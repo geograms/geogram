@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Geogram Desktop
+Comment=Resilient, Decentralized Communication
+Exec=geogram_desktop
+Icon=app_icon
+Categories=Network;Communication;
+Terminal=false
+StartupWMClass=geogram_desktop
