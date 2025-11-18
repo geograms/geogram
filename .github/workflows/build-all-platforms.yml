@@ -1,0 +1,173 @@
+name: Build All Platforms
+
+on:
+  push:
+    branches: [ main ]
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Flutter
+      uses: subosito/flutter-action@v2
+      with:
+        channel: 'stable'
+        cache: true
+
+    - name: Install Linux dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev
+
+    - name: Enable Linux desktop
+      run: flutter config --enable-linux-desktop
+
+    - name: Install dependencies
+      run: flutter pub get
+
+    - name: Build Linux Release
+      run: flutter build linux --release
+
+    - name: Create portable archive
+      run: |
+        cd build/linux/x64/release
+        tar -czf ../../../../geogram-desktop-linux-x64.tar.gz bundle/
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: geogram-desktop-linux-x64
+        path: geogram-desktop-linux-x64.tar.gz
+        retention-days: 30
+
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Flutter
+      uses: subosito/flutter-action@v2
+      with:
+        channel: 'stable'
+        cache: true
+
+    - name: Enable Windows desktop
+      run: flutter config --enable-windows-desktop
+
+    - name: Install dependencies
+      run: flutter pub get
+
+    - name: Build Windows Release
+      run: flutter build windows --release
+
+    - name: Create portable archive
+      run: |
+        cd build/windows/x64/runner/Release
+        Compress-Archive -Path * -DestinationPath ../../../../../geogram-desktop-windows-x64.zip
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: geogram-desktop-windows-x64
+        path: geogram-desktop-windows-x64.zip
+        retention-days: 30
+
+  build-macos:
+    runs-on: macos-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Flutter
+      uses: subosito/flutter-action@v2
+      with:
+        channel: 'stable'
+        cache: true
+
+    - name: Enable macOS desktop
+      run: flutter config --enable-macos-desktop
+
+    - name: Install dependencies
+      run: flutter pub get
+
+    - name: Build macOS Release
+      run: flutter build macos --release
+
+    - name: Create portable archive
+      run: |
+        cd build/macos/Build/Products/Release
+        zip -r ../../../../../geogram-desktop-macos-x64.zip geogram_desktop.app
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: geogram-desktop-macos-x64
+        path: geogram-desktop-macos-x64.zip
+        retention-days: 30
+
+  build-web:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Flutter
+      uses: subosito/flutter-action@v2
+      with:
+        channel: 'stable'
+        cache: true
+
+    - name: Install dependencies
+      run: flutter pub get
+
+    - name: Build Web Release
+      run: flutter build web --release
+
+    - name: Create portable archive
+      run: |
+        cd build
+        tar -czf ../geogram-desktop-web.tar.gz web/
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: geogram-desktop-web
+        path: geogram-desktop-web.tar.gz
+        retention-days: 30
+
+  create-release:
+    needs: [build-linux, build-windows, build-macos, build-web]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    steps:
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: artifacts
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: |
+          artifacts/geogram-desktop-linux-x64/geogram-desktop-linux-x64.tar.gz
+          artifacts/geogram-desktop-windows-x64/geogram-desktop-windows-x64.zip
+          artifacts/geogram-desktop-macos-x64/geogram-desktop-macos-x64.zip
+          artifacts/geogram-desktop-web/geogram-desktop-web.tar.gz
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

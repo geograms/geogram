@@ -4,20 +4,37 @@ A cross-platform desktop and mobile application for Geogram, built with Flutter.
 
 ## Supported Platforms
 
-- Linux (Desktop)
-- macOS (Desktop)
-- Web
-- Android
-- iOS
+- **Linux** (Desktop) - Full support
+- **Windows** (Desktop) - Full support (requires Windows to build, or use GitHub Actions)
+- **macOS** (Desktop) - Full support
+- **Web** - Full support
+- **Android** - Full support
+- **iOS** - Full support
 
 ## Prerequisites
 
 - Flutter SDK (installed in ~/flutter)
 - For Linux: GTK development libraries
+- For Windows: Visual Studio 2022 with C++ tools
 - For macOS: Xcode
 - For Android: Android Studio and SDK
 - For iOS: Xcode (macOS only)
 - For Web: Chrome or another web browser
+
+## Building
+
+### Quick Start Scripts
+
+- Linux: `./rebuild-desktop.sh` or `./launch-desktop.sh`
+- Windows: `build-windows.bat` or `build-windows.sh`
+- Web: `./launch-web.sh`
+- Android: `./launch-android.sh`
+
+### Detailed Build Instructions
+
+- **Linux**: See [INSTALL.md](INSTALL.md)
+- **Windows**: See [BUILD_WINDOWS.md](BUILD_WINDOWS.md) and [INSTALL_WINDOWS.md](INSTALL_WINDOWS.md)
+- **GitHub Actions**: Automated builds for all platforms - see `.github/workflows/`
 
 ## Running the Application
 
