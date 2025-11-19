@@ -198,6 +198,8 @@ class WebSocketService {
       final response = {
         'type': 'COLLECTION_FILE_RESPONSE',
         'requestId': requestId,
+        'collectionName': collectionName,
+        'fileName': fileName,
         'fileContent': fileContent,
       };
 
