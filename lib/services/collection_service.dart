@@ -899,219 +899,478 @@ window.COLLECTION_DATA_FULL = $jsonData;
             padding: 0;
             box-sizing: border-box;
         }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        @keyframes shimmer {
+            0% { background-position: -1000px 0; }
+            100% { background-position: 1000px 0; }
+        }
+
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-            background: #f5f5f5;
-            color: #333;
-        }
-        .header {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 2rem;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            background-attachment: fixed;
+            color: #1a202c;
+            min-height: 100vh;
+            animation: fadeIn 0.6s ease-out;
         }
+
+        .header {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            color: #1a202c;
+            padding: 2.5rem 0;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+            border-bottom: 1px solid rgba(102, 126, 234, 0.1);
+        }
+
+        .header-content {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 0 2rem;
+        }
+
         .header h1 {
-            font-size: 2rem;
+            font-size: 2.5rem;
+            font-weight: 700;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            margin-bottom: 0.5rem;
+            letter-spacing: -0.5px;
+        }
+
+        .header .description {
+            color: #4a5568;
+            font-size: 1.1rem;
+            line-height: 1.6;
+            margin-bottom: 0.75rem;
+        }
+
+        .header .meta {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            color: #718096;
+            font-size: 0.9rem;
+        }
+
+        .meta-icon {
+            opacity: 0.7;
+        }
+
+        .stats-container {
+            max-width: 1400px;
+            margin: -3rem auto 0;
+            padding: 0 2rem;
+            position: relative;
+            z-index: 10;
+        }
+
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+        }
+
+        .stat-card {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 16px;
+            padding: 2rem;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.8);
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+            animation: fadeIn 0.6s ease-out backwards;
+        }
+
+        .stat-card:nth-child(1) { animation-delay: 0.1s; }
+        .stat-card:nth-child(2) { animation-delay: 0.2s; }
+        .stat-card:nth-child(3) { animation-delay: 0.3s; }
+
+        .stat-card:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+        }
+
+        .stat-icon {
+            font-size: 2.5rem;
+            margin-bottom: 1rem;
+            display: inline-block;
+        }
+
+        .stat-value {
+            font-size: 2.25rem;
+            font-weight: 700;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
             margin-bottom: 0.5rem;
         }
-        .header .description {
-            opacity: 0.9;
-            font-size: 1rem;
+
+        .stat-label {
+            font-size: 0.95rem;
+            color: #718096;
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
         }
-        .header .meta {
-            margin-top: 1rem;
-            font-size: 0.875rem;
-            opacity: 0.8;
-        }
+
         .container {
             max-width: 1400px;
             margin: 0 auto;
             padding: 2rem;
         }
+
         .search-box {
-            background: white;
-            padding: 1.5rem;
-            border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            padding: 1rem;
+            border-radius: 16px;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.8);
             margin-bottom: 2rem;
+            animation: fadeIn 0.6s ease-out 0.4s backwards;
         }
+
+        .search-wrapper {
+            position: relative;
+            display: flex;
+            align-items: center;
+        }
+
+        .search-icon {
+            position: absolute;
+            left: 1.25rem;
+            color: #a0aec0;
+            font-size: 1.25rem;
+        }
+
         .search-input {
             width: 100%;
-            padding: 0.75rem 1rem;
-            font-size: 1rem;
-            border: 2px solid #e0e0e0;
-            border-radius: 6px;
+            padding: 1rem 1rem 1rem 3.5rem;
+            font-size: 1.05rem;
+            border: 2px solid transparent;
+            border-radius: 12px;
             outline: none;
-            transition: border-color 0.3s;
+            background: #f7fafc;
+            transition: all 0.3s ease;
+            color: #2d3748;
         }
+
         .search-input:focus {
             border-color: #667eea;
+            background: white;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
         }
+
+        .search-input::placeholder {
+            color: #a0aec0;
+        }
+
         .tabs {
             display: flex;
-            gap: 1rem;
-            margin-bottom: 2rem;
-            border-bottom: 2px solid #e0e0e0;
+            gap: 0.5rem;
+            margin-bottom: 1.5rem;
+            background: rgba(255, 255, 255, 0.5);
+            backdrop-filter: blur(10px);
+            padding: 0.5rem;
+            border-radius: 12px;
+            animation: fadeIn 0.6s ease-out 0.5s backwards;
         }
+
         .tab {
-            padding: 0.75rem 1.5rem;
-            background: none;
+            padding: 0.875rem 1.75rem;
+            background: transparent;
             border: none;
             cursor: pointer;
             font-size: 1rem;
-            color: #666;
-            border-bottom: 3px solid transparent;
-            transition: all 0.3s;
-        }
-        .tab.active {
-            color: #667eea;
-            border-bottom-color: #667eea;
-            font-weight: 600;
-        }
-        .content {
-            background: white;
+            font-weight: 500;
+            color: #4a5568;
             border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-            padding: 1.5rem;
-            min-height: 400px;
+            transition: all 0.3s ease;
+            position: relative;
         }
+
+        .tab:hover {
+            background: rgba(255, 255, 255, 0.6);
+            color: #667eea;
+        }
+
+        .tab.active {
+            background: white;
+            color: #667eea;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+        }
+
+        .content {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 16px;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.8);
+            padding: 2rem;
+            min-height: 500px;
+            animation: fadeIn 0.6s ease-out 0.6s backwards;
+        }
+
         .file-tree {
             list-style: none;
         }
+
         .file-item {
-            padding: 0.5rem;
+            padding: 0.75rem 1rem;
             cursor: pointer;
-            border-radius: 4px;
-            transition: background 0.2s;
+            border-radius: 8px;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            margin: 0.25rem 0;
+        }
+
+        .file-item:hover {
+            background: linear-gradient(135deg, rgba(102, 126, 234, 0.05) 0%, rgba(118, 75, 162, 0.05) 100%);
+            transform: translateX(4px);
+        }
+
+        .file-item.directory {
+            font-weight: 600;
+        }
+
+        .file-icon {
+            font-size: 1.5rem;
+            flex-shrink: 0;
+            transition: transform 0.2s ease;
+        }
+
+        .file-item:hover .file-icon {
+            transform: scale(1.1);
+        }
+
+        .file-name {
+            flex: 1;
+            color: #2d3748;
+            font-size: 0.95rem;
+        }
+
+        .file-type-badge {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 0.25rem 0.75rem;
+            border-radius: 6px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .file-size {
+            color: #a0aec0;
+            font-size: 0.875rem;
+            font-weight: 500;
+            min-width: 80px;
+            text-align: right;
+        }
+
+        .nested {
+            padding-left: 2rem;
+            display: none;
+            overflow: hidden;
+        }
+
+        .nested.open {
+            display: block;
+            animation: fadeIn 0.3s ease-out;
+        }
+
+        .expand-icon {
+            margin-right: 0.25rem;
+            display: inline-block;
+            font-size: 0.75rem;
+            transition: transform 0.3s ease;
+            color: #a0aec0;
+        }
+
+        .expand-icon.expanded {
+            transform: rotate(90deg);
+            color: #667eea;
+        }
+
+        .search-results {
+            display: none;
+        }
+
+        .search-results.active {
+            display: block;
+        }
+
+        .result-item {
+            padding: 1.25rem;
+            border-bottom: 1px solid #e2e8f0;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            border-radius: 8px;
+            margin-bottom: 0.5rem;
+        }
+
+        .result-item:hover {
+            background: linear-gradient(135deg, rgba(102, 126, 234, 0.05) 0%, rgba(118, 75, 162, 0.05) 100%);
+            border-color: #667eea;
+            transform: translateX(4px);
+        }
+
+        .result-name {
+            font-weight: 600;
+            font-size: 1.05rem;
+            margin-bottom: 0.5rem;
+            color: #667eea;
             display: flex;
             align-items: center;
             gap: 0.5rem;
         }
-        .file-item:hover {
-            background: #f5f5f5;
-        }
-        .file-item.directory {
-            font-weight: 500;
-        }
-        .file-icon {
-            width: 20px;
-            height: 20px;
-            flex-shrink: 0;
-        }
-        .file-name {
-            flex: 1;
-        }
-        .file-size {
-            color: #999;
-            font-size: 0.875rem;
-        }
-        .nested {
-            padding-left: 1.5rem;
-            display: none;
-        }
-        .nested.open {
-            display: block;
-        }
-        .expand-icon {
-            margin-right: 0.25rem;
-            display: inline-block;
-            width: 12px;
-            transition: transform 0.2s;
-        }
-        .expand-icon.expanded {
-            transform: rotate(90deg);
-        }
-        .search-results {
-            display: none;
-        }
-        .search-results.active {
-            display: block;
-        }
-        .result-item {
-            padding: 1rem;
-            border-bottom: 1px solid #f0f0f0;
-            cursor: pointer;
-            transition: background 0.2s;
-        }
-        .result-item:hover {
-            background: #f9f9f9;
-        }
-        .result-name {
-            font-weight: 500;
-            margin-bottom: 0.25rem;
-            color: #667eea;
-        }
+
         .result-path {
             font-size: 0.875rem;
-            color: #999;
-            margin-bottom: 0.25rem;
+            color: #718096;
+            margin-bottom: 0.5rem;
+            font-family: 'Courier New', monospace;
         }
+
         .result-meta {
-            font-size: 0.75rem;
-            color: #666;
+            font-size: 0.8rem;
+            color: #a0aec0;
             display: flex;
-            gap: 1rem;
+            gap: 1.5rem;
+            flex-wrap: wrap;
         }
+
+        .result-meta span {
+            display: flex;
+            align-items: center;
+            gap: 0.25rem;
+        }
+
         .no-results {
             text-align: center;
-            padding: 3rem;
-            color: #999;
+            padding: 4rem 2rem;
+            color: #a0aec0;
         }
-        .stats {
-            display: flex;
-            gap: 2rem;
-            padding: 1rem;
-            background: #f9f9f9;
-            border-radius: 6px;
+
+        .no-results-icon {
+            font-size: 4rem;
             margin-bottom: 1rem;
+            opacity: 0.5;
         }
-        .stat {
-            flex: 1;
+
+        .no-results-text {
+            font-size: 1.25rem;
+            font-weight: 500;
+            margin-bottom: 0.5rem;
         }
-        .stat-value {
-            font-size: 1.5rem;
+
+        .no-results-hint {
+            font-size: 0.95rem;
+            opacity: 0.7;
+        }
+
+        .footer {
+            max-width: 1400px;
+            margin: 3rem auto 0;
+            padding: 2rem;
+            text-align: center;
+            color: rgba(255, 255, 255, 0.8);
+            font-size: 0.9rem;
+        }
+
+        .footer a {
+            color: white;
+            text-decoration: none;
             font-weight: 600;
-            color: #667eea;
+            transition: opacity 0.3s ease;
         }
-        .stat-label {
-            font-size: 0.875rem;
-            color: #666;
-            margin-top: 0.25rem;
+
+        .footer a:hover {
+            opacity: 0.8;
+        }
+
+        @media (max-width: 768px) {
+            .header h1 {
+                font-size: 2rem;
+            }
+
+            .stats {
+                grid-template-columns: 1fr;
+            }
+
+            .stat-card {
+                padding: 1.5rem;
+            }
+
+            .stat-value {
+                font-size: 1.75rem;
+            }
+
+            .container {
+                padding: 1rem;
+            }
+
+            .content {
+                padding: 1.5rem;
+            }
         }
     </style>
 </head>
 <body>
     <div class="header">
-        <div class="container">
+        <div class="header-content">
             <h1 id="collection-title">Loading...</h1>
             <div class="description" id="collection-description"></div>
-            <div class="meta" id="collection-meta"></div>
+            <div class="meta">
+                <span class="meta-icon">🕒</span>
+                <span id="collection-meta"></span>
+            </div>
+        </div>
+    </div>
+
+    <div class="stats-container">
+        <div class="stats">
+            <div class="stat-card">
+                <div class="stat-icon">📄</div>
+                <div class="stat-value" id="total-files">0</div>
+                <div class="stat-label">Total Files</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon">📁</div>
+                <div class="stat-value" id="total-folders">0</div>
+                <div class="stat-label">Folders</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon">💾</div>
+                <div class="stat-value" id="total-size">0 B</div>
+                <div class="stat-label">Total Size</div>
+            </div>
         </div>
     </div>
 
     <div class="container">
         <div class="search-box">
-            <input type="text" class="search-input" id="search-input" placeholder="Search files by name or metadata...">
-        </div>
-
-        <div class="stats">
-            <div class="stat">
-                <div class="stat-value" id="total-files">0</div>
-                <div class="stat-label">Total Files</div>
-            </div>
-            <div class="stat">
-                <div class="stat-value" id="total-folders">0</div>
-                <div class="stat-label">Folders</div>
-            </div>
-            <div class="stat">
-                <div class="stat-value" id="total-size">0 B</div>
-                <div class="stat-label">Total Size</div>
+            <div class="search-wrapper">
+                <span class="search-icon">🔍</span>
+                <input type="text" class="search-input" id="search-input" placeholder="Search files, folders, or file types...">
             </div>
         </div>
 
         <div class="tabs">
-            <button class="tab active" data-tab="browser">File Browser</button>
-            <button class="tab" data-tab="search">Search Results</button>
+            <button class="tab active" data-tab="browser">📂 File Browser</button>
+            <button class="tab" data-tab="search">🔍 Search Results</button>
         </div>
 
         <div class="content">
@@ -1122,6 +1381,10 @@ window.COLLECTION_DATA_FULL = $jsonData;
                 <div id="search-results-list"></div>
             </div>
         </div>
+    </div>
+
+    <div class="footer">
+        Powered by <a href="https://github.com/geograms/geogram" target="_blank">Geogram</a> • Resilient, Decentralized Communication
     </div>
 
     <script src="collection.js"></script>
@@ -1145,6 +1408,43 @@ window.COLLECTION_DATA_FULL = $jsonData;
             document.getElementById('collection-title').textContent = collectionData.title || 'Collection';
             document.getElementById('collection-description').textContent = collectionData.description || '';
             document.getElementById('collection-meta').textContent = \`Updated: \${new Date(collectionData.updated).toLocaleString()}\`;
+        }
+
+        function getFileIcon(item) {
+            if (item.type === 'directory') return '📁';
+
+            const ext = item.name.split('.').pop().toLowerCase();
+            const mimeType = item.mimeType || '';
+
+            // Images
+            if (mimeType.startsWith('image/') || ['jpg', 'jpeg', 'png', 'gif', 'svg', 'webp', 'bmp'].includes(ext)) {
+                return '🖼️';
+            }
+            // Videos
+            if (mimeType.startsWith('video/') || ['mp4', 'avi', 'mov', 'mkv', 'webm'].includes(ext)) {
+                return '🎥';
+            }
+            // Audio
+            if (mimeType.startsWith('audio/') || ['mp3', 'wav', 'ogg', 'flac', 'm4a'].includes(ext)) {
+                return '🎵';
+            }
+            // Documents
+            if (['pdf'].includes(ext)) return '📕';
+            if (['doc', 'docx'].includes(ext)) return '📘';
+            if (['xls', 'xlsx'].includes(ext)) return '📗';
+            if (['ppt', 'pptx'].includes(ext)) return '📙';
+            if (['txt', 'md', 'readme'].includes(ext)) return '📝';
+
+            // Code
+            if (['js', 'ts', 'jsx', 'tsx', 'json'].includes(ext)) return '📜';
+            if (['html', 'css', 'scss'].includes(ext)) return '🌐';
+            if (['py', 'java', 'cpp', 'c', 'h', 'rs', 'go'].includes(ext)) return '⚙️';
+
+            // Archives
+            if (['zip', 'tar', 'gz', 'rar', '7z'].includes(ext)) return '📦';
+
+            // Default
+            return '📄';
         }
 
         function calculateStats() {
@@ -1221,7 +1521,7 @@ window.COLLECTION_DATA_FULL = $jsonData;
 
                 const icon = document.createElement('span');
                 icon.className = 'file-icon';
-                icon.textContent = item.type === 'directory' ? '📁' : '📄';
+                icon.textContent = getFileIcon(item);
                 div.appendChild(icon);
 
                 const name = document.createElement('span');
@@ -1295,7 +1595,13 @@ window.COLLECTION_DATA_FULL = $jsonData;
             const container = document.getElementById('search-results-list');
 
             if (results.length === 0) {
-                container.innerHTML = '<div class="no-results">No files found matching "' + query + '"</div>';
+                container.innerHTML = \`
+                    <div class="no-results">
+                        <div class="no-results-icon">🔍</div>
+                        <div class="no-results-text">No results found</div>
+                        <div class="no-results-hint">Try searching for a different term</div>
+                    </div>
+                \`;
                 return;
             }
 
@@ -1305,11 +1611,11 @@ window.COLLECTION_DATA_FULL = $jsonData;
                 div.className = 'result-item';
 
                 div.innerHTML = \`
-                    <div class="result-name">\${item.type === 'directory' ? '📁' : '📄'} \${item.name}</div>
+                    <div class="result-name">\${getFileIcon(item)} \${item.name}</div>
                     <div class="result-path">\${item.path}</div>
                     <div class="result-meta">
-                        \${item.type !== 'directory' ? \`<span>Size: \${formatSize(item.size)}</span>\` : ''}
-                        \${item.mimeType ? \`<span>Type: \${item.mimeType}</span>\` : ''}
+                        \${item.type !== 'directory' ? \`<span>📏 \${formatSize(item.size)}</span>\` : ''}
+                        \${item.mimeType ? \`<span>📋 \${item.mimeType}</span>\` : ''}
                     </div>
                 \`;
 
