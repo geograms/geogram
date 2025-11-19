@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:crypto/crypto.dart';
 import 'package:mime/mime.dart';
@@ -8,6 +9,7 @@ import '../services/log_service.dart';
 import '../services/profile_service.dart';
 import '../services/collection_service.dart';
 import '../util/nostr_event.dart';
+import '../util/tlsh.dart';
 
 /// WebSocket service for relay connections
 class WebSocketService {
@@ -245,11 +247,9 @@ class WebSocketService {
         final sha1Hash = sha1.convert(bytes).toString();
         final mimeType = lookupMimeType(entity.path) ?? 'application/octet-stream';
 
-        // TODO: Implement TLSH (Trend Micro Locality Sensitive Hash)
+        // Calculate TLSH (Trend Micro Locality Sensitive Hash)
         // TLSH is used for fuzzy matching and finding similar files
-        // For now, we'll include it as null until a Dart TLSH package is available
-        // or we implement FFI bindings to the C library
-        final tlshHash = null; // await _calculateTlsh(bytes);
+        final tlshHash = TLSH.hash(bytes);
 
         final hashes = <String, dynamic>{
           'sha1': sha1Hash,
