@@ -47,6 +47,7 @@ dependencies:
   hex: ^0.2.0
   http: ^1.2.0
   window_manager: ^0.4.3
+  shelf: ^1.4.0
 
 dev_dependencies:
   flutter_test:

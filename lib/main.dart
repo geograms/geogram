@@ -6,6 +6,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:window_manager/window_manager.dart';
 import 'services/log_service.dart';
+import 'services/log_api_service.dart';
 import 'services/config_service.dart';
 import 'services/collection_service.dart';
 import 'services/profile_service.dart';
@@ -70,6 +71,10 @@ void main() async {
     // Start relay auto-discovery
     RelayDiscoveryService().start();
     LogService().log('RelayDiscoveryService started');
+
+    // Start log API service
+    await LogApiService().start();
+    LogService().log('LogApiService started on port 45678');
   } catch (e, stackTrace) {
     LogService().log('ERROR during initialization: $e');
     LogService().log('Stack trace: $stackTrace');
