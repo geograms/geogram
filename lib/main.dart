@@ -1301,14 +1301,6 @@ class _SettingsPageState extends State<SettingsPage> {
           ),
         ),
         ListTile(
-          leading: const Icon(Icons.language),
-          title: Text(_i18n.t('language')),
-          subtitle: Text(_i18n.getLanguageName(_i18n.currentLanguage)),
-          trailing: const Icon(Icons.chevron_right),
-          onTap: _showLanguageDialog,
-        ),
-        const Divider(),
-        ListTile(
           leading: const Icon(Icons.person_outline),
           title: Text(_i18n.t('profile')),
           subtitle: Text(_i18n.t('manage_your_profile')),
@@ -1357,6 +1349,13 @@ class _SettingsPageState extends State<SettingsPage> {
           },
         ),
         const Divider(),
+        ListTile(
+          leading: const Icon(Icons.language),
+          title: Text(_i18n.t('language')),
+          subtitle: Text(_i18n.getLanguageName(_i18n.currentLanguage)),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: _showLanguageDialog,
+        ),
         ListTile(
           leading: const Icon(Icons.info_outlined),
           title: Text(_i18n.t('about')),
