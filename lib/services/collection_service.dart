@@ -770,14 +770,23 @@ class CollectionService {
     try {
       final entries = <Map<String, dynamic>>[];
 
+      // Check if this is a www type collection to determine if index.html should be included
+      bool isWwwType = false;
+      final collectionJsFile = File('${folder.path}/collection.js');
+      if (await collectionJsFile.exists()) {
+        final content = await collectionJsFile.readAsString();
+        isWwwType = content.contains('"type": "www"');
+      }
+
       // Recursively scan all files and directories
       await for (var entity in folder.list(recursive: true, followLinks: false)) {
         final relativePath = entity.path.substring(folder.path.length + 1);
 
         // Skip hidden files, metadata files, and the extra directory
+        // For www type collections, include index.html as it's content, not metadata
         if (relativePath.startsWith('.') ||
             relativePath == 'collection.js' ||
-            relativePath == 'index.html' ||
+            (!isWwwType && relativePath == 'index.html') ||
             relativePath == 'extra' ||
             relativePath.startsWith('extra/')) {
           continue;
@@ -826,14 +835,23 @@ class CollectionService {
       final filesToProcess = <File>[];
       final directoriesToAdd = <Map<String, dynamic>>[];
 
+      // Check if this is a www type collection to determine if index.html should be included
+      bool isWwwType = false;
+      final collectionJsFile = File('${folder.path}/collection.js');
+      if (await collectionJsFile.exists()) {
+        final content = await collectionJsFile.readAsString();
+        isWwwType = content.contains('"type": "www"');
+      }
+
       // First pass: collect all entities without reading files
       await for (var entity in folder.list(recursive: true, followLinks: false)) {
         final relativePath = entity.path.substring(folder.path.length + 1);
 
         // Skip hidden files, metadata files, and the extra directory
+        // For www type collections, include index.html as it's content, not metadata
         if (relativePath.startsWith('.') ||
             relativePath == 'collection.js' ||
-            relativePath == 'index.html' ||
+            (!isWwwType && relativePath == 'index.html') ||
             relativePath == 'extra' ||
             relativePath.startsWith('extra/')) {
           continue;
