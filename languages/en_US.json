@@ -224,7 +224,7 @@
   "delete_collection_confirm_msg": "Are you sure you want to delete \"{0}\"?",
   "collection_deleted": "Collection deleted",
   "create_collection_title": "Create New Collection",
-  "collection_title": "Collection Title",
+  "collection_title": "Title",
   "collection_title_hint": "Enter a title for your collection",
   "collection_description": "Description (optional)",
   "collection_description_hint": "Describe this collection",
