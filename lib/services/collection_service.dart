@@ -283,6 +283,9 @@ class CollectionService {
 
       stderr.writeln('Folders created successfully');
 
+      // Create skeleton template files based on type
+      await _createSkeletonFiles(type, collectionFolder);
+
       // Create collection object
       final collection = Collection(
         id: id,
@@ -309,6 +312,51 @@ class CollectionService {
       stderr.writeln('Error in createCollection: $e');
       stderr.writeln('Stack trace: $stackTrace');
       rethrow;
+    }
+  }
+
+  /// Create skeleton template files based on collection type
+  Future<void> _createSkeletonFiles(String type, Directory collectionFolder) async {
+    try {
+      if (type == 'www') {
+        // Create default index.html for website type
+        final indexFile = File('${collectionFolder.path}/index.html');
+        final indexContent = '''<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Welcome</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+            line-height: 1.6;
+        }
+        h1 {
+            color: #333;
+        }
+        p {
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <h1>Welcome to Your Website</h1>
+    <p>This is the default homepage. Edit this file to create your website.</p>
+    <p>You can add more HTML files, CSS stylesheets, JavaScript files, and images to build your site.</p>
+</body>
+</html>
+''';
+        await indexFile.writeAsString(indexContent);
+        stderr.writeln('Created skeleton index.html for www type');
+      }
+      // Add more skeleton templates for other types here (forum, chat)
+    } catch (e) {
+      stderr.writeln('Error creating skeleton files: $e');
+      // Don't fail collection creation if skeleton creation fails
     }
   }
 
