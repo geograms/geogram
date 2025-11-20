@@ -102,6 +102,15 @@ class WebSocketService {
                 data['collectionName'] as String?,
                 data['fileName'] as String?,
               );
+            } else if (data['type'] == 'HTTP_REQUEST') {
+              LogService().log('✓ Relay forwarded HTTP request');
+              _handleHttpRequest(
+                data['requestId'] as String?,
+                data['method'] as String?,
+                data['path'] as String?,
+                data['headers'] as String?,
+                data['body'] as String?,
+              );
             }
 
             _messageController.add(data);
@@ -244,6 +253,134 @@ class WebSocketService {
       LogService().log('Sent $fileName for collection $collectionName (${fileContent.length} bytes)');
     } catch (e) {
       LogService().log('Error handling collection file request: $e');
+    }
+  }
+
+  /// Handle HTTP request from relay (for www collection proxying)
+  Future<void> _handleHttpRequest(
+    String? requestId,
+    String? method,
+    String? path,
+    String? headersJson,
+    String? body,
+  ) async {
+    if (requestId == null || method == null || path == null) {
+      LogService().log('Invalid HTTP request: missing parameters');
+      return;
+    }
+
+    try {
+      LogService().log('HTTP Request: $method $path');
+
+      // Parse path: should be /collections/{collectionName}/{filePath}
+      final parts = path.split('/').where((p) => p.isNotEmpty).toList();
+      if (parts.length < 2 || parts[0] != 'collections') {
+        throw Exception('Invalid path format: $path');
+      }
+
+      final collectionName = parts[1];
+      final filePath = parts.length > 2 ? '/${parts.sublist(2).join('/')}' : '/';
+
+      // Load collection
+      final collections = await CollectionService().loadCollections();
+      final collection = collections.firstWhere(
+        (c) => c.title == collectionName,
+        orElse: () => throw Exception('Collection not found: $collectionName'),
+      );
+
+      // Security check: reject access to private collections
+      if (collection.visibility == 'private') {
+        LogService().log('⚠ Rejected HTTP request for private collection: $collectionName');
+        _sendHttpResponse(requestId, 403, {'Content-Type': 'text/plain'}, 'Forbidden');
+        return;
+      }
+
+      final storagePath = collection.storagePath;
+      if (storagePath == null) {
+        throw Exception('Collection has no storage path: $collectionName');
+      }
+
+      // Construct file path
+      final fullPath = '$storagePath$filePath';
+      final file = File(fullPath);
+
+      if (!await file.exists()) {
+        LogService().log('File not found: $fullPath');
+        _sendHttpResponse(requestId, 404, {'Content-Type': 'text/plain'}, 'Not Found');
+        return;
+      }
+
+      // Read file content
+      final fileBytes = await file.readAsBytes();
+      final fileContent = base64Encode(fileBytes);
+
+      // Determine content type
+      final contentType = _getContentType(filePath);
+
+      // Send successful response
+      _sendHttpResponse(
+        requestId,
+        200,
+        {'Content-Type': contentType},
+        fileContent,
+        isBase64: true,
+      );
+
+      LogService().log('Sent HTTP response: 200 OK (${fileBytes.length} bytes)');
+    } catch (e) {
+      LogService().log('Error handling HTTP request: $e');
+      _sendHttpResponse(requestId, 500, {'Content-Type': 'text/plain'}, 'Internal Server Error: $e');
+    }
+  }
+
+  /// Send HTTP response to relay
+  void _sendHttpResponse(
+    String requestId,
+    int statusCode,
+    Map<String, String> headers,
+    String body, {
+    bool isBase64 = false,
+  }) {
+    final response = {
+      'type': 'HTTP_RESPONSE',
+      'requestId': requestId,
+      'statusCode': statusCode,
+      'responseHeaders': jsonEncode(headers),
+      'responseBody': body,
+      'isBase64': isBase64,
+    };
+
+    send(response);
+  }
+
+  /// Get content type based on file extension
+  String _getContentType(String filePath) {
+    final ext = filePath.toLowerCase().split('.').last;
+    switch (ext) {
+      case 'html':
+      case 'htm':
+        return 'text/html';
+      case 'css':
+        return 'text/css';
+      case 'js':
+        return 'application/javascript';
+      case 'json':
+        return 'application/json';
+      case 'png':
+        return 'image/png';
+      case 'jpg':
+      case 'jpeg':
+        return 'image/jpeg';
+      case 'gif':
+        return 'image/gif';
+      case 'svg':
+        return 'image/svg+xml';
+      case 'ico':
+        return 'image/x-icon';
+      case 'txt':
+        return 'text/plain';
+      default:
+        return 'application/octet-stream';
     }
   }
 
