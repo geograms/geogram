@@ -121,8 +121,8 @@ class _HomePageState extends State<HomePage> {
     CollectionsPage(),
     GeoChatPage(),
     DevicesPage(),
-    LogPage(),
     SettingsPage(),
+    LogPage(),
   ];
 
   @override
@@ -191,6 +191,11 @@ class _HomePageState extends State<HomePage> {
             selectedIcon: const Icon(Icons.settings),
             label: Text(_i18n.t('settings')),
           ),
+          NavigationDrawerDestination(
+            icon: const Icon(Icons.article_outlined),
+            selectedIcon: const Icon(Icons.article),
+            label: Text(_i18n.t('log')),
+          ),
         ],
       ),
       body: _pages[_selectedIndex],
@@ -216,11 +221,6 @@ class _HomePageState extends State<HomePage> {
             icon: const Icon(Icons.devices_outlined),
             selectedIcon: const Icon(Icons.devices),
             label: _i18n.t('devices'),
-          ),
-          NavigationDestination(
-            icon: const Icon(Icons.article_outlined),
-            selectedIcon: const Icon(Icons.article),
-            label: _i18n.t('log'),
           ),
           NavigationDestination(
             icon: const Icon(Icons.settings_outlined),
