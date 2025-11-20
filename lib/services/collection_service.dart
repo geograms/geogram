@@ -322,12 +322,31 @@ class CollectionService {
         // Create default index.html for website type
         final indexFile = File('${collectionFolder.path}/index.html');
         final indexContent = '''<!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>Hello World</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Welcome</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+            line-height: 1.6;
+        }
+        h1 {
+            color: #333;
+        }
+        p {
+            color: #666;
+        }
+    </style>
 </head>
 <body>
-    <h1>Hello World</h1>
+    <h1>Welcome to Your Website</h1>
+    <p>This is the default homepage. Edit this file to create your website.</p>
+    <p>You can add more HTML files, CSS stylesheets, JavaScript files, and images to build your site.</p>
 </body>
 </html>
 ''';
@@ -930,6 +949,18 @@ window.COLLECTION_DATA_FULL = $jsonData;
   /// Generate and save index.html for collection browsing
   Future<void> _generateAndSaveIndexHtml(Directory folder) async {
     try {
+      // Check if this is a www type collection - if so, skip generating browser index.html
+      final collectionJsFile = File('${folder.path}/collection.js');
+      if (await collectionJsFile.exists()) {
+        final content = await collectionJsFile.readAsString();
+        // Check if this is a www type collection
+        if (content.contains('"type": "www"')) {
+          stderr.writeln('Skipping index.html generation for www type collection');
+          return; // Don't overwrite www type's custom index.html
+        }
+      }
+
+      // Continue with normal index.html generation for other types
       final indexHtmlFile = File('${folder.path}/index.html');
       final htmlContent = _generateIndexHtmlContent();
       await indexHtmlFile.writeAsString(htmlContent);
