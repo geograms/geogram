@@ -17,6 +17,7 @@ class WebSocketService {
   StreamSubscription? _subscription;
   final _messageController = StreamController<Map<String, dynamic>>.broadcast();
   Timer? _reconnectTimer;
+  Timer? _pingTimer;
   String? _relayUrl;
   bool _shouldReconnect = false;
   bool _isReconnecting = false;
@@ -43,6 +44,9 @@ class WebSocketService {
 
       // Start reconnection monitoring
       _startReconnectTimer();
+
+      // Start heartbeat (ping) timer
+      _startPingTimer();
 
       // Get user profile
       final profile = ProfileService().getProfile();
@@ -91,7 +95,10 @@ class WebSocketService {
             final data = jsonDecode(message as String) as Map<String, dynamic>;
             LogService().log('Message type: ${data['type']}');
 
-            if (data['type'] == 'hello_ack') {
+            if (data['type'] == 'PONG') {
+              // Heartbeat response - connection is alive
+              LogService().log('✓ PONG received from relay');
+            } else if (data['type'] == 'hello_ack') {
               final success = data['success'] as bool? ?? false;
               if (success) {
                 LogService().log('✓ Hello acknowledged!');
@@ -160,6 +167,8 @@ class WebSocketService {
     _shouldReconnect = false;
     _reconnectTimer?.cancel();
     _reconnectTimer = null;
+    _pingTimer?.cancel();
+    _pingTimer = null;
     _subscription?.cancel();
     _channel?.sink.close();
     _channel = null;
@@ -409,6 +418,31 @@ class WebSocketService {
     });
   }
 
+  /// Start heartbeat ping timer
+  void _startPingTimer() {
+    _pingTimer?.cancel();
+    // Send PING every 60 seconds (well before the 5-minute idle timeout)
+    _pingTimer = Timer.periodic(const Duration(seconds: 60), (timer) {
+      _sendPing();
+    });
+  }
+
+  /// Send PING message to keep connection alive
+  void _sendPing() {
+    if (_channel != null && _shouldReconnect) {
+      try {
+        final pingMessage = {
+          'type': 'PING',
+        };
+        final json = jsonEncode(pingMessage);
+        _channel!.sink.add(json);
+        LogService().log('Sent PING to relay');
+      } catch (e) {
+        LogService().log('Error sending PING: $e');
+      }
+    }
+  }
+
   /// Check connection and attempt reconnection if needed
   void _checkConnection() {
     if (!_shouldReconnect || _isReconnecting) {
@@ -457,6 +491,7 @@ class WebSocketService {
   void dispose() {
     disconnect();
     _reconnectTimer?.cancel();
+    _pingTimer?.cancel();
     _messageController.close();
   }
 }
