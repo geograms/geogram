@@ -60,7 +60,7 @@ class Collection {
   String? storagePath;
   bool isOwned;
   bool isFavorite;
-  String type; // 'files', 'forum', 'chat'
+  String type; // 'files', 'forum', 'chat', 'www'
 
   // Security settings
   String visibility; // 'public', 'private', 'restricted'

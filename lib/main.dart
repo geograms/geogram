@@ -720,6 +720,7 @@ class _CreateCollectionDialogState extends State<_CreateCollectionDialog> {
                 DropdownMenuItem(value: 'files', child: Text('Files')),
                 DropdownMenuItem(value: 'forum', child: Text('Forum')),
                 DropdownMenuItem(value: 'chat', child: Text('Chat')),
+                DropdownMenuItem(value: 'www', child: Text('Website')),
               ],
               onChanged: _isCreating ? null : (value) {
                 if (value != null) {
