@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'dart:math';
+import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as path;
 import '../models/profile.dart';
@@ -15,6 +16,9 @@ class ProfileService {
 
   Profile? _profile;
   bool _initialized = false;
+
+  /// Notifier for profile changes
+  final ValueNotifier<int> profileNotifier = ValueNotifier<int>(0);
 
   /// Initialize profile service
   Future<void> initialize() async {
@@ -81,6 +85,7 @@ class ProfileService {
   Future<void> saveProfile(Profile profile) async {
     _profile = profile;
     await ConfigService().set('profile', profile.toJson());
+    profileNotifier.value++; // Notify listeners
     LogService().log('Profile saved to config');
   }
 

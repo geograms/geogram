@@ -122,6 +122,7 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage> {
   int _selectedIndex = 0;
   final I18nService _i18n = I18nService();
+  final ProfileService _profileService = ProfileService();
 
   static const List<Widget> _pages = [
     CollectionsPage(),
@@ -131,20 +132,39 @@ class _HomePageState extends State<HomePage> {
     LogPage(),
   ];
 
+  /// Get title text from profile or default app name
+  String _getTitleText() {
+    final profile = _profileService.getProfile();
+    if (profile.callsign.isNotEmpty) {
+      if (profile.nickname.isNotEmpty) {
+        return '${profile.callsign} - ${profile.nickname}';
+      }
+      return profile.callsign;
+    }
+    return _i18n.t('app_name');
+  }
+
   @override
   void initState() {
     super.initState();
     // Listen to language changes to rebuild the UI
     _i18n.languageNotifier.addListener(_onLanguageChanged);
+    // Listen to profile changes to update title
+    _profileService.profileNotifier.addListener(_onProfileChanged);
   }
 
   @override
   void dispose() {
     _i18n.languageNotifier.removeListener(_onLanguageChanged);
+    _profileService.profileNotifier.removeListener(_onProfileChanged);
     super.dispose();
   }
 
   void _onLanguageChanged() {
+    setState(() {});
+  }
+
+  void _onProfileChanged() {
     setState(() {});
   }
 
@@ -156,7 +176,7 @@ class _HomePageState extends State<HomePage> {
           children: [
             const Icon(Icons.folder_special),
             const SizedBox(width: 8),
-            Text(_i18n.t('app_name')),
+            Text(_getTitleText()),
           ],
         ),
       ),
