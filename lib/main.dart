@@ -26,6 +26,7 @@ import 'pages/forum_browser_page.dart';
 import 'pages/blog_browser_page.dart';
 import 'pages/events_browser_page.dart';
 import 'pages/news_browser_page.dart';
+import 'pages/postcards_browser_page.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -494,7 +495,12 @@ class _CollectionsPageState extends State<CollectionsPage> {
                                                         collectionPath: collection.storagePath ?? '',
                                                         collectionTitle: collection.title,
                                                       )
-                                                    : CollectionBrowserPage(collection: collection);
+                                                    : collection.type == 'postcards'
+                                                        ? PostcardsBrowserPage(
+                                                            collectionPath: collection.storagePath ?? '',
+                                                            collectionTitle: collection.title,
+                                                          )
+                                                        : CollectionBrowserPage(collection: collection);
 
                                 Navigator.push(
                                   context,
@@ -551,6 +557,8 @@ class _CollectionCard extends StatelessWidget {
         return Icons.event;
       case 'www':
         return Icons.language;
+      case 'postcards':
+        return Icons.credit_card;
       default:
         return Icons.folder_special;
     }
@@ -904,6 +912,16 @@ class _CreateCollectionDialogState extends State<_CreateCollectionDialog> {
                         : null,
                   ),
                 ),
+                DropdownMenuItem(
+                  value: 'postcards',
+                  enabled: !_existingTypes.contains('postcards'),
+                  child: Text(
+                    '${_i18n.t('collection_type_postcards')}${_existingTypes.contains('postcards') ? ' ${_i18n.t('already_exists')}' : ''}',
+                    style: _existingTypes.contains('postcards')
+                        ? TextStyle(color: Colors.grey)
+                        : null,
+                  ),
+                ),
               ],
               onChanged: _isCreating ? null : (value) {
                 if (value != null) {
@@ -918,7 +936,8 @@ class _CreateCollectionDialogState extends State<_CreateCollectionDialog> {
                           _titleController.text == 'forum' ||
                           _titleController.text == 'chat' ||
                           _titleController.text == 'blog' ||
-                          _titleController.text == 'events') {
+                          _titleController.text == 'events' ||
+                          _titleController.text == 'postcards') {
                         _titleController.text = '';
                       }
                     }

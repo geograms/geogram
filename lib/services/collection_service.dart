@@ -405,6 +405,10 @@ class CollectionService {
         // Initialize forum collection structure
         await _initializeForumCollection(collectionFolder);
         stderr.writeln('Created forum collection skeleton');
+      } else if (type == 'postcards') {
+        // Initialize postcards collection structure
+        await _initializePostcardsCollection(collectionFolder);
+        stderr.writeln('Created postcards collection skeleton');
       }
       // Add more skeleton templates for other types here
     } catch (e) {
@@ -585,6 +589,37 @@ class CollectionService {
     );
 
     stderr.writeln('Forum collection initialized with ${defaultSections.length} sections');
+    if (currentProfile.npub.isNotEmpty) {
+      stderr.writeln('Set ${currentProfile.callsign} (${currentProfile.npub}) as admin');
+    }
+  }
+
+  /// Initialize postcards collection with directory structure
+  Future<void> _initializePostcardsCollection(Directory collectionFolder) async {
+    // Create postcards directory
+    final postcardsDir = Directory('${collectionFolder.path}/postcards');
+    await postcardsDir.create();
+
+    // Create current year directory
+    final year = DateTime.now().year;
+    final yearDir = Directory('${postcardsDir.path}/$year');
+    await yearDir.create();
+
+    // Create security.json with current user as admin
+    final profileService = ProfileService();
+    final currentProfile = profileService.getProfile();
+    final securityFile = File('${collectionFolder.path}/extra/security.json');
+    final securityData = {
+      'version': '1.0',
+      'adminNpub': currentProfile.npub.isNotEmpty ? currentProfile.npub : null,
+      'moderators': <String>[],
+      'bannedNpubs': <String>[],
+    };
+    await securityFile.writeAsString(
+      const JsonEncoder.withIndent('  ').convert(securityData),
+    );
+
+    stderr.writeln('Postcards collection initialized');
     if (currentProfile.npub.isNotEmpty) {
       stderr.writeln('Set ${currentProfile.callsign} (${currentProfile.npub}) as admin');
     }
