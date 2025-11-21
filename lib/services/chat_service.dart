@@ -29,11 +29,17 @@ class ChatService {
   ChatSecurity _security = ChatSecurity();
 
   /// Initialize chat service for a collection
-  Future<void> initializeCollection(String collectionPath) async {
+  Future<void> initializeCollection(String collectionPath, {String? creatorNpub}) async {
     _collectionPath = collectionPath;
     await _loadChannels();
     await _loadParticipants();
     await _loadSecurity();
+
+    // If this is a new collection (no admin set) and creator npub provided, set as admin
+    if (_security.adminNpub == null && creatorNpub != null && creatorNpub.isNotEmpty) {
+      final newSecurity = ChatSecurity(adminNpub: creatorNpub);
+      await saveSecurity(newSecurity);
+    }
   }
 
   /// Get collection path

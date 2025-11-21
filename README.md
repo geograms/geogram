@@ -32,8 +32,9 @@ A cross-platform desktop and mobile application for Geogram, built with Flutter.
 
 ### Detailed Build Instructions
 
-- **Linux**: See [INSTALL.md](INSTALL.md)
-- **Windows**: See [BUILD_WINDOWS.md](BUILD_WINDOWS.md) and [INSTALL_WINDOWS.md](INSTALL_WINDOWS.md)
+- **Linux**: See [docs/installation/INSTALL.md](docs/installation/INSTALL.md)
+- **Windows**: See [docs/build/BUILD_WINDOWS.md](docs/build/BUILD_WINDOWS.md) and [docs/installation/INSTALL_WINDOWS.md](docs/installation/INSTALL_WINDOWS.md)
+- **Releases**: See [docs/build/RELEASE.md](docs/build/RELEASE.md) for creating releases
 - **GitHub Actions**: Automated builds for all platforms - see `.github/workflows/`
 
 ## Running the Application
@@ -111,18 +112,52 @@ geogram_desktop/
 
 ## Current Features
 
-The app includes:
+Geogram Desktop is a fully-featured offline-first communication and data management platform:
 
-- Navigation drawer and bottom navigation bar
-- Five main sections:
-  - **Collections**: Placeholder for managing collections
-  - **GeoChat**: Placeholder for conversations
-  - **Devices**: Placeholder for connected devices
-  - **Log**: Full-featured logging system (see below)
-  - **Settings**: Basic settings page with menu items
+### Core Functionality
+
+- **Collections Management**: Browse, create, and manage collections (chat logs, forums, file storage)
+  - File browser with folder navigation and file operations
+  - Search functionality across collections
+  - Collection metadata and configuration
+
+- **Chat System**: Full-featured text-based communication
+  - Multiple channels per collection
+  - Direct messages and group chats
+  - File attachments with SHA1-based deduplication
+  - NOSTR key integration for message signing
+  - Message deletion for admins/moderators
+
+- **Forum System**: Threaded discussions with category organization
+  - Multiple categories per forum
+  - Thread creation and management
+  - Post replies with metadata support
+  - Admin controls (create/rename/delete categories)
+  - Thread and post deletion for admins
+  - File attachments with SHA1 naming
+
+- **User Profile**: Customizable callsign and NOSTR identity
+  - Profile management with callsign and NOSTR key storage
+  - Secure key generation and import
+
+- **Device Management**: Connect and manage multiple Geogram devices
+  - BLE device discovery and pairing
+  - Device connection status monitoring
+  - Relay device connectivity (Hello protocol)
+
+- **Logging System**: Comprehensive application logging
+  - Real-time log display with timestamps
+  - Pause/resume, filter, and clear functionality
+  - Copy to clipboard
+  - File logging to `~/Documents/geogram/log.txt`
+
+### Technical Features
+
 - Material 3 design with light/dark theme support
-- Responsive layout that adapts to different screen sizes
-- Custom Geogram app icon
+- Responsive layout for all screen sizes
+- Cross-platform support (Linux, Windows, macOS, Android, iOS, Web)
+- Offline-first architecture with text-based storage
+- SHA1-based file deduplication
 
 ### Log Functionality
 
@@ -170,14 +205,63 @@ flutter devices
 flutter test
 ```
 
-## Next Steps
+## Roadmap
 
-- Implement map integration
-- Add messaging functionality
-- Integrate device management
-- Connect to Geogram backend services
-- Add authentication
-- Implement real-time updates
+### Completed
+
+- ✅ Collections management system
+- ✅ Chat functionality with channels and DMs
+- ✅ Forum system with threading
+- ✅ File attachments and management
+- ✅ NOSTR key integration
+- ✅ User profiles with callsigns
+- ✅ Device connectivity (BLE and relay)
+- ✅ Admin/moderator controls
+
+### In Progress
+
+- Map integration
+- Enhanced search capabilities
+- Real-time sync between devices
+
+### Planned
+
+- Video/audio file support
+- Location tagging and map views
+- Enhanced NOSTR signature verification
+- Multi-device sync improvements
+- Export/import functionality
+
+## Documentation
+
+### Installation & Building
+
+- [Linux Installation](docs/installation/INSTALL.md)
+- [Windows Installation](docs/installation/INSTALL_WINDOWS.md)
+- [Windows Build Guide](docs/build/BUILD_WINDOWS.md)
+- [Release Process](docs/build/RELEASE.md)
+
+### Features & Implementation
+
+- [Forum Format Specification](docs/features/FORUM_FORMAT.md)
+- [Profile System](docs/features/PROFILE_IMPLEMENTATION.md)
+- [Search Functionality](docs/features/SEARCH_IMPLEMENTATION.md)
+- [NOSTR Keys Integration](docs/features/NOSTR_KEYS_IMPLEMENTATION.md)
+- [Relay Hello Protocol](docs/features/RELAY_HELLO_IMPLEMENTATION.md)
+- [Collapsible Folders](docs/features/COLLAPSIBLE_FOLDERS.md)
+- [Collections File Management](docs/features/COLLECTIONS_FILE_MANAGEMENT.md)
+- [File Browser Enhancements](docs/features/FILE_BROWSER_ENHANCEMENTS.md)
+
+### Development Notes
+
+- [Bug Fixes](docs/development/BUGFIX.md)
+- [Profile Bug Fixes](docs/development/PROFILE_BUGFIX.md)
+- [File Browser Updates](docs/development/FILE_BROWSER_UPDATES.md)
+- [Folder Rename on Title Change](docs/development/FOLDER_RENAME_ON_TITLE_CHANGE.md)
+- [Summary Updates](docs/development/SUMMARY_UPDATES.md)
+- [Desktop Icon](docs/development/DESKTOP_ICON.md)
+- [Windows Support](docs/development/WINDOWS_SUPPORT.md)
+- [Hello Protocol Testing](docs/development/TEST_HELLO.md)
 
 ## Resources
 

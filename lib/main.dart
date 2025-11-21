@@ -22,6 +22,10 @@ import 'pages/relays_page.dart';
 import 'pages/location_page.dart';
 import 'pages/notifications_page.dart';
 import 'pages/chat_browser_page.dart';
+import 'pages/forum_browser_page.dart';
+import 'pages/blog_browser_page.dart';
+import 'pages/events_browser_page.dart';
+import 'pages/news_browser_page.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -418,7 +422,7 @@ class _CollectionsPageState extends State<CollectionsPage> {
             child: TextField(
               controller: _searchController,
               decoration: InputDecoration(
-                hintText: _i18n.t('search_collections'),
+                hintText: _i18n.t('search'),
                 prefixIcon: const Icon(Icons.search),
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(8),
@@ -476,7 +480,21 @@ class _CollectionsPageState extends State<CollectionsPage> {
                                 // Route to appropriate page based on collection type
                                 final Widget targetPage = collection.type == 'chat'
                                     ? ChatBrowserPage(collection: collection)
-                                    : CollectionBrowserPage(collection: collection);
+                                    : collection.type == 'forum'
+                                        ? ForumBrowserPage(collection: collection)
+                                        : collection.type == 'blog'
+                                            ? BlogBrowserPage(
+                                                collectionPath: collection.storagePath ?? '',
+                                                collectionTitle: collection.title,
+                                              )
+                                            : collection.type == 'news'
+                                                ? NewsBrowserPage(collection: collection)
+                                                : collection.type == 'events'
+                                                    ? EventsBrowserPage(
+                                                        collectionPath: collection.storagePath ?? '',
+                                                        collectionTitle: collection.title,
+                                                      )
+                                                    : CollectionBrowserPage(collection: collection);
 
                                 Navigator.push(
                                   context,
@@ -525,6 +543,12 @@ class _CollectionCard extends StatelessWidget {
     switch (collection.type) {
       case 'chat':
         return Icons.chat;
+      case 'forum':
+        return Icons.forum;
+      case 'blog':
+        return Icons.article;
+      case 'events':
+        return Icons.event;
       case 'www':
         return Icons.language;
       default:
@@ -808,6 +832,101 @@ class _CreateCollectionDialogState extends State<_CreateCollectionDialog> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // Type dropdown (moved to first position)
+            DropdownButtonFormField<String>(
+              value: _collectionType,
+              decoration: InputDecoration(
+                labelText: _i18n.t('type'),
+                border: const OutlineInputBorder(),
+              ),
+              items: [
+                DropdownMenuItem(
+                  value: 'files',
+                  child: Text(_i18n.t('collection_type_files')),
+                ),
+                DropdownMenuItem(
+                  value: 'forum',
+                  enabled: !_existingTypes.contains('forum'),
+                  child: Text(
+                    '${_i18n.t('collection_type_forum')}${_existingTypes.contains('forum') ? ' ${_i18n.t('already_exists')}' : ''}',
+                    style: _existingTypes.contains('forum')
+                        ? TextStyle(color: Colors.grey)
+                        : null,
+                  ),
+                ),
+                DropdownMenuItem(
+                  value: 'chat',
+                  enabled: !_existingTypes.contains('chat'),
+                  child: Text(
+                    '${_i18n.t('collection_type_chat')}${_existingTypes.contains('chat') ? ' ${_i18n.t('already_exists')}' : ''}',
+                    style: _existingTypes.contains('chat')
+                        ? TextStyle(color: Colors.grey)
+                        : null,
+                  ),
+                ),
+                DropdownMenuItem(
+                  value: 'blog',
+                  enabled: !_existingTypes.contains('blog'),
+                  child: Text(
+                    '${_i18n.t('collection_type_blog')}${_existingTypes.contains('blog') ? ' ${_i18n.t('already_exists')}' : ''}',
+                    style: _existingTypes.contains('blog')
+                        ? TextStyle(color: Colors.grey)
+                        : null,
+                  ),
+                ),
+                DropdownMenuItem(
+                  value: 'events',
+                  enabled: !_existingTypes.contains('events'),
+                  child: Text(
+                    '${_i18n.t('collection_type_events')}${_existingTypes.contains('events') ? ' ${_i18n.t('already_exists')}' : ''}',
+                    style: _existingTypes.contains('events')
+                        ? TextStyle(color: Colors.grey)
+                        : null,
+                  ),
+                ),
+                DropdownMenuItem(
+                  value: 'news',
+                  enabled: !_existingTypes.contains('news'),
+                  child: Text(
+                    '${_i18n.t('collection_type_news')}${_existingTypes.contains('news') ? ' ${_i18n.t('already_exists')}' : ''}',
+                    style: _existingTypes.contains('news')
+                        ? TextStyle(color: Colors.grey)
+                        : null,
+                  ),
+                ),
+                DropdownMenuItem(
+                  value: 'www',
+                  enabled: !_existingTypes.contains('www'),
+                  child: Text(
+                    '${_i18n.t('collection_type_www')}${_existingTypes.contains('www') ? ' ${_i18n.t('already_exists')}' : ''}',
+                    style: _existingTypes.contains('www')
+                        ? TextStyle(color: Colors.grey)
+                        : null,
+                  ),
+                ),
+              ],
+              onChanged: _isCreating ? null : (value) {
+                if (value != null) {
+                  setState(() {
+                    _collectionType = value;
+                    // Auto-set title for non-files types
+                    if (value != 'files') {
+                      _titleController.text = value;
+                    } else {
+                      // Clear title when switching back to files type
+                      if (_titleController.text == 'www' ||
+                          _titleController.text == 'forum' ||
+                          _titleController.text == 'chat' ||
+                          _titleController.text == 'blog' ||
+                          _titleController.text == 'events') {
+                        _titleController.text = '';
+                      }
+                    }
+                  });
+                }
+              },
+            ),
+            const SizedBox(height: 16),
             TextField(
               controller: _titleController,
               decoration: InputDecoration(
@@ -837,65 +956,6 @@ class _CreateCollectionDialogState extends State<_CreateCollectionDialog> {
               onSubmitted: (_) {
                 if (!_isCreating) {
                   _create();
-                }
-              },
-            ),
-            const SizedBox(height: 16),
-            DropdownButtonFormField<String>(
-              value: _collectionType,
-              decoration: const InputDecoration(
-                labelText: 'Collection Type',
-                border: OutlineInputBorder(),
-              ),
-              items: [
-                const DropdownMenuItem(value: 'files', child: Text('Files')),
-                DropdownMenuItem(
-                  value: 'forum',
-                  enabled: !_existingTypes.contains('forum'),
-                  child: Text(
-                    'Forum${_existingTypes.contains('forum') ? ' (already exists)' : ''}',
-                    style: _existingTypes.contains('forum')
-                        ? TextStyle(color: Colors.grey)
-                        : null,
-                  ),
-                ),
-                DropdownMenuItem(
-                  value: 'chat',
-                  enabled: !_existingTypes.contains('chat'),
-                  child: Text(
-                    'Chat${_existingTypes.contains('chat') ? ' (already exists)' : ''}',
-                    style: _existingTypes.contains('chat')
-                        ? TextStyle(color: Colors.grey)
-                        : null,
-                  ),
-                ),
-                DropdownMenuItem(
-                  value: 'www',
-                  enabled: !_existingTypes.contains('www'),
-                  child: Text(
-                    'Website${_existingTypes.contains('www') ? ' (already exists)' : ''}',
-                    style: _existingTypes.contains('www')
-                        ? TextStyle(color: Colors.grey)
-                        : null,
-                  ),
-                ),
-              ],
-              onChanged: _isCreating ? null : (value) {
-                if (value != null) {
-                  setState(() {
-                    _collectionType = value;
-                    // Auto-set title for non-files types
-                    if (value != 'files') {
-                      _titleController.text = value;
-                    } else {
-                      // Clear title when switching back to files type
-                      if (_titleController.text == 'www' ||
-                          _titleController.text == 'forum' ||
-                          _titleController.text == 'chat') {
-                        _titleController.text = '';
-                      }
-                    }
-                  });
                 }
               },
             ),

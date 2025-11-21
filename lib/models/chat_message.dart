@@ -125,8 +125,25 @@ class ChatMessage implements Comparable<ChatMessage> {
   /// Check if message has file attachment
   bool get hasFile => hasMeta('file');
 
-  /// Get attached filename
+  /// Get attached filename (full name with SHA1 prefix)
   String? get attachedFile => getMeta('file');
+
+  /// Get display filename (without SHA1 prefix)
+  /// Format: {sha1}_{original_filename} -> original_filename
+  String? get displayFileName {
+    if (!hasFile) return null;
+    final fullName = getMeta('file')!;
+
+    // Check if file follows SHA1 naming convention
+    final underscoreIndex = fullName.indexOf('_');
+    if (underscoreIndex > 0 && underscoreIndex == 40) {
+      // SHA1 is 40 characters, followed by underscore
+      return fullName.substring(41);
+    }
+
+    // Fallback to full name if not in expected format
+    return fullName;
+  }
 
   /// Check if message has location
   bool get hasLocation => hasMeta('lat') && hasMeta('lon');

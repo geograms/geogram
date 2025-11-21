@@ -118,15 +118,15 @@ GIT_CONFIG_NOSYSTEM=1 gh release create v1.x.x \
 ## Installation
 
 ### Linux
-See [INSTALL.md](https://github.com/geograms/geogram-desktop/blob/main/INSTALL.md)
+See [INSTALL.md](https://github.com/geograms/geogram-desktop/blob/main/docs/installation/INSTALL.md)
 
 ### Windows
-See [INSTALL_WINDOWS.md](https://github.com/geograms/geogram-desktop/blob/main/INSTALL_WINDOWS.md)
+See [INSTALL_WINDOWS.md](https://github.com/geograms/geogram-desktop/blob/main/docs/installation/INSTALL_WINDOWS.md)
 
 ## Building from Source
 
 See platform-specific build documentation:
-- [BUILD_WINDOWS.md](https://github.com/geograms/geogram-desktop/blob/main/BUILD_WINDOWS.md)
+- [BUILD_WINDOWS.md](https://github.com/geograms/geogram-desktop/blob/main/docs/build/BUILD_WINDOWS.md)
 - [README.md](https://github.com/geograms/geogram-desktop/blob/main/README.md)
 
 ## Links

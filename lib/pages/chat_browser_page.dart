@@ -62,7 +62,13 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       if (storagePath == null) {
         throw Exception('Collection storage path is null');
       }
-      await _chatService.initializeCollection(storagePath);
+
+      // Pass current user's npub to initialize admin if needed
+      final currentProfile = _profileService.getProfile();
+      await _chatService.initializeCollection(
+        storagePath,
+        creatorNpub: currentProfile.npub,
+      );
 
       // Load channels
       _channels = _chatService.channels;

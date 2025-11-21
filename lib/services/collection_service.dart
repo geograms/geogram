@@ -8,6 +8,7 @@ import '../models/collection.dart';
 import '../models/chat_channel.dart';
 import '../models/chat_security.dart';
 import '../models/chat_settings.dart';
+import '../models/forum_section.dart';
 import '../util/nostr_key_generator.dart';
 import '../util/tlsh.dart';
 import 'config_service.dart';
@@ -181,18 +182,26 @@ class CollectionService {
         final content = await treeJsonFile.readAsString();
         final entries = json.decode(content) as List<dynamic>;
 
-        for (var entry in entries) {
-          if (entry['type'] == 'file') {
-            fileCount++;
-            totalSize += entry['size'] as int? ?? 0;
+        // Recursively count files including those in subdirectories
+        void countRecursive(List<dynamic> items) {
+          for (var entry in items) {
+            if (entry['type'] == 'file') {
+              fileCount++;
+              totalSize += entry['size'] as int? ?? 0;
+            } else if (entry['type'] == 'directory' && entry['children'] != null) {
+              // Recursively count files in subdirectories
+              countRecursive(entry['children'] as List<dynamic>);
+            }
           }
         }
+
+        countRecursive(entries);
       } else {
-        // If tree.json doesn't exist yet, set to 0
-        // It will be generated soon and counts will be updated on reload
-        stderr.writeln('Warning: tree.json not found for counting, setting counts to 0');
-        fileCount = 0;
-        totalSize = 0;
+        // If tree.json doesn't exist yet, scan filesystem directly
+        await _scanDirectoryForCount(folder, (count, size) {
+          fileCount += count;
+          totalSize += size;
+        });
       }
     } catch (e) {
       stderr.writeln('Error counting files: $e');
@@ -200,6 +209,37 @@ class CollectionService {
 
     collection.filesCount = fileCount;
     collection.totalSize = totalSize;
+  }
+
+  /// Scan directory recursively to count files (fallback when tree.json doesn't exist)
+  Future<void> _scanDirectoryForCount(Directory dir, void Function(int count, int size) onCount) async {
+    try {
+      await for (var entity in dir.list()) {
+        if (entity is File) {
+          // Skip system files
+          final fileName = entity.path.split('/').last;
+          if (!fileName.startsWith('.') &&
+              fileName != 'collection.js' &&
+              fileName != 'tree.json' &&
+              fileName != 'data.js') {
+            try {
+              final stat = await entity.stat();
+              onCount(1, stat.size);
+            } catch (e) {
+              // Skip files that can't be accessed
+            }
+          }
+        } else if (entity is Directory) {
+          // Skip system directories
+          final dirName = entity.path.split('/').last;
+          if (!dirName.startsWith('.') && dirName != 'extra') {
+            await _scanDirectoryForCount(entity, onCount);
+          }
+        }
+      }
+    } catch (e) {
+      stderr.writeln('Error scanning directory ${dir.path}: $e');
+    }
   }
 
   /// Create a new collection
@@ -361,8 +401,12 @@ class CollectionService {
         // Initialize chat collection structure
         await _initializeChatCollection(collectionFolder);
         stderr.writeln('Created chat collection skeleton');
+      } else if (type == 'forum') {
+        // Initialize forum collection structure
+        await _initializeForumCollection(collectionFolder);
+        stderr.writeln('Created forum collection skeleton');
       }
-      // Add more skeleton templates for other types here (forum)
+      // Add more skeleton templates for other types here
     } catch (e) {
       stderr.writeln('Error creating skeleton files: $e');
       // Don't fail collection creation if skeleton creation fails
@@ -452,6 +496,95 @@ class CollectionService {
     );
 
     stderr.writeln('Chat collection initialized with main channel');
+    if (currentProfile.npub.isNotEmpty) {
+      stderr.writeln('Set ${currentProfile.callsign} (${currentProfile.npub}) as admin');
+    }
+  }
+
+  /// Initialize forum collection with default sections and metadata files
+  Future<void> _initializeForumCollection(Directory collectionFolder) async {
+    // Define default sections
+    final defaultSections = [
+      {
+        'id': 'announcements',
+        'name': 'Announcements',
+        'folder': 'announcements',
+        'description': 'Important announcements and updates',
+        'order': 1,
+        'readonly': false,
+      },
+      {
+        'id': 'general',
+        'name': 'General Discussion',
+        'folder': 'general',
+        'description': 'General topics and discussions',
+        'order': 2,
+        'readonly': false,
+      },
+      {
+        'id': 'help',
+        'name': 'Help & Support',
+        'folder': 'help',
+        'description': 'Get help and support from the community',
+        'order': 3,
+        'readonly': false,
+      },
+    ];
+
+    // Create section folders and config files
+    for (var sectionData in defaultSections) {
+      final sectionDir = Directory('${collectionFolder.path}/${sectionData['folder']}');
+      await sectionDir.create();
+
+      // Create section config.json with default settings
+      final config = ForumSectionConfig.defaults(
+        id: sectionData['id'] as String,
+        name: sectionData['name'] as String,
+        description: sectionData['description'] as String?,
+      );
+
+      final configFile = File('${sectionDir.path}/config.json');
+      await configFile.writeAsString(
+        const JsonEncoder.withIndent('  ').convert(config.toJson()),
+      );
+    }
+
+    // Create sections.json in extra/
+    final sectionsFile = File('${collectionFolder.path}/extra/sections.json');
+    final sectionsData = {
+      'version': '1.0',
+      'sections': defaultSections,
+    };
+    await sectionsFile.writeAsString(
+      const JsonEncoder.withIndent('  ').convert(sectionsData),
+    );
+
+    // Create security.json with current user as admin
+    final profileService = ProfileService();
+    final currentProfile = profileService.getProfile();
+    final securityFile = File('${collectionFolder.path}/extra/security.json');
+    final securityData = {
+      'version': '1.0',
+      'adminNpub': currentProfile.npub.isNotEmpty ? currentProfile.npub : null,
+      'moderators': <String>[],
+      'bannedNpubs': <String>[],
+    };
+    await securityFile.writeAsString(
+      const JsonEncoder.withIndent('  ').convert(securityData),
+    );
+
+    // Create settings.json with signing enabled by default
+    final settingsFile = File('${collectionFolder.path}/extra/settings.json');
+    final settingsData = {
+      'version': '1.0',
+      'signMessages': true,
+      'requireSignatures': false,
+    };
+    await settingsFile.writeAsString(
+      const JsonEncoder.withIndent('  ').convert(settingsData),
+    );
+
+    stderr.writeln('Forum collection initialized with ${defaultSections.length} sections');
     if (currentProfile.npub.isNotEmpty) {
       stderr.writeln('Set ${currentProfile.callsign} (${currentProfile.npub}) as admin');
     }

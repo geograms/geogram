@@ -90,19 +90,40 @@ class MessageBubbleWidget extends StatelessWidget {
                         padding: const EdgeInsets.only(top: 8),
                         child: _buildMetadataChips(context, theme, isOwnMessage),
                       ),
-                    // Timestamp
+                    // Timestamp and options
                     Padding(
                       padding: const EdgeInsets.only(top: 6),
-                      child: Text(
-                        message.displayTime,
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: isOwnMessage
-                              ? theme.colorScheme.onPrimaryContainer
-                                  .withOpacity(0.7)
-                              : theme.colorScheme.onSurfaceVariant
-                                  .withOpacity(0.7),
-                          fontSize: 11,
-                        ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            message.displayTime,
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: isOwnMessage
+                                  ? theme.colorScheme.onPrimaryContainer
+                                      .withOpacity(0.7)
+                                  : theme.colorScheme.onSurfaceVariant
+                                      .withOpacity(0.7),
+                              fontSize: 11,
+                            ),
+                          ),
+                          // Options menu button (moderator only)
+                          if (canDelete && onDelete != null) ...[
+                            const SizedBox(width: 6),
+                            InkWell(
+                              onTap: () => _showMessageOptions(context),
+                              child: Icon(
+                                Icons.more_horiz,
+                                size: 16,
+                                color: isOwnMessage
+                                    ? theme.colorScheme.onPrimaryContainer
+                                        .withOpacity(0.6)
+                                    : theme.colorScheme.onSurfaceVariant
+                                        .withOpacity(0.6),
+                              ),
+                            ),
+                          ],
+                        ],
                       ),
                     ),
                   ],
