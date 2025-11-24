@@ -10,6 +10,7 @@ import '../services/log_service.dart';
 import '../services/i18n_service.dart';
 import '../services/relay_service.dart';
 import '../services/profile_service.dart';
+import '../services/config_service.dart';
 
 /// Full-page reusable location picker
 /// Can be used throughout the app for selecting coordinates
@@ -28,16 +29,35 @@ class LocationPickerPage extends StatefulWidget {
 class _LocationPickerPageState extends State<LocationPickerPage> {
   final I18nService _i18n = I18nService();
   final ProfileService _profileService = ProfileService();
+  final ConfigService _configService = ConfigService();
   final MapController _mapController = MapController();
   late TextEditingController _latController;
   late TextEditingController _lonController;
   late LatLng _selectedPosition;
   bool _isOnline = true;
 
+  // Default to central Europe (Munich/Vienna area)
+  static const LatLng _defaultPosition = LatLng(48.0, 10.0);
+
   @override
   void initState() {
     super.initState();
-    _selectedPosition = widget.initialPosition ?? const LatLng(0, 0);
+
+    // Priority: 1) provided initialPosition, 2) last saved position, 3) Europe default
+    if (widget.initialPosition != null) {
+      _selectedPosition = widget.initialPosition!;
+    } else {
+      // Try to get last saved position from config
+      final lastLat = _configService.get('lastLocationPickerLat');
+      final lastLon = _configService.get('lastLocationPickerLon');
+
+      if (lastLat != null && lastLon != null) {
+        _selectedPosition = LatLng(lastLat as double, lastLon as double);
+      } else {
+        _selectedPosition = _defaultPosition;
+      }
+    }
+
     _latController = TextEditingController(
       text: _selectedPosition.latitude.toStringAsFixed(6),
     );
@@ -92,8 +112,14 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
     _mapController.move(_selectedPosition, _mapController.camera.zoom);
   }
 
-  void _confirmSelection() {
-    Navigator.of(context).pop(_selectedPosition);
+  Future<void> _confirmSelection() async {
+    // Save the selected position for next time
+    await _configService.set('lastLocationPickerLat', _selectedPosition.latitude);
+    await _configService.set('lastLocationPickerLon', _selectedPosition.longitude);
+
+    if (mounted) {
+      Navigator.of(context).pop(_selectedPosition);
+    }
   }
 
   /// Get tile URL - use relay if available, otherwise fallback to OSM
