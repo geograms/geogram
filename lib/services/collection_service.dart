@@ -137,6 +137,7 @@ class CollectionService {
       await _loadSecuritySettings(collection, folder);
 
       // Check if all required files exist (collection.js, tree.json, data.js, index.html)
+      // Only generate missing files, don't validate/regenerate on startup to avoid file handle exhaustion
       if (!await _hasRequiredFiles(folder)) {
         stderr.writeln('Missing required files for collection: ${collection.title}');
         stderr.writeln('Generating tree.json, data.js, and index.html...');
@@ -145,19 +146,9 @@ class CollectionService {
         await _generateAndSaveTreeJson(folder);
         await _generateAndSaveDataJs(folder);
         await _generateAndSaveIndexHtml(folder);
-      } else {
-        // Validate tree.json matches directory contents
-        final isValid = await _validateTreeJson(folder);
-        if (!isValid) {
-          stderr.writeln('tree.json out of sync for collection: ${collection.title}');
-          stderr.writeln('Regenerating tree.json, data.js, and index.html...');
-
-          // Regenerate files if out of sync
-          await _generateAndSaveTreeJson(folder);
-          await _generateAndSaveDataJs(folder);
-          await _generateAndSaveIndexHtml(folder);
-        }
       }
+      // Note: Validation and regeneration are skipped on startup to prevent "too many open files" errors
+      // Tree files will be regenerated when explicitly requested or when collection is modified
 
       // Count files
       await _countCollectionFiles(collection, folder);
