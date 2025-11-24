@@ -3,8 +3,9 @@
  * License: Apache-2.0
  */
 
+import 'dart:io' as io;
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
-import 'dart:io';
 import 'package:path/path.dart' as path;
 import 'package:url_launcher/url_launcher.dart';
 import '../models/event.dart';
@@ -282,23 +283,31 @@ class EventDetailWidget extends StatelessWidget {
         const SizedBox(height: 8),
         ClipRRect(
           borderRadius: BorderRadius.circular(8),
-          child: Image.file(
-            File(flyerPath),
-            fit: BoxFit.contain,
-            errorBuilder: (context, error, stackTrace) {
-              return Container(
+          child: kIsWeb
+            ? Container(
                 height: 200,
                 color: theme.colorScheme.surfaceVariant,
                 child: Center(
-                  child: Icon(
-                    Icons.broken_image,
-                    size: 48,
-                    color: theme.colorScheme.onSurfaceVariant,
-                  ),
+                  child: Text(i18n.t('image_not_available_on_web')),
                 ),
-              );
-            },
-          ),
+              )
+            : Image.file(
+                io.File(flyerPath),
+                fit: BoxFit.contain,
+                errorBuilder: (context, error, stackTrace) {
+                  return Container(
+                    height: 200,
+                    color: theme.colorScheme.surfaceVariant,
+                    child: Center(
+                      child: Icon(
+                        Icons.broken_image,
+                        size: 48,
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  );
+                },
+              ),
         ),
       ],
     );
@@ -720,7 +729,7 @@ class EventFilesSection extends StatefulWidget {
 }
 
 class _EventFilesSectionState extends State<EventFilesSection> {
-  List<FileSystemEntity> _files = [];
+  List<io.FileSystemEntity> _files = [];
   bool _isLoading = true;
 
   @override
@@ -739,11 +748,17 @@ class _EventFilesSectionState extends State<EventFilesSection> {
   }
 
   Future<void> _loadFiles() async {
+    // File system operations not supported on web
+    if (kIsWeb) {
+      setState(() => _isLoading = false);
+      return;
+    }
+
     setState(() => _isLoading = true);
 
     try {
       final year = widget.event.id.substring(0, 4);
-      final eventDir = Directory(
+      final eventDir = io.Directory(
         '${widget.collectionPath}/events/$year/${widget.event.id}',
       );
 
@@ -752,7 +767,7 @@ class _EventFilesSectionState extends State<EventFilesSection> {
 
         // Filter out directories and system files
         _files = entities.where((entity) {
-          if (entity is! File) return false;
+          if (entity is! io.File) return false;
 
           final fileName = path.basename(entity.path);
           // Exclude system files
@@ -790,7 +805,8 @@ class _EventFilesSectionState extends State<EventFilesSection> {
     return Icons.insert_drive_file;
   }
 
-  Future<void> _openFile(FileSystemEntity file) async {
+  Future<void> _openFile(io.FileSystemEntity file) async {
+    if (kIsWeb) return;
     final uri = Uri.file(file.path);
     if (await canLaunchUrl(uri)) {
       await launchUrl(uri);
@@ -899,11 +915,11 @@ class _EventFilesSectionState extends State<EventFilesSection> {
                       Expanded(
                         child: Padding(
                           padding: const EdgeInsets.all(8),
-                          child: isImage
+                          child: (isImage && !kIsWeb)
                               ? ClipRRect(
                                   borderRadius: BorderRadius.circular(4),
                                   child: Image.file(
-                                    File(file.path),
+                                    io.File(file.path),
                                     fit: BoxFit.cover,
                                     errorBuilder: (context, error, stackTrace) {
                                       return Icon(

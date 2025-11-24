@@ -1,7 +1,9 @@
 import 'dart:convert';
-import 'dart:io';
+import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:path_provider/path_provider.dart';
 import '../util/nostr_key_generator.dart';
+import '../platform/web_storage.dart' if (dart.library.io) '../platform/web_storage_stub.dart';
 
 /// Service for managing application configuration stored in config.json
 class ConfigService {
@@ -11,9 +13,19 @@ class ConfigService {
 
   File? _configFile;
   Map<String, dynamic> _config = {};
+  static const String _webStorageKey = 'geogram_config';
 
   /// Initialize the config service and load existing configuration
   Future<void> init() async {
+    if (kIsWeb) {
+      await _initWeb();
+    } else {
+      await _initNative();
+    }
+  }
+
+  /// Initialize for native platforms (file-based storage)
+  Future<void> _initNative() async {
     final appDir = await getApplicationDocumentsDirectory();
     final configDir = Directory('${appDir.path}/geogram');
 
@@ -26,23 +38,44 @@ class ConfigService {
     if (await _configFile!.exists()) {
       await _load();
     } else {
-      // Create default config
-      _config = {
-        'version': '1.0.0',
-        'created': DateTime.now().toIso8601String(),
-        'collections': {
-          'favorites': <String>[],
-        },
-        'settings': {
-          'theme': 'system',
-          'language': 'en',
-        },
-      };
+      _createDefaultConfig();
       await _save();
     }
   }
 
-  /// Load configuration from disk
+  /// Initialize for web platform (localStorage-based storage)
+  Future<void> _initWeb() async {
+    final stored = WebStorage.get(_webStorageKey);
+    if (stored != null) {
+      try {
+        _config = json.decode(stored) as Map<String, dynamic>;
+      } catch (e) {
+        print('Error loading web config: $e');
+        _createDefaultConfig();
+        await _save();
+      }
+    } else {
+      _createDefaultConfig();
+      await _save();
+    }
+  }
+
+  /// Create default configuration
+  void _createDefaultConfig() {
+    _config = {
+      'version': '1.0.0',
+      'created': DateTime.now().toIso8601String(),
+      'collections': {
+        'favorites': <String>[],
+      },
+      'settings': {
+        'theme': 'system',
+        'language': 'en',
+      },
+    };
+  }
+
+  /// Load configuration from disk (native only)
   Future<void> _load() async {
     try {
       final contents = await _configFile!.readAsString();
@@ -53,13 +86,22 @@ class ConfigService {
     }
   }
 
-  /// Save configuration to disk
+  /// Save configuration to storage
   Future<void> _save() async {
-    try {
-      final contents = JsonEncoder.withIndent('  ').convert(_config);
-      await _configFile!.writeAsString(contents);
-    } catch (e) {
-      stderr.writeln('Error saving config: $e');
+    if (kIsWeb) {
+      try {
+        final contents = JsonEncoder.withIndent('  ').convert(_config);
+        WebStorage.set(_webStorageKey, contents);
+      } catch (e) {
+        print('Error saving web config: $e');
+      }
+    } else {
+      try {
+        final contents = JsonEncoder.withIndent('  ').convert(_config);
+        await _configFile!.writeAsString(contents);
+      } catch (e) {
+        stderr.writeln('Error saving config: $e');
+      }
     }
   }
 

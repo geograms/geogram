@@ -5,7 +5,7 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'dart:io';
+import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import '../models/blog_post.dart';

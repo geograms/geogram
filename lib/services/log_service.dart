@@ -1,5 +1,6 @@
 import 'dart:collection';
-import 'dart:io';
+import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:path_provider/path_provider.dart';
 
 /// Global singleton for logging
@@ -17,6 +18,13 @@ class LogService {
 
   Future<void> init() async {
     if (_initialized) return;
+
+    // On web, we only use in-memory logging
+    if (kIsWeb) {
+      _initialized = true;
+      print('=== Application Started (Web): ${DateTime.now()} ===');
+      return;
+    }
 
     try {
       final appDir = await getApplicationDocumentsDirectory();
@@ -36,28 +44,31 @@ class LogService {
       _logSink!.writeln('\n=== Application Started: ${DateTime.now()} ===');
       await _logSink!.flush();
     } catch (e) {
-      // Can't use log() here as we're in init(), use stderr
-      stderr.writeln('Error initializing log file: $e');
+      // Can't use log() here as we're in init(), use print on web or stderr on native
+      print('Error initializing log file: $e');
+      _initialized = true; // Still mark as initialized to allow in-memory logging
     }
   }
 
   void _writeToFile(String message) {
-    if (_logSink == null) return;
+    if (kIsWeb || _logSink == null) return;
 
     try {
       // Write log entry to the open sink
       _logSink!.writeln(message);
     } catch (e) {
-      stderr.writeln('Error writing to log file: $e');
+      print('Error writing to log file: $e');
     }
   }
 
   Future<void> dispose() async {
+    if (kIsWeb) return;
+
     try {
       await _logSink?.flush();
       await _logSink?.close();
     } catch (e) {
-      stderr.writeln('Error closing log file: $e');
+      print('Error closing log file: $e');
     }
   }
 

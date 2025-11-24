@@ -1,4 +1,5 @@
-import 'dart:io';
+import 'dart:io' as io;
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:file_picker/file_picker.dart';
@@ -239,9 +240,9 @@ class _ProfilePageState extends State<ProfilePage> {
                                   decoration: BoxDecoration(
                                     shape: BoxShape.circle,
                                     color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                                    image: _profileImagePath != null
+                                    image: (_profileImagePath != null && !kIsWeb)
                                         ? DecorationImage(
-                                            image: FileImage(File(_profileImagePath!)),
+                                            image: FileImage(io.File(_profileImagePath!)),
                                             fit: BoxFit.cover,
                                           )
                                         : null,

@@ -1,5 +1,6 @@
 import 'dart:async';
-import 'dart:io';
+import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import '../models/relay.dart';
@@ -20,6 +21,12 @@ class RelayDiscoveryService {
 
   /// Start automatic discovery
   void start() {
+    // Network interface scanning not supported on web
+    if (kIsWeb) {
+      LogService().log('Relay auto-discovery not supported on web platform');
+      return;
+    }
+
     LogService().log('Starting relay auto-discovery service');
 
     // Run initial scan
@@ -40,6 +47,9 @@ class RelayDiscoveryService {
 
   /// Discover relays on local network
   Future<void> discover() async {
+    // Network interface scanning not supported on web
+    if (kIsWeb) return;
+
     if (_isScanning) {
       LogService().log('Discovery scan already in progress, skipping');
       return;

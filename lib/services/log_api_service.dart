@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
+import 'dart:io' as io;
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:shelf/shelf.dart' as shelf;
 import 'package:shelf/shelf_io.dart' as shelf_io;
 import 'log_service.dart';
@@ -10,10 +11,17 @@ class LogApiService {
   factory LogApiService() => _instance;
   LogApiService._internal();
 
-  HttpServer? _server;
+  // Use dynamic to avoid type conflicts between stub and real dart:io
+  dynamic _server;
   final int port = 45678;
 
   Future<void> start() async {
+    // HTTP server not supported on web
+    if (kIsWeb) {
+      LogService().log('LogApiService: Not supported on web platform');
+      return;
+    }
+
     if (_server != null) {
       LogService().log('LogApiService: Server already running on port $port');
       return;
@@ -26,7 +34,7 @@ class LogApiService {
 
       _server = await shelf_io.serve(
         handler,
-        InternetAddress.loopbackIPv4,
+        io.InternetAddress.loopbackIPv4,
         port,
       );
 
@@ -37,8 +45,10 @@ class LogApiService {
   }
 
   Future<void> stop() async {
+    if (kIsWeb) return;
+
     if (_server != null) {
-      await _server!.close();
+      await (_server as io.HttpServer).close();
       _server = null;
       LogService().log('LogApiService: Stopped');
     }

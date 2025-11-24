@@ -3,7 +3,7 @@
  * License: Apache-2.0
  */
 
-import 'dart:io';
+import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'package:crypto/crypto.dart';
 import 'dart:convert';
 import '../models/blog_post.dart';

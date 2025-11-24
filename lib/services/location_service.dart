@@ -4,7 +4,7 @@
  */
 
 import 'dart:convert';
-import 'dart:io';
+import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'dart:math';
 import 'package:flutter/services.dart' show rootBundle;
 

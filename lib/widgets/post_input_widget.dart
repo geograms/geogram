@@ -6,7 +6,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:file_picker/file_picker.dart';
-import 'dart:io';
+import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 
 /// Widget for composing and sending forum posts/replies
 class PostInputWidget extends StatefulWidget {

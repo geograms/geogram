@@ -4,7 +4,7 @@
  */
 
 import 'package:flutter/material.dart';
-import 'dart:io';
+import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'package:file_picker/file_picker.dart';
 import '../models/event.dart';
 import '../models/event_link.dart';

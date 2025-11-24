@@ -1,4 +1,4 @@
-import 'dart:io';
+import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
@@ -127,6 +127,12 @@ class ProfileService {
 
   /// Set profile picture from file
   Future<String?> setProfilePicture(String sourcePath) async {
+    // On web, profile pictures are handled differently (e.g., base64 in config)
+    if (kIsWeb) {
+      LogService().log('Profile picture file storage not supported on web');
+      return null;
+    }
+
     try {
       final file = File(sourcePath);
       if (!await file.exists()) {
@@ -144,7 +150,6 @@ class ProfileService {
       // Copy file to app directory with consistent name
       final extension = path.extension(sourcePath);
       final destPath = path.join(geogramDir.path, 'profile_picture$extension');
-      final destFile = File(destPath);
 
       await file.copy(destPath);
       LogService().log('Profile picture saved to: $destPath');
@@ -160,14 +165,17 @@ class ProfileService {
   Future<void> removeProfilePicture() async {
     final profile = getProfile();
     if (profile.profileImagePath != null) {
-      try {
-        final file = File(profile.profileImagePath!);
-        if (await file.exists()) {
-          await file.delete();
-          LogService().log('Profile picture deleted');
+      // Only try to delete file on native platforms
+      if (!kIsWeb) {
+        try {
+          final file = File(profile.profileImagePath!);
+          if (await file.exists()) {
+            await file.delete();
+            LogService().log('Profile picture deleted');
+          }
+        } catch (e) {
+          LogService().log('Error deleting profile picture: $e');
         }
-      } catch (e) {
-        LogService().log('Error deleting profile picture: $e');
       }
 
       // Update profile
@@ -179,6 +187,9 @@ class ProfileService {
   Future<bool> hasProfilePicture() async {
     final profile = getProfile();
     if (profile.profileImagePath == null) return false;
+
+    // On web, we can't check file existence
+    if (kIsWeb) return false;
 
     final file = File(profile.profileImagePath!);
     return await file.exists();

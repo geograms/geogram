@@ -3,7 +3,7 @@
  * License: Apache-2.0
  */
 
-import 'dart:io';
+import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'dart:convert';
 import 'dart:math' as math;
 import '../models/report.dart';

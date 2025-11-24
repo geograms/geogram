@@ -9,7 +9,7 @@ import '../models/chat_security.dart';
 import '../services/chat_service.dart';
 import '../services/profile_service.dart';
 import 'dart:convert';
-import 'dart:io';
+import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'package:path/path.dart' as path;
 
 /// Page for managing chat settings and moderators

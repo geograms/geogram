@@ -3,7 +3,7 @@
  * License: Apache-2.0
  */
 
-import 'dart:io';
+import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import '../models/postcard.dart';
 
 /// Service for managing postcards (sneakernet message delivery)

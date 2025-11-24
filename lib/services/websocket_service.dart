@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
+import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'dart:typed_data';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:crypto/crypto.dart';
