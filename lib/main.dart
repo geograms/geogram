@@ -1109,13 +1109,28 @@ class _CreateCollectionDialogState extends State<_CreateCollectionDialog> {
 
   Future<void> _checkExistingTypes() async {
     try {
-      final collections = await CollectionService().loadCollections();
-      setState(() {
-        _existingTypes = collections
-            .where((c) => c.type != 'files')
-            .map((c) => c.type)
+      // Quick check for existing collection types by scanning folder names only
+      // This avoids expensive loadCollections() call which validates all collections
+      final collectionsService = CollectionService();
+      final collectionsDir = Directory('${collectionsService.getDefaultCollectionsPath()}');
+
+      if (await collectionsDir.exists()) {
+        final folders = await collectionsDir.list().toList();
+        final existingFolderNames = folders
+            .where((e) => e is Directory)
+            .map((e) => e.path.split('/').last)
             .toSet();
-      });
+
+        // Known fixed collection types (non-files types use type name as folder name)
+        final fixedTypes = {
+          'forum', 'chat', 'blog', 'events', 'news', 'www',
+          'postcards', 'contacts', 'places', 'market', 'report'
+        };
+
+        setState(() {
+          _existingTypes = fixedTypes.intersection(existingFolderNames);
+        });
+      }
     } catch (e) {
       LogService().log('Error checking existing types: $e');
     }

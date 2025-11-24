@@ -24,6 +24,14 @@ class CollectionService {
   Directory? _collectionsDir;
   final ConfigService _configService = ConfigService();
 
+  /// Get the default collections directory path
+  String getDefaultCollectionsPath() {
+    if (_collectionsDir == null) {
+      throw Exception('CollectionService not initialized. Call init() first.');
+    }
+    return _collectionsDir!.path;
+  }
+
   /// Initialize the collection service
   Future<void> init() async {
     try {
