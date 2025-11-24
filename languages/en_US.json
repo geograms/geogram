@@ -392,6 +392,7 @@
   "collection_type_contacts": "Contacts",
   "collection_type_places": "Places",
   "collection_type_market": "Market",
+  "collection_type_report": "Reports",
   "create_shop": "Create Shop",
   "shop_name": "Shop Name",
   "shop_name_hint": "e.g., My Awesome Shop",

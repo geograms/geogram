@@ -31,6 +31,7 @@ import 'pages/postcards_browser_page.dart';
 import 'pages/contacts_browser_page.dart';
 import 'pages/places_browser_page.dart';
 import 'pages/market_browser_page.dart';
+import 'pages/report_browser_page.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -575,7 +576,12 @@ class _CollectionsPageState extends State<CollectionsPage> {
                                                                             collectionPath: collection.storagePath ?? '',
                                                                             collectionTitle: collection.title,
                                                                           )
-                                                                        : CollectionBrowserPage(collection: collection);
+                                                                        : collection.type == 'report'
+                                                                            ? ReportBrowserPage(
+                                                                                collectionPath: collection.storagePath ?? '',
+                                                                                collectionTitle: collection.title,
+                                                                              )
+                                                                            : CollectionBrowserPage(collection: collection);
 
                                               Navigator.push(
                                                 context,
@@ -661,7 +667,12 @@ class _CollectionsPageState extends State<CollectionsPage> {
                                                                                       collectionPath: collection.storagePath ?? '',
                                                                                       collectionTitle: collection.title,
                                                                                     )
-                                                                                  : CollectionBrowserPage(collection: collection);
+                                                                                  : collection.type == 'report'
+                                                                                      ? ReportBrowserPage(
+                                                                                          collectionPath: collection.storagePath ?? '',
+                                                                                          collectionTitle: collection.title,
+                                                                                        )
+                                                                                      : CollectionBrowserPage(collection: collection);
 
                                               Navigator.push(
                                                 context,
