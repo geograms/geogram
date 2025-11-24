@@ -1,5 +1,5 @@
 import 'dart:convert';
-import 'dart:io';
+import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'dart:typed_data';
 import 'package:path_provider/path_provider.dart';
 import 'package:crypto/crypto.dart';
@@ -1098,6 +1098,38 @@ class CollectionService {
     return await _buildFileTree(collectionDir);
   }
 
+  /// Scan directory non-recursively to avoid "too many open files"
+  /// This processes directories one level at a time with proper cleanup
+  Future<List<FileSystemEntity>> _scanDirectoryNonRecursive(Directory root) async {
+    final allEntities = <FileSystemEntity>[];
+    final dirsToProcess = <Directory>[root];
+
+    while (dirsToProcess.isNotEmpty) {
+      final currentDir = dirsToProcess.removeAt(0);
+
+      try {
+        // Process one directory at a time, immediately converting to list to close stream
+        final entities = await currentDir.list(recursive: false, followLinks: false).toList();
+
+        for (var entity in entities) {
+          // Skip if it's the root directory itself
+          if (entity.path == root.path) continue;
+
+          allEntities.add(entity);
+
+          // If it's a directory, add to queue for processing
+          if (entity is Directory) {
+            dirsToProcess.add(entity);
+          }
+        }
+      } catch (e) {
+        stderr.writeln('Error scanning directory ${currentDir.path}: $e');
+      }
+    }
+
+    return allEntities;
+  }
+
   /// Generate and save tree.json
   Future<void> _generateAndSaveTreeJson(Directory folder) async {
     try {
@@ -1111,8 +1143,9 @@ class CollectionService {
         isWwwType = content.contains('"type": "www"');
       }
 
-      // Recursively scan all files and directories
-      final entities = await folder.list(recursive: true, followLinks: false).toList();
+      // Use non-recursive scan to avoid "too many open files" error
+      // Build tree manually by processing one level at a time
+      final entities = await _scanDirectoryNonRecursive(folder);
 
       for (var entity in entities) {
         final relativePath = entity.path.substring(folder.path.length + 1);
@@ -1179,7 +1212,8 @@ class CollectionService {
       }
 
       // First pass: collect all entities without reading files
-      final entities = await folder.list(recursive: true, followLinks: false).toList();
+      // Use non-recursive scan to avoid "too many open files" error
+      final entities = await _scanDirectoryNonRecursive(folder);
 
       for (var entity in entities) {
         final relativePath = entity.path.substring(folder.path.length + 1);
