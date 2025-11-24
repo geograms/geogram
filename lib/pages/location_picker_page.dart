@@ -6,6 +6,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
+import 'package:http/http.dart' as http;
+import 'dart:convert';
 import '../services/log_service.dart';
 import '../services/i18n_service.dart';
 import '../services/relay_service.dart';
@@ -43,9 +45,10 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
   void initState() {
     super.initState();
 
-    // Priority: 1) provided initialPosition, 2) last saved position, 3) Europe default
+    // Priority: 1) provided initialPosition, 2) last saved position, 3) GeoIP, 4) Europe default
     if (widget.initialPosition != null) {
       _selectedPosition = widget.initialPosition!;
+      _initializeControllers();
     } else {
       // Try to get last saved position from config
       final lastLat = _configService.get('lastLocationPickerLat');
@@ -53,11 +56,17 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
 
       if (lastLat != null && lastLon != null) {
         _selectedPosition = LatLng(lastLat as double, lastLon as double);
+        _initializeControllers();
       } else {
+        // Try GeoIP, fallback to Europe default
         _selectedPosition = _defaultPosition;
+        _initializeControllers();
+        _fetchGeoIPLocation();
       }
     }
+  }
 
+  void _initializeControllers() {
     _latController = TextEditingController(
       text: _selectedPosition.latitude.toStringAsFixed(6),
     );
@@ -69,6 +78,37 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _mapController.move(_selectedPosition, 10.0);
     });
+  }
+
+  Future<void> _fetchGeoIPLocation() async {
+    try {
+      // Use ip-api.com free GeoIP service (no API key required)
+      final response = await http.get(
+        Uri.parse('http://ip-api.com/json/?fields=lat,lon'),
+      ).timeout(const Duration(seconds: 5));
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        final lat = data['lat'] as double?;
+        final lon = data['lon'] as double?;
+
+        if (lat != null && lon != null && mounted) {
+          setState(() {
+            _selectedPosition = LatLng(lat, lon);
+            _latController.text = lat.toStringAsFixed(6);
+            _lonController.text = lon.toStringAsFixed(6);
+          });
+
+          // Smoothly move map to GeoIP location
+          _mapController.move(_selectedPosition, 10.0);
+
+          LogService().log('GeoIP location: $lat, $lon');
+        }
+      }
+    } catch (e) {
+      // Silently fail - already defaulted to Europe
+      LogService().log('Could not fetch GeoIP location: $e');
+    }
   }
 
   @override
