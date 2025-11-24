@@ -178,13 +178,41 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
           ),
         ],
       ),
-      body: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Left panel: Place list
-          Expanded(
-            flex: 1,
-            child: Column(
+      body: LayoutBuilder(
+        builder: (context, constraints) {
+          // Use two-panel layout for wide screens, single panel for narrow
+          final isWideScreen = constraints.maxWidth >= 600;
+
+          if (isWideScreen) {
+            // Desktop/landscape: Two-panel layout
+            return Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Left panel: Place list
+                Expanded(
+                  flex: 1,
+                  child: _buildPlaceList(context),
+                ),
+                const VerticalDivider(width: 1),
+                // Right panel: Place detail
+                Expanded(
+                  flex: 2,
+                  child: _buildPlaceDetailPanel(),
+                ),
+              ],
+            );
+          } else {
+            // Mobile/portrait: Single panel
+            // Show place list, detail opens in full screen
+            return _buildPlaceList(context, isMobileView: true);
+          }
+        },
+      ),
+    );
+  }
+
+  Widget _buildPlaceList(BuildContext context, {bool isMobileView = false}) {
+    return Column(
               children: [
                 // Search bar
                 Padding(
@@ -265,34 +293,26 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
                               itemCount: _filteredPlaces.length,
                               itemBuilder: (context, index) {
                                 final place = _filteredPlaces[index];
-                                return _buildPlaceListTile(place);
+                                return _buildPlaceListTile(place, isMobileView: isMobileView);
                               },
                             ),
                 ),
               ],
-            ),
-          ),
-
-          const VerticalDivider(width: 1),
-
-          // Right panel: Place detail
-          Expanded(
-            flex: 2,
-            child: _selectedPlace == null
-                ? Center(
-                    child: Text(_i18n.t('select_place_to_view')),
-                  )
-                : Align(
-                alignment: Alignment.topCenter,
-                child: _buildPlaceDetail(_selectedPlace!),
-              ),
-          ),
-        ],
-      ),
-    );
+            );
   }
 
-  Widget _buildPlaceListTile(Place place) {
+  Widget _buildPlaceDetailPanel() {
+    return _selectedPlace == null
+        ? Center(
+            child: Text(_i18n.t('select_place_to_view')),
+          )
+        : Align(
+            alignment: Alignment.topCenter,
+            child: _buildPlaceDetail(_selectedPlace!),
+          );
+  }
+
+  Widget _buildPlaceListTile(Place place, {bool isMobileView = false}) {
     return ListTile(
       leading: CircleAvatar(
         child: Icon(_getTypeIcon(place.type)),
@@ -307,7 +327,7 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
         overflow: TextOverflow.ellipsis,
       ),
       selected: _selectedPlace?.folderPath == place.folderPath,
-      onTap: () => _selectPlace(place),
+      onTap: () => isMobileView ? _selectPlaceMobile(place) : _selectPlace(place),
       trailing: PopupMenuButton(
         itemBuilder: (context) => [
           PopupMenuItem(value: 'delete', child: Text(_i18n.t('delete'))),
@@ -317,6 +337,26 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
         },
       ),
     );
+  }
+
+  Future<void> _selectPlaceMobile(Place place) async {
+    if (!mounted) return;
+
+    // Navigate to full-screen detail view
+    final result = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder: (context) => _PlaceDetailPage(
+          place: place,
+          placeService: _placeService,
+          i18n: _i18n,
+        ),
+      ),
+    );
+
+    // Reload places if changes were made
+    if (result == true && mounted) {
+      await _loadPlaces();
+    }
   }
 
   IconData _getTypeIcon(String? type) {
@@ -495,6 +535,254 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Full-screen place detail page for mobile view
+class _PlaceDetailPage extends StatefulWidget {
+  final Place place;
+  final PlaceService placeService;
+  final I18nService i18n;
+
+  const _PlaceDetailPage({
+    Key? key,
+    required this.place,
+    required this.placeService,
+    required this.i18n,
+  }) : super(key: key);
+
+  @override
+  State<_PlaceDetailPage> createState() => _PlaceDetailPageState();
+}
+
+class _PlaceDetailPageState extends State<_PlaceDetailPage> {
+  bool _hasChanges = false;
+
+  IconData _getTypeIcon(String? type) {
+    switch (type?.toLowerCase()) {
+      case 'restaurant':
+        return Icons.restaurant;
+      case 'cafe':
+      case 'coffee':
+        return Icons.local_cafe;
+      case 'monument':
+      case 'landmark':
+        return Icons.account_balance;
+      case 'park':
+        return Icons.park;
+      case 'museum':
+        return Icons.museum;
+      case 'shop':
+      case 'store':
+        return Icons.store;
+      case 'hotel':
+        return Icons.hotel;
+      case 'hospital':
+        return Icons.local_hospital;
+      case 'school':
+        return Icons.school;
+      case 'church':
+        return Icons.church;
+      default:
+        return Icons.place;
+    }
+  }
+
+  Future<void> _deletePlace() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(widget.i18n.t('delete_place')),
+        content: Text(widget.i18n.t('delete_place_confirm', params: [widget.place.name])),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text(widget.i18n.t('cancel')),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            child: Text(widget.i18n.t('delete')),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      final success = await widget.placeService.deletePlace(widget.place);
+
+      if (success && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(widget.i18n.t('place_deleted', params: [widget.place.name]))),
+        );
+        _hasChanges = true;
+        Navigator.pop(context, true);
+      }
+    }
+  }
+
+  Widget _buildInfoSection(String title, List<Widget> children) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const SizedBox(height: 16),
+        Text(
+          title,
+          style: Theme.of(context).textTheme.titleMedium,
+        ),
+        const SizedBox(height: 8),
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: children,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildInfoRow(String label, String value, {bool monospace = false}) {
+    if (value.isEmpty) return const SizedBox.shrink();
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 120,
+            child: Text(
+              label,
+              style: const TextStyle(fontWeight: FontWeight.bold),
+            ),
+          ),
+          Expanded(
+            child: SelectableText(
+              value,
+              style: monospace
+                  ? const TextStyle(fontFamily: 'monospace', fontSize: 12)
+                  : null,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return PopScope(
+      canPop: true,
+      onPopInvoked: (didPop) {
+        if (didPop && _hasChanges) {
+          Navigator.of(context).pop(true);
+        }
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          title: Text(widget.place.name),
+        ),
+        body: SingleChildScrollView(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Header
+              Row(
+                children: [
+                  CircleAvatar(
+                    radius: 30,
+                    child: Icon(_getTypeIcon(widget.place.type), size: 30),
+                  ),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          widget.place.name,
+                          style: Theme.of(context).textTheme.headlineSmall,
+                        ),
+                        if (widget.place.type != null)
+                          Text(
+                            widget.place.type!,
+                            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                  color: Theme.of(context).colorScheme.secondary,
+                                ),
+                          ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+
+              const SizedBox(height: 24),
+
+              // Basic info
+              _buildInfoSection(widget.i18n.t('basic_information'), [
+                _buildInfoRow(widget.i18n.t('coordinates'), widget.place.coordinatesString, monospace: true),
+                _buildInfoRow(widget.i18n.t('radius'), '${widget.place.radius} ${widget.i18n.t('meters')}'),
+                if (widget.place.address != null)
+                  _buildInfoRow(widget.i18n.t('address'), widget.place.address!),
+                if (widget.place.founded != null)
+                  _buildInfoRow(widget.i18n.t('founded'), widget.place.founded!),
+                if (widget.place.hours != null)
+                  _buildInfoRow(widget.i18n.t('hours'), widget.place.hours!),
+                _buildInfoRow(widget.i18n.t('author'), widget.place.author),
+                _buildInfoRow(widget.i18n.t('created'), widget.place.displayCreated),
+              ]),
+
+              // Description
+              if (widget.place.description.isNotEmpty) ...[
+                const SizedBox(height: 16),
+                Text(
+                  widget.i18n.t('description'),
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+                const SizedBox(height: 8),
+                Card(
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Text(widget.place.description),
+                  ),
+                ),
+              ],
+
+              // History
+              if (widget.place.history != null && widget.place.history!.isNotEmpty) ...[
+                const SizedBox(height: 16),
+                Text(
+                  widget.i18n.t('history'),
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+                const SizedBox(height: 8),
+                Card(
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Text(widget.place.history!),
+                  ),
+                ),
+              ],
+
+              const SizedBox(height: 24),
+
+              // Actions
+              FilledButton.icon(
+                icon: const Icon(Icons.delete),
+                label: Text(widget.i18n.t('delete')),
+                onPressed: _deletePlace,
+                style: FilledButton.styleFrom(
+                  backgroundColor: Colors.red,
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

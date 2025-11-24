@@ -196,21 +196,35 @@ class _PostcardsBrowserPageState extends State<PostcardsBrowserPage> {
       ),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
-          : Row(
-              children: [
-                // Left panel: Postcard list
-                _buildPostcardList(theme),
-                const VerticalDivider(width: 1),
-                // Right panel: Postcard detail
-                Expanded(child: _buildPostcardDetail(theme)),
-              ],
+          : LayoutBuilder(
+              builder: (context, constraints) {
+                // Use two-panel layout for wide screens, single panel for narrow
+                final isWideScreen = constraints.maxWidth >= 600;
+
+                if (isWideScreen) {
+                  // Desktop/landscape: Two-panel layout
+                  return Row(
+                    children: [
+                      // Left panel: Postcard list
+                      _buildPostcardList(theme),
+                      const VerticalDivider(width: 1),
+                      // Right panel: Postcard detail
+                      Expanded(child: _buildPostcardDetail(theme)),
+                    ],
+                  );
+                } else {
+                  // Mobile/portrait: Single panel
+                  // Show postcard list, detail opens in full screen
+                  return _buildPostcardList(theme, isMobileView: true);
+                }
+              },
             ),
     );
   }
 
-  Widget _buildPostcardList(ThemeData theme) {
+  Widget _buildPostcardList(ThemeData theme, {bool isMobileView = false}) {
     return Container(
-      width: 350,
+      width: isMobileView ? null : 350,
       color: theme.colorScheme.surface,
       child: Column(
         children: [
@@ -286,7 +300,7 @@ class _PostcardsBrowserPageState extends State<PostcardsBrowserPage> {
           Expanded(
             child: _filteredPostcards.isEmpty
                 ? _buildEmptyState(theme)
-                : _buildYearGroupedList(theme),
+                : _buildYearGroupedList(theme, isMobileView: isMobileView),
           ),
         ],
       ),
@@ -351,7 +365,7 @@ class _PostcardsBrowserPageState extends State<PostcardsBrowserPage> {
     );
   }
 
-  Widget _buildYearGroupedList(ThemeData theme) {
+  Widget _buildYearGroupedList(ThemeData theme, {bool isMobileView = false}) {
     // Group postcards by year
     final Map<int, List<Postcard>> postcardsByYear = {};
     for (var postcard in _filteredPostcards) {
@@ -412,12 +426,45 @@ class _PostcardsBrowserPageState extends State<PostcardsBrowserPage> {
               ...postcards.map((postcard) => PostcardTileWidget(
                     postcard: postcard,
                     isSelected: _selectedPostcard?.id == postcard.id,
-                    onTap: () => _selectPostcard(postcard),
+                    onTap: () => isMobileView
+                        ? _selectPostcardMobile(postcard)
+                        : _selectPostcard(postcard),
                   )),
           ],
         );
       },
     );
+  }
+
+  Future<void> _selectPostcardMobile(Postcard postcard) async {
+    // Load full postcard with all stamps
+    final fullPostcard = await _postcardService.loadPostcard(postcard.id);
+
+    if (!mounted || fullPostcard == null) return;
+
+    final isSender = fullPostcard.senderCallsign == _currentCallsign;
+    final isRecipient = fullPostcard.recipientCallsign == _currentCallsign;
+
+    // Navigate to full-screen detail view
+    final result = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder: (context) => _PostcardDetailPage(
+          postcard: fullPostcard,
+          collectionPath: widget.collectionPath,
+          postcardService: _postcardService,
+          i18n: _i18n,
+          currentCallsign: _currentCallsign,
+          currentUserNpub: _currentUserNpub,
+          isSender: isSender,
+          isRecipient: isRecipient,
+        ),
+      ),
+    );
+
+    // Reload postcards if changes were made
+    if (result == true && mounted) {
+      await _loadPostcards();
+    }
   }
 
   Widget _buildPostcardDetail(ThemeData theme) {
@@ -460,6 +507,81 @@ class _PostcardsBrowserPageState extends State<PostcardsBrowserPage> {
         });
         await _loadPostcards(); // Reload list to update counts
       },
+    );
+  }
+}
+
+/// Full-screen postcard detail page for mobile view
+class _PostcardDetailPage extends StatefulWidget {
+  final Postcard postcard;
+  final String collectionPath;
+  final PostcardService postcardService;
+  final I18nService i18n;
+  final String? currentCallsign;
+  final String? currentUserNpub;
+  final bool isSender;
+  final bool isRecipient;
+
+  const _PostcardDetailPage({
+    Key? key,
+    required this.postcard,
+    required this.collectionPath,
+    required this.postcardService,
+    required this.i18n,
+    required this.currentCallsign,
+    required this.currentUserNpub,
+    required this.isSender,
+    required this.isRecipient,
+  }) : super(key: key);
+
+  @override
+  State<_PostcardDetailPage> createState() => _PostcardDetailPageState();
+}
+
+class _PostcardDetailPageState extends State<_PostcardDetailPage> {
+  late Postcard _postcard;
+  bool _hasChanges = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _postcard = widget.postcard;
+  }
+
+  Future<void> _refresh() async {
+    final updated = await widget.postcardService.loadPostcard(_postcard.id);
+    if (updated != null) {
+      final postcard = updated;
+      setState(() {
+        _postcard = postcard;
+      });
+      _hasChanges = true;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return PopScope(
+      canPop: true,
+      onPopInvoked: (didPop) {
+        if (didPop && _hasChanges) {
+          Navigator.of(context).pop(true);
+        }
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          title: Text(_postcard.title),
+        ),
+        body: PostcardDetailWidget(
+          postcard: _postcard,
+          collectionPath: widget.collectionPath,
+          currentCallsign: widget.currentCallsign,
+          currentUserNpub: widget.currentUserNpub,
+          isSender: widget.isSender,
+          isRecipient: widget.isRecipient,
+          onRefresh: _refresh,
+        ),
+      ),
     );
   }
 }

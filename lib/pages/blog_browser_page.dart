@@ -126,6 +126,32 @@ class _BlogBrowserPageState extends State<BlogBrowserPage> {
     });
   }
 
+  Future<void> _selectPostMobile(BlogPost post) async {
+    // Load full post with comments
+    final fullPost = await _blogService.loadFullPost(post.id);
+
+    if (!mounted || fullPost == null) return;
+
+    // Navigate to full-screen detail view
+    final result = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder: (context) => _BlogPostDetailPage(
+          post: fullPost,
+          collectionPath: widget.collectionPath,
+          blogService: _blogService,
+          profileService: _profileService,
+          i18n: _i18n,
+          currentUserNpub: _currentUserNpub,
+        ),
+      ),
+    );
+
+    // Reload posts if changes were made
+    if (result == true && mounted) {
+      await _loadPosts();
+    }
+  }
+
   void _toggleYear(int year) {
     setState(() {
       if (_expandedYears.contains(year)) {
@@ -375,21 +401,35 @@ class _BlogBrowserPageState extends State<BlogBrowserPage> {
       ),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
-          : Row(
-              children: [
-                // Left panel: Post list
-                _buildPostList(theme),
-                const VerticalDivider(width: 1),
-                // Right panel: Post detail
-                Expanded(child: _buildPostDetail(theme, canEdit)),
-              ],
+          : LayoutBuilder(
+              builder: (context, constraints) {
+                // Use two-panel layout for wide screens, single panel for narrow
+                final isWideScreen = constraints.maxWidth >= 600;
+
+                if (isWideScreen) {
+                  // Desktop/landscape: Two-panel layout
+                  return Row(
+                    children: [
+                      // Left panel: Post list
+                      _buildPostList(theme),
+                      const VerticalDivider(width: 1),
+                      // Right panel: Post detail
+                      Expanded(child: _buildPostDetail(theme, canEdit)),
+                    ],
+                  );
+                } else {
+                  // Mobile/portrait: Single panel
+                  // Show post list, detail opens in full screen
+                  return _buildPostList(theme, isMobileView: true);
+                }
+              },
             ),
     );
   }
 
-  Widget _buildPostList(ThemeData theme) {
+  Widget _buildPostList(ThemeData theme, {bool isMobileView = false}) {
     return Container(
-      width: 350,
+      width: isMobileView ? null : 350,
       color: theme.colorScheme.surface,
       child: Column(
         children: [
@@ -423,7 +463,7 @@ class _BlogBrowserPageState extends State<BlogBrowserPage> {
           Expanded(
             child: _filteredPosts.isEmpty
                 ? _buildEmptyState(theme)
-                : _buildYearGroupedList(theme),
+                : _buildYearGroupedList(theme, isMobileView: isMobileView),
           ),
         ],
       ),
@@ -467,7 +507,7 @@ class _BlogBrowserPageState extends State<BlogBrowserPage> {
     );
   }
 
-  Widget _buildYearGroupedList(ThemeData theme) {
+  Widget _buildYearGroupedList(ThemeData theme, {bool isMobileView = false}) {
     // Group posts by year
     final Map<int, List<BlogPost>> postsByYear = {};
     for (var post in _filteredPosts) {
@@ -528,7 +568,9 @@ class _BlogBrowserPageState extends State<BlogBrowserPage> {
               ...posts.map((post) => BlogPostTileWidget(
                     post: post,
                     isSelected: _selectedPost?.id == post.id,
-                    onTap: () => _selectPost(post),
+                    onTap: () => isMobileView
+                        ? _selectPostMobile(post)
+                        : _selectPost(post),
                   )),
           ],
         );
@@ -678,6 +720,364 @@ class _BlogBrowserPageState extends State<BlogBrowserPage> {
             icon: const Icon(Icons.send),
             onPressed: _addComment,
             tooltip: _i18n.t('send_comment'),
+            style: IconButton.styleFrom(
+              backgroundColor: theme.colorScheme.primaryContainer,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Full-screen blog post detail page for mobile view
+class _BlogPostDetailPage extends StatefulWidget {
+  final BlogPost post;
+  final String collectionPath;
+  final BlogService blogService;
+  final ProfileService profileService;
+  final I18nService i18n;
+  final String? currentUserNpub;
+
+  const _BlogPostDetailPage({
+    Key? key,
+    required this.post,
+    required this.collectionPath,
+    required this.blogService,
+    required this.profileService,
+    required this.i18n,
+    required this.currentUserNpub,
+  }) : super(key: key);
+
+  @override
+  State<_BlogPostDetailPage> createState() => _BlogPostDetailPageState();
+}
+
+class _BlogPostDetailPageState extends State<_BlogPostDetailPage> {
+  late BlogPost _post;
+  final TextEditingController _commentController = TextEditingController();
+  final ScrollController _scrollController = ScrollController();
+  bool _hasChanges = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _post = widget.post;
+  }
+
+  @override
+  void dispose() {
+    _commentController.dispose();
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _editPost() async {
+    final result = await showDialog<Map<String, dynamic>>(
+      context: context,
+      builder: (context) => EditBlogPostDialog(post: _post),
+    );
+
+    if (result != null && mounted) {
+      final success = await widget.blogService.updatePost(
+        postId: _post.id,
+        title: result['title'] as String,
+        description: result['description'] as String?,
+        content: result['content'] as String,
+        tags: result['tags'] as List<String>?,
+        status: result['status'] as BlogStatus?,
+        userNpub: widget.currentUserNpub,
+      );
+
+      if (success && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(widget.i18n.t('post_updated')),
+            backgroundColor: Colors.green,
+          ),
+        );
+        _hasChanges = true;
+
+        // Reload post
+        final updatedPost = await widget.blogService.loadFullPost(_post.id);
+        if (updatedPost != null) {
+          final post = updatedPost; // Capture non-null value
+          setState(() {
+            _post = post;
+          });
+        }
+      }
+    }
+  }
+
+  Future<void> _publishDraft() async {
+    if (!_post.isDraft) return;
+
+    final success = await widget.blogService.publishPost(
+      _post.id,
+      widget.currentUserNpub,
+    );
+
+    if (success && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(widget.i18n.t('post_published')),
+          backgroundColor: Colors.green,
+        ),
+      );
+      _hasChanges = true;
+
+      // Reload post
+      final updatedPost = await widget.blogService.loadFullPost(_post.id);
+      if (updatedPost != null) {
+        final post = updatedPost; // Capture non-null value
+        setState(() {
+          _post = post;
+        });
+      }
+    }
+  }
+
+  Future<void> _deletePost() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(widget.i18n.t('delete_post')),
+        content: Text(widget.i18n.t('delete_post_confirm')),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text(widget.i18n.t('cancel')),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(context).colorScheme.error,
+            ),
+            child: Text(widget.i18n.t('delete')),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true && mounted) {
+      final success = await widget.blogService.deletePost(
+        _post.id,
+        widget.currentUserNpub,
+      );
+
+      if (success && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(widget.i18n.t('post_deleted')),
+            backgroundColor: Colors.green,
+          ),
+        );
+        Navigator.pop(context, true); // Return true to indicate changes
+      }
+    }
+  }
+
+  Future<void> _addComment() async {
+    if (_commentController.text.trim().isEmpty) return;
+
+    final profile = widget.profileService.getProfile();
+    final success = await widget.blogService.addComment(
+      postId: _post.id,
+      author: profile.callsign,
+      content: _commentController.text.trim(),
+      npub: profile.npub,
+    );
+
+    if (success && mounted) {
+      _commentController.clear();
+      _hasChanges = true;
+
+      // Reload post with new comment
+      final updatedPost = await widget.blogService.loadFullPost(_post.id);
+      if (updatedPost != null) {
+        final post = updatedPost; // Capture non-null value
+        setState(() {
+          _post = post;
+        });
+
+        // Scroll to bottom to show new comment
+        Future.delayed(const Duration(milliseconds: 100), () {
+          if (_scrollController.hasClients) {
+            _scrollController.animateTo(
+              _scrollController.position.maxScrollExtent,
+              duration: const Duration(milliseconds: 300),
+              curve: Curves.easeOut,
+            );
+          }
+        });
+      }
+    }
+  }
+
+  Future<void> _deleteComment(int commentIndex) async {
+    final success = await widget.blogService.deleteComment(
+      postId: _post.id,
+      commentIndex: commentIndex,
+      userNpub: widget.currentUserNpub,
+    );
+
+    if (success && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(widget.i18n.t('comment_deleted')),
+          backgroundColor: Colors.green,
+        ),
+      );
+      _hasChanges = true;
+
+      // Reload post
+      final updatedPost = await widget.blogService.loadFullPost(_post.id);
+      if (updatedPost != null) {
+        final post = updatedPost; // Capture non-null value
+        setState(() {
+          _post = post;
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isAdmin = widget.blogService.isAdmin(widget.currentUserNpub);
+    final canEdit = isAdmin || _post.isOwnPost(widget.currentUserNpub);
+
+    return PopScope(
+      canPop: true,
+      onPopInvokedWithResult: (didPop, result) {
+        if (didPop && _hasChanges) {
+          // Return true to indicate changes were made
+          Navigator.of(context).pop(true);
+        }
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          title: Text(widget.i18n.t('blog_post')),
+        ),
+        body: Column(
+          children: [
+            Expanded(
+              child: ListView(
+                controller: _scrollController,
+                padding: const EdgeInsets.all(16),
+                children: [
+                  BlogPostDetailWidget(
+                    post: _post,
+                    collectionPath: widget.collectionPath,
+                    canEdit: canEdit,
+                    onEdit: _editPost,
+                    onDelete: _deletePost,
+                    onPublish: _post.isDraft ? _publishDraft : null,
+                  ),
+                  const SizedBox(height: 24),
+                  _buildCommentsSection(theme),
+                ],
+              ),
+            ),
+            if (_post.isPublished) _buildCommentInput(theme),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCommentsSection(ThemeData theme) {
+    if (_post.comments.isEmpty) {
+      return Column(
+        children: [
+          const Divider(),
+          const SizedBox(height: 16),
+          Text(
+            widget.i18n.t('no_comments_yet'),
+            style: theme.textTheme.bodyMedium?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            _post.isPublished
+                ? widget.i18n.t('be_first_to_comment')
+                : widget.i18n.t('comments_when_published'),
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant.withOpacity(0.7),
+            ),
+          ),
+        ],
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Divider(),
+        const SizedBox(height: 16),
+        Text(
+          '${widget.i18n.t('comments')} (${_post.comments.length})',
+          style: theme.textTheme.titleMedium?.copyWith(
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        const SizedBox(height: 16),
+        ..._post.comments.asMap().entries.map((entry) {
+          final index = entry.key;
+          final comment = entry.value;
+          final canDelete = widget.blogService.isAdmin(widget.currentUserNpub) ||
+              comment.npub == widget.currentUserNpub;
+
+          return BlogCommentWidget(
+            comment: comment,
+            canDelete: canDelete,
+            onDelete: canDelete ? () => _deleteComment(index) : null,
+          );
+        }),
+      ],
+    );
+  }
+
+  Widget _buildCommentInput(ThemeData theme) {
+    return Container(
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surface,
+        border: Border(
+          top: BorderSide(
+            color: theme.colorScheme.outlineVariant,
+            width: 1,
+          ),
+        ),
+      ),
+      padding: const EdgeInsets.all(16),
+      child: Row(
+        children: [
+          Expanded(
+            child: TextField(
+              controller: _commentController,
+              decoration: InputDecoration(
+                hintText: widget.i18n.t('write_comment'),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(24),
+                ),
+                filled: true,
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 20,
+                  vertical: 12,
+                ),
+              ),
+              maxLines: null,
+              textInputAction: TextInputAction.send,
+              onSubmitted: (_) => _addComment(),
+            ),
+          ),
+          const SizedBox(width: 8),
+          IconButton(
+            icon: const Icon(Icons.send),
+            onPressed: _addComment,
+            tooltip: widget.i18n.t('send_comment'),
             style: IconButton.styleFrom(
               backgroundColor: theme.colorScheme.primaryContainer,
             ),

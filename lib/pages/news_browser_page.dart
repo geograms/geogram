@@ -211,7 +211,7 @@ class _NewsBrowserPageState extends State<NewsBrowserPage> {
     });
   }
 
-  Widget _buildArticleListByYear() {
+  Widget _buildArticleListByYear({bool isMobileView = false}) {
     // Group articles by year
     final Map<int, List<NewsArticle>> articlesByYear = {};
     for (var article in _filteredArticles) {
@@ -328,7 +328,9 @@ class _NewsBrowserPageState extends State<NewsBrowserPage> {
                         ),
                       ],
                     ),
-                    onTap: () => _selectArticle(article),
+                    onTap: () => isMobileView
+                        ? _selectArticleMobile(article)
+                        : _selectArticle(article),
                   ),
                 );
               }).toList(),
@@ -336,6 +338,32 @@ class _NewsBrowserPageState extends State<NewsBrowserPage> {
         );
       },
     );
+  }
+
+  Future<void> _selectArticleMobile(NewsArticle article) async {
+    // Load full article
+    final fullArticle = await _newsService.loadFullArticle(article.id);
+
+    if (!mounted || fullArticle == null) return;
+
+    // Navigate to full-screen detail view
+    final result = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder: (context) => _NewsArticleDetailPage(
+          article: fullArticle,
+          newsService: _newsService,
+          profileService: _profileService,
+          i18n: _i18n,
+          currentUserNpub: _currentUserNpub,
+          currentLanguage: _currentLanguage,
+        ),
+      ),
+    );
+
+    // Reload articles if changes were made
+    if (result == true && mounted) {
+      await _loadArticles();
+    }
   }
 
   @override
@@ -361,12 +389,39 @@ class _NewsBrowserPageState extends State<NewsBrowserPage> {
           ),
         ],
       ),
-      body: Row(
-        children: [
-          // Left panel - Article list
-          Expanded(
-            flex: 2,
-            child: Column(
+      body: LayoutBuilder(
+        builder: (context, constraints) {
+          // Use two-panel layout for wide screens, single panel for narrow
+          final isWideScreen = constraints.maxWidth >= 600;
+
+          if (isWideScreen) {
+            // Desktop/landscape: Two-panel layout
+            return Row(
+              children: [
+                // Left panel - Article list
+                Expanded(
+                  flex: 2,
+                  child: _buildArticleList(context),
+                ),
+                // Right panel - Article detail
+                Expanded(
+                  flex: 3,
+                  child: _buildArticleDetailPanel(),
+                ),
+              ],
+            );
+          } else {
+            // Mobile/portrait: Single panel
+            // Show article list, detail opens in full screen
+            return _buildArticleList(context, isMobileView: true);
+          }
+        },
+      ),
+    );
+  }
+
+  Widget _buildArticleList(BuildContext context, {bool isMobileView = false}) {
+    return Column(
               children: [
                 // Search bar
                 Padding(
@@ -412,35 +467,30 @@ class _NewsBrowserPageState extends State<NewsBrowserPage> {
                                 ],
                               ),
                             )
-                          : _buildArticleListByYear(),
+                          : _buildArticleListByYear(isMobileView: isMobileView),
+                ),
+              ],
+            );
+  }
+
+  Widget _buildArticleDetailPanel() {
+    return _selectedArticle == null
+        ? Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(Icons.article_outlined, size: 64, color: Colors.grey[400]),
+                const SizedBox(height: 16),
+                Text(
+                  _i18n.t('select_article_to_view'),
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        color: Colors.grey[600],
+                      ),
                 ),
               ],
             ),
-          ),
-          // Right panel - Article detail
-          Expanded(
-            flex: 3,
-            child: _selectedArticle == null
-                ? Center(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(Icons.article_outlined, size: 64, color: Colors.grey[400]),
-                        const SizedBox(height: 16),
-                        Text(
-                          _i18n.t('select_article_to_view'),
-                          style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                                color: Colors.grey[600],
-                              ),
-                        ),
-                      ],
-                    ),
-                  )
-                : _buildArticleDetail(_selectedArticle!),
-          ),
-        ],
-      ),
-    );
+          )
+        : _buildArticleDetail(_selectedArticle!);
   }
 
   Widget _buildArticleDetail(NewsArticle article) {
@@ -587,6 +637,256 @@ class _NewsBrowserPageState extends State<NewsBrowserPage> {
           ),
         ),
       ],
+    );
+  }
+}
+
+/// Full-screen news article detail page for mobile view
+class _NewsArticleDetailPage extends StatefulWidget {
+  final NewsArticle article;
+  final NewsService newsService;
+  final ProfileService profileService;
+  final I18nService i18n;
+  final String? currentUserNpub;
+  final String currentLanguage;
+
+  const _NewsArticleDetailPage({
+    Key? key,
+    required this.article,
+    required this.newsService,
+    required this.profileService,
+    required this.i18n,
+    required this.currentUserNpub,
+    required this.currentLanguage,
+  }) : super(key: key);
+
+  @override
+  State<_NewsArticleDetailPage> createState() => _NewsArticleDetailPageState();
+}
+
+class _NewsArticleDetailPageState extends State<_NewsArticleDetailPage> {
+  late NewsArticle _article;
+  bool _hasChanges = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _article = widget.article;
+  }
+
+  Future<void> _toggleLike() async {
+    final profile = widget.profileService.getProfile();
+    final success = await widget.newsService.toggleLike(_article.id, profile.callsign);
+    if (success && mounted) {
+      _hasChanges = true;
+      // Reload article
+      final updatedArticle = await widget.newsService.loadFullArticle(_article.id);
+      if (updatedArticle != null) {
+        final article = updatedArticle; // Capture non-null value
+        setState(() {
+          _article = article;
+        });
+      }
+    }
+  }
+
+  Future<void> _deleteArticle() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(widget.i18n.t('delete_article')),
+        content: Text(widget.i18n.t('delete_article_confirm')),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text(widget.i18n.t('cancel')),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: Text(widget.i18n.t('delete'), style: const TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true && mounted) {
+      final success = await widget.newsService.deleteArticle(_article.id, widget.currentUserNpub);
+      if (success && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(widget.i18n.t('article_deleted'))),
+        );
+        _hasChanges = true;
+        Navigator.pop(context, true);
+      }
+    }
+  }
+
+  Color _getClassificationColor(NewsClassification classification) {
+    switch (classification) {
+      case NewsClassification.danger:
+        return Colors.red;
+      case NewsClassification.urgent:
+        return Colors.orange;
+      case NewsClassification.normal:
+      default:
+        return Colors.blue;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final profile = widget.profileService.getProfile();
+    final isOwnArticle = _article.isOwnArticle(widget.currentUserNpub);
+    final isLiked = _article.isLikedBy(profile.callsign);
+
+    return PopScope(
+      canPop: true,
+      onPopInvoked: (didPop) {
+        if (didPop && _hasChanges) {
+          Navigator.of(context).pop(true);
+        }
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          title: Text(_article.getHeadline(widget.currentLanguage)),
+          actions: [
+            if (isOwnArticle)
+              IconButton(
+                icon: const Icon(Icons.delete),
+                onPressed: _deleteArticle,
+                tooltip: widget.i18n.t('delete_article'),
+              ),
+          ],
+        ),
+        body: Column(
+          children: [
+            // Article header
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: _getClassificationColor(_article.classification).withOpacity(0.1),
+                border: Border(
+                  bottom: BorderSide(
+                    color: _getClassificationColor(_article.classification),
+                    width: 3,
+                  ),
+                ),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    _article.getHeadline(widget.currentLanguage),
+                    style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                          fontWeight: FontWeight.bold,
+                        ),
+                  ),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      Chip(label: Text(_article.author)),
+                      Chip(label: Text('${_article.displayDate} ${_article.displayTime}')),
+                      Chip(
+                        label: Text(widget.i18n.t('classification_${_article.classification.name}')),
+                        backgroundColor: _getClassificationColor(_article.classification),
+                        labelStyle: const TextStyle(color: Colors.white),
+                      ),
+                      if (_article.isExpired)
+                        Chip(
+                          label: Text(widget.i18n.t('expired')),
+                          backgroundColor: Colors.red,
+                          labelStyle: const TextStyle(color: Colors.white),
+                        ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            // Article content
+            Expanded(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(_article.getContent(widget.currentLanguage), style: Theme.of(context).textTheme.bodyLarge),
+                    const SizedBox(height: 16),
+                    // Language indicator
+                    if (_article.availableLanguages.length > 1) ...[
+                      Chip(
+                        label: Text('Available in: ${_article.availableLanguages.join(', ').toUpperCase()}'),
+                        avatar: const Icon(Icons.language, size: 16),
+                      ),
+                      const SizedBox(height: 16),
+                    ],
+                    if (_article.hasLocation) ...[
+                      const Divider(),
+                      Text('📍 ${_article.address ?? ''}', style: const TextStyle(fontWeight: FontWeight.bold)),
+                      Text('Coordinates: ${_article.latitude}, ${_article.longitude}'),
+                      if (_article.hasRadius)
+                        Text(widget.i18n.t('within_radius', params: [_article.radiusKm.toString()])),
+                    ],
+                    if (_article.hasSource) ...[
+                      const Divider(),
+                      Text('Source: ${_article.source}'),
+                    ],
+                    if (_article.hasExpiry) ...[
+                      const Divider(),
+                      Text('${widget.i18n.t('expires')}: ${_article.expiry}'),
+                    ],
+                    if (_article.tags.isNotEmpty) ...[
+                      const Divider(),
+                      Wrap(
+                        spacing: 4,
+                        children: _article.tags.map((tag) => Chip(label: Text('#$tag'))).toList(),
+                      ),
+                    ],
+                    const Divider(),
+                    Row(
+                      children: [
+                        IconButton(
+                          icon: Icon(isLiked ? Icons.favorite : Icons.favorite_border),
+                          color: isLiked ? Colors.red : null,
+                          onPressed: _toggleLike,
+                        ),
+                        Text('${_article.likeCount} ${_article.likeCount == 1 ? widget.i18n.t('like') : widget.i18n.t('likes')}'),
+                        const Spacer(),
+                        Text('${_article.commentCount} ${_article.commentCount == 1 ? widget.i18n.t('comment') : widget.i18n.t('comments_plural')}'),
+                      ],
+                    ),
+                    if (_article.comments.isNotEmpty) ...[
+                      const Divider(),
+                      const SizedBox(height: 8),
+                      ..._article.comments.map((comment) => Card(
+                            margin: const EdgeInsets.only(bottom: 8),
+                            child: Padding(
+                              padding: const EdgeInsets.all(12),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    children: [
+                                      Text(comment.author, style: const TextStyle(fontWeight: FontWeight.bold)),
+                                      const SizedBox(width: 8),
+                                      Text(comment.timestamp, style: const TextStyle(fontSize: 12)),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Text(comment.content),
+                                ],
+                              ),
+                            ),
+                          )),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

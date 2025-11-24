@@ -73,9 +73,14 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       // Load channels
       _channels = _chatService.channels;
 
-      // Select main channel by default
-      if (_channels.isNotEmpty) {
-        await _selectChannel(_channels.first);
+      // Select main channel by default only in wide screen mode
+      if (_channels.isNotEmpty && mounted) {
+        final screenWidth = MediaQuery.of(context).size.width;
+        final isWideScreen = screenWidth >= 600;
+
+        if (isWideScreen) {
+          await _selectChannel(_channels.first);
+        }
       }
 
       setState(() {
@@ -116,6 +121,11 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
         _isLoading = false;
       });
     }
+  }
+
+  /// Select a channel for mobile view (just sets it, layout handles display)
+  Future<void> _selectChannelMobile(ChatChannel channel) async {
+    await _selectChannel(channel);
   }
 
   /// Send a message
@@ -468,10 +478,32 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
 
+    final screenWidth = MediaQuery.of(context).size.width;
+    final isWideScreen = screenWidth >= 600;
+
     return Scaffold(
       appBar: AppBar(
-        title: Text(
-          _selectedChannel?.name ?? widget.collection.title,
+        leading: !isWideScreen && _selectedChannel != null
+            ? IconButton(
+                icon: const Icon(Icons.arrow_back),
+                onPressed: () {
+                  setState(() {
+                    _selectedChannel = null;
+                  });
+                },
+              )
+            : null,
+        title: LayoutBuilder(
+          builder: (context, constraints) {
+            // In narrow screen, show collection title when on channel list
+            if (!isWideScreen && _selectedChannel == null) {
+              return Text(widget.collection.title);
+            }
+
+            return Text(
+              _selectedChannel?.name ?? widget.collection.title,
+            );
+          },
         ),
         actions: [
           IconButton(
@@ -479,11 +511,12 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
             onPressed: _refreshChannel,
             tooltip: 'Refresh',
           ),
-          IconButton(
-            icon: const Icon(Icons.info_outline),
-            onPressed: _showChannelInfo,
-            tooltip: 'Channel info',
-          ),
+          if (_selectedChannel != null)
+            IconButton(
+              icon: const Icon(Icons.info_outline),
+              onPressed: _showChannelInfo,
+              tooltip: 'Channel info',
+            ),
           IconButton(
             icon: const Icon(Icons.settings),
             onPressed: _openSettings,
@@ -533,43 +566,200 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       return _buildEmptyState(theme);
     }
 
-    return Row(
-      children: [
-        // Left sidebar - Channel list
-        ChannelListWidget(
-          channels: _channels,
-          selectedChannelId: _selectedChannel?.id,
-          onChannelSelect: _selectChannel,
-          onNewChannel: _showNewChannelDialog,
-        ),
-        // Right panel - Messages and input
-        Expanded(
-          child: _selectedChannel == null
-              ? _buildNoChannelSelected(theme)
-              : Column(
-                  children: [
-                    // Message list
-                    Expanded(
-                      child: MessageListWidget(
-                        messages: _messages,
-                        isGroupChat: _selectedChannel!.isGroup,
-                        isLoading: _isLoading,
-                        onFileOpen: _openAttachedFile,
-                        onMessageDelete: _deleteMessage,
-                        canDeleteMessage: _canDeleteMessage,
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        // Use two-panel layout for wide screens, single panel for narrow
+        final isWideScreen = constraints.maxWidth >= 600;
+
+        if (isWideScreen) {
+          // Desktop/landscape: Two-panel layout
+          return Row(
+            children: [
+              // Left sidebar - Channel list
+              ChannelListWidget(
+                channels: _channels,
+                selectedChannelId: _selectedChannel?.id,
+                onChannelSelect: _selectChannel,
+                onNewChannel: _showNewChannelDialog,
+              ),
+              // Right panel - Messages and input
+              Expanded(
+                child: _selectedChannel == null
+                    ? _buildNoChannelSelected(theme)
+                    : Column(
+                        children: [
+                          // Message list
+                          Expanded(
+                            child: MessageListWidget(
+                              messages: _messages,
+                              isGroupChat: _selectedChannel!.isGroup,
+                              isLoading: _isLoading,
+                              onFileOpen: _openAttachedFile,
+                              onMessageDelete: _deleteMessage,
+                              canDeleteMessage: _canDeleteMessage,
+                            ),
+                          ),
+                          // Message input
+                          MessageInputWidget(
+                            onSend: _sendMessage,
+                            maxLength: _selectedChannel!.config?.maxSizeText ?? 500,
+                            allowFiles:
+                                _selectedChannel!.config?.fileUpload ?? true,
+                          ),
+                        ],
                       ),
-                    ),
-                    // Message input
-                    MessageInputWidget(
-                      onSend: _sendMessage,
-                      maxLength: _selectedChannel!.config?.maxSizeText ?? 500,
-                      allowFiles:
-                          _selectedChannel!.config?.fileUpload ?? true,
-                    ),
-                  ],
+              ),
+            ],
+          );
+        } else {
+          // Mobile/portrait: Single panel
+          if (_selectedChannel == null) {
+            // Show full-width channel list
+            return _buildFullWidthChannelList(theme);
+          } else {
+            // Show chat messages (no duplicate header, using AppBar)
+            return Column(
+              children: [
+                // Message list
+                Expanded(
+                  child: MessageListWidget(
+                    messages: _messages,
+                    isGroupChat: _selectedChannel!.isGroup,
+                    isLoading: _isLoading,
+                    onFileOpen: _openAttachedFile,
+                    onMessageDelete: _deleteMessage,
+                    canDeleteMessage: _canDeleteMessage,
+                  ),
                 ),
-        ),
-      ],
+                // Message input
+                MessageInputWidget(
+                  onSend: _sendMessage,
+                  maxLength: _selectedChannel!.config?.maxSizeText ?? 500,
+                  allowFiles: _selectedChannel!.config?.fileUpload ?? true,
+                ),
+              ],
+            );
+          }
+        }
+      },
+    );
+  }
+
+  /// Build full-width channel list for mobile view
+  Widget _buildFullWidthChannelList(ThemeData theme) {
+    // Sort channels: favorites first, then by last message time
+    final sortedChannels = List<ChatChannel>.from(_channels);
+    sortedChannels.sort((a, b) {
+      // Favorites first
+      if (a.isFavorite && !b.isFavorite) return -1;
+      if (!a.isFavorite && b.isFavorite) return 1;
+
+      // Main channel always at top (after favorites)
+      if (a.isMain && !b.isMain) return -1;
+      if (!a.isMain && b.isMain) return 1;
+
+      // Then by last message time (newest first)
+      if (a.lastMessageTime == null && b.lastMessageTime == null) return 0;
+      if (a.lastMessageTime == null) return 1;
+      if (b.lastMessageTime == null) return -1;
+      return b.lastMessageTime!.compareTo(a.lastMessageTime!);
+    });
+
+    return Container(
+      color: theme.colorScheme.surface,
+      child: Column(
+        children: [
+          // Header
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: theme.colorScheme.surfaceVariant,
+              border: Border(
+                bottom: BorderSide(
+                  color: theme.colorScheme.outlineVariant,
+                  width: 1,
+                ),
+              ),
+            ),
+            child: Row(
+              children: [
+                Icon(Icons.chat, color: theme.colorScheme.primary),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    'Channels',
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+                FilledButton.icon(
+                  onPressed: _showNewChannelDialog,
+                  icon: const Icon(Icons.add, size: 18),
+                  label: const Text('New'),
+                  style: FilledButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          // Channel list
+          Expanded(
+            child: ListView.builder(
+              itemCount: sortedChannels.length,
+              itemBuilder: (context, index) {
+                final channel = sortedChannels[index];
+
+                return ListTile(
+                  leading: CircleAvatar(
+                    backgroundColor: channel.isGroup
+                        ? theme.colorScheme.primaryContainer
+                        : theme.colorScheme.secondaryContainer,
+                    child: Icon(
+                      channel.isGroup ? Icons.group : Icons.person,
+                      color: channel.isGroup
+                          ? theme.colorScheme.onPrimaryContainer
+                          : theme.colorScheme.onSecondaryContainer,
+                      size: 20,
+                    ),
+                  ),
+                  title: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          channel.name,
+                          style: TextStyle(
+                            fontWeight: channel.isFavorite
+                                ? FontWeight.bold
+                                : FontWeight.normal,
+                          ),
+                        ),
+                      ),
+                      if (channel.isFavorite)
+                        Icon(
+                          Icons.star,
+                          size: 16,
+                          color: theme.colorScheme.primary,
+                        ),
+                    ],
+                  ),
+                  subtitle: channel.description != null && channel.description!.isNotEmpty
+                      ? Text(
+                          channel.description!,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        )
+                      : (channel.isGroup
+                          ? const Text('Group chat')
+                          : null),
+                  onTap: () => _selectChannelMobile(channel),
+                );
+              },
+            ),
+          ),
+        ],
+      ),
     );
   }
 

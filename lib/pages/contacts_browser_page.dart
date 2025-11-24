@@ -121,6 +121,29 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
     });
   }
 
+  Future<void> _selectContactMobile(Contact contact) async {
+    if (!mounted) return;
+
+    // Navigate to full-screen detail view
+    final result = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder: (context) => _ContactDetailPage(
+          contact: contact,
+          contactService: _contactService,
+          profileService: _profileService,
+          i18n: _i18n,
+          collectionPath: widget.collectionPath,
+        ),
+      ),
+    );
+
+    // Reload contacts if changes were made
+    if (result == true && mounted) {
+      await _loadContacts();
+      await _loadGroups();
+    }
+  }
+
   void _selectGroup(String? groupPath) {
     setState(() {
       _selectedGroupPath = groupPath;
@@ -280,12 +303,43 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
           ),
         ],
       ),
-      body: Row(
-        children: [
-          // Left panel: Contact list
-          Expanded(
-            flex: 1,
-            child: Column(
+      body: LayoutBuilder(
+        builder: (context, constraints) {
+          // Use two-panel layout for wide screens, single panel for narrow
+          final isWideScreen = constraints.maxWidth >= 600;
+
+          if (isWideScreen) {
+            // Desktop/landscape: Two-panel layout
+            return Row(
+              children: [
+                // Left panel: Contact list
+                Expanded(
+                  flex: 1,
+                  child: _buildContactList(context),
+                ),
+                const VerticalDivider(width: 1),
+                // Right panel: Contact detail
+                Expanded(
+                  flex: 2,
+                  child: _selectedContact == null
+                      ? Center(
+                          child: Text(_i18n.t('select_contact_to_view')),
+                        )
+                      : _buildContactDetail(_selectedContact!),
+                ),
+              ],
+            );
+          } else {
+            // Mobile/portrait: Single panel
+            return _buildContactList(context, isMobileView: true);
+          }
+        },
+      ),
+    );
+  }
+
+  Widget _buildContactList(BuildContext context, {bool isMobileView = false}) {
+    return Column(
               children: [
                 // Search bar
                 Padding(
@@ -385,31 +439,15 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
                               itemCount: _filteredContacts.length,
                               itemBuilder: (context, index) {
                                 final contact = _filteredContacts[index];
-                                return _buildContactListTile(contact);
+                                return _buildContactListTile(contact, isMobileView: isMobileView);
                               },
                             ),
                 ),
               ],
-            ),
-          ),
-
-          const VerticalDivider(width: 1),
-
-          // Right panel: Contact detail
-          Expanded(
-            flex: 2,
-            child: _selectedContact == null
-                ? Center(
-                    child: Text(_i18n.t('select_contact_to_view')),
-                  )
-                : _buildContactDetail(_selectedContact!),
-          ),
-        ],
-      ),
-    );
+            );
   }
 
-  Widget _buildContactListTile(Contact contact) {
+  Widget _buildContactListTile(Contact contact, {bool isMobileView = false}) {
     return ListTile(
       leading: CircleAvatar(
         backgroundColor: contact.revoked ? Colors.red : Colors.blue,
@@ -442,7 +480,7 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
       ),
       subtitle: Text(contact.callsign),
       selected: _selectedContact?.callsign == contact.callsign,
-      onTap: () => _selectContact(contact),
+      onTap: () => isMobileView ? _selectContactMobile(contact) : _selectContact(contact),
       trailing: PopupMenuButton(
         itemBuilder: (context) => [
           PopupMenuItem(value: 'edit', child: Text(_i18n.t('edit'))),
@@ -681,6 +719,225 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
   Widget _buildInfoRow(String label, String value, {bool monospace = false}) {
     if (value.isEmpty) return const SizedBox.shrink();
 
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 120,
+            child: Text(
+              label,
+              style: const TextStyle(fontWeight: FontWeight.bold),
+            ),
+          ),
+          Expanded(
+            child: SelectableText(
+              value,
+              style: monospace
+                  ? const TextStyle(fontFamily: 'monospace', fontSize: 12)
+                  : null,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Full-screen contact detail page for mobile view
+class _ContactDetailPage extends StatelessWidget {
+  final Contact contact;
+  final ContactService contactService;
+  final ProfileService profileService;
+  final I18nService i18n;
+  final String collectionPath;
+
+  const _ContactDetailPage({
+    Key? key,
+    required this.contact,
+    required this.contactService,
+    required this.profileService,
+    required this.i18n,
+    required this.collectionPath,
+  }) : super(key: key);
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(contact.displayName),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.edit),
+            onPressed: () async {
+              final result = await Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (context) => AddEditContactPage(
+                    collectionPath: collectionPath,
+                    contact: contact,
+                  ),
+                ),
+              );
+              if (result == true && context.mounted) {
+                Navigator.pop(context, true);
+              }
+            },
+          ),
+        ],
+      ),
+      body: _buildContactDetail(context),
+    );
+  }
+
+  Widget _buildContactDetail(BuildContext context) {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Header
+          Row(
+            children: [
+              CircleAvatar(
+                radius: 40,
+                backgroundColor: contact.revoked ? Colors.red : Colors.blue,
+                child: Text(
+                  contact.callsign.substring(0, 2),
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 32,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            contact.displayName,
+                            style: Theme.of(context).textTheme.headlineSmall,
+                          ),
+                        ),
+                        if (contact.isProbablyMachine) ...[
+                          const SizedBox(width: 8),
+                          Chip(
+                            label: Text(i18n.t('machine'), style: const TextStyle(fontSize: 12)),
+                            padding: const EdgeInsets.symmetric(horizontal: 4),
+                          ),
+                        ],
+                      ],
+                    ),
+                    Text(
+                      contact.callsign,
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                    if (contact.groupPath != null && contact.groupPath!.isNotEmpty)
+                      Text(
+                        '${i18n.t('group')}: ${contact.groupDisplayName}',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+
+          if (contact.revoked) ...[
+            const SizedBox(height: 16),
+            Card(
+              color: Colors.red.shade50,
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Row(
+                  children: [
+                    const Icon(Icons.block, color: Colors.red),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        i18n.t('contact_revoked_warning'),
+                        style: const TextStyle(color: Colors.red, fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+
+          const SizedBox(height: 24),
+          const Divider(),
+          const SizedBox(height: 16),
+
+          // Details
+          _buildDetailRow(i18n.t('npub'), contact.npub, monospace: true),
+          _buildDetailRow(i18n.t('callsign'), contact.callsign),
+
+          // Contact Information
+          if (contact.emails.isNotEmpty) ...[
+            const SizedBox(height: 16),
+            const Divider(),
+            const SizedBox(height: 8),
+            Text(
+              i18n.t('emails'),
+              style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.bold,
+                  ),
+            ),
+            ...contact.emails.map((e) => _buildDetailRow(i18n.t('email'), e)),
+          ],
+
+          if (contact.phones.isNotEmpty) ...[
+            const SizedBox(height: 16),
+            const Divider(),
+            const SizedBox(height: 8),
+            Text(
+              i18n.t('phones'),
+              style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.bold,
+                  ),
+            ),
+            ...contact.phones.map((p) => _buildDetailRow(i18n.t('phone'), p)),
+          ],
+
+          if (contact.websites.isNotEmpty) ...[
+            const SizedBox(height: 16),
+            const Divider(),
+            const SizedBox(height: 8),
+            Text(
+              i18n.t('websites'),
+              style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.bold,
+                  ),
+            ),
+            ...contact.websites.map((w) => _buildDetailRow(i18n.t('website'), w)),
+          ],
+
+          // Notes
+          if (contact.notes.isNotEmpty) ...[
+            const SizedBox(height: 16),
+            const Divider(),
+            const SizedBox(height: 8),
+            Text(
+              i18n.t('notes'),
+              style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.bold,
+                  ),
+            ),
+            const SizedBox(height: 8),
+            Text(contact.notes),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDetailRow(String label, String value, {bool monospace = false}) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
       child: Row(

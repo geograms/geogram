@@ -353,21 +353,35 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
       ),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
-          : Row(
-              children: [
-                // Left panel: Event list
-                _buildEventList(theme),
-                const VerticalDivider(width: 1),
-                // Right panel: Event detail
-                Expanded(child: _buildEventDetail(theme)),
-              ],
+          : LayoutBuilder(
+              builder: (context, constraints) {
+                // Use two-panel layout for wide screens, single panel for narrow
+                final isWideScreen = constraints.maxWidth >= 600;
+
+                if (isWideScreen) {
+                  // Desktop/landscape: Two-panel layout
+                  return Row(
+                    children: [
+                      // Left panel: Event list
+                      _buildEventList(theme),
+                      const VerticalDivider(width: 1),
+                      // Right panel: Event detail
+                      Expanded(child: _buildEventDetail(theme)),
+                    ],
+                  );
+                } else {
+                  // Mobile/portrait: Single panel
+                  // Show event list, detail opens in full screen
+                  return _buildEventList(theme, isMobileView: true);
+                }
+              },
             ),
     );
   }
 
-  Widget _buildEventList(ThemeData theme) {
+  Widget _buildEventList(ThemeData theme, {bool isMobileView = false}) {
     return Container(
-      width: 350,
+      width: isMobileView ? null : 350,
       color: theme.colorScheme.surface,
       child: Column(
         children: [
@@ -428,7 +442,7 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
           Expanded(
             child: _filteredEvents.isEmpty
                 ? _buildEmptyState(theme)
-                : _buildYearGroupedList(theme),
+                : _buildYearGroupedList(theme, isMobileView: isMobileView),
           ),
         ],
       ),
@@ -472,7 +486,7 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
     );
   }
 
-  Widget _buildYearGroupedList(ThemeData theme) {
+  Widget _buildYearGroupedList(ThemeData theme, {bool isMobileView = false}) {
     // Group events by year
     final Map<int, List<Event>> eventsByYear = {};
     for (var event in _filteredEvents) {
@@ -533,12 +547,41 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
               ...events.map((event) => EventTileWidget(
                     event: event,
                     isSelected: _selectedEvent?.id == event.id,
-                    onTap: () => _selectEvent(event),
+                    onTap: () => isMobileView
+                        ? _selectEventMobile(event)
+                        : _selectEvent(event),
                   )),
           ],
         );
       },
     );
+  }
+
+  Future<void> _selectEventMobile(Event event) async {
+    // Load full event with all features
+    final fullEvent = await _eventService.loadEvent(event.id);
+
+    if (!mounted || fullEvent == null) return;
+
+    // Navigate to full-screen detail view
+    final result = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder: (context) => _EventDetailPage(
+          event: fullEvent,
+          collectionPath: widget.collectionPath,
+          eventService: _eventService,
+          profileService: _profileService,
+          i18n: _i18n,
+          currentUserNpub: _currentUserNpub,
+          currentCallsign: _currentCallsign,
+        ),
+      ),
+    );
+
+    // Reload events if changes were made
+    if (result == true && mounted) {
+      await _loadEvents();
+    }
   }
 
   Widget _buildEventDetail(ThemeData theme) {
@@ -584,6 +627,262 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
           _selectedEvent = updated;
         });
       },
+    );
+  }
+}
+
+/// Full-screen event detail page for mobile view
+class _EventDetailPage extends StatefulWidget {
+  final Event event;
+  final String collectionPath;
+  final EventService eventService;
+  final ProfileService profileService;
+  final I18nService i18n;
+  final String? currentUserNpub;
+  final String? currentCallsign;
+
+  const _EventDetailPage({
+    Key? key,
+    required this.event,
+    required this.collectionPath,
+    required this.eventService,
+    required this.profileService,
+    required this.i18n,
+    required this.currentUserNpub,
+    required this.currentCallsign,
+  }) : super(key: key);
+
+  @override
+  State<_EventDetailPage> createState() => _EventDetailPageState();
+}
+
+class _EventDetailPageState extends State<_EventDetailPage> {
+  late Event _event;
+  bool _hasChanges = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _event = widget.event;
+  }
+
+  Future<void> _likeEvent() async {
+    if (widget.currentCallsign == null) return;
+
+    final success = await widget.eventService.addLike(
+      eventId: _event.id,
+      callsign: widget.currentCallsign!,
+    );
+
+    if (success && mounted) {
+      _hasChanges = true;
+      // Reload event
+      final updatedEvent = await widget.eventService.loadEvent(_event.id);
+      if (updatedEvent != null) {
+        final event = updatedEvent; // Capture non-null value
+        setState(() {
+          _event = event;
+        });
+      }
+    }
+  }
+
+  Future<void> _unlikeEvent() async {
+    if (widget.currentCallsign == null) return;
+
+    final success = await widget.eventService.removeLike(
+      eventId: _event.id,
+      callsign: widget.currentCallsign!,
+    );
+
+    if (success && mounted) {
+      _hasChanges = true;
+      // Reload event
+      final updatedEvent = await widget.eventService.loadEvent(_event.id);
+      if (updatedEvent != null) {
+        final event = updatedEvent; // Capture non-null value
+        setState(() {
+          _event = event;
+        });
+      }
+    }
+  }
+
+  Future<void> _editEvent() async {
+    final result = await Navigator.push<Map<String, dynamic>>(
+      context,
+      MaterialPageRoute(
+        builder: (context) => EventSettingsPage(
+          event: _event,
+          collectionPath: widget.collectionPath,
+        ),
+      ),
+    );
+
+    if (result != null && mounted) {
+      final newEventId = await widget.eventService.updateEvent(
+        eventId: _event.id,
+        title: result['title'] as String,
+        location: result['location'] as String,
+        locationName: result['locationName'] as String?,
+        content: result['content'] as String,
+        agenda: result['agenda'] as String?,
+        visibility: result['visibility'] as String?,
+        admins: result['admins'] as List<String>?,
+        moderators: result['moderators'] as List<String>?,
+        eventDateTime: result['eventDateTime'] as DateTime?,
+        startDate: result['startDate'] as String?,
+        endDate: result['endDate'] as String?,
+        trailerFileName: result.containsKey('trailer')
+            ? (result['trailer'] as String? ?? '')
+            : null,
+        links: result['links'] as List<EventLink>?,
+        registrationEnabled: result['registrationEnabled'] as bool?,
+      );
+
+      if (newEventId != null && mounted) {
+        _hasChanges = true;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(widget.i18n.t('event_updated')),
+            backgroundColor: Colors.green,
+          ),
+        );
+        // Reload event using the new ID
+        final updatedEvent = await widget.eventService.loadEvent(newEventId);
+        if (updatedEvent != null) {
+          final event = updatedEvent; // Capture non-null value
+          setState(() {
+            _event = event;
+          });
+        }
+      }
+    }
+  }
+
+  Future<void> _uploadFiles() async {
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        allowMultiple: true,
+        type: FileType.any,
+        dialogTitle: widget.i18n.t('select_files_to_add'),
+      );
+
+      if (result != null && result.files.isNotEmpty && mounted) {
+        final year = _event.id.substring(0, 4);
+        final eventPath = '${widget.collectionPath}/events/$year/${_event.id}';
+
+        int copiedCount = 0;
+        for (var file in result.files) {
+          if (file.path != null) {
+            final sourceFile = File(file.path!);
+            final targetPath = '$eventPath/${file.name}';
+
+            try {
+              await sourceFile.copy(targetPath);
+              copiedCount++;
+            } catch (e) {
+              print('Error copying file ${file.name}: $e');
+            }
+          }
+        }
+
+        if (copiedCount > 0 && mounted) {
+          _hasChanges = true;
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(widget.i18n.t('files_uploaded', params: [copiedCount.toString()])),
+              backgroundColor: Colors.green,
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('${widget.i18n.t('error')}: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _createUpdate() async {
+    final result = await showDialog<Map<String, dynamic>>(
+      context: context,
+      builder: (context) => const NewUpdateDialog(),
+    );
+
+    if (result != null && mounted) {
+      final profile = widget.profileService.getProfile();
+      final update = await widget.eventService.createUpdate(
+        eventId: _event.id,
+        title: result['title'] as String,
+        author: profile.callsign,
+        content: result['content'] as String,
+        npub: profile.npub,
+      );
+
+      if (update != null && mounted) {
+        _hasChanges = true;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(widget.i18n.t('update_created')),
+            backgroundColor: Colors.green,
+          ),
+        );
+        // Reload event to show the new update
+        final updatedEvent = await widget.eventService.loadEvent(_event.id);
+        if (updatedEvent != null) {
+          final event = updatedEvent; // Capture non-null value
+          setState(() {
+            _event = event;
+          });
+        }
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final canEdit = _event.canEdit(widget.currentCallsign ?? '', widget.currentUserNpub);
+    final hasLiked = _event.hasUserLiked(widget.currentCallsign ?? '');
+
+    return PopScope(
+      canPop: true,
+      onPopInvoked: (didPop) {
+        if (didPop && _hasChanges) {
+          Navigator.of(context).pop(true);
+        }
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          title: Text(_event.title),
+        ),
+        body: EventDetailWidget(
+          event: _event,
+          collectionPath: widget.collectionPath,
+          currentCallsign: widget.currentCallsign,
+          currentUserNpub: widget.currentUserNpub,
+          canEdit: canEdit,
+          hasLiked: hasLiked,
+          onLike: hasLiked ? _unlikeEvent : _likeEvent,
+          onEdit: _editEvent,
+          onUploadFiles: _uploadFiles,
+          onCreateUpdate: _createUpdate,
+          onRefresh: () async {
+            final updated = await widget.eventService.loadEvent(_event.id);
+            if (updated != null) {
+              final event = updated; // Capture non-null value
+              setState(() {
+                _event = event;
+              });
+            }
+          },
+        ),
+      ),
     );
   }
 }

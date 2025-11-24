@@ -6,6 +6,7 @@ import 'dart:convert';
 import '../services/profile_service.dart';
 import '../services/log_service.dart';
 import '../services/i18n_service.dart';
+import '../services/relay_service.dart';
 
 class LocationPage extends StatefulWidget {
   const LocationPage({super.key});
@@ -223,6 +224,39 @@ class _LocationPageState extends State<LocationPage> {
     _saveLocation();
   }
 
+  /// Get tile URL - use relay if available, otherwise fallback to OSM
+  String _getTileUrl() {
+    try {
+      final relay = RelayService().getPreferredRelay();
+      final profile = _profileService.getProfile();
+
+      // Check if we have both a relay and a callsign
+      if (relay != null && relay.url.isNotEmpty && profile.callsign.isNotEmpty) {
+        // Use relay tile server - convert WebSocket URL to HTTP URL
+        var relayUrl = relay.url;
+
+        // Convert ws:// to http:// and wss:// to https://
+        if (relayUrl.startsWith('ws://')) {
+          relayUrl = relayUrl.replaceFirst('ws://', 'http://');
+        } else if (relayUrl.startsWith('wss://')) {
+          relayUrl = relayUrl.replaceFirst('wss://', 'https://');
+        }
+
+        // Remove trailing slash if present
+        if (relayUrl.endsWith('/')) {
+          relayUrl = relayUrl.substring(0, relayUrl.length - 1);
+        }
+
+        return '$relayUrl/tiles/${profile.callsign}/{z}/{x}/{y}.png';
+      }
+    } catch (e) {
+      LogService().log('Error getting relay tile URL: $e');
+    }
+
+    // Fallback to OpenStreetMap
+    return 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -249,10 +283,9 @@ class _LocationPageState extends State<LocationPage> {
                     ),
                     children: [
                       TileLayer(
-                        urlTemplate: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+                        urlTemplate: _getTileUrl(),
                         userAgentPackageName: 'dev.geogram.geogram_desktop',
-                        subdomains: const ['a', 'b', 'c', 'd'],
-                        retinaMode: RetinaMode.isHighDensity(context),
+                        subdomains: const [], // No subdomains for relay/OSM
                         errorTileCallback: (tile, error, stackTrace) {
                           // Map tiles failed to load - probably offline
                           if (!_isOnline) return;

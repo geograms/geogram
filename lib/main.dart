@@ -302,27 +302,47 @@ class _CollectionsPageState extends State<CollectionsPage> {
     super.dispose();
   }
 
+  bool _isFixedCollectionType(Collection collection) {
+    const fixedTypes = {
+      'chat', 'forum', 'blog', 'events', 'news',
+      'www', 'postcards', 'contacts', 'places'
+    };
+    return fixedTypes.contains(collection.type);
+  }
+
   Future<void> _loadCollections() async {
     setState(() => _isLoading = true);
 
     try {
       final collections = await _collectionService.loadCollections();
 
-      // Sort: favorites first, then alphabetically
-      collections.sort((a, b) {
-        if (a.isFavorite != b.isFavorite) {
-          return a.isFavorite ? -1 : 1;
-        }
-        return a.title.toLowerCase().compareTo(b.title.toLowerCase());
-      });
+      // Separate fixed and file collections
+      final fixedCollections = collections.where(_isFixedCollectionType).toList();
+      final fileCollections = collections.where((c) => !_isFixedCollectionType(c)).toList();
+
+      // Sort each group: favorites first, then alphabetically
+      void sortGroup(List<Collection> group) {
+        group.sort((a, b) {
+          if (a.isFavorite != b.isFavorite) {
+            return a.isFavorite ? -1 : 1;
+          }
+          return a.title.toLowerCase().compareTo(b.title.toLowerCase());
+        });
+      }
+
+      sortGroup(fixedCollections);
+      sortGroup(fileCollections);
+
+      // Combine: fixed first, then file collections
+      final sortedCollections = [...fixedCollections, ...fileCollections];
 
       setState(() {
-        _allCollections = collections;
-        _filteredCollections = collections;
+        _allCollections = sortedCollections;
+        _filteredCollections = sortedCollections;
         _isLoading = false;
       });
 
-      LogService().log('Loaded ${collections.length} collections');
+      LogService().log('Loaded ${collections.length} collections (${fixedCollections.length} fixed, ${fileCollections.length} file)');
     } catch (e) {
       LogService().log('Error loading collections: $e');
       setState(() => _isLoading = false);
@@ -471,59 +491,176 @@ class _CollectionsPageState extends State<CollectionsPage> {
                       )
                     : RefreshIndicator(
                         onRefresh: _loadCollections,
-                        child: ListView.builder(
-                          padding: const EdgeInsets.symmetric(horizontal: 16),
-                          itemCount: _filteredCollections.length,
-                          itemBuilder: (context, index) {
-                            final collection = _filteredCollections[index];
-                            return _CollectionCard(
-                              collection: collection,
-                              onTap: () {
-                                LogService().log('Opened collection: ${collection.title}');
-                                // Route to appropriate page based on collection type
-                                final Widget targetPage = collection.type == 'chat'
-                                    ? ChatBrowserPage(collection: collection)
-                                    : collection.type == 'forum'
-                                        ? ForumBrowserPage(collection: collection)
-                                        : collection.type == 'blog'
-                                            ? BlogBrowserPage(
-                                                collectionPath: collection.storagePath ?? '',
-                                                collectionTitle: collection.title,
-                                              )
-                                            : collection.type == 'news'
-                                                ? NewsBrowserPage(collection: collection)
-                                                : collection.type == 'events'
-                                                    ? EventsBrowserPage(
-                                                        collectionPath: collection.storagePath ?? '',
-                                                        collectionTitle: collection.title,
-                                                      )
-                                                    : collection.type == 'postcards'
-                                                        ? PostcardsBrowserPage(
+                        child: LayoutBuilder(
+                          builder: (context, constraints) {
+                            // Calculate number of columns based on screen width
+                            final screenWidth = constraints.maxWidth;
+                            final crossAxisCount = screenWidth < 600
+                                ? 2 // Mobile/Small: 2 columns
+                                : screenWidth < 900
+                                    ? 4 // Tablet: 4 columns
+                                    : screenWidth < 1400
+                                        ? 6 // Desktop: 6 columns
+                                        : screenWidth < 1800
+                                            ? 7 // Large desktop: 7 columns
+                                            : 8; // Extra large: 8 columns
+
+                            // Separate fixed and file collections from filtered list
+                            final fixedCollections = _filteredCollections.where(_isFixedCollectionType).toList();
+                            final fileCollections = _filteredCollections.where((c) => !_isFixedCollectionType(c)).toList();
+
+                            return CustomScrollView(
+                              slivers: [
+                                // Fixed collections grid
+                                if (fixedCollections.isNotEmpty)
+                                  SliverPadding(
+                                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                                    sliver: SliverGrid(
+                                      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                                        crossAxisCount: crossAxisCount,
+                                        crossAxisSpacing: 8,
+                                        mainAxisSpacing: 8,
+                                        childAspectRatio: 1.9,
+                                      ),
+                                      delegate: SliverChildBuilderDelegate(
+                                        (context, index) {
+                                          final collection = fixedCollections[index];
+                                          return _CollectionGridCard(
+                                  collection: collection,
+                                  onTap: () {
+                                    LogService().log('Opened collection: ${collection.title}');
+                                    // Route to appropriate page based on collection type
+                                    final Widget targetPage = collection.type == 'chat'
+                                        ? ChatBrowserPage(collection: collection)
+                                        : collection.type == 'forum'
+                                            ? ForumBrowserPage(collection: collection)
+                                            : collection.type == 'blog'
+                                                ? BlogBrowserPage(
+                                                    collectionPath: collection.storagePath ?? '',
+                                                    collectionTitle: collection.title,
+                                                  )
+                                                : collection.type == 'news'
+                                                    ? NewsBrowserPage(collection: collection)
+                                                    : collection.type == 'events'
+                                                        ? EventsBrowserPage(
                                                             collectionPath: collection.storagePath ?? '',
                                                             collectionTitle: collection.title,
                                                           )
-                                                        : collection.type == 'contacts'
-                                                            ? ContactsBrowserPage(
+                                                        : collection.type == 'postcards'
+                                                            ? PostcardsBrowserPage(
                                                                 collectionPath: collection.storagePath ?? '',
                                                                 collectionTitle: collection.title,
                                                               )
-                                                            : collection.type == 'places'
-                                                                ? PlacesBrowserPage(
+                                                            : collection.type == 'contacts'
+                                                                ? ContactsBrowserPage(
                                                                     collectionPath: collection.storagePath ?? '',
                                                                     collectionTitle: collection.title,
                                                                   )
-                                                                : CollectionBrowserPage(collection: collection);
+                                                                : collection.type == 'places'
+                                                                    ? PlacesBrowserPage(
+                                                                        collectionPath: collection.storagePath ?? '',
+                                                                        collectionTitle: collection.title,
+                                                                      )
+                                                                    : CollectionBrowserPage(collection: collection);
 
-                                Navigator.push(
-                                  context,
-                                  MaterialPageRoute(
-                                    builder: (context) => targetPage,
+                                              Navigator.push(
+                                                context,
+                                                MaterialPageRoute(
+                                                  builder: (context) => targetPage,
+                                                ),
+                                              ).then((_) => _loadCollections());
+                                            },
+                                            onFavoriteToggle: () => _toggleFavorite(collection),
+                                            onDelete: () => _deleteCollection(collection),
+                                            onOpenFolder: () => _openFolder(collection),
+                                          );
+                                        },
+                                        childCount: fixedCollections.length,
+                                      ),
+                                    ),
                                   ),
-                                ).then((_) => _loadCollections());
-                              },
-                              onFavoriteToggle: () => _toggleFavorite(collection),
-                              onDelete: () => _deleteCollection(collection),
-                              onOpenFolder: () => _openFolder(collection),
+
+                                // Separator between fixed and file collections
+                                if (fixedCollections.isNotEmpty && fileCollections.isNotEmpty)
+                                  SliverToBoxAdapter(
+                                    child: Padding(
+                                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                                      child: Divider(
+                                        thickness: 1,
+                                        color: Theme.of(context).colorScheme.outlineVariant,
+                                      ),
+                                    ),
+                                  ),
+
+                                // File collections grid
+                                if (fileCollections.isNotEmpty)
+                                  SliverPadding(
+                                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                                    sliver: SliverGrid(
+                                      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                                        crossAxisCount: crossAxisCount,
+                                        crossAxisSpacing: 8,
+                                        mainAxisSpacing: 8,
+                                        childAspectRatio: 1.9,
+                                      ),
+                                      delegate: SliverChildBuilderDelegate(
+                                        (context, index) {
+                                          final collection = fileCollections[index];
+                                          return _CollectionGridCard(
+                                            collection: collection,
+                                            onTap: () {
+                                              LogService().log('Opened collection: ${collection.title}');
+                                              // Route to appropriate page based on collection type
+                                              final Widget targetPage = collection.type == 'chat'
+                                                  ? ChatBrowserPage(collection: collection)
+                                                  : collection.type == 'forum'
+                                                      ? ForumBrowserPage(collection: collection)
+                                                      : collection.type == 'blog'
+                                                          ? BlogBrowserPage(
+                                                              collectionPath: collection.storagePath ?? '',
+                                                              collectionTitle: collection.title,
+                                                            )
+                                                          : collection.type == 'news'
+                                                              ? NewsBrowserPage(collection: collection)
+                                                              : collection.type == 'events'
+                                                                  ? EventsBrowserPage(
+                                                                      collectionPath: collection.storagePath ?? '',
+                                                                      collectionTitle: collection.title,
+                                                                    )
+                                                                  : collection.type == 'postcards'
+                                                                      ? PostcardsBrowserPage(
+                                                                          collectionPath: collection.storagePath ?? '',
+                                                                          collectionTitle: collection.title,
+                                                                        )
+                                                                      : collection.type == 'contacts'
+                                                                          ? ContactsBrowserPage(
+                                                                              collectionPath: collection.storagePath ?? '',
+                                                                              collectionTitle: collection.title,
+                                                                            )
+                                                                          : collection.type == 'places'
+                                                                              ? PlacesBrowserPage(
+                                                                                  collectionPath: collection.storagePath ?? '',
+                                                                                  collectionTitle: collection.title,
+                                                                                )
+                                                                              : CollectionBrowserPage(collection: collection);
+
+                                              Navigator.push(
+                                                context,
+                                                MaterialPageRoute(
+                                                  builder: (context) => targetPage,
+                                                ),
+                                              ).then((_) => _loadCollections());
+                                            },
+                                            onFavoriteToggle: () => _toggleFavorite(collection),
+                                            onDelete: () => _deleteCollection(collection),
+                                            onOpenFolder: () => _openFolder(collection),
+                                          );
+                                        },
+                                        childCount: fileCollections.length,
+                                      ),
+                                    ),
+                                  ),
+                              ],
                             );
                           },
                         ),
@@ -540,7 +677,202 @@ class _CollectionsPageState extends State<CollectionsPage> {
   }
 }
 
-// Collection Card Widget
+// Collection Grid Card Widget (compact design for grid layout)
+class _CollectionGridCard extends StatelessWidget {
+  final Collection collection;
+  final VoidCallback onTap;
+  final VoidCallback onFavoriteToggle;
+  final VoidCallback onDelete;
+  final VoidCallback onOpenFolder;
+
+  const _CollectionGridCard({
+    required this.collection,
+    required this.onTap,
+    required this.onFavoriteToggle,
+    required this.onDelete,
+    required this.onOpenFolder,
+  });
+
+  /// Check if this is a fixed collection type
+  bool _isFixedCollectionType() {
+    const fixedTypes = {
+      'chat', 'forum', 'blog', 'events', 'news',
+      'www', 'postcards', 'contacts', 'places'
+    };
+    return fixedTypes.contains(collection.type);
+  }
+
+  /// Get display title with proper capitalization for fixed types
+  String _getDisplayTitle() {
+    if (_isFixedCollectionType() && collection.title.isNotEmpty) {
+      // Special case for www -> WWW
+      if (collection.title.toLowerCase() == 'www') {
+        return 'WWW';
+      }
+      return collection.title[0].toUpperCase() + collection.title.substring(1);
+    }
+    return collection.title;
+  }
+
+  /// Get appropriate icon based on collection type
+  IconData _getCollectionIcon() {
+    switch (collection.type) {
+      case 'chat':
+        return Icons.chat;
+      case 'forum':
+        return Icons.forum;
+      case 'blog':
+        return Icons.article;
+      case 'events':
+        return Icons.event;
+      case 'news':
+        return Icons.newspaper;
+      case 'www':
+        return Icons.language;
+      case 'postcards':
+        return Icons.credit_card;
+      case 'contacts':
+        return Icons.contacts;
+      case 'places':
+        return Icons.place;
+      default:
+        return Icons.folder_special;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final i18n = I18nService();
+
+    return Card(
+      elevation: 2,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(12),
+        child: Stack(
+          children: [
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Main content: Icon, title, and stats
+                  Expanded(
+                    child: Center(
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: [
+                          Icon(
+                            _getCollectionIcon(),
+                            size: 26,
+                            color: theme.colorScheme.primary,
+                          ),
+                          const SizedBox(width: 8),
+                          Flexible(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(
+                                  _getDisplayTitle(),
+                                  style: theme.textTheme.titleSmall?.copyWith(
+                                    fontWeight: FontWeight.w600,
+                                    fontSize: 15,
+                                    height: 1.15,
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                                Text(
+                                  '${collection.filesCount} files • ${collection.formattedSize}',
+                                  style: theme.textTheme.bodySmall?.copyWith(
+                                    color: theme.colorScheme.onSurfaceVariant,
+                                    fontSize: 12,
+                                    height: 1.15,
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  // Bottom: Action buttons
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      IconButton(
+                        icon: Icon(
+                          collection.isFavorite ? Icons.star : Icons.star_border,
+                          size: 13,
+                        ),
+                        onPressed: onFavoriteToggle,
+                        tooltip: i18n.t('favorite'),
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(
+                          minWidth: 20,
+                          minHeight: 20,
+                        ),
+                        color: collection.isFavorite ? Colors.amber : null,
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.folder_open, size: 13),
+                        onPressed: onOpenFolder,
+                        tooltip: i18n.t('open_folder'),
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(
+                          minWidth: 20,
+                          minHeight: 20,
+                        ),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.delete_outline, size: 13),
+                        onPressed: onDelete,
+                        tooltip: i18n.t('delete'),
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(
+                          minWidth: 20,
+                          minHeight: 20,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            // Favorite badge overlay
+            if (collection.isFavorite)
+              Positioned(
+                top: 4,
+                right: 4,
+                child: Container(
+                  padding: const EdgeInsets.all(3),
+                  decoration: BoxDecoration(
+                    color: Colors.amber.withOpacity(0.9),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: const Icon(
+                    Icons.star,
+                    size: 10,
+                    color: Colors.white,
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// Collection Card Widget (original list design - kept for reference)
 class _CollectionCard extends StatelessWidget {
   final Collection collection;
   final VoidCallback onTap;

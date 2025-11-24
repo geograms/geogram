@@ -523,10 +523,22 @@ class _ForumBrowserPageState extends State<ForumBrowserPage> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(
-          _selectedThread?.title ??
-              _selectedSection?.name ??
-              widget.collection.title,
+        title: LayoutBuilder(
+          builder: (context, constraints) {
+            final screenWidth = MediaQuery.of(context).size.width;
+            final isWideScreen = screenWidth >= 600;
+
+            // In narrow screen, show "Forum" when on the section list
+            if (!isWideScreen && _selectedSection == null && _selectedThread == null) {
+              return Text(widget.collection.title);
+            }
+
+            return Text(
+              _selectedThread?.title ??
+                  _selectedSection?.name ??
+                  widget.collection.title,
+            );
+          },
         ),
         actions: [
           IconButton(
@@ -596,53 +608,222 @@ class _ForumBrowserPageState extends State<ForumBrowserPage> {
       return _buildEmptyState(theme);
     }
 
-    return Row(
-      children: [
-        // Left panel - Section list
-        SectionListWidget(
-          sections: _sections,
-          selectedSectionId: _selectedSection?.id,
-          onSectionSelect: _selectSection,
-        ),
-        // Middle panel - Thread list
-        ThreadListWidget(
-          threads: _threads,
-          selectedThreadId: _selectedThread?.id,
-          onThreadSelect: _selectThread,
-          onNewThread: _showNewThreadDialog,
-          canCreateThread: _canCreateThread,
-          onThreadMenu: _showThreadMenu,
-          canModerateThread: (thread) => _isAdmin,
-        ),
-        // Right panel - Posts and input
-        Expanded(
-          child: _selectedThread == null
-              ? _buildNoThreadSelected(theme)
-              : Column(
-                  children: [
-                    // Post list
-                    Expanded(
-                      child: PostListWidget(
-                        posts: _posts,
-                        threadTitle: _selectedThread!.title,
-                        onFileOpen: _openAttachedFile,
-                        onPostDelete: _deletePost,
-                        canDeletePost: _canDeletePost,
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        // Use three-panel layout for wide screens, single panel for narrow
+        final isWideScreen = constraints.maxWidth >= 600;
+
+        if (isWideScreen) {
+          // Desktop/landscape: Three-panel layout
+          return Row(
+            children: [
+              // Left panel - Section list
+              SectionListWidget(
+                sections: _sections,
+                selectedSectionId: _selectedSection?.id,
+                onSectionSelect: _selectSection,
+              ),
+              // Middle panel - Thread list
+              ThreadListWidget(
+                threads: _threads,
+                selectedThreadId: _selectedThread?.id,
+                onThreadSelect: _selectThread,
+                onNewThread: _showNewThreadDialog,
+                canCreateThread: _canCreateThread,
+                onThreadMenu: _showThreadMenu,
+                canModerateThread: (thread) => _isAdmin,
+              ),
+              // Right panel - Posts and input
+              Expanded(
+                child: _selectedThread == null
+                    ? _buildNoThreadSelected(theme)
+                    : Column(
+                        children: [
+                          // Post list
+                          Expanded(
+                            child: PostListWidget(
+                              posts: _posts,
+                              threadTitle: _selectedThread!.title,
+                              onFileOpen: _openAttachedFile,
+                              onPostDelete: _deletePost,
+                              canDeletePost: _canDeletePost,
+                            ),
+                          ),
+                          // Post input
+                          PostInputWidget(
+                            onSend: _sendPost,
+                            maxLength: _selectedSection?.config?.maxSizeText ?? 5000,
+                            allowFiles: _selectedSection?.config?.fileUpload ?? true,
+                            isLocked: _selectedThread!.isLocked,
+                            hintText: 'Write a reply...',
+                          ),
+                        ],
+                      ),
+              ),
+            ],
+          );
+        } else {
+          // Mobile/portrait: Single panel showing section list
+          // Threads and posts open in full screen
+          return _buildSectionList(theme, isMobileView: true);
+        }
+      },
+    );
+  }
+
+  /// Build section list
+  Widget _buildSectionList(ThemeData theme, {bool isMobileView = false}) {
+    if (isMobileView) {
+      // In mobile view, build a full-width list
+      final sortedSections = List<ForumSection>.from(_sections);
+      sortedSections.sort();
+
+      return Container(
+        color: theme.colorScheme.surface,
+        child: Column(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: theme.colorScheme.surfaceVariant,
+                border: Border(
+                  bottom: BorderSide(
+                    color: theme.colorScheme.outlineVariant,
+                    width: 1,
+                  ),
+                ),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.forum, color: theme.colorScheme.primary),
+                  const SizedBox(width: 12),
+                  Text(
+                    'Forum Categories',
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Expanded(
+              child: ListView.builder(
+                itemCount: sortedSections.length,
+                itemBuilder: (context, index) {
+                  final section = sortedSections[index];
+                  final isSelected = _selectedSection?.id == section.id;
+
+                  return ListTile(
+                    leading: Icon(
+                      Icons.category,
+                      color: isSelected
+                          ? theme.colorScheme.primary
+                          : theme.colorScheme.onSurfaceVariant,
+                    ),
+                    title: Text(
+                      section.name,
+                      style: TextStyle(
+                        fontWeight:
+                            isSelected ? FontWeight.bold : FontWeight.normal,
+                        color: isSelected ? theme.colorScheme.primary : null,
                       ),
                     ),
-                    // Post input
-                    PostInputWidget(
-                      onSend: _sendPost,
-                      maxLength: _selectedSection?.config?.maxSizeText ?? 5000,
-                      allowFiles: _selectedSection?.config?.fileUpload ?? true,
-                      isLocked: _selectedThread!.isLocked,
-                      hintText: 'Write a reply...',
+                    subtitle: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        if (section.description != null && section.description!.isNotEmpty)
+                          Text(
+                            section.description!,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: theme.textTheme.bodySmall,
+                          ),
+                        const SizedBox(height: 4),
+                        FutureBuilder<List<ForumThread>>(
+                          future: _forumService.loadThreads(section.id),
+                          builder: (context, snapshot) {
+                            if (!snapshot.hasData) {
+                              return Text(
+                                'Loading...',
+                                style: theme.textTheme.bodySmall?.copyWith(
+                                  color: theme.colorScheme.onSurfaceVariant,
+                                ),
+                              );
+                            }
+                            final threads = snapshot.data!;
+                            final totalPosts = threads.fold<int>(
+                              0,
+                              (sum, thread) => sum + thread.replyCount + 1, // +1 for original post
+                            );
+                            return Text(
+                              '${threads.length} threads • $totalPosts posts',
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                color: theme.colorScheme.onSurfaceVariant,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            );
+                          },
+                        ),
+                      ],
                     ),
-                  ],
-                ),
+                    selected: isSelected,
+                    onTap: () => _selectSectionMobile(section),
+                  );
+                },
+              ),
+            ),
+          ],
         ),
-      ],
+      );
+    }
+
+    return SectionListWidget(
+      sections: _sections,
+      selectedSectionId: _selectedSection?.id,
+      onSectionSelect: _selectSection,
     );
+  }
+
+  /// Select section in mobile view - navigate to thread list
+  Future<void> _selectSectionMobile(ForumSection section) async {
+    // Capture section for mobile navigation
+    final sectionToOpen = section;
+
+    // Load threads first
+    setState(() {
+      _isLoading = true;
+    });
+
+    try {
+      final threads = await _forumService.loadThreads(sectionToOpen.id);
+
+      if (!mounted) return;
+
+      // Navigate to full-screen thread list view
+      final result = await Navigator.of(context).push<bool>(
+        MaterialPageRoute(
+          builder: (context) => _ThreadListPage(
+            section: sectionToOpen,
+            threads: threads,
+            forumService: _forumService,
+            profileService: _profileService,
+            collection: widget.collection,
+            isAdmin: _isAdmin,
+          ),
+        ),
+      );
+
+      // Reload sections if changes were made
+      if (result == true && mounted) {
+        await _initializeForum();
+      }
+    } catch (e) {
+      _showError('Failed to load threads: $e');
+    } finally {
+      setState(() {
+        _isLoading = false;
+      });
+    }
   }
 
   /// Build empty state
@@ -1291,6 +1472,676 @@ class _ForumBrowserPageState extends State<ForumBrowserPage> {
           ),
           const Divider(),
         ],
+      ),
+    );
+  }
+}
+
+/// Full-screen thread list page for mobile view
+class _ThreadListPage extends StatefulWidget {
+  final ForumSection section;
+  final List<ForumThread> threads;
+  final ForumService forumService;
+  final ProfileService profileService;
+  final Collection collection;
+  final bool isAdmin;
+
+  const _ThreadListPage({
+    Key? key,
+    required this.section,
+    required this.threads,
+    required this.forumService,
+    required this.profileService,
+    required this.collection,
+    required this.isAdmin,
+  }) : super(key: key);
+
+  @override
+  State<_ThreadListPage> createState() => _ThreadListPageState();
+}
+
+class _ThreadListPageState extends State<_ThreadListPage> {
+  late List<ForumThread> _threads;
+  bool _hasChanges = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _threads = widget.threads;
+  }
+
+  bool get _canCreateThread {
+    return widget.section.config?.allowNewThreads ?? true;
+  }
+
+  Future<void> _selectThread(ForumThread thread) async {
+    // Load posts for the thread
+    final posts = await widget.forumService.loadPosts(
+      widget.section.id,
+      thread.id,
+    );
+
+    if (!mounted) return;
+
+    // Navigate to posts page
+    final result = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder: (context) => _PostsPage(
+          section: widget.section,
+          thread: thread,
+          posts: posts,
+          forumService: widget.forumService,
+          profileService: widget.profileService,
+          collection: widget.collection,
+          isAdmin: widget.isAdmin,
+        ),
+      ),
+    );
+
+    // Reload threads if changes were made
+    if (result == true && mounted) {
+      _hasChanges = true;
+      await _reloadThreads();
+    }
+  }
+
+  Future<void> _reloadThreads() async {
+    final threads = await widget.forumService.loadThreads(widget.section.id);
+    setState(() {
+      _threads = threads;
+    });
+  }
+
+  Future<void> _showNewThreadDialog() async {
+    final result = await showDialog<Map<String, String>>(
+      context: context,
+      builder: (context) => NewThreadDialog(
+        existingThreadTitles: _threads.map((t) => t.title).toList(),
+        maxTitleLength: 100,
+        maxContentLength: widget.section.config?.maxSizeText ?? 5000,
+      ),
+    );
+
+    if (result != null && mounted) {
+      final profile = widget.profileService.getProfile();
+      if (profile.callsign.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('No active callsign. Please set up your profile first.'),
+          ),
+        );
+        return;
+      }
+
+      // Load settings and check if signing is enabled
+      final settings = await _loadForumSettings();
+      Map<String, String> metadata = {};
+      if (settings['signMessages'] == true &&
+          profile.npub.isNotEmpty &&
+          profile.nsec.isNotEmpty) {
+        metadata['npub'] = profile.npub;
+        metadata['signature'] = 'PLACEHOLDER_SIGNATURE_${DateTime.now().millisecondsSinceEpoch}';
+      }
+
+      final originalPost = ForumPost.now(
+        author: profile.callsign,
+        content: result['content']!,
+        isOriginalPost: true,
+        metadata: metadata.isNotEmpty ? metadata : null,
+      );
+
+      final thread = await widget.forumService.createThread(
+        widget.section.id,
+        result['title']!,
+        originalPost,
+      );
+
+      _hasChanges = true;
+      await _reloadThreads();
+
+      // Navigate to the new thread
+      final newThread = _threads.firstWhere(
+        (t) => t.id == thread.id,
+        orElse: () => thread,
+      );
+      await _selectThread(newThread);
+    }
+  }
+
+  Future<Map<String, dynamic>> _loadForumSettings() async {
+    try {
+      final storagePath = widget.collection.storagePath;
+      if (storagePath == null) return {};
+
+      final settingsFile = File(path.join(storagePath, 'extra', 'settings.json'));
+      if (!await settingsFile.exists()) {
+        return {};
+      }
+
+      final content = await settingsFile.readAsString();
+      final json = jsonDecode(content) as Map<String, dynamic>;
+      return json;
+    } catch (e) {
+      return {};
+    }
+  }
+
+  void _showThreadMenu(ForumThread thread) {
+    showModalBottomSheet(
+      context: context,
+      builder: (context) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: Icon(
+                Icons.delete,
+                color: Theme.of(context).colorScheme.error,
+              ),
+              title: Text(
+                'Delete thread',
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.error,
+                ),
+              ),
+              onTap: () {
+                Navigator.pop(context);
+                _confirmDeleteThread(thread);
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _confirmDeleteThread(ForumThread thread) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete Thread'),
+        content: Text(
+          'Are you sure you want to delete the thread "${thread.title}"? '
+          'This will permanently delete all posts in this thread.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(context).colorScheme.error,
+            ),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true && mounted) {
+      final profile = widget.profileService.getProfile();
+      await widget.forumService.deleteThread(
+        sectionId: widget.section.id,
+        threadId: thread.id,
+        userNpub: profile.npub,
+      );
+
+      _hasChanges = true;
+      await _reloadThreads();
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Thread deleted successfully')),
+        );
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    return PopScope(
+      canPop: true,
+      onPopInvoked: (didPop) {
+        if (didPop && _hasChanges) {
+          Navigator.of(context).pop(true);
+        }
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          title: Text(widget.section.name),
+        ),
+        body: _buildFullWidthThreadList(theme),
+      ),
+    );
+  }
+
+  Widget _buildFullWidthThreadList(ThemeData theme) {
+    // Build a full-width thread list for mobile view
+    final sortedThreads = List<ForumThread>.from(_threads);
+    sortedThreads.sort();
+
+    return Container(
+      color: theme.colorScheme.surface,
+      child: Column(
+        children: [
+          // Header
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: theme.colorScheme.surfaceVariant,
+              border: Border(
+                bottom: BorderSide(
+                  color: theme.colorScheme.outlineVariant,
+                  width: 1,
+                ),
+              ),
+            ),
+            child: Row(
+              children: [
+                Icon(Icons.topic, color: theme.colorScheme.primary),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    'Threads',
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+                if (_canCreateThread)
+                  FilledButton.icon(
+                    onPressed: _showNewThreadDialog,
+                    icon: const Icon(Icons.add, size: 18),
+                    label: const Text('New'),
+                    style: FilledButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          // Thread list
+          Expanded(
+            child: sortedThreads.isEmpty
+                ? Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(
+                          Icons.forum_outlined,
+                          size: 64,
+                          color: theme.colorScheme.onSurfaceVariant.withOpacity(0.5),
+                        ),
+                        const SizedBox(height: 16),
+                        Text(
+                          'No threads yet',
+                          style: theme.textTheme.titleMedium?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                        if (_canCreateThread) ...[
+                          const SizedBox(height: 16),
+                          FilledButton.icon(
+                            onPressed: _showNewThreadDialog,
+                            icon: const Icon(Icons.add),
+                            label: const Text('Create first thread'),
+                          ),
+                        ],
+                      ],
+                    ),
+                  )
+                : ListView.builder(
+                    itemCount: sortedThreads.length,
+                    itemBuilder: (context, index) {
+                      final thread = sortedThreads[index];
+
+                      return ListTile(
+                        leading: Icon(
+                          thread.isPinned ? Icons.push_pin : Icons.comment,
+                          color: thread.isPinned
+                              ? theme.colorScheme.primary
+                              : theme.colorScheme.onSurfaceVariant,
+                        ),
+                        title: Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                thread.title,
+                                style: TextStyle(
+                                  fontWeight: thread.isPinned
+                                      ? FontWeight.bold
+                                      : FontWeight.normal,
+                                ),
+                              ),
+                            ),
+                            if (thread.isLocked)
+                              Icon(
+                                Icons.lock,
+                                size: 16,
+                                color: theme.colorScheme.onSurfaceVariant,
+                              ),
+                          ],
+                        ),
+                        subtitle: Text(
+                          'Started by ${thread.author} • ${thread.replyCount + 1} posts',
+                          style: theme.textTheme.bodySmall,
+                        ),
+                        trailing: widget.isAdmin
+                            ? IconButton(
+                                icon: const Icon(Icons.more_vert),
+                                onPressed: () => _showThreadMenu(thread),
+                              )
+                            : null,
+                        onTap: () => _selectThread(thread),
+                      );
+                    },
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Full-screen posts page for mobile view
+class _PostsPage extends StatefulWidget {
+  final ForumSection section;
+  final ForumThread thread;
+  final List<ForumPost> posts;
+  final ForumService forumService;
+  final ProfileService profileService;
+  final Collection collection;
+  final bool isAdmin;
+
+  const _PostsPage({
+    Key? key,
+    required this.section,
+    required this.thread,
+    required this.posts,
+    required this.forumService,
+    required this.profileService,
+    required this.collection,
+    required this.isAdmin,
+  }) : super(key: key);
+
+  @override
+  State<_PostsPage> createState() => _PostsPageState();
+}
+
+class _PostsPageState extends State<_PostsPage> {
+  late List<ForumPost> _posts;
+  bool _hasChanges = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _posts = widget.posts;
+  }
+
+  Future<void> _sendPost(String content, String? filePath) async {
+    final profile = widget.profileService.getProfile();
+    if (profile.callsign.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('No active callsign. Please set up your profile first.'),
+        ),
+      );
+      return;
+    }
+
+    try {
+      Map<String, String> metadata = {};
+
+      // Handle file attachment
+      String? attachedFileName;
+      if (filePath != null) {
+        attachedFileName = await _copyFileToThread(filePath);
+        if (attachedFileName != null) {
+          metadata['file'] = attachedFileName;
+        }
+      }
+
+      // Load settings and check if signing is enabled
+      final settings = await _loadForumSettings();
+      if (settings['signMessages'] == true &&
+          profile.npub.isNotEmpty &&
+          profile.nsec.isNotEmpty) {
+        metadata['npub'] = profile.npub;
+        metadata['signature'] = 'PLACEHOLDER_SIGNATURE_${DateTime.now().millisecondsSinceEpoch}';
+      }
+
+      final post = ForumPost.now(
+        author: profile.callsign,
+        content: content,
+        isOriginalPost: false,
+        metadata: metadata.isNotEmpty ? metadata : null,
+      );
+
+      await widget.forumService.addReply(
+        widget.section.id,
+        widget.thread.id,
+        post,
+      );
+
+      _hasChanges = true;
+      setState(() {
+        _posts.add(post);
+      });
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Post added successfully'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to send post: $e')),
+        );
+      }
+    }
+  }
+
+  Future<Map<String, dynamic>> _loadForumSettings() async {
+    try {
+      final storagePath = widget.collection.storagePath;
+      if (storagePath == null) return {};
+
+      final settingsFile = File(path.join(storagePath, 'extra', 'settings.json'));
+      if (!await settingsFile.exists()) {
+        return {};
+      }
+
+      final content = await settingsFile.readAsString();
+      final json = jsonDecode(content) as Map<String, dynamic>;
+      return json;
+    } catch (e) {
+      return {};
+    }
+  }
+
+  Future<String?> _copyFileToThread(String sourceFilePath) async {
+    try {
+      final sourceFile = File(sourceFilePath);
+      if (!await sourceFile.exists()) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('File not found')),
+          );
+        }
+        return null;
+      }
+
+      final storagePath = widget.collection.storagePath;
+      if (storagePath == null) {
+        return null;
+      }
+
+      final bytes = await sourceFile.readAsBytes();
+      final hash = sha1.convert(bytes);
+      final sha1Hash = hash.toString();
+
+      final filesPath = path.join(
+        storagePath,
+        widget.section.folder,
+        'files',
+      );
+
+      final filesDir = Directory(filesPath);
+      if (!await filesDir.exists()) {
+        await filesDir.create(recursive: true);
+      }
+
+      String originalFileName = path.basename(sourceFilePath);
+      if (originalFileName.length > 100) {
+        final ext = path.extension(originalFileName);
+        final nameWithoutExt = path.basenameWithoutExtension(originalFileName);
+        final maxNameLength = 100 - ext.length;
+        originalFileName = nameWithoutExt.substring(0, maxNameLength) + ext;
+      }
+
+      final newFileName = '${sha1Hash}_$originalFileName';
+      final destPath = path.join(filesDir.path, newFileName);
+      final destFile = File(destPath);
+
+      await sourceFile.copy(destFile.path);
+
+      return newFileName;
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to copy file: $e')),
+        );
+      }
+      return null;
+    }
+  }
+
+  bool _canDeletePost(ForumPost post) {
+    final profile = widget.profileService.getProfile();
+    final userNpub = profile.npub;
+    return widget.forumService.security.canModerate(userNpub, widget.section.id);
+  }
+
+  Future<void> _deletePost(ForumPost post) async {
+    try {
+      final profile = widget.profileService.getProfile();
+      final userNpub = profile.npub;
+
+      await widget.forumService.deletePost(
+        widget.section.id,
+        widget.thread.id,
+        post,
+        userNpub,
+      );
+
+      _hasChanges = true;
+      setState(() {
+        _posts.removeWhere((p) =>
+            p.timestamp == post.timestamp && p.author == post.author);
+      });
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Post deleted')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to delete post: $e')),
+        );
+      }
+    }
+  }
+
+  Future<void> _openAttachedFile(ForumPost post) async {
+    if (!post.hasFile) return;
+
+    try {
+      final storagePath = widget.collection.storagePath;
+      if (storagePath == null) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Collection storage path is null')),
+          );
+        }
+        return;
+      }
+
+      final filePath = path.join(
+        storagePath,
+        widget.section.folder,
+        'files',
+        post.attachedFile!,
+      );
+
+      final file = File(filePath);
+      if (!await file.exists()) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('File not found: ${post.attachedFile}')),
+          );
+        }
+        return;
+      }
+
+      if (Platform.isLinux) {
+        await Process.run('xdg-open', [filePath]);
+      } else if (Platform.isMacOS) {
+        await Process.run('open', [filePath]);
+      } else if (Platform.isWindows) {
+        await Process.run('start', [filePath], runInShell: true);
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to open file: $e')),
+        );
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return PopScope(
+      canPop: true,
+      onPopInvoked: (didPop) {
+        if (didPop && _hasChanges) {
+          Navigator.of(context).pop(true);
+        }
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          title: Text(widget.thread.title),
+        ),
+        body: Column(
+          children: [
+            Expanded(
+              child: PostListWidget(
+                posts: _posts,
+                threadTitle: widget.thread.title,
+                onFileOpen: _openAttachedFile,
+                onPostDelete: _deletePost,
+                canDeletePost: _canDeletePost,
+              ),
+            ),
+            PostInputWidget(
+              onSend: _sendPost,
+              maxLength: widget.section.config?.maxSizeText ?? 5000,
+              allowFiles: widget.section.config?.fileUpload ?? true,
+              isLocked: widget.thread.isLocked,
+              hintText: 'Write a reply...',
+            ),
+          ],
+        ),
       ),
     );
   }
