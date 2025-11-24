@@ -5,11 +5,13 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:latlong2/latlong.dart';
 import '../models/report.dart';
 import '../models/report_update.dart';
 import '../services/report_service.dart';
 import '../services/profile_service.dart';
 import '../services/log_service.dart';
+import 'location_picker_page.dart';
 
 /// Page for viewing and editing report details
 class ReportDetailPage extends StatefulWidget {
@@ -100,6 +102,35 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
     }
 
     setState(() => _isLoading = false);
+  }
+
+  Future<void> _pickLocationOnMap() async {
+    // Get current coordinates if valid
+    final currentLat = double.tryParse(_latitudeController.text);
+    final currentLon = double.tryParse(_longitudeController.text);
+    LatLng? initialPosition;
+
+    if (currentLat != null && currentLon != null &&
+        currentLat >= -90 && currentLat <= 90 &&
+        currentLon >= -180 && currentLon <= 180) {
+      initialPosition = LatLng(currentLat, currentLon);
+    }
+
+    final result = await Navigator.push<LatLng>(
+      context,
+      MaterialPageRoute(
+        builder: (context) => LocationPickerPage(
+          initialPosition: initialPosition,
+        ),
+      ),
+    );
+
+    if (result != null) {
+      setState(() {
+        _latitudeController.text = result.latitude.toStringAsFixed(6);
+        _longitudeController.text = result.longitude.toStringAsFixed(6);
+      });
+    }
   }
 
   Future<void> _save() async {
@@ -310,15 +341,40 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
                   ),
                   const SizedBox(height: 16),
 
-                  // Coordinates
+                  // Location Section
+                  Text(
+                    'Location *',
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+
+                  // Map Picker Button (Primary method)
+                  if (_isEditing)
+                    SizedBox(
+                      width: double.infinity,
+                      child: FilledButton.icon(
+                        onPressed: _pickLocationOnMap,
+                        icon: const Icon(Icons.map),
+                        label: const Text('Pick Location on Map'),
+                        style: FilledButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 16),
+                        ),
+                      ),
+                    ),
+                  if (_isEditing) const SizedBox(height: 16),
+
+                  // Coordinates (Manual Input)
                   Row(
                     children: [
                       Expanded(
                         child: TextField(
                           controller: _latitudeController,
-                          decoration: const InputDecoration(
+                          decoration: InputDecoration(
                             labelText: 'Latitude *',
-                            border: OutlineInputBorder(),
+                            border: const OutlineInputBorder(),
+                            hintText: _isEditing ? 'Or enter manually' : null,
                           ),
                           enabled: _isEditing,
                           keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: true),
@@ -328,9 +384,10 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
                       Expanded(
                         child: TextField(
                           controller: _longitudeController,
-                          decoration: const InputDecoration(
+                          decoration: InputDecoration(
                             labelText: 'Longitude *',
-                            border: OutlineInputBorder(),
+                            border: const OutlineInputBorder(),
+                            hintText: _isEditing ? 'Or enter manually' : null,
                           ),
                           enabled: _isEditing,
                           keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: true),
