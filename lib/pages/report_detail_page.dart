@@ -394,7 +394,11 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final canEdit = _report == null || (_currentUserNpub != null && _report!.isAdmin(_currentUserNpub!));
+    final profile = _profileService.getProfile();
+    final isAuthor = _report != null && _report!.author == profile.callsign;
+    final canEdit = _report == null ||
+                     isAuthor ||
+                     (_currentUserNpub != null && _report!.isAdmin(_currentUserNpub!));
 
     return Scaffold(
       appBar: AppBar(
