@@ -29,6 +29,7 @@ class ReportBrowserPage extends StatefulWidget {
 class _ReportBrowserPageState extends State<ReportBrowserPage> {
   final ReportService _reportService = ReportService();
   final ProfileService _profileService = ProfileService();
+  final I18nService _i18n = I18nService();
   final TextEditingController _searchController = TextEditingController();
 
   List<Report> _allReports = [];
@@ -112,18 +113,26 @@ class _ReportBrowserPageState extends State<ReportBrowserPage> {
     });
   }
 
+  String _getDisplayTitle() {
+    // Translate known fixed type names
+    if (widget.collectionTitle.toLowerCase() == 'report') {
+      return _i18n.t('collection_type_report');
+    }
+    return widget.collectionTitle;
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(widget.collectionTitle),
+        title: Text(_getDisplayTitle()),
         actions: [
           // Filter by severity
           PopupMenuButton<ReportSeverity?>(
             icon: Icon(_filterSeverity == null ? Icons.filter_alt_outlined : Icons.filter_alt),
-            tooltip: 'Filter by severity',
+            tooltip: _i18n.t('filter_by_severity'),
             onSelected: (severity) {
               setState(() {
                 _filterSeverity = severity;
@@ -133,7 +142,7 @@ class _ReportBrowserPageState extends State<ReportBrowserPage> {
             itemBuilder: (context) => [
               PopupMenuItem(
                 value: null,
-                child: const Text('All Severities'),
+                child: Text(_i18n.t('all_severities')),
               ),
               const PopupMenuDivider(),
               PopupMenuItem(
@@ -142,7 +151,7 @@ class _ReportBrowserPageState extends State<ReportBrowserPage> {
                   children: [
                     _buildSeverityBadge(ReportSeverity.emergency),
                     const SizedBox(width: 8),
-                    const Text('Emergency'),
+                    Text(_i18n.t('emergency')),
                   ],
                 ),
               ),
@@ -152,7 +161,7 @@ class _ReportBrowserPageState extends State<ReportBrowserPage> {
                   children: [
                     _buildSeverityBadge(ReportSeverity.urgent),
                     const SizedBox(width: 8),
-                    const Text('Urgent'),
+                    Text(_i18n.t('urgent')),
                   ],
                 ),
               ),
@@ -162,7 +171,7 @@ class _ReportBrowserPageState extends State<ReportBrowserPage> {
                   children: [
                     _buildSeverityBadge(ReportSeverity.attention),
                     const SizedBox(width: 8),
-                    const Text('Attention'),
+                    Text(_i18n.t('attention')),
                   ],
                 ),
               ),
@@ -172,7 +181,7 @@ class _ReportBrowserPageState extends State<ReportBrowserPage> {
                   children: [
                     _buildSeverityBadge(ReportSeverity.info),
                     const SizedBox(width: 8),
-                    const Text('Info'),
+                    Text(_i18n.t('info')),
                   ],
                 ),
               ),
@@ -181,7 +190,7 @@ class _ReportBrowserPageState extends State<ReportBrowserPage> {
           // Filter by status
           PopupMenuButton<ReportStatus?>(
             icon: Icon(_filterStatus == null ? Icons.swap_vert : Icons.check_circle),
-            tooltip: 'Filter by status',
+            tooltip: _i18n.t('filter_by_status'),
             onSelected: (status) {
               setState(() {
                 _filterStatus = status;
@@ -191,31 +200,31 @@ class _ReportBrowserPageState extends State<ReportBrowserPage> {
             itemBuilder: (context) => [
               PopupMenuItem(
                 value: null,
-                child: const Text('All Statuses'),
+                child: Text(_i18n.t('all_statuses')),
               ),
               const PopupMenuDivider(),
               PopupMenuItem(
                 value: ReportStatus.open,
-                child: const Text('Open'),
+                child: Text(_i18n.t('open')),
               ),
               PopupMenuItem(
                 value: ReportStatus.inProgress,
-                child: const Text('In Progress'),
+                child: Text(_i18n.t('in_progress')),
               ),
               PopupMenuItem(
                 value: ReportStatus.resolved,
-                child: const Text('Resolved'),
+                child: Text(_i18n.t('resolved')),
               ),
               PopupMenuItem(
                 value: ReportStatus.closed,
-                child: const Text('Closed'),
+                child: Text(_i18n.t('closed')),
               ),
             ],
           ),
           // Sort
           PopupMenuButton<int>(
             icon: const Icon(Icons.sort),
-            tooltip: 'Sort by',
+            tooltip: _i18n.t('sort_by'),
             onSelected: (mode) {
               setState(() {
                 _sortMode = mode;
@@ -229,7 +238,7 @@ class _ReportBrowserPageState extends State<ReportBrowserPage> {
                   children: [
                     if (_sortMode == 0) const Icon(Icons.check, size: 16),
                     if (_sortMode == 0) const SizedBox(width: 8),
-                    const Text('Date (Newest)'),
+                    Text(_i18n.t('date_newest')),
                   ],
                 ),
               ),
@@ -239,7 +248,7 @@ class _ReportBrowserPageState extends State<ReportBrowserPage> {
                   children: [
                     if (_sortMode == 1) const Icon(Icons.check, size: 16),
                     if (_sortMode == 1) const SizedBox(width: 8),
-                    const Text('Severity'),
+                    Text(_i18n.t('severity')),
                   ],
                 ),
               ),
@@ -272,7 +281,7 @@ class _ReportBrowserPageState extends State<ReportBrowserPage> {
                   child: TextField(
                     controller: _searchController,
                     decoration: InputDecoration(
-                      hintText: 'Search reports...',
+                      hintText: _i18n.t('search_reports'),
                       prefixIcon: const Icon(Icons.search),
                       suffixIcon: _searchController.text.isNotEmpty
                           ? IconButton(
@@ -328,14 +337,14 @@ class _ReportBrowserPageState extends State<ReportBrowserPage> {
                               Icon(Icons.report_outlined, size: 64, color: theme.colorScheme.primary),
                               const SizedBox(height: 16),
                               Text(
-                                _allReports.isEmpty ? 'No reports yet' : 'No matching reports',
+                                _allReports.isEmpty ? _i18n.t('no_reports_yet') : _i18n.t('no_matching_reports'),
                                 style: theme.textTheme.titleLarge,
                               ),
                               const SizedBox(height: 8),
                               Text(
                                 _allReports.isEmpty
-                                    ? 'Create your first report'
-                                    : 'Try adjusting your filters',
+                                    ? _i18n.t('create_first_report')
+                                    : _i18n.t('try_adjusting_filters'),
                                 style: theme.textTheme.bodyMedium,
                               ),
                             ],
@@ -354,7 +363,7 @@ class _ReportBrowserPageState extends State<ReportBrowserPage> {
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _createReport,
         icon: const Icon(Icons.add),
-        label: const Text('New Report'),
+        label: Text(_i18n.t('new_report')),
       ),
     );
   }
@@ -447,23 +456,28 @@ class _ReportBrowserPageState extends State<ReportBrowserPage> {
   Widget _buildSeverityBadge(ReportSeverity severity) {
     Color color;
     IconData icon;
+    String labelKey;
 
     switch (severity) {
       case ReportSeverity.emergency:
         color = Colors.red;
         icon = Icons.emergency;
+        labelKey = 'emergency';
         break;
       case ReportSeverity.urgent:
         color = Colors.orange;
         icon = Icons.warning;
+        labelKey = 'urgent';
         break;
       case ReportSeverity.attention:
         color = Colors.yellow.shade700;
         icon = Icons.report_problem;
+        labelKey = 'attention';
         break;
       case ReportSeverity.info:
         color = Colors.blue;
         icon = Icons.info;
+        labelKey = 'info';
         break;
     }
 
@@ -479,7 +493,7 @@ class _ReportBrowserPageState extends State<ReportBrowserPage> {
           Icon(icon, size: 16, color: color),
           const SizedBox(width: 4),
           Text(
-            severity.name.toUpperCase(),
+            _i18n.t(labelKey).toUpperCase(),
             style: TextStyle(
               color: color,
               fontSize: 12,
@@ -493,19 +507,24 @@ class _ReportBrowserPageState extends State<ReportBrowserPage> {
 
   Widget _buildStatusBadge(ReportStatus status) {
     Color color;
+    String labelKey;
 
     switch (status) {
       case ReportStatus.open:
         color = Colors.grey;
+        labelKey = 'open';
         break;
       case ReportStatus.inProgress:
         color = Colors.blue;
+        labelKey = 'in_progress';
         break;
       case ReportStatus.resolved:
         color = Colors.green;
+        labelKey = 'resolved';
         break;
       case ReportStatus.closed:
         color = Colors.grey.shade700;
+        labelKey = 'closed';
         break;
     }
 
@@ -516,7 +535,7 @@ class _ReportBrowserPageState extends State<ReportBrowserPage> {
         borderRadius: BorderRadius.circular(4),
       ),
       child: Text(
-        status.name.replaceAll(RegExp(r'([A-Z])'), ' \$1').trim().toUpperCase(),
+        _i18n.t(labelKey).toUpperCase(),
         style: TextStyle(
           color: color,
           fontSize: 12,
@@ -533,15 +552,15 @@ class _ReportBrowserPageState extends State<ReportBrowserPage> {
     if (diff.inDays == 0) {
       if (diff.inHours == 0) {
         if (diff.inMinutes == 0) {
-          return 'Just now';
+          return _i18n.t('just_now');
         }
-        return '${diff.inMinutes}m ago';
+        return _i18n.t('minutes_ago').replaceAll('{0}', '${diff.inMinutes}');
       }
-      return '${diff.inHours}h ago';
+      return _i18n.t('hours_ago').replaceAll('{0}', '${diff.inHours}');
     } else if (diff.inDays == 1) {
-      return 'Yesterday';
+      return _i18n.t('yesterday');
     } else if (diff.inDays < 7) {
-      return '${diff.inDays}d ago';
+      return _i18n.t('days_ago').replaceAll('{0}', '${diff.inDays}');
     } else {
       return '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
     }

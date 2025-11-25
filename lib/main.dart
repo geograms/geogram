@@ -32,6 +32,7 @@ import 'pages/contacts_browser_page.dart';
 import 'pages/places_browser_page.dart';
 import 'pages/market_browser_page.dart';
 import 'pages/report_browser_page.dart';
+import 'pages/maps_browser_page.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -143,7 +144,7 @@ class _HomePageState extends State<HomePage> {
 
   static const List<Widget> _pages = [
     CollectionsPage(),
-    GeoChatPage(),
+    MapsBrowserPage(),
     DevicesPage(),
     SettingsPage(),
     LogPage(),
@@ -219,9 +220,9 @@ class _HomePageState extends State<HomePage> {
             label: Text(_i18n.t('collections')),
           ),
           NavigationDrawerDestination(
-            icon: const Icon(Icons.chat_bubble_outline),
-            selectedIcon: const Icon(Icons.chat_bubble),
-            label: Text(_i18n.t('geochat')),
+            icon: const Icon(Icons.map_outlined),
+            selectedIcon: const Icon(Icons.map),
+            label: Text(_i18n.t('map')),
           ),
           NavigationDrawerDestination(
             icon: const Icon(Icons.devices_outlined),
@@ -256,9 +257,9 @@ class _HomePageState extends State<HomePage> {
             label: _i18n.t('collections'),
           ),
           NavigationDestination(
-            icon: const Icon(Icons.chat_bubble_outline),
-            selectedIcon: const Icon(Icons.chat_bubble),
-            label: _i18n.t('geochat'),
+            icon: const Icon(Icons.map_outlined),
+            selectedIcon: const Icon(Icons.map),
+            label: _i18n.t('map'),
           ),
           NavigationDestination(
             icon: const Icon(Icons.devices_outlined),
@@ -1368,21 +1369,26 @@ class _CreateCollectionDialogState extends State<_CreateCollectionDialog> {
                 if (value != null) {
                   setState(() {
                     _collectionType = value;
-                    // Auto-set title for non-files types
+                    // Auto-set title for non-files types with translated name
                     if (value != 'files') {
-                      _titleController.text = value;
+                      _titleController.text = _i18n.t('collection_type_$value');
                     } else {
                       // Clear title when switching back to files type
-                      if (_titleController.text == 'www' ||
-                          _titleController.text == 'forum' ||
-                          _titleController.text == 'chat' ||
-                          _titleController.text == 'blog' ||
-                          _titleController.text == 'events' ||
-                          _titleController.text == 'news' ||
-                          _titleController.text == 'postcards' ||
-                          _titleController.text == 'contacts' ||
-                          _titleController.text == 'places' ||
-                          _titleController.text == 'market') {
+                      // Check against translated names
+                      final fixedTypeTranslations = [
+                        _i18n.t('collection_type_www'),
+                        _i18n.t('collection_type_forum'),
+                        _i18n.t('collection_type_chat'),
+                        _i18n.t('collection_type_blog'),
+                        _i18n.t('collection_type_events'),
+                        _i18n.t('collection_type_news'),
+                        _i18n.t('collection_type_postcards'),
+                        _i18n.t('collection_type_contacts'),
+                        _i18n.t('collection_type_places'),
+                        _i18n.t('collection_type_market'),
+                        _i18n.t('collection_type_report'),
+                      ];
+                      if (fixedTypeTranslations.contains(_titleController.text)) {
                         _titleController.text = '';
                       }
                     }

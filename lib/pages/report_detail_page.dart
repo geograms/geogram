@@ -5,8 +5,10 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:latlong2/latlong.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'dart:io';
 import 'package:path/path.dart' as path;
 import '../models/report.dart';
@@ -451,34 +453,47 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
                   ],
 
                   // Title
-                  TextField(
-                    controller: _titleController,
-                    decoration: InputDecoration(
-                      labelText: _i18n.t('title') + ' *',
-                      hintText: _i18n.t('title_hint'),
-                      border: OutlineInputBorder(),
+                  if (_isEditing)
+                    TextField(
+                      controller: _titleController,
+                      decoration: InputDecoration(
+                        labelText: _i18n.t('title') + ' *',
+                        hintText: _i18n.t('title_hint'),
+                        border: OutlineInputBorder(),
+                      ),
+                      maxLines: 2,
+                    )
+                  else
+                    _buildReadOnlyField(
+                      label: _i18n.t('title'),
+                      value: _titleController.text,
+                      theme: theme,
                     ),
-                    enabled: _isEditing,
-                    maxLines: 2,
-                  ),
                   SizedBox(height: 16),
 
                   // Description
-                  TextField(
-                    controller: _descriptionController,
-                    decoration: InputDecoration(
-                      labelText: _i18n.t('description') + ' *',
-                      hintText: _i18n.t('description_hint'),
-                      border: OutlineInputBorder(),
+                  if (_isEditing)
+                    TextField(
+                      controller: _descriptionController,
+                      decoration: InputDecoration(
+                        labelText: _i18n.t('description') + ' *',
+                        hintText: _i18n.t('description_hint'),
+                        border: OutlineInputBorder(),
+                      ),
+                      maxLines: 8,
+                    )
+                  else
+                    _buildReadOnlyField(
+                      label: _i18n.t('description'),
+                      value: _descriptionController.text,
+                      theme: theme,
+                      isMultiline: true,
                     ),
-                    enabled: _isEditing,
-                    maxLines: 8,
-                  ),
                   SizedBox(height: 16),
 
                   // Location Section
                   Text(
-                    _i18n.t('location') + ' *',
+                    _isEditing ? _i18n.t('location') + ' *' : _i18n.t('location'),
                     style: theme.textTheme.titleMedium?.copyWith(
                       fontWeight: FontWeight.bold,
                     ),
@@ -541,7 +556,7 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
                   if (_isEditing && _locationInputMode == 'map') SizedBox(height: 16),
 
                   // Coordinates Display/Input
-                  if (_locationInputMode == 'manual' || !_isEditing)
+                  if (_isEditing && _locationInputMode == 'manual')
                     Row(
                       children: [
                         Expanded(
@@ -551,7 +566,6 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
                               labelText: _i18n.t('latitude') + ' *',
                               border: OutlineInputBorder(),
                             ),
-                            enabled: _isEditing && _locationInputMode == 'manual',
                             keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: true),
                           ),
                         ),
@@ -563,13 +577,14 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
                               labelText: _i18n.t('longitude') + ' *',
                               border: OutlineInputBorder(),
                             ),
-                            enabled: _isEditing && _locationInputMode == 'manual',
                             keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: true),
                           ),
                         ),
                       ],
-                    ),
-                  if (_locationInputMode == 'manual' || !_isEditing) SizedBox(height: 16),
+                    )
+                  else if (!_isEditing)
+                    _buildCoordinatesField(theme),
+                  if (_isEditing && _locationInputMode == 'manual' || !_isEditing) SizedBox(height: 16),
 
                   // Show current coordinates when using map mode
                   if (_isEditing && _locationInputMode == 'map')
@@ -595,71 +610,84 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
                   if (_isEditing && _locationInputMode == 'map') SizedBox(height: 16),
 
                   // Address
-                  TextField(
-                    controller: _addressController,
-                    decoration: InputDecoration(
-                      labelText: _i18n.t('address'),
-                      hintText: _i18n.t('address_hint'),
-                      border: OutlineInputBorder(),
+                  if (_isEditing)
+                    TextField(
+                      controller: _addressController,
+                      decoration: InputDecoration(
+                        labelText: _i18n.t('address'),
+                        hintText: _i18n.t('address_hint'),
+                        border: OutlineInputBorder(),
+                      ),
+                    )
+                  else if (_addressController.text.isNotEmpty)
+                    _buildReadOnlyField(
+                      label: _i18n.t('address'),
+                      value: _addressController.text,
+                      theme: theme,
                     ),
-                    enabled: _isEditing,
-                  ),
-                  SizedBox(height: 16),
+                  if (_isEditing || _addressController.text.isNotEmpty) SizedBox(height: 16),
 
                   // Type
-                  DropdownButtonFormField<String>(
-                    value: _selectedType,
-                    decoration: InputDecoration(
-                      labelText: _i18n.t('type') + ' *',
-                      border: OutlineInputBorder(),
+                  if (_isEditing)
+                    DropdownButtonFormField<String>(
+                      value: _selectedType,
+                      decoration: InputDecoration(
+                        labelText: _i18n.t('type') + ' *',
+                        border: OutlineInputBorder(),
+                      ),
+                      items: _reportTypes.map((type) {
+                        return DropdownMenuItem(
+                          value: type['value'],
+                          child: Text(type['label']!),
+                        );
+                      }).toList(),
+                      onChanged: (value) {
+                        if (value != null) {
+                          setState(() {
+                            _selectedType = value;
+                          });
+                        }
+                      },
+                    )
+                  else
+                    _buildReadOnlyField(
+                      label: _i18n.t('type'),
+                      value: _reportTypes.firstWhere(
+                        (t) => t['value'] == _selectedType,
+                        orElse: () => {'label': _selectedType},
+                      )['label'] ?? _selectedType,
+                      theme: theme,
                     ),
-                    items: _reportTypes.map((type) {
-                      return DropdownMenuItem(
-                        value: type['value'],
-                        child: Text(type['label']!),
-                      );
-                    }).toList(),
-                    onChanged: _isEditing
-                        ? (value) {
-                            if (value != null) {
-                              setState(() {
-                                _selectedType = value;
-                              });
-                            }
-                          }
-                        : null,
-                  ),
                   SizedBox(height: 16),
 
-                  // Severity
-                  DropdownButtonFormField<ReportSeverity>(
-                    initialValue: _selectedSeverity,
-                    decoration: InputDecoration(
-                      labelText: _i18n.t('severity') + ' *',
-                      border: OutlineInputBorder(),
+                  // Severity - shown in status badges when viewing, dropdown when editing
+                  if (_isEditing)
+                    DropdownButtonFormField<ReportSeverity>(
+                      value: _selectedSeverity,
+                      decoration: InputDecoration(
+                        labelText: _i18n.t('severity') + ' *',
+                        border: OutlineInputBorder(),
+                      ),
+                      items: ReportSeverity.values.map((severity) {
+                        return DropdownMenuItem(
+                          value: severity,
+                          child: Text(severity.name),
+                        );
+                      }).toList(),
+                      onChanged: (value) {
+                        if (value != null) {
+                          setState(() {
+                            _selectedSeverity = value;
+                          });
+                        }
+                      },
                     ),
-                    items: ReportSeverity.values.map((severity) {
-                      return DropdownMenuItem(
-                        value: severity,
-                        child: Text(severity.name),
-                      );
-                    }).toList(),
-                    onChanged: _isEditing
-                        ? (value) {
-                            if (value != null) {
-                              setState(() {
-                                _selectedSeverity = value;
-                              });
-                            }
-                          }
-                        : null,
-                  ),
-                  SizedBox(height: 16),
+                  if (_isEditing) SizedBox(height: 16),
 
-                  // Status (only for existing reports)
-                  if (!_isNew) ...[
+                  // Status (only for existing reports when editing - shown in badges when viewing)
+                  if (!_isNew && _isEditing && canEdit) ...[
                     DropdownButtonFormField<ReportStatus>(
-                      initialValue: _selectedStatus,
+                      value: _selectedStatus,
                       decoration: InputDecoration(
                         labelText: _i18n.t('status'),
                         border: OutlineInputBorder(),
@@ -670,29 +698,33 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
                           child: Text(status.name),
                         );
                       }).toList(),
-                      onChanged: _isEditing && canEdit
-                          ? (value) {
-                              if (value != null) {
-                                setState(() {
-                                  _selectedStatus = value;
-                                });
-                              }
-                            }
-                          : null,
+                      onChanged: (value) {
+                        if (value != null) {
+                          setState(() {
+                            _selectedStatus = value;
+                          });
+                        }
+                      },
                     ),
                     SizedBox(height: 16),
                   ],
 
                   // Contact
-                  TextField(
-                    controller: _contactController,
-                    decoration: InputDecoration(
-                      labelText: _i18n.t('contact'),
-                      hintText: _i18n.t('contact_info_hint'),
-                      border: OutlineInputBorder(),
+                  if (_isEditing)
+                    TextField(
+                      controller: _contactController,
+                      decoration: InputDecoration(
+                        labelText: _i18n.t('contact'),
+                        hintText: _i18n.t('contact_info_hint'),
+                        border: OutlineInputBorder(),
+                      ),
+                    )
+                  else if (_contactController.text.isNotEmpty)
+                    _buildReadOnlyField(
+                      label: _i18n.t('contact'),
+                      value: _contactController.text,
+                      theme: theme,
                     ),
-                    enabled: _isEditing,
-                  ),
                   SizedBox(height: 24),
 
                   // Images Section
@@ -788,11 +820,11 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
                   SizedBox(height: 24),
 
                   // Actions (for existing reports)
-                  if (!_isNew && _report != null) ...[
+                  if (!_isNew && _report != null && _currentUserNpub != null && _currentUserNpub!.isNotEmpty) ...[
                     const Divider(),
                     SizedBox(height: 16),
                     Text(
-                      'Actions',
+                      _i18n.t('actions'),
                       style: theme.textTheme.titleMedium?.copyWith(
                         fontWeight: FontWeight.bold,
                       ),
@@ -802,71 +834,181 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
                       spacing: 8,
                       runSpacing: 8,
                       children: [
-                        if (_currentUserNpub != null && _currentUserNpub!.isNotEmpty) ...[
-                          ElevatedButton.icon(
-                            onPressed: _isLoading ? null : _toggleSubscription,
-                            icon: Icon(_report!.isSubscribed(_currentUserNpub!)
-                                ? Icons.notifications_off
-                                : Icons.notifications),
-                            label: Text(_report!.isSubscribed(_currentUserNpub!)
-                                ? 'Unsubscribe'
-                                : 'Subscribe'),
-                          ),
-                          if (!_report!.verifiedBy.contains(_currentUserNpub))
-                            ElevatedButton.icon(
-                              onPressed: _isLoading ? null : _verify,
-                              icon: Icon(Icons.verified),
-                              label: Text(_i18n.t('verify')),
-                            ),
-                        ],
                         ElevatedButton.icon(
-                          onPressed: () {
-                            Clipboard.setData(ClipboardData(
-                              text: '${_report!.latitude},${_report!.longitude}',
-                            ));
-                            _showSuccess('Coordinates copied');
-                          },
-                          icon: Icon(Icons.copy),
-                          label: Text(_i18n.t('copy_coords')),
+                          onPressed: _isLoading ? null : _toggleSubscription,
+                          icon: Icon(_report!.isSubscribed(_currentUserNpub!)
+                              ? Icons.notifications_off
+                              : Icons.notifications),
+                          label: Text(_report!.isSubscribed(_currentUserNpub!)
+                              ? _i18n.t('unsubscribe')
+                              : _i18n.t('subscribe')),
                         ),
+                        if (!_report!.verifiedBy.contains(_currentUserNpub))
+                          ElevatedButton.icon(
+                            onPressed: _isLoading ? null : _verify,
+                            icon: Icon(Icons.verified),
+                            label: Text(_i18n.t('verify')),
+                          ),
                       ],
                     ),
                     SizedBox(height: 24),
                   ],
 
-                  // Updates section (for existing reports)
-                  if (!_isNew && _report != null) ...[
+                  // Updates section (for existing reports, only show if there are updates)
+                  if (!_isNew && _report != null && _updates.isNotEmpty) ...[
                     const Divider(),
                     SizedBox(height: 16),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Text(
-                          'Updates',
-                          style: theme.textTheme.titleMedium?.copyWith(
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        Text(
-                          '${_updates.length}',
-                          style: theme.textTheme.titleMedium,
-                        ),
-                      ],
+                    Text(
+                      '${_i18n.t('updates')} (${_updates.length})',
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
                     SizedBox(height: 16),
-                    if (_updates.isEmpty)
-                      Center(
-                        child: Padding(
-                          padding: EdgeInsets.all(32),
-                          child: Text(_i18n.t('no_updates_yet')),
-                        ),
-                      )
-                    else
-                      ..._updates.map((update) => _buildUpdateCard(update, theme)),
+                    ..._updates.map((update) => _buildUpdateCard(update, theme)),
                   ],
                 ],
               ),
             ),
+    );
+  }
+
+  /// Builds a coordinates field with copy and open in map buttons
+  Widget _buildCoordinatesField(ThemeData theme) {
+    final lat = _latitudeController.text;
+    final lon = _longitudeController.text;
+    final coordsText = '$lat, $lon';
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(
+          color: theme.colorScheme.outline.withValues(alpha: 0.2),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            _i18n.t('coordinates'),
+            style: theme.textTheme.labelMedium?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  coordsText,
+                  style: theme.textTheme.bodyLarge?.copyWith(
+                    color: theme.colorScheme.onSurface,
+                  ),
+                ),
+              ),
+              IconButton(
+                onPressed: () {
+                  Clipboard.setData(ClipboardData(text: coordsText));
+                  _showSuccess(_i18n.t('coordinates_copied'));
+                },
+                icon: Icon(Icons.copy, size: 20),
+                tooltip: _i18n.t('copy_coordinates'),
+                style: IconButton.styleFrom(
+                  foregroundColor: theme.colorScheme.primary,
+                ),
+              ),
+              IconButton(
+                onPressed: () => _openInMap(lat, lon),
+                icon: Icon(Icons.map, size: 20),
+                tooltip: _i18n.t('open_in_map'),
+                style: IconButton.styleFrom(
+                  foregroundColor: theme.colorScheme.primary,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Opens the coordinates in the system's default map application
+  Future<void> _openInMap(String lat, String lon) async {
+    try {
+      final latitude = double.tryParse(lat);
+      final longitude = double.tryParse(lon);
+
+      if (latitude == null || longitude == null) {
+        _showError('Invalid coordinates');
+        return;
+      }
+
+      Uri mapUri;
+
+      if (!kIsWeb && Platform.isAndroid) {
+        // Android: Use geo: URI scheme which opens in default map app
+        mapUri = Uri.parse('geo:$latitude,$longitude?q=$latitude,$longitude');
+      } else if (!kIsWeb && Platform.isIOS) {
+        // iOS: Use Apple Maps URL scheme
+        mapUri = Uri.parse('https://maps.apple.com/?q=$latitude,$longitude');
+      } else {
+        // Desktop/Web: Use OpenStreetMap
+        mapUri = Uri.parse('https://www.openstreetmap.org/?mlat=$latitude&mlon=$longitude&zoom=15');
+      }
+
+      if (await canLaunchUrl(mapUri)) {
+        await launchUrl(mapUri, mode: LaunchMode.externalApplication);
+      } else {
+        // Fallback to OpenStreetMap web
+        final fallbackUri = Uri.parse('https://www.openstreetmap.org/?mlat=$latitude&mlon=$longitude&zoom=15');
+        await launchUrl(fallbackUri, mode: LaunchMode.externalApplication);
+      }
+    } catch (e) {
+      _showError('Could not open map: $e');
+      LogService().log('ReportDetailPage: Error opening map: $e');
+    }
+  }
+
+  /// Builds a read-only field that displays label and value as regular text
+  Widget _buildReadOnlyField({
+    required String label,
+    required String value,
+    required ThemeData theme,
+    bool isMultiline = false,
+  }) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(
+          color: theme.colorScheme.outline.withValues(alpha: 0.2),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
+            style: theme.textTheme.labelMedium?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            value.isNotEmpty ? value : '-',
+            style: theme.textTheme.bodyLarge?.copyWith(
+              color: theme.colorScheme.onSurface,
+            ),
+          ),
+        ],
+      ),
     );
   }
 

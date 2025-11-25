@@ -18,6 +18,8 @@ class RelayDiscoveryService {
   final List<int> _ports = [80, 8080];
   final Duration _scanInterval = const Duration(minutes: 5);
   final Duration _requestTimeout = const Duration(seconds: 2);
+  final Duration _startupDelay = const Duration(seconds: 5);
+  static const int _maxConcurrentConnections = 20; // Limit concurrent connections to avoid "too many open files"
 
   /// Start automatic discovery
   void start() {
@@ -27,14 +29,17 @@ class RelayDiscoveryService {
       return;
     }
 
-    LogService().log('Starting relay auto-discovery service');
+    LogService().log('Starting relay auto-discovery service (delayed ${_startupDelay.inSeconds}s)');
 
-    // Run initial scan
-    discover();
-
-    // Schedule periodic scans every 5 minutes
-    _discoveryTimer = Timer.periodic(_scanInterval, (_) {
+    // Delay initial scan to let the app initialize fully
+    // This prevents "too many open files" errors on startup
+    Timer(_startupDelay, () {
       discover();
+
+      // Schedule periodic scans every 5 minutes
+      _discoveryTimer = Timer.periodic(_scanInterval, (_) {
+        discover();
+      });
     });
   }
 
@@ -115,32 +120,40 @@ class RelayDiscoveryService {
   }
 
   /// Scan a network range for relays
+  /// Uses batched connections to avoid exhausting file descriptors
   Future<int> _scanRange(String subnet) async {
     int foundCount = 0;
 
-    // Scan IPs in parallel (1-254, skip 255)
-    final futures = <Future<void>>[];
-
+    // Build list of all IP:port combinations to scan
+    final targets = <MapEntry<String, int>>[];
     for (int i = 1; i < 255; i++) {
       final ip = '$subnet.$i';
-
       for (var port in _ports) {
-        futures.add(_checkRelay(ip, port).then((relay) {
-          if (relay != null) {
-            foundCount++;
-          }
-        }));
+        targets.add(MapEntry(ip, port));
       }
     }
 
-    // Wait for all scans to complete (with timeout)
-    await Future.wait(futures).timeout(
-      const Duration(seconds: 30),
-      onTimeout: () {
-        LogService().log('  Range scan timeout for $subnet');
-        return [];
-      },
-    );
+    // Process in batches to avoid "too many open files" error
+    for (int batchStart = 0; batchStart < targets.length; batchStart += _maxConcurrentConnections) {
+      final batchEnd = (batchStart + _maxConcurrentConnections).clamp(0, targets.length);
+      final batch = targets.sublist(batchStart, batchEnd);
+
+      final futures = batch.map((target) async {
+        final relay = await _checkRelay(target.key, target.value);
+        if (relay != null) {
+          foundCount++;
+        }
+      }).toList();
+
+      // Wait for this batch to complete before starting the next
+      await Future.wait(futures).timeout(
+        const Duration(seconds: 10),
+        onTimeout: () {
+          // Silently continue on timeout
+          return [];
+        },
+      );
+    }
 
     return foundCount;
   }
