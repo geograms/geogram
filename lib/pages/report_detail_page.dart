@@ -14,6 +14,7 @@ import '../models/report_update.dart';
 import '../services/report_service.dart';
 import '../services/profile_service.dart';
 import '../services/log_service.dart';
+import '../services/i18n_service.dart';
 import 'location_picker_page.dart';
 
 /// Page for viewing and editing report details
@@ -34,6 +35,7 @@ class ReportDetailPage extends StatefulWidget {
 class _ReportDetailPageState extends State<ReportDetailPage> {
   final ReportService _reportService = ReportService();
   final ProfileService _profileService = ProfileService();
+  final I18nService _i18n = I18nService();
 
   late bool _isNew;
   late bool _isEditing;
@@ -396,11 +398,11 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(_isNew ? 'New Report' : 'Report Details'),
+        title: Text(_isNew ? _i18n.t('new_report') : _i18n.t('report_details')),
         actions: [
           if (!_isNew && !_isEditing && canEdit)
             IconButton(
-              icon: const Icon(Icons.edit),
+              icon: Icon(Icons.edit),
               onPressed: () {
                 setState(() {
                   _isEditing = true;
@@ -409,13 +411,13 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
             ),
           if (_isEditing)
             IconButton(
-              icon: const Icon(Icons.save),
+              icon: Icon(Icons.save),
               onPressed: _isLoading ? null : _save,
             ),
         ],
       ),
       body: _isLoading && _report == null
-          ? const Center(child: CircularProgressIndicator())
+          ? Center(child: CircularProgressIndicator())
           : SingleChildScrollView(
               padding: const EdgeInsets.all(16),
               child: Column(
@@ -431,70 +433,70 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
                         _buildStatusChip(_report!.status),
                         if (_report!.verificationCount > 0)
                           Chip(
-                            avatar: const Icon(Icons.verified, color: Colors.green, size: 16),
+                            avatar: Icon(Icons.verified, color: Colors.green, size: 16),
                             label: Text('${_report!.verificationCount} verifications'),
                           ),
                         if (_report!.isExpired)
                           Chip(
-                            avatar: const Icon(Icons.warning, color: Colors.orange, size: 16),
-                            label: const Text('Expired'),
+                            avatar: Icon(Icons.warning, color: Colors.orange, size: 16),
+                            label: Text(_i18n.t('expired')),
                           ),
                       ],
                     ),
-                    const SizedBox(height: 16),
+                    SizedBox(height: 16),
                   ],
 
                   // Title
                   TextField(
                     controller: _titleController,
-                    decoration: const InputDecoration(
-                      labelText: 'Title *',
-                      hintText: 'Brief description of the issue',
+                    decoration: InputDecoration(
+                      labelText: _i18n.t('title') + ' *',
+                      hintText: _i18n.t('title_hint'),
                       border: OutlineInputBorder(),
                     ),
                     enabled: _isEditing,
                     maxLines: 2,
                   ),
-                  const SizedBox(height: 16),
+                  SizedBox(height: 16),
 
                   // Description
                   TextField(
                     controller: _descriptionController,
-                    decoration: const InputDecoration(
-                      labelText: 'Description *',
-                      hintText: 'Detailed description of the issue',
+                    decoration: InputDecoration(
+                      labelText: _i18n.t('description') + ' *',
+                      hintText: _i18n.t('description_hint'),
                       border: OutlineInputBorder(),
                     ),
                     enabled: _isEditing,
                     maxLines: 8,
                   ),
-                  const SizedBox(height: 16),
+                  SizedBox(height: 16),
 
                   // Location Section
                   Text(
-                    'Location *',
+                    _i18n.t('location') + ' *',
                     style: theme.textTheme.titleMedium?.copyWith(
                       fontWeight: FontWeight.bold,
                     ),
                   ),
-                  const SizedBox(height: 8),
+                  SizedBox(height: 8),
 
                   // Location Input Mode Selector
                   if (_isEditing)
                     DropdownButtonFormField<String>(
                       value: _locationInputMode,
-                      decoration: const InputDecoration(
-                        labelText: 'Input Method',
+                      decoration: InputDecoration(
+                        labelText: _i18n.t('input_method'),
                         border: OutlineInputBorder(),
                       ),
-                      items: const [
+                      items: [
                         DropdownMenuItem(
                           value: 'map',
                           child: Row(
                             children: [
                               Icon(Icons.map, size: 20),
                               SizedBox(width: 8),
-                              Text('Pick on Map'),
+                              Text(_i18n.t('pick_on_map')),
                             ],
                           ),
                         ),
@@ -504,7 +506,7 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
                             children: [
                               Icon(Icons.edit_location, size: 20),
                               SizedBox(width: 8),
-                              Text('Enter Manually'),
+                              Text(_i18n.t('enter_manually')),
                             ],
                           ),
                         ),
@@ -517,7 +519,7 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
                         }
                       },
                     ),
-                  if (_isEditing) const SizedBox(height: 16),
+                  if (_isEditing) SizedBox(height: 16),
 
                   // Map Picker Button
                   if (_isEditing && _locationInputMode == 'map')
@@ -525,14 +527,14 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
                       width: double.infinity,
                       child: FilledButton.icon(
                         onPressed: _pickLocationOnMap,
-                        icon: const Icon(Icons.map),
-                        label: const Text('Pick Location on Map'),
+                        icon: Icon(Icons.map),
+                        label: Text(_i18n.t('pick_location_on_map')),
                         style: FilledButton.styleFrom(
                           padding: const EdgeInsets.symmetric(vertical: 16),
                         ),
                       ),
                     ),
-                  if (_isEditing && _locationInputMode == 'map') const SizedBox(height: 16),
+                  if (_isEditing && _locationInputMode == 'map') SizedBox(height: 16),
 
                   // Coordinates Display/Input
                   if (_locationInputMode == 'manual' || !_isEditing)
@@ -541,20 +543,20 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
                         Expanded(
                           child: TextField(
                             controller: _latitudeController,
-                            decoration: const InputDecoration(
-                              labelText: 'Latitude *',
+                            decoration: InputDecoration(
+                              labelText: _i18n.t('latitude') + ' *',
                               border: OutlineInputBorder(),
                             ),
                             enabled: _isEditing && _locationInputMode == 'manual',
                             keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: true),
                           ),
                         ),
-                        const SizedBox(width: 16),
+                        SizedBox(width: 16),
                         Expanded(
                           child: TextField(
                             controller: _longitudeController,
-                            decoration: const InputDecoration(
-                              labelText: 'Longitude *',
+                            decoration: InputDecoration(
+                              labelText: _i18n.t('longitude') + ' *',
                               border: OutlineInputBorder(),
                             ),
                             enabled: _isEditing && _locationInputMode == 'manual',
@@ -563,7 +565,7 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
                         ),
                       ],
                     ),
-                  if (_locationInputMode == 'manual' || !_isEditing) const SizedBox(height: 16),
+                  if (_locationInputMode == 'manual' || !_isEditing) SizedBox(height: 16),
 
                   // Show current coordinates when using map mode
                   if (_isEditing && _locationInputMode == 'map')
@@ -576,7 +578,7 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
                       child: Row(
                         children: [
                           Icon(Icons.location_on, size: 16, color: theme.colorScheme.primary),
-                          const SizedBox(width: 8),
+                          SizedBox(width: 8),
                           Expanded(
                             child: Text(
                               'Coordinates: ${_latitudeController.text}, ${_longitudeController.text}',
@@ -586,25 +588,25 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
                         ],
                       ),
                     ),
-                  if (_isEditing && _locationInputMode == 'map') const SizedBox(height: 16),
+                  if (_isEditing && _locationInputMode == 'map') SizedBox(height: 16),
 
                   // Address
                   TextField(
                     controller: _addressController,
-                    decoration: const InputDecoration(
-                      labelText: 'Address',
-                      hintText: 'Street address or location description',
+                    decoration: InputDecoration(
+                      labelText: _i18n.t('address'),
+                      hintText: _i18n.t('address_hint'),
                       border: OutlineInputBorder(),
                     ),
                     enabled: _isEditing,
                   ),
-                  const SizedBox(height: 16),
+                  SizedBox(height: 16),
 
                   // Type
                   DropdownButtonFormField<String>(
                     value: _selectedType,
-                    decoration: const InputDecoration(
-                      labelText: 'Type *',
+                    decoration: InputDecoration(
+                      labelText: _i18n.t('type') + ' *',
                       border: OutlineInputBorder(),
                     ),
                     items: _reportTypes.map((type) {
@@ -623,13 +625,13 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
                           }
                         : null,
                   ),
-                  const SizedBox(height: 16),
+                  SizedBox(height: 16),
 
                   // Severity
                   DropdownButtonFormField<ReportSeverity>(
                     initialValue: _selectedSeverity,
-                    decoration: const InputDecoration(
-                      labelText: 'Severity *',
+                    decoration: InputDecoration(
+                      labelText: _i18n.t('severity') + ' *',
                       border: OutlineInputBorder(),
                     ),
                     items: ReportSeverity.values.map((severity) {
@@ -648,14 +650,14 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
                           }
                         : null,
                   ),
-                  const SizedBox(height: 16),
+                  SizedBox(height: 16),
 
                   // Status (only for existing reports)
                   if (!_isNew) ...[
                     DropdownButtonFormField<ReportStatus>(
                       initialValue: _selectedStatus,
-                      decoration: const InputDecoration(
-                        labelText: 'Status',
+                      decoration: InputDecoration(
+                        labelText: _i18n.t('status'),
                         border: OutlineInputBorder(),
                       ),
                       items: ReportStatus.values.map((status) {
@@ -674,38 +676,38 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
                             }
                           : null,
                     ),
-                    const SizedBox(height: 16),
+                    SizedBox(height: 16),
                   ],
 
                   // Contact
                   TextField(
                     controller: _contactController,
-                    decoration: const InputDecoration(
-                      labelText: 'Contact',
-                      hintText: 'Contact information or notes',
+                    decoration: InputDecoration(
+                      labelText: _i18n.t('contact'),
+                      hintText: _i18n.t('contact_info_hint'),
                       border: OutlineInputBorder(),
                     ),
                     enabled: _isEditing,
                   ),
-                  const SizedBox(height: 24),
+                  SizedBox(height: 24),
 
                   // Images Section
                   Text(
-                    'Photos',
+                    _i18n.t('photos'),
                     style: theme.textTheme.titleMedium?.copyWith(
                       fontWeight: FontWeight.bold,
                     ),
                   ),
-                  const SizedBox(height: 8),
+                  SizedBox(height: 8),
 
                   // Add Images Button
                   if (_isEditing)
                     OutlinedButton.icon(
                       onPressed: _pickImages,
-                      icon: const Icon(Icons.add_photo_alternate),
-                      label: const Text('Add Photos'),
+                      icon: Icon(Icons.add_photo_alternate),
+                      label: Text(_i18n.t('add_photos')),
                     ),
-                  if (_isEditing) const SizedBox(height: 16),
+                  if (_isEditing) SizedBox(height: 16),
 
                   // Display Images
                   if (_existingImages.isNotEmpty || _imageFiles.isNotEmpty)
@@ -732,7 +734,7 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
                                   right: 4,
                                   child: IconButton(
                                     onPressed: () => _removeImage(entry.key, isExisting: true),
-                                    icon: const Icon(Icons.close),
+                                    icon: Icon(Icons.close),
                                     iconSize: 20,
                                     style: IconButton.styleFrom(
                                       backgroundColor: Colors.black54,
@@ -763,7 +765,7 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
                                   right: 4,
                                   child: IconButton(
                                     onPressed: () => _removeImage(entry.key),
-                                    icon: const Icon(Icons.close),
+                                    icon: Icon(Icons.close),
                                     iconSize: 20,
                                     style: IconButton.styleFrom(
                                       backgroundColor: Colors.black54,
@@ -778,20 +780,20 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
                       ],
                     ),
                   if (_existingImages.isEmpty && _imageFiles.isEmpty && !_isEditing)
-                    const Text('No photos attached'),
-                  const SizedBox(height: 24),
+                    Text(_i18n.t('no_photos_attached')),
+                  SizedBox(height: 24),
 
                   // Actions (for existing reports)
                   if (!_isNew && _report != null) ...[
                     const Divider(),
-                    const SizedBox(height: 16),
+                    SizedBox(height: 16),
                     Text(
                       'Actions',
                       style: theme.textTheme.titleMedium?.copyWith(
                         fontWeight: FontWeight.bold,
                       ),
                     ),
-                    const SizedBox(height: 16),
+                    SizedBox(height: 16),
                     Wrap(
                       spacing: 8,
                       runSpacing: 8,
@@ -809,8 +811,8 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
                           if (!_report!.verifiedBy.contains(_currentUserNpub))
                             ElevatedButton.icon(
                               onPressed: _isLoading ? null : _verify,
-                              icon: const Icon(Icons.verified),
-                              label: const Text('Verify'),
+                              icon: Icon(Icons.verified),
+                              label: Text(_i18n.t('verify')),
                             ),
                         ],
                         ElevatedButton.icon(
@@ -820,18 +822,18 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
                             ));
                             _showSuccess('Coordinates copied');
                           },
-                          icon: const Icon(Icons.copy),
-                          label: const Text('Copy Coords'),
+                          icon: Icon(Icons.copy),
+                          label: Text(_i18n.t('copy_coords')),
                         ),
                       ],
                     ),
-                    const SizedBox(height: 24),
+                    SizedBox(height: 24),
                   ],
 
                   // Updates section (for existing reports)
                   if (!_isNew && _report != null) ...[
                     const Divider(),
-                    const SizedBox(height: 16),
+                    SizedBox(height: 16),
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
@@ -847,12 +849,12 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
                         ),
                       ],
                     ),
-                    const SizedBox(height: 16),
+                    SizedBox(height: 16),
                     if (_updates.isEmpty)
-                      const Center(
+                      Center(
                         child: Padding(
                           padding: EdgeInsets.all(32),
-                          child: Text('No updates yet'),
+                          child: Text(_i18n.t('no_updates_yet')),
                         ),
                       )
                     else
@@ -929,7 +931,7 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
             Row(
               children: [
                 Icon(Icons.update, size: 16, color: theme.colorScheme.primary),
-                const SizedBox(width: 8),
+                SizedBox(width: 8),
                 Expanded(
                   child: Text(
                     update.title,
@@ -940,12 +942,12 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
                 ),
               ],
             ),
-            const SizedBox(height: 8),
+            SizedBox(height: 8),
             Text(
               'By ${update.author} • ${_formatUpdateDate(update.dateTime)}',
               style: theme.textTheme.bodySmall,
             ),
-            const SizedBox(height: 8),
+            SizedBox(height: 8),
             Text(
               update.content,
               style: theme.textTheme.bodyMedium,

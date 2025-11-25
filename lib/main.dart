@@ -315,7 +315,7 @@ class _CollectionsPageState extends State<CollectionsPage> {
   bool _isFixedCollectionType(Collection collection) {
     const fixedTypes = {
       'chat', 'forum', 'blog', 'events', 'news',
-      'www', 'postcards', 'contacts', 'places', 'market'
+      'www', 'postcards', 'contacts', 'places', 'market', 'report'
     };
     return fixedTypes.contains(collection.type);
   }
