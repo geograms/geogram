@@ -211,11 +211,13 @@ class DevicesService {
 
   /// Fetch collections from online device
   Future<List<RemoteCollection>> _fetchCollectionsOnline(RemoteDevice device) async {
+    final collections = <RemoteCollection>[];
+
     try {
       String baseUrl;
 
       if (device.url != null) {
-        // Direct connection
+        // Direct connection to device or relay
         baseUrl = device.url!.replaceFirst('ws://', 'http://').replaceFirst('wss://', 'https://');
       } else {
         // Via relay proxy
@@ -224,42 +226,79 @@ class DevicesService {
         baseUrl = '${relay.url.replaceFirst('ws://', 'http://').replaceFirst('wss://', 'https://')}/device/${device.callsign}';
       }
 
-      final response = await http.get(
-        Uri.parse('$baseUrl/api/collections'),
-      ).timeout(const Duration(seconds: 10));
+      LogService().log('DevicesService: Fetching collections from $baseUrl');
 
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body);
-        final collections = <RemoteCollection>[];
+      // Try to fetch chat rooms (works for relays)
+      try {
+        final chatResponse = await http.get(
+          Uri.parse('$baseUrl/api/chat/rooms'),
+        ).timeout(const Duration(seconds: 10));
 
-        if (data is List) {
-          for (final item in data) {
-            collections.add(RemoteCollection.fromJson(item, device.callsign));
-          }
-        } else if (data['collections'] is List) {
-          for (final item in data['collections']) {
-            if (item is String) {
+        LogService().log('DevicesService: Chat rooms response: ${chatResponse.statusCode}');
+
+        if (chatResponse.statusCode == 200) {
+          final data = json.decode(chatResponse.body);
+          LogService().log('DevicesService: Chat data: $data');
+
+          if (data['rooms'] is List) {
+            for (final room in data['rooms']) {
               collections.add(RemoteCollection(
-                name: item,
+                name: room['name'] ?? room['id'] ?? 'Chat',
                 deviceCallsign: device.callsign,
-                type: _guessCollectionType(item),
+                type: 'chat',
+                description: room['description'],
+                fileCount: room['message_count'],
               ));
-            } else {
-              collections.add(RemoteCollection.fromJson(item, device.callsign));
             }
           }
         }
-
-        // Update device
-        device.collections = collections;
-        device.lastFetched = DateTime.now();
-
-        // Cache the collections
-        await _cacheCollections(device.callsign, collections);
-
-        _notifyListeners();
-        return collections;
+      } catch (e) {
+        LogService().log('DevicesService: Error fetching chat rooms: $e');
       }
+
+      // Try to fetch file collections (works for desktop devices)
+      try {
+        final filesResponse = await http.get(
+          Uri.parse('$baseUrl/files'),
+        ).timeout(const Duration(seconds: 10));
+
+        LogService().log('DevicesService: Files response: ${filesResponse.statusCode}');
+
+        if (filesResponse.statusCode == 200) {
+          final data = json.decode(filesResponse.body);
+          LogService().log('DevicesService: Files data: $data');
+
+          if (data['entries'] is List) {
+            for (final entry in data['entries']) {
+              if (entry['isDirectory'] == true || entry['type'] == 'directory') {
+                final name = entry['name'] as String;
+                // Skip hidden folders and system folders
+                if (!name.startsWith('.') && name != 'extra') {
+                  collections.add(RemoteCollection(
+                    name: name,
+                    deviceCallsign: device.callsign,
+                    type: _guessCollectionType(name),
+                  ));
+                }
+              }
+            }
+          }
+        }
+      } catch (e) {
+        LogService().log('DevicesService: Error fetching files: $e');
+      }
+
+      // Update device
+      device.collections = collections;
+      device.lastFetched = DateTime.now();
+
+      // Cache the collections if we got any
+      if (collections.isNotEmpty) {
+        await _cacheCollections(device.callsign, collections);
+      }
+
+      _notifyListeners();
+      return collections;
     } catch (e) {
       LogService().log('DevicesService: Error fetching collections from ${device.callsign}: $e');
     }
