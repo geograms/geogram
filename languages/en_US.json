@@ -1098,5 +1098,11 @@
   "device_has_no_public_collections": "This device has no public collections",
   "device_offline_no_cache": "Device is offline and no cached data available",
   "visibility": "Visibility",
-  "files": "files"
+  "files": "files",
+  "no_rooms_found": "No chat rooms found",
+  "device_has_no_chat_rooms": "This device has no public chat rooms",
+  "messages": "messages",
+  "items_at_location": "items at this location",
+  "delete_device": "Delete Device",
+  "delete_device_confirm": "Are you sure you want to delete {0} and all its cached data?"
 }

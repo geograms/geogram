@@ -1093,5 +1093,11 @@
   "device_has_no_public_collections": "Este dispositivo não tem coleções públicas",
   "device_offline_no_cache": "Dispositivo offline e sem dados em cache disponíveis",
   "visibility": "Visibilidade",
-  "files": "ficheiros"
+  "files": "ficheiros",
+  "no_rooms_found": "Nenhuma sala de chat encontrada",
+  "device_has_no_chat_rooms": "Este dispositivo não tem salas de chat públicas",
+  "messages": "mensagens",
+  "items_at_location": "itens nesta localização",
+  "delete_device": "Eliminar Dispositivo",
+  "delete_device_confirm": "Tem a certeza que deseja eliminar {0} e todos os dados em cache?"
 }

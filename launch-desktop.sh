@@ -45,6 +45,14 @@ echo "🖥️  Available devices:"
 
 echo ""
 echo "▶️  Starting app on Linux desktop..."
+
+# Kill any existing geogram_desktop processes to free up ports
+if pgrep -f "geogram_desktop" > /dev/null 2>&1; then
+    echo "🔄 Killing existing geogram_desktop processes..."
+    pkill -f "geogram_desktop" 2>/dev/null || true
+    sleep 1
+fi
+
 echo ""
 
 # Run the app on Linux desktop

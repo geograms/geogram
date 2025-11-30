@@ -32,12 +32,23 @@ import 'chat_settings_page.dart';
 
 /// Page for browsing and interacting with a chat collection
 class ChatBrowserPage extends StatefulWidget {
-  final Collection collection;
+  final Collection? collection;
+
+  /// For browsing a remote device's chat
+  final String? remoteDeviceUrl;
+  final String? remoteDeviceCallsign;
+  final String? remoteDeviceName;
 
   const ChatBrowserPage({
     Key? key,
-    required this.collection,
+    this.collection,
+    this.remoteDeviceUrl,
+    this.remoteDeviceCallsign,
+    this.remoteDeviceName,
   }) : super(key: key);
+
+  /// Whether this is browsing a remote device
+  bool get isRemoteDevice => remoteDeviceUrl != null;
 
   @override
   State<ChatBrowserPage> createState() => _ChatBrowserPageState();
@@ -227,15 +238,26 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
 
   /// Initialize chat service and load data
   Future<void> _initializeChat() async {
-    LogService().log('DEBUG _initializeChat: STARTING');
+    LogService().log('DEBUG _initializeChat: STARTING, isRemoteDevice=${widget.isRemoteDevice}');
     setState(() {
       _isLoading = true;
       _error = null;
     });
 
     try {
-      // Initialize chat service with collection path
-      final storagePath = widget.collection.storagePath;
+      // For remote device, skip local channel initialization
+      if (widget.isRemoteDevice) {
+        LogService().log('DEBUG _initializeChat: Remote device mode - loading from ${widget.remoteDeviceUrl}');
+        setState(() {
+          _isInitialized = true;
+        });
+        // Load relay chat rooms from the remote device
+        await _loadRelayRooms();
+        return;
+      }
+
+      // Initialize chat service with collection path (local mode)
+      final storagePath = widget.collection?.storagePath;
       if (storagePath == null) {
         throw Exception('Collection storage path is null');
       }
@@ -279,10 +301,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
 
   /// Load relay chat rooms from preferred relay (uses HTTP API, doesn't require WebSocket)
   Future<void> _loadRelayRooms() async {
-    LogService().log('DEBUG _loadRelayRooms: STARTING');
-    // Use preferred relay for HTTP API calls - doesn't require WebSocket connection
-    final relay = _relayService.getPreferredRelay();
-    LogService().log('DEBUG _loadRelayRooms: relay=${relay?.name}, url=${relay?.url}');
+    LogService().log('DEBUG _loadRelayRooms: STARTING, isRemoteDevice=${widget.isRemoteDevice}');
 
     setState(() {
       _loadingRelayRooms = true;
@@ -291,6 +310,64 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     // Initialize cache service
     await _cacheService.initialize();
     LogService().log('DEBUG _loadRelayRooms: cache initialized, will check for cached devices');
+
+    // If browsing a remote device, use its URL directly
+    if (widget.isRemoteDevice && widget.remoteDeviceUrl != null) {
+      LogService().log('DEBUG _loadRelayRooms: Remote device mode - using URL ${widget.remoteDeviceUrl}');
+      try {
+        // Remember relay info for cache loading when disconnected
+        _lastRelayUrl = widget.remoteDeviceUrl;
+        _lastRelayCacheKey = widget.remoteDeviceCallsign ?? widget.remoteDeviceName;
+
+        // Fetch rooms from remote device
+        final rooms = await _relayService.fetchChatRooms(widget.remoteDeviceUrl!);
+
+        if (rooms.isNotEmpty) {
+          // Cache the rooms using the device's callsign
+          final deviceCallsign = rooms.first.relayName.isNotEmpty
+              ? rooms.first.relayName
+              : (widget.remoteDeviceCallsign ?? widget.remoteDeviceName ?? 'remote');
+          if (deviceCallsign.isNotEmpty) {
+            _lastRelayCacheKey = deviceCallsign;
+            await _cacheService.saveChatRooms(deviceCallsign, rooms);
+          }
+        }
+
+        setState(() {
+          _relayRooms = rooms;
+          _relayReachable = true; // Successfully fetched - device is reachable
+          _loadingRelayRooms = false;
+        });
+        return;
+      } catch (e) {
+        LogService().log('DEBUG _loadRelayRooms: Remote device fetch failed: $e');
+        setState(() {
+          _relayReachable = false;
+        });
+        // Try loading from cache for remote device
+        if (_lastRelayCacheKey != null && _lastRelayCacheKey!.isNotEmpty) {
+          final cachedRooms = await _cacheService.loadChatRooms(
+            _lastRelayCacheKey!,
+            _lastRelayUrl ?? '',
+          );
+          if (cachedRooms.isNotEmpty) {
+            setState(() {
+              _relayRooms = cachedRooms;
+              _loadingRelayRooms = false;
+            });
+            return;
+          }
+        }
+        setState(() {
+          _loadingRelayRooms = false;
+        });
+        return;
+      }
+    }
+
+    // Use preferred relay for HTTP API calls - doesn't require WebSocket connection
+    final relay = _relayService.getPreferredRelay();
+    LogService().log('DEBUG _loadRelayRooms: relay=${relay?.name}, url=${relay?.url}');
 
     // If relay has a valid URL, try to fetch from it via HTTP API
     if (relay != null && relay.url.isNotEmpty) {
@@ -616,8 +693,13 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
 
   /// Load chat settings
   Future<ChatSettings> _loadChatSettings() async {
+    // Remote devices don't have local settings
+    if (widget.isRemoteDevice || widget.collection == null) {
+      return ChatSettings();
+    }
+
     try {
-      final storagePath = widget.collection.storagePath;
+      final storagePath = widget.collection!.storagePath;
       if (storagePath == null) return ChatSettings();
 
       final settingsFile =
@@ -669,6 +751,12 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
 
   /// Copy file to channel's files folder
   Future<String?> _copyFileToChannel(String sourceFilePath) async {
+    // Not supported for remote devices
+    if (widget.isRemoteDevice || widget.collection == null) {
+      _showError('File attachments not supported for remote devices');
+      return null;
+    }
+
     try {
       final sourceFile = File(sourceFilePath);
       if (!await sourceFile.exists()) {
@@ -677,7 +765,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       }
 
       // Determine destination folder
-      final storagePath = widget.collection.storagePath;
+      final storagePath = widget.collection!.storagePath;
       if (storagePath == null) {
         _showError('Collection storage path is null');
         return null;
@@ -772,8 +860,14 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
   Future<void> _openAttachedFile(ChatMessage message) async {
     if (!message.hasFile) return;
 
+    // Not supported for remote devices
+    if (widget.isRemoteDevice || widget.collection == null) {
+      _showError('File attachments not supported for remote devices');
+      return;
+    }
+
     try {
-      final storagePath = widget.collection.storagePath;
+      final storagePath = widget.collection!.storagePath;
       if (storagePath == null) {
         _showError('Collection storage path is null');
         return;
@@ -869,7 +963,12 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
 
   /// Open settings page
   void _openSettings() {
-    final storagePath = widget.collection.storagePath;
+    // Not available for remote devices
+    if (widget.isRemoteDevice || widget.collection == null) {
+      return;
+    }
+
+    final storagePath = widget.collection!.storagePath;
     if (storagePath == null) {
       _showError('Collection storage path is null');
       return;
@@ -938,9 +1037,14 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
             : null,
         title: LayoutBuilder(
           builder: (context, constraints) {
+            // Get the title based on context (remote device or local collection)
+            final baseTitle = widget.isRemoteDevice
+                ? (widget.remoteDeviceName ?? widget.remoteDeviceCallsign ?? _i18n.t('chat'))
+                : widget.collection?.title ?? _i18n.t('chat');
+
             // In narrow screen, show collection title when on channel list
             if (!isWideScreen && _selectedChannel == null && _selectedRelayRoom == null) {
-              return Text(widget.collection.title);
+              return Text(baseTitle);
             }
 
             // Show relay room name if selected
@@ -949,7 +1053,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
             }
 
             return Text(
-              _selectedChannel?.name ?? widget.collection.title,
+              _selectedChannel?.name ?? baseTitle,
             );
           },
         ),
@@ -959,11 +1063,13 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
             onPressed: _refreshChannel,
             tooltip: _i18n.t('refresh'),
           ),
-          IconButton(
-            icon: const Icon(Icons.settings),
-            onPressed: _openSettings,
-            tooltip: _i18n.t('settings'),
-          ),
+          // Only show settings for local chat (not remote devices)
+          if (!widget.isRemoteDevice)
+            IconButton(
+              icon: const Icon(Icons.settings),
+              onPressed: _openSettings,
+              tooltip: _i18n.t('settings'),
+            ),
         ],
       ),
       body: _buildBody(theme),
@@ -1093,19 +1199,29 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     final remoteSources = <DeviceSourceWithRooms>[];
 
     if (_relayRooms.isNotEmpty) {
-      // Get relay info from the first room (they all share the same relay)
-      final relayName = _relayRooms.first.relayName;
-      // Get the connected relay to access its callsign
-      final connectedRelay = _relayService.getConnectedRelay();
+      // For remote device mode, use the remote device info
+      // For local mode, use the connected relay info
+      String deviceName;
+      String? deviceCallsign;
+
+      if (widget.isRemoteDevice) {
+        deviceName = widget.remoteDeviceName ?? widget.remoteDeviceCallsign ?? 'Remote Device';
+        deviceCallsign = widget.remoteDeviceCallsign;
+      } else {
+        final relayName = _relayRooms.first.relayName;
+        final connectedRelay = _relayService.getConnectedRelay();
+        deviceName = relayName.isNotEmpty ? relayName : (connectedRelay?.name ?? 'Relay');
+        deviceCallsign = connectedRelay?.callsign;
+      }
 
       remoteSources.add(DeviceSourceWithRooms(
         device: DeviceSource.relay(
           id: 'relay_${_lastRelayUrl ?? 'default'}',
-          name: relayName.isNotEmpty ? relayName : (connectedRelay?.name ?? 'Relay'),
-          callsign: connectedRelay?.callsign,
+          name: deviceName,
+          callsign: deviceCallsign,
           url: _lastRelayUrl ?? '',
           isOnline: _relayReachable,
-          latency: connectedRelay?.latency,
+          latency: null,
         ),
         rooms: _relayRooms,
         isLoading: _loadingRelayRooms,
@@ -1115,8 +1231,11 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     // Get current profile callsign
     final currentProfile = _profileService.getProfile();
 
+    // For remote device mode, don't show local channels
+    final localChannels = widget.isRemoteDevice ? <ChatChannel>[] : _channels;
+
     return DeviceChatSidebar(
-      localChannels: _channels,
+      localChannels: localChannels,
       remoteSources: remoteSources,
       selectedLocalChannelId: _selectedChannel?.id,
       selectedRemoteRoom: _selectedRelayRoom != null
@@ -1127,7 +1246,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
           : null,
       onLocalChannelSelect: _selectChannel,
       onRemoteRoomSelect: (device, room) => _selectRelayRoom(room),
-      onNewLocalChannel: _showNewChannelDialog,
+      onNewLocalChannel: widget.isRemoteDevice ? null : _showNewChannelDialog,
       onRefreshDevice: (device) => _loadRelayRooms(),
       localCallsign: currentProfile.callsign,
       unreadCounts: _unreadCounts,
@@ -1191,6 +1310,11 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
 
   /// Build full-width channel list for mobile view
   Widget _buildFullWidthChannelList(ThemeData theme) {
+    // For remote device mode, only show relay rooms
+    if (widget.isRemoteDevice) {
+      return _buildRemoteDeviceRoomList(theme);
+    }
+
     // Sort channels: favorites first, then by last message time
     final sortedChannels = List<ChatChannel>.from(_channels);
     sortedChannels.sort((a, b) {
@@ -1407,8 +1531,185 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     );
   }
 
+  /// Build room list for remote device mode (only shows relay rooms)
+  Widget _buildRemoteDeviceRoomList(ThemeData theme) {
+    final deviceName = widget.remoteDeviceName ?? widget.remoteDeviceCallsign ?? 'Remote Device';
+
+    return Container(
+      color: theme.colorScheme.surface,
+      child: Column(
+        children: [
+          // Device header
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: theme.colorScheme.surfaceVariant,
+              border: Border(
+                bottom: BorderSide(
+                  color: theme.colorScheme.outlineVariant,
+                  width: 1,
+                ),
+              ),
+            ),
+            child: Row(
+              children: [
+                // Status indicator dot
+                Container(
+                  width: 10,
+                  height: 10,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: _relayReachable ? Colors.green : Colors.red.shade400,
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Icon(Icons.devices, color: theme.colorScheme.primary),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        deviceName,
+                        style: theme.textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      if (widget.remoteDeviceCallsign != null)
+                        Text(
+                          widget.remoteDeviceCallsign!,
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            fontFamily: 'monospace',
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+                // Status badge
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: _relayReachable
+                        ? Colors.green.withOpacity(0.1)
+                        : Colors.red.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text(
+                    _relayReachable ? _i18n.t('online') : _i18n.t('offline_cached'),
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: _relayReachable ? Colors.green.shade700 : Colors.red.shade700,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                IconButton(
+                  icon: const Icon(Icons.refresh),
+                  onPressed: _loadRelayRooms,
+                  tooltip: _i18n.t('refresh_rooms'),
+                ),
+              ],
+            ),
+          ),
+          // Room list
+          Expanded(
+            child: _loadingRelayRooms
+                ? const Center(child: CircularProgressIndicator())
+                : _relayRooms.isEmpty
+                    ? Center(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(
+                              Icons.forum_outlined,
+                              size: 64,
+                              color: theme.colorScheme.onSurfaceVariant.withOpacity(0.5),
+                            ),
+                            const SizedBox(height: 16),
+                            Text(
+                              _i18n.t('no_rooms_found'),
+                              style: theme.textTheme.titleMedium?.copyWith(
+                                color: theme.colorScheme.onSurfaceVariant,
+                              ),
+                            ),
+                          ],
+                        ),
+                      )
+                    : ListView.builder(
+                        itemCount: _relayRooms.length,
+                        itemBuilder: (context, index) {
+                          final room = _relayRooms[index];
+                          final unreadCount = _unreadCounts[room.id] ?? 0;
+                          return ListTile(
+                            leading: Badge(
+                              isLabelVisible: unreadCount > 0,
+                              label: Text('$unreadCount'),
+                              child: CircleAvatar(
+                                backgroundColor: theme.colorScheme.primaryContainer,
+                                child: Icon(
+                                  Icons.forum,
+                                  color: theme.colorScheme.onPrimaryContainer,
+                                  size: 20,
+                                ),
+                              ),
+                            ),
+                            title: Text(room.name),
+                            subtitle: room.description.isNotEmpty
+                                ? Text(
+                                    room.description,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  )
+                                : Text('${room.messageCount} ${_i18n.t("messages")}'),
+                            onTap: () => _selectRelayRoom(room),
+                          );
+                        },
+                      ),
+          ),
+        ],
+      ),
+    );
+  }
+
   /// Build empty state
   Widget _buildEmptyState(ThemeData theme) {
+    // For remote device mode, show different empty state
+    if (widget.isRemoteDevice) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              Icons.forum_outlined,
+              size: 80,
+              color: theme.colorScheme.onSurfaceVariant.withOpacity(0.5),
+            ),
+            const SizedBox(height: 24),
+            Text(
+              _i18n.t('no_rooms_found'),
+              style: theme.textTheme.titleLarge,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              _relayReachable
+                  ? _i18n.t('device_has_no_chat_rooms')
+                  : _i18n.t('device_offline_no_cache'),
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 24),
+            FilledButton.icon(
+              onPressed: _loadRelayRooms,
+              icon: const Icon(Icons.refresh),
+              label: Text(_i18n.t('refresh')),
+            ),
+          ],
+        ),
+      );
+    }
+
     return Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,

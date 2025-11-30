@@ -8,6 +8,7 @@ import '../services/devices_service.dart';
 import '../services/i18n_service.dart';
 import '../services/log_service.dart';
 import '../services/relay_cache_service.dart';
+import 'chat_browser_page.dart';
 
 /// Page for browsing remote devices and their collections
 class DevicesBrowserPage extends StatefulWidget {
@@ -106,16 +107,29 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
   }
 
   void _openChatCollection(RemoteCollection collection) {
-    // Show info about remote chat collection
-    // TODO: Implement remote chat browsing
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          '${_i18n.t("chat")}: ${collection.name} (${_selectedDevice?.callsign ?? ""})',
-        ),
-        action: SnackBarAction(
-          label: _i18n.t('close'),
-          onPressed: () {},
+    if (_selectedDevice == null) return;
+
+    // Build the remote device URL
+    // If the device has a direct URL, use it; otherwise construct via relay proxy
+    String remoteUrl = _selectedDevice!.url ?? '';
+
+    // Convert WebSocket URL to HTTP URL for API calls
+    if (remoteUrl.startsWith('ws://')) {
+      remoteUrl = remoteUrl.replaceFirst('ws://', 'http://');
+    } else if (remoteUrl.startsWith('wss://')) {
+      remoteUrl = remoteUrl.replaceFirst('wss://', 'https://');
+    }
+
+    LogService().log('DevicesBrowserPage: Opening chat for ${_selectedDevice!.callsign} at $remoteUrl');
+
+    // Navigate to the ChatBrowserPage with remote device parameters
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => ChatBrowserPage(
+          remoteDeviceUrl: remoteUrl,
+          remoteDeviceCallsign: _selectedDevice!.callsign,
+          remoteDeviceName: _selectedDevice!.name,
         ),
       ),
     );
@@ -325,7 +339,8 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
               fontFamily: 'monospace',
             ),
           ),
-          Row(
+          Wrap(
+            spacing: 8,
             children: [
               Text(
                 device.isOnline ? _i18n.t('online') : _i18n.t('offline'),
@@ -333,35 +348,86 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
                   color: device.isOnline ? Colors.green : Colors.grey,
                 ),
               ),
-              if (device.hasCachedData) ...[
-                const SizedBox(width: 8),
-                Icon(
-                  Icons.download_done,
-                  size: 14,
-                  color: theme.colorScheme.primary,
+              if (device.hasCachedData)
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      Icons.download_done,
+                      size: 14,
+                      color: theme.colorScheme.primary,
+                    ),
+                    const SizedBox(width: 2),
+                    Text(
+                      _i18n.t('cached'),
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.primary,
+                      ),
+                    ),
+                  ],
                 ),
-                const SizedBox(width: 2),
-                Text(
-                  _i18n.t('cached'),
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: theme.colorScheme.primary,
-                  ),
-                ),
-              ],
             ],
           ),
         ],
       ),
-      trailing: device.latency != null
-          ? Text(
-              '${device.latency}ms',
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (device.latency != null)
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: Text(
+                '${device.latency}ms',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
               ),
-            )
-          : null,
+            ),
+          IconButton(
+            icon: Icon(
+              Icons.delete_outline,
+              color: theme.colorScheme.error,
+              size: 20,
+            ),
+            onPressed: () => _confirmDeleteDevice(device),
+            tooltip: _i18n.t('delete'),
+          ),
+        ],
+      ),
       onTap: () => _selectDevice(device),
     );
+  }
+
+  Future<void> _confirmDeleteDevice(RemoteDevice device) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(_i18n.t('delete_device')),
+        content: Text(_i18n.t('delete_device_confirm', params: [device.name])),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text(_i18n.t('cancel')),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(context).colorScheme.error,
+            ),
+            child: Text(_i18n.t('delete')),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      await _devicesService.removeDevice(device.callsign);
+      if (_selectedDevice?.callsign == device.callsign) {
+        setState(() => _selectedDevice = null);
+      }
+      _devices = _devicesService.getAllDevices();
+      setState(() {});
+    }
   }
 
   Widget _buildDeviceDetail(ThemeData theme) {

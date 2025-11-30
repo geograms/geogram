@@ -8,6 +8,7 @@ import 'dart:io' show Platform;
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
+import 'package:flutter_map_marker_cluster/flutter_map_marker_cluster.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
@@ -97,6 +98,21 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
     final savedZoom = _configService.getNestedValue('mapState.zoom') as double?;
     final savedRadius = _configService.getNestedValue('mapState.radius') as double?;
 
+    // Load saved filter settings
+    final savedFilters = _configService.getNestedValue('mapState.visibleLayers') as List<dynamic>?;
+    if (savedFilters != null) {
+      _visibleLayers.clear();
+      for (final filter in savedFilters) {
+        try {
+          final type = MapItemType.values.firstWhere((t) => t.name == filter);
+          _visibleLayers.add(type);
+        } catch (_) {
+          // Ignore invalid filter names
+        }
+      }
+      LogService().log('MapsBrowserPage: Restored ${_visibleLayers.length} saved filters');
+    }
+
     if (savedLat != null && savedLon != null) {
       // Restore saved position
       setState(() {
@@ -133,6 +149,12 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
     await _configService.setNestedValue('mapState.longitude', _centerPosition!.longitude);
     await _configService.setNestedValue('mapState.zoom', _currentZoom);
     await _configService.setNestedValue('mapState.radius', _radiusKm);
+  }
+
+  /// Save filter settings to config
+  Future<void> _saveFilterState() async {
+    final filterNames = _visibleLayers.map((t) => t.name).toList();
+    await _configService.setNestedValue('mapState.visibleLayers', filterNames);
   }
 
   Future<void> _loadItems({bool forceRefresh = false}) async {
@@ -174,6 +196,7 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
         _visibleLayers.add(type);
       }
     });
+    _saveFilterState();
     _loadItems();
   }
 
@@ -221,6 +244,22 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
 
     // Clamp to reasonable values
     return zoom.clamp(1.0, 18.0);
+  }
+
+  /// Calculate radius from zoom level (inverse of _getZoomForRadius)
+  double _getRadiusForZoom(double zoom) {
+    const targetRadiusPixels = 280.0;
+
+    // Account for latitude
+    final lat = _centerPosition?.latitude ?? 0;
+    final latRadians = lat * math.pi / 180;
+    final metersPerPixelAtZoom0 = 156543.03 * math.cos(latRadians);
+
+    // Inverse formula: radiusMeters = metersPerPixelAtZoom0 * targetRadiusPixels / 2^zoom
+    final radiusMeters = metersPerPixelAtZoom0 * targetRadiusPixels / math.pow(2, zoom);
+    final radiusKm = radiusMeters / 1000;
+
+    return radiusKm.clamp(_minRadius, _maxRadius);
   }
 
   void _selectItem(MapItem item) {
@@ -778,42 +817,76 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
               ],
             ),
 
-            // Item markers (rendered before user marker so user marker is on top)
-            MarkerLayer(
-              markers: visibleItems.map((item) {
-                final isSelected = _selectedItem == item;
-                return Marker(
-                  point: LatLng(item.latitude, item.longitude),
-                  width: isSelected ? 50 : 40,
-                  height: isSelected ? 50 : 40,
-                  child: GestureDetector(
-                    onTap: () => _selectItem(item),
-                    child: Container(
-                      decoration: BoxDecoration(
-                        color: isSelected
-                            ? _getTypeColor(item.type)
-                            : _getTypeColor(item.type).withValues(alpha: 0.8),
-                        shape: BoxShape.circle,
-                        border: isSelected
-                            ? Border.all(color: Colors.white, width: 3)
-                            : null,
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withValues(alpha: 0.3),
-                            blurRadius: 4,
-                            offset: const Offset(0, 2),
-                          ),
-                        ],
-                      ),
-                      child: Icon(
-                        _getTypeIcon(item.type),
-                        color: Colors.white,
-                        size: isSelected ? 28 : 22,
+            // Item markers with clustering (rendered before user marker so user marker is on top)
+            MarkerClusterLayerWidget(
+              options: MarkerClusterLayerOptions(
+                maxClusterRadius: 80,
+                size: const Size(48, 48),
+                alignment: Alignment.center,
+                padding: const EdgeInsets.all(50),
+                maxZoom: 15,
+                markers: visibleItems.map((item) {
+                  final isSelected = _selectedItem == item;
+                  return Marker(
+                    point: LatLng(item.latitude, item.longitude),
+                    width: isSelected ? 50 : 40,
+                    height: isSelected ? 50 : 40,
+                    child: GestureDetector(
+                      onTap: () => _selectItem(item),
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: isSelected
+                              ? _getTypeColor(item.type)
+                              : _getTypeColor(item.type).withValues(alpha: 0.8),
+                          shape: BoxShape.circle,
+                          border: isSelected
+                              ? Border.all(color: Colors.white, width: 3)
+                              : null,
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withValues(alpha: 0.3),
+                              blurRadius: 4,
+                              offset: const Offset(0, 2),
+                            ),
+                          ],
+                        ),
+                        child: Icon(
+                          _getTypeIcon(item.type),
+                          color: Colors.white,
+                          size: isSelected ? 28 : 22,
+                        ),
                       ),
                     ),
-                  ),
-                );
-              }).toList(),
+                  );
+                }).toList(),
+                builder: (context, markers) {
+                  // Cluster marker - green circle with count
+                  return Container(
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: Colors.green.shade600,
+                      border: Border.all(color: Colors.white, width: 3),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.3),
+                          blurRadius: 6,
+                          offset: const Offset(0, 2),
+                        ),
+                      ],
+                    ),
+                    child: Center(
+                      child: Text(
+                        markers.length.toString(),
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 14,
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              ),
             ),
 
             // User location marker - more prominent with pulsing effect
@@ -917,10 +990,15 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
                 heroTag: 'zoom_in',
                 onPressed: () {
                   final newZoom = (_currentZoom + 1).clamp(1.0, 18.0);
-                  setState(() => _currentZoom = newZoom);
+                  final newRadius = _getRadiusForZoom(newZoom);
+                  setState(() {
+                    _currentZoom = newZoom;
+                    _radiusKm = newRadius;
+                  });
                   if (_mapReady && _centerPosition != null) {
                     _mapController.move(_centerPosition!, newZoom);
                   }
+                  _saveMapState();
                 },
                 tooltip: _i18n.t('zoom_in'),
                 child: const Icon(Icons.add),
@@ -931,10 +1009,15 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
                 heroTag: 'zoom_out',
                 onPressed: () {
                   final newZoom = (_currentZoom - 1).clamp(1.0, 18.0);
-                  setState(() => _currentZoom = newZoom);
+                  final newRadius = _getRadiusForZoom(newZoom);
+                  setState(() {
+                    _currentZoom = newZoom;
+                    _radiusKm = newRadius;
+                  });
                   if (_mapReady && _centerPosition != null) {
                     _mapController.move(_centerPosition!, newZoom);
                   }
+                  _saveMapState();
                 },
                 tooltip: _i18n.t('zoom_out'),
                 child: const Icon(Icons.remove),
@@ -1088,72 +1171,76 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
                 ),
               ),
 
-              // Group items
+              // Group items (indented to show hierarchy)
               if (isExpanded && items.isNotEmpty)
-                ListView.separated(
-                  shrinkWrap: true,
-                  physics: const NeverScrollableScrollPhysics(),
-                  itemCount: items.length,
-                  separatorBuilder: (_, __) => const Divider(height: 1),
-                  itemBuilder: (context, itemIndex) {
-                    final item = items[itemIndex];
-                    final isSelected = _selectedItem == item;
+                Padding(
+                  padding: const EdgeInsets.only(left: 24),
+                  child: ListView.separated(
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    itemCount: items.length,
+                    separatorBuilder: (_, __) => const Divider(height: 1, indent: 16),
+                    itemBuilder: (context, itemIndex) {
+                      final item = items[itemIndex];
+                      final isSelected = _selectedItem == item;
 
-                    return ListTile(
-                      selected: isSelected,
-                      selectedTileColor:
-                          _getTypeColor(type).withValues(alpha: 0.1),
-                      leading: Container(
-                        width: 40,
-                        height: 40,
-                        decoration: BoxDecoration(
-                          color: _getTypeColor(type).withValues(alpha: 0.1),
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: Icon(
-                          _getTypeIcon(type),
-                          color: _getTypeColor(type),
-                          size: 20,
-                        ),
-                      ),
-                      title: Text(
-                        item.title,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      subtitle: item.subtitle != null
-                          ? Text(
-                              item.subtitle!,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            )
-                          : null,
-                      trailing: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text(
-                            item.distanceString,
-                            style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                                  color: Theme.of(context)
-                                      .colorScheme
-                                      .onSurfaceVariant,
-                                ),
+                      return ListTile(
+                        selected: isSelected,
+                        selectedTileColor:
+                            _getTypeColor(type).withValues(alpha: 0.1),
+                        contentPadding: const EdgeInsets.only(left: 8, right: 16),
+                        leading: Container(
+                          width: 36,
+                          height: 36,
+                          decoration: BoxDecoration(
+                            color: _getTypeColor(type).withValues(alpha: 0.1),
+                            borderRadius: BorderRadius.circular(8),
                           ),
-                          const SizedBox(width: 8),
-                          Icon(
-                            Icons.chevron_right,
-                            color: Theme.of(context).colorScheme.onSurfaceVariant,
+                          child: Icon(
+                            _getTypeIcon(type),
+                            color: _getTypeColor(type),
+                            size: 18,
                           ),
-                        ],
-                      ),
-                      onTap: () => _openItemDetail(item),
-                    );
-                  },
+                        ),
+                        title: Text(
+                          item.title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        subtitle: item.subtitle != null
+                            ? Text(
+                                item.subtitle!,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              )
+                            : null,
+                        trailing: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              item.distanceString,
+                              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                    color: Theme.of(context)
+                                        .colorScheme
+                                        .onSurfaceVariant,
+                                  ),
+                            ),
+                            const SizedBox(width: 8),
+                            Icon(
+                              Icons.chevron_right,
+                              color: Theme.of(context).colorScheme.onSurfaceVariant,
+                            ),
+                          ],
+                        ),
+                        onTap: () => _openItemDetail(item),
+                      );
+                    },
+                  ),
                 ),
 
               if (isExpanded && items.isEmpty)
                 Padding(
-                  padding: const EdgeInsets.all(16),
+                  padding: const EdgeInsets.only(left: 40, top: 16, bottom: 16, right: 16),
                   child: Text(
                     _i18n.t('no_items_type'),
                     style: Theme.of(context).textTheme.bodyMedium?.copyWith(

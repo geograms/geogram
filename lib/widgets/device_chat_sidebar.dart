@@ -30,8 +30,8 @@ class DeviceChatSidebar extends StatefulWidget {
   /// Callback when remote room is selected
   final Function(DeviceSource, RelayChatRoom) onRemoteRoomSelect;
 
-  /// Callback to create new local channel
-  final VoidCallback onNewLocalChannel;
+  /// Callback to create new local channel (null hides the button)
+  final VoidCallback? onNewLocalChannel;
 
   /// Callback to refresh a remote device's rooms
   final Function(DeviceSource)? onRefreshDevice;
@@ -50,7 +50,7 @@ class DeviceChatSidebar extends StatefulWidget {
     this.selectedRemoteRoom,
     required this.onLocalChannelSelect,
     required this.onRemoteRoomSelect,
-    required this.onNewLocalChannel,
+    this.onNewLocalChannel,
     this.onRefreshDevice,
     required this.localCallsign,
     this.unreadCounts = const {},
@@ -90,16 +90,17 @@ class _DeviceChatSidebarState extends State<DeviceChatSidebar> {
           Expanded(
             child: ListView(
               children: [
-                // Local device section
-                _buildDeviceSection(
-                  theme,
-                  DeviceSource.local(
-                    callsign: widget.localCallsign,
-                    nickname: 'This Device',
+                // Local device section (only show if there are local channels)
+                if (widget.localChannels.isNotEmpty)
+                  _buildDeviceSection(
+                    theme,
+                    DeviceSource.local(
+                      callsign: widget.localCallsign,
+                      nickname: 'This Device',
+                    ),
+                    widget.localChannels,
+                    null,
                   ),
-                  widget.localChannels,
-                  null,
-                ),
                 // Remote device sections
                 for (final source in widget.remoteSources)
                   _buildDeviceSection(
@@ -144,7 +145,11 @@ class _DeviceChatSidebarState extends State<DeviceChatSidebar> {
     List<ChatChannel>? localChannels,
     List<RelayChatRoom>? remoteRooms,
   ) {
-    final isExpanded = _expandedDevices[device.id] ?? false;
+    // Default to expanded if:
+    // - It's the local device, OR
+    // - There are no local channels (remote device browsing mode)
+    final defaultExpanded = device.isLocal || widget.localChannels.isEmpty;
+    final isExpanded = _expandedDevices[device.id] ?? defaultExpanded;
     final hasItems = (localChannels?.isNotEmpty ?? false) ||
         (remoteRooms?.isNotEmpty ?? false);
 
@@ -159,8 +164,8 @@ class _DeviceChatSidebarState extends State<DeviceChatSidebar> {
             ...localChannels.map((channel) => _buildLocalChannelTile(theme, channel)),
           if (remoteRooms != null)
             ...remoteRooms.map((room) => _buildRemoteRoomTile(theme, device, room)),
-          // Add channel button for local device
-          if (device.isLocal)
+          // Add channel button for local device (when callback is provided)
+          if (device.isLocal && widget.onNewLocalChannel != null)
             _buildAddChannelButton(theme),
         ],
       ],
