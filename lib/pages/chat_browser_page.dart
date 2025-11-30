@@ -20,6 +20,7 @@ import '../services/relay_service.dart';
 import '../services/relay_cache_service.dart';
 import '../services/chat_notification_service.dart';
 import '../services/log_service.dart';
+import '../services/i18n_service.dart';
 import '../models/device_source.dart';
 import '../util/nostr_crypto.dart';
 import '../util/nostr_event.dart';
@@ -48,6 +49,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
   final RelayService _relayService = RelayService();
   final RelayCacheService _cacheService = RelayCacheService();
   final ChatNotificationService _chatNotificationService = ChatNotificationService();
+  final I18nService _i18n = I18nService();
 
   List<ChatChannel> _channels = [];
   ChatChannel? _selectedChannel;
@@ -461,10 +463,31 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
   /// Convert relay messages to ChatMessage format for display
   List<ChatMessage> _convertRelayMessages(List<RelayChatMessage> relayMessages) {
     return relayMessages.map((rm) {
+      // Build metadata map with verification info
+      final metadata = <String, String>{};
+
+      // Track if message has signature (from server response)
+      if (rm.hasSignature) {
+        metadata['has_signature'] = 'true';
+        if (rm.signature != null && rm.signature!.isNotEmpty) {
+          metadata['signature'] = rm.signature!;
+        }
+      }
+
+      // Track verification status
+      if (rm.verified) {
+        metadata['verified'] = 'true';
+      }
+
+      if (rm.npub != null) {
+        metadata['npub'] = rm.npub!;
+      }
+
       return ChatMessage(
         author: rm.callsign,
         timestamp: rm.timestamp,
         content: rm.content,
+        metadata: metadata.isNotEmpty ? metadata : null,
       );
     }).toList();
   }
@@ -560,7 +583,8 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       );
 
       if (success) {
-        // Add optimistic update
+        // Add optimistic update with verified status
+        // Since we signed the message ourselves, it should be verified
         final now = DateTime.now();
         final timestamp = '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')} '
             '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}_${now.second.toString().padLeft(2, '0')}';
@@ -571,6 +595,8 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
           content: content,
           roomId: _selectedRelayRoom!.id,
           npub: currentProfile.npub,
+          verified: true,      // We signed it, so it's verified
+          hasSignature: true,  // Message was signed
         );
 
         setState(() {
@@ -931,12 +957,12 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
           IconButton(
             icon: const Icon(Icons.refresh),
             onPressed: _refreshChannel,
-            tooltip: 'Refresh',
+            tooltip: _i18n.t('refresh'),
           ),
           IconButton(
             icon: const Icon(Icons.settings),
             onPressed: _openSettings,
-            tooltip: 'Settings',
+            tooltip: _i18n.t('settings'),
           ),
         ],
       ),
@@ -971,7 +997,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
             const SizedBox(height: 16),
             FilledButton(
               onPressed: _initializeChat,
-              child: const Text('Retry'),
+              child: Text(_i18n.t('retry')),
             ),
           ],
         ),
@@ -1151,7 +1177,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
                 ),
                 const SizedBox(width: 8),
                 Text(
-                  'Read-only mode - relay is offline',
+                  _i18n.t('read_only_relay_offline'),
                   style: theme.textTheme.bodyMedium?.copyWith(
                     color: theme.colorScheme.onSurfaceVariant,
                   ),
@@ -1205,7 +1231,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
                 const SizedBox(width: 12),
                 Expanded(
                   child: Text(
-                    'Channels',
+                    _i18n.t('channels'),
                     style: theme.textTheme.titleMedium?.copyWith(
                       fontWeight: FontWeight.bold,
                     ),
@@ -1214,7 +1240,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
                 FilledButton.icon(
                   onPressed: _showNewChannelDialog,
                   icon: const Icon(Icons.add, size: 18),
-                  label: const Text('New'),
+                  label: Text(_i18n.t('new_channel')),
                   style: FilledButton.styleFrom(
                     padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                   ),
@@ -1267,7 +1293,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
                           overflow: TextOverflow.ellipsis,
                         )
                       : (channel.isGroup
-                          ? const Text('Group chat')
+                          ? Text(_i18n.t('group_chat'))
                           : null),
                   onTap: () => _selectChannelMobile(channel),
                 )),
@@ -1315,7 +1341,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
                                 ),
                               ),
                               Text(
-                                _relayReachable ? 'Online' : 'Offline (cached)',
+                                _relayReachable ? _i18n.t('online') : _i18n.t('offline_cached'),
                                 style: theme.textTheme.bodySmall?.copyWith(
                                   color: _relayReachable
                                       ? Colors.green.shade700
@@ -1328,7 +1354,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
                         IconButton(
                           icon: const Icon(Icons.refresh),
                           onPressed: _loadRelayRooms,
-                          tooltip: 'Refresh rooms',
+                          tooltip: _i18n.t('refresh_rooms'),
                         ),
                       ],
                     ),
@@ -1394,12 +1420,12 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
           ),
           const SizedBox(height: 24),
           Text(
-            'No channels found',
+            _i18n.t('no_channels_found'),
             style: theme.textTheme.titleLarge,
           ),
           const SizedBox(height: 8),
           Text(
-            'Create a channel to start chatting',
+            _i18n.t('create_channel_to_start'),
             style: theme.textTheme.bodyMedium?.copyWith(
               color: theme.colorScheme.onSurfaceVariant,
             ),
@@ -1408,7 +1434,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
           FilledButton.icon(
             onPressed: _showNewChannelDialog,
             icon: const Icon(Icons.add),
-            label: const Text('Create Channel'),
+            label: Text(_i18n.t('create_channel')),
           ),
         ],
       ),
@@ -1428,7 +1454,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
           ),
           const SizedBox(height: 16),
           Text(
-            'Select a channel to start chatting',
+            _i18n.t('select_channel_to_chat'),
             style: theme.textTheme.titleMedium?.copyWith(
               color: theme.colorScheme.onSurfaceVariant,
             ),
@@ -1451,13 +1477,13 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
-              _buildInfoRow('Type', _selectedChannel!.type.name),
+              _buildInfoRow(_i18n.t('type'), _selectedChannel!.type.name),
               _buildInfoRow('ID', _selectedChannel!.id),
               if (_selectedChannel!.description != null)
-                _buildInfoRow('Description', _selectedChannel!.description!),
-              _buildInfoRow('Participants',
+                _buildInfoRow(_i18n.t('description'), _selectedChannel!.description!),
+              _buildInfoRow(_i18n.t('participants'),
                   _selectedChannel!.participants.join(', ')),
-              _buildInfoRow('Created',
+              _buildInfoRow(_i18n.t('created'),
                   _selectedChannel!.created.toString().substring(0, 16)),
             ],
           ),
@@ -1465,7 +1491,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('Close'),
+            child: Text(_i18n.t('close')),
           ),
         ],
       ),

@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import '../models/device_source.dart';
 import '../models/chat_channel.dart';
 import '../models/relay_chat_room.dart';
+import '../services/i18n_service.dart';
 
 /// Unified sidebar for browsing chat rooms across multiple devices
 /// Shows local device channels and remote device (relay/direct) rooms
@@ -60,6 +61,8 @@ class DeviceChatSidebar extends StatefulWidget {
 }
 
 class _DeviceChatSidebarState extends State<DeviceChatSidebar> {
+  final I18nService _i18n = I18nService();
+
   /// Track which device sections are expanded
   final Map<String, bool> _expandedDevices = {'local': true};
 
@@ -125,7 +128,7 @@ class _DeviceChatSidebarState extends State<DeviceChatSidebar> {
           ),
           const SizedBox(width: 12),
           Text(
-            'Chat Rooms',
+            _i18n.t('chat_rooms'),
             style: theme.textTheme.titleLarge?.copyWith(
               fontWeight: FontWeight.bold,
             ),
@@ -238,22 +241,23 @@ class _DeviceChatSidebarState extends State<DeviceChatSidebar> {
                   ],
                 ),
               ),
-              // Status text
-              Text(
-                device.statusText,
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: device.isOnline
-                      ? Colors.green.shade700
-                      : theme.colorScheme.onSurfaceVariant,
-                  fontSize: 10,
+              // Status text (only shown when offline)
+              if (device.statusText.isNotEmpty)
+                Text(
+                  device.statusText,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: device.isOnline
+                        ? Colors.green.shade700
+                        : Colors.red.shade700,
+                    fontSize: 10,
+                  ),
                 ),
-              ),
               // Refresh button for remote devices
               if (!device.isLocal && widget.onRefreshDevice != null)
                 IconButton(
                   icon: const Icon(Icons.refresh, size: 16),
                   onPressed: () => widget.onRefreshDevice?.call(device),
-                  tooltip: 'Refresh',
+                  tooltip: _i18n.t('refresh'),
                   padding: EdgeInsets.zero,
                   constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
                 ),
@@ -431,7 +435,7 @@ class _DeviceChatSidebarState extends State<DeviceChatSidebar> {
               ),
               const SizedBox(width: 8),
               Text(
-                'New Channel',
+                _i18n.t('new_channel'),
                 style: theme.textTheme.bodyMedium?.copyWith(
                   color: theme.colorScheme.primary,
                   fontWeight: FontWeight.w500,

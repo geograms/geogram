@@ -51,6 +51,7 @@ dependencies:
   window_manager: ^0.4.3
   shelf: ^1.4.0
   flutter_markdown: ^0.7.4+1
+  geolocator: ^13.0.2
 
 dev_dependencies:
   flutter_test:

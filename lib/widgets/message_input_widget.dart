@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:file_picker/file_picker.dart';
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
+import '../services/i18n_service.dart';
 
 /// Widget for composing and sending chat messages
 class MessageInputWidget extends StatefulWidget {
@@ -29,6 +30,7 @@ class _MessageInputWidgetState extends State<MessageInputWidget> {
   final TextEditingController _controller = TextEditingController();
   final FocusNode _focusNode = FocusNode();
   final FocusNode _keyboardListenerFocusNode = FocusNode();
+  final I18nService _i18n = I18nService();
   String? _selectedFilePath;
   String? _selectedFileName;
   bool _isSending = false;
@@ -72,7 +74,7 @@ class _MessageInputWidgetState extends State<MessageInputWidget> {
                   IconButton(
                     icon: const Icon(Icons.attach_file),
                     onPressed: _isSending ? null : _pickFile,
-                    tooltip: 'Attach file',
+                    tooltip: _i18n.t('attach_file'),
                   ),
                 // Text input field
                 Expanded(
@@ -94,7 +96,7 @@ class _MessageInputWidgetState extends State<MessageInputWidget> {
                       maxLength: widget.maxLength,
                       textCapitalization: TextCapitalization.sentences,
                       decoration: InputDecoration(
-                        hintText: 'Type a message...',
+                        hintText: _i18n.t('type_a_message'),
                         border: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(24),
                         ),
@@ -124,7 +126,7 @@ class _MessageInputWidgetState extends State<MessageInputWidget> {
                         )
                       : const Icon(Icons.send),
                   onPressed: _isSending ? null : _handleSend,
-                  tooltip: 'Send message',
+                  tooltip: _i18n.t('send_message'),
                   color: theme.colorScheme.primary,
                 ),
               ],
@@ -176,7 +178,7 @@ class _MessageInputWidgetState extends State<MessageInputWidget> {
           IconButton(
             icon: const Icon(Icons.close),
             onPressed: _clearFile,
-            tooltip: 'Remove file',
+            tooltip: _i18n.t('remove_file'),
             iconSize: 20,
           ),
         ],
@@ -199,7 +201,7 @@ class _MessageInputWidgetState extends State<MessageInputWidget> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Error picking file: $e'),
+            content: Text(_i18n.t('error_picking_file', params: ['$e'])),
             backgroundColor: Theme.of(context).colorScheme.error,
           ),
         );
@@ -229,7 +231,7 @@ class _MessageInputWidgetState extends State<MessageInputWidget> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-              'Message too long (max ${widget.maxLength} characters)'),
+              _i18n.t('message_too_long', params: ['${widget.maxLength}'])),
           backgroundColor: Theme.of(context).colorScheme.error,
         ),
       );
@@ -252,7 +254,7 @@ class _MessageInputWidgetState extends State<MessageInputWidget> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Failed to send message: $e'),
+            content: Text(_i18n.t('failed_to_send_message', params: ['$e'])),
             backgroundColor: Theme.of(context).colorScheme.error,
           ),
         );
@@ -282,7 +284,7 @@ class _MessageInputWidgetState extends State<MessageInputWidget> {
         return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(1)} GB';
       }
     } catch (e) {
-      return 'Unknown size';
+      return _i18n.t('unknown_size');
     }
   }
 }

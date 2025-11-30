@@ -107,19 +107,69 @@ class MessageBubbleWidget extends StatelessWidget {
                               fontSize: 11,
                             ),
                           ),
-                          // Signed indicator (small icon next to time)
-                          if (message.isSigned) ...[
+                          // Verified indicator (signature verified by server)
+                          if (message.isVerified) ...[
                             const SizedBox(width: 4),
-                            Tooltip(
-                              message: 'Signed message',
-                              child: Icon(
-                                Icons.verified,
-                                size: 12,
-                                color: isOwnMessage
-                                    ? theme.colorScheme.onPrimaryContainer
-                                        .withOpacity(0.7)
-                                    : theme.colorScheme.tertiary
-                                        .withOpacity(0.8),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 4,
+                                vertical: 1,
+                              ),
+                              decoration: BoxDecoration(
+                                color: Colors.green.withOpacity(0.15),
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(
+                                    Icons.verified,
+                                    size: 11,
+                                    color: Colors.green.shade700,
+                                  ),
+                                  const SizedBox(width: 2),
+                                  Text(
+                                    'verified',
+                                    style: TextStyle(
+                                      fontSize: 9,
+                                      fontWeight: FontWeight.w500,
+                                      color: Colors.green.shade700,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ]
+                          // Failed verification (has signature but verification failed - possible spoofing)
+                          else if (message.isSigned) ...[
+                            const SizedBox(width: 4),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 4,
+                                vertical: 1,
+                              ),
+                              decoration: BoxDecoration(
+                                color: Colors.red.withOpacity(0.15),
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(
+                                    Icons.warning,
+                                    size: 11,
+                                    color: Colors.red.shade700,
+                                  ),
+                                  const SizedBox(width: 2),
+                                  Text(
+                                    'unverified',
+                                    style: TextStyle(
+                                      fontSize: 9,
+                                      fontWeight: FontWeight.w500,
+                                      color: Colors.red.shade700,
+                                    ),
+                                  ),
+                                ],
                               ),
                             ),
                           ],
@@ -327,8 +377,10 @@ class MessageBubbleWidget extends StatelessWidget {
               if (message.hasLocation)
                 _buildInfoRow('Location',
                     '${message.latitude}, ${message.longitude}'),
-              if (message.isSigned)
+              if (message.isSigned) ...[
                 _buildInfoRow('Signature', message.signature!),
+                _buildInfoRow('Verified', message.isVerified ? 'Yes' : 'No'),
+              ],
             ],
           ),
         ),

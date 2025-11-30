@@ -8,6 +8,7 @@ import '../models/chat_settings.dart';
 import '../models/chat_security.dart';
 import '../services/chat_service.dart';
 import '../services/profile_service.dart';
+import '../services/i18n_service.dart';
 import 'dart:convert';
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'package:path/path.dart' as path;
@@ -28,6 +29,7 @@ class ChatSettingsPage extends StatefulWidget {
 class _ChatSettingsPageState extends State<ChatSettingsPage> {
   final ChatService _chatService = ChatService();
   final ProfileService _profileService = ProfileService();
+  final I18nService _i18n = I18nService();
 
   ChatSettings _settings = ChatSettings();
   ChatSecurity _security = ChatSecurity();
@@ -96,7 +98,7 @@ class _ChatSettingsPageState extends State<ChatSettingsPage> {
     if (_isLoading) {
       return Scaffold(
         appBar: AppBar(
-          title: const Text('Chat Settings'),
+          title: Text(_i18n.t('chat_settings')),
         ),
         body: const Center(
           child: CircularProgressIndicator(),
@@ -106,7 +108,7 @@ class _ChatSettingsPageState extends State<ChatSettingsPage> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Chat Settings'),
+        title: Text(_i18n.t('chat_settings')),
       ),
       body: ListView(
         padding: const EdgeInsets.all(16),
@@ -114,12 +116,12 @@ class _ChatSettingsPageState extends State<ChatSettingsPage> {
           // Message signing section
           _buildSection(
             theme,
-            'Message Signing',
+            _i18n.t('message_signing'),
             [
               SwitchListTile(
-                title: const Text('Sign messages by default'),
-                subtitle: const Text(
-                  'Automatically sign all outgoing messages with your NOSTR key',
+                title: Text(_i18n.t('sign_messages_by_default')),
+                subtitle: Text(
+                  _i18n.t('sign_messages_desc'),
                 ),
                 value: _settings.signMessages,
                 onChanged: (value) {
@@ -133,7 +135,7 @@ class _ChatSettingsPageState extends State<ChatSettingsPage> {
                 Padding(
                   padding: const EdgeInsets.all(16),
                   child: Text(
-                    'Note: You need to set up your NOSTR keys in your profile to use message signing.',
+                    _i18n.t('nostr_keys_required'),
                     style: theme.textTheme.bodySmall?.copyWith(
                       color: theme.colorScheme.error,
                     ),
@@ -148,10 +150,10 @@ class _ChatSettingsPageState extends State<ChatSettingsPage> {
           if (_isAdmin) ...[
             _buildSection(
               theme,
-              'Security & Moderation',
+              _i18n.t('security_moderation'),
               [
                 ListTile(
-                  title: const Text('Your Admin Status'),
+                  title: Text(_i18n.t('your_admin_status')),
                   subtitle: Text('npub: ${_security.adminNpub ?? "Not set"}'),
                   leading: const Icon(Icons.admin_panel_settings),
                 ),
@@ -162,12 +164,12 @@ class _ChatSettingsPageState extends State<ChatSettingsPage> {
           ] else ...[
             _buildSection(
               theme,
-              'Moderation',
+              _i18n.t('moderation'),
               [
                 ListTile(
-                  title: const Text('Moderators'),
-                  subtitle: const Text(
-                      'Only the chat administrator can manage moderators'),
+                  title: Text(_i18n.t('moderators')),
+                  subtitle: Text(
+                      _i18n.t('only_admin_manage_moderators')),
                   leading: const Icon(Icons.shield),
                 ),
               ],
@@ -185,7 +187,7 @@ class _ChatSettingsPageState extends State<ChatSettingsPage> {
     // Main channel moderators
     widgets.add(
       ListTile(
-        title: const Text('Main Channel Moderators'),
+        title: Text(_i18n.t('main_channel_moderators')),
         trailing: IconButton(
           icon: const Icon(Icons.add),
           onPressed: () => _addModerator('main'),
@@ -199,7 +201,7 @@ class _ChatSettingsPageState extends State<ChatSettingsPage> {
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
           child: Text(
-            'No moderators assigned',
+            _i18n.t('no_moderators_assigned'),
             style: theme.textTheme.bodySmall?.copyWith(
               color: theme.colorScheme.onSurfaceVariant,
               fontStyle: FontStyle.italic,
@@ -238,7 +240,7 @@ class _ChatSettingsPageState extends State<ChatSettingsPage> {
     for (var channel in channels) {
       widgets.add(
         ListTile(
-          title: Text('${channel.name} Moderators'),
+          title: Text(_i18n.t('channel_moderators', params: [channel.name])),
           trailing: IconButton(
             icon: const Icon(Icons.add),
             onPressed: () => _addModerator(channel.id),
@@ -252,7 +254,7 @@ class _ChatSettingsPageState extends State<ChatSettingsPage> {
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             child: Text(
-              'No moderators assigned',
+              _i18n.t('no_moderators_assigned'),
               style: theme.textTheme.bodySmall?.copyWith(
                 color: theme.colorScheme.onSurfaceVariant,
                 fontStyle: FontStyle.italic,
@@ -315,23 +317,23 @@ class _ChatSettingsPageState extends State<ChatSettingsPage> {
     final result = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Add Moderator'),
+        title: Text(_i18n.t('add_moderator')),
         content: TextField(
           controller: controller,
-          decoration: const InputDecoration(
-            labelText: 'NOSTR public key (npub)',
-            hintText: 'npub1...',
+          decoration: InputDecoration(
+            labelText: _i18n.t('nostr_public_key_npub'),
+            hintText: _i18n.t('npub_placeholder'),
           ),
           maxLines: 3,
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
+            child: Text(_i18n.t('cancel')),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, controller.text.trim()),
-            child: const Text('Add'),
+            child: Text(_i18n.t('add')),
           ),
         ],
       ),
@@ -339,7 +341,7 @@ class _ChatSettingsPageState extends State<ChatSettingsPage> {
 
     if (result != null && result.isNotEmpty) {
       if (!result.startsWith('npub1')) {
-        _showError('Invalid npub format');
+        _showError(_i18n.t('invalid_npub_format'));
         return;
       }
 
@@ -347,7 +349,7 @@ class _ChatSettingsPageState extends State<ChatSettingsPage> {
         _security.addModerator(channelId, result);
         await _chatService.saveSecurity(_security);
         setState(() {});
-        _showSuccess('Moderator added');
+        _showSuccess(_i18n.t('moderator_added'));
       } catch (e) {
         _showError('Failed to add moderator: $e');
       }
@@ -359,19 +361,19 @@ class _ChatSettingsPageState extends State<ChatSettingsPage> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Remove Moderator'),
-        content: const Text('Are you sure you want to remove this moderator?'),
+        title: Text(_i18n.t('remove_moderator')),
+        content: Text(_i18n.t('remove_moderator_confirm')),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
+            child: Text(_i18n.t('cancel')),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, true),
             style: FilledButton.styleFrom(
               backgroundColor: Theme.of(context).colorScheme.error,
             ),
-            child: const Text('Remove'),
+            child: Text(_i18n.t('remove')),
           ),
         ],
       ),
@@ -382,7 +384,7 @@ class _ChatSettingsPageState extends State<ChatSettingsPage> {
         _security.removeModerator(channelId, npub);
         await _chatService.saveSecurity(_security);
         setState(() {});
-        _showSuccess('Moderator removed');
+        _showSuccess(_i18n.t('moderator_removed'));
       } catch (e) {
         _showError('Failed to remove moderator: $e');
       }

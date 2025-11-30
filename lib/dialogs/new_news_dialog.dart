@@ -5,8 +5,10 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:latlong2/latlong.dart';
 import '../models/news_article.dart';
 import '../services/i18n_service.dart';
+import '../pages/location_picker_page.dart';
 
 /// Dialog for creating a new news article with multilanguage support
 class NewNewsDialog extends StatefulWidget {
@@ -213,6 +215,34 @@ class _NewNewsDialogState extends State<NewNewsDialog> {
           );
         });
       }
+    }
+  }
+
+  Future<void> _openMapPicker() async {
+    // Get current coordinates if available
+    LatLng? initialPosition;
+    final lat = double.tryParse(_latitudeController.text.trim());
+    final lon = double.tryParse(_longitudeController.text.trim());
+    if (lat != null && lon != null && lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180) {
+      initialPosition = LatLng(lat, lon);
+    }
+
+    // Open location picker
+    final result = await Navigator.push<LatLng>(
+      context,
+      MaterialPageRoute(
+        builder: (context) => LocationPickerPage(
+          initialPosition: initialPosition,
+        ),
+      ),
+    );
+
+    // Update coordinates if location was selected
+    if (result != null && mounted) {
+      setState(() {
+        _latitudeController.text = result.latitude.toStringAsFixed(6);
+        _longitudeController.text = result.longitude.toStringAsFixed(6);
+      });
     }
   }
 
@@ -488,6 +518,12 @@ class _NewNewsDialogState extends State<NewNewsDialog> {
                                           return null;
                                         },
                                       ),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    IconButton.filledTonal(
+                                      onPressed: _openMapPicker,
+                                      icon: const Icon(Icons.map),
+                                      tooltip: _i18n.t('select_on_map'),
                                     ),
                                   ],
                                 ),

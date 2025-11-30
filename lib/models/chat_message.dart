@@ -166,11 +166,17 @@ class ChatMessage implements Comparable<ChatMessage> {
     }
   }
 
-  /// Check if message is signed
-  bool get isSigned => hasMeta('signature');
+  /// Check if message is signed (has signature metadata)
+  bool get isSigned => hasMeta('signature') || hasMeta('has_signature');
+
+  /// Check if message has signature (from API response)
+  bool get hasSignature => getMeta('has_signature') == 'true' || hasMeta('signature');
 
   /// Get NOSTR signature
   String? get signature => getMeta('signature');
+
+  /// Check if signature was verified by server
+  bool get isVerified => getMeta('verified') == 'true';
 
   /// Get author's npub
   String? get npub => getMeta('npub');

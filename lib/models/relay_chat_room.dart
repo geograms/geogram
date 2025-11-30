@@ -60,6 +60,8 @@ class RelayChatMessage {
   final String? signature; // Message signature (BIP-340 Schnorr)
   final String? eventId;   // NOSTR event ID
   final int? createdAt;    // Unix timestamp in seconds
+  final bool verified;     // Server-side signature verification result
+  final bool hasSignature; // Whether message has a signature
 
   RelayChatMessage({
     required this.timestamp,
@@ -71,6 +73,8 @@ class RelayChatMessage {
     this.signature,
     this.eventId,
     this.createdAt,
+    this.verified = false,
+    this.hasSignature = false,
   });
 
   factory RelayChatMessage.fromJson(Map<String, dynamic> json, String roomId) {
@@ -84,6 +88,8 @@ class RelayChatMessage {
       signature: json['signature'] as String?,
       eventId: json['event_id'] as String?,
       createdAt: json['created_at'] as int?,
+      verified: json['verified'] as bool? ?? false,
+      hasSignature: json['has_signature'] as bool? ?? false,
     );
   }
 

@@ -110,11 +110,11 @@ class DeviceSource {
   bool get isDirect => type == DeviceSourceType.direct;
 
   /// Get status display string
+  /// Only shows text when not reachable - no need to display when connected
   String get statusText {
-    if (isLocal) return 'Local';
-    if (!isOnline) return 'Offline';
-    if (latency != null) return 'Online (${latency}ms)';
-    return 'Online';
+    if (isLocal) return '';
+    if (!isOnline) return 'Not reachable';
+    return ''; // No text needed when online
   }
 
   /// Get icon for this device type

@@ -3,10 +3,12 @@
  * License: Apache-2.0
  */
 
+import 'dart:io' show Platform;
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:http/http.dart' as http;
+import 'package:geolocator/geolocator.dart';
 import 'dart:convert';
 import '../services/log_service.dart';
 import '../services/i18n_service.dart';
@@ -38,6 +40,7 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
   late TextEditingController _lonController;
   late LatLng _selectedPosition;
   bool _isOnline = true;
+  bool _isDetectingLocation = false;
 
   // Default to central Europe (Munich/Vienna area)
   static const LatLng _defaultPosition = LatLng(48.0, 10.0);
@@ -118,6 +121,137 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
     }
   }
 
+  /// Auto-detect current location
+  /// Uses GPS on Android, IP-based geolocation on desktop
+  Future<void> _autoDetectLocation() async {
+    if (_isDetectingLocation) return;
+
+    setState(() {
+      _isDetectingLocation = true;
+    });
+
+    try {
+      // Check if we're on Android (mobile) or desktop
+      final isAndroid = Platform.isAndroid;
+
+      if (isAndroid) {
+        // Use GPS on Android
+        await _detectLocationViaGPS();
+      } else {
+        // Use IP-based geolocation on desktop (Windows, Linux, macOS)
+        await _detectLocationViaIP();
+      }
+    } catch (e) {
+      LogService().log('Error auto-detecting location: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(_i18n.t('location_detection_failed'))),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isDetectingLocation = false;
+        });
+      }
+    }
+  }
+
+  /// Detect location using GPS (Android)
+  Future<void> _detectLocationViaGPS() async {
+    // Check if location services are enabled
+    bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    if (!serviceEnabled) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(_i18n.t('location_services_disabled'))),
+        );
+      }
+      return;
+    }
+
+    // Check and request permission
+    LocationPermission permission = await Geolocator.checkPermission();
+    if (permission == LocationPermission.denied) {
+      permission = await Geolocator.requestPermission();
+      if (permission == LocationPermission.denied) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(_i18n.t('location_permission_denied'))),
+          );
+        }
+        return;
+      }
+    }
+
+    if (permission == LocationPermission.deniedForever) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(_i18n.t('location_permission_permanent_denied'))),
+        );
+      }
+      return;
+    }
+
+    // Get current position
+    final position = await Geolocator.getCurrentPosition(
+      locationSettings: const LocationSettings(
+        accuracy: LocationAccuracy.high,
+        timeLimit: Duration(seconds: 10),
+      ),
+    );
+
+    if (mounted) {
+      setState(() {
+        _selectedPosition = LatLng(position.latitude, position.longitude);
+        _latController.text = position.latitude.toStringAsFixed(6);
+        _lonController.text = position.longitude.toStringAsFixed(6);
+      });
+
+      _mapController.move(_selectedPosition, 15.0);
+
+      LogService().log('GPS location: ${position.latitude}, ${position.longitude}');
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(_i18n.t('location_detected_gps'))),
+      );
+    }
+  }
+
+  /// Detect location using IP address (Desktop)
+  Future<void> _detectLocationViaIP() async {
+    final response = await http.get(
+      Uri.parse('http://ip-api.com/json/?fields=lat,lon,city,country'),
+    ).timeout(const Duration(seconds: 10));
+
+    if (response.statusCode == 200) {
+      final data = json.decode(response.body);
+      final lat = data['lat'] as double?;
+      final lon = data['lon'] as double?;
+      final city = data['city'] as String? ?? '';
+      final country = data['country'] as String? ?? '';
+
+      if (lat != null && lon != null && mounted) {
+        setState(() {
+          _selectedPosition = LatLng(lat, lon);
+          _latController.text = lat.toStringAsFixed(6);
+          _lonController.text = lon.toStringAsFixed(6);
+        });
+
+        _mapController.move(_selectedPosition, 10.0);
+
+        LogService().log('IP-based location: $lat, $lon ($city, $country)');
+
+        final locationText = city.isNotEmpty ? '$city, $country' : _i18n.t('location_detected');
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(locationText)),
+        );
+      }
+    } else {
+      throw Exception('Failed to fetch IP location: ${response.statusCode}');
+    }
+  }
+
   @override
   void dispose() {
     _latController.dispose();
@@ -178,6 +312,22 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
       appBar: AppBar(
         title: Text(_i18n.t('select_location_on_map')),
         actions: [
+          // Auto-detect location button
+          _isDetectingLocation
+              ? const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 16),
+                  child: SizedBox(
+                    width: 24,
+                    height: 24,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                )
+              : IconButton.filledTonal(
+                  onPressed: _autoDetectLocation,
+                  icon: const Icon(Icons.my_location),
+                  tooltip: _i18n.t('auto_detect_location'),
+                ),
+          const SizedBox(width: 8),
           FilledButton.icon(
             onPressed: _confirmSelection,
             icon: const Icon(Icons.check),

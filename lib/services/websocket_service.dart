@@ -84,7 +84,13 @@ class WebSocketService {
       LogService().log('══════════════════════════════════════');
 
       // Send hello
-      _channel!.sink.add(helloJson);
+      try {
+        _channel!.sink.add(helloJson);
+      } catch (e) {
+        LogService().log('Error sending hello: $e');
+        _handleConnectionLoss();
+        return false;
+      }
 
       // Listen for messages
       _subscription = _channel!.stream.listen(
@@ -168,6 +174,7 @@ class WebSocketService {
           LogService().log('WebSocket connection closed');
           _handleConnectionLoss();
         },
+        cancelOnError: true,
       );
 
       // Wait a bit for response
@@ -193,7 +200,11 @@ class WebSocketService {
     _pingTimer?.cancel();
     _pingTimer = null;
     _subscription?.cancel();
-    _channel?.sink.close();
+    try {
+      _channel?.sink.close();
+    } catch (e) {
+      // Ignore errors when closing - connection might already be closed
+    }
     _channel = null;
     _subscription = null;
   }
@@ -201,9 +212,14 @@ class WebSocketService {
   /// Send message to relay
   void send(Map<String, dynamic> message) {
     if (_channel != null) {
-      final json = jsonEncode(message);
-      LogService().log('Sending to relay: $json');
-      _channel!.sink.add(json);
+      try {
+        final json = jsonEncode(message);
+        LogService().log('Sending to relay: $json');
+        _channel!.sink.add(json);
+      } catch (e) {
+        LogService().log('Error sending message: $e');
+        _handleConnectionLoss();
+      }
     }
   }
 
@@ -222,7 +238,16 @@ class WebSocketService {
           .where((c) => c.visibility != 'private')
           .toList();
 
-      final collectionNames = publicCollections.map((c) => c.title).toList();
+      // Extract folder names from storage paths (raw names for navigation)
+      final collectionNames = publicCollections.map((c) {
+        if (c.storagePath != null) {
+          // Get the last segment of the path as folder name
+          final path = c.storagePath!;
+          final segments = path.split('/').where((s) => s.isNotEmpty).toList();
+          return segments.isNotEmpty ? segments.last : c.title;
+        }
+        return c.title;
+      }).toList();
 
       final response = {
         'type': 'COLLECTIONS_RESPONSE',
@@ -231,7 +256,7 @@ class WebSocketService {
       };
 
       send(response);
-      LogService().log('Sent ${collectionNames.length} collection names to relay (filtered ${collections.length - publicCollections.length} private collections)');
+      LogService().log('Sent ${collectionNames.length} collection folder names to relay (filtered ${collections.length - publicCollections.length} private collections)');
     } catch (e) {
       LogService().log('Error handling collections request: $e');
     }
@@ -247,8 +272,16 @@ class WebSocketService {
 
     try {
       final collections = await CollectionService().loadCollections();
+      // Match by folder name (last segment of storagePath) instead of title
       final collection = collections.firstWhere(
-        (c) => c.title == collectionName,
+        (c) {
+          if (c.storagePath != null) {
+            final segments = c.storagePath!.split('/').where((s) => s.isNotEmpty).toList();
+            final folderName = segments.isNotEmpty ? segments.last : '';
+            return folderName == collectionName;
+          }
+          return c.title == collectionName;
+        },
         orElse: () => throw Exception('Collection not found: $collectionName'),
       );
 
@@ -330,10 +363,17 @@ class WebSocketService {
       final collectionName = parts[1];
       final filePath = parts.length > 2 ? '/${parts.sublist(2).join('/')}' : '/';
 
-      // Load collection
+      // Load collection - match by folder name (last segment of storagePath)
       final collections = await CollectionService().loadCollections();
       final collection = collections.firstWhere(
-        (c) => c.title == collectionName,
+        (c) {
+          if (c.storagePath != null) {
+            final segments = c.storagePath!.split('/').where((s) => s.isNotEmpty).toList();
+            final folderName = segments.isNotEmpty ? segments.last : '';
+            return folderName == collectionName;
+          }
+          return c.title == collectionName;
+        },
         orElse: () => throw Exception('Collection not found: $collectionName'),
       );
 
