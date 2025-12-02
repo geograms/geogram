@@ -625,7 +625,6 @@ class GeogramTileImageProvider extends ImageProvider<GeogramTileImageProvider> {
     final x = coordinates.x.toInt();
     final y = coordinates.y.toInt();
 
-    Uint8List? tileData;
     bool needsNetworkFetch = true;
 
     // 1. Try file cache first
@@ -633,31 +632,28 @@ class GeogramTileImageProvider extends ImageProvider<GeogramTileImageProvider> {
       final cachePath = _getTileCachePath(z, x, y);
       final cacheFile = File(cachePath);
       if (await cacheFile.exists()) {
-        tileData = await cacheFile.readAsBytes();
-        if (tileData.isNotEmpty && _isValidImageData(tileData)) {
+        final cachedBytes = await cacheFile.readAsBytes();
+        if (cachedBytes.isNotEmpty && _isValidImageData(cachedBytes)) {
           // Cache hit with valid image - try to decode
           try {
             needsNetworkFetch = false;
-            LogService().log('TILE [$z/$x/$y] SOURCE: LOCAL_CACHE (${tileData.length} bytes)');
-            final buffer = await ui.ImmutableBuffer.fromUint8List(tileData);
+            LogService().log('TILE [$z/$x/$y] SOURCE: LOCAL_CACHE (${cachedBytes.length} bytes)');
+            final buffer = await ui.ImmutableBuffer.fromUint8List(cachedBytes);
             return decode(buffer);
           } catch (e) {
             // Cached tile is corrupted, delete it and re-fetch
             LogService().log('TILE [$z/$x/$y] Cache corrupted, re-fetching');
             await cacheFile.delete();
-            tileData = null;
             needsNetworkFetch = true;
           }
         } else {
           // Invalid cached data, delete it
           LogService().log('TILE [$z/$x/$y] Invalid cache data, deleting');
           await cacheFile.delete();
-          tileData = null;
         }
       }
     } catch (e) {
       // Cache miss or error, continue to next source
-      tileData = null;
     }
 
     // Network fetch needed - track loading status
@@ -937,32 +933,27 @@ class GeogramLabelsImageProvider extends ImageProvider<GeogramLabelsImageProvide
     final x = coordinates.x.toInt();
     final y = coordinates.y.toInt();
 
-    Uint8List? tileData;
-
     // 1. Try file cache first
     try {
       final cachePath = _getLabelsCachePath(z, x, y);
       final cacheFile = File(cachePath);
       if (await cacheFile.exists()) {
-        tileData = await cacheFile.readAsBytes();
-        if (tileData.isNotEmpty && _isValidImageData(tileData)) {
+        final cachedBytes = await cacheFile.readAsBytes();
+        if (cachedBytes.isNotEmpty && _isValidImageData(cachedBytes)) {
           try {
-            final buffer = await ui.ImmutableBuffer.fromUint8List(tileData);
+            final buffer = await ui.ImmutableBuffer.fromUint8List(cachedBytes);
             return decode(buffer);
           } catch (e) {
             // Corrupted cache, delete and re-fetch
             await cacheFile.delete();
-            tileData = null;
           }
         } else {
           // Invalid cache data, delete it
           await cacheFile.delete();
-          tileData = null;
         }
       }
     } catch (e) {
       // Cache miss, continue to network
-      tileData = null;
     }
 
     // 2. Fetch from network - Esri uses z/y/x order
@@ -1142,31 +1133,26 @@ class GeogramTransportLabelsImageProvider extends ImageProvider<GeogramTransport
     final x = coordinates.x.toInt();
     final y = coordinates.y.toInt();
 
-    Uint8List? tileData;
-
     // 1. Try file cache first
     try {
       final cachePath = _getTransportCachePath(z, x, y);
       final cacheFile = File(cachePath);
       if (await cacheFile.exists()) {
-        tileData = await cacheFile.readAsBytes();
-        if (tileData.isNotEmpty && _isValidImageData(tileData)) {
+        final cachedBytes = await cacheFile.readAsBytes();
+        if (cachedBytes.isNotEmpty && _isValidImageData(cachedBytes)) {
           try {
-            final buffer = await ui.ImmutableBuffer.fromUint8List(tileData);
+            final buffer = await ui.ImmutableBuffer.fromUint8List(cachedBytes);
             return decode(buffer);
           } catch (e) {
             // Corrupted cache, delete and re-fetch
             await cacheFile.delete();
-            tileData = null;
           }
         } else {
           await cacheFile.delete();
-          tileData = null;
         }
       }
     } catch (e) {
       // Cache miss
-      tileData = null;
     }
 
     // 2. Fetch from network - Esri uses z/y/x order
@@ -1306,31 +1292,26 @@ class GeogramBordersImageProvider extends ImageProvider<GeogramBordersImageProvi
     final x = coordinates.x.toInt();
     final y = coordinates.y.toInt();
 
-    Uint8List? tileData;
-
     // 1. Try file cache first
     try {
       final cachePath = _getBordersCachePath(z, x, y);
       final cacheFile = File(cachePath);
       if (await cacheFile.exists()) {
-        tileData = await cacheFile.readAsBytes();
-        if (tileData.isNotEmpty && _isValidImageData(tileData)) {
+        final cachedBytes = await cacheFile.readAsBytes();
+        if (cachedBytes.isNotEmpty && _isValidImageData(cachedBytes)) {
           try {
-            final buffer = await ui.ImmutableBuffer.fromUint8List(tileData);
+            final buffer = await ui.ImmutableBuffer.fromUint8List(cachedBytes);
             return decode(buffer);
           } catch (e) {
             // Corrupted cache, delete and re-fetch
             await cacheFile.delete();
-            tileData = null;
           }
         } else {
           await cacheFile.delete();
-          tileData = null;
         }
       }
     } catch (e) {
       // Cache miss
-      tileData = null;
     }
 
     // 2. Fetch from network - Esri uses z/y/x order
