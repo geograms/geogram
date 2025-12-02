@@ -626,6 +626,7 @@ class GeogramTileImageProvider extends ImageProvider<GeogramTileImageProvider> {
     final y = coordinates.y.toInt();
 
     bool needsNetworkFetch = true;
+    Uint8List? tileData;
 
     // 1. Try file cache first
     try {
@@ -932,6 +933,7 @@ class GeogramLabelsImageProvider extends ImageProvider<GeogramLabelsImageProvide
     final z = coordinates.z.toInt();
     final x = coordinates.x.toInt();
     final y = coordinates.y.toInt();
+    Uint8List? tileData;
 
     // 1. Try file cache first
     try {
@@ -1132,6 +1134,7 @@ class GeogramTransportLabelsImageProvider extends ImageProvider<GeogramTransport
     final z = coordinates.z.toInt();
     final x = coordinates.x.toInt();
     final y = coordinates.y.toInt();
+    Uint8List? tileData;
 
     // 1. Try file cache first
     try {
@@ -1291,6 +1294,7 @@ class GeogramBordersImageProvider extends ImageProvider<GeogramBordersImageProvi
     final z = coordinates.z.toInt();
     final x = coordinates.x.toInt();
     final y = coordinates.y.toInt();
+    Uint8List? tileData;
 
     // 1. Try file cache first
     try {
