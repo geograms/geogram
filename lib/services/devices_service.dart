@@ -9,6 +9,7 @@ import 'dart:io';
 import 'package:http/http.dart' as http;
 import '../models/device_source.dart';
 import '../models/relay.dart';
+import '../util/chat_api.dart';
 import 'relay_cache_service.dart';
 import 'relay_service.dart';
 import 'relay_discovery_service.dart';
@@ -266,8 +267,10 @@ class DevicesService {
       // If no collections found via /files, check if it's a relay with chat
       if (collections.isEmpty) {
         try {
+          // Use callsign-scoped API: /{callsign}/api/chat/rooms
+          final chatUrl = ChatApi.roomsUrl(baseUrl, device.callsign);
           final chatResponse = await http.get(
-            Uri.parse('$baseUrl/api/chat/rooms'),
+            Uri.parse(chatUrl),
           ).timeout(const Duration(seconds: 10));
 
           if (chatResponse.statusCode == 200) {

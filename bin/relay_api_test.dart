@@ -360,9 +360,9 @@ Future<void> _testSearchEndpoint() async {
 }
 
 Future<void> _testChatRoomsEndpoint() async {
-  print('Testing GET /api/chat/rooms...');
+  print('Testing GET /$RELAY_CALLSIGN/api/chat/rooms...');
   try {
-    final response = await http.get(Uri.parse('$BASE_URL/api/chat/rooms'));
+    final response = await http.get(Uri.parse('$BASE_URL/$RELAY_CALLSIGN/api/chat/rooms'));
     if (response.statusCode == 200) {
       final data = jsonDecode(response.body) as Map<String, dynamic>;
 
@@ -385,10 +385,10 @@ Future<void> _testChatRoomsEndpoint() async {
         fail('Chat rooms endpoint', 'Missing rooms array');
       }
 
-      if (data['relay'] == RELAY_CALLSIGN) {
+      if (data['callsign'] == RELAY_CALLSIGN) {
         pass('Chat rooms includes relay callsign');
       } else {
-        fail('Chat rooms relay', 'Missing or incorrect relay callsign');
+        fail('Chat rooms callsign', 'Missing or incorrect callsign: got ${data['callsign']}, expected $RELAY_CALLSIGN');
       }
     } else {
       fail('Chat rooms endpoint', 'HTTP ${response.statusCode}');
@@ -399,9 +399,9 @@ Future<void> _testChatRoomsEndpoint() async {
 }
 
 Future<void> _testRoomMessagesEndpoint() async {
-  print('Testing GET /api/chat/rooms/{id}/messages...');
+  print('Testing GET /$RELAY_CALLSIGN/api/chat/rooms/{id}/messages...');
   try {
-    final response = await http.get(Uri.parse('$BASE_URL/api/chat/rooms/general/messages'));
+    final response = await http.get(Uri.parse('$BASE_URL/$RELAY_CALLSIGN/api/chat/rooms/general/messages'));
     if (response.statusCode == 200) {
       final data = jsonDecode(response.body) as Map<String, dynamic>;
 
@@ -423,12 +423,12 @@ Future<void> _testRoomMessagesEndpoint() async {
         if (messages.isNotEmpty) {
           final msg = messages[0] as Map<String, dynamic>;
           if (msg.containsKey('id') &&
-              msg.containsKey('sender') &&
+              msg.containsKey('callsign') &&
               msg.containsKey('content') &&
               msg.containsKey('timestamp')) {
             pass('Messages have correct structure');
           } else {
-            fail('Message structure', 'Missing required fields');
+            fail('Message structure', 'Missing required fields: id=${msg.containsKey('id')}, callsign=${msg.containsKey('callsign')}, content=${msg.containsKey('content')}, timestamp=${msg.containsKey('timestamp')}');
           }
         }
       } else {
@@ -439,7 +439,7 @@ Future<void> _testRoomMessagesEndpoint() async {
     }
 
     // Test for non-existent room
-    final response2 = await http.get(Uri.parse('$BASE_URL/api/chat/rooms/nonexistent/messages'));
+    final response2 = await http.get(Uri.parse('$BASE_URL/$RELAY_CALLSIGN/api/chat/rooms/nonexistent/messages'));
     if (response2.statusCode == 404) {
       pass('Room messages returns 404 for non-existent room');
     } else {
@@ -451,11 +451,11 @@ Future<void> _testRoomMessagesEndpoint() async {
 }
 
 Future<void> _testPostChatMessage() async {
-  print('Testing POST /api/chat/rooms/{id}/messages...');
+  print('Testing POST /$RELAY_CALLSIGN/api/chat/rooms/{id}/messages...');
   try {
     // Post a new message
     final response = await http.post(
-      Uri.parse('$BASE_URL/api/chat/rooms/general/messages'),
+      Uri.parse('$BASE_URL/$RELAY_CALLSIGN/api/chat/rooms/general/messages'),
       headers: {'Content-Type': 'application/json'},
       body: jsonEncode({
         'callsign': 'X9TESTER',
@@ -477,7 +477,7 @@ Future<void> _testPostChatMessage() async {
     }
 
     // Verify message was added
-    final getResponse = await http.get(Uri.parse('$BASE_URL/api/chat/rooms/general/messages'));
+    final getResponse = await http.get(Uri.parse('$BASE_URL/$RELAY_CALLSIGN/api/chat/rooms/general/messages'));
     final getData = jsonDecode(getResponse.body) as Map<String, dynamic>;
     final messages = getData['messages'] as List;
     if (messages.length == 4) {
@@ -488,7 +488,7 @@ Future<void> _testPostChatMessage() async {
 
     // Test missing callsign
     final response2 = await http.post(
-      Uri.parse('$BASE_URL/api/chat/rooms/general/messages'),
+      Uri.parse('$BASE_URL/$RELAY_CALLSIGN/api/chat/rooms/general/messages'),
       headers: {'Content-Type': 'application/json'},
       body: jsonEncode({'content': 'Missing callsign'}),
     );
@@ -500,7 +500,7 @@ Future<void> _testPostChatMessage() async {
 
     // Test missing content
     final response3 = await http.post(
-      Uri.parse('$BASE_URL/api/chat/rooms/general/messages'),
+      Uri.parse('$BASE_URL/$RELAY_CALLSIGN/api/chat/rooms/general/messages'),
       headers: {'Content-Type': 'application/json'},
       body: jsonEncode({'callsign': 'X9TESTER'}),
     );
@@ -880,12 +880,12 @@ Future<void> _testChatPersistence(String tempDirPath) async {
     final chatFile = chatFiles.first as File;
     pass('Chat text file exists: ${chatFile.path.split('/').last}');
 
-    // Verify text format
+    // Verify text format - header uses room ID (not callsign) for NOSTR signature validity
     final content = await chatFile.readAsString();
-    if (content.contains('# $callsign:') || content.contains('# ')) {
+    if (content.contains('# general:') || content.contains('# ')) {
       pass('Chat file has correct header format');
     } else {
-      fail('Chat file header', 'Missing "# CALLSIGN:" header');
+      fail('Chat file header', 'Missing "# roomId:" header');
     }
 
     if (content.contains('> ') && content.contains(' -- ')) {
@@ -930,7 +930,7 @@ Future<void> _testChatPersistence(String tempDirPath) async {
 
   // Step 3: Verify messages are loaded via API
   try {
-    final response = await http.get(Uri.parse('$BASE_URL/api/chat/rooms'));
+    final response = await http.get(Uri.parse('$BASE_URL/$RELAY_CALLSIGN/api/chat/rooms'));
     if (response.statusCode == 200) {
       final data = jsonDecode(response.body) as Map<String, dynamic>;
       final rooms = data['rooms'] as List;
@@ -944,7 +944,7 @@ Future<void> _testChatPersistence(String tempDirPath) async {
       fail('Get rooms after restart', 'HTTP ${response.statusCode}');
     }
 
-    final msgResponse = await http.get(Uri.parse('$BASE_URL/api/chat/rooms/general/messages'));
+    final msgResponse = await http.get(Uri.parse('$BASE_URL/$RELAY_CALLSIGN/api/chat/rooms/general/messages'));
     if (msgResponse.statusCode == 200) {
       final data = jsonDecode(msgResponse.body) as Map<String, dynamic>;
       final messages = data['messages'] as List;
@@ -971,7 +971,7 @@ Future<void> _testChatPersistence(String tempDirPath) async {
     // Step 4: Post a new message and verify it persists to text file
     print('  Testing new message persistence to text file...');
     final postResponse = await http.post(
-      Uri.parse('$BASE_URL/api/chat/rooms/general/messages'),
+      Uri.parse('$BASE_URL/$RELAY_CALLSIGN/api/chat/rooms/general/messages'),
       headers: {'Content-Type': 'application/json'},
       body: jsonEncode({
         'callsign': 'X9PERSIST',

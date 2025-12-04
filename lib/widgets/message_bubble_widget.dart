@@ -31,8 +31,15 @@ class MessageBubbleWidget extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final profileService = ProfileService();
-    final currentCallsign = profileService.getProfile().callsign;
-    final isOwnMessage = message.author == currentCallsign;
+    final currentProfile = profileService.getProfile();
+    final currentCallsign = currentProfile.callsign;
+
+    // Compare case-insensitively for callsigns, or by npub if available
+    final isOwnMessage = message.author.toUpperCase() == currentCallsign.toUpperCase() ||
+        (message.npub != null &&
+         message.npub!.isNotEmpty &&
+         currentProfile.npub.isNotEmpty &&
+         message.npub == currentProfile.npub);
 
     return Align(
       alignment: isOwnMessage ? Alignment.centerRight : Alignment.centerLeft,

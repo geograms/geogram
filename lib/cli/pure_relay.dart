@@ -7,6 +7,9 @@ import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 import '../services/storage_config.dart';
 import '../util/nostr_key_generator.dart';
+import '../util/nostr_event.dart';
+import '../util/nostr_crypto.dart';
+import '../util/chat_api.dart';
 
 /// App version constant
 const String cliAppVersion = '1.5.2';
@@ -300,51 +303,59 @@ class ChatRoom {
 }
 
 /// Chat message
+/// Storage format only requires: timestamp, callsign, content, npub, signature
+/// Event ID and verification status are recalculated from these fields
 class ChatMessage {
-  final String id;
+  final String id;           // NOSTR event ID (calculated from content)
   final String roomId;
   final String senderCallsign;
-  final String? senderNpub;
-  final String? senderPubkey;
-  final String? signature;
+  final String? senderNpub;  // NOSTR public key (bech32) - human readable
+  final String? signature;   // BIP-340 Schnorr signature
   final String content;
   final DateTime timestamp;
+  final bool verified;       // Signature verified (runtime, not stored)
+  final bool hasSignature;   // Has valid signature
 
   ChatMessage({
     required this.id,
     required this.roomId,
     required this.senderCallsign,
     this.senderNpub,
-    this.senderPubkey,
     this.signature,
     required this.content,
     DateTime? timestamp,
-  }) : timestamp = timestamp ?? DateTime.now();
+    this.verified = false,
+    bool? hasSignature,
+  }) : timestamp = timestamp ?? DateTime.now(),
+       hasSignature = hasSignature ?? (signature != null && signature.isNotEmpty);
 
   factory ChatMessage.fromJson(Map<String, dynamic> json, String roomId) {
+    final sig = json['signature'] as String?;
     return ChatMessage(
       id: json['id'] as String? ?? DateTime.now().millisecondsSinceEpoch.toString(),
       roomId: json['room_id'] as String? ?? roomId,
       senderCallsign: json['sender'] as String? ?? json['callsign'] as String? ?? 'Unknown',
       senderNpub: json['npub'] as String?,
-      senderPubkey: json['pubkey'] as String?,
-      signature: json['signature'] as String?,
+      signature: sig,
       content: json['content'] as String? ?? '',
       timestamp: json['timestamp'] != null
           ? DateTime.tryParse(json['timestamp'] as String) ?? DateTime.now()
           : DateTime.now(),
+      verified: json['verified'] as bool? ?? false,
+      hasSignature: json['has_signature'] as bool? ?? (sig != null && sig.isNotEmpty),
     );
   }
 
   Map<String, dynamic> toJson() => {
         'id': id,
         'room_id': roomId,
-        'sender': senderCallsign,
+        'callsign': senderCallsign,
         if (senderNpub != null) 'npub': senderNpub,
-        if (senderPubkey != null) 'pubkey': senderPubkey,
         if (signature != null) 'signature': signature,
         'content': content,
         'timestamp': timestamp.toIso8601String(),
+        'verified': verified,
+        'has_signature': hasSignature,
       };
 }
 
@@ -575,17 +586,44 @@ class PureRelayServer {
     }
   }
 
-  /// Get chat data directory path: {devicesDir}/{callsign}/chat
+  /// Get chat data directory path for a specific callsign: {devicesDir}/{callsign}/chat
   /// This matches the Java implementation structure
-  String get _chatDataPath {
+  /// If no callsign provided, defaults to relay's callsign
+  String _getChatDataPath([String? callsign]) {
     final storageConfig = StorageConfig();
-    return '${storageConfig.devicesDir}/${_settings.callsign}/chat';
+    final targetCallsign = callsign ?? _settings.callsign;
+    return '${storageConfig.devicesDir}/$targetCallsign/chat';
   }
 
+  /// Parse callsign from URL path: /{callsign}/api/... returns callsign
+  /// Returns null if path doesn't match the pattern
+  String? _parseCallsignFromPath(String path) {
+    // Match pattern: /{callsign}/api/...
+    final regex = RegExp(r'^/([A-Z0-9]+)/api/');
+    final match = regex.firstMatch(path);
+    if (match != null) {
+      return match.group(1);
+    }
+    return null;
+  }
+
+  /// Get the API path without callsign prefix
+  /// /X1ABC/api/chat/rooms -> /api/chat/rooms
+  String _getApiPathWithoutCallsign(String path) {
+    final regex = RegExp(r'^/[A-Z0-9]+(/api/.*)$');
+    final match = regex.firstMatch(path);
+    if (match != null) {
+      return match.group(1)!;
+    }
+    return path;
+  }
+
+
   /// Load chat rooms from disk ({callsign}/chat/{room_id}/config.json)
-  Future<void> _loadChatData() async {
+  Future<void> _loadChatData([String? callsign]) async {
+    final chatPath = _getChatDataPath(callsign);
     try {
-      final chatDir = Directory(_chatDataPath);
+      final chatDir = Directory(chatPath);
       if (!await chatDir.exists()) {
         await chatDir.create(recursive: true);
         _log('INFO', 'Created chat directory at ${chatDir.path}');
@@ -595,7 +633,7 @@ class PureRelayServer {
       // List room directories
       final roomDirs = await chatDir.list().where((e) => e is Directory).toList();
       if (roomDirs.isEmpty) {
-        _log('INFO', 'No chat rooms found in $_chatDataPath');
+        _log('INFO', 'No chat rooms found in $chatPath');
         return;
       }
 
@@ -630,15 +668,16 @@ class PureRelayServer {
         }
       }
 
-      _log('INFO', 'Loaded $loadedCount chat rooms from $_chatDataPath');
+      _log('INFO', 'Loaded $loadedCount chat rooms from $chatPath');
     } catch (e) {
       _log('ERROR', 'Failed to load chat data: $e');
     }
   }
 
   /// Load messages for a room from text files ({room_id}/{year}/{date}_chat.txt)
-  Future<void> _loadRoomMessages(ChatRoom room) async {
-    final roomDir = Directory('$_chatDataPath/${room.id}');
+  Future<void> _loadRoomMessages(ChatRoom room, [String? callsign]) async {
+    final chatPath = _getChatDataPath(callsign);
+    final roomDir = Directory('$chatPath/${room.id}');
     if (!await roomDir.exists()) return;
 
     // Get all year directories
@@ -676,9 +715,7 @@ class PureRelayServer {
       String? currentTimestamp;
       String? currentCallsign;
       String? currentNpub;
-      String? currentPubkey;
       String? currentSignature;
-      String? currentEventId;
       final contentBuffer = StringBuffer();
 
       for (final line in lines) {
@@ -686,15 +723,38 @@ class PureRelayServer {
         if (line.startsWith('> ') && line.contains(' -- ')) {
           // Save previous message
           if (currentTimestamp != null && currentCallsign != null) {
+            final content = contentBuffer.toString().trim();
+            final timestamp = _parseTimestamp(currentTimestamp);
+            final hasSig = currentSignature != null && currentSignature!.isNotEmpty;
+
+            // Reconstruct NOSTR event to get ID and verify signature
+            String? eventId;
+            bool verified = false;
+            if (hasSig && currentNpub != null) {
+              final event = _reconstructNostrEvent(
+                npub: currentNpub,
+                content: content,
+                signature: currentSignature,
+                roomId: room.id,
+                callsign: currentCallsign,
+                timestamp: timestamp,
+              );
+              if (event != null) {
+                eventId = event.id;
+                verified = event.verify();
+              }
+            }
+
             final msg = ChatMessage(
-              id: currentEventId ?? DateTime.now().millisecondsSinceEpoch.toString(),
+              id: eventId ?? DateTime.now().millisecondsSinceEpoch.toString(),
               roomId: room.id,
               senderCallsign: currentCallsign,
               senderNpub: currentNpub,
-              senderPubkey: currentPubkey,
               signature: currentSignature,
-              content: contentBuffer.toString().trim(),
-              timestamp: _parseTimestamp(currentTimestamp),
+              content: content,
+              timestamp: timestamp,
+              verified: verified,
+              hasSignature: hasSig,
             );
             room.messages.add(msg);
           }
@@ -706,9 +766,7 @@ class PureRelayServer {
             currentCallsign = line.substring(separatorIdx + 4).trim();
             contentBuffer.clear();
             currentNpub = null;
-            currentPubkey = null;
             currentSignature = null;
-            currentEventId = null;
           }
         }
         // Skip file header (# CALLSIGN: Title)
@@ -726,14 +784,13 @@ class PureRelayServer {
               case 'npub':
                 currentNpub = value;
                 break;
-              case 'pubkey':
-                currentPubkey = value;
-                break;
               case 'signature':
                 currentSignature = value;
                 break;
+              // Legacy fields (ignored, recalculated from npub + signature)
+              case 'pubkey':
               case 'event_id':
-                currentEventId = value;
+              case 'verified':
                 break;
             }
           }
@@ -749,21 +806,101 @@ class PureRelayServer {
 
       // Save last message
       if (currentTimestamp != null && currentCallsign != null) {
+        final content = contentBuffer.toString().trim();
+        final timestamp = _parseTimestamp(currentTimestamp);
+        final hasSig = currentSignature != null && currentSignature!.isNotEmpty;
+
+        // Reconstruct NOSTR event to get ID and verify signature
+        String? eventId;
+        bool verified = false;
+        if (hasSig && currentNpub != null) {
+          final event = _reconstructNostrEvent(
+            npub: currentNpub,
+            content: content,
+            signature: currentSignature,
+            roomId: room.id,
+            callsign: currentCallsign,
+            timestamp: timestamp,
+          );
+          if (event != null) {
+            eventId = event.id;
+            verified = event.verify();
+          }
+        }
+
         final msg = ChatMessage(
-          id: currentEventId ?? DateTime.now().millisecondsSinceEpoch.toString(),
+          id: eventId ?? DateTime.now().millisecondsSinceEpoch.toString(),
           roomId: room.id,
           senderCallsign: currentCallsign,
           senderNpub: currentNpub,
-          senderPubkey: currentPubkey,
           signature: currentSignature,
-          content: contentBuffer.toString().trim(),
-          timestamp: _parseTimestamp(currentTimestamp),
+          content: content,
+          timestamp: timestamp,
+          verified: verified,
+          hasSignature: hasSig,
         );
         room.messages.add(msg);
       }
     } catch (e) {
       _log('ERROR', 'Failed to parse chat file ${chatFile.path}: $e');
     }
+  }
+
+  /// Reconstruct a NOSTR event from stored message data
+  /// Returns the event with calculated ID, or null if missing required data
+  NostrEvent? _reconstructNostrEvent({
+    required String? npub,
+    required String content,
+    required String? signature,
+    required String roomId,
+    required String callsign,
+    required DateTime timestamp,
+  }) {
+    if (npub == null || npub.isEmpty) return null;
+    if (signature == null || signature.isEmpty) return null;
+
+    try {
+      final pubkey = NostrCrypto.decodeNpub(npub);
+      final createdAt = timestamp.millisecondsSinceEpoch ~/ 1000;
+
+      final event = NostrEvent(
+        pubkey: pubkey,
+        createdAt: createdAt,
+        kind: 1,
+        tags: [['t', 'chat'], ['room', roomId], ['callsign', callsign]],
+        content: content,
+        sig: signature,
+      );
+
+      // Calculate the event ID
+      event.calculateId();
+
+      return event;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /// Verify a message by reconstructing and verifying the NOSTR event
+  bool _verifyStoredMessage({
+    required String? npub,
+    required String content,
+    required String? signature,
+    required String roomId,
+    required String callsign,
+    required DateTime timestamp,
+  }) {
+    final event = _reconstructNostrEvent(
+      npub: npub,
+      content: content,
+      signature: signature,
+      roomId: roomId,
+      callsign: callsign,
+      timestamp: timestamp,
+    );
+
+    if (event == null) return false;
+    return event.verify();
   }
 
   /// Parse timestamp from format YYYY-MM-DD HH:MM_ss
@@ -792,8 +929,9 @@ class PureRelayServer {
   }
 
   /// Save room config to {room_id}/config.json
-  Future<void> _saveRoomConfig(ChatRoom room) async {
-    final roomDir = Directory('$_chatDataPath/${room.id}');
+  Future<void> _saveRoomConfig(ChatRoom room, [String? callsign]) async {
+    final chatPath = _getChatDataPath(callsign);
+    final roomDir = Directory('$chatPath/${room.id}');
     if (!await roomDir.exists()) {
       await roomDir.create(recursive: true);
       _log('INFO', 'Created chat room directory: ${roomDir.path}');
@@ -819,19 +957,22 @@ class PureRelayServer {
   }
 
   /// Save all chat rooms (configs only)
-  Future<void> _saveChatData() async {
+  Future<void> _saveChatData([String? callsign]) async {
     for (final room in _chatRooms.values) {
-      await _saveRoomConfig(room);
+      await _saveRoomConfig(room, callsign);
     }
   }
 
   /// Save a message to the chat file ({room_id}/{year}/{date}_chat.txt)
-  Future<void> _saveRoomMessages(String roomId) async {
+  Future<void> _saveRoomMessages(String roomId, [String? callsign]) async {
     final room = _chatRooms[roomId];
     if (room == null) return;
 
+    final chatPath = _getChatDataPath(callsign);
+    final targetCallsign = callsign ?? _settings.callsign;
+
     // Ensure room config exists
-    await _saveRoomConfig(room);
+    await _saveRoomConfig(room, callsign);
 
     // Group messages by date
     final messagesByDate = <String, List<ChatMessage>>{};
@@ -847,7 +988,7 @@ class PureRelayServer {
       final year = dateStr.substring(0, 4);
 
       // Create year directory
-      final yearDir = Directory('$_chatDataPath/${room.id}/$year');
+      final yearDir = Directory('$chatPath/${room.id}/$year');
       if (!await yearDir.exists()) {
         await yearDir.create(recursive: true);
         _log('INFO', 'Created year directory: ${yearDir.path}');
@@ -858,7 +999,9 @@ class PureRelayServer {
       final chatFile = File('${yearDir.path}/$fileName');
 
       final buffer = StringBuffer();
-      buffer.writeln('# ${_settings.callsign}: Chat from $dateStr');
+      // Use room.id in header (not callsign) - this is part of the NOSTR event tags
+      // and changing it would invalidate signatures
+      buffer.writeln('# ${room.id}: Chat from $dateStr');
       buffer.writeln();
 
       for (final msg in messages) {
@@ -868,15 +1011,10 @@ class PureRelayServer {
         buffer.writeln('> $timestamp -- ${msg.senderCallsign}');
         buffer.writeln(msg.content);
 
-        // Write NOSTR metadata if present
+        // Write NOSTR metadata (minimal: npub + signature only)
+        // event_id and verified can be recalculated from these fields
         if (msg.senderNpub != null && msg.senderNpub!.isNotEmpty) {
           buffer.writeln('--> npub: ${msg.senderNpub}');
-        }
-        if (msg.senderPubkey != null && msg.senderPubkey!.isNotEmpty) {
-          buffer.writeln('--> pubkey: ${msg.senderPubkey}');
-        }
-        if (msg.id.isNotEmpty && !msg.id.contains(RegExp(r'^\d+$'))) {
-          buffer.writeln('--> event_id: ${msg.id}');
         }
         if (msg.signature != null && msg.signature!.isNotEmpty) {
           buffer.writeln('--> signature: ${msg.signature}');
@@ -1347,10 +1485,14 @@ class PureRelayServer {
         await _handleDeviceProxy(request);
       } else if (path == '/search') {
         await _handleSearch(request);
-      } else if (path == '/api/chat/rooms') {
-        await _handleChatRooms(request);
-      } else if (path.startsWith('/api/chat/rooms/') && path.endsWith('/messages')) {
-        await _handleRoomMessages(request);
+      } else if (ChatApi.isRoomsPath(path)) {
+        // /{callsign}/api/chat/rooms
+        final callsign = ChatApi.extractCallsign(path)!;
+        await _handleChatRooms(request, callsign);
+      } else if (ChatApi.isMessagesPath(path)) {
+        // /{callsign}/api/chat/rooms/{roomId}/messages
+        final callsign = ChatApi.extractCallsign(path)!;
+        await _handleRoomMessages(request, callsign);
       } else if (path == '/api/relay/send' && method == 'POST') {
         await _handleRelaySend(request);
       } else if (path == '/api/groups') {
@@ -1568,14 +1710,47 @@ class PureRelayServer {
             if (content != null && client.callsign != null) {
               final room = _chatRooms[roomId];
               if (room != null) {
+                final signature = message['signature'] as String?;
+                final pubkey = message['pubkey'] as String?;
+                final eventId = message['event_id'] as String?;
+                final hasSig = signature != null && signature.isNotEmpty;
+
+                // Derive npub from pubkey if not provided
+                String? npub = message['npub'] as String?;
+                if ((npub == null || npub.isEmpty) && pubkey != null && pubkey.isNotEmpty) {
+                  try {
+                    npub = NostrCrypto.encodeNpub(pubkey);
+                  } catch (_) {}
+                }
+
+                // Verify signature if present
+                bool isVerified = false;
+                if (hasSig && pubkey != null && pubkey.isNotEmpty && eventId != null) {
+                  try {
+                    final event = NostrEvent(
+                      id: eventId,
+                      pubkey: pubkey,
+                      createdAt: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+                      kind: 1,
+                      tags: [['t', 'chat'], ['room', roomId], ['callsign', client.callsign!]],
+                      content: content,
+                      sig: signature,
+                    );
+                    isVerified = event.verify();
+                  } catch (e) {
+                    _log('WARN', 'Error verifying chat_message signature: $e');
+                  }
+                }
+
                 final msg = ChatMessage(
-                  id: message['event_id'] as String? ?? DateTime.now().millisecondsSinceEpoch.toString(),
+                  id: eventId ?? DateTime.now().millisecondsSinceEpoch.toString(),
                   roomId: roomId,
                   senderCallsign: client.callsign!,
-                  senderNpub: message['npub'] as String?,
-                  senderPubkey: message['pubkey'] as String?,
-                  signature: message['signature'] as String?,
+                  senderNpub: npub,
+                  signature: signature,
                   content: content,
+                  verified: isVerified,
+                  hasSignature: hasSig,
                 );
                 room.messages.add(msg);
                 room.lastActivity = DateTime.now();
@@ -1601,10 +1776,120 @@ class PureRelayServer {
               }
             }
             break;
+
+          default:
+            // Check for NOSTR event format (used by desktop/mobile clients)
+            // Format: {"nostr_event": ["EVENT", {...event object...}]}
+            final nostrEvent = message['nostr_event'];
+            if (nostrEvent != null) {
+              _handleNostrEvent(client, nostrEvent);
+            }
+            break;
         }
       }
     } catch (e) {
       _log('ERROR', 'WebSocket message error: $e');
+    }
+  }
+
+  /// Handle incoming NOSTR event from WebSocket
+  /// Format: ["EVENT", {id, pubkey, created_at, kind, tags, content, sig}]
+  void _handleNostrEvent(PureConnectedClient client, dynamic nostrEvent) {
+    try {
+      // Parse NOSTR message format: ["EVENT", {...}]
+      if (nostrEvent is! List || nostrEvent.length < 2) {
+        _log('WARN', 'Invalid NOSTR event format');
+        return;
+      }
+
+      final messageType = nostrEvent[0] as String?;
+      if (messageType != 'EVENT') {
+        _log('WARN', 'Unsupported NOSTR message type: $messageType');
+        return;
+      }
+
+      final eventJson = nostrEvent[1] as Map<String, dynamic>;
+
+      // Parse as NostrEvent for proper verification
+      NostrEvent event;
+      try {
+        event = NostrEvent.fromJson(eventJson);
+      } catch (e) {
+        _log('WARN', 'Failed to parse NOSTR event: $e');
+        return;
+      }
+
+      // Verify the signature (BIP-340 Schnorr)
+      if (!event.verify()) {
+        _log('WARN', 'NOSTR event signature verification failed');
+        return;
+      }
+
+      final content = event.content;
+      if (content.isEmpty) {
+        _log('WARN', 'NOSTR event has no content');
+        return;
+      }
+
+      // Extract room from tags, default to 'general'
+      String roomId = event.getTagValue('room') ?? 'general';
+
+      // Use the callsign derived from the pubkey (cryptographically verified)
+      // This ensures the callsign matches the signing key
+      final callsign = event.callsign;
+      final npub = event.npub;
+
+      _log('INFO', 'Received verified NOSTR chat message from $callsign to room $roomId');
+
+      // Find or create the room
+      var room = _chatRooms[roomId];
+      if (room == null) {
+        // Create the room if it doesn't exist
+        room = ChatRoom(
+          id: roomId,
+          name: roomId == 'general' ? 'General' : roomId,
+          description: 'Chat room',
+          creatorCallsign: _settings.callsign,
+        );
+        _chatRooms[roomId] = room;
+        _log('INFO', 'Created chat room: $roomId');
+      }
+
+      // Create chat message - mark as verified since we verified the signature above
+      final msg = ChatMessage(
+        id: event.id ?? DateTime.now().millisecondsSinceEpoch.toString(),
+        roomId: roomId,
+        senderCallsign: callsign,
+        senderNpub: npub,  // Human-readable, pubkey derived when needed
+        signature: event.sig,
+        content: content,
+        verified: true,  // Signature was verified by event.verify() above
+        hasSignature: true,
+      );
+
+      room.messages.add(msg);
+      room.lastActivity = DateTime.now();
+      _stats.totalMessages++;
+      _stats.lastMessage = DateTime.now();
+
+      // Persist to disk
+      _saveRoomMessages(roomId);
+
+      // Broadcast to other clients
+      final payload = jsonEncode({
+        'type': 'chat_message',
+        'room': roomId,
+        'message': msg.toJson(),
+      });
+      for (final c in _clients.values) {
+        if (c.id != client.id) {
+          try {
+            c.socket.add(payload);
+          } catch (_) {}
+        }
+      }
+    } catch (e) {
+      _log('ERROR', 'Error handling NOSTR event: $e');
     }
   }
 
@@ -2087,7 +2372,7 @@ class PureRelayServer {
     <p><a href="/api/status">/api/status</a> - Server status</p>
     <p><a href="/api/stats">/api/stats</a> - Server statistics</p>
     <p><a href="/api/devices">/api/devices</a> - Connected devices</p>
-    <p><a href="/api/chat/rooms">/api/chat/rooms</a> - Chat rooms</p>
+    <p><a href="/${_settings.callsign}/api/chat/rooms">/${_settings.callsign}/api/chat/rooms</a> - Chat rooms</p>
   </div>
 </body>
 </html>
@@ -2101,12 +2386,12 @@ class PureRelayServer {
     return '${seconds ~/ 86400}d';
   }
 
-  Future<void> _handleChatRooms(HttpRequest request) async {
+  Future<void> _handleChatRooms(HttpRequest request, String targetCallsign) async {
     if (request.method == 'GET') {
       final rooms = _chatRooms.values.map((r) => r.toJson()).toList();
       request.response.headers.contentType = ContentType.json;
       request.response.write(jsonEncode({
-        'relay': _settings.callsign,
+        'callsign': targetCallsign,
         'rooms': rooms,
       }));
     } else if (request.method == 'POST') {
@@ -2117,6 +2402,7 @@ class PureRelayServer {
       if (id != null && name != null) {
         final room = createChatRoom(id, name, description: data['description'] as String?);
         if (room != null) {
+          await _saveRoomConfig(room, targetCallsign);
           request.response.statusCode = 201;
           request.response.headers.contentType = ContentType.json;
           request.response.write(jsonEncode(room.toJson()));
@@ -2131,10 +2417,9 @@ class PureRelayServer {
     }
   }
 
-  Future<void> _handleRoomMessages(HttpRequest request) async {
+  Future<void> _handleRoomMessages(HttpRequest request, String targetCallsign) async {
     final path = request.uri.path;
-    final parts = path.split('/');
-    final roomId = parts.length > 4 ? parts[4] : 'general';
+    final roomId = ChatApi.extractRoomId(path) ?? 'general';
 
     final room = _chatRooms[roomId];
     if (room == null) {
@@ -2151,6 +2436,7 @@ class PureRelayServer {
       request.response.write(jsonEncode({
         'room_id': roomId,
         'room_name': room.name,
+        'callsign': targetCallsign,
         'messages': messages,
         'count': messages.length,
       }));
@@ -2159,10 +2445,10 @@ class PureRelayServer {
         final body = await utf8.decoder.bind(request).join();
         final data = jsonDecode(body) as Map<String, dynamic>;
 
-        final callsign = data['callsign'] as String?;
+        final senderCallsign = data['callsign'] as String?;
         final content = data['content'] as String?;
 
-        if (callsign == null || callsign.isEmpty) {
+        if (senderCallsign == null || senderCallsign.isEmpty) {
           request.response.statusCode = 400;
           request.response.headers.contentType = ContentType.json;
           request.response.write(jsonEncode({'error': 'Missing callsign'}));
@@ -2177,24 +2463,60 @@ class PureRelayServer {
         }
 
         // Optional NOSTR fields
-        final npub = data['npub'] as String?;
+        var npub = data['npub'] as String?;
         final pubkey = data['pubkey'] as String?;
         final eventId = data['event_id'] as String?;
         final signature = data['signature'] as String?;
         final createdAt = data['created_at'] as int?;
 
+        // Derive npub from pubkey if not provided
+        if ((npub == null || npub.isEmpty) && pubkey != null && pubkey.isNotEmpty) {
+          try {
+            npub = NostrCrypto.encodeNpub(pubkey);
+          } catch (e) {
+            _log('WARN', 'Failed to derive npub from pubkey: $e');
+          }
+        }
+
+        // Verify signature if present
+        bool isVerified = false;
+        final hasSig = signature != null && signature.isNotEmpty;
+        if (hasSig && pubkey != null && pubkey.isNotEmpty && eventId != null) {
+          try {
+            // Reconstruct and verify the NOSTR event
+            final event = NostrEvent(
+              id: eventId,
+              pubkey: pubkey,
+              createdAt: createdAt ?? (DateTime.now().millisecondsSinceEpoch ~/ 1000),
+              kind: 1,
+              tags: [['t', 'chat'], ['room', roomId], ['callsign', senderCallsign]],
+              content: content,
+              sig: signature,
+            );
+            isVerified = event.verify();
+            if (isVerified) {
+              _log('INFO', 'HTTP POST message signature verified for $senderCallsign');
+            } else {
+              _log('WARN', 'HTTP POST message signature verification failed for $senderCallsign');
+            }
+          } catch (e) {
+            _log('WARN', 'Error verifying HTTP POST message signature: $e');
+          }
+        }
+
         // Create message
         final msg = ChatMessage(
           id: eventId ?? DateTime.now().millisecondsSinceEpoch.toString(),
           roomId: roomId,
-          senderCallsign: callsign,
+          senderCallsign: senderCallsign,
           senderNpub: npub,
-          senderPubkey: pubkey,
           signature: signature,
           content: content,
           timestamp: createdAt != null
               ? DateTime.fromMillisecondsSinceEpoch(createdAt * 1000)
               : DateTime.now(),
+          verified: isVerified,
+          hasSignature: hasSig,
         );
 
         room.messages.add(msg);
@@ -2202,13 +2524,14 @@ class PureRelayServer {
         _stats.totalMessages++;
         _stats.lastMessage = DateTime.now();
 
-        // Persist to disk
-        await _saveRoomMessages(roomId);
+        // Persist to disk under the target callsign's folder
+        await _saveRoomMessages(roomId, targetCallsign);
 
         // Broadcast to connected WebSocket clients
         final payload = jsonEncode({
           'type': 'chat_message',
           'room': roomId,
+          'callsign': targetCallsign,
           'message': msg.toJson(),
         });
         for (final client in _clients.values) {

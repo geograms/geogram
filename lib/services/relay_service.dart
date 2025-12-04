@@ -10,6 +10,7 @@ import '../services/profile_service.dart';
 import '../services/chat_notification_service.dart';
 import '../util/nostr_event.dart';
 import '../util/nostr_crypto.dart';
+import '../util/chat_api.dart';
 
 /// Service for managing internet relays
 class RelayService {
@@ -517,19 +518,30 @@ class RelayService {
   }
 
   /// Fetch public chat rooms from relay
-  Future<List<RelayChatRoom>> fetchChatRooms(String relayUrl) async {
+  /// [relayCallsign] is the relay's X3 callsign used in the API path
+  Future<List<RelayChatRoom>> fetchChatRooms(String relayUrl, {String? relayCallsign}) async {
     try {
       final httpUrl = _getHttpBaseUrl(relayUrl);
-      final apiUrl = httpUrl.endsWith('/')
-          ? '${httpUrl}api/chat/rooms'
-          : '$httpUrl/api/chat/rooms';
+
+      // If no callsign provided, try to get it from status endpoint
+      String? callsign = relayCallsign;
+      if (callsign == null || callsign.isEmpty) {
+        callsign = await _getRelayCallsign(httpUrl);
+      }
+
+      if (callsign == null || callsign.isEmpty) {
+        LogService().log('Cannot fetch chat rooms: relay callsign not available');
+        return [];
+      }
+
+      final apiUrl = ChatApi.roomsUrl(httpUrl, callsign);
 
       LogService().log('Fetching chat rooms from: $apiUrl');
       final response = await http.get(Uri.parse(apiUrl));
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
-        final relayName = data['relay'] as String? ?? '';
+        final relayName = data['callsign'] as String? ?? callsign;
         final roomsData = data['rooms'] as List<dynamic>? ?? [];
 
         final rooms = roomsData.map((room) {
@@ -552,17 +564,46 @@ class RelayService {
     }
   }
 
+  /// Get relay callsign from status endpoint
+  Future<String?> _getRelayCallsign(String httpUrl) async {
+    try {
+      final statusUrl = httpUrl.endsWith('/')
+          ? '${httpUrl}api/status'
+          : '$httpUrl/api/status';
+      final response = await http.get(Uri.parse(statusUrl));
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        return data['callsign'] as String?;
+      }
+    } catch (e) {
+      LogService().log('Error fetching relay callsign: $e');
+    }
+    return null;
+  }
+
   /// Fetch messages from a relay chat room
+  /// [relayCallsign] is the relay's X3 callsign used in the API path
   Future<List<RelayChatMessage>> fetchRoomMessages(
     String relayUrl,
     String roomId, {
     int limit = 50,
+    String? relayCallsign,
   }) async {
     try {
       final httpUrl = _getHttpBaseUrl(relayUrl);
-      final apiUrl = httpUrl.endsWith('/')
-          ? '${httpUrl}api/chat/rooms/$roomId/messages?limit=$limit'
-          : '$httpUrl/api/chat/rooms/$roomId/messages?limit=$limit';
+
+      // If no callsign provided, try to get it from status endpoint
+      String? callsign = relayCallsign;
+      if (callsign == null || callsign.isEmpty) {
+        callsign = await _getRelayCallsign(httpUrl);
+      }
+
+      if (callsign == null || callsign.isEmpty) {
+        LogService().log('Cannot fetch messages: relay callsign not available');
+        return [];
+      }
+
+      final apiUrl = ChatApi.messagesUrl(httpUrl, callsign, roomId, limit: limit);
 
       LogService().log('Fetching messages from room: $roomId');
       final response = await http.get(Uri.parse(apiUrl));
@@ -642,9 +683,15 @@ class RelayService {
       } else {
         // Fallback to HTTP API with NOSTR signature
         final httpUrl = _getHttpBaseUrl(relayUrl);
-        final apiUrl = httpUrl.endsWith('/')
-            ? '${httpUrl}api/chat/rooms/$roomId/messages'
-            : '$httpUrl/api/chat/rooms/$roomId/messages';
+
+        // Get relay callsign for API path
+        final relayCallsign = await _getRelayCallsign(httpUrl);
+        if (relayCallsign == null || relayCallsign.isEmpty) {
+          LogService().log('Cannot post message: relay callsign not available');
+          return false;
+        }
+
+        final apiUrl = ChatApi.messagesUrl(httpUrl, relayCallsign, roomId);
 
         LogService().log('Posting message via HTTP to room: $roomId');
 
