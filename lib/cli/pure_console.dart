@@ -256,19 +256,20 @@ class PureConsole {
     'locationName': 'string',
     'enableAprs': 'bool',
     // Relay-only settings
-    'port': 'int',
+    'httpPort': 'int',
+    'httpsPort': 'int',
     'tileServerEnabled': 'bool',
     'osmFallbackEnabled': 'bool',
     'maxZoomLevel': 'int',
-    'maxCacheSize': 'int',
+    'maxCacheSizeMB': 'int',
     'enableCors': 'bool',
     'maxConnectedDevices': 'int',
   };
 
   /// Config keys that are relay-only
   static const List<String> _relayOnlyConfigKeys = [
-    'port', 'tileServerEnabled', 'osmFallbackEnabled', 'maxZoomLevel',
-    'maxCacheSize', 'enableCors', 'maxConnectedDevices'
+    'httpPort', 'httpsPort', 'tileServerEnabled', 'osmFallbackEnabled', 'maxZoomLevel',
+    'maxCacheSizeMB', 'enableCors', 'maxConnectedDevices'
   ];
 
   /// Get config keys based on profile type
@@ -1587,7 +1588,8 @@ class PureConsole {
       stdout.writeln('Messages:       ${relayStatus['total_messages']}');
     } else {
       stdout.writeln('Status:         \x1B[33mStopped\x1B[0m');
-      stdout.writeln('Port:           ${_relay.settings.port}');
+      stdout.writeln('HTTP Port:      ${_relay.settings.httpPort}');
+      stdout.writeln('HTTPS Port:     ${_relay.settings.httpsPort}');
     }
     stdout.writeln();
   }
@@ -1714,19 +1716,20 @@ class PureConsole {
 
   Future<void> _handleRelayStart() async {
     if (_relay.isRunning) {
-      stdout.writeln('\x1B[33mRelay server is already running on port ${_relay.settings.port}\x1B[0m');
+      stdout.writeln('\x1B[33mRelay server is already running on port ${_relay.settings.httpPort}\x1B[0m');
       return;
     }
 
-    stdout.writeln('Starting relay server on port ${_relay.settings.port}...');
+    stdout.writeln('Starting relay server on port ${_relay.settings.httpPort}...');
     final success = await _relay.start();
 
     if (success) {
       stdout.writeln('\x1B[32mRelay server started successfully\x1B[0m');
-      stdout.writeln('  Port: ${_relay.settings.port}');
+      stdout.writeln('  HTTP Port:  ${_relay.settings.httpPort}');
+      stdout.writeln('  HTTPS Port: ${_relay.settings.httpsPort}');
       stdout.writeln('  Callsign: ${_relay.settings.callsign}');
-      stdout.writeln('  Status: http://localhost:${_relay.settings.port}/api/status');
-      stdout.writeln('  Tiles:  http://localhost:${_relay.settings.port}/tiles/{callsign}/{z}/{x}/{y}.png');
+      stdout.writeln('  Status: http://localhost:${_relay.settings.httpPort}/api/status');
+      stdout.writeln('  Tiles:  http://localhost:${_relay.settings.httpPort}/tiles/{callsign}/{z}/{x}/{y}.png');
     } else {
       _printError('Failed to start relay server');
     }
@@ -1765,14 +1768,15 @@ class PureConsole {
     stdout.writeln();
     stdout.writeln('\x1B[1mSettings:\x1B[0m');
     stdout.writeln('-' * 40);
-    stdout.writeln('Port:          ${settings.port}');
+    stdout.writeln('HTTP Port:     ${settings.httpPort}');
+    stdout.writeln('HTTPS Port:    ${settings.httpsPort}');
     stdout.writeln('Callsign:      ${settings.callsign}');
     stdout.writeln('Description:   ${settings.description ?? '(not set)'}');
     stdout.writeln('Location:      ${settings.location ?? '(not set)'}');
     stdout.writeln('Tile Server:   ${settings.tileServerEnabled ? 'Enabled' : 'Disabled'}');
     stdout.writeln('OSM Fallback:  ${settings.osmFallbackEnabled ? 'Enabled' : 'Disabled'}');
     stdout.writeln('Max Zoom:      ${settings.maxZoomLevel}');
-    stdout.writeln('Max Cache:     ${settings.maxCacheSize} MB');
+    stdout.writeln('Max Cache:     ${settings.maxCacheSizeMB} MB');
     stdout.writeln('APRS:          ${settings.enableAprs ? 'Enabled' : 'Disabled'}');
     stdout.writeln('CORS:          ${settings.enableCors ? 'Enabled' : 'Disabled'}');
     stdout.writeln();
@@ -1780,7 +1784,8 @@ class PureConsole {
 
   Future<void> _handleRelayPort(List<String> args) async {
     if (args.isEmpty) {
-      stdout.writeln('Current port: ${_relay.settings.port}');
+      stdout.writeln('Current HTTP port: ${_relay.settings.httpPort}');
+      stdout.writeln('Current HTTPS port: ${_relay.settings.httpsPort}');
       return;
     }
 
@@ -1790,7 +1795,7 @@ class PureConsole {
       return;
     }
 
-    final settings = _relay.settings.copyWith(port: port);
+    final settings = _relay.settings.copyWith(httpPort: port);
     await _relay.updateSettings(settings);
     stdout.writeln('\x1B[32mPort set to $port\x1B[0m');
   }
@@ -1832,7 +1837,7 @@ class PureConsole {
         stdout.writeln('Tiles Cached:       ${stats.tilesCached}');
         stdout.writeln('Served from Cache:  ${stats.tilesServedFromCache}');
         stdout.writeln('Downloaded:         ${stats.tilesDownloaded}');
-        stdout.writeln('Max Size:           ${_relay.settings.maxCacheSize} MB');
+        stdout.writeln('Max Size:           ${_relay.settings.maxCacheSizeMB} MB');
         stdout.writeln();
         break;
       default:
@@ -2241,11 +2246,12 @@ class PureConsole {
       case 'locationName': return profile.locationName;
       case 'enableAprs': return profile.enableAprs;
       // Relay settings
-      case 'port': return profile.port ?? _relay.settings.port;
+      case 'httpPort': return _relay.settings.httpPort;
+      case 'httpsPort': return _relay.settings.httpsPort;
       case 'tileServerEnabled': return profile.tileServerEnabled;
       case 'osmFallbackEnabled': return profile.osmFallbackEnabled;
       case 'maxZoomLevel': return _relay.settings.maxZoomLevel;
-      case 'maxCacheSize': return _relay.settings.maxCacheSize;
+      case 'maxCacheSizeMB': return _relay.settings.maxCacheSizeMB;
       case 'enableCors': return _relay.settings.enableCors;
       case 'maxConnectedDevices': return _relay.settings.maxConnectedDevices;
       default: return null;
@@ -2661,7 +2667,8 @@ class PureConsole {
         final settings = _relay.settings;
         content = [
           '{',
-          '  "port": ${settings.port},',
+          '  "httpPort": ${settings.httpPort},',
+          '  "httpsPort": ${settings.httpsPort},',
           '  "callsign": "${settings.callsign}",',
           '  "description": "${settings.description ?? ''}",',
           '  "location": "${settings.location ?? ''}",',
@@ -2670,7 +2677,7 @@ class PureConsole {
           '  "tileServerEnabled": ${settings.tileServerEnabled},',
           '  "osmFallbackEnabled": ${settings.osmFallbackEnabled},',
           '  "maxZoomLevel": ${settings.maxZoomLevel},',
-          '  "maxCacheSize": ${settings.maxCacheSize},',
+          '  "maxCacheSizeMB": ${settings.maxCacheSizeMB},',
           '  "enableAprs": ${settings.enableAprs},',
           '  "enableCors": ${settings.enableCors},',
           '  "maxConnectedDevices": ${settings.maxConnectedDevices}',
@@ -2850,7 +2857,7 @@ class PureConsole {
         relayRole: profile.relayRole,
         parentRelayUrl: profile.parentRelayUrl,
         networkId: profile.networkId,
-        port: profile.port,
+        httpPort: profile.port,
         description: profile.description,
         location: profile.locationName,
         latitude: profile.latitude,
@@ -3135,7 +3142,7 @@ class PureConsole {
       relayRole: isRoot ? 'root' : 'node',
       parentRelayUrl: parentUrl,
       networkId: networkId,
-      port: port,
+      httpPort: port,
       description: description,
       location: location.isNotEmpty ? location : null,
       latitude: latitude,
@@ -3423,7 +3430,7 @@ class PureConsole {
 
     if (enable) {
       stdout.writeln('\x1B[32mSSL/HTTPS enabled\x1B[0m');
-      stdout.writeln('HTTPS will be available on port ${_relay.settings.sslPort} after restart');
+      stdout.writeln('HTTPS will be available on port ${_relay.settings.httpsPort} after restart');
     } else {
       stdout.writeln('\x1B[33mSSL/HTTPS disabled\x1B[0m');
     }
@@ -3582,7 +3589,7 @@ class PureConsole {
 
       stdout.writeln('\x1B[1mSSL/TLS Status\x1B[0m');
       stdout.writeln('─' * 40);
-      stdout.writeln('HTTPS:       ${sslEnabled ? '\x1B[32mEnabled\x1B[0m on port ${_relay.settings.sslPort}' : '\x1B[33mDisabled\x1B[0m'}');
+      stdout.writeln('HTTPS:       ${sslEnabled ? '\x1B[32mEnabled\x1B[0m on port ${_relay.settings.httpsPort}' : '\x1B[33mDisabled\x1B[0m'}');
       stdout.writeln('Certificate: ${hasCert ? '\x1B[32mInstalled\x1B[0m' : '\x1B[33mNot installed\x1B[0m'}');
       stdout.writeln('Domain:      ${_relay.settings.sslDomain ?? '\x1B[33m(not set)\x1B[0m'}');
       stdout.writeln('Email:       ${_relay.settings.sslEmail ?? '\x1B[33m(not set)\x1B[0m'}');

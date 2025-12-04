@@ -12,12 +12,12 @@ const String cliAppVersion = '1.5.1';
 
 /// Relay server settings
 class PureRelaySettings {
-  int port;
+  int httpPort;
   bool enabled;
   bool tileServerEnabled;
   bool osmFallbackEnabled;
   int maxZoomLevel;
-  int maxCacheSize; // in MB
+  int maxCacheSizeMB;
   String? description;
   String? location;
   double? latitude;
@@ -43,15 +43,15 @@ class PureRelaySettings {
   bool sslAutoRenew;
   String? sslCertPath;
   String? sslKeyPath;
-  int sslPort;
+  int httpsPort;
 
   PureRelaySettings({
-    this.port = 8080,
+    this.httpPort = 8080,
     this.enabled = false,
     this.tileServerEnabled = true,
     this.osmFallbackEnabled = true,
     this.maxZoomLevel = 15,
-    this.maxCacheSize = 500,
+    this.maxCacheSizeMB = 500,
     this.description,
     this.location,
     this.latitude,
@@ -71,17 +71,19 @@ class PureRelaySettings {
     this.sslAutoRenew = true,
     this.sslCertPath,
     this.sslKeyPath,
-    this.sslPort = 8443,
+    this.httpsPort = 8443,
   });
 
   factory PureRelaySettings.fromJson(Map<String, dynamic> json) {
     return PureRelaySettings(
-      port: json['port'] as int? ?? 8080,
+      // Support both old 'port' and new 'httpPort' keys for backward compatibility
+      httpPort: json['httpPort'] as int? ?? json['port'] as int? ?? 8080,
       enabled: json['enabled'] as bool? ?? false,
       tileServerEnabled: json['tileServerEnabled'] as bool? ?? true,
       osmFallbackEnabled: json['osmFallbackEnabled'] as bool? ?? true,
       maxZoomLevel: json['maxZoomLevel'] as int? ?? 15,
-      maxCacheSize: json['maxCacheSize'] as int? ?? 500,
+      // Support both old 'maxCacheSize' and new 'maxCacheSizeMB' keys
+      maxCacheSizeMB: json['maxCacheSizeMB'] as int? ?? json['maxCacheSize'] as int? ?? 500,
       description: json['description'] as String?,
       location: json['location'] as String?,
       latitude: json['latitude'] as double?,
@@ -101,17 +103,18 @@ class PureRelaySettings {
       sslAutoRenew: json['sslAutoRenew'] as bool? ?? true,
       sslCertPath: json['sslCertPath'] as String?,
       sslKeyPath: json['sslKeyPath'] as String?,
-      sslPort: json['sslPort'] as int? ?? 8443,
+      // Support both old 'sslPort' and new 'httpsPort' keys
+      httpsPort: json['httpsPort'] as int? ?? json['sslPort'] as int? ?? 8443,
     );
   }
 
   Map<String, dynamic> toJson() => {
-        'port': port,
+        'httpPort': httpPort,
         'enabled': enabled,
         'tileServerEnabled': tileServerEnabled,
         'osmFallbackEnabled': osmFallbackEnabled,
         'maxZoomLevel': maxZoomLevel,
-        'maxCacheSize': maxCacheSize,
+        'maxCacheSizeMB': maxCacheSizeMB,
         'description': description,
         'location': location,
         'latitude': latitude,
@@ -131,16 +134,16 @@ class PureRelaySettings {
         'sslAutoRenew': sslAutoRenew,
         'sslCertPath': sslCertPath,
         'sslKeyPath': sslKeyPath,
-        'sslPort': sslPort,
+        'httpsPort': httpsPort,
       };
 
   PureRelaySettings copyWith({
-    int? port,
+    int? httpPort,
     bool? enabled,
     bool? tileServerEnabled,
     bool? osmFallbackEnabled,
     int? maxZoomLevel,
-    int? maxCacheSize,
+    int? maxCacheSizeMB,
     String? description,
     String? location,
     double? latitude,
@@ -160,15 +163,15 @@ class PureRelaySettings {
     bool? sslAutoRenew,
     String? sslCertPath,
     String? sslKeyPath,
-    int? sslPort,
+    int? httpsPort,
   }) {
     return PureRelaySettings(
-      port: port ?? this.port,
+      httpPort: httpPort ?? this.httpPort,
       enabled: enabled ?? this.enabled,
       tileServerEnabled: tileServerEnabled ?? this.tileServerEnabled,
       osmFallbackEnabled: osmFallbackEnabled ?? this.osmFallbackEnabled,
       maxZoomLevel: maxZoomLevel ?? this.maxZoomLevel,
-      maxCacheSize: maxCacheSize ?? this.maxCacheSize,
+      maxCacheSizeMB: maxCacheSizeMB ?? this.maxCacheSizeMB,
       description: description ?? this.description,
       location: location ?? this.location,
       latitude: latitude ?? this.latitude,
@@ -188,7 +191,7 @@ class PureRelaySettings {
       sslAutoRenew: sslAutoRenew ?? this.sslAutoRenew,
       sslCertPath: sslCertPath ?? this.sslCertPath,
       sslKeyPath: sslKeyPath ?? this.sslKeyPath,
-      sslPort: sslPort ?? this.sslPort,
+      httpsPort: httpsPort ?? this.httpsPort,
     );
   }
 
@@ -503,12 +506,12 @@ class PureRelayServer {
 
   Future<void> updateSettings(PureRelaySettings settings) async {
     final wasRunning = _running;
-    final oldPort = _settings.port;
+    final oldPort = _settings.httpPort;
 
     _settings = settings;
     await saveSettings();
 
-    if (wasRunning && oldPort != settings.port) {
+    if (wasRunning && oldPort != settings.httpPort) {
       await stop();
       await start();
     }
@@ -516,8 +519,11 @@ class PureRelayServer {
 
   void setSetting(String key, dynamic value) {
     switch (key) {
-      case 'port':
-        _settings = _settings.copyWith(port: value as int);
+      case 'httpPort':
+        _settings = _settings.copyWith(httpPort: value as int);
+        break;
+      case 'httpsPort':
+        _settings = _settings.copyWith(httpsPort: value as int);
         break;
       case 'callsign':
         _settings = _settings.copyWith(callsign: value as String);
@@ -537,8 +543,8 @@ class PureRelayServer {
       case 'maxZoomLevel':
         _settings = _settings.copyWith(maxZoomLevel: value as int);
         break;
-      case 'maxCacheSize':
-        _settings = _settings.copyWith(maxCacheSize: value as int);
+      case 'maxCacheSizeMB':
+        _settings = _settings.copyWith(maxCacheSizeMB: value as int);
         break;
       case 'enableAprs':
         _settings = _settings.copyWith(enableAprs: value as bool);
@@ -564,14 +570,14 @@ class PureRelayServer {
       // Start HTTP server
       _httpServer = await HttpServer.bind(
         InternetAddress.anyIPv4,
-        _settings.port,
+        _settings.httpPort,
         shared: true,
       );
 
       _running = true;
       _startTime = DateTime.now();
 
-      _log('INFO', 'HTTP server started on port ${_settings.port}');
+      _log('INFO', 'HTTP server started on port ${_settings.httpPort}');
 
       _httpServer!.listen(_handleRequest, onError: (error) {
         _log('ERROR', 'HTTP server error: $error');
@@ -629,12 +635,12 @@ class PureRelayServer {
 
       _httpsServer = await HttpServer.bindSecure(
         InternetAddress.anyIPv4,
-        _settings.sslPort,
+        _settings.httpsPort,
         context,
         shared: true,
       );
 
-      _log('INFO', 'HTTPS server started on port ${_settings.sslPort}');
+      _log('INFO', 'HTTPS server started on port ${_settings.httpsPort}');
 
       _httpsServer!.listen(_handleRequest, onError: (error) {
         _log('ERROR', 'HTTPS server error: $error');
@@ -1160,9 +1166,9 @@ class PureRelayServer {
       'cache_size_bytes': _tileCache.sizeBytes,
       'enable_aprs': _settings.enableAprs,
       'chat_rooms': _chatRooms.length,
-      'http_port': _settings.port,
+      'http_port': _settings.httpPort,
       'https_enabled': _settings.enableSsl,
-      'https_port': _settings.enableSsl ? _settings.sslPort : null,
+      'https_port': _settings.enableSsl ? _settings.httpsPort : null,
       'https_running': _httpsServer != null,
     };
 
@@ -1859,7 +1865,8 @@ class PureRelayServer {
 
     return {
       'running': _running,
-      'port': _settings.port,
+      'httpPort': _settings.httpPort,
+      'httpsPort': _settings.httpsPort,
       'callsign': _settings.callsign,
       'connected_devices': _clients.length,
       'uptime': uptime,
