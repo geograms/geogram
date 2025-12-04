@@ -8,6 +8,7 @@ import 'package:crypto/crypto.dart';
 import 'dart:convert';
 import '../models/blog_post.dart';
 import '../models/blog_comment.dart';
+import '../util/nostr_crypto.dart';
 import 'log_service.dart';
 
 /// Model for chat security (reused for blog)
@@ -202,6 +203,20 @@ class BlogService {
     return posts;
   }
 
+  /// Get all unique tags from existing posts
+  Future<List<String>> getAllTags() async {
+    final posts = await loadPosts();
+    final tagsSet = <String>{};
+
+    for (final post in posts) {
+      tagsSet.addAll(post.tags);
+    }
+
+    final tagsList = tagsSet.toList();
+    tagsList.sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    return tagsList;
+  }
+
   /// Load full post with comments
   Future<BlogPost?> loadFullPost(String postId) async {
     if (_collectionPath == null) return null;
@@ -278,6 +293,10 @@ class BlogService {
     List<String>? tags,
     BlogStatus status = BlogStatus.draft,
     String? npub,
+    String? nsec,
+    List<String>? imagePaths,
+    double? latitude,
+    double? longitude,
     Map<String, String>? metadata,
   }) async {
     if (_collectionPath == null) return null;
@@ -296,7 +315,34 @@ class BlogService {
         await yearDir.create(recursive: true);
       }
 
-      // Create blog post
+      // Build metadata
+      final postMetadata = <String, String>{
+        ...?metadata,
+        if (npub != null) 'npub': npub,
+      };
+
+      // Copy images to blog files directory
+      if (imagePaths != null && imagePaths.isNotEmpty) {
+        final imageNames = <String>[];
+        for (final imagePath in imagePaths) {
+          final destFileName = await copyFileToBlog(imagePath, year);
+          if (destFileName != null) {
+            imageNames.add(destFileName);
+          }
+        }
+        if (imageNames.isNotEmpty) {
+          // Store all images (comma-separated for multiple)
+          postMetadata['image'] = imageNames.join(',');
+        }
+      }
+
+      // Add location if provided
+      if (latitude != null && longitude != null) {
+        postMetadata['latitude'] = latitude.toStringAsFixed(6);
+        postMetadata['longitude'] = longitude.toStringAsFixed(6);
+      }
+
+      // Create blog post (signature will be added after content hash)
       final post = BlogPost(
         id: filename,
         author: author,
@@ -306,18 +352,43 @@ class BlogService {
         status: status,
         tags: tags ?? [],
         content: content,
-        metadata: {
-          ...?metadata,
-          if (npub != null) 'npub': npub,
-        },
+        metadata: postMetadata,
+      );
+
+      // Generate NOSTR signature if nsec is provided
+      if (nsec != null && nsec.isNotEmpty) {
+        // Sign the content hash (title + content)
+        final contentToSign = '$title\n$content';
+        final contentHash = sha256.convert(utf8.encode(contentToSign)).toString();
+
+        try {
+          final privateKeyHex = NostrCrypto.decodeNsec(nsec);
+          final signature = NostrCrypto.schnorrSign(contentHash, privateKeyHex);
+          postMetadata['signature'] = signature;
+        } catch (e) {
+          print('BlogService: Error signing post: $e');
+        }
+      }
+
+      // Create post with signature in metadata
+      final signedPost = BlogPost(
+        id: filename,
+        author: author,
+        timestamp: _formatTimestamp(now),
+        title: title,
+        description: description,
+        status: status,
+        tags: tags ?? [],
+        content: content,
+        metadata: postMetadata,
       );
 
       // Write to file
       final postFile = File('$_collectionPath/blog/$year/$filename.md');
-      await postFile.writeAsString(post.exportAsText(), flush: true);
+      await postFile.writeAsString(signedPost.exportAsText(), flush: true);
 
       print('BlogService: Created post: $filename');
-      return post;
+      return signedPost;
     } catch (e) {
       print('BlogService: Error creating post: $e');
       return null;

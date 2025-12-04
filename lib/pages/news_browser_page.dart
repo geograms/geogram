@@ -3,7 +3,10 @@
  * License: Apache-2.0
  */
 
+import 'dart:io' show Platform;
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:url_launcher/url_launcher.dart';
 import '../models/news_article.dart';
 import '../models/collection.dart';
 import '../services/news_service.dart';
@@ -576,7 +579,19 @@ class _NewsBrowserPageState extends State<NewsBrowserPage> {
                 if (article.hasLocation) ...[
                   const Divider(),
                   Text('📍 ${article.address ?? ''}', style: const TextStyle(fontWeight: FontWeight.bold)),
-                  Text('Coordinates: ${article.latitude}, ${article.longitude}'),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text('Coordinates: ${article.latitude}, ${article.longitude}'),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.navigation, size: 18),
+                        onPressed: () => _openInNavigator(article.latitude!, article.longitude!),
+                        tooltip: _i18n.t('open_in_navigator'),
+                        visualDensity: VisualDensity.compact,
+                      ),
+                    ],
+                  ),
                   if (article.hasRadius)
                     Text(_i18n.t('within_radius', params: [article.radiusKm.toString()])),
                 ],
@@ -638,6 +653,32 @@ class _NewsBrowserPageState extends State<NewsBrowserPage> {
         ),
       ],
     );
+  }
+
+  Future<void> _openInNavigator(double latitude, double longitude) async {
+    try {
+      Uri mapUri;
+
+      if (!kIsWeb && Platform.isAndroid) {
+        // Android: canLaunchUrl often returns false for geo: URIs even when they work
+        mapUri = Uri.parse('geo:$latitude,$longitude?q=$latitude,$longitude');
+        await launchUrl(mapUri);
+      } else if (!kIsWeb && Platform.isIOS) {
+        mapUri = Uri.parse('https://maps.apple.com/?q=$latitude,$longitude');
+        await launchUrl(mapUri);
+      } else {
+        mapUri = Uri.parse('https://www.openstreetmap.org/?mlat=$latitude&mlon=$longitude&zoom=15');
+        if (await canLaunchUrl(mapUri)) {
+          await launchUrl(mapUri, mode: LaunchMode.externalApplication);
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not open navigator: $e')),
+        );
+      }
+    }
   }
 }
 
@@ -733,6 +774,25 @@ class _NewsArticleDetailPageState extends State<_NewsArticleDetailPage> {
     }
   }
 
+  Future<void> _openInNavigator(double latitude, double longitude) async {
+    Uri mapUri;
+    if (!kIsWeb && Platform.isAndroid) {
+      // Android: canLaunchUrl often returns false for geo: URIs even when they work
+      mapUri = Uri.parse('geo:$latitude,$longitude?q=$latitude,$longitude');
+      await launchUrl(mapUri);
+    } else if (!kIsWeb && Platform.isIOS) {
+      // iOS: Use Apple Maps
+      mapUri = Uri.parse('https://maps.apple.com/?q=$latitude,$longitude');
+      await launchUrl(mapUri);
+    } else {
+      // Desktop/Web: Use OpenStreetMap
+      mapUri = Uri.parse('https://www.openstreetmap.org/?mlat=$latitude&mlon=$longitude&zoom=15');
+      if (await canLaunchUrl(mapUri)) {
+        await launchUrl(mapUri);
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final profile = widget.profileService.getProfile();
@@ -824,7 +884,19 @@ class _NewsArticleDetailPageState extends State<_NewsArticleDetailPage> {
                     if (_article.hasLocation) ...[
                       const Divider(),
                       Text('📍 ${_article.address ?? ''}', style: const TextStyle(fontWeight: FontWeight.bold)),
-                      Text('Coordinates: ${_article.latitude}, ${_article.longitude}'),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text('Coordinates: ${_article.latitude}, ${_article.longitude}'),
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.navigation, size: 18),
+                            onPressed: () => _openInNavigator(_article.latitude!, _article.longitude!),
+                            tooltip: widget.i18n.t('open_in_navigator'),
+                            visualDensity: VisualDensity.compact,
+                          ),
+                        ],
+                      ),
                       if (_article.hasRadius)
                         Text(widget.i18n.t('within_radius', params: [_article.radiusKm.toString()])),
                     ],

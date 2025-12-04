@@ -5,11 +5,14 @@ import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
+import 'package:markdown/markdown.dart' as md;
 
 import '../services/log_service.dart';
 import '../services/config_service.dart';
 import '../services/profile_service.dart';
 import '../services/callsign_generator.dart';
+import '../services/storage_config.dart';
+import '../models/blog_post.dart';
 import '../version.dart';
 
 /// Relay server settings
@@ -323,6 +326,8 @@ class RelayServerService {
         await _handleRoomMessages(request);
       } else if (path.startsWith('/tiles/')) {
         await _handleTileRequest(request);
+      } else if (_isBlogPath(path)) {
+        await _handleBlogRequest(request);
       } else if (path == '/') {
         await _handleRoot(request);
       } else {
@@ -612,6 +617,306 @@ class RelayServerService {
     } catch (e) {
       LogService().log('Failed to save tile to disk: $e');
     }
+  }
+
+  /// Check if path is a blog URL (/{callsign}/blog/{filename}.html)
+  bool _isBlogPath(String path) {
+    // Pattern: /{identifier}/blog/{filename}.html
+    final regex = RegExp(r'^/([^/]+)/blog/([^/]+)\.html$');
+    return regex.hasMatch(path);
+  }
+
+  /// Handle blog post request - serves markdown as HTML
+  Future<void> _handleBlogRequest(HttpRequest request) async {
+    final path = request.uri.path;
+    final regex = RegExp(r'^/([^/]+)/blog/([^/]+)\.html$');
+    final match = regex.firstMatch(path);
+
+    if (match == null) {
+      request.response.statusCode = 400;
+      request.response.write('Invalid blog URL');
+      return;
+    }
+
+    final identifier = match.group(1)!; // nickname or callsign
+    final filename = match.group(2)!;   // blog filename without .html
+
+    try {
+      // Find the callsign for this identifier (could be nickname or callsign)
+      final callsign = await _findCallsignByIdentifier(identifier);
+      if (callsign == null) {
+        request.response.statusCode = 404;
+        request.response.write('User not found');
+        return;
+      }
+
+      // Extract year from filename (format: YYYY-MM-DD_title)
+      final yearMatch = RegExp(r'^(\d{4})-').firstMatch(filename);
+      if (yearMatch == null) {
+        request.response.statusCode = 400;
+        request.response.write('Invalid blog filename format');
+        return;
+      }
+      final year = yearMatch.group(1)!;
+
+      // Build path to the blog markdown file
+      final devicesDir = StorageConfig().devicesDir;
+      final blogDir = Directory('$devicesDir/$callsign');
+
+      // Find collection with blog posts
+      BlogPost? foundPost;
+      String? collectionName;
+
+      if (await blogDir.exists()) {
+        await for (final entity in blogDir.list()) {
+          if (entity is Directory) {
+            final blogPath = '${entity.path}/blog/$year/$filename.md';
+            final blogFile = File(blogPath);
+            if (await blogFile.exists()) {
+              try {
+                final content = await blogFile.readAsString();
+                foundPost = BlogPost.fromText(content, filename);
+                collectionName = entity.path.split('/').last;
+                break;
+              } catch (e) {
+                LogService().log('Error parsing blog file: $e');
+              }
+            }
+          }
+        }
+      }
+
+      if (foundPost == null) {
+        request.response.statusCode = 404;
+        request.response.write('Blog post not found');
+        return;
+      }
+
+      // Only serve published posts
+      if (foundPost.isDraft) {
+        request.response.statusCode = 403;
+        request.response.write('This post is not published');
+        return;
+      }
+
+      // Convert markdown content to HTML
+      final htmlContent = md.markdownToHtml(
+        foundPost.content,
+        extensionSet: md.ExtensionSet.gitHubWeb,
+      );
+
+      // Build full HTML page
+      final html = _buildBlogHtmlPage(foundPost, htmlContent, identifier);
+
+      request.response.headers.contentType = ContentType.html;
+      request.response.write(html);
+    } catch (e) {
+      LogService().log('Error serving blog post: $e');
+      request.response.statusCode = 500;
+      request.response.write('Internal server error');
+    }
+  }
+
+  /// Find callsign by identifier (nickname or callsign)
+  Future<String?> _findCallsignByIdentifier(String identifier) async {
+    final storageConfig = StorageConfig();
+    final devicesDir = storageConfig.devicesDir;
+    final dir = Directory(devicesDir);
+
+    if (!await dir.exists()) return null;
+
+    // First check if it's a direct callsign match (case-insensitive)
+    await for (final entity in dir.list()) {
+      if (entity is Directory) {
+        final callsign = entity.path.split('/').last;
+        if (callsign.toLowerCase() == identifier.toLowerCase()) {
+          return callsign;
+        }
+      }
+    }
+
+    // Search for nickname in config.json profiles
+    final configPath = storageConfig.configPath;
+    final configFile = File(configPath);
+    if (await configFile.exists()) {
+      try {
+        final content = await configFile.readAsString();
+        final config = jsonDecode(content) as Map<String, dynamic>;
+        final profiles = config['profiles'] as List<dynamic>?;
+        if (profiles != null) {
+          for (final profile in profiles) {
+            if (profile is Map<String, dynamic>) {
+              final nickname = profile['nickname'] as String?;
+              final callsign = profile['callsign'] as String?;
+              if (nickname != null &&
+                  callsign != null &&
+                  nickname.toLowerCase() == identifier.toLowerCase()) {
+                // Verify the callsign directory exists
+                final callsignDir = Directory('$devicesDir/$callsign');
+                if (await callsignDir.exists()) {
+                  return callsign;
+                }
+              }
+            }
+          }
+        }
+      } catch (e) {
+        LogService().log('Error reading config.json: $e');
+      }
+    }
+
+    return null;
+  }
+
+  /// Build HTML page for blog post
+  String _buildBlogHtmlPage(BlogPost post, String htmlContent, String author) {
+    final tagsHtml = post.tags.isNotEmpty
+        ? post.tags.map((t) => '<span class="tag">#$t</span>').join(' ')
+        : '';
+
+    final signedBadge = post.isSigned
+        ? '<div class="signed"><span class="icon">✓</span> Signed with NOSTR</div>'
+        : '';
+
+    return '''
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${_escapeHtml(post.title)} - $author</title>
+  <style>
+    :root {
+      --bg: #1a1a2e;
+      --surface: #16213e;
+      --primary: #e94560;
+      --text: #eaeaea;
+      --text-muted: #a0a0a0;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      padding: 2rem;
+    }
+    .container {
+      max-width: 800px;
+      margin: 0 auto;
+      background: var(--surface);
+      border-radius: 12px;
+      padding: 2rem;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+    }
+    h1 {
+      font-size: 2rem;
+      margin-bottom: 1rem;
+      color: var(--text);
+    }
+    .meta {
+      color: var(--text-muted);
+      font-size: 0.9rem;
+      margin-bottom: 1rem;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 1rem;
+    }
+    .meta span { display: flex; align-items: center; gap: 0.3rem; }
+    .description {
+      background: rgba(255,255,255,0.05);
+      padding: 1rem;
+      border-radius: 8px;
+      margin-bottom: 1.5rem;
+      font-style: italic;
+      color: var(--text-muted);
+    }
+    .tags { margin-bottom: 1.5rem; }
+    .tag {
+      display: inline-block;
+      background: rgba(233, 69, 96, 0.2);
+      color: var(--primary);
+      padding: 0.2rem 0.6rem;
+      border-radius: 4px;
+      font-size: 0.85rem;
+      margin-right: 0.5rem;
+    }
+    hr { border: none; border-top: 1px solid rgba(255,255,255,0.1); margin: 1.5rem 0; }
+    .content { font-size: 1.1rem; }
+    .content p { margin-bottom: 1rem; }
+    .content h1, .content h2, .content h3 { margin: 1.5rem 0 1rem; }
+    .content a { color: var(--primary); }
+    .content code {
+      background: rgba(255,255,255,0.1);
+      padding: 0.2rem 0.4rem;
+      border-radius: 4px;
+      font-family: monospace;
+    }
+    .content pre {
+      background: rgba(0,0,0,0.3);
+      padding: 1rem;
+      border-radius: 8px;
+      overflow-x: auto;
+      margin: 1rem 0;
+    }
+    .content pre code { background: none; padding: 0; }
+    .content img { max-width: 100%; border-radius: 8px; }
+    .content blockquote {
+      border-left: 3px solid var(--primary);
+      padding-left: 1rem;
+      margin: 1rem 0;
+      color: var(--text-muted);
+    }
+    .signed {
+      margin-top: 1.5rem;
+      color: #4ade80;
+      font-size: 0.9rem;
+      display: flex;
+      align-items: center;
+      gap: 0.3rem;
+    }
+    .footer {
+      margin-top: 2rem;
+      padding-top: 1rem;
+      border-top: 1px solid rgba(255,255,255,0.1);
+      color: var(--text-muted);
+      font-size: 0.85rem;
+      text-align: center;
+    }
+    .footer a { color: var(--primary); text-decoration: none; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>${_escapeHtml(post.title)}</h1>
+    <div class="meta">
+      <span>👤 ${_escapeHtml(post.author)}</span>
+      <span>📅 ${post.displayDate} ${post.displayTime}</span>
+    </div>
+    ${post.description != null && post.description!.isNotEmpty ? '<div class="description">${_escapeHtml(post.description!)}</div>' : ''}
+    ${tagsHtml.isNotEmpty ? '<div class="tags">$tagsHtml</div>' : ''}
+    <hr>
+    <div class="content">
+      $htmlContent
+    </div>
+    $signedBadge
+    <div class="footer">
+      Published via <a href="https://geogram.io">Geogram</a>
+    </div>
+  </div>
+</body>
+</html>
+''';
+  }
+
+  /// Escape HTML special characters
+  String _escapeHtml(String text) {
+    return text
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
   }
 
   /// Get server status

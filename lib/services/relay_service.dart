@@ -25,7 +25,7 @@ class RelayService {
   /// Default relays
   static final List<Relay> _defaultRelays = [
     Relay(
-      url: 'https://p2p.radio',
+      url: 'wss://p2p.radio',
       name: 'P2P Radio',
       description: 'Public relay for the geogram network',
       status: 'preferred',

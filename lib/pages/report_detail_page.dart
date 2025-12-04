@@ -1103,21 +1103,19 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
 
       if (!kIsWeb && Platform.isAndroid) {
         // Android: Use geo: URI scheme which opens in default map app
+        // Note: canLaunchUrl often returns false for geo: URIs even when they work
         mapUri = Uri.parse('geo:$latitude,$longitude?q=$latitude,$longitude');
+        await launchUrl(mapUri);
       } else if (!kIsWeb && Platform.isIOS) {
         // iOS: Use Apple Maps URL scheme
         mapUri = Uri.parse('https://maps.apple.com/?q=$latitude,$longitude');
+        await launchUrl(mapUri);
       } else {
         // Desktop/Web: Use OpenStreetMap
         mapUri = Uri.parse('https://www.openstreetmap.org/?mlat=$latitude&mlon=$longitude&zoom=15');
-      }
-
-      if (await canLaunchUrl(mapUri)) {
-        await launchUrl(mapUri, mode: LaunchMode.externalApplication);
-      } else {
-        // Fallback to OpenStreetMap web
-        final fallbackUri = Uri.parse('https://www.openstreetmap.org/?mlat=$latitude&mlon=$longitude&zoom=15');
-        await launchUrl(fallbackUri, mode: LaunchMode.externalApplication);
+        if (await canLaunchUrl(mapUri)) {
+          await launchUrl(mapUri, mode: LaunchMode.externalApplication);
+        }
       }
     } catch (e) {
       _showError('Could not open map: $e');

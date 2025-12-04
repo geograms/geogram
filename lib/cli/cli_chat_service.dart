@@ -4,7 +4,7 @@ import 'dart:io';
 import '../models/chat_message.dart';
 import '../models/chat_channel.dart';
 import '../services/chat_service.dart';
-import '../services/storage_config.dart';
+import 'pure_storage_config.dart';
 import '../util/nostr_crypto.dart';
 import '../util/nostr_event.dart';
 
@@ -42,9 +42,9 @@ class CliChatService {
     _currentNpub = npub;
     _currentNsec = nsec;
 
-    final storageConfig = StorageConfig();
+    final storageConfig = PureStorageConfig();
     if (!storageConfig.isInitialized) {
-      throw StateError('StorageConfig must be initialized first');
+      throw StateError('PureStorageConfig must be initialized first');
     }
 
     // Collection path is the chat subfolder within the device directory

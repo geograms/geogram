@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import '../services/devices_service.dart';
 import '../services/i18n_service.dart';
 import '../services/log_service.dart';
+import '../services/profile_service.dart';
 import '../services/relay_cache_service.dart';
 import 'chat_browser_page.dart';
 
@@ -21,9 +22,11 @@ class DevicesBrowserPage extends StatefulWidget {
 class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
   final DevicesService _devicesService = DevicesService();
   final RelayCacheService _cacheService = RelayCacheService();
+  final ProfileService _profileService = ProfileService();
   final I18nService _i18n = I18nService();
 
   List<RemoteDevice> _devices = [];
+  String _myCallsign = '';
   RemoteDevice? _selectedDevice;
   List<RemoteCollection> _collections = [];
   bool _isLoading = true;
@@ -40,18 +43,21 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
     setState(() => _isLoading = true);
 
     try {
+      // Get current device's callsign to filter it out
+      _myCallsign = _profileService.getProfile().callsign;
+
       await _devicesService.initialize();
       await _cacheService.initialize();
 
       // Listen to device updates
       _devicesService.devicesStream.listen((devices) {
         if (mounted) {
-          setState(() => _devices = devices);
+          setState(() => _devices = _filterRemoteDevices(devices));
         }
       });
 
       // Initial load
-      _devices = _devicesService.getAllDevices();
+      _devices = _filterRemoteDevices(_devicesService.getAllDevices());
 
       // Check reachability for all devices
       await _devicesService.refreshAllDevices();
@@ -65,10 +71,15 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
     }
   }
 
+  /// Filter out the current device from the list
+  List<RemoteDevice> _filterRemoteDevices(List<RemoteDevice> devices) {
+    return devices.where((d) => d.callsign != _myCallsign).toList();
+  }
+
   Future<void> _refreshDevices() async {
     setState(() => _isLoading = true);
     await _devicesService.refreshAllDevices();
-    _devices = _devicesService.getAllDevices();
+    _devices = _filterRemoteDevices(_devicesService.getAllDevices());
     setState(() => _isLoading = false);
   }
 
@@ -425,7 +436,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
       if (_selectedDevice?.callsign == device.callsign) {
         setState(() => _selectedDevice = null);
       }
-      _devices = _devicesService.getAllDevices();
+      _devices = _filterRemoteDevices(_devicesService.getAllDevices());
       setState(() {});
     }
   }

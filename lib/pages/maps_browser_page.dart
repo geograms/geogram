@@ -58,6 +58,8 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
   int _tilesLoaded = 0;
   bool _mapReady = false;
   bool _isDetectingLocation = false;
+  bool _rotationEnabled = true;
+  double _currentRotation = 0.0;
 
   // Radius slider range (logarithmic scale for fine control at lower values)
   static const double _minRadius = 1.0;
@@ -171,11 +173,12 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
     setState(() => _isLoading = true);
 
     try {
+      // Always load all item types - filtering happens at display time
       final items = await _mapsService.loadAllMapItems(
         centerLat: _centerPosition!.latitude,
         centerLon: _centerPosition!.longitude,
         radiusKm: _radiusKm,
-        visibleTypes: _visibleLayers,
+        visibleTypes: Set.from(MapItemType.values),
         forceRefresh: forceRefresh,
       );
 
@@ -205,7 +208,7 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
       }
     });
     _saveFilterState();
-    _loadItems();
+    // No need to reload - filtering happens at display time
   }
 
   void _setRadius(double radius) {
@@ -775,12 +778,22 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
   }
 
   Widget _buildLayerToggles() {
+    // Only show layer types that have items
+    final typesWithItems = MapItemType.values
+        .where((type) => (_groupedItems[type]?.length ?? 0) > 0)
+        .toList();
+
+    // Hide the entire row if no items exist
+    if (typesWithItems.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       child: SingleChildScrollView(
         scrollDirection: Axis.horizontal,
         child: Row(
-          children: MapItemType.values.map((type) {
+          children: typesWithItems.map((type) {
             final isActive = _visibleLayers.contains(type);
             final count = _groupedItems[type]?.length ?? 0;
 
@@ -800,22 +813,20 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
                     ),
                     const SizedBox(width: 4),
                     Text(_i18n.t('layer_${type.name}')),
-                    if (count > 0) ...[
-                      const SizedBox(width: 4),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: isActive
-                              ? _getTypeColor(type).withValues(alpha: 0.2)
-                              : Theme.of(context).colorScheme.surfaceContainerHighest,
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                        child: Text(
-                          count.toString(),
-                          style: Theme.of(context).textTheme.labelSmall,
-                        ),
+                    const SizedBox(width: 4),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: isActive
+                            ? _getTypeColor(type).withValues(alpha: 0.2)
+                            : Theme.of(context).colorScheme.surfaceContainerHighest,
+                        borderRadius: BorderRadius.circular(10),
                       ),
-                    ],
+                      child: Text(
+                        count.toString(),
+                        style: Theme.of(context).textTheme.labelSmall,
+                      ),
+                    ),
                   ],
                 ),
                 onSelected: (_) => _toggleLayer(type),
@@ -847,8 +858,10 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
             initialZoom: _currentZoom,
             minZoom: 1.0,
             maxZoom: 18.0,
-            interactionOptions: const InteractionOptions(
-              flags: InteractiveFlag.all,
+            interactionOptions: InteractionOptions(
+              flags: _rotationEnabled
+                  ? InteractiveFlag.all
+                  : InteractiveFlag.all & ~InteractiveFlag.rotate,
             ),
             onMapReady: () {
               setState(() => _mapReady = true);
@@ -857,7 +870,7 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
               setState(() => _selectedItem = null);
             },
             onPositionChanged: (position, hasGesture) {
-              // Update current zoom and position when user pans/zooms
+              // Update current zoom, position and rotation when user interacts
               if (hasGesture && position.center != null) {
                 final newZoom = position.zoom;
                 final newRadius = _getRadiusForZoom(newZoom);
@@ -866,6 +879,7 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
                   _centerPosition = position.center;
                   _currentZoom = newZoom;
                   _radiusKm = newRadius;
+                  _currentRotation = position.rotation;
                 });
                 // Save state (debounced by the config service)
                 _saveMapState();
@@ -1195,6 +1209,41 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
                   );
                 },
               ),
+              const SizedBox(height: 8),
+              // Compass / rotation toggle button
+              FloatingActionButton.small(
+                heroTag: 'compass',
+                onPressed: () {
+                  if (_rotationEnabled) {
+                    // Lock rotation and reset to north
+                    _mapController.rotate(0);
+                    setState(() {
+                      _currentRotation = 0;
+                      _rotationEnabled = false;
+                    });
+                  } else {
+                    // Unlock rotation
+                    setState(() {
+                      _rotationEnabled = true;
+                    });
+                  }
+                },
+                tooltip: _rotationEnabled
+                    ? _i18n.t('lock_rotation')
+                    : _i18n.t('unlock_rotation'),
+                backgroundColor: _rotationEnabled
+                    ? null
+                    : Theme.of(context).colorScheme.surfaceContainerHighest,
+                child: Transform.rotate(
+                  angle: -_currentRotation * math.pi / 180,
+                  child: Icon(
+                    Icons.explore,
+                    color: _rotationEnabled
+                        ? null
+                        : Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
             ],
           ),
         ),
@@ -1316,9 +1365,10 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
       return const Center(child: CircularProgressIndicator());
     }
 
-    // Use sorted types (non-empty first) and filter for visible layers
+    // Use sorted types, filter for visible layers, and exclude empty categories
     final visibleTypes = _sortedTypes
         .where((type) => _visibleLayers.contains(type))
+        .where((type) => (_groupedItems[type]?.isNotEmpty ?? false))
         .toList();
 
     if (_allItems.isEmpty) {
@@ -1502,7 +1552,6 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
     final item = _selectedItem!;
 
     return Container(
-      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: Theme.of(context).colorScheme.surface,
         border: Border(
@@ -1520,128 +1569,115 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
       ),
       child: Row(
         children: [
-          // Type icon
-          Container(
-            width: 48,
-            height: 48,
-            decoration: BoxDecoration(
-              color: _getTypeColor(item.type),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Icon(
-              _getTypeIcon(item.type),
-              color: Colors.white,
-              size: 28,
-            ),
-          ),
-
-          const SizedBox(width: 16),
-
-          // Item info
+          // Main clickable area (opens details)
           Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  item.title,
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.bold,
-                      ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                const SizedBox(height: 4),
-                Row(
+            child: InkWell(
+              onTap: () => _openItemDetail(item),
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Row(
                   children: [
+                    // Type icon
                     Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 8,
-                        vertical: 2,
-                      ),
+                      width: 48,
+                      height: 48,
                       decoration: BoxDecoration(
-                        color: _getTypeColor(item.type).withValues(alpha: 0.1),
-                        borderRadius: BorderRadius.circular(4),
+                        color: _getTypeColor(item.type),
+                        borderRadius: BorderRadius.circular(12),
                       ),
-                      child: Text(
-                        item.type.singularName,
-                        style: TextStyle(
-                          color: _getTypeColor(item.type),
-                          fontSize: 12,
-                          fontWeight: FontWeight.w500,
-                        ),
+                      child: Icon(
+                        _getTypeIcon(item.type),
+                        color: Colors.white,
+                        size: 28,
                       ),
                     ),
-                    const SizedBox(width: 8),
-                    Icon(
-                      Icons.straighten,
-                      size: 14,
-                      color: Theme.of(context).colorScheme.onSurfaceVariant,
-                    ),
-                    const SizedBox(width: 4),
-                    Text(
-                      item.distanceString,
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                            color:
-                                Theme.of(context).colorScheme.onSurfaceVariant,
+
+                    const SizedBox(width: 16),
+
+                    // Item info
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            item.title,
+                            style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                                  fontWeight: FontWeight.bold,
+                                ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                           ),
-                    ),
-                    if (item.subtitle != null) ...[
-                      const SizedBox(width: 16),
-                      Expanded(
-                        child: Text(
-                          item.subtitle!,
-                          style:
-                              Theme.of(context).textTheme.bodySmall?.copyWith(
-                                    color: Theme.of(context)
-                                        .colorScheme
-                                        .onSurfaceVariant,
+                          const SizedBox(height: 4),
+                          Row(
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                  vertical: 2,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: _getTypeColor(item.type).withValues(alpha: 0.1),
+                                  borderRadius: BorderRadius.circular(4),
+                                ),
+                                child: Text(
+                                  item.type.singularName,
+                                  style: TextStyle(
+                                    color: _getTypeColor(item.type),
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w500,
                                   ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Icon(
+                                Icons.straighten,
+                                size: 14,
+                                color: Theme.of(context).colorScheme.onSurfaceVariant,
+                              ),
+                              const SizedBox(width: 4),
+                              Text(
+                                item.distanceString,
+                                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                      color:
+                                          Theme.of(context).colorScheme.onSurfaceVariant,
+                                    ),
+                              ),
+                              if (item.subtitle != null) ...[
+                                const SizedBox(width: 16),
+                                Expanded(
+                                  child: Text(
+                                    item.subtitle!,
+                                    style:
+                                        Theme.of(context).textTheme.bodySmall?.copyWith(
+                                              color: Theme.of(context)
+                                                  .colorScheme
+                                                  .onSurfaceVariant,
+                                            ),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                              ],
+                            ],
+                          ),
+                        ],
                       ),
-                    ],
+                    ),
                   ],
                 ),
-              ],
+              ),
             ),
           ),
 
-          // Open details button - icon only in narrow mode
-          LayoutBuilder(
-            builder: (context, constraints) {
-              // Check parent width by looking at available space
-              final screenWidth = MediaQuery.of(context).size.width;
-              final isNarrow = screenWidth < 450;
-
-              if (isNarrow) {
-                return IconButton(
-                  onPressed: () => _openItemDetail(item),
-                  icon: const Icon(Icons.open_in_new),
-                  tooltip: _i18n.t('open'),
-                  style: IconButton.styleFrom(
-                    backgroundColor: Theme.of(context).colorScheme.primary,
-                    foregroundColor: Theme.of(context).colorScheme.onPrimary,
-                  ),
-                );
-              }
-
-              return FilledButton.icon(
-                onPressed: () => _openItemDetail(item),
-                icon: const Icon(Icons.open_in_new, size: 18),
-                label: Text(_i18n.t('open')),
-              );
-            },
-          ),
-
-          const SizedBox(width: 4),
-
           // Close button
-          IconButton(
-            icon: const Icon(Icons.close),
-            onPressed: () => setState(() => _selectedItem = null),
-            tooltip: _i18n.t('close'),
+          Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: IconButton(
+              icon: const Icon(Icons.close),
+              onPressed: () => setState(() => _selectedItem = null),
+              tooltip: _i18n.t('close'),
+            ),
           ),
         ],
       ),

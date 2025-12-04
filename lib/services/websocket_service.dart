@@ -5,12 +5,14 @@ import 'dart:typed_data';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:crypto/crypto.dart';
 import 'package:mime/mime.dart';
+import 'package:markdown/markdown.dart' as md;
 import '../services/log_service.dart';
 import '../services/profile_service.dart';
 import '../services/collection_service.dart';
 import '../util/nostr_event.dart';
 import '../util/tlsh.dart';
 import '../models/update_notification.dart';
+import '../models/blog_post.dart';
 
 /// WebSocket service for relay connections
 class WebSocketService {
@@ -342,7 +344,7 @@ class WebSocketService {
     }
   }
 
-  /// Handle HTTP request from relay (for www collection proxying)
+  /// Handle HTTP request from relay (for www collection proxying and blog API)
   Future<void> _handleHttpRequest(
     String? requestId,
     String? method,
@@ -357,6 +359,12 @@ class WebSocketService {
 
     try {
       LogService().log('HTTP Request: $method $path');
+
+      // Check if this is a blog API request
+      if (path.startsWith('/api/blog/')) {
+        await _handleBlogApiRequest(requestId, path);
+        return;
+      }
 
       // Parse path: should be /collections/{collectionName}/{filePath}
       final parts = path.split('/').where((p) => p.isNotEmpty).toList();
@@ -424,6 +432,197 @@ class WebSocketService {
       LogService().log('Error handling HTTP request: $e');
       _sendHttpResponse(requestId, 500, {'Content-Type': 'text/plain'}, 'Internal Server Error: $e');
     }
+  }
+
+  /// Handle blog API request from relay
+  /// Path format: /api/blog/{filename}.html
+  Future<void> _handleBlogApiRequest(String requestId, String path) async {
+    try {
+      // Extract filename from path: /api/blog/2025-12-04_hello-everyone.html
+      final regex = RegExp(r'^/api/blog/([^/]+)\.html$');
+      final match = regex.firstMatch(path);
+
+      if (match == null) {
+        _sendHttpResponse(requestId, 400, {'Content-Type': 'text/plain'}, 'Invalid blog path');
+        return;
+      }
+
+      final filename = match.group(1)!;  // e.g., "2025-12-04_hello-everyone"
+
+      // Extract year from filename (format: YYYY-MM-DD_title)
+      final yearMatch = RegExp(r'^(\d{4})-').firstMatch(filename);
+      if (yearMatch == null) {
+        _sendHttpResponse(requestId, 400, {'Content-Type': 'text/plain'}, 'Invalid blog filename format');
+        return;
+      }
+      final year = yearMatch.group(1)!;
+
+      // Search for blog post in all public collections
+      final collections = await CollectionService().loadCollections();
+      BlogPost? foundPost;
+      String? collectionName;
+
+      for (final collection in collections) {
+        // Skip private collections
+        if (collection.visibility == 'private') continue;
+
+        final storagePath = collection.storagePath;
+        if (storagePath == null) continue;
+
+        final blogPath = '$storagePath/blog/$year/$filename.md';
+        final blogFile = File(blogPath);
+
+        if (await blogFile.exists()) {
+          try {
+            final content = await blogFile.readAsString();
+            foundPost = BlogPost.fromText(content, filename);
+            collectionName = collection.title;
+            break;
+          } catch (e) {
+            LogService().log('Error parsing blog file: $e');
+          }
+        }
+      }
+
+      if (foundPost == null) {
+        _sendHttpResponse(requestId, 404, {'Content-Type': 'text/plain'}, 'Blog post not found');
+        return;
+      }
+
+      // Only serve published posts
+      if (foundPost.isDraft) {
+        _sendHttpResponse(requestId, 403, {'Content-Type': 'text/plain'}, 'This post is not published');
+        return;
+      }
+
+      // Get user profile for author info
+      final profile = ProfileService().getProfile();
+      final author = profile.nickname.isNotEmpty ? profile.nickname : profile.callsign;
+
+      // Convert markdown content to HTML
+      final htmlContent = md.markdownToHtml(
+        foundPost.content,
+        extensionSet: md.ExtensionSet.gitHubWeb,
+      );
+
+      // Build full HTML page
+      final html = _buildBlogHtmlPage(foundPost, htmlContent, author);
+
+      _sendHttpResponse(requestId, 200, {'Content-Type': 'text/html'}, html);
+      LogService().log('Sent blog post: ${foundPost.title} (${html.length} bytes)');
+    } catch (e) {
+      LogService().log('Error handling blog API request: $e');
+      _sendHttpResponse(requestId, 500, {'Content-Type': 'text/plain'}, 'Internal Server Error: $e');
+    }
+  }
+
+  /// Build HTML page for blog post
+  String _buildBlogHtmlPage(BlogPost post, String htmlContent, String author) {
+    final tagsHtml = post.tags.isNotEmpty
+        ? '<div class="tags">${post.tags.map((t) => '<span class="tag">#$t</span>').join(' ')}</div>'
+        : '';
+
+    return '''<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${_escapeHtml(post.title)} - $author</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+      line-height: 1.6;
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 20px;
+      background: #fafafa;
+      color: #333;
+    }
+    article {
+      background: white;
+      padding: 40px;
+      border-radius: 8px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    }
+    h1 { margin-top: 0; color: #1a1a1a; }
+    .meta {
+      color: #666;
+      font-size: 14px;
+      margin-bottom: 20px;
+      padding-bottom: 20px;
+      border-bottom: 1px solid #eee;
+    }
+    .tags { margin-top: 10px; }
+    .tag {
+      display: inline-block;
+      background: #e0f0ff;
+      color: #0066cc;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 12px;
+      margin-right: 5px;
+    }
+    img { max-width: 100%; height: auto; }
+    code {
+      background: #f4f4f4;
+      padding: 2px 6px;
+      border-radius: 3px;
+      font-family: 'SF Mono', Monaco, monospace;
+    }
+    pre {
+      background: #2d2d2d;
+      color: #f8f8f2;
+      padding: 16px;
+      border-radius: 6px;
+      overflow-x: auto;
+    }
+    pre code { background: none; padding: 0; color: inherit; }
+    blockquote {
+      border-left: 4px solid #0066cc;
+      margin: 20px 0;
+      padding-left: 20px;
+      color: #555;
+    }
+    a { color: #0066cc; }
+    footer {
+      margin-top: 40px;
+      padding-top: 20px;
+      border-top: 1px solid #eee;
+      text-align: center;
+      font-size: 12px;
+      color: #999;
+    }
+  </style>
+</head>
+<body>
+  <article>
+    <h1>${_escapeHtml(post.title)}</h1>
+    <div class="meta">
+      <span>By <strong>$author</strong></span>
+      <span> · </span>
+      <span>${post.displayDate}</span>
+      $tagsHtml
+    </div>
+    <div class="content">
+      $htmlContent
+    </div>
+  </article>
+  <footer>
+    Powered by <a href="https://geogram.radio">geogram</a>
+  </footer>
+</body>
+</html>''';
+  }
+
+  /// Escape HTML special characters
+  String _escapeHtml(String text) {
+    return text
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
   }
 
   /// Send HTTP response to relay

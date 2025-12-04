@@ -3,10 +3,15 @@
  * License: Apache-2.0
  */
 
+import 'dart:io' show Platform;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:url_launcher/url_launcher.dart';
 import '../models/place.dart';
 import '../services/place_service.dart';
 import '../services/i18n_service.dart';
+import '../services/log_service.dart';
 import 'add_edit_place_page.dart';
 
 /// Places browser page
@@ -428,7 +433,7 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
 
           // Basic info
           _buildInfoSection(_i18n.t('basic_information'), [
-            _buildInfoRow(_i18n.t('coordinates'), place.coordinatesString, monospace: true),
+            _buildLocationRow(place),
             _buildInfoRow(_i18n.t('radius'), '${place.radius} ${_i18n.t('meters')}'),
             if (place.address != null)
               _buildInfoRow(_i18n.t('address'), place.address!),
@@ -537,6 +542,78 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
         ],
       ),
     );
+  }
+
+  Widget _buildLocationRow(Place place) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          SizedBox(
+            width: 120,
+            child: Text(
+              _i18n.t('coordinates'),
+              style: const TextStyle(fontWeight: FontWeight.bold),
+            ),
+          ),
+          Expanded(
+            child: SelectableText(
+              place.coordinatesString,
+              style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+            ),
+          ),
+          IconButton(
+            icon: const Icon(Icons.copy, size: 18),
+            onPressed: () => _copyCoordinates(place),
+            tooltip: _i18n.t('copy_coordinates'),
+            visualDensity: VisualDensity.compact,
+          ),
+          IconButton(
+            icon: const Icon(Icons.navigation, size: 18),
+            onPressed: () => _openInNavigator(place),
+            tooltip: _i18n.t('open_in_navigator'),
+            visualDensity: VisualDensity.compact,
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _copyCoordinates(Place place) {
+    Clipboard.setData(ClipboardData(text: place.coordinatesString));
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(_i18n.t('coordinates_copied'))),
+    );
+  }
+
+  Future<void> _openInNavigator(Place place) async {
+    try {
+      Uri mapUri;
+
+      if (!kIsWeb && Platform.isAndroid) {
+        // Android: canLaunchUrl often returns false for geo: URIs even when they work
+        mapUri = Uri.parse('geo:${place.latitude},${place.longitude}?q=${place.latitude},${place.longitude}');
+        await launchUrl(mapUri);
+      } else if (!kIsWeb && Platform.isIOS) {
+        // iOS: Use Apple Maps URL scheme
+        mapUri = Uri.parse('https://maps.apple.com/?q=${place.latitude},${place.longitude}');
+        await launchUrl(mapUri);
+      } else {
+        // Desktop/Web: Use OpenStreetMap
+        mapUri = Uri.parse('https://www.openstreetmap.org/?mlat=${place.latitude}&mlon=${place.longitude}&zoom=15');
+        if (await canLaunchUrl(mapUri)) {
+          await launchUrl(mapUri, mode: LaunchMode.externalApplication);
+        }
+      }
+    } catch (e) {
+      LogService().log('PlacesBrowserPage: Error opening navigator: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not open navigator: $e')),
+        );
+      }
+    }
   }
 }
 
@@ -674,6 +751,79 @@ class _PlaceDetailPageState extends State<_PlaceDetailPage> {
     );
   }
 
+  Widget _buildLocationRow() {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          SizedBox(
+            width: 120,
+            child: Text(
+              widget.i18n.t('coordinates'),
+              style: const TextStyle(fontWeight: FontWeight.bold),
+            ),
+          ),
+          Expanded(
+            child: SelectableText(
+              widget.place.coordinatesString,
+              style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+            ),
+          ),
+          IconButton(
+            icon: const Icon(Icons.copy, size: 18),
+            onPressed: _copyCoordinates,
+            tooltip: widget.i18n.t('copy_coordinates'),
+            visualDensity: VisualDensity.compact,
+          ),
+          IconButton(
+            icon: const Icon(Icons.navigation, size: 18),
+            onPressed: _openInNavigator,
+            tooltip: widget.i18n.t('open_in_navigator'),
+            visualDensity: VisualDensity.compact,
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _copyCoordinates() {
+    Clipboard.setData(ClipboardData(text: widget.place.coordinatesString));
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(widget.i18n.t('coordinates_copied'))),
+    );
+  }
+
+  Future<void> _openInNavigator() async {
+    try {
+      Uri mapUri;
+      final place = widget.place;
+
+      if (!kIsWeb && Platform.isAndroid) {
+        // Android: canLaunchUrl often returns false for geo: URIs even when they work
+        mapUri = Uri.parse('geo:${place.latitude},${place.longitude}?q=${place.latitude},${place.longitude}');
+        await launchUrl(mapUri);
+      } else if (!kIsWeb && Platform.isIOS) {
+        // iOS: Use Apple Maps URL scheme
+        mapUri = Uri.parse('https://maps.apple.com/?q=${place.latitude},${place.longitude}');
+        await launchUrl(mapUri);
+      } else {
+        // Desktop/Web: Use OpenStreetMap
+        mapUri = Uri.parse('https://www.openstreetmap.org/?mlat=${place.latitude}&mlon=${place.longitude}&zoom=15');
+        if (await canLaunchUrl(mapUri)) {
+          await launchUrl(mapUri, mode: LaunchMode.externalApplication);
+        }
+      }
+    } catch (e) {
+      LogService().log('PlaceDetailPage: Error opening navigator: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not open navigator: $e')),
+        );
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return PopScope(
@@ -725,7 +875,7 @@ class _PlaceDetailPageState extends State<_PlaceDetailPage> {
 
               // Basic info
               _buildInfoSection(widget.i18n.t('basic_information'), [
-                _buildInfoRow(widget.i18n.t('coordinates'), widget.place.coordinatesString, monospace: true),
+                _buildLocationRow(),
                 _buildInfoRow(widget.i18n.t('radius'), '${widget.place.radius} ${widget.i18n.t('meters')}'),
                 if (widget.place.address != null)
                   _buildInfoRow(widget.i18n.t('address'), widget.place.address!),

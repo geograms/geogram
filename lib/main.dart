@@ -210,6 +210,133 @@ class _HomePageState extends State<HomePage> {
     _i18n.languageNotifier.addListener(_onLanguageChanged);
     // Listen to profile changes to update title
     _profileService.profileNotifier.addListener(_onProfileChanged);
+
+    // Check for first launch and show profile setup
+    _checkFirstLaunch();
+  }
+
+  /// Check if this is the first launch and show welcome dialog
+  void _checkFirstLaunch() {
+    final config = ConfigService().getAll();
+    final firstLaunchComplete = config['firstLaunchComplete'] as bool? ?? false;
+
+    if (!firstLaunchComplete) {
+      // Mark first launch as complete
+      ConfigService().set('firstLaunchComplete', true);
+
+      // Create default collections and show welcome dialog after first frame
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
+        if (mounted) {
+          await _createDefaultCollections();
+          if (mounted) {
+            _showWelcomeDialog();
+          }
+        }
+      });
+    }
+  }
+
+  /// Create default collections for first launch
+  Future<void> _createDefaultCollections() async {
+    final collectionService = CollectionService();
+    final defaultTypes = ['places', 'events', 'blog', 'alerts'];
+
+    for (final type in defaultTypes) {
+      try {
+        await collectionService.createCollection(
+          title: _i18n.t('collection_type_$type'),
+          type: type,
+        );
+        LogService().log('Created default collection: $type');
+      } catch (e) {
+        // Collection might already exist, skip
+        LogService().log('Skipped creating $type collection: $e');
+      }
+    }
+
+    // Refresh collections list
+    setState(() {});
+  }
+
+  /// Show welcome dialog with generated callsign
+  void _showWelcomeDialog() {
+    final profile = _profileService.getProfile();
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => PopScope(
+        canPop: false,
+        child: AlertDialog(
+          title: Text(_i18n.t('welcome_to_geogram')),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(_i18n.t('welcome_message')),
+            const SizedBox(height: 16),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.primaryContainer,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.badge,
+                    color: Theme.of(context).colorScheme.primary,
+                  ),
+                  const SizedBox(width: 12),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        _i18n.t('your_callsign'),
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                      Text(
+                        profile.callsign,
+                        style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                          fontWeight: FontWeight.bold,
+                          color: Theme.of(context).colorScheme.primary,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              _i18n.t('welcome_customize_hint'),
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context);
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => const ProfilePage(),
+                ),
+              );
+            },
+            child: Text(_i18n.t('customize_profile')),
+          ),
+          FilledButton(
+            onPressed: () {
+              Navigator.pop(context);
+            },
+            child: Text(_i18n.t('later')),
+          ),
+        ],
+        ),
+      ),
+    );
   }
 
   @override
@@ -229,13 +356,25 @@ class _HomePageState extends State<HomePage> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        automaticallyImplyLeading: false,
-        title: const ProfileSwitcher(),
-        actions: [
-          // Show relay indicator if current profile is a relay
-          if (_profileService.getProfile().isRelay)
+    return PopScope(
+      // Don't allow back gesture to exit app when on Collections (index 0)
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) {
+        if (_selectedIndex != 0) {
+          // Navigate back to Collections panel
+          setState(() {
+            _selectedIndex = 0;
+          });
+        }
+        // If already on Collections, do nothing (stay there)
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          automaticallyImplyLeading: false,
+          title: const ProfileSwitcher(),
+          actions: [
+            // Show relay indicator if current profile is a relay
+            if (_profileService.getProfile().isRelay)
             IconButton(
               icon: const Icon(Icons.cell_tower),
               tooltip: _i18n.t('relay_dashboard'),
@@ -325,6 +464,7 @@ class _HomePageState extends State<HomePage> {
           ),
         ],
       ),
+      ),
     );
   }
 }
@@ -355,6 +495,7 @@ class _CollectionsPageState extends State<CollectionsPage> {
     super.initState();
     _i18n.languageNotifier.addListener(_onLanguageChanged);
     _profileService.activeProfileNotifier.addListener(_onProfileChanged);
+    _collectionService.collectionsNotifier.addListener(_onCollectionsChanged);
     LogService().log('Collections page opened');
     _loadCollections();
     _subscribeToUnreadCounts();
@@ -363,6 +504,12 @@ class _CollectionsPageState extends State<CollectionsPage> {
   void _onProfileChanged() {
     // Profile changed, reload collections for the new profile
     LogService().log('Profile changed, reloading collections');
+    _loadCollections();
+  }
+
+  void _onCollectionsChanged() {
+    // Collections were created/updated/deleted, reload the list
+    LogService().log('Collections changed, reloading collections');
     _loadCollections();
   }
 
@@ -383,6 +530,7 @@ class _CollectionsPageState extends State<CollectionsPage> {
   void dispose() {
     _i18n.languageNotifier.removeListener(_onLanguageChanged);
     _profileService.activeProfileNotifier.removeListener(_onProfileChanged);
+    _collectionService.collectionsNotifier.removeListener(_onCollectionsChanged);
     _searchController.dispose();
     _unreadSubscription?.cancel();
     super.dispose();
@@ -466,25 +614,6 @@ class _CollectionsPageState extends State<CollectionsPage> {
     _collectionService.toggleFavorite(collection);
     setState(() {});
     LogService().log('Toggled favorite for ${collection.title}');
-  }
-
-  Future<void> _openFolder(Collection collection) async {
-    if (collection.storagePath == null) {
-      LogService().log('Collection has no storage path');
-      return;
-    }
-
-    try {
-      final uri = Uri.file(collection.storagePath!);
-      if (await canLaunchUrl(uri)) {
-        await launchUrl(uri);
-        LogService().log('Opened folder: ${collection.storagePath}');
-      } else {
-        LogService().log('Cannot open folder: ${collection.storagePath}');
-      }
-    } catch (e) {
-      LogService().log('Error opening folder: $e');
-    }
   }
 
   Future<void> _deleteCollection(Collection collection) async {
@@ -679,7 +808,6 @@ class _CollectionsPageState extends State<CollectionsPage> {
                                             },
                                             onFavoriteToggle: () => _toggleFavorite(collection),
                                             onDelete: () => _deleteCollection(collection),
-                                            onOpenFolder: () => _openFolder(collection),
                                             unreadCount: collection.type == 'chat' ? _chatNotificationService.totalUnreadCount : 0,
                                           );
                                         },
@@ -777,7 +905,6 @@ class _CollectionsPageState extends State<CollectionsPage> {
                                             },
                                             onFavoriteToggle: () => _toggleFavorite(collection),
                                             onDelete: () => _deleteCollection(collection),
-                                            onOpenFolder: () => _openFolder(collection),
                                             unreadCount: 0, // File collections don't track unread
                                           );
                                         },
@@ -808,7 +935,6 @@ class _CollectionGridCard extends StatelessWidget {
   final VoidCallback onTap;
   final VoidCallback onFavoriteToggle;
   final VoidCallback onDelete;
-  final VoidCallback onOpenFolder;
   final int unreadCount;
 
   const _CollectionGridCard({
@@ -816,7 +942,6 @@ class _CollectionGridCard extends StatelessWidget {
     required this.onTap,
     required this.onFavoriteToggle,
     required this.onDelete,
-    required this.onOpenFolder,
     this.unreadCount = 0,
   });
 
@@ -882,15 +1007,67 @@ class _CollectionGridCard extends StatelessWidget {
     }
   }
 
+  void _showContextMenu(BuildContext context, Offset position) {
+    final i18n = I18nService();
+    final RenderBox overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
+
+    showMenu<String>(
+      context: context,
+      position: RelativeRect.fromRect(
+        position & const Size(40, 40),
+        Offset.zero & overlay.size,
+      ),
+      items: [
+        PopupMenuItem<String>(
+          value: 'favorite',
+          child: Row(
+            children: [
+              Icon(
+                collection.isFavorite ? Icons.star : Icons.star_border,
+                color: collection.isFavorite ? Colors.amber : null,
+              ),
+              const SizedBox(width: 8),
+              Text(i18n.t('favorite')),
+            ],
+          ),
+        ),
+        PopupMenuItem<String>(
+          value: 'delete',
+          child: Row(
+            children: [
+              const Icon(Icons.delete_outline),
+              const SizedBox(width: 8),
+              Text(i18n.t('delete')),
+            ],
+          ),
+        ),
+      ],
+    ).then((value) {
+      if (value == 'favorite') {
+        onFavoriteToggle();
+      } else if (value == 'delete') {
+        onDelete();
+      }
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final i18n = I18nService();
+    final isAndroid = !kIsWeb && Platform.isAndroid;
 
     return Card(
       elevation: 2,
       child: InkWell(
         onTap: onTap,
+        onLongPress: isAndroid
+            ? () {
+                final RenderBox box = context.findRenderObject() as RenderBox;
+                final Offset position = box.localToGlobal(Offset.zero);
+                _showContextMenu(context, position);
+              }
+            : null,
         borderRadius: BorderRadius.circular(12),
         child: Stack(
           children: [
@@ -933,16 +1110,17 @@ class _CollectionGridCard extends StatelessWidget {
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
                                 ),
-                                Text(
-                                  '${collection.filesCount} files • ${collection.formattedSize}',
-                                  style: theme.textTheme.bodySmall?.copyWith(
-                                    color: theme.colorScheme.onSurfaceVariant,
-                                    fontSize: 12,
-                                    height: 1.15,
+                                if (collection.filesCount > 0)
+                                  Text(
+                                    '${collection.filesCount} files • ${collection.formattedSize}',
+                                    style: theme.textTheme.bodySmall?.copyWith(
+                                      color: theme.colorScheme.onSurfaceVariant,
+                                      fontSize: 12,
+                                      height: 1.15,
+                                    ),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
                                   ),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
                               ],
                             ),
                           ),
@@ -950,46 +1128,40 @@ class _CollectionGridCard extends StatelessWidget {
                       ),
                     ),
                   ),
-                  // Bottom: Action buttons
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.end,
-                    children: [
-                      IconButton(
-                        icon: Icon(
-                          collection.isFavorite ? Icons.star : Icons.star_border,
-                          size: 13,
-                        ),
-                        onPressed: onFavoriteToggle,
-                        tooltip: i18n.t('favorite'),
-                        padding: EdgeInsets.zero,
-                        constraints: const BoxConstraints(
-                          minWidth: 20,
-                          minHeight: 20,
-                        ),
-                        color: collection.isFavorite ? Colors.amber : null,
+                  // Bottom: Action buttons (only on desktop, hidden on Android)
+                  if (!isAndroid)
+                    SizedBox(
+                      height: 18,
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.end,
+                        children: [
+                          IconButton(
+                            icon: Icon(
+                              collection.isFavorite ? Icons.star : Icons.star_border,
+                              size: 12,
+                            ),
+                            onPressed: onFavoriteToggle,
+                            tooltip: i18n.t('favorite'),
+                            padding: EdgeInsets.zero,
+                            constraints: const BoxConstraints(
+                              minWidth: 18,
+                              minHeight: 18,
+                            ),
+                            color: collection.isFavorite ? Colors.amber : null,
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.delete_outline, size: 12),
+                            onPressed: onDelete,
+                            tooltip: i18n.t('delete'),
+                            padding: EdgeInsets.zero,
+                            constraints: const BoxConstraints(
+                              minWidth: 18,
+                              minHeight: 18,
+                            ),
+                          ),
+                        ],
                       ),
-                      IconButton(
-                        icon: const Icon(Icons.folder_open, size: 13),
-                        onPressed: onOpenFolder,
-                        tooltip: i18n.t('open_folder'),
-                        padding: EdgeInsets.zero,
-                        constraints: const BoxConstraints(
-                          minWidth: 20,
-                          minHeight: 20,
-                        ),
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.delete_outline, size: 13),
-                        onPressed: onDelete,
-                        tooltip: i18n.t('delete'),
-                        padding: EdgeInsets.zero,
-                        constraints: const BoxConstraints(
-                          minWidth: 20,
-                          minHeight: 20,
-                        ),
-                      ),
-                    ],
-                  ),
+                    ),
                 ],
               ),
             ),

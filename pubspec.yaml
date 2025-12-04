@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.5.3+1
+version: 1.5.4+1
 
 environment:
   sdk: ^3.10.0
@@ -52,6 +52,7 @@ dependencies:
   window_manager: ^0.4.3
   shelf: ^1.4.0
   flutter_markdown: ^0.7.4+1
+  markdown: ^7.2.2          # Server-side markdown to HTML conversion
   geolocator: ^13.0.2
   dart_console: ^4.1.2       # Terminal input/output for CLI mode
   ensemble_ts_interpreter: ^1.0.3  # JavaScript interpreter for game scripting
@@ -66,6 +67,15 @@ dev_dependencies:
   # package. See that file for information about deactivating specific lint
   # rules and activating additional ones.
   flutter_lints: ^6.0.0
+  flutter_native_splash: ^2.4.0
+
+# Flutter native splash screen configuration
+flutter_native_splash:
+  color: "#0a0f1c"
+  image: assets/splash_icon.png
+  android: true
+  ios: false
+  web: false
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
@@ -83,6 +93,7 @@ flutter:
     - languages/en_US.json
     - languages/pt_PT.json
     - assets/worldcities.csv
+    - assets/default_profile.png
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images

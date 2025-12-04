@@ -27,7 +27,7 @@ Future<void> main() async {
       request.response.headers.contentType = ContentType.json;
       request.response.write(jsonEncode({
         'name': 'Geogram Desktop Relay Test',
-        'version': '1.4.1',
+        'version': '1.5.3',
         'callsign': 'X3TEST',
         'description': 'Test relay server',
         'connected_devices': 0,

@@ -5,14 +5,18 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
-import '../services/storage_config.dart';
+import 'package:markdown/markdown.dart' as md;
+import 'pure_storage_config.dart';
+import '../models/blog_post.dart';
 import '../util/nostr_key_generator.dart';
 import '../util/nostr_event.dart';
 import '../util/nostr_crypto.dart';
 import '../util/chat_api.dart';
 
-/// App version constant
-const String cliAppVersion = '1.5.2';
+/// App version - use central version.dart for consistency
+import '../version.dart' show appVersion;
+/// Alias for backward compatibility
+String get cliAppVersion => appVersion;
 
 /// Relay server settings
 class PureRelaySettings {
@@ -523,14 +527,14 @@ class PureRelayServer {
 
   /// Initialize relay server
   ///
-  /// Uses StorageConfig for path management. StorageConfig must be initialized
+  /// Uses PureStorageConfig for path management. PureStorageConfig must be initialized
   /// before calling this method.
   Future<void> initialize() async {
-    final storageConfig = StorageConfig();
+    final storageConfig = PureStorageConfig();
     if (!storageConfig.isInitialized) {
       throw StateError(
-        'StorageConfig must be initialized before PureRelayServer. '
-        'Call StorageConfig().init() first.',
+        'PureStorageConfig must be initialized before PureRelayServer. '
+        'Call PureStorageConfig().init() first.',
       );
     }
 
@@ -538,7 +542,7 @@ class PureRelayServer {
     _configPath = storageConfig.relayConfigPath;
     _tilesDirectory = storageConfig.tilesDir;
 
-    // StorageConfig already creates directories, but ensure tiles exists
+    // PureStorageConfig already creates directories, but ensure tiles exists
     await Directory(_tilesDirectory!).create(recursive: true);
 
     await _loadSettings();
@@ -590,7 +594,7 @@ class PureRelayServer {
   /// This matches the Java implementation structure
   /// If no callsign provided, defaults to relay's callsign
   String _getChatDataPath([String? callsign]) {
-    final storageConfig = StorageConfig();
+    final storageConfig = PureStorageConfig();
     final targetCallsign = callsign ?? _settings.callsign;
     return '${storageConfig.devicesDir}/$targetCallsign/chat';
   }
@@ -1509,6 +1513,8 @@ class PureRelayServer {
         await _handleCliCommand(request);
       } else if (path == '/') {
         await _handleRoot(request);
+      } else if (_isBlogPath(path)) {
+        await _handleBlogRequest(request);
       } else if (_isCallsignOrNicknamePath(path)) {
         await _handleCallsignOrNicknameWww(request);
       } else {
@@ -2238,6 +2244,361 @@ class PureRelayServer {
 
     // Valid nickname: alphanumeric, -, _, at least 2 chars
     return RegExp(r'^[a-zA-Z0-9][a-zA-Z0-9_-]+$').hasMatch(firstPart);
+  }
+
+  /// Check if path is a blog URL (/{identifier}/blog/{filename}.html)
+  bool _isBlogPath(String path) {
+    final regex = RegExp(r'^/([^/]+)/blog/([^/]+)\.html$');
+    return regex.hasMatch(path);
+  }
+
+  /// Handle blog post request - serves markdown as HTML
+  Future<void> _handleBlogRequest(HttpRequest request) async {
+    final path = request.uri.path;
+    final regex = RegExp(r'^/([^/]+)/blog/([^/]+)\.html$');
+    final match = regex.firstMatch(path);
+
+    if (match == null) {
+      request.response.statusCode = 400;
+      request.response.write('Invalid blog URL');
+      return;
+    }
+
+    final identifier = match.group(1)!; // nickname or callsign
+    final filename = match.group(2)!;   // blog filename without .html
+
+    try {
+      // First, try to find a connected WebSocket client with this nickname/callsign
+      final client = _findConnectedClientByIdentifier(identifier);
+
+      if (client != null) {
+        // Proxy the blog request to the connected client via WebSocket
+        _log('INFO', 'Proxying blog request to connected client: ${client.callsign} (${client.nickname ?? "no nickname"})');
+
+        // Build the internal blog API path for the client
+        final blogApiPath = '/api/blog/$filename.html';
+
+        final requestId = DateTime.now().millisecondsSinceEpoch.toString();
+        final proxyRequest = {
+          'type': 'HTTP_REQUEST',
+          'requestId': requestId,
+          'method': 'GET',
+          'path': blogApiPath,
+          'headers': request.headers.toString(),
+          'body': '',
+        };
+
+        // Send request to device and wait for response
+        final completer = Completer<Map<String, dynamic>>();
+        _pendingProxyRequests[requestId] = completer;
+
+        try {
+          client.socket.add(jsonEncode(proxyRequest));
+
+          // Wait for response with timeout
+          final response = await completer.future.timeout(
+            const Duration(seconds: 30),
+            onTimeout: () => {
+              'type': 'HTTP_RESPONSE',
+              'statusCode': 504,
+              'responseBody': 'Gateway Timeout - client did not respond',
+            },
+          );
+
+          request.response.statusCode = response['statusCode'] ?? 500;
+          if (response['responseHeaders'] != null) {
+            try {
+              final headers = jsonDecode(response['responseHeaders'] as String) as Map<String, dynamic>;
+              headers.forEach((key, value) {
+                request.response.headers.add(key, value.toString());
+              });
+            } catch (_) {}
+          }
+
+          final body = response['responseBody'] ?? '';
+          final isBase64 = response['isBase64'] == true;
+          if (isBase64) {
+            request.response.add(base64Decode(body));
+          } else {
+            request.response.write(body);
+          }
+          return;
+        } catch (e) {
+          _log('ERROR', 'Error proxying blog request: $e');
+          request.response.statusCode = 502;
+          request.response.write('Bad Gateway: $e');
+          return;
+        } finally {
+          _pendingProxyRequests.remove(requestId);
+        }
+      }
+
+      // Fallback: Try to find the blog locally on the relay server
+      // (for relays that also host their own content)
+      final callsign = await _findCallsignByIdentifier(identifier);
+      if (callsign == null) {
+        request.response.statusCode = 404;
+        request.response.write('User not found (not connected and no local data)');
+        return;
+      }
+
+      // Extract year from filename (format: YYYY-MM-DD_title)
+      final yearMatch = RegExp(r'^(\d{4})-').firstMatch(filename);
+      if (yearMatch == null) {
+        request.response.statusCode = 400;
+        request.response.write('Invalid blog filename format');
+        return;
+      }
+      final year = yearMatch.group(1)!;
+
+      // Build path to the blog markdown file
+      final devicesDir = PureStorageConfig().devicesDir;
+      final blogDir = Directory('$devicesDir/$callsign');
+
+      // Find blog post in any collection
+      BlogPost? foundPost;
+
+      if (await blogDir.exists()) {
+        await for (final entity in blogDir.list()) {
+          if (entity is Directory) {
+            final blogPath = '${entity.path}/blog/$year/$filename.md';
+            final blogFile = File(blogPath);
+            if (await blogFile.exists()) {
+              try {
+                final content = await blogFile.readAsString();
+                foundPost = BlogPost.fromText(content, filename);
+                break;
+              } catch (e) {
+                _log('ERROR', 'Error parsing blog file: $e');
+              }
+            }
+          }
+        }
+      }
+
+      if (foundPost == null) {
+        request.response.statusCode = 404;
+        request.response.write('Blog post not found');
+        return;
+      }
+
+      // Only serve published posts
+      if (foundPost.isDraft) {
+        request.response.statusCode = 403;
+        request.response.write('This post is not published');
+        return;
+      }
+
+      // Convert markdown content to HTML
+      final htmlContent = md.markdownToHtml(
+        foundPost.content,
+        extensionSet: md.ExtensionSet.gitHubWeb,
+      );
+
+      // Build full HTML page
+      final html = _buildBlogHtmlPage(foundPost, htmlContent, identifier);
+
+      request.response.headers.contentType = ContentType.html;
+      request.response.write(html);
+    } catch (e) {
+      _log('ERROR', 'Error serving blog post: $e');
+      request.response.statusCode = 500;
+      request.response.write('Internal server error');
+    }
+  }
+
+  /// Find a connected WebSocket client by nickname or callsign
+  PureConnectedClient? _findConnectedClientByIdentifier(String identifier) {
+    final lowerIdentifier = identifier.toLowerCase();
+
+    // First try to find by callsign
+    for (final client in _clients.values) {
+      if (client.callsign?.toLowerCase() == lowerIdentifier) {
+        return client;
+      }
+    }
+
+    // Then try to find by nickname
+    for (final client in _clients.values) {
+      if (client.nickname?.toLowerCase() == lowerIdentifier) {
+        return client;
+      }
+    }
+
+    return null;
+  }
+
+  /// Find callsign by identifier (nickname or callsign)
+  Future<String?> _findCallsignByIdentifier(String identifier) async {
+    final storageConfig = PureStorageConfig();
+    final devicesDir = storageConfig.devicesDir;
+    final dir = Directory(devicesDir);
+
+    if (!await dir.exists()) return null;
+
+    // First check if it's a direct callsign match (case-insensitive)
+    await for (final entity in dir.list()) {
+      if (entity is Directory) {
+        final callsign = entity.path.split('/').last;
+        if (callsign.toLowerCase() == identifier.toLowerCase()) {
+          return callsign;
+        }
+      }
+    }
+
+    // Search for nickname in config.json profiles
+    final configPath = storageConfig.configPath;
+    final configFile = File(configPath);
+    if (await configFile.exists()) {
+      try {
+        final content = await configFile.readAsString();
+        final config = jsonDecode(content) as Map<String, dynamic>;
+        final profiles = config['profiles'] as List<dynamic>?;
+        if (profiles != null) {
+          for (final profile in profiles) {
+            if (profile is Map<String, dynamic>) {
+              final nickname = profile['nickname'] as String?;
+              final callsign = profile['callsign'] as String?;
+              if (nickname != null &&
+                  callsign != null &&
+                  nickname.toLowerCase() == identifier.toLowerCase()) {
+                // Verify the callsign directory exists
+                final callsignDir = Directory('$devicesDir/$callsign');
+                if (await callsignDir.exists()) {
+                  return callsign;
+                }
+              }
+            }
+          }
+        }
+      } catch (e) {
+        _log('ERROR', 'Error reading config.json: $e');
+      }
+    }
+
+    return null;
+  }
+
+  /// Build HTML page for blog post
+  String _buildBlogHtmlPage(BlogPost post, String htmlContent, String author) {
+    final tagsHtml = post.tags.isNotEmpty
+        ? '<div class="tags">${post.tags.map((t) => '<span class="tag">#$t</span>').join(' ')}</div>'
+        : '';
+
+    return '''<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${_escapeHtml(post.title)} - $author</title>
+  <style>
+    :root {
+      --bg: #1a1a2e;
+      --surface: #16213e;
+      --primary: #e94560;
+      --text: #eee;
+      --text-secondary: #aaa;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.7;
+      padding: 2rem;
+      max-width: 800px;
+      margin: 0 auto;
+    }
+    header {
+      margin-bottom: 2rem;
+      padding-bottom: 1rem;
+      border-bottom: 1px solid var(--surface);
+    }
+    h1 { color: var(--primary); margin-bottom: 0.5rem; }
+    .meta { color: var(--text-secondary); font-size: 0.9rem; }
+    .description {
+      font-style: italic;
+      color: var(--text-secondary);
+      padding: 1rem;
+      background: var(--surface);
+      border-radius: 8px;
+      margin: 1rem 0;
+    }
+    .tags { margin: 1rem 0; }
+    .tag {
+      display: inline-block;
+      background: var(--surface);
+      padding: 0.25rem 0.75rem;
+      border-radius: 1rem;
+      font-size: 0.85rem;
+      margin-right: 0.5rem;
+      color: var(--primary);
+    }
+    article { margin-top: 2rem; }
+    article h1, article h2, article h3 { margin: 1.5rem 0 1rem; color: var(--primary); }
+    article p { margin: 1rem 0; }
+    article a { color: var(--primary); }
+    article code {
+      background: var(--surface);
+      padding: 0.2rem 0.4rem;
+      border-radius: 4px;
+      font-size: 0.9em;
+    }
+    article pre {
+      background: var(--surface);
+      padding: 1rem;
+      border-radius: 8px;
+      overflow-x: auto;
+      margin: 1rem 0;
+    }
+    article pre code { background: none; padding: 0; }
+    article blockquote {
+      border-left: 3px solid var(--primary);
+      padding-left: 1rem;
+      margin: 1rem 0;
+      color: var(--text-secondary);
+    }
+    article ul, article ol { margin: 1rem 0; padding-left: 2rem; }
+    article li { margin: 0.5rem 0; }
+    article img { max-width: 100%; height: auto; border-radius: 8px; }
+    footer {
+      margin-top: 3rem;
+      padding-top: 1rem;
+      border-top: 1px solid var(--surface);
+      color: var(--text-secondary);
+      font-size: 0.85rem;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>${_escapeHtml(post.title)}</h1>
+    <div class="meta">
+      <span>By <strong>$author</strong></span> ·
+      <span>${post.displayDate}</span>
+    </div>
+    ${post.description != null && post.description!.isNotEmpty ? '<div class="description">${_escapeHtml(post.description!)}</div>' : ''}
+    $tagsHtml
+  </header>
+  <article>
+    $htmlContent
+  </article>
+  <footer>
+    <p>Powered by <a href="https://geogram.radio" target="_blank">geogram</a></p>
+  </footer>
+</body>
+</html>''';
+  }
+
+  /// Escape HTML entities
+  String _escapeHtml(String text) {
+    return text
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
   }
 
   /// GET /{identifier} or /{identifier}/* - Serve WWW collection from device

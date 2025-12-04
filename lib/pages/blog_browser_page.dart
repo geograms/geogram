@@ -8,6 +8,7 @@ import '../models/blog_post.dart';
 import '../models/blog_comment.dart';
 import '../services/blog_service.dart';
 import '../services/profile_service.dart';
+import '../services/relay_service.dart';
 import '../services/i18n_service.dart';
 import '../widgets/blog_post_tile_widget.dart';
 import '../widgets/blog_post_detail_widget.dart';
@@ -33,6 +34,7 @@ class BlogBrowserPage extends StatefulWidget {
 class _BlogBrowserPageState extends State<BlogBrowserPage> {
   final BlogService _blogService = BlogService();
   final ProfileService _profileService = ProfileService();
+  final RelayService _relayService = RelayService();
   final I18nService _i18n = I18nService();
   final TextEditingController _searchController = TextEditingController();
   final TextEditingController _commentController = TextEditingController();
@@ -43,6 +45,8 @@ class _BlogBrowserPageState extends State<BlogBrowserPage> {
   BlogPost? _selectedPost;
   bool _isLoading = true;
   bool _showDraftsOnly = false;
+  String? _relayUrl;
+  String? _profileIdentifier;
   Set<int> _expandedYears = {};
   String? _currentUserNpub;
 
@@ -62,9 +66,17 @@ class _BlogBrowserPageState extends State<BlogBrowserPage> {
   }
 
   Future<void> _initialize() async {
-    // Get current user npub
+    // Get current user npub and profile info for shareable URL
     final profile = _profileService.getProfile();
     _currentUserNpub = profile.npub;
+
+    // Get relay URL and profile identifier for shareable blog URLs
+    final connectedRelay = _relayService.getConnectedRelay();
+    _relayUrl = connectedRelay?.url;
+    // Use nickname if available, otherwise callsign
+    _profileIdentifier = profile.nickname.isNotEmpty
+        ? profile.nickname
+        : profile.callsign;
 
     // Initialize blog service
     await _blogService.initializeCollection(
@@ -142,6 +154,8 @@ class _BlogBrowserPageState extends State<BlogBrowserPage> {
           profileService: _profileService,
           i18n: _i18n,
           currentUserNpub: _currentUserNpub,
+          relayUrl: _relayUrl,
+          profileIdentifier: _profileIdentifier,
         ),
       ),
     );
@@ -163,9 +177,17 @@ class _BlogBrowserPageState extends State<BlogBrowserPage> {
   }
 
   Future<void> _createNewPost() async {
-    final result = await showDialog<Map<String, dynamic>>(
-      context: context,
-      builder: (context) => const NewBlogPostDialog(),
+    // Get existing tags for autocomplete
+    final existingTags = await _blogService.getAllTags();
+
+    if (!mounted) return;
+
+    final result = await Navigator.push<Map<String, dynamic>>(
+      context,
+      MaterialPageRoute(
+        builder: (context) => NewBlogPostDialog(existingTags: existingTags),
+        fullscreenDialog: true,
+      ),
     );
 
     if (result != null && mounted) {
@@ -178,6 +200,10 @@ class _BlogBrowserPageState extends State<BlogBrowserPage> {
         tags: result['tags'] as List<String>?,
         status: result['status'] as BlogStatus,
         npub: profile.npub,
+        nsec: profile.nsec,
+        imagePaths: result['imagePaths'] as List<String>?,
+        latitude: result['latitude'] as double?,
+        longitude: result['longitude'] as double?,
       );
 
       if (post != null && mounted) {
@@ -371,20 +397,6 @@ class _BlogBrowserPageState extends State<BlogBrowserPage> {
       appBar: AppBar(
         title: Text(_i18n.t('blog')),
         actions: [
-          // Show drafts toggle
-          IconButton(
-            icon: Icon(
-              _showDraftsOnly ? Icons.visibility_off : Icons.visibility,
-              color: _showDraftsOnly ? theme.colorScheme.primary : null,
-            ),
-            onPressed: () {
-              setState(() {
-                _showDraftsOnly = !_showDraftsOnly;
-              });
-              _loadPosts();
-            },
-            tooltip: _showDraftsOnly ? _i18n.t('show_all_posts') : _i18n.t('show_only_drafts'),
-          ),
           // Refresh
           IconButton(
             icon: const Icon(Icons.refresh),
@@ -616,6 +628,8 @@ class _BlogBrowserPageState extends State<BlogBrowserPage> {
                 onEdit: _editPost,
                 onDelete: _deletePost,
                 onPublish: _selectedPost!.isDraft ? _publishDraft : null,
+                relayUrl: _relayUrl,
+                profileIdentifier: _profileIdentifier,
               ),
               const SizedBox(height: 24),
               // Comments section
@@ -738,6 +752,8 @@ class _BlogPostDetailPage extends StatefulWidget {
   final ProfileService profileService;
   final I18nService i18n;
   final String? currentUserNpub;
+  final String? relayUrl;
+  final String? profileIdentifier;
 
   const _BlogPostDetailPage({
     Key? key,
@@ -747,6 +763,8 @@ class _BlogPostDetailPage extends StatefulWidget {
     required this.profileService,
     required this.i18n,
     required this.currentUserNpub,
+    this.relayUrl,
+    this.profileIdentifier,
   }) : super(key: key);
 
   @override
@@ -974,6 +992,8 @@ class _BlogPostDetailPageState extends State<_BlogPostDetailPage> {
                     onEdit: _editPost,
                     onDelete: _deletePost,
                     onPublish: _post.isDraft ? _publishDraft : null,
+                    relayUrl: widget.relayUrl,
+                    profileIdentifier: widget.profileIdentifier,
                   ),
                   const SizedBox(height: 24),
                   _buildCommentsSection(theme),

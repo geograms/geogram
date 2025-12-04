@@ -3,7 +3,7 @@
 import 'dart:convert';
 import 'dart:io';
 import 'dart:async';
-import '../services/storage_config.dart';
+import 'pure_storage_config.dart';
 
 /// Pure Dart config service for CLI mode
 /// Shares the same config.json format with the Flutter ConfigService
@@ -25,11 +25,11 @@ class CliConfigService {
   Future<void> init() async {
     if (_initialized) return;
 
-    final storageConfig = StorageConfig();
+    final storageConfig = PureStorageConfig();
     if (!storageConfig.isInitialized) {
       throw StateError(
-        'StorageConfig must be initialized before CliConfigService. '
-        'Call StorageConfig().init() first.',
+        'PureStorageConfig must be initialized before CliConfigService. '
+        'Call PureStorageConfig().init() first.',
       );
     }
 

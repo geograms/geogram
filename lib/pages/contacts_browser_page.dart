@@ -3,7 +3,10 @@
  * License: Apache-2.0
  */
 
+import 'dart:io' show Platform;
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:url_launcher/url_launcher.dart';
 import '../models/contact.dart';
 import '../services/contact_service.dart';
 import '../services/profile_service.dart';
@@ -637,11 +640,10 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
           // Locations (for postcard delivery)
           if (contact.locations.isNotEmpty)
             _buildInfoSection(_i18n.t('typical_locations'), [
-              ...contact.locations.map((loc) => _buildInfoRow(
+              ...contact.locations.map((loc) => _buildLocationRow(
                     loc.name,
-                    loc.latitude != null && loc.longitude != null
-                        ? '${loc.latitude}, ${loc.longitude}'
-                        : '',
+                    loc.latitude,
+                    loc.longitude,
                   )),
             ]),
 
@@ -687,6 +689,54 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
                 style: OutlinedButton.styleFrom(foregroundColor: Colors.red),
               ),
             ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _openInNavigator(double latitude, double longitude) async {
+    Uri mapUri;
+    if (!kIsWeb && Platform.isAndroid) {
+      // Android: canLaunchUrl often returns false for geo: URIs even when they work
+      mapUri = Uri.parse('geo:$latitude,$longitude?q=$latitude,$longitude');
+      await launchUrl(mapUri);
+    } else if (!kIsWeb && Platform.isIOS) {
+      // iOS: Use Apple Maps
+      mapUri = Uri.parse('https://maps.apple.com/?q=$latitude,$longitude');
+      await launchUrl(mapUri);
+    } else {
+      // Desktop/Web: Use OpenStreetMap
+      mapUri = Uri.parse('https://www.openstreetmap.org/?mlat=$latitude&mlon=$longitude&zoom=15');
+      if (await canLaunchUrl(mapUri)) {
+        await launchUrl(mapUri);
+      }
+    }
+  }
+
+  Widget _buildLocationRow(String label, double? latitude, double? longitude) {
+    if (latitude == null || longitude == null) return const SizedBox.shrink();
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 120,
+            child: Text(
+              label,
+              style: const TextStyle(fontWeight: FontWeight.bold),
+            ),
+          ),
+          Expanded(
+            child: Text('$latitude, $longitude'),
+          ),
+          IconButton(
+            icon: const Icon(Icons.navigation, size: 18),
+            onPressed: () => _openInNavigator(latitude, longitude),
+            tooltip: _i18n.t('open_in_navigator'),
+            visualDensity: VisualDensity.compact,
           ),
         ],
       ),

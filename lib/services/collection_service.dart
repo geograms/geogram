@@ -30,6 +30,9 @@ class CollectionService {
   /// Notifier for when callsign/collections change (incremented on change)
   final callsignNotifier = ValueNotifier<int>(0);
 
+  /// Notifier for when collections are created, updated, or deleted
+  final collectionsNotifier = ValueNotifier<int>(0);
+
   /// Get the default collections directory path
   String getDefaultCollectionsPath() {
     if (_collectionsDir == null) {
@@ -451,6 +454,9 @@ class CollectionService {
       await _writeCollectionFiles(collection, collectionFolder);
 
       stderr.writeln('Collection created successfully');
+
+      // Notify listeners that collections changed
+      collectionsNotifier.value++;
 
       return collection;
     } catch (e, stackTrace) {

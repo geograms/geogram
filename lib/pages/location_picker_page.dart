@@ -41,6 +41,7 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
   late LatLng _selectedPosition;
   bool _isOnline = true;
   bool _isDetectingLocation = false;
+  bool _showManualCoordinates = false;
 
   // Default to central Europe (Munich/Vienna area)
   static const LatLng _defaultPosition = LatLng(48.0, 10.0);
@@ -315,36 +316,13 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
     return Scaffold(
       appBar: AppBar(
         title: Text(_i18n.t('select_location_on_map')),
-        actions: [
-          // Auto-detect location button
-          _isDetectingLocation
-              ? const Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 16),
-                  child: SizedBox(
-                    width: 24,
-                    height: 24,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  ),
-                )
-              : IconButton.filledTonal(
-                  onPressed: _autoDetectLocation,
-                  icon: const Icon(Icons.my_location),
-                  tooltip: _i18n.t('auto_detect_location'),
-                ),
-          const SizedBox(width: 8),
-          FilledButton.icon(
-            onPressed: _confirmSelection,
-            icon: const Icon(Icons.check),
-            label: Text(_i18n.t('confirm_location')),
-            style: FilledButton.styleFrom(
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(8),
-              ),
-            ),
-          ),
-          const SizedBox(width: 16),
-        ],
       ),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: _confirmSelection,
+        icon: const Icon(Icons.check),
+        label: Text(_i18n.t('confirm_location')),
+      ),
+      floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
       body: LayoutBuilder(
         builder: (context, constraints) {
           // Use portrait layout if width < height (portrait mode)
@@ -501,55 +479,56 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
                           );
                         },
                       ),
-                      // Layer toggle button
+                      // Layer toggle and auto-detect buttons
                       Positioned(
                         top: 16,
                         right: 16,
-                        child: ValueListenableBuilder<MapLayerType>(
-                          valueListenable: _mapTileService.layerTypeNotifier,
-                          builder: (context, layerType, child) {
-                            return FloatingActionButton.small(
-                              heroTag: 'layer_toggle',
-                              onPressed: () => _mapTileService.toggleLayer(),
-                              tooltip: layerType == MapLayerType.standard
-                                  ? _i18n.t('switch_to_satellite')
-                                  : _i18n.t('switch_to_standard'),
-                              child: Icon(
-                                layerType == MapLayerType.standard
-                                    ? Icons.satellite_alt
-                                    : Icons.map,
-                              ),
-                            );
-                          },
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            // Layer toggle button
+                            ValueListenableBuilder<MapLayerType>(
+                              valueListenable: _mapTileService.layerTypeNotifier,
+                              builder: (context, layerType, child) {
+                                return FloatingActionButton.small(
+                                  heroTag: 'layer_toggle',
+                                  onPressed: () => _mapTileService.toggleLayer(),
+                                  tooltip: layerType == MapLayerType.standard
+                                      ? _i18n.t('switch_to_satellite')
+                                      : _i18n.t('switch_to_standard'),
+                                  child: Icon(
+                                    layerType == MapLayerType.standard
+                                        ? Icons.satellite_alt
+                                        : Icons.map,
+                                  ),
+                                );
+                              },
+                            ),
+                            const SizedBox(height: 8),
+                            // Auto-detect location button
+                            _isDetectingLocation
+                                ? FloatingActionButton.small(
+                                    heroTag: 'auto_detect',
+                                    onPressed: null,
+                                    child: const SizedBox(
+                                      width: 20,
+                                      height: 20,
+                                      child: CircularProgressIndicator(strokeWidth: 2),
+                                    ),
+                                  )
+                                : FloatingActionButton.small(
+                                    heroTag: 'auto_detect',
+                                    onPressed: _autoDetectLocation,
+                                    tooltip: _i18n.t('auto_detect_location'),
+                                    child: const Icon(Icons.my_location),
+                                  ),
+                          ],
                         ),
                       ),
                     ],
                   ),
                 ),
 
-                // Map Instructions
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  color: theme.colorScheme.primaryContainer.withOpacity(0.3),
-                  child: Row(
-                    children: [
-                      Icon(
-                        Icons.info_outline,
-                        size: 16,
-                        color: theme.colorScheme.primary,
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          _i18n.t('map_instructions'),
-                          style: theme.textTheme.bodySmall?.copyWith(
-                            color: theme.colorScheme.onSurfaceVariant,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
               ],
             ),
           ),
@@ -557,7 +536,6 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
           // Manual Input Panel
           isPortrait
               ? Container(
-                  height: 200,
                   decoration: BoxDecoration(
                     color: theme.colorScheme.surface,
                     border: Border(
@@ -566,130 +544,46 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
                       ),
                     ),
                   ),
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.all(24),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // Coordinates Section
-                    Row(
-                      children: [
-                        Icon(
-                          Icons.my_location,
-                          color: theme.colorScheme.primary,
-                          size: 20,
-                        ),
-                        const SizedBox(width: 8),
-                        Text(
-                          _i18n.t('coordinates'),
-                          style: theme.textTheme.titleMedium?.copyWith(
-                            fontWeight: FontWeight.bold,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Toggle link
+                  InkWell(
+                    onTap: () {
+                      setState(() {
+                        _showManualCoordinates = !_showManualCoordinates;
+                      });
+                    },
+                    child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(
+                            _showManualCoordinates ? Icons.expand_less : Icons.expand_more,
+                            color: theme.colorScheme.primary,
+                            size: 20,
                           ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 16),
-
-                    // Latitude Input
-                    Text(
-                      _i18n.t('latitude'),
-                      style: theme.textTheme.titleSmall,
-                    ),
-                    const SizedBox(height: 8),
-                    TextField(
-                      controller: _latController,
-                      decoration: InputDecoration(
-                        hintText: _i18n.t('latitude_range'),
-                        border: const OutlineInputBorder(),
-                        filled: true,
-                        suffixText: '°',
-                        prefixIcon: Icon(
-                          Icons.arrow_upward,
-                          color: theme.colorScheme.primary,
-                        ),
-                      ),
-                      keyboardType: const TextInputType.numberWithOptions(
-                        decimal: true,
-                        signed: true,
+                          const SizedBox(width: 8),
+                          Text(
+                            _showManualCoordinates
+                                ? _i18n.t('hide_coordinates')
+                                : _i18n.t('enter_coordinates_manually'),
+                            style: theme.textTheme.bodyMedium?.copyWith(
+                              color: theme.colorScheme.primary,
+                            ),
+                          ),
+                        ],
                       ),
                     ),
-
-                    const SizedBox(height: 16),
-
-                    // Longitude Input
-                    Text(
-                      _i18n.t('longitude'),
-                      style: theme.textTheme.titleSmall,
-                    ),
-                    const SizedBox(height: 8),
-                    TextField(
-                      controller: _lonController,
-                      decoration: InputDecoration(
-                        hintText: _i18n.t('longitude_range'),
-                        border: const OutlineInputBorder(),
-                        filled: true,
-                        suffixText: '°',
-                        prefixIcon: Icon(
-                          Icons.arrow_forward,
-                          color: theme.colorScheme.primary,
-                        ),
-                      ),
-                      keyboardType: const TextInputType.numberWithOptions(
-                        decimal: true,
-                        signed: true,
-                      ),
-                    ),
-
-                    const SizedBox(height: 16),
-
-                    // Update Button
-                    SizedBox(
-                      width: double.infinity,
-                      child: FilledButton.icon(
-                        onPressed: _updateFromManualInput,
-                        icon: const Icon(Icons.update),
-                        label: Text(_i18n.t('update_map_position')),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            )
-              : SizedBox(
-                  width: 350,
-                  child: Container(
-                    decoration: BoxDecoration(
-                      color: theme.colorScheme.surface,
-                      border: Border(
-                        left: BorderSide(
-                          color: theme.colorScheme.outline.withOpacity(0.2),
-                        ),
-                      ),
-                    ),
-                    child: SingleChildScrollView(
-                      padding: const EdgeInsets.all(24),
+                  ),
+                  // Collapsible coordinates section
+                  if (_showManualCoordinates)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          // Coordinates Section
-                          Row(
-                            children: [
-                              Icon(
-                                Icons.my_location,
-                                color: theme.colorScheme.primary,
-                                size: 20,
-                              ),
-                              const SizedBox(width: 8),
-                              Text(
-                                _i18n.t('coordinates'),
-                                style: theme.textTheme.titleMedium?.copyWith(
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 16),
-
                           // Latitude Input
                           Text(
                             _i18n.t('latitude'),
@@ -712,10 +606,9 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
                               decimal: true,
                               signed: true,
                             ),
+                            onSubmitted: (_) => _updateFromManualInput(),
                           ),
-
                           const SizedBox(height: 16),
-
                           // Longitude Input
                           Text(
                             _i18n.t('longitude'),
@@ -738,21 +631,118 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
                               decimal: true,
                               signed: true,
                             ),
-                          ),
-
-                          const SizedBox(height: 16),
-
-                          // Update Button
-                          SizedBox(
-                            width: double.infinity,
-                            child: FilledButton.icon(
-                              onPressed: _updateFromManualInput,
-                              icon: const Icon(Icons.update),
-                              label: Text(_i18n.t('update_map_position')),
-                            ),
+                            onSubmitted: (_) => _updateFromManualInput(),
                           ),
                         ],
                       ),
+                    ),
+                ],
+              ),
+            )
+              : SizedBox(
+                  width: 350,
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: theme.colorScheme.surface,
+                      border: Border(
+                        left: BorderSide(
+                          color: theme.colorScheme.outline.withOpacity(0.2),
+                        ),
+                      ),
+                    ),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        // Toggle link
+                        InkWell(
+                          onTap: () {
+                            setState(() {
+                              _showManualCoordinates = !_showManualCoordinates;
+                            });
+                          },
+                          child: Padding(
+                            padding: const EdgeInsets.all(16),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(
+                                  _showManualCoordinates ? Icons.expand_less : Icons.expand_more,
+                                  color: theme.colorScheme.primary,
+                                  size: 20,
+                                ),
+                                const SizedBox(width: 8),
+                                Text(
+                                  _showManualCoordinates
+                                      ? _i18n.t('hide_coordinates')
+                                      : _i18n.t('enter_coordinates_manually'),
+                                  style: theme.textTheme.bodyMedium?.copyWith(
+                                    color: theme.colorScheme.primary,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                        // Collapsible coordinates section
+                        if (_showManualCoordinates)
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                // Latitude Input
+                                Text(
+                                  _i18n.t('latitude'),
+                                  style: theme.textTheme.titleSmall,
+                                ),
+                                const SizedBox(height: 8),
+                                TextField(
+                                  controller: _latController,
+                                  decoration: InputDecoration(
+                                    hintText: _i18n.t('latitude_range'),
+                                    border: const OutlineInputBorder(),
+                                    filled: true,
+                                    suffixText: '°',
+                                    prefixIcon: Icon(
+                                      Icons.arrow_upward,
+                                      color: theme.colorScheme.primary,
+                                    ),
+                                  ),
+                                  keyboardType: const TextInputType.numberWithOptions(
+                                    decimal: true,
+                                    signed: true,
+                                  ),
+                                  onSubmitted: (_) => _updateFromManualInput(),
+                                ),
+                                const SizedBox(height: 16),
+                                // Longitude Input
+                                Text(
+                                  _i18n.t('longitude'),
+                                  style: theme.textTheme.titleSmall,
+                                ),
+                                const SizedBox(height: 8),
+                                TextField(
+                                  controller: _lonController,
+                                  decoration: InputDecoration(
+                                    hintText: _i18n.t('longitude_range'),
+                                    border: const OutlineInputBorder(),
+                                    filled: true,
+                                    suffixText: '°',
+                                    prefixIcon: Icon(
+                                      Icons.arrow_forward,
+                                      color: theme.colorScheme.primary,
+                                    ),
+                                  ),
+                                  keyboardType: const TextInputType.numberWithOptions(
+                                    decimal: true,
+                                    signed: true,
+                                  ),
+                                  onSubmitted: (_) => _updateFromManualInput(),
+                                ),
+                              ],
+                            ),
+                          ),
+                      ],
                     ),
                   ),
                 ),

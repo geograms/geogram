@@ -19,6 +19,8 @@ class BlogPostDetailWidget extends StatelessWidget {
   final VoidCallback? onEdit;
   final VoidCallback? onDelete;
   final VoidCallback? onPublish;
+  final String? relayUrl;
+  final String? profileIdentifier; // nickname or callsign for URL
 
   const BlogPostDetailWidget({
     Key? key,
@@ -28,7 +30,21 @@ class BlogPostDetailWidget extends StatelessWidget {
     this.onEdit,
     this.onDelete,
     this.onPublish,
+    this.relayUrl,
+    this.profileIdentifier,
   }) : super(key: key);
+
+  /// Get shareable URL for this blog post
+  String? get shareableUrl {
+    if (relayUrl == null || profileIdentifier == null || post.isDraft) {
+      return null;
+    }
+    // Convert ws:// or wss:// to http:// or https://
+    final httpUrl = relayUrl!
+        .replaceFirst('ws://', 'http://')
+        .replaceFirst('wss://', 'https://');
+    return '$httpUrl/$profileIdentifier/blog/${post.id}.html';
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -247,6 +263,54 @@ class BlogPostDetailWidget extends StatelessWidget {
                 ),
               ),
             ],
+          ),
+        ],
+        // Shareable URL (only for published posts)
+        if (shareableUrl != null) ...[
+          const SizedBox(height: 16),
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: theme.colorScheme.surfaceContainerHighest.withOpacity(0.5),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(
+                color: theme.colorScheme.outline.withOpacity(0.2),
+              ),
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  Icons.link,
+                  size: 18,
+                  color: theme.colorScheme.primary,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: SelectableText(
+                    shareableUrl!,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.primary,
+                      fontFamily: 'monospace',
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                IconButton(
+                  icon: const Icon(Icons.copy, size: 18),
+                  onPressed: () {
+                    Clipboard.setData(ClipboardData(text: shareableUrl!));
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(i18n.t('url_copied')),
+                        duration: const Duration(seconds: 2),
+                      ),
+                    );
+                  },
+                  tooltip: i18n.t('copy_url'),
+                  visualDensity: VisualDensity.compact,
+                ),
+              ],
+            ),
           ),
         ],
       ],

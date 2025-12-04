@@ -80,6 +80,13 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
 
         setState(() {
           _existingTypes = _singleInstanceTypes.intersection(existingFolderNames);
+          // Select the first available type that isn't already created
+          _selectedType = _collectionTypes
+              .map((t) => t.type)
+              .firstWhere(
+                (type) => !_existingTypes.contains(type),
+                orElse: () => 'files', // Fallback to files which allows multiple
+              );
         });
       }
     } catch (e) {

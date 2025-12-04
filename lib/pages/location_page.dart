@@ -245,16 +245,50 @@ class _LocationPageState extends State<LocationPage> {
       appBar: AppBar(
         title: Text(_i18n.t('location_settings')),
       ),
-      body: Row(
-        children: [
-          // Map View (Left Side)
-          Expanded(
-            flex: 2,
-            child: Column(
+      body: LayoutBuilder(
+        builder: (context, constraints) {
+          final isWide = constraints.maxWidth > 700;
+
+          if (isWide) {
+            // Desktop: side-by-side layout
+            return Row(
               children: [
-                // Map Widget
                 Expanded(
-                  child: Stack(
+                  flex: 2,
+                  child: _buildMapSection(context),
+                ),
+                SizedBox(
+                  width: 350,
+                  child: _buildFormPanel(context),
+                ),
+              ],
+            );
+          } else {
+            // Mobile: stacked layout
+            return Column(
+              children: [
+                Expanded(
+                  flex: 2,
+                  child: _buildMapSection(context),
+                ),
+                Expanded(
+                  flex: 3,
+                  child: _buildFormPanel(context),
+                ),
+              ],
+            );
+          }
+        },
+      ),
+    );
+  }
+
+  Widget _buildMapSection(BuildContext context) {
+    return Column(
+      children: [
+        // Map Widget
+        Expanded(
+          child: Stack(
                     children: [
                       FlutterMap(
                         mapController: _mapController,
@@ -451,33 +485,31 @@ class _LocationPageState extends State<LocationPage> {
                   ),
                 ),
               ],
-            ),
-          ),
+            );
+  }
 
-          // Manual Input Panel (Right Side)
-          SizedBox(
-            width: 350,
-            child: Container(
-              decoration: BoxDecoration(
-                color: Theme.of(context).colorScheme.surface,
-                border: Border(
-                  left: BorderSide(
-                    color: Theme.of(context).colorScheme.outline.withOpacity(0.2),
-                  ),
+  Widget _buildFormPanel(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surface,
+        border: Border(
+          left: BorderSide(
+            color: Theme.of(context).colorScheme.outline.withOpacity(0.2),
+          ),
+        ),
+      ),
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Header
+            Row(
+              children: [
+                Icon(
+                  Icons.edit_location,
+                  color: Theme.of(context).colorScheme.primary,
                 ),
-              ),
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.all(24),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // Header
-                    Row(
-                      children: [
-                        Icon(
-                          Icons.edit_location,
-                          color: Theme.of(context).colorScheme.primary,
-                        ),
                         const SizedBox(width: 8),
                         Text(
                           _i18n.t('location_details'),
@@ -667,25 +699,21 @@ class _LocationPageState extends State<LocationPage> {
 
                     const SizedBox(height: 16),
 
-                    // Coordinate Format Help
-                    ExpansionTile(
-                      title: Text(_i18n.t('coordinate_format_help')),
-                      leading: const Icon(Icons.help_outline, size: 20),
-                      tilePadding: EdgeInsets.zero,
-                      childrenPadding: const EdgeInsets.all(12),
-                      children: [
-                        Text(
-                          _i18n.t('coordinate_help_text'),
-                          style: Theme.of(context).textTheme.bodySmall,
-                        ),
-                      ],
-                    ),
-                  ],
+            // Coordinate Format Help
+            ExpansionTile(
+              title: Text(_i18n.t('coordinate_format_help')),
+              leading: const Icon(Icons.help_outline, size: 20),
+              tilePadding: EdgeInsets.zero,
+              childrenPadding: const EdgeInsets.all(12),
+              children: [
+                Text(
+                  _i18n.t('coordinate_help_text'),
+                  style: Theme.of(context).textTheme.bodySmall,
                 ),
-              ),
+              ],
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }

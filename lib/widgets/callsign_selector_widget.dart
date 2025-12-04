@@ -3,6 +3,7 @@
  * License: Apache-2.0
  */
 
+import 'dart:io';
 import 'package:flutter/material.dart';
 import '../models/profile.dart';
 import '../services/profile_service.dart';
@@ -296,27 +297,38 @@ class CallsignSelectorWidget extends StatelessWidget {
 
   /// Build profile avatar
   Widget _buildProfileAvatar(ThemeData theme, Profile profile, {bool isActive = false, double size = 36}) {
-    final color = _getColorForProfile(profile);
-    final bgColor = isActive
-        ? theme.colorScheme.primary.withValues(alpha: 0.2)
-        : color.withValues(alpha: 0.15);
-    final iconColor = isActive ? theme.colorScheme.onPrimaryContainer : color;
+    // Check if profile has a custom image
+    if (profile.profileImagePath != null && profile.profileImagePath!.isNotEmpty) {
+      final imageFile = File(profile.profileImagePath!);
+      if (imageFile.existsSync()) {
+        return Container(
+          width: size,
+          height: size,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(size * 0.4),
+            image: DecorationImage(
+              image: FileImage(imageFile),
+              fit: BoxFit.cover,
+            ),
+          ),
+        );
+      }
+    }
 
+    // Use default geogram icon when no profile image is set
     return Container(
       width: size,
       height: size,
       decoration: BoxDecoration(
-        color: bgColor,
         borderRadius: BorderRadius.circular(size * 0.4),
       ),
-      child: Center(
-        child: Text(
-          profile.callsign.isNotEmpty ? profile.callsign[0].toUpperCase() : '?',
-          style: TextStyle(
-            fontSize: size * 0.45,
-            fontWeight: FontWeight.bold,
-            color: iconColor,
-          ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(size * 0.4),
+        child: Image.asset(
+          'assets/default_profile.png',
+          width: size,
+          height: size,
+          fit: BoxFit.cover,
         ),
       ),
     );

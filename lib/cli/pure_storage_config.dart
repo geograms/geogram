@@ -1,30 +1,15 @@
+// Pure Dart storage configuration for CLI mode (no Flutter dependencies)
 import 'dart:io';
 import 'package:path/path.dart' as path;
-import 'package:path_provider/path_provider.dart';
 
-/// Centralized storage configuration for geogram-desktop
+/// Centralized storage configuration for CLI mode
 ///
-/// This service provides unified path management for both UI and CLI modes.
-/// By default, data is stored in the directory where the binary is running.
-/// This can be overridden via:
-/// - Environment variable: GEOGRAM_DATA_DIR
-/// - CLI argument: --data-dir=/path/to/dir
-/// - Programmatic configuration before initialization
-///
-/// Standard folder structure:
-/// {BASE_DIR}/
-/// ├── config.json         # Main config (profiles, settings)
-/// ├── relay_config.json   # Relay specific config
-/// ├── devices/            # Device data per callsign
-/// │   └── {CALLSIGN}/
-/// │       └── {collections}
-/// ├── tiles/              # Cached map tiles
-/// ├── ssl/                # SSL certificates
-/// └── logs/               # Log files
-class StorageConfig {
-  static final StorageConfig _instance = StorageConfig._internal();
-  factory StorageConfig() => _instance;
-  StorageConfig._internal();
+/// This is a pure Dart version of StorageConfig that doesn't depend on
+/// Flutter-specific packages like path_provider.
+class PureStorageConfig {
+  static final PureStorageConfig _instance = PureStorageConfig._internal();
+  factory PureStorageConfig() => _instance;
+  PureStorageConfig._internal();
 
   /// Whether the storage config has been initialized
   bool _initialized = false;
@@ -42,7 +27,7 @@ class StorageConfig {
   String get baseDir {
     if (!_initialized || _baseDir == null) {
       throw StateError(
-        'StorageConfig not initialized. Call StorageConfig().init() first.',
+        'PureStorageConfig not initialized. Call PureStorageConfig().init() first.',
       );
     }
     return _baseDir!;
@@ -88,7 +73,7 @@ class StorageConfig {
       // Already initialized - allow re-initialization with different path
       if (customBaseDir != null && customBaseDir != _baseDir) {
         stderr.writeln(
-          'StorageConfig: Re-initializing with new base directory: $customBaseDir',
+          'PureStorageConfig: Re-initializing with new base directory: $customBaseDir',
         );
       } else {
         return; // Already initialized with same or default path
@@ -103,17 +88,13 @@ class StorageConfig {
       final envDir = Platform.environment[envVarName];
       if (envDir != null && envDir.isNotEmpty) {
         _baseDir = _normalizePath(envDir);
-      } else if (Platform.isAndroid || Platform.isIOS) {
-        // On mobile platforms, use app documents directory
-        final appDir = await getApplicationDocumentsDirectory();
-        _baseDir = path.join(appDir.path, 'geogram');
       } else {
-        // Default to current working directory (desktop)
+        // Default to current working directory (CLI is always desktop)
         _baseDir = Directory.current.path;
       }
     }
 
-    stderr.writeln('StorageConfig: Base directory set to: $_baseDir');
+    stderr.writeln('PureStorageConfig: Base directory set to: $_baseDir');
 
     if (createDirectories) {
       await _ensureDirectoriesExist();
@@ -162,7 +143,7 @@ class StorageConfig {
       final directory = Directory(dir);
       if (!await directory.exists()) {
         await directory.create(recursive: true);
-        stderr.writeln('StorageConfig: Created directory: $dir');
+        stderr.writeln('PureStorageConfig: Created directory: $dir');
       }
     }
   }
@@ -194,9 +175,9 @@ class StorageConfig {
   @override
   String toString() {
     if (!_initialized) {
-      return 'StorageConfig(not initialized)';
+      return 'PureStorageConfig(not initialized)';
     }
-    return 'StorageConfig(baseDir: $baseDir)';
+    return 'PureStorageConfig(baseDir: $baseDir)';
   }
 }
 

@@ -3,8 +3,11 @@
  * License: Apache-2.0
  */
 
+import 'dart:io' show Platform;
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:latlong2/latlong.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../models/group.dart';
 import '../models/group_member.dart';
 import '../models/group_area.dart';
@@ -203,6 +206,25 @@ class _GroupDetailPageState extends State<GroupDetailPage> with SingleTickerProv
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(_i18n.t('area_removed'))),
         );
+      }
+    }
+  }
+
+  Future<void> _openInNavigator(double latitude, double longitude) async {
+    Uri mapUri;
+    if (!kIsWeb && Platform.isAndroid) {
+      // Android: canLaunchUrl often returns false for geo: URIs even when they work
+      mapUri = Uri.parse('geo:$latitude,$longitude?q=$latitude,$longitude');
+      await launchUrl(mapUri);
+    } else if (!kIsWeb && Platform.isIOS) {
+      // iOS: Use Apple Maps
+      mapUri = Uri.parse('https://maps.apple.com/?q=$latitude,$longitude');
+      await launchUrl(mapUri);
+    } else {
+      // Desktop/Web: Use OpenStreetMap
+      mapUri = Uri.parse('https://www.openstreetmap.org/?mlat=$latitude&mlon=$longitude&zoom=15');
+      if (await canLaunchUrl(mapUri)) {
+        await launchUrl(mapUri);
       }
     }
   }
@@ -467,12 +489,21 @@ class _GroupDetailPageState extends State<GroupDetailPage> with SingleTickerProv
                       leading: const Icon(Icons.location_on),
                       title: Text(area.name),
                       subtitle: Text('${area.latitude}, ${area.longitude} (${area.radiusKm} km)'),
-                      trailing: _isAdmin
-                          ? IconButton(
+                      trailing: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          IconButton(
+                            icon: const Icon(Icons.navigation, size: 20),
+                            onPressed: () => _openInNavigator(area.latitude, area.longitude),
+                            tooltip: _i18n.t('open_in_navigator'),
+                          ),
+                          if (_isAdmin)
+                            IconButton(
                               icon: const Icon(Icons.delete),
                               onPressed: () => _removeArea(area),
-                            )
-                          : null,
+                            ),
+                        ],
+                      ),
                     );
                   },
                 ),

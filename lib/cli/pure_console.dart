@@ -14,7 +14,7 @@ import 'game/game_config.dart';
 import 'game/game_parser.dart';
 import 'game/game_engine.dart';
 import 'game/game_screen.dart';
-import '../services/storage_config.dart';
+import 'pure_storage_config.dart';
 
 /// Completion candidate
 class Candidate {
@@ -313,7 +313,7 @@ class PureConsole {
     final customDataDir = parseDataDirFromArgs(args);
 
     // Initialize storage configuration first
-    await StorageConfig().init(customBaseDir: customDataDir);
+    await PureStorageConfig().init(customBaseDir: customDataDir);
 
     await _initializeServices();
     _printBanner();
@@ -389,7 +389,7 @@ class PureConsole {
       stdout.writeln('\x1B[33m  No profile configured\x1B[0m');
     }
 
-    stdout.writeln('\x1B[36m  Data Directory: ${StorageConfig().baseDir}\x1B[0m');
+    stdout.writeln('\x1B[36m  Data Directory: ${PureStorageConfig().baseDir}\x1B[0m');
     stdout.writeln('\x1B[36m' + '=' * 60 + '\x1B[0m');
     stdout.writeln();
     stdout.writeln('Type "help" for available commands.');

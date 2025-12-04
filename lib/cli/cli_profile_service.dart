@@ -6,7 +6,7 @@ import 'dart:math';
 import 'package:crypto/crypto.dart';
 import 'cli_config_service.dart';
 import '../models/profile.dart';
-import '../services/storage_config.dart';
+import 'pure_storage_config.dart';
 
 // Re-export ProfileType for CLI usage
 export '../models/profile.dart' show ProfileType;
@@ -112,9 +112,9 @@ class CliProfileService {
   Future<void> initialize() async {
     if (_initialized) return;
 
-    final storageConfig = StorageConfig();
+    final storageConfig = PureStorageConfig();
     if (!storageConfig.isInitialized) {
-      throw StateError('StorageConfig must be initialized first');
+      throw StateError('PureStorageConfig must be initialized first');
     }
 
     // Initialize CLI config service
@@ -262,7 +262,7 @@ class CliProfileService {
 
   /// Create device folder in the devices directory
   Future<void> _createDeviceFolder(String callsign) async {
-    final storageConfig = StorageConfig();
+    final storageConfig = PureStorageConfig();
     final deviceDir = Directory('${storageConfig.devicesDir}/$callsign');
     if (!await deviceDir.exists()) {
       await deviceDir.create(recursive: true);

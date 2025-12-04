@@ -3,6 +3,7 @@
  * License: Apache-2.0
  */
 
+import 'dart:io';
 import 'package:flutter/material.dart';
 import '../models/profile.dart';
 import '../services/profile_service.dart';
@@ -62,25 +63,45 @@ class _ProfileSwitcherState extends State<ProfileSwitcher> {
   }
 
   Widget _buildProfileAvatar(Profile profile, {double size = 32}) {
+    // Check if profile has a custom image
+    if (profile.profileImagePath != null && profile.profileImagePath!.isNotEmpty) {
+      final imageFile = File(profile.profileImagePath!);
+      if (imageFile.existsSync()) {
+        return Container(
+          width: size,
+          height: size,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            border: Border.all(
+              color: Colors.white.withOpacity(0.5),
+              width: 2,
+            ),
+            image: DecorationImage(
+              image: FileImage(imageFile),
+              fit: BoxFit.cover,
+            ),
+          ),
+        );
+      }
+    }
+
+    // Use default geogram icon when no profile image is set
     return Container(
       width: size,
       height: size,
       decoration: BoxDecoration(
         shape: BoxShape.circle,
-        color: _getColorFromName(profile.preferredColor),
         border: Border.all(
           color: Colors.white.withOpacity(0.5),
           width: 2,
         ),
       ),
-      child: Center(
-        child: Text(
-          profile.callsign.isNotEmpty ? profile.callsign.substring(0, 2) : '??',
-          style: TextStyle(
-            color: Colors.white,
-            fontWeight: FontWeight.bold,
-            fontSize: size * 0.4,
-          ),
+      child: ClipOval(
+        child: Image.asset(
+          'assets/default_profile.png',
+          width: size,
+          height: size,
+          fit: BoxFit.cover,
         ),
       ),
     );
@@ -122,7 +143,9 @@ class _ProfileSwitcherState extends State<ProfileSwitcher> {
                       Row(
                         children: [
                           Text(
-                            profile.callsign,
+                            profile.nickname.isNotEmpty
+                                ? profile.nickname
+                                : profile.callsign,
                             style: TextStyle(
                               fontWeight:
                                   isActive ? FontWeight.bold : FontWeight.normal,
@@ -150,7 +173,7 @@ class _ProfileSwitcherState extends State<ProfileSwitcher> {
                       ),
                       if (profile.nickname.isNotEmpty)
                         Text(
-                          profile.nickname,
+                          profile.callsign,
                           style: TextStyle(
                             fontSize: 12,
                             color: Theme.of(context)
@@ -230,12 +253,14 @@ class _ProfileSwitcherState extends State<ProfileSwitcher> {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Text(
-                      profile.callsign.isNotEmpty
-                          ? profile.callsign
-                          : 'No Profile',
+                      profile.nickname.isNotEmpty
+                          ? profile.nickname
+                          : (profile.callsign.isNotEmpty
+                              ? profile.callsign
+                              : 'No Profile'),
                       style: const TextStyle(
                         fontWeight: FontWeight.bold,
-                        fontSize: 14,
+                        fontSize: 16,
                       ),
                     ),
                     if (profile.isRelay) ...[
@@ -261,7 +286,7 @@ class _ProfileSwitcherState extends State<ProfileSwitcher> {
                 ),
                 if (profile.nickname.isNotEmpty)
                   Text(
-                    profile.nickname,
+                    profile.callsign,
                     style: TextStyle(
                       fontSize: 11,
                       color: Theme.of(context)
