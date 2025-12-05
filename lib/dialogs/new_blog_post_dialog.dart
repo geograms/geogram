@@ -4,6 +4,7 @@
  */
 
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:file_picker/file_picker.dart';
 import 'package:latlong2/latlong.dart';
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
@@ -257,26 +258,39 @@ class _NewBlogPostDialogState extends State<NewBlogPostDialog> {
                     children: [
                       ClipRRect(
                         borderRadius: BorderRadius.circular(8),
-                        child: Image.file(
-                          File(imagePath),
-                          width: 100,
-                          height: 100,
-                          fit: BoxFit.cover,
-                          errorBuilder: (context, error, stackTrace) {
-                            return Container(
-                              width: 100,
-                              height: 100,
-                              decoration: BoxDecoration(
-                                color: theme.colorScheme.surfaceContainerHighest,
-                                borderRadius: BorderRadius.circular(8),
+                        child: kIsWeb
+                            ? Container(
+                                width: 100,
+                                height: 100,
+                                decoration: BoxDecoration(
+                                  color: theme.colorScheme.surfaceContainerHighest,
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: Icon(
+                                  Icons.image,
+                                  color: theme.colorScheme.onSurfaceVariant,
+                                ),
+                              )
+                            : Image.file(
+                                File(imagePath) as dynamic,
+                                width: 100,
+                                height: 100,
+                                fit: BoxFit.cover,
+                                errorBuilder: (context, error, stackTrace) {
+                                  return Container(
+                                    width: 100,
+                                    height: 100,
+                                    decoration: BoxDecoration(
+                                      color: theme.colorScheme.surfaceContainerHighest,
+                                      borderRadius: BorderRadius.circular(8),
+                                    ),
+                                    child: Icon(
+                                      Icons.broken_image,
+                                      color: theme.colorScheme.onSurfaceVariant,
+                                    ),
+                                  );
+                                },
                               ),
-                              child: Icon(
-                                Icons.broken_image,
-                                color: theme.colorScheme.onSurfaceVariant,
-                              ),
-                            );
-                          },
-                        ),
                       ),
                       Positioned(
                         top: 4,
