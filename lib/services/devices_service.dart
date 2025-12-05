@@ -5,7 +5,7 @@
 
 import 'dart:convert';
 import 'dart:async';
-import 'dart:io';
+import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'dart:math';
 import 'package:http/http.dart' as http;
 import '../models/device_source.dart';

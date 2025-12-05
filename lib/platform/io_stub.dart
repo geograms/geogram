@@ -4,6 +4,7 @@
 // ignore_for_file: avoid_classes_with_only_static_members
 
 import 'dart:async';
+import 'dart:typed_data';
 
 /// Stub for stderr (web platform)
 final stderr = _StderrStub();
@@ -136,11 +137,11 @@ class File implements FileSystemEntity {
     throw UnsupportedError('File operations are not supported on web');
   }
 
-  Future<List<int>> readAsBytes() async {
+  Future<Uint8List> readAsBytes() async {
     throw UnsupportedError('File operations are not supported on web');
   }
 
-  List<int> readAsBytesSync() {
+  Uint8List readAsBytesSync() {
     throw UnsupportedError('File operations are not supported on web');
   }
 
@@ -395,7 +396,12 @@ class HttpServer {
 
   Future<void> close({bool force = false}) async {}
 
-  Stream<dynamic> get stream => const Stream.empty();
+  Stream<HttpRequest> get stream => const Stream.empty();
+
+  StreamSubscription<HttpRequest> listen(void Function(HttpRequest event)? onData,
+      {Function? onError, void Function()? onDone, bool? cancelOnError}) {
+    throw UnsupportedError('HttpServer is not supported on web');
+  }
 }
 
 /// Stub for ProcessSignal
@@ -632,6 +638,8 @@ abstract class HttpHeaders {
   static const contentTypeHeader = 'content-type';
   static const contentLengthHeader = 'content-length';
 
+  ContentType? contentType;
+
   void add(String name, Object value);
   void set(String name, Object value);
   String? value(String name);
@@ -775,4 +783,135 @@ class SocketException implements IOException {
 
   @override
   String toString() => 'SocketException: $message';
+}
+
+/// Stub for WebSocket
+class WebSocket {
+  static const int connecting = 0;
+  static const int open = 1;
+  static const int closing = 2;
+  static const int closed = 3;
+
+  int get readyState => closed;
+  String? get closeReason => null;
+  int? get closeCode => null;
+
+  static Future<WebSocket> connect(String url, {Iterable<String>? protocols, Map<String, dynamic>? headers}) async {
+    throw UnsupportedError('WebSocket is not supported on web via dart:io');
+  }
+
+  void add(dynamic data) {
+    throw UnsupportedError('WebSocket is not supported on web via dart:io');
+  }
+
+  Future<void> close([int? code, String? reason]) async {}
+
+  Stream<dynamic> get stream => const Stream.empty();
+
+  StreamSubscription<dynamic> listen(void Function(dynamic event)? onData,
+      {Function? onError, void Function()? onDone, bool? cancelOnError}) {
+    throw UnsupportedError('WebSocket is not supported on web via dart:io');
+  }
+}
+
+/// Stub for WebSocketTransformer
+class WebSocketTransformer {
+  static bool isUpgradeRequest(HttpRequest request) => false;
+
+  static Future<WebSocket> upgrade(HttpRequest request) async {
+    throw UnsupportedError('WebSocketTransformer is not supported on web');
+  }
+}
+
+/// Stub for HttpRequest
+abstract class HttpRequest {
+  Uri get uri;
+  String get method;
+  HttpHeaders get headers;
+  HttpResponse get response;
+  HttpSession get session;
+  String get protocolVersion;
+  InternetAddress get connectionInfo;
+  List<Cookie> get cookies;
+  int get contentLength;
+  bool get persistentConnection;
+  X509Certificate? get certificate;
+
+  StreamSubscription<List<int>> listen(void Function(List<int> event)? onData,
+      {Function? onError, void Function()? onDone, bool? cancelOnError});
+}
+
+/// Stub for HttpResponse
+abstract class HttpResponse {
+  int get statusCode;
+  set statusCode(int value);
+  String get reasonPhrase;
+  set reasonPhrase(String value);
+  HttpHeaders get headers;
+  List<Cookie> get cookies;
+  Duration? get deadline;
+  set deadline(Duration? value);
+  int get contentLength;
+  set contentLength(int value);
+  bool get persistentConnection;
+  set persistentConnection(bool value);
+  bool get bufferOutput;
+  set bufferOutput(bool value);
+
+  void add(List<int> data);
+  void write(Object? object);
+  void writeln([Object? object]);
+  void writeAll(Iterable objects, [String separator]);
+  Future<void> close();
+  Future<void> flush();
+  Future<void> redirect(Uri location, {int status});
+  Future<dynamic> addStream(Stream<List<int>> stream);
+}
+
+/// Stub for HttpSession
+abstract class HttpSession {
+  String get id;
+  bool get isNew;
+  void destroy();
+  void set onTimeout(void Function() callback);
+}
+
+/// Stub for Cookie
+class Cookie {
+  String name;
+  String value;
+  DateTime? expires;
+  int? maxAge;
+  String? domain;
+  String? path;
+  bool secure;
+  bool httpOnly;
+
+  Cookie(this.name, this.value)
+      : secure = false,
+        httpOnly = false;
+
+  Cookie.fromSetCookieValue(String value)
+      : name = '',
+        value = '',
+        secure = false,
+        httpOnly = false;
+
+  @override
+  String toString() => '$name=$value';
+}
+
+/// Stub for X509Certificate
+abstract class X509Certificate {
+  String get subject;
+  String get issuer;
+  DateTime get startValidity;
+  DateTime get endValidity;
+}
+
+/// Stub for HttpConnectionInfo
+abstract class HttpConnectionInfo {
+  InternetAddress get remoteAddress;
+  int get remotePort;
+  int get localPort;
 }

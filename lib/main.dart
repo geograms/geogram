@@ -46,6 +46,8 @@ import 'widgets/profile_switcher.dart';
 import 'cli/console.dart';
 
 void main() async {
+  print('MAIN: Starting Geogram (kIsWeb: $kIsWeb)'); // Debug
+
   // Check for CLI mode before Flutter initialization
   if (!kIsWeb) {
     final args = Platform.executableArguments;
@@ -103,19 +105,20 @@ void main() async {
   LogService().log('Geogram Desktop starting...');
 
   try {
+    // PHASE 1: Critical services (must complete before UI)
+    // These are fast and required for the app to function
+
     // Initialize storage configuration first (all other services depend on it)
-    // Checks GEOGRAM_DATA_DIR environment variable, defaults to current directory
     await StorageConfig().init();
     LogService().log('StorageConfig initialized: ${StorageConfig().baseDir}');
 
-    // Initialize services
-    await ConfigService().init();
-    LogService().log('ConfigService initialized');
+    // Initialize config and i18n in parallel (both are independent)
+    await Future.wait([
+      ConfigService().init().then((_) => LogService().log('ConfigService initialized')),
+      I18nService().init().then((_) => LogService().log('I18nService initialized')),
+    ]);
 
-    // Initialize i18n service (internationalization)
-    await I18nService().init();
-    LogService().log('I18nService initialized');
-
+    // Initialize profile and collection services
     await CollectionService().init();
     LogService().log('CollectionService initialized');
 
@@ -127,32 +130,50 @@ void main() async {
     await CollectionService().setActiveCallsign(profile.callsign);
     LogService().log('CollectionService callsign set: ${profile.callsign}');
 
-    await RelayService().initialize();
-    LogService().log('RelayService initialized');
-
+    // Initialize notification service (needed for UI badges)
     await NotificationService().initialize();
     LogService().log('NotificationService initialized');
 
-    await UpdateService().initialize();
-    LogService().log('UpdateService initialized');
-
-    // Start relay auto-discovery
-    RelayDiscoveryService().start();
-    LogService().log('RelayDiscoveryService started');
-
-    // Start log API service
-    await LogApiService().start();
-    LogService().log('LogApiService started on port 45678');
-
-    // Initialize chat notification service
+    // Initialize chat notification service (needed for unread counts)
     ChatNotificationService().initialize();
     LogService().log('ChatNotificationService initialized');
+
   } catch (e, stackTrace) {
-    LogService().log('ERROR during initialization: $e');
+    LogService().log('ERROR during critical initialization: $e');
     LogService().log('Stack trace: $stackTrace');
+    print('MAIN ERROR: $e');
+    print('MAIN STACK: $stackTrace');
   }
 
+  // Start the app immediately - don't wait for non-critical services
+  print('MAIN: Starting app (deferred services will initialize in background)');
   runApp(const GeogramApp());
+
+  // PHASE 2: Deferred services (initialize after first frame)
+  // These can take time and shouldn't block the UI
+  WidgetsBinding.instance.addPostFrameCallback((_) async {
+    try {
+      // RelayService can involve network calls - defer it
+      await RelayService().initialize();
+      LogService().log('RelayService initialized (deferred)');
+
+      // UpdateService may check for updates - defer it
+      await UpdateService().initialize();
+      LogService().log('UpdateService initialized (deferred)');
+
+      // Start relay auto-discovery (background task)
+      RelayDiscoveryService().start();
+      LogService().log('RelayDiscoveryService started (deferred)');
+
+      // Start log API service (only needed for debugging)
+      await LogApiService().start();
+      LogService().log('LogApiService started on port 45678 (deferred)');
+    } catch (e, stackTrace) {
+      LogService().log('ERROR during deferred initialization: $e');
+      LogService().log('Stack trace: $stackTrace');
+    }
+  });
+  return; // Early return since runApp is already called
 }
 
 class GeogramApp extends StatelessWidget {
@@ -239,7 +260,7 @@ class _HomePageState extends State<HomePage> {
   /// Create default collections for first launch
   Future<void> _createDefaultCollections() async {
     final collectionService = CollectionService();
-    final defaultTypes = ['places', 'events', 'blog', 'alerts'];
+    final defaultTypes = ['places', 'events', 'blog', 'alerts', 'chat'];
 
     for (final type in defaultTypes) {
       try {
@@ -545,38 +566,53 @@ class _CollectionsPageState extends State<CollectionsPage> {
     setState(() => _isLoading = true);
 
     try {
-      final collections = await _collectionService.loadCollections();
+      // Use progressive loading for faster perceived performance
+      final collections = <Collection>[];
 
-      // Separate fixed and file collections
-      final fixedCollections = collections.where(_isFixedCollectionType).toList();
-      final fileCollections = collections.where((c) => !_isFixedCollectionType(c)).toList();
+      await for (final collection in _collectionService.loadCollectionsStream()) {
+        collections.add(collection);
 
-      // Sort each group: favorites first, then alphabetically
-      void sortGroup(List<Collection> group) {
-        group.sort((a, b) {
-          if (a.isFavorite != b.isFavorite) {
-            return a.isFavorite ? -1 : 1;
-          }
-          return a.title.toLowerCase().compareTo(b.title.toLowerCase());
-        });
+        // Update UI progressively every few collections for responsiveness
+        if (collections.length <= 3 || collections.length % 5 == 0) {
+          _updateCollectionsList(List.from(collections), isComplete: false);
+        }
       }
 
-      sortGroup(fixedCollections);
-      sortGroup(fileCollections);
+      // Final update with all collections
+      _updateCollectionsList(collections, isComplete: true);
 
-      // Combine: fixed first, then file collections
-      final sortedCollections = [...fixedCollections, ...fileCollections];
-
-      setState(() {
-        _allCollections = sortedCollections;
-        _isLoading = false;
-      });
-
-      LogService().log('Loaded ${collections.length} collections (${fixedCollections.length} fixed, ${fileCollections.length} file)');
+      LogService().log('Loaded ${collections.length} collections');
     } catch (e) {
       LogService().log('Error loading collections: $e');
       setState(() => _isLoading = false);
     }
+  }
+
+  void _updateCollectionsList(List<Collection> collections, {required bool isComplete}) {
+    // Separate fixed and file collections
+    final fixedCollections = collections.where(_isFixedCollectionType).toList();
+    final fileCollections = collections.where((c) => !_isFixedCollectionType(c)).toList();
+
+    // Sort each group: favorites first, then alphabetically
+    void sortGroup(List<Collection> group) {
+      group.sort((a, b) {
+        if (a.isFavorite != b.isFavorite) {
+          return a.isFavorite ? -1 : 1;
+        }
+        return a.title.toLowerCase().compareTo(b.title.toLowerCase());
+      });
+    }
+
+    sortGroup(fixedCollections);
+    sortGroup(fileCollections);
+
+    // Combine: fixed first, then file collections
+    final sortedCollections = [...fixedCollections, ...fileCollections];
+
+    setState(() {
+      _allCollections = sortedCollections;
+      _isLoading = !isComplete;
+    });
   }
 
 

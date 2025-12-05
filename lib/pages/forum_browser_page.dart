@@ -14,6 +14,7 @@ import '../models/forum_thread.dart';
 import '../models/forum_post.dart';
 import '../services/forum_service.dart';
 import '../services/profile_service.dart';
+import '../services/signing_service.dart';
 import '../widgets/section_list_widget.dart';
 import '../widgets/thread_list_widget.dart';
 import '../widgets/post_list_widget.dart';
@@ -181,19 +182,23 @@ class _ForumBrowserPageState extends State<ForumBrowserPage> {
 
       // Load settings and check if signing is enabled
       final settings = await _loadForumSettings();
+      final signingService = SigningService();
+      await signingService.initialize();
       if (settings['signMessages'] == true &&
           currentProfile.npub.isNotEmpty &&
-          currentProfile.nsec.isNotEmpty) {
+          signingService.canSign(currentProfile)) {
         // Add npub
         metadata['npub'] = currentProfile.npub;
 
-        // TODO: Implement proper NOSTR signing using secp256k1
-        // For now, add a placeholder signature
-        metadata['signature'] = _generatePlaceholderSignature(
+        // Generate BIP-340 Schnorr signature (handles both extension and nsec)
+        final signature = await signingService.generateSignature(
           content,
           metadata,
-          currentProfile.nsec,
+          currentProfile,
         );
+        if (signature != null && signature.isNotEmpty) {
+          metadata['signature'] = signature;
+        }
       }
 
       // Create post object
@@ -240,20 +245,6 @@ class _ForumBrowserPageState extends State<ForumBrowserPage> {
     } catch (e) {
       return {};
     }
-  }
-
-  /// Generate placeholder signature
-  /// TODO: Replace with proper NOSTR signing implementation
-  String _generatePlaceholderSignature(
-    String content,
-    Map<String, String> metadata,
-    String nsec,
-  ) {
-    // This is a placeholder. Real implementation needs:
-    // - secp256k1 library for Schnorr signatures
-    // - Proper message hashing (SHA-256)
-    // - Signature encoding
-    return 'PLACEHOLDER_SIGNATURE_${DateTime.now().millisecondsSinceEpoch}';
   }
 
   /// Copy file to thread's files folder
@@ -422,15 +413,20 @@ class _ForumBrowserPageState extends State<ForumBrowserPage> {
 
         // Load settings and check if signing is enabled
         final settings = await _loadForumSettings();
+        final signingService = SigningService();
+        await signingService.initialize();
         if (settings['signMessages'] == true &&
             currentProfile.npub.isNotEmpty &&
-            currentProfile.nsec.isNotEmpty) {
+            signingService.canSign(currentProfile)) {
           metadata['npub'] = currentProfile.npub;
-          metadata['signature'] = _generatePlaceholderSignature(
+          final signature = await signingService.generateSignature(
             result['content']!,
             metadata,
-            currentProfile.nsec,
+            currentProfile,
           );
+          if (signature != null && signature.isNotEmpty) {
+            metadata['signature'] = signature;
+          }
         }
 
         final originalPost = ForumPost.now(
@@ -1576,11 +1572,20 @@ class _ThreadListPageState extends State<_ThreadListPage> {
       // Load settings and check if signing is enabled
       final settings = await _loadForumSettings();
       Map<String, String> metadata = {};
+      final signingService = SigningService();
+      await signingService.initialize();
       if (settings['signMessages'] == true &&
           profile.npub.isNotEmpty &&
-          profile.nsec.isNotEmpty) {
+          signingService.canSign(profile)) {
         metadata['npub'] = profile.npub;
-        metadata['signature'] = 'PLACEHOLDER_SIGNATURE_${DateTime.now().millisecondsSinceEpoch}';
+        final signature = await signingService.generateSignature(
+          result['content']!,
+          metadata,
+          profile,
+        );
+        if (signature != null && signature.isNotEmpty) {
+          metadata['signature'] = signature;
+        }
       }
 
       final originalPost = ForumPost.now(
@@ -1907,11 +1912,20 @@ class _PostsPageState extends State<_PostsPage> {
 
       // Load settings and check if signing is enabled
       final settings = await _loadForumSettings();
+      final signingService = SigningService();
+      await signingService.initialize();
       if (settings['signMessages'] == true &&
           profile.npub.isNotEmpty &&
-          profile.nsec.isNotEmpty) {
+          signingService.canSign(profile)) {
         metadata['npub'] = profile.npub;
-        metadata['signature'] = 'PLACEHOLDER_SIGNATURE_${DateTime.now().millisecondsSinceEpoch}';
+        final signature = await signingService.generateSignature(
+          content,
+          metadata,
+          profile,
+        );
+        if (signature != null && signature.isNotEmpty) {
+          metadata['signature'] = signature;
+        }
       }
 
       final post = ForumPost.now(

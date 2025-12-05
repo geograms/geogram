@@ -185,6 +185,7 @@
   "backup": "Backup",
   "available": "Available",
   "device": "device",
+  "this_device": "This Device",
   "devices_connected": "devices connected",
   "last_checked": "Last checked: {0}",
   "add_custom_relay": "Add Custom Relay",
@@ -233,6 +234,7 @@
   "location_permission_denied": "Location permission denied",
   "location_permission_permanent_denied": "Location permission permanently denied. Please enable in app settings.",
   "location_detected_gps": "Location detected via GPS",
+  "location_detected_browser": "Location detected via browser",
   "location_detected": "Location detected",
   "close": "Close",
   "location_saved": "Location saved successfully",
@@ -1199,5 +1201,9 @@
   "your_callsign": "Your Callsign",
   "welcome_customize_hint": "Your unique callsign for the Geogram network is shown above.",
   "later": "OK",
-  "customize_profile": "Go to Settings"
+  "customize_profile": "Go to Settings",
+  "login_with_extension": "Login with NOSTR Extension",
+  "extension_login_description": "Use your browser extension (Alby, nos2x, etc.) to sign in. Your private key stays secure in the extension.",
+  "extension_not_available": "No NOSTR extension detected. Install Alby or nos2x to use this feature.",
+  "extension_login_failed": "Failed to login with extension. Please try again or check your extension."
 }

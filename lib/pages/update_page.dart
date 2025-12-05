@@ -89,9 +89,7 @@ class _UpdatePageState extends State<UpdatePage> {
       final downloadPath = await _updateService.downloadUpdate(
         _latestRelease!,
         onProgress: (progress) {
-          setState(() {
-            _statusMessage = 'Downloading: ${(progress * 100).toStringAsFixed(0)}%';
-          });
+          // Progress is handled by ValueListenableBuilder, no need to setState here
         },
       );
 
@@ -213,6 +211,23 @@ class _UpdatePageState extends State<UpdatePage> {
     }
   }
 
+  /// Handle tap on update card - either check for updates or install
+  void _handleUpdateCardTap() {
+    if (_isLoading) return;
+
+    final hasUpdate = _latestRelease != null &&
+        _updateService.isNewerVersion(
+          _updateService.getCurrentVersion(),
+          _latestRelease!.version,
+        );
+
+    if (hasUpdate && !kIsWeb) {
+      _downloadAndInstall();
+    } else {
+      _checkForUpdates();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final platform = _updateService.detectPlatform();
@@ -271,47 +286,10 @@ class _UpdatePageState extends State<UpdatePage> {
 
               const SizedBox(height: 24),
 
-              // Update Status Card
-              if (_statusMessage != null || _error != null)
-                Card(
-                  color: _error != null
-                      ? Theme.of(context).colorScheme.errorContainer
-                      : hasUpdate
-                          ? Theme.of(context).colorScheme.primaryContainer
-                          : Theme.of(context).colorScheme.secondaryContainer,
-                  child: Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Row(
-                      children: [
-                        Icon(
-                          _error != null
-                              ? Icons.error_outline
-                              : hasUpdate
-                                  ? Icons.system_update
-                                  : Icons.check_circle_outline,
-                          color: _error != null
-                              ? Theme.of(context).colorScheme.error
-                              : hasUpdate
-                                  ? Theme.of(context).colorScheme.primary
-                                  : Theme.of(context).colorScheme.secondary,
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Text(
-                            _error ?? _statusMessage ?? '',
-                            style: TextStyle(
-                              color: _error != null
-                                  ? Theme.of(context).colorScheme.onErrorContainer
-                                  : Theme.of(context).colorScheme.onSecondaryContainer,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
+              // Clickable Update Status Card - Main action area
+              _buildUpdateStatusCard(hasUpdate),
 
-              if (_statusMessage != null || _error != null) const SizedBox(height: 24),
+              const SizedBox(height: 16),
 
               // Download Progress
               if (_updateService.isDownloading)
@@ -320,15 +298,69 @@ class _UpdatePageState extends State<UpdatePage> {
                     ValueListenableBuilder<double>(
                       valueListenable: _updateService.downloadProgress,
                       builder: (context, progress, child) {
-                        return LinearProgressIndicator(value: progress);
+                        final downloadStatus = _updateService.getDownloadStatus();
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Text(
+                                  downloadStatus.isNotEmpty ? downloadStatus : 'Downloading...',
+                                  style: Theme.of(context).textTheme.bodyMedium,
+                                ),
+                                Text(
+                                  '${(progress * 100).toStringAsFixed(0)}%',
+                                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 8),
+                            LinearProgressIndicator(
+                              value: progress,
+                              minHeight: 8,
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                          ],
+                        );
                       },
                     ),
                     const SizedBox(height: 24),
                   ],
                 ),
 
-              // Latest Release Card
-              if (_latestRelease != null)
+              // Error display
+              if (_error != null)
+                Card(
+                  color: Theme.of(context).colorScheme.errorContainer,
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Row(
+                      children: [
+                        Icon(
+                          Icons.error_outline,
+                          color: Theme.of(context).colorScheme.error,
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Text(
+                            _error!,
+                            style: TextStyle(
+                              color: Theme.of(context).colorScheme.onErrorContainer,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+
+              if (_error != null) const SizedBox(height: 16),
+
+              // Latest Release Card (details)
+              if (_latestRelease != null && !_updateService.isDownloading)
                 Card(
                   child: Padding(
                     padding: const EdgeInsets.all(20),
@@ -338,14 +370,12 @@ class _UpdatePageState extends State<UpdatePage> {
                         Row(
                           children: [
                             Icon(
-                              hasUpdate ? Icons.new_releases : Icons.verified,
-                              color: hasUpdate
-                                  ? Theme.of(context).colorScheme.primary
-                                  : Colors.green,
+                              Icons.new_releases_outlined,
+                              color: Theme.of(context).colorScheme.primary,
                             ),
                             const SizedBox(width: 12),
                             Text(
-                              hasUpdate ? 'Update Available' : 'Latest Release',
+                              'Release Details',
                               style: Theme.of(context).textTheme.titleMedium?.copyWith(
                                     fontWeight: FontWeight.bold,
                                   ),
@@ -392,37 +422,6 @@ class _UpdatePageState extends State<UpdatePage> {
                     ),
                   ),
                 ),
-
-              const SizedBox(height: 24),
-
-              // Action Buttons
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      onPressed: _isLoading ? null : _checkForUpdates,
-                      icon: _isLoading
-                          ? const SizedBox(
-                              width: 16,
-                              height: 16,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : const Icon(Icons.refresh),
-                      label: const Text('Check for Updates'),
-                    ),
-                  ),
-                  if (hasUpdate && !kIsWeb) ...[
-                    const SizedBox(width: 16),
-                    Expanded(
-                      child: FilledButton.icon(
-                        onPressed: _isLoading ? null : _downloadAndInstall,
-                        icon: const Icon(Icons.download),
-                        label: const Text('Install Update'),
-                      ),
-                    ),
-                  ],
-                ],
-              ),
 
               const SizedBox(height: 32),
 
@@ -558,6 +557,108 @@ class _UpdatePageState extends State<UpdatePage> {
               ),
 
               const SizedBox(height: 24),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Build the main clickable update status card
+  Widget _buildUpdateStatusCard(bool hasUpdate) {
+    final isDownloading = _updateService.isDownloading;
+
+    // Determine card appearance based on state
+    Color cardColor;
+    IconData icon;
+    String title;
+    String subtitle;
+
+    if (isDownloading) {
+      cardColor = Theme.of(context).colorScheme.primaryContainer;
+      icon = Icons.downloading;
+      title = 'Downloading Update...';
+      subtitle = 'Please wait while the update downloads';
+    } else if (_isLoading) {
+      cardColor = Theme.of(context).colorScheme.surfaceContainerHighest;
+      icon = Icons.sync;
+      title = 'Checking...';
+      subtitle = _statusMessage ?? 'Please wait';
+    } else if (hasUpdate && !kIsWeb) {
+      cardColor = Theme.of(context).colorScheme.primaryContainer;
+      icon = Icons.system_update;
+      title = 'Update Available';
+      subtitle = 'Tap to download and install v${_latestRelease!.version}';
+    } else if (_latestRelease != null) {
+      cardColor = Theme.of(context).colorScheme.secondaryContainer;
+      icon = Icons.check_circle_outline;
+      title = 'Up to Date';
+      subtitle = 'Tap to check for updates';
+    } else {
+      cardColor = Theme.of(context).colorScheme.surfaceContainerHighest;
+      icon = Icons.refresh;
+      title = 'Check for Updates';
+      subtitle = 'Tap to check for new versions';
+    }
+
+    return Card(
+      color: cardColor,
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: (isDownloading || _isLoading) ? null : _handleUpdateCardTap,
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Theme.of(context).colorScheme.surface.withOpacity(0.5),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: _isLoading && !isDownloading
+                    ? SizedBox(
+                        width: 24,
+                        height: 24,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Theme.of(context).colorScheme.primary,
+                        ),
+                      )
+                    : Icon(
+                        icon,
+                        size: 24,
+                        color: hasUpdate
+                            ? Theme.of(context).colorScheme.primary
+                            : Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                            fontWeight: FontWeight.bold,
+                          ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      subtitle,
+                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                            color: Theme.of(context).colorScheme.onSurfaceVariant,
+                          ),
+                    ),
+                  ],
+                ),
+              ),
+              if (!isDownloading && !_isLoading)
+                Icon(
+                  Icons.chevron_right,
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
             ],
           ),
         ),

@@ -3,7 +3,8 @@
  * License: Apache-2.0
  */
 
-import 'dart:io' show Platform;
+import 'dart:io' if (dart.library.html) '../platform/io_stub.dart' show Platform;
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
@@ -127,7 +128,7 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
   }
 
   /// Auto-detect current location
-  /// Uses GPS on Android, IP-based geolocation on desktop
+  /// Uses browser Geolocation API on web, GPS on Android, IP-based geolocation on desktop
   Future<void> _autoDetectLocation() async {
     if (_isDetectingLocation) return;
 
@@ -136,10 +137,10 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
     });
 
     try {
-      // Check if we're on Android (mobile) or desktop
-      final isAndroid = Platform.isAndroid;
-
-      if (isAndroid) {
+      if (kIsWeb) {
+        // Use browser Geolocation API on web (requests permission automatically)
+        await _detectLocationViaBrowser();
+      } else if (Platform.isAndroid) {
         // Use GPS on Android
         await _detectLocationViaGPS();
       } else {
@@ -219,6 +220,61 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
 
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(_i18n.t('location_detected_gps'))),
+      );
+    }
+  }
+
+  /// Detect location using Browser Geolocation API (Web)
+  /// This will prompt the user for permission if not already granted
+  Future<void> _detectLocationViaBrowser() async {
+    // Check and request permission - geolocator handles browser permission dialog
+    LocationPermission permission = await Geolocator.checkPermission();
+    if (permission == LocationPermission.denied) {
+      permission = await Geolocator.requestPermission();
+      if (permission == LocationPermission.denied) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(_i18n.t('location_permission_denied'))),
+          );
+        }
+        // Fall back to IP-based geolocation
+        await _detectLocationViaIP();
+        return;
+      }
+    }
+
+    if (permission == LocationPermission.deniedForever) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(_i18n.t('location_permission_permanent_denied'))),
+        );
+      }
+      // Fall back to IP-based geolocation
+      await _detectLocationViaIP();
+      return;
+    }
+
+    // Get current position using browser's Geolocation API
+    final position = await Geolocator.getCurrentPosition(
+      locationSettings: const LocationSettings(
+        accuracy: LocationAccuracy.high,
+        timeLimit: Duration(seconds: 15),
+      ),
+    );
+
+    if (mounted) {
+      setState(() {
+        _selectedPosition = LatLng(position.latitude, position.longitude);
+        _latController.text = position.latitude.toStringAsFixed(6);
+        _lonController.text = position.longitude.toStringAsFixed(6);
+      });
+
+      _mapController.move(_selectedPosition, 15.0);
+
+      LogService().log('Browser geolocation: ${position.latitude}, ${position.longitude}');
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(_i18n.t('location_detected_browser'))),
       );
     }
   }

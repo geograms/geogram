@@ -21,6 +21,7 @@ import '../services/relay_cache_service.dart';
 import '../services/chat_notification_service.dart';
 import '../services/log_service.dart';
 import '../services/i18n_service.dart';
+import '../services/signing_service.dart';
 import '../models/device_source.dart';
 import '../util/nostr_crypto.dart';
 import '../util/nostr_event.dart';
@@ -713,20 +714,22 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       }
 
       // Add signing if enabled - uses BIP-340 Schnorr signature
+      final signingService = SigningService();
+      await signingService.initialize();
       if (settings.signMessages &&
           currentProfile.npub.isNotEmpty &&
-          currentProfile.nsec.isNotEmpty) {
+          signingService.canSign(currentProfile)) {
         // Add npub for verification
         metadata['npub'] = currentProfile.npub;
         metadata['channel'] = _selectedChannel!.id;
 
-        // Generate BIP-340 Schnorr signature on secp256k1 curve
-        final signature = _generateSchnorrSignature(
+        // Generate BIP-340 Schnorr signature (handles both extension and nsec)
+        final signature = await signingService.generateSignature(
           content,
           metadata,
-          currentProfile.nsec,
+          currentProfile,
         );
-        if (signature.isNotEmpty) {
+        if (signature != null && signature.isNotEmpty) {
           metadata['signature'] = signature;
           metadata['verified'] = 'true'; // Self-signed messages are verified
         }
@@ -841,39 +844,6 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       return ChatSettings.fromJson(json);
     } catch (e) {
       return ChatSettings();
-    }
-  }
-
-  /// Generate BIP-340 Schnorr signature for a chat message
-  /// Creates a NOSTR event and signs it with the user's private key
-  String _generateSchnorrSignature(
-    String content,
-    Map<String, String> metadata,
-    String nsec,
-  ) {
-    try {
-      // Decode nsec to get private key hex
-      final privateKeyHex = NostrCrypto.decodeNsec(nsec);
-      final publicKeyHex = NostrCrypto.derivePublicKey(privateKeyHex);
-
-      // Create a NOSTR event for signing
-      final event = NostrEvent.textNote(
-        pubkeyHex: publicKeyHex,
-        content: content,
-        tags: [
-          ['t', 'chat'],
-          ['channel', metadata['channel'] ?? 'main'],
-        ],
-      );
-
-      // Calculate event ID and sign with BIP-340 Schnorr signature
-      event.calculateId();
-      event.sign(privateKeyHex);
-
-      return event.sig ?? '';
-    } catch (e) {
-      LogService().log('Error generating Schnorr signature: $e');
-      return '';
     }
   }
 

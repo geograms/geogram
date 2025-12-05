@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
+import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
@@ -23,11 +24,21 @@ class UpdateService {
   bool _isDownloading = false;
   double _downloadProgress = 0.0;
 
+  /// Track bytes downloaded for current session (for resume info display)
+  int _bytesDownloaded = 0;
+  int _totalBytes = 0;
+
   /// Notifier for update availability
   final ValueNotifier<bool> updateAvailable = ValueNotifier(false);
 
   /// Notifier for download progress (0.0 to 1.0)
   final ValueNotifier<double> downloadProgress = ValueNotifier(0.0);
+
+  /// Progress update throttling - only update UI every 100ms or 1% change
+  DateTime _lastProgressUpdate = DateTime.now();
+  double _lastProgressValue = 0.0;
+  static const _progressUpdateInterval = Duration(milliseconds: 100);
+  static const _progressMinChange = 0.01; // 1%
 
   /// Initialize update service
   Future<void> initialize() async {
@@ -367,7 +378,7 @@ class UpdateService {
     return null;
   }
 
-  /// Download update to temporary file
+  /// Download update to temporary file with resume support
   Future<String?> downloadUpdate(ReleaseInfo release,
       {void Function(double progress)? onProgress}) async {
     if (_isDownloading || kIsWeb) return null;
@@ -380,51 +391,208 @@ class UpdateService {
 
     _isDownloading = true;
     _downloadProgress = 0.0;
+    _lastProgressValue = 0.0;
+    _lastProgressUpdate = DateTime.now();
     downloadProgress.value = 0.0;
+    _bytesDownloaded = 0;
+    _totalBytes = 0;
 
     try {
       LogService().log('Downloading update from: $downloadUrl');
 
-      final request = http.Request('GET', Uri.parse(downloadUrl));
-      request.headers['User-Agent'] = 'Geogram-Desktop-Updater';
-
-      final response = await http.Client().send(request);
-
-      if (response.statusCode != 200) {
-        throw Exception('Failed to download update: HTTP ${response.statusCode}');
-      }
-
-      final contentLength = response.contentLength ?? 0;
       final tempDir = await getTemporaryDirectory();
       final platform = detectPlatform();
-      final tempFile = File(
-          '${tempDir.path}${Platform.pathSeparator}geogram-update-${release.version}${platform == UpdatePlatform.windows ? '.exe' : platform == UpdatePlatform.android ? '.apk' : ''}');
+      final extension = platform == UpdatePlatform.windows
+          ? '.exe'
+          : platform == UpdatePlatform.android
+              ? '.apk'
+              : '';
+      final tempFilePath =
+          '${tempDir.path}${Platform.pathSeparator}geogram-update-${release.version}$extension';
+      final partialFilePath = '$tempFilePath.partial';
+      final tempFile = File(tempFilePath);
+      final partialFile = File(partialFilePath);
 
-      final sink = tempFile.openWrite();
-      var downloaded = 0;
-
-      await for (final chunk in response.stream) {
-        sink.add(chunk);
-        downloaded += chunk.length;
-
-        if (contentLength > 0) {
-          _downloadProgress = downloaded / contentLength;
-          downloadProgress.value = _downloadProgress;
-          onProgress?.call(_downloadProgress);
-        }
+      // Check for existing partial download
+      int existingBytes = 0;
+      if (await partialFile.exists()) {
+        existingBytes = await partialFile.length();
+        LogService().log('Found partial download: $existingBytes bytes');
       }
 
-      await sink.close();
+      // First, get the total file size with a HEAD request
+      final headResponse = await http.head(
+        Uri.parse(downloadUrl),
+        headers: {'User-Agent': 'Geogram-Desktop-Updater'},
+      ).timeout(const Duration(seconds: 30));
 
-      LogService().log('Downloaded ${downloaded} bytes to ${tempFile.path}');
-      return tempFile.path;
+      final contentLength = int.tryParse(
+              headResponse.headers['content-length'] ?? '') ??
+          0;
+      _totalBytes = contentLength;
+
+      // Check if server supports range requests
+      final acceptRanges = headResponse.headers['accept-ranges'];
+      final supportsResume = acceptRanges == 'bytes' && contentLength > 0;
+
+      // If we have a complete download already, use it
+      if (existingBytes > 0 && existingBytes >= contentLength && contentLength > 0) {
+        LogService().log('Partial file is complete, renaming...');
+        await partialFile.rename(tempFilePath);
+        _downloadProgress = 1.0;
+        downloadProgress.value = 1.0;
+        return tempFilePath;
+      }
+
+      // Create HTTP client for better connection management
+      final client = http.Client();
+
+      try {
+        // Build request with Range header for resume
+        final request = http.Request('GET', Uri.parse(downloadUrl));
+        request.headers['User-Agent'] = 'Geogram-Desktop-Updater';
+
+        // Resume from existing bytes if supported
+        int startByte = 0;
+        if (supportsResume && existingBytes > 0) {
+          startByte = existingBytes;
+          request.headers['Range'] = 'bytes=$startByte-';
+          LogService().log('Resuming download from byte $startByte');
+        } else if (existingBytes > 0) {
+          // Server doesn't support resume, delete partial and start fresh
+          LogService().log('Server does not support resume, starting fresh');
+          await partialFile.delete();
+          existingBytes = 0;
+        }
+
+        final response = await client.send(request);
+
+        // Check response - 200 for full, 206 for partial
+        if (response.statusCode != 200 && response.statusCode != 206) {
+          throw Exception('Failed to download update: HTTP ${response.statusCode}');
+        }
+
+        // Calculate total size for progress
+        final expectedLength = response.contentLength ?? (contentLength - startByte);
+        final totalSize = startByte + expectedLength;
+
+        // Open file for writing - append if resuming
+        final sink = partialFile.openWrite(
+            mode: startByte > 0 ? FileMode.append : FileMode.write);
+
+        var downloaded = startByte;
+        _bytesDownloaded = downloaded;
+
+        // Use buffered writing for better performance
+        final buffer = <int>[];
+        const bufferSize = 65536; // 64KB buffer
+
+        await for (final chunk in response.stream) {
+          buffer.addAll(chunk);
+          downloaded += chunk.length;
+
+          // Write in larger chunks for better I/O performance
+          if (buffer.length >= bufferSize) {
+            sink.add(buffer);
+            buffer.clear();
+          }
+
+          // Throttled progress update
+          _bytesDownloaded = downloaded;
+          if (totalSize > 0) {
+            final progress = downloaded / totalSize;
+            _updateProgressThrottled(progress, onProgress);
+          }
+        }
+
+        // Write remaining buffer
+        if (buffer.isNotEmpty) {
+          sink.add(buffer);
+        }
+
+        await sink.flush();
+        await sink.close();
+
+        // Rename partial file to final name
+        await partialFile.rename(tempFilePath);
+
+        // Final progress update
+        _downloadProgress = 1.0;
+        downloadProgress.value = 1.0;
+        onProgress?.call(1.0);
+
+        LogService().log('Downloaded $downloaded bytes to $tempFilePath');
+        return tempFilePath;
+      } finally {
+        client.close();
+      }
     } catch (e) {
       LogService().log('Error downloading update: $e');
+      // Don't delete partial file on error - allow resume next time
       return null;
     } finally {
       _isDownloading = false;
       _downloadProgress = 0.0;
       downloadProgress.value = 0.0;
+      _bytesDownloaded = 0;
+      _totalBytes = 0;
+    }
+  }
+
+  /// Update progress with throttling to reduce UI updates
+  void _updateProgressThrottled(double progress, void Function(double)? onProgress) {
+    final now = DateTime.now();
+    final timeSinceLastUpdate = now.difference(_lastProgressUpdate);
+    final progressChange = (progress - _lastProgressValue).abs();
+
+    // Only update if enough time has passed OR progress changed significantly
+    if (timeSinceLastUpdate >= _progressUpdateInterval ||
+        progressChange >= _progressMinChange ||
+        progress >= 1.0) {
+      _downloadProgress = progress;
+      downloadProgress.value = progress;
+      onProgress?.call(progress);
+      _lastProgressUpdate = now;
+      _lastProgressValue = progress;
+    }
+  }
+
+  /// Get formatted download status (for UI display)
+  String getDownloadStatus() {
+    if (!_isDownloading) return '';
+    if (_totalBytes == 0) return 'Downloading...';
+
+    final downloadedMB = _bytesDownloaded / (1024 * 1024);
+    final totalMB = _totalBytes / (1024 * 1024);
+    return '${downloadedMB.toStringAsFixed(1)} / ${totalMB.toStringAsFixed(1)} MB';
+  }
+
+  /// Cancel current download (if any)
+  Future<void> cancelDownload() async {
+    if (!_isDownloading) return;
+
+    LogService().log('Download cancelled by user');
+    _isDownloading = false;
+    _downloadProgress = 0.0;
+    downloadProgress.value = 0.0;
+  }
+
+  /// Clear partial downloads
+  Future<void> clearPartialDownloads() async {
+    if (kIsWeb) return;
+
+    try {
+      final tempDir = await getTemporaryDirectory();
+      final dir = Directory(tempDir.path);
+
+      await for (final entity in dir.list()) {
+        if (entity is File && entity.path.endsWith('.partial')) {
+          LogService().log('Deleting partial download: ${entity.path}');
+          await entity.delete();
+        }
+      }
+    } catch (e) {
+      LogService().log('Error clearing partial downloads: $e');
     }
   }
 

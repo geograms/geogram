@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'dart:typed_data';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:crypto/crypto.dart';
 import 'package:mime/mime.dart';
@@ -9,6 +10,7 @@ import 'package:markdown/markdown.dart' as md;
 import '../services/log_service.dart';
 import '../services/profile_service.dart';
 import '../services/collection_service.dart';
+import '../services/signing_service.dart';
 import '../util/nostr_event.dart';
 import '../util/tlsh.dart';
 import '../models/update_notification.dart';
@@ -43,7 +45,21 @@ class WebSocketService {
 
       // Connect to WebSocket
       final uri = Uri.parse(url);
+      LogService().log('Platform: ${kIsWeb ? "Web" : "Native"}');
+      LogService().log('Connecting to WebSocket at: $uri');
+
       _channel = WebSocketChannel.connect(uri);
+
+      // On web, we need to wait for the connection to establish
+      // The ready future completes when the WebSocket is ready to send/receive
+      try {
+        await _channel!.ready;
+        LogService().log('✓ WebSocket ready (connection established)');
+      } catch (e) {
+        LogService().log('WebSocket ready failed: $e');
+        _channel = null;
+        return false;
+      }
 
       LogService().log('✓ WebSocket connected');
 
@@ -65,12 +81,20 @@ class WebSocketService {
         nickname: profile.nickname,
       );
       event.calculateId();
-      event.signWithNsec(profile.nsec);
+
+      // Sign using SigningService (handles both extension and nsec)
+      final signingService = SigningService();
+      await signingService.initialize();
+      final signedEvent = await signingService.signEvent(event, profile);
+      if (signedEvent == null) {
+        LogService().log('Failed to sign hello event');
+        return false;
+      }
 
       // Build hello message
       final helloMessage = {
         'type': 'hello',
-        'event': event.toJson(),
+        'event': signedEvent.toJson(),
       };
 
       final helloJson = jsonEncode(helloMessage);
@@ -78,12 +102,12 @@ class WebSocketService {
       LogService().log('SENDING HELLO MESSAGE');
       LogService().log('══════════════════════════════════════');
       LogService().log('Message type: hello');
-      LogService().log('Event ID: ${event.id?.substring(0, 16)}...');
+      LogService().log('Event ID: ${signedEvent.id?.substring(0, 16)}...');
       LogService().log('Callsign: ${profile.callsign}');
       if (profile.nickname.isNotEmpty) {
         LogService().log('Nickname: ${profile.nickname}');
       }
-      LogService().log('Content: ${event.content}');
+      LogService().log('Content: ${signedEvent.content}');
       LogService().log('');
       LogService().log('Full message:');
       LogService().log(helloJson);
@@ -99,10 +123,12 @@ class WebSocketService {
       }
 
       // Listen for messages
+      LogService().log('Setting up WebSocket message listener (${kIsWeb ? "Web" : "Native"})...');
       _subscription = _channel!.stream.listen(
         (message) {
           try {
             final rawMessage = message as String;
+            LogService().log('[WS-RX] Received ${rawMessage.length} chars');
 
             // Handle lightweight UPDATE notifications (plain string, not JSON)
             if (rawMessage.startsWith('UPDATE:')) {
@@ -117,7 +143,7 @@ class WebSocketService {
             LogService().log('');
             LogService().log('RECEIVED MESSAGE FROM RELAY');
             LogService().log('══════════════════════════════════════');
-            LogService().log('Raw message: $rawMessage');
+            LogService().log('Raw message: ${rawMessage.length > 500 ? "${rawMessage.substring(0, 500)}..." : rawMessage}');
 
             final data = jsonDecode(rawMessage) as Map<String, dynamic>;
             LogService().log('Message type: ${data['type']}');
@@ -272,8 +298,9 @@ class WebSocketService {
 
     try {
       final json = jsonEncode(message);
-      LogService().log('Sending to relay: $json');
+      LogService().log('Sending to relay (${kIsWeb ? "Web" : "Native"}): ${json.length > 200 ? "${json.substring(0, 200)}..." : json}');
       _channel!.sink.add(json);
+      LogService().log('✓ Message sent to WebSocket sink');
       return true;
     } catch (e) {
       LogService().log('Error sending message: $e');
@@ -285,6 +312,12 @@ class WebSocketService {
   /// Handle collections request from relay
   Future<void> _handleCollectionsRequest(String? requestId) async {
     if (requestId == null) return;
+
+    // Skip collection requests on web - the web client doesn't serve collections
+    if (kIsWeb) {
+      LogService().log('Ignoring COLLECTIONS_REQUEST on web platform');
+      return;
+    }
 
     try {
       final collections = await CollectionService().loadCollections();
@@ -325,6 +358,12 @@ class WebSocketService {
     String? fileName,
   ) async {
     if (requestId == null || collectionName == null || fileName == null) return;
+
+    // Skip file requests on web - the web client doesn't serve files
+    if (kIsWeb) {
+      LogService().log('Ignoring COLLECTION_FILE_REQUEST on web platform');
+      return;
+    }
 
     try {
       final collections = await CollectionService().loadCollections();
@@ -404,6 +443,12 @@ class WebSocketService {
   ) async {
     if (requestId == null || method == null || path == null) {
       LogService().log('Invalid HTTP request: missing parameters');
+      return;
+    }
+
+    // Skip HTTP requests on web - the web client doesn't serve HTTP content
+    if (kIsWeb) {
+      LogService().log('Ignoring HTTP_REQUEST on web platform');
       return;
     }
 

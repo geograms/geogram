@@ -44,27 +44,25 @@ class NostrKeyGenerator {
     return '$prefix$suffix';
   }
 
-  /// Validate npub format
+  /// Validate npub format (must be proper bech32-encoded public key)
   static bool isValidNpub(String npub) {
     try {
       if (!npub.startsWith('npub1')) return false;
       NostrCrypto.decodeNpub(npub);
       return true;
     } catch (e) {
-      // Accept legacy format too
-      return npub.startsWith('npub1') && npub.length >= 10;
+      return false;
     }
   }
 
-  /// Validate nsec format
+  /// Validate nsec format (must be proper bech32-encoded private key)
   static bool isValidNsec(String nsec) {
     try {
       if (!nsec.startsWith('nsec1')) return false;
       NostrCrypto.decodeNsec(nsec);
       return true;
     } catch (e) {
-      // Accept legacy format too
-      return nsec.startsWith('nsec1') && nsec.length >= 10;
+      return false;
     }
   }
 

@@ -1,4 +1,5 @@
-import 'dart:io';
+import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:path/path.dart' as path;
 import 'package:path_provider/path_provider.dart';
 
@@ -87,12 +88,21 @@ class StorageConfig {
     if (_initialized) {
       // Already initialized - allow re-initialization with different path
       if (customBaseDir != null && customBaseDir != _baseDir) {
-        stderr.writeln(
-          'StorageConfig: Re-initializing with new base directory: $customBaseDir',
-        );
+        if (!kIsWeb) {
+          stderr.writeln(
+            'StorageConfig: Re-initializing with new base directory: $customBaseDir',
+          );
+        }
       } else {
         return; // Already initialized with same or default path
       }
+    }
+
+    // On web, we don't use file-based storage
+    if (kIsWeb) {
+      _baseDir = '/web'; // Virtual path for web
+      _initialized = true;
+      return;
     }
 
     // Determine base directory with priority order
@@ -130,6 +140,11 @@ class StorageConfig {
 
   /// Normalize path (expand ~ and resolve relative paths)
   String _normalizePath(String inputPath) {
+    // On web, just return the input path as-is
+    if (kIsWeb) {
+      return inputPath;
+    }
+
     var normalized = inputPath;
 
     // Expand ~ to home directory

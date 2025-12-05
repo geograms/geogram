@@ -3,9 +3,9 @@
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
-import 'package:crypto/crypto.dart';
 import 'cli_config_service.dart';
 import '../models/profile.dart';
+import '../util/nostr_key_generator.dart';
 import 'pure_storage_config.dart';
 
 // Re-export ProfileType for CLI usage
@@ -146,10 +146,9 @@ class CliProfileService {
           _activeProfileId = _profiles.isNotEmpty ? _profiles.first.id : null;
         }
 
-        stderr.writeln('CliProfileService: Loaded ${_profiles.length} profiles from shared config');
       }
     } catch (e) {
-      stderr.writeln('CliProfileService: Error loading profiles: $e');
+      // Silent error - profile loading is not critical
       _profiles = [];
     }
   }
@@ -165,10 +164,9 @@ class CliProfileService {
             .map((d) => CachedDevice.fromJson(d as Map<String, dynamic>))
             .toList();
 
-        stderr.writeln('CliProfileService: Loaded ${_cachedDevices.length} cached devices');
       }
     } catch (e) {
-      stderr.writeln('CliProfileService: Error loading cached devices: $e');
+      // Silent error - cached devices loading is not critical
       _cachedDevices = [];
     }
   }
@@ -188,8 +186,8 @@ class CliProfileService {
 
       // Flush to disk immediately to ensure changes are persisted
       await configService.flush();
-    } catch (e) {
-      stderr.writeln('CliProfileService: Error saving profiles: $e');
+    } catch (_) {
+      // Silent error - will retry on next save
     }
   }
 
@@ -201,8 +199,8 @@ class CliProfileService {
       await _devicesFile!.writeAsString(
         const JsonEncoder.withIndent('  ').convert(json)
       );
-    } catch (e) {
-      stderr.writeln('CliProfileService: Error saving cached devices: $e');
+    } catch (_) {
+      // Silent error - will retry on next save
     }
   }
 
@@ -266,7 +264,6 @@ class CliProfileService {
     final deviceDir = Directory('${storageConfig.devicesDir}/$callsign');
     if (!await deviceDir.exists()) {
       await deviceDir.create(recursive: true);
-      stderr.writeln('Created device folder: ${deviceDir.path}');
     }
   }
 
@@ -310,40 +307,22 @@ class CliProfileService {
     return _profiles.isEmpty;
   }
 
-  /// Generate NOSTR-style keys (simplified for CLI)
+  /// Generate proper NOSTR keys using secp256k1
   static Map<String, String> generateKeys() {
-    final random = Random.secure();
-    final privateKeyBytes = List<int>.generate(32, (_) => random.nextInt(256));
-    final privateKeyHex = privateKeyBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
-
-    // Derive public key (simplified - in real impl would use proper crypto)
-    final publicKeyBytes = sha256.convert(privateKeyBytes).bytes;
-    final publicKeyHex = publicKeyBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
-
-    // Convert to bech32-like format (simplified)
+    final keys = NostrKeyGenerator.generateKeyPair();
     return {
-      'nsec': 'nsec1${privateKeyHex.substring(0, 58)}',
-      'npub': 'npub1${publicKeyHex.substring(0, 58)}',
+      'nsec': keys.nsec,
+      'npub': keys.npub,
     };
   }
 
   /// Generate callsign from npub
   static String generateCallsign(String npub, ProfileType type) {
-    final prefix = type == ProfileType.relay ? 'X3' : 'X1';
-
-    // Extract hex portion and generate deterministic suffix
-    final hexPart = npub.length > 5 ? npub.substring(5) : npub;
-    final hashBytes = sha256.convert(hexPart.codeUnits).bytes;
-
-    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-    final suffix = String.fromCharCodes([
-      chars.codeUnitAt(hashBytes[0] % chars.length),
-      chars.codeUnitAt(hashBytes[1] % chars.length),
-      chars.codeUnitAt(hashBytes[2] % chars.length),
-      chars.codeUnitAt(hashBytes[3] % chars.length),
-    ]);
-
-    return '$prefix$suffix';
+    if (type == ProfileType.relay) {
+      return NostrKeyGenerator.deriveRelayCallsign(npub);
+    } else {
+      return NostrKeyGenerator.deriveCallsign(npub);
+    }
   }
 
   /// Create a new profile with generated identity

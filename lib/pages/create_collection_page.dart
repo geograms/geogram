@@ -3,7 +3,7 @@
  * License: Apache-2.0
  */
 
-import 'dart:io';
+import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
@@ -184,7 +184,7 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(_i18n.t('create_collection_title')),
+        title: Text(_i18n.t('add_new_collection')),
         leading: IconButton(
           icon: const Icon(Icons.close),
           onPressed: () => Navigator.pop(context),
@@ -210,7 +210,7 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
                 ),
               )
             : const Icon(Icons.add),
-        label: Text(_i18n.t('create')),
+        label: Text(_i18n.t('add')),
       ),
       floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
       body: LayoutBuilder(

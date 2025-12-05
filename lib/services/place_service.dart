@@ -6,6 +6,7 @@
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import '../models/place.dart';
 import 'location_service.dart';
+import 'log_service.dart';
 
 /// Service for managing places collection
 class PlaceService {
@@ -82,7 +83,7 @@ class PlaceService {
       final content = await placeFile.readAsString();
       return _parsePlaceFile(content, placeFile.path, folderPath, regionName);
     } catch (e) {
-      print('Error loading place from $folderPath: $e');
+      LogService().log('Error loading place from $folderPath: $e');
       return null;
     }
   }
@@ -243,7 +244,7 @@ class PlaceService {
     // Validate required fields
     if (name == null || created == null || author == null ||
         latitude == null || longitude == null || radius == null) {
-      print('Missing required fields in $filePath');
+      LogService().log('Missing required fields in $filePath');
       return null;
     }
 
@@ -436,7 +437,7 @@ class PlaceService {
       }
       return false;
     } catch (e) {
-      print('Error deleting place: $e');
+      LogService().log('Error deleting place: $e');
       return false;
     }
   }

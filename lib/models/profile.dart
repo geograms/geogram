@@ -14,7 +14,8 @@ class Profile {
   String description;
   String? profileImagePath;
   String npub; // NOSTR public key
-  String nsec; // NOSTR private key (secret)
+  String nsec; // NOSTR private key (secret) - empty when using extension
+  bool useExtension; // Whether to use NIP-07 browser extension for signing
   String preferredColor;
   double? latitude; // User's current latitude
   double? longitude; // User's current longitude
@@ -42,6 +43,7 @@ class Profile {
     this.profileImagePath,
     this.npub = '',
     this.nsec = '',
+    this.useExtension = false,
     this.preferredColor = 'blue',
     this.latitude,
     this.longitude,
@@ -78,6 +80,7 @@ class Profile {
       profileImagePath: json['profileImagePath'] as String?,
       npub: json['npub'] as String? ?? '',
       nsec: json['nsec'] as String? ?? '',
+      useExtension: json['useExtension'] as bool? ?? false,
       preferredColor: json['preferredColor'] as String? ?? 'blue',
       latitude: json['latitude'] as double?,
       longitude: json['longitude'] as double?,
@@ -107,6 +110,7 @@ class Profile {
       if (profileImagePath != null) 'profileImagePath': profileImagePath,
       'npub': npub,
       'nsec': nsec,
+      'useExtension': useExtension,
       'preferredColor': preferredColor,
       if (latitude != null) 'latitude': latitude,
       if (longitude != null) 'longitude': longitude,
@@ -132,6 +136,7 @@ class Profile {
     String? profileImagePath,
     String? npub,
     String? nsec,
+    bool? useExtension,
     String? preferredColor,
     double? latitude,
     double? longitude,
@@ -154,6 +159,7 @@ class Profile {
       profileImagePath: profileImagePath ?? this.profileImagePath,
       npub: npub ?? this.npub,
       nsec: nsec ?? this.nsec,
+      useExtension: useExtension ?? this.useExtension,
       preferredColor: preferredColor ?? this.preferredColor,
       latitude: latitude ?? this.latitude,
       longitude: longitude ?? this.longitude,

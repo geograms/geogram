@@ -90,6 +90,14 @@ class _DeviceChatSidebarState extends State<DeviceChatSidebar> {
           Expanded(
             child: ListView(
               children: [
+                // Remote device sections (relay rooms first)
+                for (final source in widget.remoteSources)
+                  _buildDeviceSection(
+                    theme,
+                    source.device,
+                    null,
+                    source.rooms,
+                  ),
                 // Local device section (only show if there are local channels)
                 if (widget.localChannels.isNotEmpty)
                   _buildDeviceSection(
@@ -100,14 +108,6 @@ class _DeviceChatSidebarState extends State<DeviceChatSidebar> {
                     ),
                     widget.localChannels,
                     null,
-                  ),
-                // Remote device sections
-                for (final source in widget.remoteSources)
-                  _buildDeviceSection(
-                    theme,
-                    source.device,
-                    null,
-                    source.rooms,
                   ),
               ],
             ),
@@ -146,9 +146,9 @@ class _DeviceChatSidebarState extends State<DeviceChatSidebar> {
     List<RelayChatRoom>? remoteRooms,
   ) {
     // Default to expanded if:
-    // - It's the local device, OR
-    // - There are no local channels (remote device browsing mode)
-    final defaultExpanded = device.isLocal || widget.localChannels.isEmpty;
+    // - It's a remote device (relay), OR
+    // - There are no remote sources (local only mode)
+    final defaultExpanded = !device.isLocal || widget.remoteSources.isEmpty;
     final isExpanded = _expandedDevices[device.id] ?? defaultExpanded;
     final hasItems = (localChannels?.isNotEmpty ?? false) ||
         (remoteRooms?.isNotEmpty ?? false);
@@ -164,9 +164,6 @@ class _DeviceChatSidebarState extends State<DeviceChatSidebar> {
             ...localChannels.map((channel) => _buildLocalChannelTile(theme, channel)),
           if (remoteRooms != null)
             ...remoteRooms.map((room) => _buildRemoteRoomTile(theme, device, room)),
-          // Add channel button for local device (when callback is provided)
-          if (device.isLocal && widget.onNewLocalChannel != null)
-            _buildAddChannelButton(theme),
         ],
       ],
     );
@@ -417,35 +414,6 @@ class _DeviceChatSidebarState extends State<DeviceChatSidebar> {
                     ),
                   ),
                 ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildAddChannelButton(ThemeData theme) {
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: widget.onNewLocalChannel,
-        child: Padding(
-          padding: const EdgeInsets.only(left: 44, right: 12, top: 6, bottom: 10),
-          child: Row(
-            children: [
-              Icon(
-                Icons.add,
-                size: 18,
-                color: theme.colorScheme.primary,
-              ),
-              const SizedBox(width: 8),
-              Text(
-                _i18n.t('new_channel'),
-                style: theme.textTheme.bodyMedium?.copyWith(
-                  color: theme.colorScheme.primary,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
             ],
           ),
         ),

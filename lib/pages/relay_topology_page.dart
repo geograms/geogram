@@ -5,7 +5,7 @@
 
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
+import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:path/path.dart' as path;

@@ -71,11 +71,7 @@ class PureStorageConfig {
   }) async {
     if (_initialized) {
       // Already initialized - allow re-initialization with different path
-      if (customBaseDir != null && customBaseDir != _baseDir) {
-        stderr.writeln(
-          'PureStorageConfig: Re-initializing with new base directory: $customBaseDir',
-        );
-      } else {
+      if (customBaseDir == null || customBaseDir == _baseDir) {
         return; // Already initialized with same or default path
       }
     }
@@ -93,8 +89,6 @@ class PureStorageConfig {
         _baseDir = Directory.current.path;
       }
     }
-
-    stderr.writeln('PureStorageConfig: Base directory set to: $_baseDir');
 
     if (createDirectories) {
       await _ensureDirectoriesExist();
@@ -143,7 +137,6 @@ class PureStorageConfig {
       final directory = Directory(dir);
       if (!await directory.exists()) {
         await directory.create(recursive: true);
-        stderr.writeln('PureStorageConfig: Created directory: $dir');
       }
     }
   }

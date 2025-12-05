@@ -8,6 +8,7 @@ import '../services/log_service.dart';
 import '../services/websocket_service.dart';
 import '../services/profile_service.dart';
 import '../services/chat_notification_service.dart';
+import '../services/signing_service.dart';
 import '../util/nostr_event.dart';
 import '../util/nostr_crypto.dart';
 import '../util/chat_api.dart';
@@ -663,12 +664,18 @@ class RelayService {
             ],
           );
 
-          // Calculate ID and sign with BIP-340 Schnorr signature
+          // Calculate ID and sign with SigningService (handles both extension and nsec)
           event.calculateId();
-          event.signWithNsec(profile.nsec);
+          final signingService = SigningService();
+          await signingService.initialize();
+          final signedEvent = await signingService.signEvent(event, profile);
+          if (signedEvent == null) {
+            LogService().log('Failed to sign message event');
+            return false;
+          }
 
           // Send via NOSTR protocol: ["EVENT", {...}]
-          final nostrMessage = NostrRelayMessage.event(event);
+          final nostrMessage = NostrRelayMessage.event(signedEvent);
 
           // Console output for debugging
           print('');
@@ -678,8 +685,8 @@ class RelayService {
           print('║  Room: $roomId');
           print('║  Callsign: $callsign');
           print('║  Content: $content');
-          print('║  Event ID: ${event.id?.substring(0, 32)}...');
-          print('║  Kind: ${event.kind}');
+          print('║  Event ID: ${signedEvent.id?.substring(0, 32)}...');
+          print('║  Kind: ${signedEvent.kind}');
           print('╚══════════════════════════════════════════════════════════════╝');
           print('');
 
@@ -722,7 +729,15 @@ class RelayService {
           ],
         );
         event.calculateId();
-        event.signWithNsec(profile.nsec);
+
+        // Sign with SigningService (handles both extension and nsec)
+        final signingService = SigningService();
+        await signingService.initialize();
+        final signedEvent = await signingService.signEvent(event, profile);
+        if (signedEvent == null) {
+          LogService().log('Failed to sign HTTP message event');
+          return false;
+        }
 
         // Console output for debugging
         print('');
@@ -732,13 +747,13 @@ class RelayService {
         print('║  Room: $roomId');
         print('║  Callsign: $callsign');
         print('║  Content: $content');
-        print('║  Event ID: ${event.id?.substring(0, 32)}...');
+        print('║  Event ID: ${signedEvent.id?.substring(0, 32)}...');
         print('║  Pubkey: ${pubkeyHex.substring(0, 16)}...');
         print('╚══════════════════════════════════════════════════════════════╝');
         print('');
 
         // Self-verify the signature before sending
-        final selfVerify = NostrCrypto.schnorrVerify(event.id!, event.sig!, pubkeyHex);
+        final selfVerify = NostrCrypto.schnorrVerify(signedEvent.id!, signedEvent.sig!, pubkeyHex);
         if (!selfVerify) {
           print('⚠ WARNING: Desktop cannot verify its own signature!');
         }
@@ -749,9 +764,9 @@ class RelayService {
           'content': content,
           'npub': profile.npub,
           'pubkey': pubkeyHex,
-          'event_id': event.id,
-          'signature': event.sig,
-          'created_at': event.createdAt,
+          'event_id': signedEvent.id,
+          'signature': signedEvent.sig,
+          'created_at': signedEvent.createdAt,
         };
 
         final response = await http.post(

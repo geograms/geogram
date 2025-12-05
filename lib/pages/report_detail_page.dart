@@ -9,7 +9,10 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:latlong2/latlong.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:url_launcher/url_launcher.dart';
-import 'dart:io';
+// dart:io operations only work on native platforms
+// Image handling is disabled on web
+import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
+import '../platform/file_image_helper.dart' as file_helper;
 import 'package:path/path.dart' as path;
 import '../models/report.dart';
 import '../models/report_update.dart';
@@ -47,7 +50,7 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
   List<ReportComment> _comments = [];
   bool _isLoading = false;
   String? _currentUserNpub;
-  List<File> _imageFiles = [];
+  List<String> _imageFilePaths = [];  // Store paths instead of File objects for web compatibility
   List<String> _existingImages = [];
 
   // Form controllers
@@ -238,6 +241,10 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
   }
 
   Future<void> _pickImages() async {
+    if (kIsWeb) {
+      _showError('Image picking is not supported on web');
+      return;
+    }
     try {
       final result = await FilePicker.platform.pickFiles(
         type: FileType.image,
@@ -246,8 +253,8 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
 
       if (result != null && result.files.isNotEmpty) {
         setState(() {
-          _imageFiles.addAll(
-            result.files.map((file) => File(file.path!)).toList(),
+          _imageFilePaths.addAll(
+            result.files.where((f) => f.path != null).map((file) => file.path!).toList(),
           );
         });
       }
@@ -290,13 +297,14 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
       if (isExisting) {
         _existingImages.removeAt(index);
       } else {
-        _imageFiles.removeAt(index);
+        _imageFilePaths.removeAt(index);
       }
     });
   }
 
   Future<void> _saveImages() async {
-    if (_report == null || _imageFiles.isEmpty) return;
+    if (kIsWeb) return;  // File operations not supported on web
+    if (_report == null || _imageFilePaths.isEmpty) return;
 
     try {
       final reportDir = Directory(path.join(
@@ -311,14 +319,15 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
       }
 
       // Copy new images to the images folder
-      for (final imageFile in _imageFiles) {
-        final fileName = path.basename(imageFile.path);
+      for (final imagePath in _imageFilePaths) {
+        final imageFile = File(imagePath);
+        final fileName = path.basename(imagePath);
         final destPath = path.join(imagesDir.path, fileName);
         await imageFile.copy(destPath);
       }
 
       // Clear the list and reload existing images
-      _imageFiles.clear();
+      _imageFilePaths.clear();
       await _loadExistingImages();
     } catch (e) {
       LogService().log('Error saving images: $e');
@@ -811,24 +820,26 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
                     ),
                   if (_isEditing) SizedBox(height: 16),
 
-                  // Display Images
-                  if (_existingImages.isNotEmpty || _imageFiles.isNotEmpty)
+                  // Display Images (only on native platforms)
+                  if (!kIsWeb && (_existingImages.isNotEmpty || _imageFilePaths.isNotEmpty))
                     Wrap(
                       spacing: 8,
                       runSpacing: 8,
                       children: [
                         // Existing images
                         ..._existingImages.asMap().entries.map((entry) {
+                          final imageWidget = file_helper.buildFileImage(
+                            entry.value,
+                            width: 120,
+                            height: 120,
+                            fit: BoxFit.cover,
+                          );
+                          if (imageWidget == null) return const SizedBox.shrink();
                           return Stack(
                             children: [
                               ClipRRect(
                                 borderRadius: BorderRadius.circular(8),
-                                child: Image.file(
-                                  File(entry.value),
-                                  width: 120,
-                                  height: 120,
-                                  fit: BoxFit.cover,
-                                ),
+                                child: imageWidget,
                               ),
                               if (_isEditing)
                                 Positioned(
@@ -849,17 +860,19 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
                           );
                         }),
                         // New images
-                        ..._imageFiles.asMap().entries.map((entry) {
+                        ..._imageFilePaths.asMap().entries.map((entry) {
+                          final imageWidget = file_helper.buildFileImage(
+                            entry.value,
+                            width: 120,
+                            height: 120,
+                            fit: BoxFit.cover,
+                          );
+                          if (imageWidget == null) return const SizedBox.shrink();
                           return Stack(
                             children: [
                               ClipRRect(
                                 borderRadius: BorderRadius.circular(8),
-                                child: Image.file(
-                                  entry.value,
-                                  width: 120,
-                                  height: 120,
-                                  fit: BoxFit.cover,
-                                ),
+                                child: imageWidget,
                               ),
                               if (_isEditing)
                                 Positioned(
@@ -881,8 +894,8 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
                         }),
                       ],
                     ),
-                  if (_existingImages.isEmpty && _imageFiles.isEmpty && !_isEditing)
-                    Text(_i18n.t('no_photos_attached')),
+                  if (_existingImages.isEmpty && _imageFilePaths.isEmpty && !_isEditing)
+                    Text(kIsWeb ? _i18n.t('photos_not_available_on_web') : _i18n.t('no_photos_attached')),
                   SizedBox(height: 24),
 
                   // Likes section (for existing reports)

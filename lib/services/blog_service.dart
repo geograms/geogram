@@ -6,8 +6,10 @@
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'package:crypto/crypto.dart';
 import 'dart:convert';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import '../models/blog_post.dart';
 import '../models/blog_comment.dart';
+import '../platform/file_system_service.dart';
 import '../util/nostr_crypto.dart';
 import 'log_service.dart';
 
@@ -69,14 +71,23 @@ class BlogService {
 
   /// Initialize blog service for a collection
   Future<void> initializeCollection(String collectionPath, {String? creatorNpub}) async {
-    print('BlogService: Initializing with collection path: $collectionPath');
+    LogService().log('BlogService: Initializing with collection path: $collectionPath');
     _collectionPath = collectionPath;
 
     // Ensure blog directory exists
-    final blogDir = Directory('$collectionPath/blog');
-    if (!await blogDir.exists()) {
-      await blogDir.create(recursive: true);
-      print('BlogService: Created blog directory');
+    final blogPath = '$collectionPath/blog';
+    if (kIsWeb) {
+      final fs = FileSystemService.instance;
+      if (!await fs.exists(blogPath)) {
+        await fs.createDirectory(blogPath, recursive: true);
+        LogService().log('BlogService: Created blog directory');
+      }
+    } else {
+      final blogDir = Directory('$collectionPath/blog');
+      if (!await blogDir.exists()) {
+        await blogDir.create(recursive: true);
+        LogService().log('BlogService: Created blog directory');
+      }
     }
 
     // Load security
@@ -84,7 +95,7 @@ class BlogService {
 
     // If no admin set and creator provided, set as admin
     if (_security.adminNpub == null && creatorNpub != null && creatorNpub.isNotEmpty) {
-      print('BlogService: Setting creator as admin: $creatorNpub');
+      LogService().log('BlogService: Setting creator as admin: $creatorNpub');
       final newSecurity = ChatSecurity(adminNpub: creatorNpub);
       await saveSecurity(newSecurity);
     }
@@ -94,18 +105,35 @@ class BlogService {
   Future<void> _loadSecurity() async {
     if (_collectionPath == null) return;
 
-    final securityFile = File('$_collectionPath/extra/security.json');
-    if (await securityFile.exists()) {
-      try {
-        final content = await securityFile.readAsString();
+    final securityPath = '$_collectionPath/extra/security.json';
+
+    try {
+      String? content;
+      bool exists = false;
+
+      if (kIsWeb) {
+        final fs = FileSystemService.instance;
+        exists = await fs.exists(securityPath);
+        if (exists) {
+          content = await fs.readAsString(securityPath);
+        }
+      } else {
+        final securityFile = File(securityPath);
+        exists = await securityFile.exists();
+        if (exists) {
+          content = await securityFile.readAsString();
+        }
+      }
+
+      if (exists && content != null) {
         final json = jsonDecode(content) as Map<String, dynamic>;
         _security = ChatSecurity.fromJson(json);
-        print('BlogService: Loaded security settings');
-      } catch (e) {
-        print('BlogService: Error loading security: $e');
+        LogService().log('BlogService: Loaded security settings');
+      } else {
         _security = ChatSecurity();
       }
-    } else {
+    } catch (e) {
+      LogService().log('BlogService: Error loading security: $e');
       _security = ChatSecurity();
     }
   }
@@ -116,36 +144,61 @@ class BlogService {
 
     _security = security;
 
-    final extraDir = Directory('$_collectionPath/extra');
-    if (!await extraDir.exists()) {
-      await extraDir.create(recursive: true);
+    final extraPath = '$_collectionPath/extra';
+    final securityPath = '$extraPath/security.json';
+    final content = jsonEncode(security.toJson());
+
+    if (kIsWeb) {
+      final fs = FileSystemService.instance;
+      if (!await fs.exists(extraPath)) {
+        await fs.createDirectory(extraPath, recursive: true);
+      }
+      await fs.writeAsString(securityPath, content);
+    } else {
+      final extraDir = Directory(extraPath);
+      if (!await extraDir.exists()) {
+        await extraDir.create(recursive: true);
+      }
+      final securityFile = File(securityPath);
+      await securityFile.writeAsString(content, flush: true);
     }
 
-    final securityFile = File('$_collectionPath/extra/security.json');
-    await securityFile.writeAsString(
-      jsonEncode(security.toJson()),
-      flush: true,
-    );
-
-    print('BlogService: Saved security settings');
+    LogService().log('BlogService: Saved security settings');
   }
 
   /// Get available years (folders in blog directory)
   Future<List<int>> getYears() async {
     if (_collectionPath == null) return [];
 
-    final blogDir = Directory('$_collectionPath/blog');
-    if (!await blogDir.exists()) return [];
-
+    final blogPath = '$_collectionPath/blog';
     final years = <int>[];
-    final entities = await blogDir.list().toList();
 
-    for (var entity in entities) {
-      if (entity is Directory) {
-        final name = entity.path.split('/').last;
-        final year = int.tryParse(name);
-        if (year != null) {
-          years.add(year);
+    if (kIsWeb) {
+      final fs = FileSystemService.instance;
+      if (!await fs.exists(blogPath)) return [];
+
+      final entities = await fs.list(blogPath);
+      for (var entity in entities) {
+        if (entity.type == FsEntityType.directory) {
+          final name = entity.path.split('/').last;
+          final year = int.tryParse(name);
+          if (year != null) {
+            years.add(year);
+          }
+        }
+      }
+    } else {
+      final blogDir = Directory(blogPath);
+      if (!await blogDir.exists()) return [];
+
+      final entities = await blogDir.list().toList();
+      for (var entity in entities) {
+        if (entity is Directory) {
+          final name = entity.path.split('/').last;
+          final year = int.tryParse(name);
+          if (year != null) {
+            years.add(year);
+          }
         }
       }
     }
@@ -166,32 +219,60 @@ class BlogService {
     final years = year != null ? [year] : await getYears();
 
     for (var y in years) {
-      final yearDir = Directory('$_collectionPath/blog/$y');
-      if (!await yearDir.exists()) continue;
+      final yearPath = '$_collectionPath/blog/$y';
 
-      final entities = await yearDir.list().toList();
+      if (kIsWeb) {
+        final fs = FileSystemService.instance;
+        if (!await fs.exists(yearPath)) continue;
 
+        final entities = await fs.list(yearPath);
+        for (var entity in entities) {
+          if (entity.type == FsEntityType.file && entity.path.endsWith('.md')) {
+            try {
+              final fileName = entity.path.split('/').last;
+              final postId = fileName.substring(0, fileName.length - 3); // Remove .md
 
-      for (var entity in entities) {
-        if (entity is File && entity.path.endsWith('.md')) {
-          try {
-            final fileName = entity.path.split('/').last;
-            final postId = fileName.substring(0, fileName.length - 3); // Remove .md
+              final content = await fs.readAsString(entity.path);
+              final post = BlogPost.fromText(content, postId);
 
-            final content = await entity.readAsString();
-            final post = BlogPost.fromText(content, postId);
-
-            // Filter by published status
-            if (publishedOnly && !post.isPublished) {
-              // Skip drafts unless user is the author
-              if (!post.isOwnPost(currentUserNpub)) {
-                continue;
+              // Filter by published status
+              if (publishedOnly && !post.isPublished) {
+                if (!post.isOwnPost(currentUserNpub)) {
+                  continue;
+                }
               }
-            }
 
-            posts.add(post);
-          } catch (e) {
-            print('BlogService: Error loading post ${entity.path}: $e');
+              posts.add(post);
+            } catch (e) {
+              LogService().log('BlogService: Error loading post ${entity.path}: $e');
+            }
+          }
+        }
+      } else {
+        final yearDir = Directory(yearPath);
+        if (!await yearDir.exists()) continue;
+
+        final entities = await yearDir.list().toList();
+        for (var entity in entities) {
+          if (entity is File && entity.path.endsWith('.md')) {
+            try {
+              final fileName = entity.path.split('/').last;
+              final postId = fileName.substring(0, fileName.length - 3); // Remove .md
+
+              final content = await entity.readAsString();
+              final post = BlogPost.fromText(content, postId);
+
+              // Filter by published status
+              if (publishedOnly && !post.isPublished) {
+                if (!post.isOwnPost(currentUserNpub)) {
+                  continue;
+                }
+              }
+
+              posts.add(post);
+            } catch (e) {
+              LogService().log('BlogService: Error loading post ${entity.path}: $e');
+            }
           }
         }
       }
@@ -223,18 +304,30 @@ class BlogService {
 
     // Extract year from postId (format: YYYY-MM-DD_title)
     final year = postId.substring(0, 4);
-    final postFile = File('$_collectionPath/blog/$year/$postId.md');
-
-    if (!await postFile.exists()) {
-      print('BlogService: Post file not found: ${postFile.path}');
-      return null;
-    }
+    final postPath = '$_collectionPath/blog/$year/$postId.md';
 
     try {
-      final content = await postFile.readAsString();
+      String? content;
+
+      if (kIsWeb) {
+        final fs = FileSystemService.instance;
+        if (!await fs.exists(postPath)) {
+          LogService().log('BlogService: Post file not found: $postPath');
+          return null;
+        }
+        content = await fs.readAsString(postPath);
+      } else {
+        final postFile = File(postPath);
+        if (!await postFile.exists()) {
+          LogService().log('BlogService: Post file not found: $postPath');
+          return null;
+        }
+        content = await postFile.readAsString();
+      }
+
       return BlogPost.fromText(content, postId);
     } catch (e) {
-      print('BlogService: Error loading full post: $e');
+      LogService().log('BlogService: Error loading full post: $e');
       return null;
     }
   }
@@ -276,9 +369,17 @@ class BlogService {
     String filename = baseFilename;
     int suffix = 1;
 
-    while (await File('$_collectionPath/blog/$year/$filename.md').exists()) {
-      filename = '$baseFilename-$suffix';
-      suffix++;
+    if (kIsWeb) {
+      final fs = FileSystemService.instance;
+      while (await fs.exists('$_collectionPath/blog/$year/$filename.md')) {
+        filename = '$baseFilename-$suffix';
+        suffix++;
+      }
+    } else {
+      while (await File('$_collectionPath/blog/$year/$filename.md').exists()) {
+        filename = '$baseFilename-$suffix';
+        suffix++;
+      }
     }
 
     return filename;
@@ -310,9 +411,17 @@ class BlogService {
       final filename = await _ensureUniqueFilename(baseFilename, year);
 
       // Ensure year directory exists
-      final yearDir = Directory('$_collectionPath/blog/$year');
-      if (!await yearDir.exists()) {
-        await yearDir.create(recursive: true);
+      final yearPath = '$_collectionPath/blog/$year';
+      if (kIsWeb) {
+        final fs = FileSystemService.instance;
+        if (!await fs.exists(yearPath)) {
+          await fs.createDirectory(yearPath, recursive: true);
+        }
+      } else {
+        final yearDir = Directory(yearPath);
+        if (!await yearDir.exists()) {
+          await yearDir.create(recursive: true);
+        }
       }
 
       // Build metadata
@@ -366,7 +475,7 @@ class BlogService {
           final signature = NostrCrypto.schnorrSign(contentHash, privateKeyHex);
           postMetadata['signature'] = signature;
         } catch (e) {
-          print('BlogService: Error signing post: $e');
+          LogService().log('BlogService: Error signing post: $e');
         }
       }
 
@@ -384,13 +493,21 @@ class BlogService {
       );
 
       // Write to file
-      final postFile = File('$_collectionPath/blog/$year/$filename.md');
-      await postFile.writeAsString(signedPost.exportAsText(), flush: true);
+      final postPath = '$_collectionPath/blog/$year/$filename.md';
+      final postContent = signedPost.exportAsText();
 
-      print('BlogService: Created post: $filename');
+      if (kIsWeb) {
+        final fs = FileSystemService.instance;
+        await fs.writeAsString(postPath, postContent);
+      } else {
+        final postFile = File(postPath);
+        await postFile.writeAsString(postContent, flush: true);
+      }
+
+      LogService().log('BlogService: Created post: $filename');
       return signedPost;
     } catch (e) {
-      print('BlogService: Error creating post: $e');
+      LogService().log('BlogService: Error creating post: $e');
       return null;
     }
   }
@@ -414,7 +531,7 @@ class BlogService {
 
     // Check permissions (author or admin)
     if (!_security.isAdmin(userNpub) && !post.isOwnPost(userNpub)) {
-      print('BlogService: User $userNpub cannot edit post by ${post.npub}');
+      LogService().log('BlogService: User $userNpub cannot edit post by ${post.npub}');
       return false;
     }
 
@@ -431,13 +548,21 @@ class BlogService {
 
       // Write to file
       final year = post.year;
-      final postFile = File('$_collectionPath/blog/$year/$postId.md');
-      await postFile.writeAsString(updatedPost.exportAsText(), flush: true);
+      final postPath = '$_collectionPath/blog/$year/$postId.md';
+      final postContent = updatedPost.exportAsText();
 
-      print('BlogService: Updated post: $postId');
+      if (kIsWeb) {
+        final fs = FileSystemService.instance;
+        await fs.writeAsString(postPath, postContent);
+      } else {
+        final postFile = File(postPath);
+        await postFile.writeAsString(postContent, flush: true);
+      }
+
+      LogService().log('BlogService: Updated post: $postId');
       return true;
     } catch (e) {
-      print('BlogService: Error updating post: $e');
+      LogService().log('BlogService: Error updating post: $e');
       return false;
     }
   }
@@ -461,23 +586,33 @@ class BlogService {
 
     // Check permissions (author or admin)
     if (!_security.isAdmin(userNpub) && !post.isOwnPost(userNpub)) {
-      print('BlogService: User $userNpub cannot delete post by ${post.npub}');
+      LogService().log('BlogService: User $userNpub cannot delete post by ${post.npub}');
       return false;
     }
 
     try {
       final year = post.year;
-      final postFile = File('$_collectionPath/blog/$year/$postId.md');
+      final postPath = '$_collectionPath/blog/$year/$postId.md';
 
-      if (await postFile.exists()) {
-        await postFile.delete();
-        print('BlogService: Deleted post: $postId');
-        return true;
+      if (kIsWeb) {
+        final fs = FileSystemService.instance;
+        if (await fs.exists(postPath)) {
+          await fs.delete(postPath);
+          LogService().log('BlogService: Deleted post: $postId');
+          return true;
+        }
+      } else {
+        final postFile = File(postPath);
+        if (await postFile.exists()) {
+          await postFile.delete();
+          LogService().log('BlogService: Deleted post: $postId');
+          return true;
+        }
       }
 
       return false;
     } catch (e) {
-      print('BlogService: Error deleting post: $e');
+      LogService().log('BlogService: Error deleting post: $e');
       return false;
     }
   }
@@ -498,7 +633,7 @@ class BlogService {
 
     // Only allow comments on published posts
     if (!post.isPublished) {
-      print('BlogService: Cannot comment on draft post');
+      LogService().log('BlogService: Cannot comment on draft post');
       return false;
     }
 
@@ -515,17 +650,26 @@ class BlogService {
 
       // Append to post file
       final year = post.year;
-      final postFile = File('$_collectionPath/blog/$year/$postId.md');
-      await postFile.writeAsString(
-        '\n${comment.exportAsText()}',
-        mode: FileMode.append,
-        flush: true,
-      );
+      final postPath = '$_collectionPath/blog/$year/$postId.md';
+      final commentText = '\n${comment.exportAsText()}';
 
-      print('BlogService: Added comment to post: $postId');
+      if (kIsWeb) {
+        final fs = FileSystemService.instance;
+        final existing = await fs.readAsString(postPath);
+        await fs.writeAsString(postPath, existing + commentText);
+      } else {
+        final postFile = File(postPath);
+        await postFile.writeAsString(
+          commentText,
+          mode: FileMode.append,
+          flush: true,
+        );
+      }
+
+      LogService().log('BlogService: Added comment to post: $postId');
       return true;
     } catch (e) {
-      print('BlogService: Error adding comment: $e');
+      LogService().log('BlogService: Error adding comment: $e');
       return false;
     }
   }
@@ -551,7 +695,7 @@ class BlogService {
     // Check permissions (admin, moderator, or comment author)
     final isCommentAuthor = comment.npub != null && comment.npub == userNpub;
     if (!_security.isAdmin(userNpub) && !isCommentAuthor) {
-      print('BlogService: User $userNpub cannot delete comment by ${comment.npub}');
+      LogService().log('BlogService: User $userNpub cannot delete comment by ${comment.npub}');
       return false;
     }
 
@@ -563,13 +707,21 @@ class BlogService {
       final updatedPost = post.copyWith(comments: updatedComments);
 
       final year = post.year;
-      final postFile = File('$_collectionPath/blog/$year/$postId.md');
-      await postFile.writeAsString(updatedPost.exportAsText(), flush: true);
+      final postPath = '$_collectionPath/blog/$year/$postId.md';
+      final postContent = updatedPost.exportAsText();
 
-      print('BlogService: Deleted comment from post: $postId');
+      if (kIsWeb) {
+        final fs = FileSystemService.instance;
+        await fs.writeAsString(postPath, postContent);
+      } else {
+        final postFile = File(postPath);
+        await postFile.writeAsString(postContent, flush: true);
+      }
+
+      LogService().log('BlogService: Deleted comment from post: $postId');
       return true;
     } catch (e) {
-      print('BlogService: Error deleting comment: $e');
+      LogService().log('BlogService: Error deleting comment: $e');
       return false;
     }
   }
@@ -578,10 +730,17 @@ class BlogService {
   Future<String?> copyFileToBlog(String sourcePath, int year) async {
     if (_collectionPath == null) return null;
 
+    // File copying is not fully supported on web yet
+    // On web, we would need to handle this differently (e.g., via file upload)
+    if (kIsWeb) {
+      LogService().log('BlogService: File copy not supported on web');
+      return null;
+    }
+
     try {
       final sourceFile = File(sourcePath);
       if (!await sourceFile.exists()) {
-        print('BlogService: Source file does not exist: $sourcePath');
+        LogService().log('BlogService: Source file does not exist: $sourcePath');
         return null;
       }
 
@@ -617,10 +776,10 @@ class BlogService {
       final destFile = File('$_collectionPath/blog/$year/files/$destFileName');
       await sourceFile.copy(destFile.path);
 
-      print('BlogService: Copied file: $destFileName');
+      LogService().log('BlogService: Copied file: $destFileName');
       return destFileName;
     } catch (e) {
-      print('BlogService: Error copying file: $e');
+      LogService().log('BlogService: Error copying file: $e');
       return null;
     }
   }

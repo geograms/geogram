@@ -185,6 +185,7 @@
   "backup": "Backup",
   "available": "Disponível",
   "device": "dispositivo",
+  "this_device": "Este Dispositivo",
   "devices_connected": "dispositivos conectados",
   "last_checked": "Última verificação: {0}",
   "add_custom_relay": "Adicionar Relé Personalizado",
@@ -231,6 +232,7 @@
   "location_permission_denied": "Permissão de localização negada",
   "location_permission_permanent_denied": "Permissão de localização negada permanentemente. Por favor ative nas definições da app.",
   "location_detected_gps": "Localização detetada via GPS",
+  "location_detected_browser": "Localização detetada via navegador",
   "location_detected": "Localização detetada",
   "close": "Fechar",
   "select_location": "Selecionar Localização",
@@ -1193,5 +1195,9 @@
   "your_callsign": "O Seu Indicativo",
   "welcome_customize_hint": "O seu indicativo único para a rede Geogram é apresentado acima.",
   "later": "OK",
-  "customize_profile": "Ir para Definições"
+  "customize_profile": "Ir para Definições",
+  "login_with_extension": "Entrar com Extensão NOSTR",
+  "extension_login_description": "Use a extensão do navegador (Alby, nos2x, etc.) para entrar. A sua chave privada permanece segura na extensão.",
+  "extension_not_available": "Nenhuma extensão NOSTR detectada. Instale o Alby ou nos2x para usar esta funcionalidade.",
+  "extension_login_failed": "Falha ao entrar com a extensão. Por favor tente novamente ou verifique a sua extensão."
 }

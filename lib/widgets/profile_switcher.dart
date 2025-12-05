@@ -3,12 +3,13 @@
  * License: Apache-2.0
  */
 
-import 'dart:io';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import '../models/profile.dart';
 import '../services/profile_service.dart';
 import '../services/i18n_service.dart';
 import '../pages/profile_management_page.dart';
+import '../platform/file_image_helper.dart' as file_helper;
 
 /// Profile switcher widget for the AppBar
 /// Shows current profile and allows switching between profiles
@@ -39,34 +40,11 @@ class _ProfileSwitcherState extends State<ProfileSwitcher> {
     if (mounted) setState(() {});
   }
 
-  Color _getColorFromName(String colorName) {
-    switch (colorName.toLowerCase()) {
-      case 'red':
-        return Colors.red;
-      case 'blue':
-        return Colors.blue;
-      case 'green':
-        return Colors.green;
-      case 'yellow':
-        return Colors.yellow;
-      case 'purple':
-        return Colors.purple;
-      case 'orange':
-        return Colors.orange;
-      case 'pink':
-        return Colors.pink;
-      case 'cyan':
-        return Colors.cyan;
-      default:
-        return Colors.blue;
-    }
-  }
-
   Widget _buildProfileAvatar(Profile profile, {double size = 32}) {
-    // Check if profile has a custom image
-    if (profile.profileImagePath != null && profile.profileImagePath!.isNotEmpty) {
-      final imageFile = File(profile.profileImagePath!);
-      if (imageFile.existsSync()) {
+    // Check if profile has a custom image (file-based images not supported on web)
+    if (!kIsWeb && profile.profileImagePath != null && profile.profileImagePath!.isNotEmpty) {
+      final imageProvider = file_helper.getFileImageProvider(profile.profileImagePath!);
+      if (imageProvider != null) {
         return Container(
           width: size,
           height: size,
@@ -77,7 +55,7 @@ class _ProfileSwitcherState extends State<ProfileSwitcher> {
               width: 2,
             ),
             image: DecorationImage(
-              image: FileImage(imageFile),
+              image: imageProvider,
               fit: BoxFit.cover,
             ),
           ),

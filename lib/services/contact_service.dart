@@ -5,6 +5,7 @@
 
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import '../models/contact.dart';
+import 'log_service.dart';
 
 /// Service for managing contacts collection (people and machines)
 class ContactService {
@@ -16,21 +17,21 @@ class ContactService {
 
   /// Initialize contact service for a collection
   Future<void> initializeCollection(String collectionPath) async {
-    print('ContactService: Initializing with collection path: $collectionPath');
+    LogService().log('ContactService: Initializing with collection path: $collectionPath');
     _collectionPath = collectionPath;
 
     // Ensure contacts directory exists
     final contactsDir = Directory('$collectionPath/contacts');
     if (!await contactsDir.exists()) {
       await contactsDir.create(recursive: true);
-      print('ContactService: Created contacts directory');
+      LogService().log('ContactService: Created contacts directory');
     }
 
     // Ensure profile-pictures directory exists
     final profilePicturesDir = Directory('$collectionPath/contacts/profile-pictures');
     if (!await profilePicturesDir.exists()) {
       await profilePicturesDir.create(recursive: true);
-      print('ContactService: Created profile-pictures directory');
+      LogService().log('ContactService: Created profile-pictures directory');
     }
   }
 
@@ -61,7 +62,7 @@ class ContactService {
             contacts.add(contact);
           }
         } catch (e) {
-          print('ContactService: Error loading contact ${entity.path}: $e');
+          LogService().log('ContactService: Error loading contact ${entity.path}: $e');
         }
       }
     }
@@ -109,7 +110,7 @@ class ContactService {
             contacts.add(contact);
           }
         } catch (e) {
-          print('ContactService: Error loading contact ${entity.path}: $e');
+          LogService().log('ContactService: Error loading contact ${entity.path}: $e');
         }
       } else if (entity is Directory) {
         // Skip profile-pictures and hidden directories
@@ -134,7 +135,7 @@ class ContactService {
       final contact = await parseContactFile(content, filePath);
       return contact;
     } catch (e) {
-      print('ContactService: Error reading contact file $filePath: $e');
+      LogService().log('ContactService: Error reading contact file $filePath: $e');
       return null;
     }
   }
@@ -259,7 +260,7 @@ class ContactService {
 
     // Validate required fields
     if (displayName == null || callsign == null || npub == null || created == null || firstSeen == null) {
-      print('ContactService: Missing required fields in contact file');
+      LogService().log('ContactService: Missing required fields in contact file');
       return null;
     }
 
@@ -444,10 +445,10 @@ class ContactService {
 
     try {
       await file.writeAsString(fileContent);
-      print('ContactService: Saved contact ${contact.callsign} to ${file.path}');
+      LogService().log('ContactService: Saved contact ${contact.callsign} to ${file.path}');
       return null; // Success
     } catch (e) {
-      print('ContactService: Error saving contact: $e');
+      LogService().log('ContactService: Error saving contact: $e');
       return 'Error saving contact: $e';
     }
   }
@@ -496,14 +497,14 @@ class ContactService {
 
     try {
       await file.delete();
-      print('ContactService: Deleted contact $callsign');
+      LogService().log('ContactService: Deleted contact $callsign');
 
       // Also delete profile picture if exists
       await _deleteProfilePicture(callsign);
 
       return true;
     } catch (e) {
-      print('ContactService: Error deleting contact: $e');
+      LogService().log('ContactService: Error deleting contact: $e');
       return false;
     }
   }
@@ -521,7 +522,7 @@ class ContactService {
       final file = File('${pictureDir.path}/$callsign.$ext');
       if (await file.exists()) {
         await file.delete();
-        print('ContactService: Deleted profile picture for $callsign');
+        LogService().log('ContactService: Deleted profile picture for $callsign');
         break;
       }
     }
@@ -557,10 +558,10 @@ class ContactService {
     try {
       await fromFile.copy(toFile.path);
       await fromFile.delete();
-      print('ContactService: Moved contact $callsign from $fromPath to $toPath');
+      LogService().log('ContactService: Moved contact $callsign from $fromPath to $toPath');
       return true;
     } catch (e) {
-      print('ContactService: Error moving contact: $e');
+      LogService().log('ContactService: Error moving contact: $e');
       return false;
     }
   }
@@ -685,7 +686,7 @@ class ContactService {
 
     final dir = Directory('$_collectionPath/contacts/$groupPath');
     if (await dir.exists()) {
-      print('ContactService: Group already exists: $groupPath');
+      LogService().log('ContactService: Group already exists: $groupPath');
       return false;
     }
 
@@ -722,10 +723,10 @@ class ContactService {
         await groupFile.writeAsString(buffer.toString());
       }
 
-      print('ContactService: Created group $groupPath');
+      LogService().log('ContactService: Created group $groupPath');
       return true;
     } catch (e) {
-      print('ContactService: Error creating group: $e');
+      LogService().log('ContactService: Error creating group: $e');
       return false;
     }
   }
@@ -754,16 +755,16 @@ class ContactService {
     }
 
     if (contactCount > 0) {
-      print('ContactService: Cannot delete non-empty group $groupPath');
+      LogService().log('ContactService: Cannot delete non-empty group $groupPath');
       return false;
     }
 
     try {
       await dir.delete(recursive: true);
-      print('ContactService: Deleted group $groupPath');
+      LogService().log('ContactService: Deleted group $groupPath');
       return true;
     } catch (e) {
-      print('ContactService: Error deleting group: $e');
+      LogService().log('ContactService: Error deleting group: $e');
       return false;
     }
   }
@@ -797,10 +798,10 @@ class ContactService {
 
     try {
       await sourceFile.copy(targetFile.path);
-      print('ContactService: Saved profile picture for $callsign');
+      LogService().log('ContactService: Saved profile picture for $callsign');
       return '$callsign.$extension'; // Return filename for PROFILE_PICTURE field
     } catch (e) {
-      print('ContactService: Error saving profile picture: $e');
+      LogService().log('ContactService: Error saving profile picture: $e');
       return null;
     }
   }

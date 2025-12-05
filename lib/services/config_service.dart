@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import '../util/nostr_key_generator.dart';
 import '../platform/web_storage.dart' if (dart.library.io) '../platform/web_storage_stub.dart';
 import 'storage_config.dart';
+import 'log_service.dart';
 
 /// Service for managing application configuration stored in config.json
 class ConfigService {
@@ -60,7 +61,7 @@ class ConfigService {
       try {
         _config = json.decode(stored) as Map<String, dynamic>;
       } catch (e) {
-        print('Error loading web config: $e');
+        LogService().log('Error loading web config: $e');
         _createDefaultConfig();
         await _saveImmediate();
       }
@@ -80,7 +81,7 @@ class ConfigService {
       },
       'settings': {
         'theme': 'system',
-        'language': 'en',
+        'language': 'en_US',
       },
     };
   }
@@ -114,7 +115,7 @@ class ConfigService {
         final contents = JsonEncoder.withIndent('  ').convert(_config);
         WebStorage.set(_webStorageKey, contents);
       } catch (e) {
-        print('Error saving web config: $e');
+        LogService().log('Error saving web config: $e');
       }
     } else {
       if (_configFile == null) {

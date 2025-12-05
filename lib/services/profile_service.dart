@@ -7,7 +7,9 @@ import '../models/profile.dart';
 import '../services/log_service.dart';
 import '../services/config_service.dart';
 import '../services/collection_service.dart';
+import '../services/signing_service.dart';
 import '../util/nostr_key_generator.dart';
+import '../util/nostr_crypto.dart';
 
 /// Service for managing user profiles (supports multiple callsigns)
 class ProfileService {
@@ -306,6 +308,75 @@ class ProfileService {
     _saveAllProfiles();
     LogService().log('Created new profile: ${newProfile.callsign} (${type.name})');
     return newProfile;
+  }
+
+  /// Create a new profile using NIP-07 browser extension (web only)
+  /// This creates a profile without storing the nsec - signing is done via extension
+  Future<Profile?> createProfileWithExtension({String? nickname}) async {
+    if (!kIsWeb) {
+      LogService().log('Extension login only available on web');
+      return null;
+    }
+
+    try {
+      final signingService = SigningService();
+      await signingService.initialize();
+
+      if (!signingService.isExtensionAvailable) {
+        LogService().log('NIP-07 extension not available');
+        return null;
+      }
+
+      // Get public key from extension
+      final pubkeyHex = await signingService.getExtensionPublicKey();
+      if (pubkeyHex == null || pubkeyHex.isEmpty) {
+        LogService().log('Failed to get public key from extension');
+        return null;
+      }
+
+      // Convert pubkey hex to npub
+      final npub = NostrCrypto.encodeNpub(pubkeyHex);
+
+      // Derive callsign from npub
+      final callsign = NostrKeyGenerator.deriveCallsign(npub);
+
+      // Create profile with extension mode enabled
+      final newProfile = Profile(
+        nickname: nickname ?? '',
+        type: ProfileType.client,
+        npub: npub,
+        nsec: '', // No nsec stored - using extension
+        useExtension: true,
+        callsign: callsign,
+      );
+
+      // Set random preferred color
+      final colors = ['red', 'blue', 'green', 'yellow', 'purple', 'orange', 'pink', 'cyan'];
+      newProfile.preferredColor = colors[Random().nextInt(colors.length)];
+
+      _profiles.add(newProfile);
+      _activeProfileId = newProfile.id;
+      _saveAllProfiles();
+
+      LogService().log('Created profile with extension: ${newProfile.callsign}');
+      return newProfile;
+    } catch (e) {
+      LogService().log('Error creating profile with extension: $e');
+      return null;
+    }
+  }
+
+  /// Check if NIP-07 extension is available (web only)
+  Future<bool> isExtensionAvailable() async {
+    if (!kIsWeb) return false;
+
+    try {
+      final signingService = SigningService();
+      await signingService.initialize();
+      return signingService.isExtensionAvailable;
+    } catch (e) {
+      return false;
+    }
   }
 
   /// Delete a profile by ID (cannot delete the last profile)

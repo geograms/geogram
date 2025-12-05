@@ -3,6 +3,7 @@
  * License: Apache-2.0
  */
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../models/profile.dart';
@@ -102,14 +103,34 @@ class _ProfileManagementPageState extends State<ProfileManagementPage> {
     );
 
     if (result != null) {
+      final useExtension = result['useExtension'] as bool? ?? false;
       final type = result['type'] as ProfileType;
       final nickname = result['nickname'] as String?;
 
       try {
-        await _profileService.createNewProfile(
-          nickname: nickname,
-          type: type,
-        );
+        if (useExtension) {
+          // Create profile using NIP-07 extension
+          final profile = await _profileService.createProfileWithExtension(
+            nickname: nickname,
+          );
+          if (profile == null) {
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(_i18n.t('extension_login_failed')),
+                  backgroundColor: Colors.red,
+                ),
+              );
+            }
+            return;
+          }
+        } else {
+          // Create profile with generated keys
+          await _profileService.createNewProfile(
+            nickname: nickname,
+            type: type,
+          );
+        }
 
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -609,8 +630,37 @@ class _CreateProfileDialog extends StatefulWidget {
 
 class _CreateProfileDialogState extends State<_CreateProfileDialog> {
   final I18nService _i18n = I18nService();
+  final ProfileService _profileService = ProfileService();
   final TextEditingController _nicknameController = TextEditingController();
   ProfileType _selectedType = ProfileType.client;
+  bool _useExtension = false;
+  bool _extensionAvailable = false;
+  bool _checkingExtension = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _checkExtensionAvailability();
+  }
+
+  Future<void> _checkExtensionAvailability() async {
+    if (kIsWeb) {
+      final available = await _profileService.isExtensionAvailable();
+      if (mounted) {
+        setState(() {
+          _extensionAvailable = available;
+          _checkingExtension = false;
+        });
+      }
+    } else {
+      if (mounted) {
+        setState(() {
+          _extensionAvailable = false;
+          _checkingExtension = false;
+        });
+      }
+    }
+  }
 
   @override
   void dispose() {
@@ -628,35 +678,45 @@ class _CreateProfileDialogState extends State<_CreateProfileDialog> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              _i18n.t('profile_type'),
-              style: Theme.of(context).textTheme.titleMedium,
-            ),
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                Expanded(
-                  child: _buildTypeOption(
-                    type: ProfileType.client,
-                    icon: Icons.person,
-                    title: _i18n.t('client'),
-                    description: _i18n.t('client_description'),
-                    color: Colors.blue,
+            // NIP-07 Extension option (web only)
+            if (kIsWeb) ...[
+              _buildExtensionOption(),
+              const SizedBox(height: 16),
+              const Divider(),
+              const SizedBox(height: 16),
+            ],
+            // Profile type selection (only show if not using extension)
+            if (!_useExtension) ...[
+              Text(
+                _i18n.t('profile_type'),
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Expanded(
+                    child: _buildTypeOption(
+                      type: ProfileType.client,
+                      icon: Icons.person,
+                      title: _i18n.t('client'),
+                      description: _i18n.t('client_description'),
+                      color: Colors.blue,
+                    ),
                   ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: _buildTypeOption(
-                    type: ProfileType.relay,
-                    icon: Icons.cell_tower,
-                    title: _i18n.t('relay'),
-                    description: _i18n.t('relay_description'),
-                    color: Colors.orange,
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: _buildTypeOption(
+                      type: ProfileType.relay,
+                      icon: Icons.cell_tower,
+                      title: _i18n.t('relay'),
+                      description: _i18n.t('relay_description'),
+                      color: Colors.orange,
+                    ),
                   ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 24),
+                ],
+              ),
+              const SizedBox(height: 24),
+            ],
             Text(
               _i18n.t('nickname_optional'),
               style: Theme.of(context).textTheme.titleMedium,
@@ -682,6 +742,7 @@ class _CreateProfileDialogState extends State<_CreateProfileDialog> {
           onPressed: () {
             Navigator.pop(context, {
               'type': _selectedType,
+              'useExtension': _useExtension,
               'nickname': _nicknameController.text.trim().isEmpty
                   ? null
                   : _nicknameController.text.trim(),
@@ -693,6 +754,118 @@ class _CreateProfileDialogState extends State<_CreateProfileDialog> {
     );
   }
 
+  Widget _buildExtensionOption() {
+    final isSelected = _useExtension;
+
+    return InkWell(
+      onTap: _extensionAvailable
+          ? () => setState(() {
+                _useExtension = !_useExtension;
+              })
+          : null,
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          border: Border.all(
+            color: isSelected
+                ? Colors.purple
+                : _extensionAvailable
+                    ? Colors.grey[300]!
+                    : Colors.grey[200]!,
+            width: isSelected ? 2 : 1,
+          ),
+          borderRadius: BorderRadius.circular(12),
+          color: isSelected
+              ? Colors.purple.withOpacity(0.1)
+              : _extensionAvailable
+                  ? null
+                  : Colors.grey[100],
+        ),
+        child: Row(
+          children: [
+            Icon(
+              Icons.extension,
+              size: 40,
+              color: _extensionAvailable
+                  ? (isSelected ? Colors.purple : Colors.grey[600])
+                  : Colors.grey[400],
+            ),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Text(
+                        _i18n.t('login_with_extension'),
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          color: _extensionAvailable
+                              ? (isSelected ? Colors.purple : null)
+                              : Colors.grey[500],
+                        ),
+                      ),
+                      if (_checkingExtension) ...[
+                        const SizedBox(width: 8),
+                        const SizedBox(
+                          width: 12,
+                          height: 12,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                      ] else if (_extensionAvailable) ...[
+                        const SizedBox(width: 8),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 6,
+                            vertical: 2,
+                          ),
+                          decoration: BoxDecoration(
+                            color: Colors.green.withOpacity(0.2),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Text(
+                            _i18n.t('available'),
+                            style: const TextStyle(
+                              fontSize: 10,
+                              color: Colors.green,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    _extensionAvailable
+                        ? _i18n.t('extension_login_description')
+                        : _i18n.t('extension_not_available'),
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Colors.grey[600],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            if (_extensionAvailable)
+              Checkbox(
+                value: _useExtension,
+                onChanged: (value) {
+                  setState(() {
+                    _useExtension = value ?? false;
+                  });
+                },
+                activeColor: Colors.purple,
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildTypeOption({
     required ProfileType type,
     required IconData icon,
@@ -700,30 +873,46 @@ class _CreateProfileDialogState extends State<_CreateProfileDialog> {
     required String description,
     required Color color,
   }) {
-    final isSelected = _selectedType == type;
+    final isSelected = _selectedType == type && !_useExtension;
 
     return InkWell(
-      onTap: () => setState(() => _selectedType = type),
+      onTap: _useExtension
+          ? null
+          : () => setState(() => _selectedType = type),
       borderRadius: BorderRadius.circular(12),
       child: Container(
         padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
           border: Border.all(
-            color: isSelected ? color : Colors.grey[300]!,
+            color: isSelected
+                ? color
+                : _useExtension
+                    ? Colors.grey[200]!
+                    : Colors.grey[300]!,
             width: isSelected ? 2 : 1,
           ),
           borderRadius: BorderRadius.circular(12),
-          color: isSelected ? color.withOpacity(0.1) : null,
+          color: isSelected
+              ? color.withOpacity(0.1)
+              : _useExtension
+                  ? Colors.grey[100]
+                  : null,
         ),
         child: Column(
           children: [
-            Icon(icon, size: 32, color: isSelected ? color : Colors.grey[600]),
+            Icon(
+              icon,
+              size: 32,
+              color: _useExtension
+                  ? Colors.grey[400]
+                  : (isSelected ? color : Colors.grey[600]),
+            ),
             const SizedBox(height: 8),
             Text(
               title,
               style: TextStyle(
                 fontWeight: FontWeight.bold,
-                color: isSelected ? color : null,
+                color: _useExtension ? Colors.grey[400] : (isSelected ? color : null),
               ),
             ),
             const SizedBox(height: 4),
@@ -732,7 +921,7 @@ class _CreateProfileDialogState extends State<_CreateProfileDialog> {
               textAlign: TextAlign.center,
               style: TextStyle(
                 fontSize: 11,
-                color: Colors.grey[600],
+                color: _useExtension ? Colors.grey[400] : Colors.grey[600],
               ),
             ),
           ],

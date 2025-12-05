@@ -4,7 +4,7 @@
  */
 
 import 'dart:async';
-import 'dart:io';
+import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'package:flutter/material.dart';
 import 'package:path/path.dart' as path;
 import '../services/relay_node_service.dart';

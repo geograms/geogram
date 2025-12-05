@@ -2,13 +2,14 @@ import 'dart:convert';
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
-import 'package:flutter/foundation.dart';
+import 'package:flutter/foundation.dart' show ValueNotifier, kIsWeb;
 import 'package:mime/mime.dart';
 import '../models/collection.dart';
 import '../models/chat_channel.dart';
 import '../models/chat_security.dart';
 import '../models/chat_settings.dart';
 import '../models/forum_section.dart';
+import '../platform/file_system_service.dart';
 import '../util/nostr_key_generator.dart';
 import '../util/tlsh.dart';
 import 'config_service.dart';
@@ -16,7 +17,7 @@ import 'chat_service.dart';
 import 'profile_service.dart';
 import 'storage_config.dart';
 
-/// Service for managing collections on disk
+/// Service for managing collections on disk (or in memory for web)
 class CollectionService {
   static final CollectionService _instance = CollectionService._internal();
   factory CollectionService() => _instance;
@@ -27,6 +28,9 @@ class CollectionService {
   String? _currentCallsign;
   final ConfigService _configService = ConfigService();
 
+  /// In-memory collection store for web platform
+  final Map<String, Collection> _webCollections = {};
+
   /// Notifier for when callsign/collections change (incremented on change)
   final callsignNotifier = ValueNotifier<int>(0);
 
@@ -35,6 +39,9 @@ class CollectionService {
 
   /// Get the default collections directory path
   String getDefaultCollectionsPath() {
+    if (kIsWeb) {
+      return '/web/collections';  // Virtual path for web
+    }
     if (_collectionsDir == null) {
       throw Exception('CollectionService not initialized. Call init() and setActiveCallsign() first.');
     }
@@ -43,6 +50,9 @@ class CollectionService {
 
   /// Get the devices directory path (base for all callsign folders)
   String getDevicesPath() {
+    if (kIsWeb) {
+      return '/web/devices';  // Virtual path for web
+    }
     if (_devicesDir == null) {
       throw Exception('CollectionService not initialized. Call init() first.');
     }
@@ -58,6 +68,18 @@ class CollectionService {
   /// before calling this method.
   Future<void> init() async {
     try {
+      // On web, initialize virtual file system
+      if (kIsWeb) {
+        final fs = FileSystemService.instance;
+        await fs.init();
+
+        // Create virtual devices directory
+        await fs.createDirectory('/web/devices', recursive: true);
+
+        stderr.writeln('CollectionService initialized (web mode - IndexedDB storage)');
+        return;
+      }
+
       final storageConfig = StorageConfig();
       if (!storageConfig.isInitialized) {
         throw StateError(
@@ -83,13 +105,27 @@ class CollectionService {
   /// Set the active callsign and configure the collections directory
   /// This should be called after ProfileService is initialized
   Future<void> setActiveCallsign(String callsign) async {
-    if (_devicesDir == null) {
-      throw Exception('CollectionService not initialized. Call init() first.');
-    }
-
     // Sanitize callsign for folder name (alphanumeric, underscore, dash)
     final sanitizedCallsign = _sanitizeCallsign(callsign);
     _currentCallsign = sanitizedCallsign;
+
+    // On web, create virtual collections directory
+    if (kIsWeb) {
+      final fs = FileSystemService.instance;
+      final collectionsPath = '/web/devices/$sanitizedCallsign';
+      await fs.createDirectory(collectionsPath, recursive: true);
+
+      stderr.writeln('CollectionService active callsign (web): $sanitizedCallsign');
+      stderr.writeln('Virtual collections directory: $collectionsPath');
+
+      // Notify listeners that callsign changed
+      callsignNotifier.value++;
+      return;
+    }
+
+    if (_devicesDir == null) {
+      throw Exception('CollectionService not initialized. Call init() first.');
+    }
 
     _collectionsDir = Directory('${_devicesDir!.path}/$sanitizedCallsign');
 
@@ -114,7 +150,11 @@ class CollectionService {
   }
 
   /// Get the collections directory
+  /// Note: This throws on web as Directory operations are not supported
   Directory get collectionsDirectory {
+    if (kIsWeb) {
+      throw UnsupportedError('collectionsDirectory is not available on web platform');
+    }
     if (_collectionsDir == null) {
       throw Exception('CollectionService not initialized. Call init() first.');
     }
@@ -122,23 +162,47 @@ class CollectionService {
   }
 
   /// Load all collections from disk (including from custom locations)
+  /// On web, loads collections from virtual file system (IndexedDB)
+  ///
+  /// For faster startup, consider using [loadCollectionsStream] instead
+  /// which provides progressive loading.
   Future<List<Collection>> loadCollections() async {
+    final collections = <Collection>[];
+    await for (final collection in loadCollectionsStream()) {
+      collections.add(collection);
+    }
+    return collections;
+  }
+
+  /// Load collections progressively as a stream.
+  /// This allows the UI to display collections as they load instead of
+  /// waiting for all collections to be scanned.
+  ///
+  /// Example usage:
+  /// ```dart
+  /// CollectionService().loadCollectionsStream().listen((collection) {
+  ///   setState(() => _collections.add(collection));
+  /// });
+  /// ```
+  Stream<Collection> loadCollectionsStream() async* {
+    // On web, load from virtual file system
+    if (kIsWeb) {
+      yield* _loadWebCollectionsStream();
+      return;
+    }
+
     if (_collectionsDir == null) {
       throw Exception('CollectionService not initialized. Call init() first.');
     }
 
-    final collections = <Collection>[];
-
     // Load from default collections directory
     if (await _collectionsDir!.exists()) {
-      final folders = await _collectionsDir!.list().toList();
-
-      for (var entity in folders) {
+      await for (final entity in _collectionsDir!.list()) {
         if (entity is Directory) {
           try {
             final collection = await _loadCollectionFromFolder(entity);
             if (collection != null) {
-              collections.add(collection);
+              yield collection;
             }
           } catch (e) {
             stderr.writeln('Error loading collection from ${entity.path}: $e');
@@ -148,14 +212,98 @@ class CollectionService {
     }
 
     // TODO: Load from custom locations stored in config
-    // For now, we only load from the default directory
-    // In the future, we can store custom collection paths in config.json
-    // and scan those directories as well
+  }
 
-    return collections;
+  /// Load web collections from virtual file system
+  Stream<Collection> _loadWebCollectionsStream() async* {
+    // First yield any cached in-memory collections
+    for (final collection in _webCollections.values) {
+      yield collection;
+    }
+
+    // Then try to load from IndexedDB
+    if (_currentCallsign == null) return;
+
+    final fs = FileSystemService.instance;
+    final collectionsPath = '/web/devices/$_currentCallsign';
+
+    if (!await fs.exists(collectionsPath)) return;
+
+    final entities = await fs.list(collectionsPath);
+    for (final entity in entities) {
+      if (entity.isDirectory) {
+        try {
+          final collection = await _loadWebCollectionFromFolder(entity.path);
+          if (collection != null && !_webCollections.containsKey(collection.id)) {
+            _webCollections[collection.id] = collection;
+            yield collection;
+          }
+        } catch (e) {
+          stderr.writeln('Error loading web collection from ${entity.path}: $e');
+        }
+      }
+    }
+  }
+
+  /// Load a collection from virtual file system (web)
+  Future<Collection?> _loadWebCollectionFromFolder(String folderPath) async {
+    final fs = FileSystemService.instance;
+    final collectionJsPath = '$folderPath/collection.js';
+
+    if (!await fs.exists(collectionJsPath)) {
+      return null;
+    }
+
+    try {
+      final content = await fs.readAsString(collectionJsPath);
+
+      // Extract JSON from JavaScript file
+      final startIndex = content.indexOf('window.COLLECTION_DATA = {');
+      if (startIndex == -1) return null;
+
+      final jsonStart = content.indexOf('{', startIndex);
+      final jsonEnd = content.lastIndexOf('};');
+      if (jsonStart == -1 || jsonEnd == -1) return null;
+
+      final jsonContent = content.substring(jsonStart, jsonEnd + 1);
+      final data = json.decode(jsonContent) as Map<String, dynamic>;
+
+      final collectionData = data['collection'] as Map<String, dynamic>?;
+      if (collectionData == null) return null;
+
+      // Check for cached stats
+      final cachedStats = data['cachedStats'] as Map<String, dynamic>?;
+
+      final collection = Collection(
+        id: collectionData['id'] as String? ?? '',
+        title: collectionData['title'] as String? ?? 'Untitled',
+        description: collectionData['description'] as String? ?? '',
+        type: collectionData['type'] as String? ?? 'files',
+        updated: collectionData['updated'] as String? ?? DateTime.now().toIso8601String(),
+        storagePath: folderPath,
+        isOwned: true,
+        visibility: 'public',
+        allowedReaders: const [],
+        encryption: 'none',
+        filesCount: cachedStats?['fileCount'] as int? ?? 0,
+        totalSize: cachedStats?['totalSize'] as int? ?? 0,
+      );
+
+      // Set favorite status from config
+      collection.isFavorite = _configService.isFavorite(collection.id);
+
+      return collection;
+    } catch (e) {
+      stderr.writeln('Error parsing web collection.js: $e');
+      return null;
+    }
   }
 
   /// Load a single collection from a folder
+  ///
+  /// This method is optimized for fast loading:
+  /// - Uses cached file counts if available
+  /// - Defers tree.json and data.js generation to background
   Future<Collection?> _loadCollectionFromFolder(Directory folder) async {
     final collectionJsFile = File('${folder.path}/collection.js');
 
@@ -201,6 +349,12 @@ class CollectionService {
         return null;
       }
 
+      // Check for cached stats to avoid expensive file counting
+      final cachedStats = data['cachedStats'] as Map<String, dynamic>?;
+      final hasCachedStats = cachedStats != null &&
+          cachedStats['fileCount'] != null &&
+          cachedStats['totalSize'] != null;
+
       final collection = Collection(
         id: collectionData['id'] as String? ?? '',
         title: collectionData['title'] as String? ?? 'Untitled',
@@ -213,6 +367,9 @@ class CollectionService {
         visibility: 'public', // Default, will be overridden by security.json
         allowedReaders: const [],
         encryption: 'none',
+        // Use cached stats if available
+        filesCount: hasCachedStats ? (cachedStats['fileCount'] as int? ?? 0) : 0,
+        totalSize: hasCachedStats ? (cachedStats['totalSize'] as int? ?? 0) : 0,
       );
 
       // Set favorite status from config
@@ -221,54 +378,95 @@ class CollectionService {
       // Load security settings (will override defaults if file exists)
       await _loadSecuritySettings(collection, folder);
 
-      // Ensure tree.json exists and is valid for all collection types
-      // tree.json is needed for file browsing via API
+      // OPTIMIZATION: Defer expensive tree.json generation to background
+      // Only check if tree.json exists - don't generate during load
       final treeJsonFile = File('${folder.path}/extra/tree.json');
-      bool needsTreeGeneration = false;
+      final needsTreeGeneration = !await treeJsonFile.exists();
 
-      if (!await treeJsonFile.exists()) {
-        needsTreeGeneration = true;
-      } else {
-        // Check if tree.json is empty
-        final content = await treeJsonFile.readAsString();
-        if (content.trim() == '[]' || content.trim().isEmpty) {
-          // Check if folder has actual content
-          bool hasContent = false;
-          await for (final entity in folder.list()) {
-            final name = entity.path.split('/').last;
-            if (name != 'extra' && name != 'collection.js' &&
-                name != 'index.html' && !name.startsWith('.')) {
-              hasContent = true;
-              break;
-            }
-          }
-          if (hasContent) {
-            needsTreeGeneration = true;
-          }
-        }
-      }
-
+      // Schedule background generation if needed (non-blocking)
       if (needsTreeGeneration) {
-        stderr.writeln('Generating tree.json for collection: ${collection.title}');
-        await _generateAndSaveTreeJson(folder);
+        // Queue for background generation instead of blocking load
+        _scheduleBackgroundGeneration(folder, collection);
       }
 
-      // For files and www types, also ensure data.js and index.html exist
-      if (collection.type == 'files' || collection.type == 'www') {
-        if (!await _hasRequiredFiles(folder)) {
-          stderr.writeln('Generating data.js and index.html for collection: ${collection.title}');
-          await _generateAndSaveDataJs(folder);
-          await _generateAndSaveIndexHtml(folder);
+      // OPTIMIZATION: Only count files if we don't have cached stats
+      if (!hasCachedStats) {
+        // Use tree.json if available for fast counting
+        if (!needsTreeGeneration) {
+          await _countCollectionFiles(collection, folder);
+          // Save cached stats for next time
+          await _saveCachedStats(collection, folder);
         }
+        // Otherwise, file count will be updated during background generation
       }
-
-      // Count files
-      await _countCollectionFiles(collection, folder);
 
       return collection;
     } catch (e) {
       stderr.writeln('Error parsing collection.js: $e');
       return null;
+    }
+  }
+
+  /// Schedule background generation of tree.json and other files
+  void _scheduleBackgroundGeneration(Directory folder, Collection collection) {
+    // Use Future.delayed to not block the current load
+    Future.delayed(const Duration(milliseconds: 100), () async {
+      try {
+        stderr.writeln('Background: Generating tree.json for ${collection.title}');
+        await _generateAndSaveTreeJson(folder);
+
+        // For files and www types, also ensure data.js and index.html exist
+        if (collection.type == 'files' || collection.type == 'www') {
+          if (!await _hasRequiredFiles(folder)) {
+            await _generateAndSaveDataJs(folder);
+            await _generateAndSaveIndexHtml(folder);
+          }
+        }
+
+        // Update file count after generation
+        await _countCollectionFiles(collection, folder);
+        await _saveCachedStats(collection, folder);
+
+        // Notify that collection was updated
+        collectionsNotifier.value++;
+      } catch (e) {
+        stderr.writeln('Background generation error for ${collection.title}: $e');
+      }
+    });
+  }
+
+  /// Save cached stats to collection.js for faster subsequent loads
+  Future<void> _saveCachedStats(Collection collection, Directory folder) async {
+    try {
+      final collectionJsFile = File('${folder.path}/collection.js');
+      if (!await collectionJsFile.exists()) return;
+
+      final content = await collectionJsFile.readAsString();
+
+      // Extract existing data
+      final startIndex = content.indexOf('window.COLLECTION_DATA = {');
+      if (startIndex == -1) return;
+
+      final jsonStart = content.indexOf('{', startIndex);
+      final jsonEnd = content.lastIndexOf('};');
+      if (jsonStart == -1 || jsonEnd == -1) return;
+
+      final jsonContent = content.substring(jsonStart, jsonEnd + 1);
+      final data = json.decode(jsonContent) as Map<String, dynamic>;
+
+      // Add/update cached stats
+      data['cachedStats'] = {
+        'fileCount': collection.filesCount,
+        'totalSize': collection.totalSize,
+        'lastScanned': DateTime.now().toIso8601String(),
+      };
+
+      // Write back
+      final newContent = 'window.COLLECTION_DATA = ${json.encode(data)};';
+      await collectionJsFile.writeAsString(newContent);
+    } catch (e) {
+      // Non-critical - just log and continue
+      stderr.writeln('Could not save cached stats: $e');
     }
   }
 
@@ -352,10 +550,6 @@ class CollectionService {
     String type = 'files',
     String? customRootPath,
   }) async {
-    if (_collectionsDir == null) {
-      throw Exception('CollectionService not initialized. Call init() first.');
-    }
-
     try {
       // Generate NOSTR key pair (npub/nsec)
       final keys = NostrKeyGenerator.generateKeyPair();
@@ -365,6 +559,15 @@ class CollectionService {
 
       // Store keys in config
       _configService.storeCollectionKeys(keys);
+
+      // On web, use virtual file system (IndexedDB)
+      if (kIsWeb) {
+        return await _createWebCollection(id: id, title: title, description: description, type: type);
+      }
+
+      if (_collectionsDir == null) {
+        throw Exception('CollectionService not initialized. Call init() first.');
+      }
 
       // Determine folder name based on type
       String folderName;
@@ -464,6 +667,117 @@ class CollectionService {
       stderr.writeln('Stack trace: $stackTrace');
       rethrow;
     }
+  }
+
+  /// Create a collection for web platform with persistence to IndexedDB
+  Future<Collection> _createWebCollection({
+    required String id,
+    required String title,
+    required String description,
+    required String type,
+  }) async {
+    stderr.writeln('Creating web collection (IndexedDB): $title [$type]');
+
+    if (_currentCallsign == null) {
+      throw Exception('No active callsign set');
+    }
+
+    final fs = FileSystemService.instance;
+
+    // Determine folder name
+    String folderName;
+    if (type != 'files') {
+      folderName = type;
+    } else {
+      folderName = title
+          .replaceAll(' ', '_')
+          .toLowerCase()
+          .replaceAll(RegExp(r'[^a-z0-9_-]'), '_');
+      if (folderName.length > 50) folderName = folderName.substring(0, 50);
+      folderName = folderName.replaceAll(RegExp(r'_+$'), '');
+      if (folderName.isEmpty) folderName = 'collection';
+    }
+
+    final basePath = '/web/devices/$_currentCallsign';
+    var collectionPath = '$basePath/$folderName';
+
+    // Ensure unique path for files type
+    if (type == 'files') {
+      int counter = 1;
+      while (await fs.exists(collectionPath)) {
+        collectionPath = '$basePath/${folderName}_$counter';
+        counter++;
+      }
+    } else {
+      // For non-files types, check if already exists
+      if (await fs.exists(collectionPath)) {
+        throw Exception('A $type collection already exists');
+      }
+    }
+
+    // Create folder structure
+    await fs.createDirectory(collectionPath, recursive: true);
+    await fs.createDirectory('$collectionPath/extra', recursive: true);
+
+    final collection = Collection(
+      id: id,
+      title: title,
+      description: description,
+      type: type,
+      updated: DateTime.now().toIso8601String(),
+      storagePath: collectionPath,
+      isOwned: true,
+      isFavorite: false,
+      filesCount: 0,
+      totalSize: 0,
+    );
+
+    // Write collection.js
+    await _writeWebCollectionFiles(collection, collectionPath);
+
+    // Store in memory cache
+    _webCollections[id] = collection;
+
+    stderr.writeln('Web collection created successfully: ${collection.title}');
+
+    // Notify listeners
+    collectionsNotifier.value++;
+
+    return collection;
+  }
+
+  /// Write collection files to web virtual file system
+  Future<void> _writeWebCollectionFiles(Collection collection, String folderPath) async {
+    final fs = FileSystemService.instance;
+
+    // Generate collection.js content
+    final collectionJs = '''window.COLLECTION_DATA = ${json.encode({
+      'collection': {
+        'id': collection.id,
+        'title': collection.title,
+        'description': collection.description,
+        'type': collection.type,
+        'updated': collection.updated,
+      },
+      'cachedStats': {
+        'fileCount': collection.filesCount,
+        'totalSize': collection.totalSize,
+        'lastScanned': DateTime.now().toIso8601String(),
+      },
+    }, toEncodable: (o) => o.toString())};''';
+
+    await fs.writeAsString('$folderPath/collection.js', collectionJs);
+
+    // Write empty tree.json
+    await fs.writeAsString('$folderPath/extra/tree.json', '[]');
+
+    // Write security.json with defaults
+    final securityJson = json.encode({
+      'visibility': collection.visibility,
+      'encryption': collection.encryption,
+      'allowedReaders': collection.allowedReaders,
+    });
+    await fs.writeAsString('$folderPath/extra/security.json', securityJson);
   }
 
   /// Create skeleton template files based on collection type
