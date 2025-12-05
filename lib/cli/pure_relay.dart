@@ -12,6 +12,7 @@ import '../util/nostr_key_generator.dart';
 import '../util/nostr_event.dart';
 import '../util/nostr_crypto.dart';
 import '../util/chat_api.dart';
+import '../util/event_bus.dart';
 
 /// App version - use central version.dart for consistency
 import '../version.dart' show appVersion;
@@ -109,8 +110,9 @@ class PureRelaySettings {
       latitude: json['latitude'] as double?,
       longitude: json['longitude'] as double?,
       // Relay identity keys (callsign is derived from npub with X3 prefix)
-      npub: json['npub'] as String?,
-      nsec: json['nsec'] as String?,
+      // Treat empty strings as null to trigger default key generation
+      npub: (json['npub'] as String?)?.isNotEmpty == true ? json['npub'] as String : null,
+      nsec: (json['nsec'] as String?)?.isNotEmpty == true ? json['nsec'] as String : null,
       enableAprs: json['enableAprs'] as bool? ?? false,
       enableCors: json['enableCors'] as bool? ?? true,
       httpRequestTimeout: json['httpRequestTimeout'] as int? ?? 30000,
@@ -262,8 +264,8 @@ class ChatRoom {
     required this.creatorCallsign,
     DateTime? createdAt,
     this.isPublic = true,
-  })  : createdAt = createdAt ?? DateTime.now(),
-        lastActivity = createdAt ?? DateTime.now();
+  })  : createdAt = createdAt ?? DateTime.now().toUtc(),
+        lastActivity = createdAt ?? DateTime.now().toUtc();
 
   factory ChatRoom.fromJson(Map<String, dynamic> json) {
     final room = ChatRoom(
@@ -277,7 +279,8 @@ class ChatRoom {
       isPublic: json['is_public'] as bool? ?? true,
     );
     if (json['last_activity'] != null) {
-      room.lastActivity = DateTime.tryParse(json['last_activity'] as String) ?? DateTime.now();
+      final parsed = DateTime.tryParse(json['last_activity'] as String);
+      room.lastActivity = parsed?.toUtc() ?? DateTime.now().toUtc();
     }
     return room;
   }
@@ -330,11 +333,20 @@ class ChatMessage {
     DateTime? timestamp,
     this.verified = false,
     bool? hasSignature,
-  }) : timestamp = timestamp ?? DateTime.now(),
+  }) : timestamp = timestamp ?? DateTime.now().toUtc(),  // Use UTC for consistent timestamps
        hasSignature = hasSignature ?? (signature != null && signature.isNotEmpty);
 
   factory ChatMessage.fromJson(Map<String, dynamic> json, String roomId) {
     final sig = json['signature'] as String?;
+    // Parse timestamp as UTC for consistent handling
+    DateTime? parsedTime;
+    if (json['timestamp'] != null) {
+      parsedTime = DateTime.tryParse(json['timestamp'] as String);
+      // Ensure it's treated as UTC if not already
+      if (parsedTime != null && !parsedTime.isUtc) {
+        parsedTime = parsedTime.toUtc();
+      }
+    }
     return ChatMessage(
       id: json['id'] as String? ?? DateTime.now().millisecondsSinceEpoch.toString(),
       roomId: json['room_id'] as String? ?? roomId,
@@ -342,9 +354,7 @@ class ChatMessage {
       senderNpub: json['npub'] as String?,
       signature: sig,
       content: json['content'] as String? ?? '',
-      timestamp: json['timestamp'] != null
-          ? DateTime.tryParse(json['timestamp'] as String) ?? DateTime.now()
-          : DateTime.now(),
+      timestamp: parsedTime ?? DateTime.now().toUtc(),
       verified: json['verified'] as bool? ?? false,
       hasSignature: json['has_signature'] as bool? ?? (sig != null && sig.isNotEmpty),
     );
@@ -358,6 +368,7 @@ class ChatMessage {
         if (signature != null) 'signature': signature,
         'content': content,
         'timestamp': timestamp.toIso8601String(),
+        'created_at': timestamp.millisecondsSinceEpoch ~/ 1000,  // Unix timestamp for signature verification
         'verified': verified,
         'has_signature': hasSignature,
       };
@@ -504,6 +515,7 @@ class PureRelayServer {
   final Map<String, ChatRoom> _chatRooms = {};
   final List<LogEntry> _logs = [];
   final ServerStats _stats = ServerStats();
+  final EventBus _eventBus = EventBus();
   bool _running = false;
   bool _quietMode = false;
   DateTime? _startTime;
@@ -512,6 +524,9 @@ class PureRelayServer {
   String? _dataDir;
 
   static const int maxLogEntries = 1000;
+
+  /// Access to the event bus for subscribing to relay events
+  EventBus get eventBus => _eventBus;
 
   bool get isRunning => _running;
   int get connectedDevices => _clients.length;
@@ -572,6 +587,22 @@ class PureRelayServer {
         final content = await configFile.readAsString();
         final json = jsonDecode(content) as Map<String, dynamic>;
         _settings = PureRelaySettings.fromJson(json);
+
+        // Validate keys - if invalid, regenerate
+        final validNpub = NostrKeyGenerator.isValidNpub(_settings.npub);
+        final validNsec = NostrKeyGenerator.isValidNsec(_settings.nsec);
+
+        if (!validNpub || !validNsec) {
+          _log('WARN', 'Invalid relay keys detected, regenerating...');
+          // Generate new valid keys
+          final newKeys = NostrKeys.forRelay();
+          _settings = _settings.copyWith(
+            npub: newKeys.npub,
+            nsec: newKeys.nsec,
+          );
+          await saveSettings();
+          _log('INFO', 'Generated and saved new relay identity keys: npub=${_settings.npub.substring(0, 20)}...');
+        }
       }
     } catch (e) {
       _log('ERROR', 'Failed to load settings: $e');
@@ -720,6 +751,7 @@ class PureRelayServer {
       String? currentCallsign;
       String? currentNpub;
       String? currentSignature;
+      int? currentCreatedAt;  // Unix timestamp from client for signature verification
       final contentBuffer = StringBuffer();
 
       for (final line in lines) {
@@ -742,12 +774,18 @@ class PureRelayServer {
                 roomId: room.id,
                 callsign: currentCallsign,
                 timestamp: timestamp,
+                createdAtUnix: currentCreatedAt,  // Use stored Unix timestamp if available
               );
               if (event != null) {
                 eventId = event.id;
                 verified = event.verify();
               }
             }
+
+            // Use stored Unix timestamp for message DateTime if available
+            final msgTimestamp = currentCreatedAt != null
+                ? DateTime.fromMillisecondsSinceEpoch(currentCreatedAt! * 1000, isUtc: true)
+                : timestamp;
 
             final msg = ChatMessage(
               id: eventId ?? DateTime.now().millisecondsSinceEpoch.toString(),
@@ -756,7 +794,7 @@ class PureRelayServer {
               senderNpub: currentNpub,
               signature: currentSignature,
               content: content,
-              timestamp: timestamp,
+              timestamp: msgTimestamp,
               verified: verified,
               hasSignature: hasSig,
             );
@@ -771,6 +809,7 @@ class PureRelayServer {
             contentBuffer.clear();
             currentNpub = null;
             currentSignature = null;
+            currentCreatedAt = null;
           }
         }
         // Skip file header (# CALLSIGN: Title)
@@ -790,6 +829,9 @@ class PureRelayServer {
                 break;
               case 'signature':
                 currentSignature = value;
+                break;
+              case 'created_at':
+                currentCreatedAt = int.tryParse(value);
                 break;
               // Legacy fields (ignored, recalculated from npub + signature)
               case 'pubkey':
@@ -825,12 +867,17 @@ class PureRelayServer {
             roomId: room.id,
             callsign: currentCallsign,
             timestamp: timestamp,
+            createdAtUnix: currentCreatedAt,
           );
           if (event != null) {
             eventId = event.id;
             verified = event.verify();
           }
         }
+
+        final msgTimestamp = currentCreatedAt != null
+            ? DateTime.fromMillisecondsSinceEpoch(currentCreatedAt! * 1000, isUtc: true)
+            : timestamp;
 
         final msg = ChatMessage(
           id: eventId ?? DateTime.now().millisecondsSinceEpoch.toString(),
@@ -839,7 +886,7 @@ class PureRelayServer {
           senderNpub: currentNpub,
           signature: currentSignature,
           content: content,
-          timestamp: timestamp,
+          timestamp: msgTimestamp,
           verified: verified,
           hasSignature: hasSig,
         );
@@ -852,6 +899,8 @@ class PureRelayServer {
 
   /// Reconstruct a NOSTR event from stored message data
   /// Returns the event with calculated ID, or null if missing required data
+  /// If createdAtUnix is provided, use it directly (from stored metadata)
+  /// Otherwise fall back to calculating from timestamp DateTime
   NostrEvent? _reconstructNostrEvent({
     required String? npub,
     required String content,
@@ -859,13 +908,16 @@ class PureRelayServer {
     required String roomId,
     required String callsign,
     required DateTime timestamp,
+    int? createdAtUnix,  // Direct Unix timestamp from client (preferred)
+    bool debug = false,
   }) {
     if (npub == null || npub.isEmpty) return null;
     if (signature == null || signature.isEmpty) return null;
 
     try {
       final pubkey = NostrCrypto.decodeNpub(npub);
-      final createdAt = timestamp.millisecondsSinceEpoch ~/ 1000;
+      // Prefer stored Unix timestamp (from client) over calculated from DateTime
+      final createdAt = createdAtUnix ?? (timestamp.millisecondsSinceEpoch ~/ 1000);
 
       final event = NostrEvent(
         pubkey: pubkey,
@@ -879,8 +931,20 @@ class PureRelayServer {
       // Calculate the event ID
       event.calculateId();
 
+      if (debug) {
+        _log('DEBUG', 'Verify: npub=$npub');
+        _log('DEBUG', 'Verify: pubkey=$pubkey');
+        _log('DEBUG', 'Verify: timestamp=$timestamp createdAt=$createdAt');
+        _log('DEBUG', 'Verify: content="$content" roomId=$roomId callsign=$callsign');
+        _log('DEBUG', 'Verify: eventId=${event.id}');
+        _log('DEBUG', 'Verify: sig=$signature');
+      }
+
       return event;
     } catch (e) {
+      if (debug) {
+        _log('DEBUG', 'Verify reconstruction failed: $e');
+      }
       return null;
     }
   }
@@ -907,19 +971,34 @@ class PureRelayServer {
     return event.verify();
   }
 
+  /// Public method to verify a chat message
+  bool verifyMessage(ChatMessage msg) {
+    return _verifyStoredMessage(
+      npub: msg.senderNpub,
+      content: msg.content,
+      signature: msg.signature,
+      roomId: msg.roomId,
+      callsign: msg.senderCallsign,
+      timestamp: msg.timestamp,
+    );
+  }
+
   /// Parse timestamp from format YYYY-MM-DD HH:MM_ss
+  /// Returns UTC DateTime to ensure consistent Unix timestamps for signature verification
   DateTime _parseTimestamp(String timestamp) {
     try {
       // Format: YYYY-MM-DD HH:MM_ss
       final parts = timestamp.split(' ');
-      if (parts.length != 2) return DateTime.now();
+      if (parts.length != 2) return DateTime.now().toUtc();
 
       final dateParts = parts[0].split('-');
       final timeParts = parts[1].replaceAll('_', ':').split(':');
 
-      if (dateParts.length != 3 || timeParts.length != 3) return DateTime.now();
+      if (dateParts.length != 3 || timeParts.length != 3) return DateTime.now().toUtc();
 
-      return DateTime(
+      // Use UTC to ensure timestamps are consistent across timezones
+      // This is critical for NOSTR signature verification
+      return DateTime.utc(
         int.parse(dateParts[0]),
         int.parse(dateParts[1]),
         int.parse(dateParts[2]),
@@ -928,7 +1007,7 @@ class PureRelayServer {
         int.parse(timeParts[2]),
       );
     } catch (e) {
-      return DateTime.now();
+      return DateTime.now().toUtc();
     }
   }
 
@@ -1015,13 +1094,16 @@ class PureRelayServer {
         buffer.writeln('> $timestamp -- ${msg.senderCallsign}');
         buffer.writeln(msg.content);
 
-        // Write NOSTR metadata (minimal: npub + signature only)
-        // event_id and verified can be recalculated from these fields
+        // Write NOSTR metadata
         if (msg.senderNpub != null && msg.senderNpub!.isNotEmpty) {
           buffer.writeln('--> npub: ${msg.senderNpub}');
         }
         if (msg.signature != null && msg.signature!.isNotEmpty) {
           buffer.writeln('--> signature: ${msg.signature}');
+        }
+        // Store Unix timestamp for signature verification (required for cross-timezone consistency)
+        if (msg.hasSignature) {
+          buffer.writeln('--> created_at: ${msg.timestamp.millisecondsSinceEpoch ~/ 1000}');
         }
         buffer.writeln();
       }
@@ -1131,11 +1213,17 @@ class PureRelayServer {
         // Check if we need to request certificates first
         final sslDir = _dataDir != null ? '$_dataDir/ssl' : null;
         final fullchainPath = sslDir != null ? '$sslDir/fullchain.pem' : null;
+        // Check for both privkey.pem and domain.key (SslCertificateManager uses domain.key)
         final keyPath = sslDir != null ? '$sslDir/privkey.pem' : null;
+        final altKeyPath = sslDir != null ? '$sslDir/domain.key' : null;
 
         bool certsExist = false;
-        if (fullchainPath != null && keyPath != null) {
-          certsExist = await File(fullchainPath).exists() && await File(keyPath).exists();
+        if (fullchainPath != null && await File(fullchainPath).exists()) {
+          // Certificate exists, check for either key file
+          if ((keyPath != null && await File(keyPath).exists()) ||
+              (altKeyPath != null && await File(altKeyPath).exists())) {
+            certsExist = true;
+          }
         }
 
         if (!certsExist && _settings.sslDomain != null && _settings.sslEmail != null) {
@@ -1408,16 +1496,79 @@ class PureRelayServer {
     final room = _chatRooms[roomId];
     if (room == null) return;
 
+    // Use UTC for consistent timestamp handling across timezones
+    // This is critical for NOSTR signature verification
+    final now = DateTime.now().toUtc();
+    String? signature;
+    String? senderNpub;
+
+    // Try to sign the message if we have valid keys
+    if (_settings.npub.isNotEmpty && _settings.nsec.isNotEmpty) {
+      try {
+        final createdAt = now.millisecondsSinceEpoch ~/ 1000;
+
+        // Get public key from npub
+        final pubkeyHex = NostrCrypto.decodeNpub(_settings.npub);
+
+        // Create NOSTR event with chat tags
+        final event = NostrEvent(
+          pubkey: pubkeyHex,
+          createdAt: createdAt,
+          kind: 1,
+          tags: [['t', 'chat'], ['room', roomId], ['callsign', _settings.callsign]],
+          content: content,
+        );
+
+        // Calculate ID and sign with nsec
+        event.calculateId();
+        event.signWithNsec(_settings.nsec);
+
+        signature = event.sig;
+        senderNpub = _settings.npub;
+
+        // Self-verify the signature
+        final selfVerified = event.verify();
+        if (!selfVerified) {
+          _log('WARN', 'Self-verification of message signature failed!');
+        }
+      } catch (e) {
+        _log('WARN', 'Failed to sign message: $e');
+      }
+    }
+
+    // Verify the message we just created
+    bool verified = false;
+    if (signature != null && senderNpub != null) {
+      final verifyEvent = _reconstructNostrEvent(
+        npub: senderNpub,
+        content: content,
+        signature: signature,
+        roomId: roomId,
+        callsign: _settings.callsign,
+        timestamp: now,
+        createdAtUnix: now.millisecondsSinceEpoch ~/ 1000,
+      );
+      verified = verifyEvent?.verify() ?? false;
+    }
+
     final message = ChatMessage(
-      id: DateTime.now().millisecondsSinceEpoch.toString(),
+      id: now.millisecondsSinceEpoch.toString(),
       roomId: roomId,
       senderCallsign: _settings.callsign,
+      senderNpub: senderNpub,
+      signature: signature,
       content: content,
+      timestamp: now,
+      verified: verified,  // Set verification status
+      hasSignature: signature != null,
     );
     room.messages.add(message);
-    room.lastActivity = DateTime.now();
+    room.lastActivity = now;
     _stats.totalMessages++;
-    _stats.lastMessage = DateTime.now();
+    _stats.lastMessage = now;
+
+    // Fire event for subscribers
+    _fireChatMessageEvent(message);
 
     // Persist to disk
     await _saveRoomMessages(roomId);
@@ -1428,11 +1579,25 @@ class PureRelayServer {
       'room': roomId,
       'message': message.toJson(),
     });
+    final updateNotification = 'UPDATE:${_settings.callsign}/chat/$roomId';
     for (final client in _clients.values) {
       try {
         client.socket.add(payload);
+        client.socket.add(updateNotification);
       } catch (_) {}
     }
+  }
+
+  /// Fire a ChatMessageEvent for a message
+  void _fireChatMessageEvent(ChatMessage msg) {
+    _eventBus.fire(ChatMessageEvent(
+      roomId: msg.roomId,
+      callsign: msg.senderCallsign,
+      content: msg.content,
+      npub: msg.senderNpub,
+      signature: msg.signature,
+      verified: msg.verified,
+    ));
   }
 
   List<ChatMessage> getChatHistory(String roomId, {int limit = 20}) {
@@ -1719,6 +1884,7 @@ class PureRelayServer {
                 final signature = message['signature'] as String?;
                 final pubkey = message['pubkey'] as String?;
                 final eventId = message['event_id'] as String?;
+                final createdAt = message['created_at'] as int?;
                 final hasSig = signature != null && signature.isNotEmpty;
 
                 // Derive npub from pubkey if not provided
@@ -1729,6 +1895,14 @@ class PureRelayServer {
                   } catch (_) {}
                 }
 
+                // Use client's created_at for verification (they signed with this timestamp)
+                // Fall back to current time if not provided
+                final now = DateTime.now().toUtc();
+                final msgTimestamp = createdAt != null
+                    ? DateTime.fromMillisecondsSinceEpoch(createdAt * 1000, isUtc: true)
+                    : now;
+                final msgCreatedAt = createdAt ?? (now.millisecondsSinceEpoch ~/ 1000);
+
                 // Verify signature if present
                 bool isVerified = false;
                 if (hasSig && pubkey != null && pubkey.isNotEmpty && eventId != null) {
@@ -1736,7 +1910,7 @@ class PureRelayServer {
                     final event = NostrEvent(
                       id: eventId,
                       pubkey: pubkey,
-                      createdAt: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+                      createdAt: msgCreatedAt,
                       kind: 1,
                       tags: [['t', 'chat'], ['room', roomId], ['callsign', client.callsign!]],
                       content: content,
@@ -1749,19 +1923,23 @@ class PureRelayServer {
                 }
 
                 final msg = ChatMessage(
-                  id: eventId ?? DateTime.now().millisecondsSinceEpoch.toString(),
+                  id: eventId ?? now.millisecondsSinceEpoch.toString(),
                   roomId: roomId,
                   senderCallsign: client.callsign!,
                   senderNpub: npub,
                   signature: signature,
                   content: content,
+                  timestamp: msgTimestamp,
                   verified: isVerified,
                   hasSignature: hasSig,
                 );
                 room.messages.add(msg);
-                room.lastActivity = DateTime.now();
+                room.lastActivity = now;
                 _stats.totalMessages++;
                 _stats.lastMessage = DateTime.now();
+
+                // Fire event for subscribers
+                _fireChatMessageEvent(msg);
 
                 // Persist to disk
                 _saveRoomMessages(roomId);
@@ -1773,7 +1951,7 @@ class PureRelayServer {
                   'message': msg.toJson(),
                 });
                 // Also send UPDATE notification for real-time refresh
-                final updateNotification = 'UPDATE:${_settings.callsign}:chat:$roomId';
+                final updateNotification = 'UPDATE:${_settings.callsign}/chat/$roomId';
                 for (final c in _clients.values) {
                   if (c.id != client.id) {
                     try {
@@ -1865,6 +2043,8 @@ class PureRelayServer {
       }
 
       // Create chat message - mark as verified since we verified the signature above
+      // Use the event's createdAt timestamp (UTC) for consistent storage
+      final msgTimestamp = DateTime.fromMillisecondsSinceEpoch(event.createdAt * 1000, isUtc: true);
       final msg = ChatMessage(
         id: event.id ?? DateTime.now().millisecondsSinceEpoch.toString(),
         roomId: roomId,
@@ -1872,14 +2052,18 @@ class PureRelayServer {
         senderNpub: npub,  // Human-readable, pubkey derived when needed
         signature: event.sig,
         content: content,
+        timestamp: msgTimestamp,
         verified: true,  // Signature was verified by event.verify() above
         hasSignature: true,
       );
 
       room.messages.add(msg);
-      room.lastActivity = DateTime.now();
+      room.lastActivity = DateTime.now().toUtc();
       _stats.totalMessages++;
       _stats.lastMessage = DateTime.now();
+
+      // Fire event for subscribers
+      _fireChatMessageEvent(msg);
 
       // Persist to disk
       _saveRoomMessages(roomId);
@@ -1891,7 +2075,7 @@ class PureRelayServer {
         'message': msg.toJson(),
       });
       // Also send UPDATE notification for real-time refresh
-      final updateNotification = 'UPDATE:${_settings.callsign}:chat:$roomId';
+      final updateNotification = 'UPDATE:${_settings.callsign}/chat/$roomId';
       for (final c in _clients.values) {
         if (c.id != client.id) {
           try {
@@ -2133,14 +2317,17 @@ class PureRelayServer {
         return;
       }
 
+      // Use UTC for consistent timestamp handling
+      final now = DateTime.now().toUtc();
       final msg = ChatMessage(
-        id: DateTime.now().millisecondsSinceEpoch.toString(),
+        id: now.millisecondsSinceEpoch.toString(),
         roomId: room,
         senderCallsign: callsign,
         content: content,
+        timestamp: now,
       );
       chatRoom.messages.add(msg);
-      chatRoom.lastActivity = DateTime.now();
+      chatRoom.lastActivity = now;
       _stats.totalMessages++;
 
       // Persist to disk
@@ -2880,8 +3067,8 @@ class PureRelayServer {
           signature: signature,
           content: content,
           timestamp: createdAt != null
-              ? DateTime.fromMillisecondsSinceEpoch(createdAt * 1000)
-              : DateTime.now(),
+              ? DateTime.fromMillisecondsSinceEpoch(createdAt * 1000, isUtc: true)
+              : DateTime.now().toUtc(),
           verified: isVerified,
           hasSignature: hasSig,
         );
@@ -2890,6 +3077,9 @@ class PureRelayServer {
         room.lastActivity = DateTime.now();
         _stats.totalMessages++;
         _stats.lastMessage = DateTime.now();
+
+        // Fire event for subscribers
+        _fireChatMessageEvent(msg);
 
         // Persist to disk under the target callsign's folder
         await _saveRoomMessages(roomId, targetCallsign);
@@ -2901,9 +3091,11 @@ class PureRelayServer {
           'callsign': targetCallsign,
           'message': msg.toJson(),
         });
+        final updateNotification = 'UPDATE:${_settings.callsign}/chat/$roomId';
         for (final client in _clients.values) {
           try {
             client.socket.add(payload);
+            client.socket.add(updateNotification);
           } catch (_) {}
         }
 

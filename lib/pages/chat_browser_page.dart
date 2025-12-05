@@ -90,6 +90,9 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
   // Relay status check timer
   Timer? _relayStatusTimer;
 
+  // Relay message polling timer (fallback for when WebSocket updates don't work)
+  Timer? _messagePollingTimer;
+
   // File change subscription for CLI/external updates
   StreamSubscription<ChatFileChange>? _fileChangeSubscription;
 
@@ -101,6 +104,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     _subscribeToUnreadCounts();
     _subscribeToFileChanges();
     _startRelayStatusChecker();
+    _startMessagePolling();
   }
 
   /// Subscribe to file changes for real-time updates from CLI
@@ -150,31 +154,28 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     _fileChangeSubscription?.cancel();
     _chatService.stopWatching();
     _relayStatusTimer?.cancel();
+    _messagePollingTimer?.cancel();
     super.dispose();
   }
 
   /// Set up listener for real-time update notifications
   void _setupUpdateListener() {
-    // Don't set up if already subscribed
-    if (_updateSubscription != null) return;
-
     final updates = _relayService.updates;
-    if (updates != null) {
-      LogService().log('Setting up real-time update listener');
-      _updateSubscription = updates.listen(_handleUpdateNotification);
-    }
+    if (updates == null) return;
+
+    // Cancel existing subscription - the stream might have changed after reconnection
+    _updateSubscription?.cancel();
+    _updateSubscription = updates.listen(_handleUpdateNotification);
+    LogService().log('Setting up real-time update listener');
   }
 
   /// Handle incoming update notification
   void _handleUpdateNotification(UpdateNotification update) {
-    // Only refresh if we're viewing the room that got updated
+    // Only handle chat updates
     if (update.collectionType == 'chat') {
+      // Refresh if we're viewing the room that got updated
       if (_selectedRelayRoom != null && _selectedRelayRoom!.id == update.path) {
-        print('→ Refreshing messages for room: ${update.path}');
-        // Fetch latest messages for the room
         _refreshRelayMessages();
-      } else {
-        print('→ Update for different room (${update.path}), currently viewing: ${_selectedRelayRoom?.id ?? "none"}');
       }
     }
   }
@@ -224,13 +225,74 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     }
   }
 
+  /// Ensure WebSocket is connected for real-time updates
+  Future<void> _ensureWebSocketConnection(String relayUrl) async {
+    // Check if already connected
+    if (_relayService.updates != null) {
+      _setupUpdateListener();
+      return;
+    }
+
+    // Connect to relay via WebSocket
+    final success = await _relayService.connectRelay(relayUrl);
+
+    if (success) {
+      // Small delay to ensure WebSocket is ready
+      await Future.delayed(const Duration(milliseconds: 500));
+      // Set up update listener now that WebSocket is connected
+      _setupUpdateListener();
+    }
+  }
+
   /// Start periodic relay status checker
   void _startRelayStatusChecker() {
-    // Check every 10 seconds
+    // Check every 10 seconds - not too frequent to avoid flashing online/offline indicator
     _relayStatusTimer = Timer.periodic(
       const Duration(seconds: 10),
       (_) => _checkRelayStatus(),
     );
+  }
+
+  /// Start periodic message polling (fallback since WebSocket updates don't work reliably)
+  void _startMessagePolling() {
+    _messagePollingTimer = Timer.periodic(
+      const Duration(seconds: 30),
+      (_) => _pollForNewMessages(),
+    );
+  }
+
+  /// Poll for new messages in the currently selected relay room
+  Future<void> _pollForNewMessages() async {
+    // Only poll if viewing a relay room and relay is reachable
+    if (_selectedRelayRoom == null || !_relayReachable) return;
+
+    try {
+      final messages = await _relayService.fetchRoomMessages(
+        _selectedRelayRoom!.relayUrl,
+        _selectedRelayRoom!.id,
+        limit: 100,
+      );
+
+      if (!mounted) return;
+
+      // Check if there are new messages by comparing count
+      if (messages.length > _relayMessages.length) {
+        setState(() {
+          _relayMessages = messages;
+        });
+
+        // Cache the updated messages
+        if (_selectedRelayRoom!.relayName.isNotEmpty) {
+          await _cacheService.saveMessages(
+            _selectedRelayRoom!.relayName,
+            _selectedRelayRoom!.id,
+            messages,
+          );
+        }
+      }
+    } catch (e) {
+      // Silently fail - don't disrupt user experience
+    }
   }
 
   /// Check if relay is reachable and update UI if status changed
@@ -312,22 +374,23 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       // Start watching for file changes now that channels are loaded
       _chatService.startWatching();
 
-      // Select main channel by default only in wide screen mode
-      if (_channels.isNotEmpty && mounted) {
-        final screenWidth = MediaQuery.of(context).size.width;
-        final isWideScreen = screenWidth >= 600;
-
-        if (isWideScreen) {
-          await _selectChannel(_channels.first);
-        }
-      }
-
       setState(() {
         _isInitialized = true;
       });
 
       // Load relay chat rooms - MUST await to ensure rooms are loaded before UI renders
       await _loadRelayRooms();
+
+      // Auto-select first relay room in wide screen mode (where sidebar is visible alongside content)
+      if (mounted) {
+        final screenWidth = MediaQuery.of(context).size.width;
+        final isWideScreen = screenWidth >= 600;
+
+        if (isWideScreen && _relayRooms.isNotEmpty) {
+          // Select first relay room (relay rooms are shown first in the UI)
+          await _selectRelayRoom(_relayRooms.first);
+        }
+      }
     } catch (e) {
       setState(() {
         _error = 'Failed to initialize chat: $e';
@@ -378,6 +441,10 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
           _relayReachable = true; // Successfully fetched - device is reachable
           _loadingRelayRooms = false;
         });
+
+        // Ensure WebSocket connection for real-time updates
+        await _ensureWebSocketConnection(widget.remoteDeviceUrl!);
+
         return;
       } catch (e) {
         LogService().log('DEBUG _loadRelayRooms: Remote device fetch failed: $e');
@@ -433,6 +500,10 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
           _relayReachable = true; // Successfully fetched - relay is reachable
           _loadingRelayRooms = false;
         });
+
+        // Ensure WebSocket connection for real-time updates
+        await _ensureWebSocketConnection(relay.url);
+
         return;
       } catch (e) {
         // Fetch failed - will try cache below
@@ -733,7 +804,11 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
           );
         }
       } else {
-        _showError('Failed to send message to relay');
+        // Send failed - relay may be unreachable
+        setState(() {
+          _relayReachable = false;
+        });
+        _showError('Failed to send message - relay offline');
       }
     } catch (e) {
       // Relay became unreachable - update status
@@ -1007,9 +1082,13 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     }
   }
 
-  /// Refresh current channel
+  /// Refresh current channel or relay room
   Future<void> _refreshChannel() async {
-    if (_selectedChannel != null) {
+    if (_selectedRelayRoom != null) {
+      // Refresh relay room messages
+      await _refreshRelayMessages();
+    } else if (_selectedChannel != null) {
+      // Refresh local channel
       await _selectChannel(_selectedChannel!);
     }
   }
@@ -1111,6 +1190,13 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
           },
         ),
         actions: [
+          // Only show add channel for local chat (not remote devices)
+          if (!widget.isRemoteDevice)
+            IconButton(
+              icon: const Icon(Icons.add),
+              onPressed: _showNewChannelDialog,
+              tooltip: _i18n.t('new_channel'),
+            ),
           IconButton(
             icon: const Icon(Icons.refresh),
             onPressed: _refreshChannel,
@@ -1388,197 +1474,183 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
 
     return Container(
       color: theme.colorScheme.surface,
-      child: Column(
+      child: ListView(
         children: [
-          // Header
-          Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: theme.colorScheme.surfaceVariant,
-              border: Border(
-                bottom: BorderSide(
-                  color: theme.colorScheme.outlineVariant,
-                  width: 1,
+          // Relay rooms section (shown first)
+          if (_relayRooms.isNotEmpty) ...[
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: theme.colorScheme.surfaceVariant,
+                border: Border(
+                  bottom: BorderSide(
+                    color: theme.colorScheme.outlineVariant,
+                    width: 1,
+                  ),
                 ),
               ),
-            ),
-            child: Row(
-              children: [
-                Icon(Icons.chat, color: theme.colorScheme.primary),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Text(
-                    _i18n.t('channels'),
-                    style: theme.textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                ),
-                FilledButton.icon(
-                  onPressed: _showNewChannelDialog,
-                  icon: const Icon(Icons.add, size: 18),
-                  label: Text(_i18n.t('new_channel')),
-                  style: FilledButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          // Channel list
-          Expanded(
-            child: ListView(
-              children: [
-                // Local channels
-                ...sortedChannels.map((channel) => ListTile(
-                  leading: CircleAvatar(
-                    backgroundColor: channel.isGroup
-                        ? theme.colorScheme.primaryContainer
-                        : theme.colorScheme.secondaryContainer,
-                    child: Icon(
-                      channel.isGroup ? Icons.group : Icons.person,
-                      color: channel.isGroup
-                          ? theme.colorScheme.onPrimaryContainer
-                          : theme.colorScheme.onSecondaryContainer,
-                      size: 20,
-                    ),
-                  ),
-                  title: Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          channel.name,
-                          style: TextStyle(
-                            fontWeight: channel.isFavorite
-                                ? FontWeight.bold
-                                : FontWeight.normal,
-                          ),
-                        ),
-                      ),
-                      if (channel.isFavorite)
-                        Icon(
-                          Icons.star,
-                          size: 16,
-                          color: theme.colorScheme.primary,
-                        ),
-                    ],
-                  ),
-                  subtitle: channel.description != null && channel.description!.isNotEmpty
-                      ? Text(
-                          channel.description!,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        )
-                      : (channel.isGroup
-                          ? Text(_i18n.t('group_chat'))
-                          : null),
-                  onTap: () => _selectChannelMobile(channel),
-                )),
-
-                // Relay rooms section
-                if (_relayRooms.isNotEmpty) ...[
+              child: Row(
+                children: [
+                  // Status indicator dot
                   Container(
-                    padding: const EdgeInsets.all(16),
-                    margin: const EdgeInsets.only(top: 8),
+                    width: 10,
+                    height: 10,
                     decoration: BoxDecoration(
-                      color: theme.colorScheme.surfaceVariant,
-                      border: Border(
-                        top: BorderSide(
-                          color: theme.colorScheme.outlineVariant,
-                          width: 1,
-                        ),
-                        bottom: BorderSide(
-                          color: theme.colorScheme.outlineVariant,
-                          width: 1,
-                        ),
-                      ),
+                      shape: BoxShape.circle,
+                      color: _relayReachable ? Colors.green : Colors.red.shade400,
                     ),
-                    child: Row(
+                  ),
+                  const SizedBox(width: 10),
+                  Icon(Icons.cell_tower, color: theme.colorScheme.primary),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        // Status indicator dot
-                        Container(
-                          width: 10,
-                          height: 10,
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            color: _relayReachable ? Colors.green : Colors.red.shade400,
+                        Text(
+                          _relayRooms.first.relayName,
+                          style: theme.textTheme.titleMedium?.copyWith(
+                            fontWeight: FontWeight.bold,
                           ),
                         ),
-                        const SizedBox(width: 10),
-                        Icon(Icons.cell_tower, color: theme.colorScheme.primary),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                _relayRooms.first.relayName,
-                                style: theme.textTheme.titleMedium?.copyWith(
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                              Text(
-                                _relayReachable ? _i18n.t('online') : _i18n.t('offline_cached'),
-                                style: theme.textTheme.bodySmall?.copyWith(
-                                  color: _relayReachable
-                                      ? Colors.green.shade700
-                                      : theme.colorScheme.error,
-                                ),
-                              ),
-                            ],
+                        Text(
+                          _relayReachable ? _i18n.t('online') : _i18n.t('offline_cached'),
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: _relayReachable
+                                ? Colors.green.shade700
+                                : theme.colorScheme.error,
                           ),
-                        ),
-                        IconButton(
-                          icon: const Icon(Icons.refresh),
-                          onPressed: _loadRelayRooms,
-                          tooltip: _i18n.t('refresh_rooms'),
                         ),
                       ],
                     ),
                   ),
-                  ..._relayRooms.map((room) {
-                    final unreadCount = _unreadCounts[room.id] ?? 0;
-                    return ListTile(
-                      leading: Badge(
-                        isLabelVisible: unreadCount > 0,
-                        label: Text('$unreadCount'),
-                        child: CircleAvatar(
-                          backgroundColor: theme.colorScheme.tertiaryContainer,
-                          child: Icon(
-                            Icons.forum,
-                            color: theme.colorScheme.onTertiaryContainer,
-                            size: 20,
-                          ),
-                        ),
-                      ),
-                      title: Text(room.name),
-                      subtitle: room.description.isNotEmpty
-                          ? Text(
-                              room.description,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            )
-                          : Text('${room.messageCount} messages'),
-                      onTap: () => _selectRelayRoom(room),
-                    );
-                  }),
+                  IconButton(
+                    icon: const Icon(Icons.refresh),
+                    onPressed: _loadRelayRooms,
+                    tooltip: _i18n.t('refresh_rooms'),
+                  ),
                 ],
+              ),
+            ),
+            ..._relayRooms.map((room) {
+              final unreadCount = _unreadCounts[room.id] ?? 0;
+              return ListTile(
+                leading: Badge(
+                  isLabelVisible: unreadCount > 0,
+                  label: Text('$unreadCount'),
+                  child: CircleAvatar(
+                    backgroundColor: theme.colorScheme.tertiaryContainer,
+                    child: Icon(
+                      Icons.forum,
+                      color: theme.colorScheme.onTertiaryContainer,
+                      size: 20,
+                    ),
+                  ),
+                ),
+                title: Text(room.name),
+                subtitle: room.description.isNotEmpty
+                    ? Text(
+                        room.description,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      )
+                    : Text('${room.messageCount} messages'),
+                onTap: () => _selectRelayRoom(room),
+              );
+            }),
+          ],
 
-                // Loading indicator for relay rooms
-                if (_loadingRelayRooms)
-                  const Padding(
-                    padding: EdgeInsets.all(16.0),
-                    child: Center(
-                      child: SizedBox(
-                        height: 24,
-                        width: 24,
-                        child: CircularProgressIndicator(strokeWidth: 2),
+          // Loading indicator for relay rooms
+          if (_loadingRelayRooms)
+            const Padding(
+              padding: EdgeInsets.all(16.0),
+              child: Center(
+                child: SizedBox(
+                  height: 24,
+                  width: 24,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+              ),
+            ),
+
+          // Local channels section (shown after relay rooms)
+          if (sortedChannels.isNotEmpty) ...[
+            Container(
+              padding: const EdgeInsets.all(16),
+              margin: EdgeInsets.only(top: _relayRooms.isNotEmpty ? 8 : 0),
+              decoration: BoxDecoration(
+                color: theme.colorScheme.surfaceVariant,
+                border: Border(
+                  top: _relayRooms.isNotEmpty ? BorderSide(
+                    color: theme.colorScheme.outlineVariant,
+                    width: 1,
+                  ) : BorderSide.none,
+                  bottom: BorderSide(
+                    color: theme.colorScheme.outlineVariant,
+                    width: 1,
+                  ),
+                ),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.smartphone, color: theme.colorScheme.primary),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      _i18n.t('this_device'),
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.bold,
                       ),
                     ),
                   ),
-              ],
+                ],
+              ),
             ),
-          ),
+            ...sortedChannels.map((channel) => ListTile(
+              leading: CircleAvatar(
+                backgroundColor: channel.isGroup
+                    ? theme.colorScheme.primaryContainer
+                    : theme.colorScheme.secondaryContainer,
+                child: Icon(
+                  channel.isGroup ? Icons.group : Icons.person,
+                  color: channel.isGroup
+                      ? theme.colorScheme.onPrimaryContainer
+                      : theme.colorScheme.onSecondaryContainer,
+                  size: 20,
+                ),
+              ),
+              title: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      channel.name,
+                      style: TextStyle(
+                        fontWeight: channel.isFavorite
+                            ? FontWeight.bold
+                            : FontWeight.normal,
+                      ),
+                    ),
+                  ),
+                  if (channel.isFavorite)
+                    Icon(
+                      Icons.star,
+                      size: 16,
+                      color: theme.colorScheme.primary,
+                    ),
+                ],
+              ),
+              subtitle: channel.description != null && channel.description!.isNotEmpty
+                  ? Text(
+                      channel.description!,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    )
+                  : (channel.isGroup
+                      ? Text(_i18n.t('group_chat'))
+                      : null),
+              onTap: () => _selectChannelMobile(channel),
+            )),
+          ],
         ],
       ),
     );

@@ -6,10 +6,10 @@ import 'package:dart_console/dart_console.dart';
 
 import 'pure_relay.dart';
 import 'cli_profile_service.dart';
-import 'cli_chat_service.dart';
 import 'cli_location_service.dart';
 import '../models/profile.dart';
 import '../models/chat_message.dart' as chat;
+import '../util/event_bus.dart';
 import 'game/game_config.dart';
 import 'game/game_parser.dart';
 import 'game/game_engine.dart';
@@ -284,6 +284,8 @@ class PureConsole {
   /// Command history
   final List<String> _history = [];
   int _historyIndex = 0;
+  static const int _maxHistorySize = 100;
+  static const String _historyFileName = '.cli_history';
 
   /// Double CTRL+C handling
   DateTime? _lastCtrlCTime;
@@ -292,11 +294,11 @@ class PureConsole {
   /// Relay server instance
   final PureRelayServer _relay = PureRelayServer();
 
+  /// Event subscription for chat messages
+  EventSubscription<ChatMessageEvent>? _chatMessageSubscription;
+
   /// CLI Profile service
   final CliProfileService _profileService = CliProfileService();
-
-  /// CLI Chat service
-  final CliChatService _chatService = CliChatService();
 
   /// SSL certificate manager
   SslCertificateManager? _sslManager;
@@ -338,15 +340,9 @@ class PureConsole {
       // Initialize relay server
       await _relay.initialize();
 
-      // Initialize chat service if we have an active profile
-      final activeProfile = _profileService.activeProfile;
-      if (activeProfile != null) {
-        await _chatService.initialize(
-          activeProfile.callsign,
-          npub: activeProfile.npub,
-          nsec: activeProfile.nsec,
-        );
-      }
+      // Enable quiet mode by default (logs go to buffer, not stderr)
+      // Users can disable with 'verbose' command or view logs with 'top'/'tail'
+      _relay.quietMode = true;
 
       // Initialize SSL manager
       _sslManager = SslCertificateManager(_relay.settings, _relay.dataDir!);
@@ -356,14 +352,64 @@ class PureConsole {
 
       // Initialize game engine
       await _gameConfig.initialize(_relay.dataDir!);
+
+      // Load command history
+      await _loadHistory();
+
+      // Subscribe to chat message events for real-time display
+      _chatMessageSubscription = _relay.eventBus.on<ChatMessageEvent>((event) {
+        _handleIncomingChatMessage(event);
+      });
     } catch (e) {
       _printError('Failed to initialize services: $e');
       exit(1);
     }
   }
 
+  /// Handle incoming chat message event - display if in same room and not from self
+  void _handleIncomingChatMessage(ChatMessageEvent event) {
+    // Only display if we're in the same chat room
+    if (_currentChatRoom != event.roomId) return;
+
+    // Don't display our own messages (already shown when sent)
+    final myCallsign = _profileService.activeProfile?.callsign;
+    if (myCallsign != null && event.callsign == myCallsign) return;
+
+    // Format timestamp
+    final now = event.timestamp;
+    final timeStr = '${now.year}-${now.month.toString().padLeft(2, '0')}-'
+        '${now.day.toString().padLeft(2, '0')} '
+        '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
+
+    // Determine verification indicator
+    String verifyIndicator;
+    if (event.signature != null && event.signature!.isNotEmpty) {
+      verifyIndicator = event.verified ? '\x1B[32m✓\x1B[0m' : '\x1B[31m✗\x1B[0m';
+    } else {
+      verifyIndicator = '\x1B[90m○\x1B[0m'; // No signature (gray circle)
+    }
+
+    // Clear current line (prompt + any input), print message, restore input
+    // \x1B[2K = clear entire line, \r = carriage return to start of line
+    stdout.write('\r\x1B[2K');
+    stdout.writeln('\x1B[33m[$timeStr]\x1B[0m $verifyIndicator \x1B[36m${event.callsign}:\x1B[0m ${event.content}');
+
+    // Restore prompt and any partial input
+    stdout.write(_currentPrompt);
+    stdout.write(_currentInputBuffer);
+    // Move cursor to correct position if not at end
+    if (_currentInputIndex < _currentInputBuffer.length) {
+      final backspaces = _currentInputBuffer.length - _currentInputIndex;
+      stdout.write('\x1B[${backspaces}D');
+    }
+  }
+
   /// Cleanup all services before exit
   Future<void> _cleanup() async {
+    // Cancel event subscriptions
+    _chatMessageSubscription?.cancel();
+    // Save command history (synchronous)
+    _saveHistory();
     // Stop SSL auto-renewal timer
     _sslManager?.stop();
     // Stop relay server
@@ -374,6 +420,35 @@ class PureConsole {
     _cleanupAsyncStdin();
     stdin.echoMode = true;
     stdin.lineMode = true;
+  }
+
+  /// Load command history from file
+  Future<void> _loadHistory() async {
+    try {
+      final historyFile = File('${PureStorageConfig().baseDir}/$_historyFileName');
+      if (await historyFile.exists()) {
+        final lines = await historyFile.readAsLines();
+        _history.clear();
+        _history.addAll(lines.where((line) => line.isNotEmpty));
+        _historyIndex = _history.length;
+      }
+    } catch (e) {
+      // Silently ignore history load errors
+    }
+  }
+
+  /// Save command history to file (synchronous for reliability)
+  void _saveHistory() {
+    try {
+      final historyFile = File('${PureStorageConfig().baseDir}/$_historyFileName');
+      // Keep only last _maxHistorySize commands
+      final historyToSave = _history.length > _maxHistorySize
+          ? _history.sublist(_history.length - _maxHistorySize)
+          : _history;
+      historyFile.writeAsStringSync(historyToSave.join('\n'));
+    } catch (e) {
+      // Silently ignore history save errors
+    }
   }
 
   void _printBanner() {
@@ -410,23 +485,32 @@ class PureConsole {
         exit(0);
       }
 
-      // Add to history
+      // Add to history (avoid duplicates and limit size)
       if (_history.isEmpty || _history.last != input) {
         _history.add(input);
+        // Trim history if it exceeds max size
+        if (_history.length > _maxHistorySize) {
+          _history.removeAt(0);
+        }
+        // Save history after each command (don't await to avoid blocking)
+        _saveHistory();
       }
       _historyIndex = _history.length;
 
       // If in a chat room, treat non-command input as a message
       if (_currentChatRoom != null && !input.startsWith('/') && !_isCommand(input)) {
-        final success = await _chatService.postMessage(_currentChatRoom!, input);
-        if (success) {
-          // IRC-style: move up, clear line, show formatted message
+        // Use relay's chat room management in CLI mode
+        if (_relay.chatRooms[_currentChatRoom!] != null) {
+          await _relay.postMessage(_currentChatRoom!, input);
+          // IRC-style: show formatted message (replacing the raw input line)
           final now = DateTime.now();
-          final timeStr = '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
+          final timeStr = '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')} ${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
           final callsign = _profileService.activeProfile?.callsign ?? 'You';
-          // Move cursor up one line, clear it, print message
-          stdout.write('\x1B[A\x1B[2K\r');
-          stdout.writeln('\x1B[33m[$timeStr]\x1B[0m \x1B[36m$callsign:\x1B[0m $input');
+          // Move cursor up to replace the empty line after input, print message
+          stdout.write('\x1B[A\x1B[2K');
+          stdout.writeln('\x1B[33m[$timeStr]\x1B[0m \x1B[32m✓\x1B[0m \x1B[36m$callsign:\x1B[0m $input');
+        } else {
+          _printError('Room not found: $_currentChatRoom');
         }
         continue;
       }
@@ -459,11 +543,21 @@ class PureConsole {
   StreamSubscription<List<int>>? _stdinSubscription;
   Completer<int>? _byteCompleter;
 
+  /// Current input line state (for async message display)
+  String _currentInputBuffer = '';
+  int _currentInputIndex = 0;
+  String _currentPrompt = '';
+
   /// Initialize async stdin reading
   void _initAsyncStdin() {
     if (_stdinSubscription != null) return;
-    stdin.echoMode = false;
-    stdin.lineMode = false;
+    try {
+      stdin.echoMode = false;
+      stdin.lineMode = false;
+    } catch (e) {
+      // Ignore terminal mode errors when running non-interactively (e.g., nohup, screen detached)
+      // The relay will still work, just without fancy input handling
+    }
     _stdinSubscription = stdin.listen((data) {
       _stdinQueue.addAll(data);
       // Complete any pending read
@@ -481,6 +575,27 @@ class PureConsole {
     }
     _byteCompleter = Completer<int>();
     return _byteCompleter!.future;
+  }
+
+  /// Read a byte with timeout for escape sequence handling
+  /// Returns -1 if no byte available within timeout
+  Future<int> _readByteAsyncWithTimeout() async {
+    // First check if there's already a byte in the queue
+    if (_stdinQueue.isNotEmpty) {
+      return _stdinQueue.removeAt(0);
+    }
+    // Wait briefly for escape sequence bytes (they should arrive quickly)
+    // Use a short timeout to handle cases where ESC is pressed alone
+    try {
+      _byteCompleter = Completer<int>();
+      final result = await _byteCompleter!.future.timeout(
+        const Duration(milliseconds: 50),
+        onTimeout: () => -1,
+      );
+      return result;
+    } catch (e) {
+      return -1;
+    }
   }
 
   /// Cleanup async stdin
@@ -503,6 +618,11 @@ class PureConsole {
     var buffer = '';
     var index = 0; // cursor position
 
+    // Track state for async message display
+    _currentPrompt = prompt;
+    _currentInputBuffer = buffer;
+    _currentInputIndex = index;
+
     // Use async stdin reading to allow HTTP server to process requests
     _initAsyncStdin();
     try {
@@ -512,6 +632,8 @@ class PureConsole {
 
         // Enter (CR or LF)
         if (byte == 13 || byte == 10) {
+          _currentInputBuffer = '';
+          _currentInputIndex = 0;
           stdout.writeln();
           return buffer.trim();
         }
@@ -544,17 +666,17 @@ class PureConsole {
 
         // Escape sequence (arrow keys, etc.)
         if (byte == 27) {
-          final byte1 = stdin.readByteSync();
+          final byte1 = await _readByteAsyncWithTimeout();
           if (byte1 == -1) continue;
 
           // Handle ESC [ or ESC O sequences (most common)
           if (byte1 == 91 || byte1 == 79) { // '[' (91) or 'O' (79)
-            final byte2 = stdin.readByteSync();
+            final byte2 = await _readByteAsyncWithTimeout();
             if (byte2 == -1) continue;
 
             // Handle extended sequences like ESC [ 1 ~ (Home) or ESC [ 3 ~ (Delete)
             if (byte2 >= 49 && byte2 <= 54) { // '1' to '6'
-              final byte3 = stdin.readByteSync();
+              final byte3 = await _readByteAsyncWithTimeout();
               if (byte3 == 126) { // '~'
                 // Extended key handling
                 switch (byte2) {
@@ -672,6 +794,10 @@ class PureConsole {
             _redrawLine(prompt, buffer, index);
           }
         }
+
+        // Sync state for async message display
+        _currentInputBuffer = buffer;
+        _currentInputIndex = index;
       }
     } catch (e) {
       // On error, just return what we have
@@ -975,11 +1101,11 @@ class PureConsole {
           }
         }
       } else if (baseDir == 'chat' && pathParts.length == 2) {
-        // Completing chat room name
+        // Completing chat room name - use relay's chat rooms in CLI mode
         final roomPartial = pathParts[1].toLowerCase();
-        for (final channel in _chatService.channels) {
-          if (channel.id.toLowerCase().startsWith(roomPartial)) {
-            candidates.add(Candidate('/chat/${channel.id}', display: '/chat/${channel.id}/', group: 'chat room', complete: false));
+        for (final room in _relay.chatRooms.values) {
+          if (room.id.toLowerCase().startsWith(roomPartial)) {
+            candidates.add(Candidate('/chat/${room.id}', display: '/chat/${room.id}/', group: 'chat room', complete: false));
           }
         }
       }
@@ -994,9 +1120,10 @@ class PureConsole {
         }
       }
     } else if (_currentPath == '/chat') {
-      for (final channel in _chatService.channels) {
-        if (channel.id.toLowerCase().startsWith(lowerPartial)) {
-          candidates.add(Candidate(channel.id, display: '${channel.id}/', group: 'chat room', complete: false));
+      // Use relay's chat rooms in CLI mode
+      for (final room in _relay.chatRooms.values) {
+        if (room.id.toLowerCase().startsWith(lowerPartial)) {
+          candidates.add(Candidate(room.id, display: '${room.id}/', group: 'chat room', complete: false));
         }
       }
     } else if (_currentPath == '/devices') {
@@ -1046,9 +1173,10 @@ class PureConsole {
     final candidates = <Candidate>[];
     final lowerPartial = partial.toLowerCase();
 
-    for (final channel in _chatService.channels) {
-      if (channel.id.toLowerCase().startsWith(lowerPartial)) {
-        candidates.add(Candidate(channel.id, display: '${channel.id} (${channel.name})', group: 'room'));
+    // Use relay's chat rooms in CLI mode
+    for (final room in _relay.chatRooms.values) {
+      if (room.id.toLowerCase().startsWith(lowerPartial)) {
+        candidates.add(Candidate(room.id, display: '${room.id} (${room.name})', group: 'room'));
       }
     }
 
@@ -1125,9 +1253,15 @@ class PureConsole {
       if (entry.key != null) {
         stdout.writeln('\x1B[33m${entry.key}:\x1B[0m');
       }
-      // Print one item per line for readability
-      for (final c in entry.value) {
-        stdout.writeln('  ${c.display}');
+      // Use columns for command groups (compact display), one per line for others
+      final isCommandGroup = entry.key != null &&
+          (entry.key!.contains('commands') || entry.key!.contains('subcommands'));
+      if (isCommandGroup) {
+        _printColumns(entry.value.map((c) => c.display).toList());
+      } else {
+        for (final c in entry.value) {
+          stdout.writeln('  ${c.display}');
+        }
       }
     }
   }
@@ -1600,7 +1734,8 @@ class PureConsole {
     stdout.writeln('-' * 40);
     if (relayStatus['running'] == true) {
       stdout.writeln('Status:         \x1B[32mRunning\x1B[0m');
-      stdout.writeln('Port:           ${relayStatus['port']}');
+      stdout.writeln('HTTP Port:      ${relayStatus['httpPort']}');
+      stdout.writeln('HTTPS Port:     ${relayStatus['httpsPort']}');
       stdout.writeln('Devices:        ${relayStatus['connected_devices']}');
       stdout.writeln('Uptime:         ${_formatUptime(relayStatus['uptime'] as int)}');
       stdout.writeln('Cache:          ${relayStatus['cache_size']} tiles (${relayStatus['cache_size_mb']} MB)');
@@ -2074,66 +2209,49 @@ class PureConsole {
   }
 
   Future<void> _listChatRooms() async {
-    if (!_chatService.isInitialized) {
-      _printError('Chat not initialized. Please create a profile first.');
-      return;
-    }
-
-    final channels = _chatService.channels;
+    // Use relay's chat rooms in CLI mode
+    final rooms = _relay.chatRooms.values.toList();
 
     stdout.writeln();
-    stdout.writeln('\x1B[1mChat Rooms (${channels.length})\x1B[0m');
+    stdout.writeln('\x1B[1mChat Rooms (${rooms.length})\x1B[0m');
     stdout.writeln('-' * 50);
 
-    for (final channel in channels) {
-      final msgCount = await _chatService.getMessageCount(channel.id);
+    for (final room in rooms) {
       stdout.writeln(
-        '${channel.id.padRight(15)} '
-        '${channel.name.padRight(20)} '
-        '$msgCount msgs'
+        '${room.id.padRight(15)} '
+        '${room.name.padRight(20)} '
+        '${room.messages.length} msgs'
       );
     }
     stdout.writeln();
   }
 
   Future<void> _showChatInfo(String roomId) async {
-    if (!_chatService.isInitialized) {
-      _printError('Chat not initialized. Please create a profile first.');
-      return;
-    }
-
-    final channel = _chatService.getChannel(roomId);
-    if (channel == null) {
+    // Use relay's chat rooms in CLI mode
+    final room = _relay.chatRooms[roomId];
+    if (room == null) {
       _printError('Room not found: $roomId');
       return;
     }
 
-    final msgCount = await _chatService.getMessageCount(roomId);
-
     stdout.writeln();
-    stdout.writeln('\x1B[1mChat Room: ${channel.name}\x1B[0m');
+    stdout.writeln('\x1B[1mChat Room: ${room.name}\x1B[0m');
     stdout.writeln('-' * 40);
-    stdout.writeln('ID:          ${channel.id}');
-    stdout.writeln('Name:        ${channel.name}');
-    stdout.writeln('Description: ${channel.description ?? '(none)'}');
-    stdout.writeln('Type:        ${channel.type.name}');
-    stdout.writeln('Created:     ${channel.created.toLocal()}');
-    if (channel.lastMessageTime != null) {
-      stdout.writeln('Last Active: ${channel.lastMessageTime!.toLocal()}');
-    }
-    stdout.writeln('Messages:    $msgCount');
-    stdout.writeln('Public:      ${channel.isPublic ? 'Yes' : 'No'}');
+    stdout.writeln('ID:          ${room.id}');
+    stdout.writeln('Name:        ${room.name}');
+    stdout.writeln('Description: ${room.description.isEmpty ? '(none)' : room.description}');
+    stdout.writeln('Creator:     ${room.creatorCallsign}');
+    stdout.writeln('Created:     ${room.createdAt.toLocal()}');
+    stdout.writeln('Last Active: ${room.lastActivity.toLocal()}');
+    stdout.writeln('Messages:    ${room.messages.length}');
+    stdout.writeln('Public:      ${room.isPublic ? 'Yes' : 'No'}');
     stdout.writeln();
   }
 
   Future<void> _createChatRoom(String id, String name, String? description) async {
-    if (!_chatService.isInitialized) {
-      _printError('Chat not initialized. Please create a profile first.');
-      return;
-    }
-
-    final channel = await _chatService.createChannel(id, name, description: description);
-    if (channel != null) {
+    // Use relay's chat room management in CLI mode
+    final room = _relay.createChatRoom(id, name, description: description);
+    if (room != null) {
       stdout.writeln('\x1B[32mChat room created: $name ($id)\x1B[0m');
     } else {
       _printError('Room with ID "$id" already exists');
@@ -2141,16 +2259,12 @@ class PureConsole {
   }
 
   Future<void> _deleteChatRoom(String id) async {
-    if (!_chatService.isInitialized) {
-      _printError('Chat not initialized. Please create a profile first.');
+    // Use relay's chat room management in CLI mode
+    if (id == 'general') {
+      _printError('Cannot delete the general room');
       return;
     }
-
-    if (id == 'main') {
-      _printError('Cannot delete the main room');
-      return;
-    }
-    if (await _chatService.deleteChannel(id)) {
+    if (_relay.deleteChatRoom(id)) {
       stdout.writeln('\x1B[32mChat room deleted: $id\x1B[0m');
     } else {
       _printError('Room not found: $id');
@@ -2158,12 +2272,8 @@ class PureConsole {
   }
 
   Future<void> _renameChatRoom(String id, String newName) async {
-    if (!_chatService.isInitialized) {
-      _printError('Chat not initialized. Please create a profile first.');
-      return;
-    }
-
-    if (await _chatService.renameChannel(id, newName)) {
+    // Use relay's chat room management in CLI mode
+    if (_relay.renameChatRoom(id, newName)) {
       stdout.writeln('\x1B[32mRoom renamed to: $newName\x1B[0m');
     } else {
       _printError('Room not found: $id');
@@ -2171,39 +2281,49 @@ class PureConsole {
   }
 
   Future<void> _showChatHistory(String roomId, int? limit) async {
-    if (!_chatService.isInitialized) {
-      _printError('Chat not initialized. Please create a profile first.');
-      return;
-    }
-
-    final messages = await _chatService.loadMessages(roomId, limit: limit ?? 20);
-    if (messages.isEmpty) {
-      return; // Silent if no messages
-    }
-
-    for (final msg in messages) {
-      final time = msg.dateTime.toLocal();
-      final timeStr = '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
-      stdout.writeln('\x1B[33m[$timeStr]\x1B[0m \x1B[36m${msg.author}:\x1B[0m ${msg.content}');
-    }
-  }
-
-  Future<void> _postMessage(String roomId, String message) async {
-    if (!_chatService.isInitialized) {
-      _printError('Chat not initialized. Please create a profile first.');
-      return;
-    }
-
-    if (_chatService.getChannel(roomId) == null) {
+    // Use relay's chat rooms in CLI mode
+    final room = _relay.chatRooms[roomId];
+    if (room == null) {
       _printError('Room not found: $roomId');
       return;
     }
 
-    if (await _chatService.postMessage(roomId, message)) {
-      stdout.writeln('Message sent');
-    } else {
-      _printError('Failed to send message');
+    final messages = room.messages;
+    if (messages.isEmpty) {
+      return; // Silent if no messages
     }
+
+    // Get last N messages
+    final count = limit ?? 20;
+    final startIdx = messages.length > count ? messages.length - count : 0;
+    final recentMessages = messages.sublist(startIdx);
+
+    for (final msg in recentMessages) {
+      final time = msg.timestamp.toLocal();
+      final timeStr = '${time.year}-${time.month.toString().padLeft(2, '0')}-${time.day.toString().padLeft(2, '0')} ${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
+
+      // Determine verification indicator
+      String verifyIndicator;
+      if (msg.hasSignature) {
+        final isVerified = _relay.verifyMessage(msg);
+        verifyIndicator = isVerified ? '\x1B[32m✓\x1B[0m' : '\x1B[31m✗\x1B[0m';
+      } else {
+        verifyIndicator = '\x1B[90m○\x1B[0m'; // No signature (gray circle)
+      }
+
+      stdout.writeln('\x1B[33m[$timeStr]\x1B[0m $verifyIndicator \x1B[36m${msg.senderCallsign}:\x1B[0m ${msg.content}');
+    }
+  }
+
+  Future<void> _postMessage(String roomId, String message) async {
+    // Use relay's chat room management in CLI mode
+    if (_relay.chatRooms[roomId] == null) {
+      _printError('Room not found: $roomId');
+      return;
+    }
+
+    await _relay.postMessage(roomId, message);
+    stdout.writeln('Message sent');
   }
 
   Future<void> _handleChatHistory(List<String> args) async {
@@ -2213,11 +2333,15 @@ class PureConsole {
   }
 
   Future<void> _handleDeleteMessage(List<String> args) async {
-    if (!_chatService.isInitialized || _currentChatRoom == null || args.isEmpty) return;
+    if (_currentChatRoom == null || args.isEmpty) return;
 
-    // For now, show error since delete by ID isn't directly supported
-    // Would need to load messages and find by timestamp
-    _printError('Delete by message ID not yet implemented. Use timestamp format.');
+    // Use relay's chat room management in CLI mode
+    final messageId = args[0];
+    if (_relay.deleteMessage(_currentChatRoom!, messageId)) {
+      stdout.writeln('\x1B[32mMessage deleted\x1B[0m');
+    } else {
+      _printError('Message not found');
+    }
   }
 
   // --- Config commands ---
@@ -2859,9 +2983,6 @@ class PureConsole {
 
     await _profileService.setActiveProfile(profile.id);
 
-    // Reinitialize chat service for the new profile
-    await _chatService.initialize(profile.callsign, npub: profile.npub, nsec: profile.nsec);
-
     // If switching to a relay, update relay server settings
     if (profile.isRelay) {
       final newSettings = _relay.settings.copyWith(
@@ -3000,9 +3121,6 @@ class PureConsole {
     );
 
     await _profileService.addProfile(profile);
-
-    // Initialize chat service for the new profile
-    await _chatService.initialize(profile.callsign, npub: profile.npub, nsec: profile.nsec);
 
     stdout.writeln();
     stdout.writeln('\x1B[32mClient profile created successfully!\x1B[0m');
@@ -3157,9 +3275,6 @@ class PureConsole {
     );
 
     await _profileService.addProfile(profile);
-
-    // Initialize chat service for the new profile
-    await _chatService.initialize(profile.callsign, npub: profile.npub, nsec: profile.nsec);
 
     // Also update relay server settings
     final newSettings = _relay.settings.copyWith(
@@ -3587,19 +3702,19 @@ class PureConsole {
     } else if (path == '/devices') {
       _listDevices();
     } else if (path == '/chat') {
-      for (final channel in _chatService.channels) {
-        stdout.writeln('\x1B[34m${channel.id}/\x1B[0m  ${channel.name}');
+      // Use relay's chat rooms in CLI mode
+      for (final room in _relay.chatRooms.values) {
+        stdout.writeln('\x1B[34m${room.id}/\x1B[0m  ${room.name}');
       }
     } else if (path.startsWith('/chat/')) {
       final roomId = path.substring('/chat/'.length);
-      final channel = _chatService.getChannel(roomId);
-      if (channel != null) {
-        _chatService.getMessageCount(roomId).then((count) {
-          stdout.writeln('$count messages');
-          if (channel.lastMessageTime != null) {
-            stdout.writeln('Last activity: ${channel.lastMessageTime!.toLocal()}');
-          }
-        });
+      final room = _relay.chatRooms[roomId];
+      if (room != null) {
+        stdout.writeln('${room.messages.length} messages');
+        if (room.messages.isNotEmpty) {
+          final lastMsg = room.messages.last;
+          stdout.writeln('Last activity: ${lastMsg.timestamp.toLocal()}');
+        }
       } else {
         _printError('Room not found');
       }
@@ -3653,10 +3768,11 @@ class PureConsole {
       // Check if we're entering a chat room
       if (target.startsWith('/chat/') && target.length > '/chat/'.length) {
         final roomId = target.substring('/chat/'.length).split('/')[0];
-        final channel = _chatService.getChannel(roomId);
-        if (channel != null) {
+        // Use relay's chat rooms in CLI mode
+        final room = _relay.chatRooms[roomId];
+        if (room != null) {
           _currentChatRoom = roomId;
-          stdout.writeln('--- ${channel.name} ---');
+          stdout.writeln('--- ${room.name} ---');
           // Show recent messages when entering
           await _showChatHistory(roomId, 10);
         } else {

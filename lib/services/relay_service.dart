@@ -643,44 +643,59 @@ class RelayService {
     try {
       final profile = ProfileService().getProfile();
 
-      if (useNostrProtocol && _wsService != null && _wsService!.isConnected) {
-        // Create NOSTR event (kind 1 text note)
-        final pubkeyHex = NostrCrypto.decodeNpub(profile.npub);
+      if (useNostrProtocol && _wsService != null) {
+        // Verify WebSocket connection is alive before attempting to send
+        final isConnected = await _wsService!.ensureConnected();
+        if (!isConnected) {
+          LogService().log('WebSocket not connected, falling back to HTTP');
+          // Fall through to HTTP fallback below
+        } else {
+          // Create NOSTR event (kind 1 text note)
+          final pubkeyHex = NostrCrypto.decodeNpub(profile.npub);
 
-        final event = NostrEvent.textNote(
-          pubkeyHex: pubkeyHex,
-          content: content,
-          tags: [
-            ['t', 'chat'],
-            ['room', roomId],
-            ['callsign', callsign],
-          ],
-        );
+          final event = NostrEvent.textNote(
+            pubkeyHex: pubkeyHex,
+            content: content,
+            tags: [
+              ['t', 'chat'],
+              ['room', roomId],
+              ['callsign', callsign],
+            ],
+          );
 
-        // Calculate ID and sign with BIP-340 Schnorr signature
-        event.calculateId();
-        event.signWithNsec(profile.nsec);
+          // Calculate ID and sign with BIP-340 Schnorr signature
+          event.calculateId();
+          event.signWithNsec(profile.nsec);
 
-        // Send via NOSTR protocol: ["EVENT", {...}]
-        final nostrMessage = NostrRelayMessage.event(event);
-        final jsonMessage = jsonEncode(nostrMessage);
+          // Send via NOSTR protocol: ["EVENT", {...}]
+          final nostrMessage = NostrRelayMessage.event(event);
 
-        // Console output for debugging
-        print('');
-        print('╔══════════════════════════════════════════════════════════════╗');
-        print('║  SENDING MESSAGE (WebSocket/NOSTR)                           ║');
-        print('╠══════════════════════════════════════════════════════════════╣');
-        print('║  Room: $roomId');
-        print('║  Callsign: $callsign');
-        print('║  Content: $content');
-        print('║  Event ID: ${event.id?.substring(0, 32)}...');
-        print('║  Kind: ${event.kind}');
-        print('╚══════════════════════════════════════════════════════════════╝');
-        print('');
+          // Console output for debugging
+          print('');
+          print('╔══════════════════════════════════════════════════════════════╗');
+          print('║  SENDING MESSAGE (WebSocket/NOSTR)                           ║');
+          print('╠══════════════════════════════════════════════════════════════╣');
+          print('║  Room: $roomId');
+          print('║  Callsign: $callsign');
+          print('║  Content: $content');
+          print('║  Event ID: ${event.id?.substring(0, 32)}...');
+          print('║  Kind: ${event.kind}');
+          print('╚══════════════════════════════════════════════════════════════╝');
+          print('');
 
-        _wsService!.send({'nostr_event': nostrMessage});
-        return true;
-      } else {
+          // Use sendWithVerification for reliable delivery
+          final sent = await _wsService!.sendWithVerification({'nostr_event': nostrMessage});
+          if (sent) {
+            return true;
+          } else {
+            LogService().log('WebSocket send failed, falling back to HTTP');
+            // Fall through to HTTP fallback below
+          }
+        }
+      }
+
+      // HTTP fallback (when WebSocket is unavailable or send failed)
+      {
         // Fallback to HTTP API with NOSTR signature
         final httpUrl = _getHttpBaseUrl(relayUrl);
 

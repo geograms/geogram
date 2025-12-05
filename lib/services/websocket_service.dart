@@ -108,15 +108,7 @@ class WebSocketService {
             if (rawMessage.startsWith('UPDATE:')) {
               final update = UpdateNotification.parse(rawMessage);
               if (update != null) {
-                print('');
-                print('╔══════════════════════════════════════════════════════════════╗');
-                print('║  RECEIVED UPDATE NOTIFICATION                                ║');
-                print('╠══════════════════════════════════════════════════════════════╣');
-                print('║  From relay: ${update.callsign}');
-                print('║  Type: ${update.collectionType}');
-                print('║  Path: ${update.path}');
-                print('╚══════════════════════════════════════════════════════════════╝');
-                print('');
+                LogService().log('UPDATE notification: ${update.callsign}/${update.collectionType}${update.path}');
                 _updateController.add(update);
               }
               return;
@@ -229,8 +221,66 @@ class WebSocketService {
     }
   }
 
-  /// Check if connected
+  /// Check if connected (channel exists)
   bool get isConnected => _channel != null;
+
+  /// Ensure WebSocket is connected and ready to send messages.
+  /// Returns true if connected, false if connection failed.
+  /// If disconnected, attempts to reconnect before returning.
+  Future<bool> ensureConnected() async {
+    // If channel exists, try a test send to verify it's alive
+    if (_channel != null) {
+      try {
+        // Try to send a ping to verify connection is alive
+        final pingMessage = jsonEncode({'type': 'PING'});
+        _channel!.sink.add(pingMessage);
+        LogService().log('Connection verified (PING sent)');
+        return true;
+      } catch (e) {
+        LogService().log('Connection test failed: $e');
+        // Connection is broken, clean up
+        _channel = null;
+        _subscription?.cancel();
+        _subscription = null;
+      }
+    }
+
+    // Not connected - try to reconnect if we have a URL
+    if (_relayUrl != null && _shouldReconnect) {
+      LogService().log('Attempting to reconnect before sending message...');
+      try {
+        final success = await connectAndHello(_relayUrl!);
+        if (success) {
+          LogService().log('✓ Reconnection successful');
+          return true;
+        }
+      } catch (e) {
+        LogService().log('✗ Reconnection failed: $e');
+      }
+    }
+
+    return false;
+  }
+
+  /// Send message to relay with connection verification.
+  /// Returns true if message was sent, false if send failed.
+  Future<bool> sendWithVerification(Map<String, dynamic> message) async {
+    if (!await ensureConnected()) {
+      LogService().log('Cannot send message: not connected to relay');
+      return false;
+    }
+
+    try {
+      final json = jsonEncode(message);
+      LogService().log('Sending to relay: $json');
+      _channel!.sink.add(json);
+      return true;
+    } catch (e) {
+      LogService().log('Error sending message: $e');
+      _handleConnectionLoss();
+      return false;
+    }
+  }
 
   /// Handle collections request from relay
   Future<void> _handleCollectionsRequest(String? requestId) async {
