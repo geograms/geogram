@@ -103,6 +103,9 @@ if [ "$SKIP_BUILD" = false ]; then
     fi
 
     if [ "$NEEDS_BUILD" = true ]; then
+        echo "Generating embedded games..."
+        "$DART_BIN" run bin/generate_embedded_games.dart
+
         echo "Compiling standalone CLI binary..."
         mkdir -p "$SCRIPT_DIR/build"
         "$DART_BIN" compile exe bin/cli.dart -o "$CLI_BINARY"

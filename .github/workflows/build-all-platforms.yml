@@ -226,8 +226,45 @@ jobs:
         path: geogram-desktop-ios-unsigned.ipa
         retention-days: 30
 
+  build-cli-linux:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Dart
+      uses: dart-lang/setup-dart@v1
+      with:
+        sdk: stable
+
+    - name: Install dependencies
+      run: dart pub get
+
+    - name: Generate embedded games
+      run: dart run bin/generate_embedded_games.dart
+
+    - name: Compile CLI binary
+      run: |
+        mkdir -p build
+        dart compile exe bin/cli.dart -o build/geogram-cli
+
+    - name: Create archive with games
+      run: |
+        mkdir -p dist/geogram-cli
+        cp build/geogram-cli dist/geogram-cli/
+        cp -r games dist/geogram-cli/
+        cd dist && tar -czf ../geogram-cli-linux-x64.tar.gz geogram-cli/
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: geogram-cli-linux-x64
+        path: geogram-cli-linux-x64.tar.gz
+        retention-days: 30
+
   create-release:
-    needs: [build-linux, build-windows, build-macos, build-web, build-android, build-ios]
+    needs: [build-linux, build-windows, build-macos, build-web, build-android, build-ios, build-cli-linux]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
 
@@ -248,6 +285,7 @@ jobs:
           artifacts/geogram-desktop-android-apk/app-release.apk
           artifacts/geogram-desktop-android-aab/app-release.aab
           artifacts/geogram-desktop-ios-unsigned/geogram-desktop-ios-unsigned.ipa
+          artifacts/geogram-cli-linux-x64/geogram-cli-linux-x64.tar.gz
         draft: false
         prerelease: false
       env:
