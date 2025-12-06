@@ -70,12 +70,16 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
   bool _isInitialized = false;
   String? _error;
 
-  // Relay chat rooms
+  // Relay chat rooms (for the primary/connected relay)
   List<RelayChatRoom> _relayRooms = [];
   RelayChatRoom? _selectedRelayRoom;
   List<RelayChatMessage> _relayMessages = [];
   bool _loadingRelayRooms = false;
-  bool _relayReachable = true; // Track if relay is currently reachable
+  bool _relayReachable = false; // Track if relay is currently reachable (default false until confirmed)
+  bool _forcedOfflineMode = false; // True when viewing a device explicitly marked as offline
+
+  // All cached devices with their rooms (for offline viewing)
+  List<CachedDeviceRooms> _cachedDeviceSources = [];
 
   // Remember last relay info for cache loading when disconnected
   String? _lastRelayUrl;
@@ -186,16 +190,26 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     if (_selectedRelayRoom == null) return;
 
     try {
-      final messages = await _relayService.fetchRoomMessages(
-        _selectedRelayRoom!.relayUrl,
+      // Download any new raw chat files
+      final cacheKey = _lastRelayCacheKey ?? '';
+      if (cacheKey.isNotEmpty) {
+        await _downloadAndCacheChatFiles(
+          _selectedRelayRoom!.relayUrl,
+          _selectedRelayRoom!.id,
+          cacheKey,
+        );
+      }
+
+      // Load messages from cache (now contains any new files)
+      final cachedMessages = await _cacheService.loadMessages(
+        cacheKey,
         _selectedRelayRoom!.id,
-        limit: 100,
       );
 
       if (mounted) {
-        // Show new messages in console
-        if (messages.isNotEmpty) {
-          final latestMsg = messages.last;
+        // Check for new messages
+        if (cachedMessages.length > _relayMessages.length) {
+          final latestMsg = cachedMessages.last;
           print('');
           print('╔══════════════════════════════════════════════════════════════╗');
           print('║  NEW MESSAGE RECEIVED                                        ║');
@@ -209,17 +223,8 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
         }
 
         setState(() {
-          _relayMessages = messages;
+          _relayMessages = cachedMessages;
         });
-
-        // Cache messages
-        if (_selectedRelayRoom!.relayName.isNotEmpty) {
-          await _cacheService.saveMessages(
-            _selectedRelayRoom!.relayName,
-            _selectedRelayRoom!.id,
-            messages,
-          );
-        }
       }
     } catch (e) {
       // Silently fail - user is already viewing messages
@@ -268,28 +273,29 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     if (_selectedRelayRoom == null || !_relayReachable) return;
 
     try {
-      final messages = await _relayService.fetchRoomMessages(
-        _selectedRelayRoom!.relayUrl,
+      // Download any new raw chat files
+      final cacheKey = _lastRelayCacheKey ?? '';
+      if (cacheKey.isNotEmpty) {
+        await _downloadAndCacheChatFiles(
+          _selectedRelayRoom!.relayUrl,
+          _selectedRelayRoom!.id,
+          cacheKey,
+        );
+      }
+
+      // Load messages from cache
+      final cachedMessages = await _cacheService.loadMessages(
+        cacheKey,
         _selectedRelayRoom!.id,
-        limit: 100,
       );
 
       if (!mounted) return;
 
       // Check if there are new messages by comparing count
-      if (messages.length > _relayMessages.length) {
+      if (cachedMessages.length > _relayMessages.length) {
         setState(() {
-          _relayMessages = messages;
+          _relayMessages = cachedMessages;
         });
-
-        // Cache the updated messages
-        if (_selectedRelayRoom!.relayName.isNotEmpty) {
-          await _cacheService.saveMessages(
-            _selectedRelayRoom!.relayName,
-            _selectedRelayRoom!.id,
-            messages,
-          );
-        }
       }
     } catch (e) {
       // Silently fail - don't disrupt user experience
@@ -299,6 +305,9 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
   /// Check if relay is reachable and update UI if status changed
   Future<void> _checkRelayStatus() async {
     if (_lastRelayUrl == null || _lastRelayUrl!.isEmpty) return;
+
+    // Don't auto-reconnect if user is viewing in forced offline mode
+    if (_forcedOfflineMode) return;
 
     // Try to set up update listener if not already done (WebSocket might be ready now)
     _setupUpdateListener();
@@ -418,23 +427,19 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     // If browsing a remote device, use its URL directly
     if (widget.isRemoteDevice && widget.remoteDeviceUrl != null) {
       LogService().log('DEBUG _loadRelayRooms: Remote device mode - using URL ${widget.remoteDeviceUrl}');
-      try {
-        // Remember relay info for cache loading when disconnected
-        _lastRelayUrl = widget.remoteDeviceUrl;
-        _lastRelayCacheKey = widget.remoteDeviceCallsign ?? widget.remoteDeviceName;
 
+      // Use widget-provided callsign as the canonical cache key (consistent for save and load)
+      final cacheKey = widget.remoteDeviceCallsign ?? widget.remoteDeviceName ?? 'remote';
+      _lastRelayUrl = widget.remoteDeviceUrl;
+      _lastRelayCacheKey = cacheKey;
+
+      try {
         // Fetch rooms from remote device
         final rooms = await _relayService.fetchChatRooms(widget.remoteDeviceUrl!);
 
         if (rooms.isNotEmpty) {
-          // Cache the rooms using the device's callsign
-          final deviceCallsign = rooms.first.relayName.isNotEmpty
-              ? rooms.first.relayName
-              : (widget.remoteDeviceCallsign ?? widget.remoteDeviceName ?? 'remote');
-          if (deviceCallsign.isNotEmpty) {
-            _lastRelayCacheKey = deviceCallsign;
-            await _cacheService.saveChatRooms(deviceCallsign, rooms);
-          }
+          // Always save using the consistent cache key (widget callsign)
+          await _cacheService.saveChatRooms(cacheKey, rooms, relayUrl: widget.remoteDeviceUrl);
         }
 
         setState(() {
@@ -452,19 +457,14 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
         setState(() {
           _relayReachable = false;
         });
-        // Try loading from cache for remote device
-        if (_lastRelayCacheKey != null && _lastRelayCacheKey!.isNotEmpty) {
-          final cachedRooms = await _cacheService.loadChatRooms(
-            _lastRelayCacheKey!,
-            _lastRelayUrl ?? '',
-          );
-          if (cachedRooms.isNotEmpty) {
-            setState(() {
-              _relayRooms = cachedRooms;
-              _loadingRelayRooms = false;
-            });
-            return;
-          }
+        // Try loading from cache using the same consistent key
+        final cachedRooms = await _cacheService.loadChatRooms(cacheKey, _lastRelayUrl ?? '');
+        if (cachedRooms.isNotEmpty) {
+          setState(() {
+            _relayRooms = cachedRooms;
+            _loadingRelayRooms = false;
+          });
+          return;
         }
         setState(() {
           _loadingRelayRooms = false;
@@ -479,33 +479,35 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
 
     // If relay has a valid URL, try to fetch from it via HTTP API
     if (relay != null && relay.url.isNotEmpty) {
-      try {
-        // Remember relay info for cache loading when disconnected
-        _lastRelayUrl = relay.url;
-        _lastRelayCacheKey = relay.callsign ?? relay.name;
+      // Use relay's callsign as the consistent cache key
+      final cacheKey = relay.callsign ?? relay.name;
+      _lastRelayUrl = relay.url;
+      _lastRelayCacheKey = cacheKey;
 
+      try {
         // Fetch rooms from relay
         final rooms = await _relayService.fetchChatRooms(relay.url);
 
         if (rooms.isNotEmpty) {
-          // Cache the rooms using the relay's callsign (from API response)
-          final relayCallsign = rooms.first.relayName;
-          if (relayCallsign.isNotEmpty) {
-            _lastRelayCacheKey = relayCallsign;
-            await _cacheService.saveChatRooms(relayCallsign, rooms);
-          }
+          // Always save using the consistent cache key
+          await _cacheService.saveChatRooms(cacheKey, rooms, relayUrl: relay.url);
+
+          setState(() {
+            _relayRooms = rooms;
+            _relayReachable = true; // Successfully fetched - relay is reachable
+            _loadingRelayRooms = false;
+          });
+
+          // Ensure WebSocket connection for real-time updates
+          await _ensureWebSocketConnection(relay.url);
+
+          // Also load other cached devices to show them as offline
+          await _loadAllCachedDevices();
+
+          return;
         }
-
-        setState(() {
-          _relayRooms = rooms;
-          _relayReachable = true; // Successfully fetched - relay is reachable
-          _loadingRelayRooms = false;
-        });
-
-        // Ensure WebSocket connection for real-time updates
-        await _ensureWebSocketConnection(relay.url);
-
-        return;
+        // If rooms are empty, fall through to cache loading
+        LogService().log('DEBUG _loadRelayRooms: relay returned empty rooms, trying cache');
       } catch (e) {
         // Fetch failed - will try cache below
         LogService().log('DEBUG _loadRelayRooms: fetch failed with error: $e');
@@ -518,51 +520,63 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       _relayReachable = false;
     });
 
-    // Try to load from cache using remembered relay info
-    LogService().log('DEBUG _loadRelayRooms: trying cache for _lastRelayCacheKey=$_lastRelayCacheKey');
-    if (_lastRelayCacheKey != null && _lastRelayCacheKey!.isNotEmpty) {
-      final cachedRooms = await _cacheService.loadChatRooms(
-        _lastRelayCacheKey!,
-        _lastRelayUrl ?? '',
-      );
-      LogService().log('DEBUG _loadRelayRooms: loaded ${cachedRooms.length} rooms from cache');
-      if (cachedRooms.isNotEmpty) {
-        // Set relay URL from cached room for status checking
-        if (_lastRelayUrl == null || _lastRelayUrl!.isEmpty) {
-          _lastRelayUrl = cachedRooms.first.relayUrl;
-        }
-        setState(() {
-          _relayRooms = cachedRooms;
-          _loadingRelayRooms = false;
-        });
-        LogService().log('DEBUG _loadRelayRooms: SUCCESS - set ${cachedRooms.length} rooms from cache, relayUrl=$_lastRelayUrl');
-        return;
-      }
-    }
+    // Load ALL cached devices with their rooms
+    await _loadAllCachedDevices();
 
-    // No remembered relay - try loading from any cached device
-    final cachedDevices = await _cacheService.getCachedDevices();
-    LogService().log('DEBUG _loadRelayRooms: cachedDevices=$cachedDevices');
-    for (final deviceCallsign in cachedDevices) {
-      final cachedRooms = await _cacheService.loadChatRooms(deviceCallsign, '');
-      LogService().log('DEBUG _loadRelayRooms: device=$deviceCallsign, rooms=${cachedRooms.length}');
-      if (cachedRooms.isNotEmpty) {
-        _lastRelayCacheKey = deviceCallsign;
-        // Set relay URL from cached room for status checking
-        if (_lastRelayUrl == null || _lastRelayUrl!.isEmpty) {
-          _lastRelayUrl = cachedRooms.first.relayUrl;
-        }
-        setState(() {
-          _relayRooms = cachedRooms;
-        });
-        LogService().log('DEBUG _loadRelayRooms: set _relayRooms to ${cachedRooms.length} rooms, relayUrl=$_lastRelayUrl');
-        break;
-      }
-    }
-
-    LogService().log('DEBUG _loadRelayRooms: final _relayRooms.length=${_relayRooms.length}');
+    LogService().log('DEBUG _loadRelayRooms: final _relayRooms.length=${_relayRooms.length}, cachedDevices=${_cachedDeviceSources.length}');
     setState(() {
       _loadingRelayRooms = false;
+    });
+  }
+
+  /// Load all cached devices and their chat rooms for offline viewing
+  Future<void> _loadAllCachedDevices() async {
+    final cachedDevices = await _cacheService.getCachedDevices();
+    LogService().log('DEBUG _loadAllCachedDevices: found ${cachedDevices.length} cached devices');
+
+    final List<CachedDeviceRooms> allCachedSources = [];
+
+    for (final deviceCallsign in cachedDevices) {
+      final cachedRooms = await _cacheService.loadChatRooms(deviceCallsign, '');
+      final cachedUrl = await _cacheService.getCachedRelayUrl(deviceCallsign);
+      final cacheTime = await _cacheService.getCacheTime(deviceCallsign);
+
+      LogService().log('DEBUG _loadAllCachedDevices: device=$deviceCallsign, rooms=${cachedRooms.length}, url=$cachedUrl, cacheTime=$cacheTime');
+
+      if (cachedRooms.isNotEmpty) {
+        allCachedSources.add(CachedDeviceRooms(
+          callsign: deviceCallsign,
+          name: cachedRooms.first.relayName.isNotEmpty ? cachedRooms.first.relayName : deviceCallsign,
+          url: cachedUrl,
+          rooms: cachedRooms,
+          isOnline: false, // Offline since we're loading from cache
+          lastActivity: cacheTime,
+        ));
+      }
+    }
+
+    // Sort cached devices: online first, then by most recent activity
+    allCachedSources.sort((a, b) {
+      // Online devices first
+      if (a.isOnline && !b.isOnline) return -1;
+      if (!a.isOnline && b.isOnline) return 1;
+      // Then by most recent activity (newest first)
+      if (a.lastActivity == null && b.lastActivity == null) return 0;
+      if (a.lastActivity == null) return 1;
+      if (b.lastActivity == null) return -1;
+      return b.lastActivity!.compareTo(a.lastActivity!);
+    });
+
+    // Set the most recent cached device as primary relay rooms (AFTER sorting)
+    if (_relayRooms.isEmpty && allCachedSources.isNotEmpty) {
+      final mostRecent = allCachedSources.first;
+      _lastRelayCacheKey = mostRecent.callsign;
+      _lastRelayUrl = mostRecent.url ?? (mostRecent.rooms.isNotEmpty ? mostRecent.rooms.first.relayUrl : null);
+      _relayRooms = mostRecent.rooms;
+    }
+
+    setState(() {
+      _cachedDeviceSources = allCachedSources;
     });
   }
 
@@ -598,7 +612,22 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     await _selectChannel(channel);
   }
 
-  /// Select a relay room and load its messages
+  /// Select a relay room from a specific device (handles cached devices)
+  Future<void> _selectRelayRoomFromDevice(DeviceSource device, RelayChatRoom room) async {
+    // Update cache key to match the device we're selecting from
+    if (device.callsign != null && device.callsign!.isNotEmpty) {
+      _lastRelayCacheKey = device.callsign;
+    }
+    if (device.url != null && device.url!.isNotEmpty) {
+      _lastRelayUrl = device.url;
+    }
+
+    // Set reachability based on device status - this determines if we try online or cache first
+    _relayReachable = device.isOnline;
+
+    await _selectRelayRoom(room);
+  }
+
   Future<void> _selectRelayRoom(RelayChatRoom room) async {
     // Mark this room as current (clears unread count)
     _chatNotificationService.setCurrentRoom(room.id);
@@ -609,43 +638,132 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       _isLoading = true;
     });
 
-    try {
-      // Fetch messages from relay
-      final messages = await _relayService.fetchRoomMessages(
-        room.relayUrl,
-        room.id,
-        limit: 100,
-      );
+    // If we already know the device is offline, skip network request and load from cache directly
+    if (!_relayReachable) {
+      LogService().log('Device offline, loading from cache');
+      await _loadMessagesFromCache(room.id);
+      return;
+    }
 
-      // Cache messages
-      if (room.relayName.isNotEmpty) {
-        await _cacheService.saveMessages(room.relayName, room.id, messages);
+    // Try to fetch and cache raw chat files from relay
+    try {
+      final cacheKey = _lastRelayCacheKey ?? '';
+      if (cacheKey.isNotEmpty) {
+        // Download and cache raw chat files (preserves all metadata including signatures)
+        await _downloadAndCacheChatFiles(room.relayUrl, room.id, cacheKey);
       }
 
-      setState(() {
-        _relayMessages = messages;
-        _relayReachable = true; // Successfully fetched - relay is reachable
-      });
-    } catch (e) {
-      // Relay not reachable - try loading from cache
-      setState(() {
-        _relayReachable = false;
-      });
+      // Load messages from cache (now contains the raw files)
+      await _loadMessagesFromCache(room.id);
 
-      if (room.relayName.isNotEmpty) {
-        final cachedMessages = await _cacheService.loadMessages(
-          room.relayName,
-          room.id,
-        );
+      // Also save the rooms to cache for offline room listing
+      if (cacheKey.isNotEmpty && _relayRooms.isNotEmpty) {
+        await _cacheService.saveChatRooms(cacheKey, _relayRooms, relayUrl: room.relayUrl);
+      }
+
+      // Only update reachability if not in forced offline mode
+      if (!_forcedOfflineMode) {
         setState(() {
-          _relayMessages = cachedMessages;
+          _relayReachable = true; // Successfully fetched - relay is reachable
         });
       }
-      _showError('Relay offline - showing cached messages');
-    } finally {
+    } catch (e) {
+      // Relay not reachable - try loading from cache
+      LogService().log('Fetch failed ($e), loading from cache');
+      if (!_forcedOfflineMode) {
+        setState(() {
+          _relayReachable = false;
+        });
+      }
+      await _loadMessagesFromCache(room.id);
+    }
+  }
+
+  /// Load messages from cache for a room
+  Future<void> _loadMessagesFromCache(String roomId) async {
+    if (_lastRelayCacheKey != null && _lastRelayCacheKey!.isNotEmpty) {
+      final cachedMessages = await _cacheService.loadMessages(
+        _lastRelayCacheKey!,
+        roomId,
+      );
+      LogService().log('DEBUG _loadMessagesFromCache: Loaded ${cachedMessages.length} messages for room $roomId');
       setState(() {
+        _relayMessages = cachedMessages;
         _isLoading = false;
       });
+      if (cachedMessages.isEmpty) {
+        _showError('No cached messages available');
+      }
+    } else {
+      LogService().log('No cache key available');
+      setState(() {
+        _relayMessages = [];
+        _isLoading = false;
+      });
+      _showError('No cached data available');
+    }
+  }
+
+  /// Download and cache raw chat files from the relay
+  /// Returns true if files were downloaded successfully
+  Future<bool> _downloadAndCacheChatFiles(String relayUrl, String roomId, String cacheKey) async {
+    try {
+      // Fetch list of available chat files from relay
+      final files = await _relayService.fetchRoomChatFiles(relayUrl, roomId);
+      LogService().log('Found ${files.length} chat files for room $roomId');
+
+      if (files.isEmpty) {
+        return false;
+      }
+
+      int downloadedCount = 0;
+
+      // Download each file that isn't already cached
+      for (final fileInfo in files) {
+        final year = fileInfo['year'] as String;
+        final filename = fileInfo['filename'] as String;
+        final expectedSize = fileInfo['size'] as int?;
+
+        // Check if file is already cached (with matching size)
+        final isCached = await _cacheService.hasCachedChatFile(
+          cacheKey,
+          roomId,
+          year,
+          filename,
+          expectedSize: expectedSize,
+        );
+
+        if (!isCached) {
+          // Download the raw file content
+          final content = await _relayService.fetchRoomChatFile(
+            relayUrl,
+            roomId,
+            year,
+            filename,
+          );
+
+          if (content != null && content.isNotEmpty) {
+            // Save raw file to cache
+            await _cacheService.saveRawChatFile(
+              cacheKey,
+              roomId,
+              year,
+              filename,
+              content,
+            );
+            downloadedCount++;
+            LogService().log('Cached $year/$filename');
+          }
+        }
+      }
+
+      if (downloadedCount > 0) {
+        LogService().log('Downloaded $downloadedCount new chat files');
+      }
+      return true;
+    } catch (e) {
+      LogService().log('Error downloading chat files: $e');
+      return false;
     }
   }
 
@@ -798,10 +916,10 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
           _relayMessages.add(newMessage);
         });
 
-        // Cache the updated message list to persist after app restart
-        if (_selectedRelayRoom!.relayName.isNotEmpty) {
+        // Cache the updated message list using the consistent cache key
+        if (_lastRelayCacheKey != null && _lastRelayCacheKey!.isNotEmpty) {
           await _cacheService.saveMessages(
-            _selectedRelayRoom!.relayName,
+            _lastRelayCacheKey!,
             _selectedRelayRoom!.id,
             _relayMessages,
           );
@@ -1219,7 +1337,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       );
     }
 
-    if (_channels.isEmpty && _relayRooms.isEmpty) {
+    if (_channels.isEmpty && _relayRooms.isEmpty && _cachedDeviceSources.isEmpty) {
       return _buildEmptyState(theme);
     }
 
@@ -1306,7 +1424,9 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
   Widget _buildChannelSidebar(ThemeData theme) {
     // Build remote device sources from relay rooms
     final remoteSources = <DeviceSourceWithRooms>[];
+    final addedCallsigns = <String>{}; // Track added devices to avoid duplicates
 
+    // Add the primary/connected relay first (if online or has rooms)
     if (_relayRooms.isNotEmpty) {
       // For remote device mode, use the remote device info
       // For local mode, use the connected relay info
@@ -1335,6 +1455,36 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
         rooms: _relayRooms,
         isLoading: _loadingRelayRooms,
       ));
+
+      // Mark this device as added
+      if (deviceCallsign != null) {
+        addedCallsigns.add(deviceCallsign.toUpperCase());
+      }
+      if (_lastRelayCacheKey != null) {
+        addedCallsigns.add(_lastRelayCacheKey!.toUpperCase());
+      }
+    }
+
+    // Add cached offline devices (that aren't already shown as online)
+    for (final cachedDevice in _cachedDeviceSources) {
+      // Skip if already added (e.g., the primary relay is also in cache)
+      if (addedCallsigns.contains(cachedDevice.callsign.toUpperCase())) {
+        continue;
+      }
+
+      remoteSources.add(DeviceSourceWithRooms(
+        device: DeviceSource.relay(
+          id: 'cached_${cachedDevice.callsign}',
+          name: cachedDevice.name ?? cachedDevice.callsign,
+          callsign: cachedDevice.callsign,
+          url: cachedDevice.url ?? '',
+          isOnline: false, // Cached devices are offline
+          latency: null,
+        ),
+        rooms: cachedDevice.rooms,
+        isLoading: false,
+      ));
+      addedCallsigns.add(cachedDevice.callsign.toUpperCase());
     }
 
     // Get current profile callsign
@@ -1354,7 +1504,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
             )
           : null,
       onLocalChannelSelect: _selectChannel,
-      onRemoteRoomSelect: (device, room) => _selectRelayRoom(room),
+      onRemoteRoomSelect: (device, room) => _selectRelayRoomFromDevice(device, room),
       onNewLocalChannel: widget.isRemoteDevice ? null : _showNewChannelDialog,
       onRefreshDevice: (device) => _loadRelayRooms(),
       localCallsign: currentProfile.callsign,
@@ -1442,12 +1592,46 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       return b.lastMessageTime!.compareTo(a.lastMessageTime!);
     });
 
+    // Check if any external device is reachable
+    final anyDeviceOnline = _relayReachable || _cachedDeviceSources.any((d) => d.isOnline);
+
+    // Build section widgets
+    final relaySection = _buildRelaySection(theme);
+    final cachedDevicesSection = _buildCachedDevicesSection(theme);
+    final localChannelsSection = _buildLocalChannelsSection(theme, sortedChannels);
+
     return Container(
       color: theme.colorScheme.surface,
       child: ListView(
         children: [
-          // Relay rooms section (shown first)
-          if (_relayRooms.isNotEmpty) ...[
+          // If no device is online, show local channels first
+          if (!anyDeviceOnline && sortedChannels.isNotEmpty) ...localChannelsSection,
+          // Then external devices
+          ...relaySection,
+          if (_loadingRelayRooms)
+            const Padding(
+              padding: EdgeInsets.all(16.0),
+              child: Center(
+                child: SizedBox(
+                  height: 24,
+                  width: 24,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+              ),
+            ),
+          ...cachedDevicesSection,
+          // If devices are online, show local channels last
+          if (anyDeviceOnline && sortedChannels.isNotEmpty) ...localChannelsSection,
+        ],
+      ),
+    );
+  }
+
+  /// Build relay rooms section widgets
+  List<Widget> _buildRelaySection(ThemeData theme) {
+    if (_relayRooms.isEmpty) return [];
+
+    return [
             Container(
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
@@ -1525,105 +1709,221 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
                         overflow: TextOverflow.ellipsis,
                       )
                     : Text('${room.messageCount} messages'),
-                onTap: () => _selectRelayRoom(room),
+                onTap: () {
+                  _forcedOfflineMode = false; // Main relay is online
+                  _selectRelayRoom(room);
+                },
               );
             }),
-          ],
+    ];
+  }
 
-          // Loading indicator for relay rooms
-          if (_loadingRelayRooms)
-            const Padding(
-              padding: EdgeInsets.all(16.0),
-              child: Center(
-                child: SizedBox(
-                  height: 24,
-                  width: 24,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                ),
+  /// Build cached devices section widgets
+  List<Widget> _buildCachedDevicesSection(ThemeData theme) {
+    // Filter out the device already shown in relay section (by callsign, not index)
+    final devicesToShow = _cachedDeviceSources
+        .where((d) => _lastRelayCacheKey == null || d.callsign != _lastRelayCacheKey)
+        .toList();
+    if (devicesToShow.isEmpty) return [];
+
+    final List<Widget> widgets = [];
+    for (final cachedDevice in devicesToShow) {
+      widgets.add(
+        Container(
+          padding: const EdgeInsets.all(16),
+          margin: const EdgeInsets.only(top: 8),
+          decoration: BoxDecoration(
+            color: theme.colorScheme.surfaceContainerHighest,
+            border: Border(
+              top: BorderSide(
+                color: theme.colorScheme.outlineVariant,
+                width: 1,
+              ),
+              bottom: BorderSide(
+                color: theme.colorScheme.outlineVariant,
+                width: 1,
               ),
             ),
-
-          // Local channels section (shown after relay rooms)
-          if (sortedChannels.isNotEmpty) ...[
-            Container(
-              padding: const EdgeInsets.all(16),
-              margin: EdgeInsets.only(top: _relayRooms.isNotEmpty ? 8 : 0),
-              decoration: BoxDecoration(
-                color: theme.colorScheme.surfaceVariant,
-                border: Border(
-                  top: _relayRooms.isNotEmpty ? BorderSide(
-                    color: theme.colorScheme.outlineVariant,
-                    width: 1,
-                  ) : BorderSide.none,
-                  bottom: BorderSide(
-                    color: theme.colorScheme.outlineVariant,
-                    width: 1,
-                  ),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 10,
+                height: 10,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: cachedDevice.isOnline ? Colors.green : Colors.grey,
                 ),
               ),
-              child: Row(
-                children: [
-                  Icon(Icons.smartphone, color: theme.colorScheme.primary),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Text(
-                      _i18n.t('this_device'),
+              const SizedBox(width: 10),
+              Icon(Icons.cell_tower, color: theme.colorScheme.onSurfaceVariant),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      cachedDevice.name ?? cachedDevice.callsign,
                       style: theme.textTheme.titleMedium?.copyWith(
                         fontWeight: FontWeight.bold,
                       ),
                     ),
+                    Text(
+                      cachedDevice.isOnline ? _i18n.t('online') : _i18n.t('offline_cached'),
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: cachedDevice.isOnline
+                            ? Colors.green.shade700
+                            : theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+
+      for (final room in cachedDevice.rooms) {
+        final unreadCount = _unreadCounts[room.id] ?? 0;
+        widgets.add(
+          ListTile(
+            leading: Badge(
+              isLabelVisible: unreadCount > 0,
+              label: Text('$unreadCount'),
+              child: CircleAvatar(
+                backgroundColor: theme.colorScheme.surfaceContainerHighest,
+                child: Icon(
+                  Icons.forum,
+                  color: theme.colorScheme.onSurfaceVariant,
+                  size: 20,
+                ),
+              ),
+            ),
+            title: Text(room.name),
+            subtitle: room.description.isNotEmpty
+                ? Text(
+                    room.description,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  )
+                : Text('${room.messageCount} messages'),
+            onTap: () {
+              _lastRelayCacheKey = cachedDevice.callsign;
+              _lastRelayUrl = cachedDevice.url;
+              _relayReachable = cachedDevice.isOnline;
+              _forcedOfflineMode = !cachedDevice.isOnline;
+              _selectRelayRoom(room);
+            },
+          ),
+        );
+      }
+    }
+    return widgets;
+  }
+
+  /// Build local channels section widgets
+  List<Widget> _buildLocalChannelsSection(ThemeData theme, List<ChatChannel> sortedChannels) {
+    if (sortedChannels.isEmpty) return [];
+
+    return [
+      Container(
+        padding: const EdgeInsets.all(16),
+        margin: EdgeInsets.only(top: _relayRooms.isNotEmpty || _cachedDeviceSources.isNotEmpty ? 8 : 0),
+        decoration: BoxDecoration(
+          color: theme.colorScheme.surfaceVariant,
+          border: Border(
+            top: (_relayRooms.isNotEmpty || _cachedDeviceSources.isNotEmpty) ? BorderSide(
+              color: theme.colorScheme.outlineVariant,
+              width: 1,
+            ) : BorderSide.none,
+            bottom: BorderSide(
+              color: theme.colorScheme.outlineVariant,
+              width: 1,
+            ),
+          ),
+        ),
+        child: Row(
+          children: [
+            // Status indicator - always green for local device
+            Container(
+              width: 10,
+              height: 10,
+              decoration: const BoxDecoration(
+                shape: BoxShape.circle,
+                color: Colors.green,
+              ),
+            ),
+            const SizedBox(width: 10),
+            Icon(Icons.smartphone, color: theme.colorScheme.primary),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    _i18n.t('this_device'),
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  Text(
+                    _i18n.t('online'),
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: Colors.green.shade700,
+                    ),
                   ),
                 ],
               ),
             ),
-            ...sortedChannels.map((channel) => ListTile(
-              leading: CircleAvatar(
-                backgroundColor: channel.isGroup
-                    ? theme.colorScheme.primaryContainer
-                    : theme.colorScheme.secondaryContainer,
-                child: Icon(
-                  channel.isGroup ? Icons.group : Icons.person,
-                  color: channel.isGroup
-                      ? theme.colorScheme.onPrimaryContainer
-                      : theme.colorScheme.onSecondaryContainer,
-                  size: 20,
+          ],
+        ),
+      ),
+      ...sortedChannels.map((channel) => ListTile(
+        leading: CircleAvatar(
+          backgroundColor: channel.isGroup
+              ? theme.colorScheme.primaryContainer
+              : theme.colorScheme.secondaryContainer,
+          child: Icon(
+            channel.isGroup ? Icons.group : Icons.person,
+            color: channel.isGroup
+                ? theme.colorScheme.onPrimaryContainer
+                : theme.colorScheme.onSecondaryContainer,
+            size: 20,
+          ),
+        ),
+        title: Row(
+          children: [
+            Expanded(
+              child: Text(
+                channel.name,
+                style: TextStyle(
+                  fontWeight: channel.isFavorite
+                      ? FontWeight.bold
+                      : FontWeight.normal,
                 ),
               ),
-              title: Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      channel.name,
-                      style: TextStyle(
-                        fontWeight: channel.isFavorite
-                            ? FontWeight.bold
-                            : FontWeight.normal,
-                      ),
-                    ),
-                  ),
-                  if (channel.isFavorite)
-                    Icon(
-                      Icons.star,
-                      size: 16,
-                      color: theme.colorScheme.primary,
-                    ),
-                ],
+            ),
+            if (channel.isFavorite)
+              Icon(
+                Icons.star,
+                size: 16,
+                color: theme.colorScheme.primary,
               ),
-              subtitle: channel.description != null && channel.description!.isNotEmpty
-                  ? Text(
-                      channel.description!,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    )
-                  : (channel.isGroup
-                      ? Text(_i18n.t('group_chat'))
-                      : null),
-              onTap: () => _selectChannelMobile(channel),
-            )),
           ],
-        ],
-      ),
-    );
+        ),
+        subtitle: channel.description != null && channel.description!.isNotEmpty
+            ? Text(
+                channel.description!,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              )
+            : (channel.isGroup
+                ? Text(_i18n.t('group_chat'))
+                : null),
+        onTap: () => _selectChannelMobile(channel),
+      )),
+    ];
   }
 
   /// Build room list for remote device mode (only shows relay rooms)
@@ -1918,4 +2218,23 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       ),
     );
   }
+}
+
+/// Holds cached device information with its chat rooms
+class CachedDeviceRooms {
+  final String callsign;
+  final String? name;
+  final String? url;
+  final List<RelayChatRoom> rooms;
+  final bool isOnline;
+  final DateTime? lastActivity; // Last cache update time for sorting
+
+  CachedDeviceRooms({
+    required this.callsign,
+    this.name,
+    this.url,
+    required this.rooms,
+    this.isOnline = false,
+    this.lastActivity,
+  });
 }

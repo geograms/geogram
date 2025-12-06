@@ -1662,6 +1662,12 @@ class PureRelayServer {
         // /{callsign}/api/chat/rooms/{roomId}/messages
         final callsign = ChatApi.extractCallsign(path)!;
         await _handleRoomMessages(request, callsign);
+      } else if (_isChatFilesListPath(path)) {
+        // /api/chat/rooms/{roomId}/files - list chat files for caching
+        await _handleChatFilesList(request);
+      } else if (_isChatFileContentPath(path)) {
+        // /api/chat/rooms/{roomId}/file/{year}/{filename} - get raw chat file
+        await _handleChatFileContent(request);
       } else if (path == '/api/relay/send' && method == 'POST') {
         await _handleRelaySend(request);
       } else if (path == '/api/groups') {
@@ -2439,6 +2445,16 @@ class PureRelayServer {
     return RegExp(r'^[a-zA-Z0-9][a-zA-Z0-9_-]+$').hasMatch(firstPart);
   }
 
+  /// Check if path is a chat files list request (/api/chat/rooms/{roomId}/files)
+  bool _isChatFilesListPath(String path) {
+    return RegExp(r'^/api/chat/rooms/[^/]+/files$').hasMatch(path);
+  }
+
+  /// Check if path is a chat file content request (/api/chat/rooms/{roomId}/file/{year}/{filename})
+  bool _isChatFileContentPath(String path) {
+    return RegExp(r'^/api/chat/rooms/[^/]+/file/\d{4}/[^/]+$').hasMatch(path);
+  }
+
   /// Check if path is a blog URL (/{identifier}/blog/{filename}.html)
   bool _isBlogPath(String path) {
     final regex = RegExp(r'^/([^/]+)/blog/([^/]+)\.html$');
@@ -3111,6 +3127,120 @@ class PureRelayServer {
         request.response.write(jsonEncode({'error': 'Invalid request: $e'}));
       }
     }
+  }
+
+  /// Handle GET /api/chat/rooms/{roomId}/files - list chat files for caching
+  Future<void> _handleChatFilesList(HttpRequest request) async {
+    final path = request.uri.path;
+    final match = RegExp(r'^/api/chat/rooms/([^/]+)/files$').firstMatch(path);
+
+    if (match == null) {
+      request.response.statusCode = 400;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({'error': 'Invalid path'}));
+      return;
+    }
+
+    final roomId = match.group(1)!;
+    final room = _chatRooms[roomId];
+
+    if (room == null) {
+      request.response.statusCode = 404;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({'error': 'Room not found'}));
+      return;
+    }
+
+    // Get the chat directory for this room
+    final chatDir = Directory('${_getChatDataPath()}/$roomId');
+
+    final List<Map<String, dynamic>> files = [];
+
+    if (await chatDir.exists()) {
+      // List all year directories
+      await for (final yearEntity in chatDir.list()) {
+        if (yearEntity is Directory) {
+          final yearName = yearEntity.path.split(Platform.pathSeparator).last;
+          if (RegExp(r'^\d{4}$').hasMatch(yearName)) {
+            // List all chat files in the year directory
+            await for (final fileEntity in yearEntity.list()) {
+              if (fileEntity is File && fileEntity.path.endsWith('_chat.txt')) {
+                final filename = fileEntity.path.split(Platform.pathSeparator).last;
+                final stat = await fileEntity.stat();
+                files.add({
+                  'year': yearName,
+                  'filename': filename,
+                  'size': stat.size,
+                  'modified': stat.modified.millisecondsSinceEpoch,
+                });
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // Sort by year and filename
+    files.sort((a, b) {
+      final yearCompare = (a['year'] as String).compareTo(b['year'] as String);
+      if (yearCompare != 0) return yearCompare;
+      return (a['filename'] as String).compareTo(b['filename'] as String);
+    });
+
+    request.response.headers.contentType = ContentType.json;
+    request.response.write(jsonEncode({
+      'room_id': roomId,
+      'relay': _settings.callsign,
+      'files': files,
+      'count': files.length,
+    }));
+  }
+
+  /// Handle GET /api/chat/rooms/{roomId}/file/{year}/{filename} - get raw chat file
+  Future<void> _handleChatFileContent(HttpRequest request) async {
+    final path = request.uri.path;
+    final match = RegExp(r'^/api/chat/rooms/([^/]+)/file/(\d{4})/([^/]+)$').firstMatch(path);
+
+    if (match == null) {
+      request.response.statusCode = 400;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({'error': 'Invalid path'}));
+      return;
+    }
+
+    final roomId = match.group(1)!;
+    final year = match.group(2)!;
+    final filename = match.group(3)!;
+
+    // Validate filename format to prevent path traversal
+    if (!RegExp(r'^\d{4}-\d{2}-\d{2}_chat\.txt$').hasMatch(filename)) {
+      request.response.statusCode = 400;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({'error': 'Invalid filename format'}));
+      return;
+    }
+
+    final room = _chatRooms[roomId];
+    if (room == null) {
+      request.response.statusCode = 404;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({'error': 'Room not found'}));
+      return;
+    }
+
+    final chatFile = File('${_getChatDataPath()}/$roomId/$year/$filename');
+
+    if (!await chatFile.exists()) {
+      request.response.statusCode = 404;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({'error': 'File not found'}));
+      return;
+    }
+
+    // Return raw file content
+    final content = await chatFile.readAsString();
+    request.response.headers.contentType = ContentType('text', 'plain', charset: 'utf-8');
+    request.response.write(content);
   }
 
   Future<void> _handleCliCommand(HttpRequest request) async {

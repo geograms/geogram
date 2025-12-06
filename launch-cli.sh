@@ -83,9 +83,12 @@ echo ""
 
 # Build if needed
 if [ "$SKIP_BUILD" = false ]; then
-    # Ensure dependencies are available
+    # Ensure dependencies are available - try offline first, fall back to online
     echo "Checking dependencies..."
-    "$DART_BIN" pub get --no-example
+    if ! "$DART_BIN" pub get --offline --no-example 2>/dev/null; then
+        echo "Fetching dependencies online..."
+        "$DART_BIN" pub get --no-example
+    fi
 
     # Check if binary exists and is newer than source files
     NEEDS_BUILD=false

@@ -67,7 +67,8 @@ class RelayCacheService {
   }
 
   /// Save chat rooms for a device
-  Future<void> saveChatRooms(String deviceCallsign, List<RelayChatRoom> rooms) async {
+  /// [relayUrl] is stored for offline retrieval when the device is unreachable
+  Future<void> saveChatRooms(String deviceCallsign, List<RelayChatRoom> rooms, {String? relayUrl}) async {
     if (kIsWeb || _basePath == null) return;
 
     try {
@@ -79,11 +80,12 @@ class RelayCacheService {
         await chatDir.create(recursive: true);
       }
 
-      // Save rooms list
+      // Save rooms list with relay URL for offline use
       final roomsFile = File('${chatDir.path}/rooms.json');
       final data = {
         'updated': DateTime.now().toIso8601String(),
         'device': deviceCallsign,
+        'relayUrl': relayUrl ?? (rooms.isNotEmpty ? rooms.first.relayUrl : null),
         'rooms': rooms.map((r) => r.toJson()).toList(),
       };
 
@@ -98,6 +100,7 @@ class RelayCacheService {
   }
 
   /// Load cached chat rooms for a device
+  /// If [relayUrl] is empty, uses the stored relayUrl from the cache
   Future<List<RelayChatRoom>> loadChatRooms(String deviceCallsign, String relayUrl) async {
     if (kIsWeb || _basePath == null) return [];
 
@@ -112,10 +115,15 @@ class RelayCacheService {
       final data = jsonDecode(content) as Map<String, dynamic>;
       final roomsData = data['rooms'] as List<dynamic>? ?? [];
 
+      // Use stored relayUrl if provided relayUrl is empty
+      final effectiveRelayUrl = relayUrl.isNotEmpty
+          ? relayUrl
+          : (data['relayUrl'] as String? ?? '');
+
       return roomsData.map((r) {
         return RelayChatRoom.fromJson(
           r as Map<String, dynamic>,
-          relayUrl,
+          effectiveRelayUrl,
           deviceCallsign,
         );
       }).toList();
@@ -192,6 +200,120 @@ class RelayCacheService {
     }
   }
 
+  /// Save a raw chat file directly (preserves original format with all metadata)
+  Future<void> saveRawChatFile(
+    String deviceCallsign,
+    String roomId,
+    String year,
+    String filename,
+    String content,
+  ) async {
+    if (kIsWeb || _basePath == null) return;
+
+    try {
+      final cacheDir = await getDeviceCacheDir(deviceCallsign);
+      if (cacheDir == null) return;
+
+      final yearDir = Directory('${cacheDir.path}/chat/$roomId/$year');
+      if (!await yearDir.exists()) {
+        await yearDir.create(recursive: true);
+        // Also create files directory for attachments
+        await Directory('${yearDir.path}/files').create();
+      }
+
+      final file = File('${yearDir.path}/$filename');
+      await file.writeAsString(content);
+
+      LogService().log('Cached raw chat file: $deviceCallsign/$roomId/$year/$filename');
+    } catch (e) {
+      LogService().log('Error saving raw chat file: $e');
+    }
+  }
+
+  /// Check if a chat file exists in cache
+  /// If [expectedSize] is provided, returns false if file size doesn't match
+  /// (this ensures we re-download if server file has been updated)
+  Future<bool> hasCachedChatFile(
+    String deviceCallsign,
+    String roomId,
+    String year,
+    String filename, {
+    int? expectedSize,
+  }) async {
+    if (kIsWeb || _basePath == null) return false;
+
+    try {
+      final cacheDir = await getDeviceCacheDir(deviceCallsign);
+      if (cacheDir == null) return false;
+
+      final file = File('${cacheDir.path}/chat/$roomId/$year/$filename');
+      if (!await file.exists()) return false;
+
+      // If expected size provided, compare with actual file size
+      if (expectedSize != null) {
+        final stat = await file.stat();
+        if (stat.size != expectedSize) {
+          LogService().log('Cache size mismatch for $filename: cached=${stat.size}, expected=$expectedSize');
+          return false;
+        }
+      }
+
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /// Get list of cached chat files for a room
+  Future<List<Map<String, dynamic>>> getCachedChatFiles(
+    String deviceCallsign,
+    String roomId,
+  ) async {
+    if (kIsWeb || _basePath == null) return [];
+
+    try {
+      final cacheDir = await getDeviceCacheDir(deviceCallsign);
+      if (cacheDir == null) return [];
+
+      final roomDir = Directory('${cacheDir.path}/chat/$roomId');
+      if (!await roomDir.exists()) return [];
+
+      final List<Map<String, dynamic>> files = [];
+
+      await for (final yearEntity in roomDir.list()) {
+        if (yearEntity is Directory) {
+          final year = yearEntity.path.split('/').last;
+          if (RegExp(r'^\d{4}$').hasMatch(year)) {
+            await for (final fileEntity in yearEntity.list()) {
+              if (fileEntity is File && fileEntity.path.endsWith('_chat.txt')) {
+                final filename = fileEntity.path.split('/').last;
+                final stat = await fileEntity.stat();
+                files.add({
+                  'year': year,
+                  'filename': filename,
+                  'size': stat.size,
+                  'modified': stat.modified.millisecondsSinceEpoch,
+                });
+              }
+            }
+          }
+        }
+      }
+
+      // Sort by year and filename
+      files.sort((a, b) {
+        final yearCompare = (a['year'] as String).compareTo(b['year'] as String);
+        if (yearCompare != 0) return yearCompare;
+        return (a['filename'] as String).compareTo(b['filename'] as String);
+      });
+
+      return files;
+    } catch (e) {
+      LogService().log('Error getting cached chat files: $e');
+      return [];
+    }
+  }
+
   /// Load cached messages for a chat room from year folders and daily files
   Future<List<RelayChatMessage>> loadMessages(
     String deviceCallsign,
@@ -255,12 +377,31 @@ class RelayCacheService {
   }
 
   /// Convert ChatMessage to RelayChatMessage for loading
+  /// Extracts NOSTR metadata (npub, signature, created_at) from ChatMessage.metadata
   RelayChatMessage _chatMessageToRelayChat(ChatMessage msg, String roomId) {
+    final metadata = msg.metadata ?? {};
+
+    // Extract NOSTR fields from metadata
+    final npub = metadata['npub'];
+    final signature = metadata['signature'];
+    final createdAtStr = metadata['created_at'];
+    final createdAt = createdAtStr != null ? int.tryParse(createdAtStr) : null;
+
+    // Determine if message has signature and is verified
+    final hasSignature = signature != null && signature.isNotEmpty;
+    // Messages with valid signature+npub are considered verified when loaded from trusted cache
+    final verified = hasSignature && npub != null && npub.isNotEmpty;
+
     return RelayChatMessage(
       roomId: roomId,
       callsign: msg.author,
       content: msg.content,
       timestamp: msg.timestamp,
+      npub: npub,
+      signature: signature,
+      createdAt: createdAt,
+      hasSignature: hasSignature,
+      verified: verified,
     );
   }
 
@@ -323,6 +464,25 @@ class RelayCacheService {
         return DateTime.parse(updated);
       }
       return null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /// Get cached relay URL for a device
+  Future<String?> getCachedRelayUrl(String deviceCallsign) async {
+    if (kIsWeb || _basePath == null) return null;
+
+    try {
+      final cacheDir = await getDeviceCacheDir(deviceCallsign);
+      if (cacheDir == null) return null;
+
+      final roomsFile = File('${cacheDir.path}/chat/rooms.json');
+      if (!await roomsFile.exists()) return null;
+
+      final content = await roomsFile.readAsString();
+      final data = jsonDecode(content) as Map<String, dynamic>;
+      return data['relayUrl'] as String?;
     } catch (e) {
       return null;
     }

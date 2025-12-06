@@ -3,6 +3,7 @@ import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'dart:math';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 
@@ -16,6 +17,9 @@ class UpdateService {
   static final UpdateService _instance = UpdateService._internal();
   factory UpdateService() => _instance;
   UpdateService._internal();
+
+  /// Method channel for Android-specific update operations
+  static const MethodChannel _updateChannel = MethodChannel('dev.geogram/updates');
 
   UpdateSettings? _settings;
   bool _initialized = false;
@@ -662,22 +666,36 @@ class UpdateService {
     if (kIsWeb) return false;
 
     try {
-      // Create backup first
+      final platform = detectPlatform();
+
+      if (platform == UpdatePlatform.android) {
+        // On Android, launch the APK installer via method channel
+        LogService().log('Launching APK installer for: $updateFilePath');
+        try {
+          final result = await _updateChannel.invokeMethod<bool>(
+            'installApk',
+            {'filePath': updateFilePath},
+          );
+          if (result == true) {
+            LogService().log('APK installer launched successfully');
+            return true;
+          } else {
+            LogService().log('Failed to launch APK installer');
+            return false;
+          }
+        } catch (e) {
+          LogService().log('Error launching APK installer: $e');
+          return false;
+        }
+      }
+
+      // Create backup first (desktop only)
       await createBackup();
 
       final currentBinary = await _getCurrentBinaryPath();
       if (currentBinary == null) {
         LogService().log('Current binary not found');
         return false;
-      }
-
-      final platform = detectPlatform();
-
-      if (platform == UpdatePlatform.android) {
-        // On Android, we need to trigger APK installation
-        LogService().log('Android update requires manual installation of APK');
-        // The downloaded APK path should be opened with an intent
-        return false; // User needs to install manually
       }
 
       // For desktop platforms, replace the binary

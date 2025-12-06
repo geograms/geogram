@@ -46,6 +46,7 @@ class DevicesService {
 
       for (final callsign in cachedCallsigns) {
         final cacheTime = await _cacheService.getCacheTime(callsign);
+        final cachedRelayUrl = await _cacheService.getCachedRelayUrl(callsign);
 
         // Try to find matching relay
         Relay? matchingRelay;
@@ -60,10 +61,13 @@ class DevicesService {
           // RelayService might not be initialized
         }
 
+        // Use relay URL if available, otherwise use cached relay URL
+        final deviceUrl = matchingRelay?.url ?? cachedRelayUrl;
+
         _devices[callsign] = RemoteDevice(
           callsign: callsign,
           name: matchingRelay?.name ?? callsign,
-          url: matchingRelay?.url,
+          url: deviceUrl,
           isOnline: false,
           lastSeen: cacheTime,
           hasCachedData: true,

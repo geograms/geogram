@@ -34,6 +34,13 @@ echo "🔧 Flutter version:"
 
 echo ""
 
+# Get dependencies - try offline first, fall back to online
+echo "📦 Checking dependencies..."
+if ! "$FLUTTER_BIN" pub get --offline 2>/dev/null; then
+    echo "📡 Fetching dependencies online..."
+    "$FLUTTER_BIN" pub get
+fi
+
 # Check for server mode
 if [ "$1" = "server" ]; then
     PORT="${2:-8080}"
@@ -52,9 +59,9 @@ if [ "$1" = "server" ]; then
 
     echo "▶️  Starting web server on http://localhost:$PORT ..."
     echo ""
-    "$FLUTTER_BIN" run -d web-server --web-port="$PORT" --web-hostname=0.0.0.0
+    "$FLUTTER_BIN" run -d web-server --web-port="$PORT" --web-hostname=0.0.0.0 --no-pub
 else
     echo "▶️  Starting app in Chrome..."
     echo ""
-    "$FLUTTER_BIN" run -d chrome "$@"
+    "$FLUTTER_BIN" run -d chrome --no-pub "$@"
 fi

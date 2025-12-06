@@ -1205,5 +1205,19 @@
   "login_with_extension": "Login with NOSTR Extension",
   "extension_login_description": "Use your browser extension (Alby, nos2x, etc.) to sign in. Your private key stays secure in the extension.",
   "extension_not_available": "No NOSTR extension detected. Install Alby or nos2x to use this feature.",
-  "extension_login_failed": "Failed to login with extension. Please try again or check your extension."
+  "extension_login_failed": "Failed to login with extension. Please try again or check your extension.",
+
+  "onboarding_welcome_title": "Welcome to Geogram",
+  "onboarding_welcome_subtitle": "Resilient, Decentralized Communication",
+  "onboarding_intro_description": "Geogram is an offline-first communication app that works without internet. It uses Bluetooth mesh networking, NOSTR encryption, and radio integration to keep you connected anywhere.",
+  "onboarding_continue": "Continue",
+
+  "onboarding_permissions_title": "Permissions Needed",
+  "onboarding_permission_location": "Location",
+  "onboarding_permission_location_short": "For maps and geographic message routing",
+  "onboarding_permission_internet": "Internet",
+  "onboarding_permission_internet_short": "For NOSTR relays and map tiles",
+  "onboarding_permission_install": "Install Updates",
+  "onboarding_permission_install_short": "For in-app updates from GitHub",
+  "onboarding_privacy_short": "Your data stays on your device. Location is only shared when you choose."
 }

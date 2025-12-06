@@ -42,6 +42,7 @@ import 'pages/relay_dashboard_page.dart';
 import 'pages/devices_browser_page.dart';
 import 'pages/profile_management_page.dart';
 import 'pages/create_collection_page.dart';
+import 'pages/onboarding_page.dart';
 import 'widgets/profile_switcher.dart';
 import 'cli/console.dart';
 
@@ -236,25 +237,47 @@ class _HomePageState extends State<HomePage> {
     _checkFirstLaunch();
   }
 
-  /// Check if this is the first launch and show welcome dialog
+  /// Check if this is the first launch and show welcome dialog or onboarding
   void _checkFirstLaunch() {
     final config = ConfigService().getAll();
     final firstLaunchComplete = config['firstLaunchComplete'] as bool? ?? false;
 
     if (!firstLaunchComplete) {
-      // Mark first launch as complete
-      ConfigService().set('firstLaunchComplete', true);
-
-      // Create default collections and show welcome dialog after first frame
+      // Create default collections and show welcome/onboarding after first frame
       WidgetsBinding.instance.addPostFrameCallback((_) async {
         if (mounted) {
           await _createDefaultCollections();
           if (mounted) {
-            _showWelcomeDialog();
+            // On Android, show full onboarding with permissions
+            // On other platforms, show simple welcome dialog
+            if (!kIsWeb && Platform.isAndroid) {
+              _showOnboarding();
+            } else {
+              // Mark first launch as complete for non-Android platforms
+              ConfigService().set('firstLaunchComplete', true);
+              _showWelcomeDialog();
+            }
           }
         }
       });
     }
+  }
+
+  /// Show the Android onboarding flow
+  void _showOnboarding() {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) => OnboardingPage(
+          onComplete: () {
+            // Mark first launch as complete
+            ConfigService().set('firstLaunchComplete', true);
+            Navigator.of(context).pop();
+            // Show the welcome dialog after onboarding
+            _showWelcomeDialog();
+          },
+        ),
+      ),
+    );
   }
 
   /// Create default collections for first launch

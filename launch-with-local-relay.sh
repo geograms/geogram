@@ -131,9 +131,10 @@ echo ""
 echo "[3/3] Starting desktop app..."
 cd "$DESKTOP_DIR"
 
-# Get Flutter packages if needed
-if [ ! -d ".dart_tool" ]; then
-    echo "Getting Flutter packages..."
+# Get Flutter packages - try offline first, fall back to online
+echo "Checking dependencies..."
+if ! flutter pub get --offline 2>/dev/null; then
+    echo "Fetching dependencies online..."
     flutter pub get
 fi
 
@@ -198,6 +199,7 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 # Launch desktop app (this will block until app exits)
-flutter run -d linux
+# --no-pub skips pub get since we already ran it above
+flutter run -d linux --no-pub
 
 # Cleanup will happen automatically via trap

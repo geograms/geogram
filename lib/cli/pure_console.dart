@@ -329,6 +329,12 @@ class PureConsole {
       await _handleSetup();
     }
 
+    // Check for daemon mode: ./geogram-cli relay (runs relay server without interactive prompt)
+    if (args.isNotEmpty && args[0] == 'relay') {
+      await _runDaemonMode();
+      return;
+    }
+
     await _commandLoop();
   }
 
@@ -364,6 +370,38 @@ class PureConsole {
       _printError('Failed to initialize services: $e');
       exit(1);
     }
+  }
+
+  /// Run in daemon mode - start relay server and wait indefinitely
+  /// Used when running: ./geogram-cli relay
+  Future<void> _runDaemonMode() async {
+    stdout.writeln('Starting in daemon mode...');
+
+    // Start the relay server
+    final success = await _relay.start();
+
+    if (!success) {
+      _printError('Failed to start relay server');
+      exit(1);
+    }
+
+    stdout.writeln('\x1B[32mRelay server started in daemon mode\x1B[0m');
+    stdout.writeln('  HTTP Port:  ${_relay.settings.httpPort}');
+    stdout.writeln('  HTTPS Port: ${_relay.settings.httpsPort}');
+    stdout.writeln('  Callsign:   ${_relay.settings.callsign}');
+    stdout.writeln('');
+    stdout.writeln('Press Ctrl+C to stop the server.');
+
+    // Set up signal handler for graceful shutdown
+    ProcessSignal.sigint.watch().listen((_) async {
+      stdout.writeln('\nShutting down...');
+      await _relay.stop();
+      await _cleanup();
+      exit(0);
+    });
+
+    // Keep the process running
+    await Future.delayed(const Duration(days: 365 * 100));
   }
 
   /// Handle incoming chat message event - display if in same room and not from self

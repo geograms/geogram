@@ -632,6 +632,63 @@ class RelayService {
     }
   }
 
+  /// Fetch list of chat files available for a room (for caching)
+  /// Returns list of {year, filename, size, modified}
+  Future<List<Map<String, dynamic>>> fetchRoomChatFiles(
+    String relayUrl,
+    String roomId,
+  ) async {
+    try {
+      final httpUrl = _getHttpBaseUrl(relayUrl);
+      final apiUrl = '$httpUrl/api/chat/rooms/$roomId/files';
+
+      LogService().log('Fetching chat file list for room: $roomId');
+      final response = await http.get(Uri.parse(apiUrl));
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        final files = (data['files'] as List<dynamic>? ?? [])
+            .map((f) => f as Map<String, dynamic>)
+            .toList();
+        LogService().log('Found ${files.length} chat files for room $roomId');
+        return files;
+      } else {
+        LogService().log('Failed to fetch chat files: ${response.statusCode}');
+        return [];
+      }
+    } catch (e) {
+      LogService().log('Error fetching chat files: $e');
+      rethrow;
+    }
+  }
+
+  /// Fetch raw content of a chat file
+  /// Returns the raw text content of the file
+  Future<String?> fetchRoomChatFile(
+    String relayUrl,
+    String roomId,
+    String year,
+    String filename,
+  ) async {
+    try {
+      final httpUrl = _getHttpBaseUrl(relayUrl);
+      final apiUrl = '$httpUrl/api/chat/rooms/$roomId/file/$year/$filename';
+
+      LogService().log('Fetching chat file: $roomId/$year/$filename');
+      final response = await http.get(Uri.parse(apiUrl));
+
+      if (response.statusCode == 200) {
+        return response.body;
+      } else {
+        LogService().log('Failed to fetch chat file: ${response.statusCode}');
+        return null;
+      }
+    } catch (e) {
+      LogService().log('Error fetching chat file: $e');
+      rethrow;
+    }
+  }
+
   /// Post a message to a relay chat room as a NOSTR event
   /// Creates a signed kind 1 text note and sends via WebSocket or HTTP
   Future<bool> postRoomMessage(

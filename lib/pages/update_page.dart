@@ -100,8 +100,13 @@ class _UpdatePageState extends State<UpdatePage> {
 
         final success = await _updateService.applyUpdate(downloadPath);
         if (success) {
-          _statusMessage = 'Update installed! Please restart the application.';
-          _backups = await _updateService.listBackups();
+          final platform = _updateService.detectPlatform();
+          if (platform == UpdatePlatform.android) {
+            _statusMessage = 'APK installer launched. Follow the prompts to complete installation.';
+          } else {
+            _statusMessage = 'Update installed! Please restart the application.';
+            _backups = await _updateService.listBackups();
+          }
         } else {
           _error = 'Failed to apply update';
           _statusMessage = null;

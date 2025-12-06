@@ -83,5 +83,12 @@ echo ""
 echo "Starting app on Android device ($DEVICE_ID)..."
 echo ""
 
-# Run the app on the specific Android device
-"$FLUTTER_BIN" run -d "$DEVICE_ID" "$@"
+# Get dependencies - try offline first, fall back to online
+echo "Checking dependencies..."
+if ! "$FLUTTER_BIN" pub get --offline 2>/dev/null; then
+    echo "Fetching dependencies online..."
+    "$FLUTTER_BIN" pub get
+fi
+
+# Run the app on the specific Android device (--no-pub since we already ran pub get)
+"$FLUTTER_BIN" run -d "$DEVICE_ID" --no-pub "$@"

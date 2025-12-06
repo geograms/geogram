@@ -16,7 +16,7 @@ import 'dart:io';
 import 'package:http/http.dart' as http;
 
 import '../lib/cli/pure_relay.dart';
-import '../lib/services/storage_config.dart';
+import '../lib/cli/pure_storage_config.dart';
 
 const int TEST_PORT = 45689;
 const String BASE_URL = 'http://localhost:$TEST_PORT';
@@ -55,8 +55,8 @@ Future<void> main() async {
 
   try {
     // Initialize storage config
-    StorageConfig().reset();
-    await StorageConfig().init(customBaseDir: tempDir.path);
+    PureStorageConfig().reset();
+    await PureStorageConfig().init(customBaseDir: tempDir.path);
 
     // Create and initialize the relay server
     final relay = PureRelayServer();
@@ -96,6 +96,8 @@ Future<void> main() async {
     await _testSearchEndpoint();
     await _testChatRoomsEndpoint();
     await _testRoomMessagesEndpoint();
+    await _testChatFilesEndpoint();
+    await _testChatFileContentEndpoint();
     await _testPostChatMessage();
     await _testRelaySendEndpoint();
     await _testGroupsEndpoint();
@@ -447,6 +449,197 @@ Future<void> _testRoomMessagesEndpoint() async {
     }
   } catch (e) {
     fail('Room messages endpoint', 'Error: $e');
+  }
+}
+
+Future<void> _testChatFilesEndpoint() async {
+  print('Testing GET /api/chat/rooms/{id}/files (chat file list for caching)...');
+  try {
+    final response = await http.get(Uri.parse('$BASE_URL/api/chat/rooms/general/files'));
+    if (response.statusCode == 200) {
+      final data = jsonDecode(response.body) as Map<String, dynamic>;
+
+      if (data['room_id'] == 'general') {
+        pass('Chat files endpoint returns correct room_id');
+      } else {
+        fail('Chat files room_id', 'Expected "general", got ${data['room_id']}');
+      }
+
+      if (data.containsKey('relay') && data['relay'] == RELAY_CALLSIGN) {
+        pass('Chat files endpoint returns relay callsign');
+      } else {
+        fail('Chat files relay', 'Missing or incorrect relay callsign');
+      }
+
+      if (data.containsKey('files') && data['files'] is List) {
+        final files = data['files'] as List;
+        pass('Chat files endpoint returns files array');
+
+        if (files.isNotEmpty) {
+          final file = files[0] as Map<String, dynamic>;
+
+          // Check file structure
+          final hasYear = file.containsKey('year');
+          final hasFilename = file.containsKey('filename');
+          final hasSize = file.containsKey('size');
+          final hasModified = file.containsKey('modified');
+
+          if (hasYear && hasFilename && hasSize && hasModified) {
+            pass('Chat file entries have correct structure');
+          } else {
+            fail('Chat file structure', 'Missing fields: year=$hasYear, filename=$hasFilename, size=$hasSize, modified=$hasModified');
+          }
+
+          // Check filename format (YYYY-MM-DD_chat.txt)
+          final filename = file['filename'] as String;
+          if (RegExp(r'^\d{4}-\d{2}-\d{2}_chat\.txt$').hasMatch(filename)) {
+            pass('Chat filename has correct format: $filename');
+          } else {
+            fail('Chat filename format', 'Invalid format: $filename');
+          }
+
+          // Check year is 4 digits
+          final year = file['year'] as String;
+          if (RegExp(r'^\d{4}$').hasMatch(year)) {
+            pass('Chat file year has correct format: $year');
+          } else {
+            fail('Chat year format', 'Invalid format: $year');
+          }
+        } else {
+          fail('Chat files empty', 'Expected at least 1 file, got 0');
+        }
+
+        if (data.containsKey('count') && data['count'] == files.length) {
+          pass('Chat files count matches array length');
+        } else {
+          fail('Chat files count', 'Count mismatch: ${data['count']} != ${files.length}');
+        }
+      } else {
+        fail('Chat files endpoint', 'Missing files array');
+      }
+    } else {
+      fail('Chat files endpoint', 'HTTP ${response.statusCode}');
+    }
+
+    // Test for non-existent room
+    final response2 = await http.get(Uri.parse('$BASE_URL/api/chat/rooms/nonexistent/files'));
+    if (response2.statusCode == 404) {
+      pass('Chat files returns 404 for non-existent room');
+    } else {
+      fail('Chat files 404', 'Expected 404, got ${response2.statusCode}');
+    }
+  } catch (e) {
+    fail('Chat files endpoint', 'Error: $e');
+  }
+}
+
+Future<void> _testChatFileContentEndpoint() async {
+  print('Testing GET /api/chat/rooms/{id}/file/{year}/{filename} (raw chat file)...');
+  try {
+    // First get the list of files to get a valid filename
+    final listResponse = await http.get(Uri.parse('$BASE_URL/api/chat/rooms/general/files'));
+    if (listResponse.statusCode != 200) {
+      fail('Chat file content', 'Could not get file list first');
+      return;
+    }
+
+    final listData = jsonDecode(listResponse.body) as Map<String, dynamic>;
+    final files = listData['files'] as List;
+
+    if (files.isEmpty) {
+      fail('Chat file content', 'No files available to test');
+      return;
+    }
+
+    final file = files[0] as Map<String, dynamic>;
+    final year = file['year'] as String;
+    final filename = file['filename'] as String;
+
+    // Fetch the raw file content
+    final response = await http.get(
+      Uri.parse('$BASE_URL/api/chat/rooms/general/file/$year/$filename'),
+    );
+
+    if (response.statusCode == 200) {
+      pass('Chat file content returns 200');
+
+      // Check content type is text/plain
+      final contentType = response.headers['content-type'];
+      if (contentType != null && contentType.contains('text/plain')) {
+        pass('Chat file content-type is text/plain');
+      } else {
+        fail('Chat file content-type', 'Expected text/plain, got $contentType');
+      }
+
+      final content = response.body;
+
+      // Check for header line (# roomId: or # callsign:roomId)
+      if (content.contains('# general') || content.contains('# ')) {
+        pass('Chat file has header line');
+      } else {
+        fail('Chat file header', 'Missing header line starting with #');
+      }
+
+      // Check for message format (> YYYY-MM-DD HH:MM:SS -- CALLSIGN)
+      if (RegExp(r'> \d{4}-\d{2}-\d{2} \d{2}:\d{2}[_:]\d{2} -- \w+').hasMatch(content)) {
+        pass('Chat file has correct message format');
+      } else {
+        fail('Chat file message format', 'Messages do not match expected format');
+      }
+
+      // Check content is not empty
+      if (content.length > 10) {
+        pass('Chat file has content (${content.length} bytes)');
+      } else {
+        fail('Chat file content', 'File too small: ${content.length} bytes');
+      }
+    } else {
+      fail('Chat file content', 'HTTP ${response.statusCode}');
+    }
+
+    // Test with invalid filename format (path traversal protection)
+    // Note: Invalid paths return 404 because they don't match the route pattern
+    final response2 = await http.get(
+      Uri.parse('$BASE_URL/api/chat/rooms/general/file/$year/../../../etc/passwd'),
+    );
+    if (response2.statusCode == 400 || response2.statusCode == 404) {
+      pass('Chat file rejects invalid filename (path traversal)');
+    } else {
+      fail('Chat file path traversal', 'Expected 400 or 404, got ${response2.statusCode}');
+    }
+
+    // Test with invalid year format
+    // Note: Invalid paths return 404 because they don't match the route pattern
+    final response3 = await http.get(
+      Uri.parse('$BASE_URL/api/chat/rooms/general/file/abc/$filename'),
+    );
+    if (response3.statusCode == 400 || response3.statusCode == 404) {
+      pass('Chat file rejects invalid year format');
+    } else {
+      fail('Chat file year validation', 'Expected 400 or 404, got ${response3.statusCode}');
+    }
+
+    // Test with non-existent file
+    final response4 = await http.get(
+      Uri.parse('$BASE_URL/api/chat/rooms/general/file/$year/1999-01-01_chat.txt'),
+    );
+    if (response4.statusCode == 404) {
+      pass('Chat file returns 404 for non-existent file');
+    } else {
+      fail('Chat file 404', 'Expected 404, got ${response4.statusCode}');
+    }
+
+    // Test with non-existent room
+    final response5 = await http.get(
+      Uri.parse('$BASE_URL/api/chat/rooms/nonexistent/file/$year/$filename'),
+    );
+    if (response5.statusCode == 404) {
+      pass('Chat file returns 404 for non-existent room');
+    } else {
+      fail('Chat file room 404', 'Expected 404, got ${response5.statusCode}');
+    }
+  } catch (e) {
+    fail('Chat file content endpoint', 'Error: $e');
   }
 }
 
@@ -910,8 +1103,8 @@ Future<void> _testChatPersistence(String tempDirPath) async {
   // Step 2: Start a NEW relay server and verify messages are loaded
   print('  Starting new relay server to verify persistence...');
 
-  StorageConfig().reset();
-  await StorageConfig().init(customBaseDir: tempDirPath);
+  PureStorageConfig().reset();
+  await PureStorageConfig().init(customBaseDir: tempDirPath);
 
   final relay2 = PureRelayServer();
   relay2.quietMode = true;

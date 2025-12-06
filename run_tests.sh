@@ -31,7 +31,18 @@ run_relay_tests() {
     echo "========================================"
     echo "Running Relay API Tests"
     echo "========================================"
-    $DART bin/relay_api_test.dart
+    # Use flutter test since the relay depends on Flutter packages
+    local FLUTTER=""
+    if command -v flutter &> /dev/null; then
+        FLUTTER="flutter"
+    elif [ -x "$HOME/flutter/bin/flutter" ]; then
+        FLUTTER="$HOME/flutter/bin/flutter"
+    else
+        echo "Error: flutter not found. Trying dart..."
+        $DART bin/relay_api_test.dart
+        return
+    fi
+    $FLUTTER test bin/relay_api_test.dart
 }
 
 run_tile_tests() {

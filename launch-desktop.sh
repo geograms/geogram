@@ -55,5 +55,12 @@ fi
 
 echo ""
 
-# Run the app on Linux desktop
-"$FLUTTER_BIN" run -d linux "$@"
+# Get dependencies - try offline first, fall back to online
+echo "📦 Checking dependencies..."
+if ! "$FLUTTER_BIN" pub get --offline 2>/dev/null; then
+    echo "📡 Fetching dependencies online..."
+    "$FLUTTER_BIN" pub get
+fi
+
+# Run the app on Linux desktop (--no-pub since we already ran pub get)
+"$FLUTTER_BIN" run -d linux --no-pub "$@"
