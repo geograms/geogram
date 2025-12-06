@@ -108,7 +108,9 @@ if [ "$SKIP_BUILD" = false ]; then
 
         echo "Compiling standalone CLI binary..."
         mkdir -p "$SCRIPT_DIR/build"
-        "$DART_BIN" compile exe bin/cli.dart -o "$CLI_BINARY"
+        # Compile to temp file first, then replace (avoids "Text file busy" error)
+        "$DART_BIN" compile exe bin/cli.dart -o "$CLI_BINARY.tmp"
+        mv -f "$CLI_BINARY.tmp" "$CLI_BINARY"
         echo ""
         echo "Build completed."
     else
