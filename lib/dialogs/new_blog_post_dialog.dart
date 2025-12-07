@@ -35,10 +35,10 @@ class NewBlogPostDialog extends StatefulWidget {
 class _NewBlogPostDialogState extends State<NewBlogPostDialog> {
   final _formKey = GlobalKey<FormState>();
   final _i18n = I18nService();
-  final _titleController = TextEditingController();
-  final _descriptionController = TextEditingController();
-  final _contentController = TextEditingController();
-  final _tagsController = TextEditingController();
+  late final TextEditingController _titleController;
+  late final TextEditingController _descriptionController;
+  late final TextEditingController _contentController;
+  late final TextEditingController _tagsController;
   final _tagsFocusNode = FocusNode();
 
   List<String> _filteredTags = [];
@@ -51,6 +51,13 @@ class _NewBlogPostDialogState extends State<NewBlogPostDialog> {
   @override
   void initState() {
     super.initState();
+    // Initialize controllers with existing post data if editing
+    _titleController = TextEditingController(text: widget.post?.title ?? '');
+    _descriptionController = TextEditingController(text: widget.post?.description ?? '');
+    _contentController = TextEditingController(text: widget.post?.content ?? '');
+    _tagsController = TextEditingController(
+      text: widget.post?.tags.join(', ') ?? '',
+    );
     _tagsController.addListener(_onTagsChanged);
     _tagsFocusNode.addListener(_onTagsFocusChanged);
   }
@@ -226,6 +233,24 @@ class _NewBlogPostDialogState extends State<NewBlogPostDialog> {
     }
   }
 
+  /// Save changes when editing (keeps current status)
+  void _update() {
+    if (_formKey.currentState!.validate()) {
+      Navigator.pop(context, {
+        'title': _titleController.text.trim(),
+        'description': _descriptionController.text.trim().isNotEmpty
+            ? _descriptionController.text.trim()
+            : null,
+        'content': _contentController.text.trim(),
+        'tags': _parseTags(),
+        'status': widget.post!.status, // Keep current status
+        'imagePaths': _imagePaths,
+        'latitude': _location?.latitude,
+        'longitude': _location?.longitude,
+      });
+    }
+  }
+
   Widget _buildAttachmentsSection(ThemeData theme) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -368,11 +393,43 @@ class _NewBlogPostDialogState extends State<NewBlogPostDialog> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(_i18n.t('new_blog_post')),
+        title: Text(widget.isEditing
+            ? _i18n.t('edit_blog_post')
+            : _i18n.t('new_blog_post')),
         leading: IconButton(
           icon: const Icon(Icons.close),
           onPressed: () => Navigator.pop(context),
         ),
+        actions: widget.isEditing
+            ? [
+                // Status badge for edit mode
+                Center(
+                  child: Container(
+                    margin: const EdgeInsets.only(right: 16),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 4,
+                    ),
+                    decoration: BoxDecoration(
+                      color: widget.post!.isDraft
+                          ? theme.colorScheme.secondaryContainer
+                          : theme.colorScheme.tertiaryContainer,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Text(
+                      widget.post!.isDraft
+                          ? _i18n.t('draft')
+                          : _i18n.t('published'),
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: widget.post!.isDraft
+                            ? theme.colorScheme.onSecondaryContainer
+                            : theme.colorScheme.onTertiaryContainer,
+                      ),
+                    ),
+                  ),
+                ),
+              ]
+            : null,
       ),
       body: Form(
         key: _formKey,
@@ -513,25 +570,47 @@ class _NewBlogPostDialogState extends State<NewBlogPostDialog> {
           ],
         ),
         child: SafeArea(
-          child: Row(
-            children: [
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: _saveAsDraft,
-                  icon: const Icon(Icons.save_outlined),
-                  label: Text(_i18n.t('save_draft')),
+          child: widget.isEditing
+              ? Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: _update,
+                        icon: const Icon(Icons.save_outlined),
+                        label: Text(_i18n.t('update')),
+                      ),
+                    ),
+                    if (widget.post!.isDraft) ...[
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: FilledButton.icon(
+                          onPressed: _publish,
+                          icon: const Icon(Icons.publish),
+                          label: Text(_i18n.t('update_and_publish')),
+                        ),
+                      ),
+                    ],
+                  ],
+                )
+              : Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: _saveAsDraft,
+                        icon: const Icon(Icons.save_outlined),
+                        label: Text(_i18n.t('save_draft')),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: FilledButton.icon(
+                        onPressed: _publish,
+                        icon: const Icon(Icons.publish),
+                        label: Text(_i18n.t('publish')),
+                      ),
+                    ),
+                  ],
                 ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: FilledButton.icon(
-                  onPressed: _publish,
-                  icon: const Icon(Icons.publish),
-                  label: Text(_i18n.t('publish')),
-                ),
-              ),
-            ],
-          ),
         ),
       ),
     );

@@ -332,7 +332,7 @@ class CliProfileService {
     String? description,
     int? port,
     String? stationRole,
-    String? parentRelayUrl,
+    String? parentStationUrl,
     String? networkId,
   }) async {
     final keys = generateKeys();
@@ -352,7 +352,7 @@ class CliProfileService {
       preferredColor: preferredColor,
       port: port,
       stationRole: stationRole,
-      parentRelayUrl: parentRelayUrl,
+      parentStationUrl: parentStationUrl,
       networkId: networkId,
     );
 

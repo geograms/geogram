@@ -14,7 +14,6 @@ import '../widgets/blog_post_tile_widget.dart';
 import '../widgets/blog_post_detail_widget.dart';
 import '../widgets/blog_comment_widget.dart';
 import '../dialogs/new_blog_post_dialog.dart';
-import '../dialogs/edit_blog_post_dialog.dart';
 
 /// Blog browser page with 2-panel layout
 class BlogBrowserPage extends StatefulWidget {
@@ -224,9 +223,18 @@ class _BlogBrowserPageState extends State<BlogBrowserPage> {
   Future<void> _editPost() async {
     if (_selectedPost == null) return;
 
-    final result = await showDialog<Map<String, dynamic>>(
-      context: context,
-      builder: (context) => EditBlogPostDialog(post: _selectedPost!),
+    final existingTags = await _blogService.getAllTags();
+    if (!mounted) return;
+
+    final result = await Navigator.push<Map<String, dynamic>>(
+      context,
+      MaterialPageRoute(
+        builder: (context) => BlogPostPage(
+          existingTags: existingTags,
+          post: _selectedPost!,
+        ),
+        fullscreenDialog: true,
+      ),
     );
 
     if (result != null && mounted) {
@@ -791,9 +799,18 @@ class _BlogPostDetailPageState extends State<_BlogPostDetailPage> {
   }
 
   Future<void> _editPost() async {
-    final result = await showDialog<Map<String, dynamic>>(
-      context: context,
-      builder: (context) => EditBlogPostDialog(post: _post),
+    final existingTags = await widget.blogService.getAllTags();
+    if (!mounted) return;
+
+    final result = await Navigator.push<Map<String, dynamic>>(
+      context,
+      MaterialPageRoute(
+        builder: (context) => BlogPostPage(
+          existingTags: existingTags,
+          post: _post,
+        ),
+        fullscreenDialog: true,
+      ),
     );
 
     if (result != null && mounted) {

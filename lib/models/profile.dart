@@ -28,7 +28,7 @@ class Profile {
   // Station-specific settings (only used when type == station)
   int? port;
   String? stationRole; // 'root' or 'node'
-  String? parentRelayUrl;
+  String? parentStationUrl;
   String? networkId;
   bool tileServerEnabled;
   bool osmFallbackEnabled;
@@ -52,7 +52,7 @@ class Profile {
     this.isActive = true,
     this.port,
     this.stationRole,
-    this.parentRelayUrl,
+    this.parentStationUrl,
     this.networkId,
     this.tileServerEnabled = true,
     this.osmFallbackEnabled = true,
@@ -91,7 +91,7 @@ class Profile {
       isActive: json['isActive'] as bool? ?? false,
       port: json['port'] as int?,
       stationRole: json['stationRole'] as String?,
-      parentRelayUrl: json['parentRelayUrl'] as String?,
+      parentStationUrl: json['parentStationUrl'] as String?,
       networkId: json['networkId'] as String?,
       tileServerEnabled: json['tileServerEnabled'] as bool? ?? true,
       osmFallbackEnabled: json['osmFallbackEnabled'] as bool? ?? true,
@@ -119,7 +119,7 @@ class Profile {
       'isActive': isActive,
       if (port != null) 'port': port,
       if (stationRole != null) 'stationRole': stationRole,
-      if (parentRelayUrl != null) 'parentRelayUrl': parentRelayUrl,
+      if (parentStationUrl != null) 'parentStationUrl': parentStationUrl,
       if (networkId != null) 'networkId': networkId,
       'tileServerEnabled': tileServerEnabled,
       'osmFallbackEnabled': osmFallbackEnabled,
@@ -144,7 +144,7 @@ class Profile {
     bool? isActive,
     int? port,
     String? stationRole,
-    String? parentRelayUrl,
+    String? parentStationUrl,
     String? networkId,
     bool? tileServerEnabled,
     bool? osmFallbackEnabled,
@@ -168,7 +168,7 @@ class Profile {
       isActive: isActive ?? this.isActive,
       port: port ?? this.port,
       stationRole: stationRole ?? this.stationRole,
-      parentRelayUrl: parentRelayUrl ?? this.parentRelayUrl,
+      parentStationUrl: parentStationUrl ?? this.parentStationUrl,
       networkId: networkId ?? this.networkId,
       tileServerEnabled: tileServerEnabled ?? this.tileServerEnabled,
       osmFallbackEnabled: osmFallbackEnabled ?? this.osmFallbackEnabled,

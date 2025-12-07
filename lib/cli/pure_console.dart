@@ -2985,8 +2985,8 @@ class PureConsole {
       stdout.writeln('\x1B[1mRelay Settings:\x1B[0m');
       stdout.writeln('  Port:        \x1B[36m${profile.port ?? 8080}\x1B[0m');
       stdout.writeln('  Role:        \x1B[36m${profile.stationRole ?? 'not set'}\x1B[0m');
-      if (profile.parentRelayUrl != null) {
-        stdout.writeln('  Parent URL:  \x1B[36m${profile.parentRelayUrl}\x1B[0m');
+      if (profile.parentStationUrl != null) {
+        stdout.writeln('  Parent URL:  \x1B[36m${profile.parentStationUrl}\x1B[0m');
       }
     }
     stdout.writeln();
@@ -3041,7 +3041,7 @@ class PureConsole {
         enableAprs: profile.enableAprs,
         stationRole: profile.stationRole,
         networkId: profile.networkId,
-        parentRelayUrl: profile.parentRelayUrl,
+        parentStationUrl: profile.parentStationUrl,
         setupComplete: true,
       );
       await _station.updateSettings(newSettings);
@@ -3312,7 +3312,7 @@ class PureConsole {
       longitude: longitude,
       port: port,
       stationRole: isRoot ? 'root' : 'node',
-      parentRelayUrl: parentUrl,
+      parentStationUrl: parentUrl,
       networkId: networkId,
       tileServerEnabled: enableTiles,
       osmFallbackEnabled: enableOsmFallback,
@@ -3333,7 +3333,7 @@ class PureConsole {
       enableAprs: enableAprs,
       stationRole: isRoot ? 'root' : 'node',
       networkId: networkId,
-      parentRelayUrl: parentUrl,
+      parentStationUrl: parentUrl,
       setupComplete: true,
     );
     await _station.updateSettings(newSettings);
