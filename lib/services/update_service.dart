@@ -497,19 +497,12 @@ class UpdateService {
         var downloaded = startByte;
         _bytesDownloaded = downloaded;
 
-        // Use buffered writing for better performance
-        final buffer = <int>[];
-        const bufferSize = 65536; // 64KB buffer
-
+        // Write chunks directly - HTTP streams are already reasonably chunked
+        // and the filesystem handles buffering internally
         await for (final chunk in response.stream) {
-          buffer.addAll(chunk);
+          // Write chunk directly to file
+          sink.add(chunk);
           downloaded += chunk.length;
-
-          // Write in larger chunks for better I/O performance
-          if (buffer.length >= bufferSize) {
-            sink.add(buffer);
-            buffer.clear();
-          }
 
           // Throttled progress update
           _bytesDownloaded = downloaded;
@@ -519,11 +512,7 @@ class UpdateService {
           }
         }
 
-        // Write remaining buffer
-        if (buffer.isNotEmpty) {
-          sink.add(buffer);
-        }
-
+        // Ensure all data is flushed to disk
         await sink.flush();
         await sink.close();
 
