@@ -144,6 +144,14 @@ class ProfileService {
     LogService().log('Generated new identity: ${profile.callsign} (${profileType.name})');
   }
 
+  /// Regenerate identity for the active profile (generates new keys and callsign)
+  Future<void> regenerateActiveProfileIdentity() async {
+    final profile = getProfile();
+    await _generateIdentityForProfile(profile, type: profile.type);
+    _saveAllProfiles();
+    LogService().log('Regenerated identity for active profile: ${profile.callsign}');
+  }
+
   /// Check if a profile has valid NOSTR keys (proper bech32 encoding)
   bool _hasValidNostrKeys(Profile profile) {
     if (profile.npub.isEmpty || profile.nsec.isEmpty) {

@@ -304,81 +304,80 @@ class _HomePageState extends State<HomePage> {
 
   /// Show welcome dialog with generated callsign
   void _showWelcomeDialog() {
-    final profile = _profileService.getProfile();
-
     showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (context) => PopScope(
-        canPop: false,
-        child: AlertDialog(
-          title: Text(_i18n.t('welcome_to_geogram')),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(_i18n.t('welcome_message')),
-            const SizedBox(height: 16),
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Theme.of(context).colorScheme.primaryContainer,
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Row(
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          final profile = _profileService.getProfile();
+
+          return PopScope(
+            canPop: false,
+            child: AlertDialog(
+              title: Text(_i18n.t('welcome_to_geogram')),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Icon(
-                    Icons.badge,
-                    color: Theme.of(context).colorScheme.primary,
-                  ),
-                  const SizedBox(width: 12),
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        _i18n.t('your_callsign'),
-                        style: Theme.of(context).textTheme.bodySmall,
-                      ),
-                      Text(
-                        profile.callsign,
-                        style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                          fontWeight: FontWeight.bold,
+                  Text(_i18n.t('welcome_message')),
+                  const SizedBox(height: 16),
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Theme.of(context).colorScheme.primaryContainer,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(
+                          Icons.badge,
                           color: Theme.of(context).colorScheme.primary,
                         ),
-                      ),
-                    ],
+                        const SizedBox(width: 12),
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              _i18n.t('your_callsign'),
+                              style: Theme.of(context).textTheme.bodySmall,
+                            ),
+                            Text(
+                              profile.callsign,
+                              style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                                fontWeight: FontWeight.bold,
+                                color: Theme.of(context).colorScheme.primary,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    _i18n.t('welcome_customize_hint'),
+                    style: Theme.of(context).textTheme.bodySmall,
                   ),
                 ],
               ),
-            ),
-            const SizedBox(height: 12),
-            Text(
-              _i18n.t('welcome_customize_hint'),
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () {
-              Navigator.pop(context);
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => const ProfilePage(),
+              actions: [
+                TextButton(
+                  onPressed: () async {
+                    await _profileService.regenerateActiveProfileIdentity();
+                    setDialogState(() {}); // Refresh dialog to show new callsign
+                  },
+                  child: Text(_i18n.t('generate_new')),
                 ),
-              );
-            },
-            child: Text(_i18n.t('customize_profile')),
-          ),
-          FilledButton(
-            onPressed: () {
-              Navigator.pop(context);
-            },
-            child: Text(_i18n.t('later')),
-          ),
-        ],
-        ),
+                FilledButton(
+                  onPressed: () {
+                    Navigator.pop(context);
+                  },
+                  child: Text(_i18n.t('later')),
+                ),
+              ],
+            ),
+          );
+        },
       ),
     );
   }

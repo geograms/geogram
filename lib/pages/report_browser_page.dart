@@ -8,6 +8,8 @@ import '../models/report.dart';
 import '../services/report_service.dart';
 import '../services/profile_service.dart';
 import '../services/i18n_service.dart';
+import '../services/alert_sharing_service.dart';
+import '../services/log_service.dart';
 import 'report_detail_page.dart';
 import 'report_settings_page.dart';
 
@@ -37,6 +39,7 @@ class _ReportBrowserPageState extends State<ReportBrowserPage> {
   ReportSeverity? _filterSeverity;
   ReportStatus? _filterStatus;
   bool _isLoading = true;
+  bool _isUploading = false;
   int _sortMode = 0; // 0: date desc, 1: severity, 2: distance
 
   @override
@@ -129,6 +132,25 @@ class _ReportBrowserPageState extends State<ReportBrowserPage> {
       appBar: AppBar(
         title: Text(_getDisplayTitle()),
         actions: [
+          // Upload all unsent alerts
+          if (_getUnsentAlertCount() > 0)
+            _isUploading
+                ? const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 16),
+                    child: SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
+                  )
+                : IconButton(
+                    icon: Badge(
+                      label: Text('${_getUnsentAlertCount()}'),
+                      child: const Icon(Icons.cloud_upload),
+                    ),
+                    tooltip: _i18n.t('upload_unsent_alerts'),
+                    onPressed: _uploadUnsentAlerts,
+                  ),
           // Filter by severity
           PopupMenuButton<ReportSeverity?>(
             icon: Icon(_filterSeverity == null ? Icons.filter_alt_outlined : Icons.filter_alt),
@@ -383,6 +405,8 @@ class _ReportBrowserPageState extends State<ReportBrowserPage> {
                   _buildSeverityBadge(report.severity),
                   const SizedBox(width: 8),
                   _buildStatusBadge(report.status),
+                  const SizedBox(width: 8),
+                  _buildRelayStatusBadge(report),
                   const Spacer(),
                   Text(
                     _formatDate(report.dateTime),
@@ -587,5 +611,135 @@ class _ReportBrowserPageState extends State<ReportBrowserPage> {
         ),
       ),
     ).then((_) => _loadReports());
+  }
+
+  /// Check if a report has been successfully sent to at least one relay
+  bool _isReportSentToRelay(Report report) {
+    return report.relayShares.any((share) => share.status == RelayShareStatusType.confirmed);
+  }
+
+  /// Get count of alerts that have not been sent to any relay
+  int _getUnsentAlertCount() {
+    return _allReports.where((report) => !_isReportSentToRelay(report)).length;
+  }
+
+  /// Build relay status badge for a report
+  Widget _buildRelayStatusBadge(Report report) {
+    final isSent = _isReportSentToRelay(report);
+    final confirmedCount = report.relayShares.where((s) => s.status == RelayShareStatusType.confirmed).length;
+    final failedCount = report.relayShares.where((s) => s.status == RelayShareStatusType.failed).length;
+
+    if (isSent) {
+      return Tooltip(
+        message: _i18n.t('sent_to_relays').replaceAll('{0}', '$confirmedCount'),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+          decoration: BoxDecoration(
+            color: Colors.green.withOpacity(0.2),
+            borderRadius: BorderRadius.circular(4),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.cloud_done, size: 14, color: Colors.green),
+              if (confirmedCount > 1) ...[
+                const SizedBox(width: 2),
+                Text(
+                  '$confirmedCount',
+                  style: const TextStyle(
+                    color: Colors.green,
+                    fontSize: 10,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      );
+    } else if (failedCount > 0) {
+      return Tooltip(
+        message: _i18n.t('relay_send_failed'),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+          decoration: BoxDecoration(
+            color: Colors.orange.withOpacity(0.2),
+            borderRadius: BorderRadius.circular(4),
+          ),
+          child: const Icon(Icons.cloud_off, size: 14, color: Colors.orange),
+        ),
+      );
+    } else {
+      return Tooltip(
+        message: _i18n.t('not_sent_to_relay'),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+          decoration: BoxDecoration(
+            color: Colors.grey.withOpacity(0.2),
+            borderRadius: BorderRadius.circular(4),
+          ),
+          child: const Icon(Icons.cloud_upload_outlined, size: 14, color: Colors.grey),
+        ),
+      );
+    }
+  }
+
+  /// Upload all unsent alerts to relays
+  Future<void> _uploadUnsentAlerts() async {
+    final unsentReports = _allReports.where((report) => !_isReportSentToRelay(report)).toList();
+    if (unsentReports.isEmpty) return;
+
+    setState(() => _isUploading = true);
+
+    final alertService = AlertSharingService();
+    int successCount = 0;
+    int failCount = 0;
+
+    for (final report in unsentReports) {
+      try {
+        LogService().log('Uploading alert: ${report.folderName}');
+        final result = await alertService.shareAlert(report);
+
+        if (result.anySuccess) {
+          successCount++;
+          // Update report with relay status
+          var updatedReport = report;
+          for (final sendResult in result.results) {
+            updatedReport = alertService.updateRelayShareStatus(
+              updatedReport,
+              sendResult.relayUrl,
+              sendResult.success
+                  ? RelayShareStatusType.confirmed
+                  : RelayShareStatusType.failed,
+              nostrEventId: result.eventId,
+            );
+          }
+          await _reportService.saveReport(updatedReport, notifyRelays: false);
+        } else {
+          failCount++;
+        }
+      } catch (e) {
+        LogService().log('Error uploading alert ${report.folderName}: $e');
+        failCount++;
+      }
+    }
+
+    // Reload reports to show updated status
+    await _loadReports();
+
+    setState(() => _isUploading = false);
+
+    // Show result snackbar
+    if (mounted) {
+      final message = successCount > 0
+          ? _i18n.t('alerts_uploaded').replaceAll('{0}', '$successCount')
+          : _i18n.t('upload_failed');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(message + (failCount > 0 ? ' (${_i18n.t('failed')}: $failCount)' : '')),
+          backgroundColor: successCount > 0 ? Colors.green : Colors.red,
+        ),
+      );
+    }
   }
 }

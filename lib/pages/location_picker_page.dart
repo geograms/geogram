@@ -42,7 +42,6 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
   late LatLng _selectedPosition;
   bool _isOnline = true;
   bool _isDetectingLocation = false;
-  bool _showManualCoordinates = false;
 
   // Default to central Europe (Munich/Vienna area)
   static const LatLng _defaultPosition = LatLng(48.0, 10.0);
@@ -52,24 +51,141 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
     super.initState();
     _initializeMap();
 
-    // Priority: 1) provided initialPosition, 2) last saved position, 3) GeoIP, 4) Europe default
+    // Priority: 1) provided initialPosition, 2) auto-detect current location, 3) last saved, 4) default
     if (widget.initialPosition != null) {
       _selectedPosition = widget.initialPosition!;
       _initializeControllers();
     } else {
-      // Try to get last saved position from config
+      // Start with default position, then try to auto-detect
+      _selectedPosition = _defaultPosition;
+      _initializeControllers();
+
+      // Automatically try to detect the user's current location
+      _autoDetectLocationOnStart();
+    }
+  }
+
+  /// Automatically detect location when the picker opens
+  /// Falls back to last saved position, then GeoIP if detection fails
+  Future<void> _autoDetectLocationOnStart() async {
+    setState(() {
+      _isDetectingLocation = true;
+    });
+
+    try {
+      if (kIsWeb) {
+        // On web, try browser geolocation first
+        await _tryBrowserGeolocation();
+      } else if (Platform.isAndroid || Platform.isIOS) {
+        // On mobile, try GPS
+        await _tryGPSLocation();
+      } else {
+        // On desktop, use IP-based geolocation
+        await _detectLocationViaIP();
+      }
+    } catch (e) {
+      LogService().log('Auto-detect failed, trying fallbacks: $e');
+
+      // Fallback 1: Try last saved position
       final lastLat = _configService.get('lastLocationPickerLat');
       final lastLon = _configService.get('lastLocationPickerLon');
 
-      if (lastLat != null && lastLon != null) {
-        _selectedPosition = LatLng(lastLat as double, lastLon as double);
-        _initializeControllers();
+      if (lastLat != null && lastLon != null && mounted) {
+        final lat = lastLat as double;
+        final lon = lastLon as double;
+        setState(() {
+          _selectedPosition = LatLng(lat, lon);
+          _latController.text = lat.toStringAsFixed(6);
+          _lonController.text = lon.toStringAsFixed(6);
+        });
+        _mapController.move(_selectedPosition, 10.0);
+        LogService().log('Using last saved position');
       } else {
-        // Try GeoIP, fallback to Europe default
-        _selectedPosition = _defaultPosition;
-        _initializeControllers();
-        _fetchGeoIPLocation();
+        // Fallback 2: Try GeoIP
+        try {
+          await _fetchGeoIPLocation();
+        } catch (e2) {
+          LogService().log('GeoIP also failed: $e2');
+          // Stay at default position
+        }
       }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isDetectingLocation = false;
+        });
+      }
+    }
+  }
+
+  /// Try to get browser geolocation without showing error messages
+  Future<void> _tryBrowserGeolocation() async {
+    LocationPermission permission = await Geolocator.checkPermission();
+    if (permission == LocationPermission.denied) {
+      permission = await Geolocator.requestPermission();
+    }
+
+    if (permission == LocationPermission.denied ||
+        permission == LocationPermission.deniedForever) {
+      // Fall back to IP-based
+      await _detectLocationViaIP();
+      return;
+    }
+
+    final position = await Geolocator.getCurrentPosition(
+      locationSettings: const LocationSettings(
+        accuracy: LocationAccuracy.high,
+        timeLimit: Duration(seconds: 10),
+      ),
+    );
+
+    if (mounted) {
+      setState(() {
+        _selectedPosition = LatLng(position.latitude, position.longitude);
+        _latController.text = position.latitude.toStringAsFixed(6);
+        _lonController.text = position.longitude.toStringAsFixed(6);
+      });
+      _mapController.move(_selectedPosition, 15.0);
+      LogService().log('Browser geolocation on start: ${position.latitude}, ${position.longitude}');
+    }
+  }
+
+  /// Try to get GPS location without showing error messages
+  Future<void> _tryGPSLocation() async {
+    bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    if (!serviceEnabled) {
+      // Fall back to IP-based
+      await _detectLocationViaIP();
+      return;
+    }
+
+    LocationPermission permission = await Geolocator.checkPermission();
+    if (permission == LocationPermission.denied) {
+      permission = await Geolocator.requestPermission();
+    }
+
+    if (permission == LocationPermission.denied ||
+        permission == LocationPermission.deniedForever) {
+      // Fall back to IP-based
+      await _detectLocationViaIP();
+      return;
+    }
+
+    final position = await Geolocator.getCurrentPosition(
+      locationSettings: const LocationSettings(
+        accuracy: LocationAccuracy.high,
+        timeLimit: Duration(seconds: 10),
+      ),
+    );
+
+    if (mounted) {
+      setState(() {
+        _selectedPosition = LatLng(position.latitude, position.longitude);
+        _latController.text = position.latitude.toStringAsFixed(6);
+        _lonController.text = position.longitude.toStringAsFixed(6);
+      });
+      _mapController.move(_selectedPosition, 15.0);
+      LogService().log('GPS location on start: ${position.latitude}, ${position.longitude}');
     }
   }
 
@@ -328,32 +444,6 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
     });
   }
 
-  void _updateFromManualInput() {
-    final lat = double.tryParse(_latController.text);
-    final lon = double.tryParse(_lonController.text);
-
-    if (lat == null || lon == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(_i18n.t('invalid_coordinates_error'))),
-      );
-      return;
-    }
-
-    if (lat < -90 || lat > 90 || lon < -180 || lon > 180) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(_i18n.t('coordinates_out_of_range'))),
-      );
-      return;
-    }
-
-    setState(() {
-      _selectedPosition = LatLng(lat, lon);
-    });
-
-    // Move map to new position
-    _mapController.move(_selectedPosition, _mapController.camera.zoom);
-  }
-
   void _confirmSelection() {
     // Save the selected position for next time
     _configService.set('lastLocationPickerLat', _selectedPosition.latitude);
@@ -535,13 +625,39 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
                           );
                         },
                       ),
-                      // Layer toggle and auto-detect buttons
+                      // Map controls (same layout as main map)
                       Positioned(
                         top: 16,
                         right: 16,
                         child: Column(
                           mainAxisSize: MainAxisSize.min,
                           children: [
+                            // Zoom in button
+                            FloatingActionButton.small(
+                              heroTag: 'zoom_in',
+                              onPressed: () {
+                                final currentZoom = _mapController.camera.zoom;
+                                if (currentZoom < 18.0) {
+                                  _mapController.move(_mapController.camera.center, currentZoom + 1);
+                                }
+                              },
+                              tooltip: _i18n.t('zoom_in'),
+                              child: const Icon(Icons.add),
+                            ),
+                            const SizedBox(height: 8),
+                            // Zoom out button
+                            FloatingActionButton.small(
+                              heroTag: 'zoom_out',
+                              onPressed: () {
+                                final currentZoom = _mapController.camera.zoom;
+                                if (currentZoom > 1.0) {
+                                  _mapController.move(_mapController.camera.center, currentZoom - 1);
+                                }
+                              },
+                              tooltip: _i18n.t('zoom_out'),
+                              child: const Icon(Icons.remove),
+                            ),
+                            const SizedBox(height: 16),
                             // Layer toggle button
                             ValueListenableBuilder<MapLayerType>(
                               valueListenable: _mapTileService.layerTypeNotifier,
@@ -561,23 +677,29 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
                               },
                             ),
                             const SizedBox(height: 8),
+                            // Reset north / compass button
+                            FloatingActionButton.small(
+                              heroTag: 'reset_north',
+                              onPressed: () {
+                                _mapController.rotate(0);
+                              },
+                              tooltip: _i18n.t('reset_north'),
+                              child: const Icon(Icons.explore),
+                            ),
+                            const SizedBox(height: 8),
                             // Auto-detect location button
-                            _isDetectingLocation
-                                ? FloatingActionButton.small(
-                                    heroTag: 'auto_detect',
-                                    onPressed: null,
-                                    child: const SizedBox(
+                            FloatingActionButton.small(
+                              heroTag: 'auto_detect',
+                              onPressed: _isDetectingLocation ? null : _autoDetectLocation,
+                              tooltip: _i18n.t('auto_detect_location'),
+                              child: _isDetectingLocation
+                                  ? const SizedBox(
                                       width: 20,
                                       height: 20,
                                       child: CircularProgressIndicator(strokeWidth: 2),
-                                    ),
-                                  )
-                                : FloatingActionButton.small(
-                                    heroTag: 'auto_detect',
-                                    onPressed: _autoDetectLocation,
-                                    tooltip: _i18n.t('auto_detect_location'),
-                                    child: const Icon(Icons.my_location),
-                                  ),
+                                    )
+                                  : const Icon(Icons.my_location),
+                            ),
                           ],
                         ),
                       ),
@@ -588,220 +710,6 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
               ],
             ),
           ),
-
-          // Manual Input Panel
-          isPortrait
-              ? Container(
-                  decoration: BoxDecoration(
-                    color: theme.colorScheme.surface,
-                    border: Border(
-                      top: BorderSide(
-                        color: theme.colorScheme.outline.withOpacity(0.2),
-                      ),
-                    ),
-                  ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  // Toggle link
-                  InkWell(
-                    onTap: () {
-                      setState(() {
-                        _showManualCoordinates = !_showManualCoordinates;
-                      });
-                    },
-                    child: Padding(
-                      padding: const EdgeInsets.all(16),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Icon(
-                            _showManualCoordinates ? Icons.expand_less : Icons.expand_more,
-                            color: theme.colorScheme.primary,
-                            size: 20,
-                          ),
-                          const SizedBox(width: 8),
-                          Text(
-                            _showManualCoordinates
-                                ? _i18n.t('hide_coordinates')
-                                : _i18n.t('enter_coordinates_manually'),
-                            style: theme.textTheme.bodyMedium?.copyWith(
-                              color: theme.colorScheme.primary,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                  // Collapsible coordinates section
-                  if (_showManualCoordinates)
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          // Latitude Input
-                          Text(
-                            _i18n.t('latitude'),
-                            style: theme.textTheme.titleSmall,
-                          ),
-                          const SizedBox(height: 8),
-                          TextField(
-                            controller: _latController,
-                            decoration: InputDecoration(
-                              hintText: _i18n.t('latitude_range'),
-                              border: const OutlineInputBorder(),
-                              filled: true,
-                              suffixText: '°',
-                              prefixIcon: Icon(
-                                Icons.arrow_upward,
-                                color: theme.colorScheme.primary,
-                              ),
-                            ),
-                            keyboardType: const TextInputType.numberWithOptions(
-                              decimal: true,
-                              signed: true,
-                            ),
-                            onSubmitted: (_) => _updateFromManualInput(),
-                          ),
-                          const SizedBox(height: 16),
-                          // Longitude Input
-                          Text(
-                            _i18n.t('longitude'),
-                            style: theme.textTheme.titleSmall,
-                          ),
-                          const SizedBox(height: 8),
-                          TextField(
-                            controller: _lonController,
-                            decoration: InputDecoration(
-                              hintText: _i18n.t('longitude_range'),
-                              border: const OutlineInputBorder(),
-                              filled: true,
-                              suffixText: '°',
-                              prefixIcon: Icon(
-                                Icons.arrow_forward,
-                                color: theme.colorScheme.primary,
-                              ),
-                            ),
-                            keyboardType: const TextInputType.numberWithOptions(
-                              decimal: true,
-                              signed: true,
-                            ),
-                            onSubmitted: (_) => _updateFromManualInput(),
-                          ),
-                        ],
-                      ),
-                    ),
-                ],
-              ),
-            )
-              : SizedBox(
-                  width: 350,
-                  child: Container(
-                    decoration: BoxDecoration(
-                      color: theme.colorScheme.surface,
-                      border: Border(
-                        left: BorderSide(
-                          color: theme.colorScheme.outline.withOpacity(0.2),
-                        ),
-                      ),
-                    ),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        // Toggle link
-                        InkWell(
-                          onTap: () {
-                            setState(() {
-                              _showManualCoordinates = !_showManualCoordinates;
-                            });
-                          },
-                          child: Padding(
-                            padding: const EdgeInsets.all(16),
-                            child: Row(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                Icon(
-                                  _showManualCoordinates ? Icons.expand_less : Icons.expand_more,
-                                  color: theme.colorScheme.primary,
-                                  size: 20,
-                                ),
-                                const SizedBox(width: 8),
-                                Text(
-                                  _showManualCoordinates
-                                      ? _i18n.t('hide_coordinates')
-                                      : _i18n.t('enter_coordinates_manually'),
-                                  style: theme.textTheme.bodyMedium?.copyWith(
-                                    color: theme.colorScheme.primary,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                        // Collapsible coordinates section
-                        if (_showManualCoordinates)
-                          Padding(
-                            padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                // Latitude Input
-                                Text(
-                                  _i18n.t('latitude'),
-                                  style: theme.textTheme.titleSmall,
-                                ),
-                                const SizedBox(height: 8),
-                                TextField(
-                                  controller: _latController,
-                                  decoration: InputDecoration(
-                                    hintText: _i18n.t('latitude_range'),
-                                    border: const OutlineInputBorder(),
-                                    filled: true,
-                                    suffixText: '°',
-                                    prefixIcon: Icon(
-                                      Icons.arrow_upward,
-                                      color: theme.colorScheme.primary,
-                                    ),
-                                  ),
-                                  keyboardType: const TextInputType.numberWithOptions(
-                                    decimal: true,
-                                    signed: true,
-                                  ),
-                                  onSubmitted: (_) => _updateFromManualInput(),
-                                ),
-                                const SizedBox(height: 16),
-                                // Longitude Input
-                                Text(
-                                  _i18n.t('longitude'),
-                                  style: theme.textTheme.titleSmall,
-                                ),
-                                const SizedBox(height: 8),
-                                TextField(
-                                  controller: _lonController,
-                                  decoration: InputDecoration(
-                                    hintText: _i18n.t('longitude_range'),
-                                    border: const OutlineInputBorder(),
-                                    filled: true,
-                                    suffixText: '°',
-                                    prefixIcon: Icon(
-                                      Icons.arrow_forward,
-                                      color: theme.colorScheme.primary,
-                                    ),
-                                  ),
-                                  keyboardType: const TextInputType.numberWithOptions(
-                                    decimal: true,
-                                    signed: true,
-                                  ),
-                                  onSubmitted: (_) => _updateFromManualInput(),
-                                ),
-                              ],
-                            ),
-                          ),
-                      ],
-                    ),
-                  ),
-                ),
             ],
           );
         },

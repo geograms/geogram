@@ -13,6 +13,7 @@ import '../models/report_comment.dart';
 import '../models/report_settings.dart';
 import '../platform/file_system_service.dart';
 import 'log_service.dart';
+import 'alert_sharing_service.dart';
 
 /// Service for managing reports
 class ReportService {
@@ -282,7 +283,14 @@ class ReportService {
   }
 
   /// Save report
-  Future<void> saveReport(Report report, {bool isExpired = false}) async {
+  ///
+  /// If [notifyRelays] is true and the report has already been shared,
+  /// it will send an update to the relays (using the same d-tag for replacement).
+  Future<void> saveReport(
+    Report report, {
+    bool isExpired = false,
+    bool notifyRelays = true,
+  }) async {
     if (_collectionPath == null) return;
 
     final baseDir = isExpired ? 'expired' : 'active';
@@ -307,6 +315,21 @@ class ReportService {
     }
 
     LogService().log('ReportService: Saved report: ${report.folderName}');
+
+    // Notify relays of update if this is an existing alert
+    if (notifyRelays && report.nostrEventId != null) {
+      try {
+        final alertService = AlertSharingService();
+        final result = await alertService.shareAlert(report);
+
+        if (result.anySuccess) {
+          LogService().log(
+              'ReportService: Updated alert on ${result.confirmed} relay(s)');
+        }
+      } catch (e) {
+        LogService().log('ReportService: Error updating alert on relays: $e');
+      }
+    }
   }
 
   /// Create new report
@@ -337,7 +360,7 @@ class ReportService {
       expires = '${expDate.year}-${expDate.month.toString().padLeft(2, '0')}-${expDate.day.toString().padLeft(2, '0')} ${expDate.hour.toString().padLeft(2, '0')}:${expDate.minute.toString().padLeft(2, '0')}_${expDate.second.toString().padLeft(2, '0')}';
     }
 
-    final report = Report(
+    var report = Report(
       folderName: folderName,
       created: created,
       author: author,
@@ -354,7 +377,61 @@ class ReportService {
       descriptions: {'EN': description},
     );
 
-    await saveReport(report);
+    // Sign the report and create NOSTR event BEFORE saving
+    final alertService = AlertSharingService();
+    final signResult = await alertService.signReportAndCreateEvent(report);
+
+    if (signResult == null) {
+      // Failed to sign - save unsigned report (should not happen in normal use)
+      LogService().log('ReportService: WARNING - Failed to sign report, saving without NOSTR data');
+      await saveReport(report, notifyRelays: false);
+      return report;
+    }
+
+    // Use the signed report (has npub + signature in metadata)
+    report = signResult.report;
+
+    // Save the signed report first
+    await saveReport(report, notifyRelays: false);
+
+    // Share to relays using the pre-created event
+    try {
+      final relayUrls = alertService.getRelayUrls();
+      if (relayUrls.isNotEmpty) {
+        final results = <AlertSendResult>[];
+        int confirmed = 0;
+        int failed = 0;
+
+        for (final relayUrl in relayUrls) {
+          final result = await alertService.sendEventToRelay(signResult.event, relayUrl);
+          results.add(result);
+          if (result.success) {
+            confirmed++;
+          } else {
+            failed++;
+          }
+        }
+
+        // Update report with relay share status and event ID
+        for (final sendResult in results) {
+          report = alertService.updateRelayShareStatus(
+            report,
+            sendResult.relayUrl,
+            sendResult.success
+                ? RelayShareStatusType.confirmed
+                : RelayShareStatusType.failed,
+            nostrEventId: signResult.event.id,
+          );
+        }
+
+        // Re-save with relay status
+        await saveReport(report, notifyRelays: false);
+        LogService().log('ReportService: Alert shared to $confirmed relay(s), $failed failed');
+      }
+    } catch (e) {
+      LogService().log('ReportService: Error sharing alert to relays: $e');
+    }
+
     return report;
   }
 

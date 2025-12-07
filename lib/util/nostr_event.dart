@@ -10,6 +10,7 @@ import 'dart:convert';
 import 'package:crypto/crypto.dart';
 import 'package:hex/hex.dart';
 import 'nostr_crypto.dart';
+import '../models/report.dart';
 
 /// NOSTR Event kinds
 class NostrEventKind {
@@ -26,6 +27,9 @@ class NostrEventKind {
   static const int channelMessage = 42;
   static const int channelHideMessage = 43;
   static const int channelMuteUser = 44;
+  /// NIP-78: Application-specific data (parameterized replaceable)
+  /// Used for Geogram alerts
+  static const int applicationSpecificData = 30078;
 }
 
 /// NOSTR Event structure (NIP-01)
@@ -129,6 +133,49 @@ class NostrEvent {
       kind: NostrEventKind.textNote,
       tags: tags,
       content: 'Hello from Geogram Desktop',
+    );
+  }
+
+  /// Create alert event (kind 30078) for sharing reports to relays
+  ///
+  /// This creates a NIP-78 application-specific event with:
+  /// - d tag: folderName (makes it a parameterized replaceable event)
+  /// - g tag: coordinates
+  /// - t tag: "alert"
+  /// - severity, status, type tags: for filtering
+  /// - expires tag: expiration timestamp (if set)
+  /// - content: full report.txt text
+  factory NostrEvent.alert({
+    required String pubkeyHex,
+    required Report report,
+    int? createdAt,
+  }) {
+    final tags = <List<String>>[
+      // d tag makes this a parameterized replaceable event (same d = replacement)
+      ['d', report.folderName],
+      // Geolocation tag
+      ['g', '${report.latitude},${report.longitude}'],
+      // Type tags for filtering
+      ['t', 'alert'],
+      ['severity', report.severity.name],
+      ['status', report.status.toFileString()],
+      ['type', report.type],
+    ];
+
+    // Add expiration if set
+    if (report.expires != null) {
+      final expDateTime = report.expirationDateTime;
+      if (expDateTime != null) {
+        tags.add(['expires', (expDateTime.millisecondsSinceEpoch ~/ 1000).toString()]);
+      }
+    }
+
+    return NostrEvent(
+      pubkey: pubkeyHex,
+      createdAt: createdAt ?? (DateTime.now().millisecondsSinceEpoch ~/ 1000),
+      kind: NostrEventKind.applicationSpecificData,
+      tags: tags,
+      content: report.exportAsText(),
     );
   }
 

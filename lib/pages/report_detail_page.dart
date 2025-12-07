@@ -3,12 +3,14 @@
  * License: Apache-2.0
  */
 
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:latlong2/latlong.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:http/http.dart' as http;
 // dart:io operations only work on native platforms
 // Image handling is disabled on web
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
@@ -59,13 +61,13 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
   final _latitudeController = TextEditingController();
   final _longitudeController = TextEditingController();
   final _addressController = TextEditingController();
-  final _contactController = TextEditingController();
   final _commentController = TextEditingController();
 
   ReportSeverity _selectedSeverity = ReportSeverity.attention;
   ReportStatus _selectedStatus = ReportStatus.open;
   String _selectedType = 'other';
-  String _locationInputMode = 'map'; // 'map' or 'manual'
+  String _locationInputMode = 'map'; // 'map', 'manual', or 'address'
+  bool _isGeocodingAddress = false;
 
   // Common report types
   static const List<Map<String, String>> _reportTypes = [
@@ -113,7 +115,6 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
       _latitudeController.text = _report!.latitude.toString();
       _longitudeController.text = _report!.longitude.toString();
       _addressController.text = _report!.address ?? '';
-      _contactController.text = _report!.contact ?? '';
       _selectedType = _report!.type;
       _selectedSeverity = _report!.severity;
       _selectedStatus = _report!.status;
@@ -131,7 +132,6 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
     _latitudeController.dispose();
     _longitudeController.dispose();
     _addressController.dispose();
-    _contactController.dispose();
     _commentController.dispose();
     super.dispose();
   }
@@ -238,6 +238,57 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
         _longitudeController.text = result.longitude.toStringAsFixed(6);
       });
     }
+  }
+
+  Future<void> _geocodeAddress() async {
+    if (_addressController.text.trim().isEmpty) {
+      _showError(_i18n.t('enter_address_first'));
+      return;
+    }
+
+    setState(() => _isGeocodingAddress = true);
+
+    try {
+      final address = Uri.encodeComponent(_addressController.text.trim());
+      final response = await http.get(
+        Uri.parse('https://nominatim.openstreetmap.org/search?q=$address&format=json&limit=1'),
+        headers: {
+          'User-Agent': 'geogram-desktop/1.0',
+        },
+      ).timeout(const Duration(seconds: 10));
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body) as List;
+        if (data.isNotEmpty) {
+          final lat = double.tryParse(data[0]['lat'].toString());
+          final lon = double.tryParse(data[0]['lon'].toString());
+          final displayName = data[0]['display_name'] as String?;
+
+          if (lat != null && lon != null) {
+            setState(() {
+              _latitudeController.text = lat.toStringAsFixed(6);
+              _longitudeController.text = lon.toStringAsFixed(6);
+              // Update address with the full display name from geocoder
+              if (displayName != null && displayName.isNotEmpty) {
+                _addressController.text = displayName;
+              }
+            });
+            _showSuccess(_i18n.t('location_found'));
+          } else {
+            _showError(_i18n.t('address_not_found'));
+          }
+        } else {
+          _showError(_i18n.t('address_not_found'));
+        }
+      } else {
+        _showError(_i18n.t('geocoding_failed'));
+      }
+    } catch (e) {
+      LogService().log('ReportDetailPage: Geocoding error: $e');
+      _showError(_i18n.t('geocoding_failed'));
+    }
+
+    setState(() => _isGeocodingAddress = false);
   }
 
   Future<void> _pickImages() async {
@@ -351,12 +402,16 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
     final lon = double.tryParse(_longitudeController.text);
 
     if (lat == null || lon == null) {
-      _showError('Valid coordinates are required');
+      if (_locationInputMode == 'address') {
+        _showError(_i18n.t('find_location_first'));
+      } else {
+        _showError(_i18n.t('coordinates_required'));
+      }
       return;
     }
 
     if (lat < -90 || lat > 90 || lon < -180 || lon > 180) {
-      _showError('Coordinates out of range');
+      _showError(_i18n.t('coordinates_out_of_range'));
       return;
     }
 
@@ -381,7 +436,6 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
           severity: _selectedSeverity,
           type: _selectedType,
           address: _addressController.text.trim().isNotEmpty ? _addressController.text.trim() : null,
-          contact: _contactController.text.trim().isNotEmpty ? _contactController.text.trim() : null,
         );
 
         // Save images
@@ -403,7 +457,6 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
           status: _selectedStatus,
           type: _selectedType,
           address: _addressController.text.trim().isNotEmpty ? _addressController.text.trim() : null,
-          contact: _contactController.text.trim().isNotEmpty ? _contactController.text.trim() : null,
         );
 
         await _reportService.saveReport(updated);
@@ -546,6 +599,84 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
                     ),
                   SizedBox(height: 16),
 
+                  // Type and Severity (underneath title)
+                  if (_isEditing)
+                    Row(
+                      children: [
+                        Expanded(
+                          child: DropdownButtonFormField<String>(
+                            value: _selectedType,
+                            isExpanded: true,
+                            decoration: InputDecoration(
+                              labelText: _i18n.t('type') + ' *',
+                              border: OutlineInputBorder(),
+                            ),
+                            items: _reportTypes.map((type) {
+                              return DropdownMenuItem(
+                                value: type['value'],
+                                child: Text(type['label']!, overflow: TextOverflow.ellipsis),
+                              );
+                            }).toList(),
+                            onChanged: (value) {
+                              if (value != null) {
+                                setState(() {
+                                  _selectedType = value;
+                                });
+                              }
+                            },
+                          ),
+                        ),
+                        SizedBox(width: 16),
+                        Expanded(
+                          child: DropdownButtonFormField<ReportSeverity>(
+                            value: _selectedSeverity,
+                            isExpanded: true,
+                            decoration: InputDecoration(
+                              labelText: _i18n.t('severity') + ' *',
+                              border: OutlineInputBorder(),
+                            ),
+                            items: ReportSeverity.values.map((severity) {
+                              return DropdownMenuItem(
+                                value: severity,
+                                child: Text(severity.name),
+                              );
+                            }).toList(),
+                            onChanged: (value) {
+                              if (value != null) {
+                                setState(() {
+                                  _selectedSeverity = value;
+                                });
+                              }
+                            },
+                          ),
+                        ),
+                      ],
+                    )
+                  else
+                    Row(
+                      children: [
+                        Expanded(
+                          child: _buildReadOnlyField(
+                            label: _i18n.t('type'),
+                            value: _reportTypes.firstWhere(
+                              (t) => t['value'] == _selectedType,
+                              orElse: () => {'label': _selectedType},
+                            )['label'] ?? _selectedType,
+                            theme: theme,
+                          ),
+                        ),
+                        SizedBox(width: 16),
+                        Expanded(
+                          child: _buildReadOnlyField(
+                            label: _i18n.t('severity'),
+                            value: _selectedSeverity.name,
+                            theme: theme,
+                          ),
+                        ),
+                      ],
+                    ),
+                  SizedBox(height: 16),
+
                   // Description
                   if (_isEditing)
                     TextField(
@@ -554,6 +685,7 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
                         labelText: _i18n.t('description') + ' *',
                         hintText: _i18n.t('description_hint'),
                         border: OutlineInputBorder(),
+                        alignLabelWithHint: true,
                       ),
                       maxLines: 8,
                     )
@@ -595,6 +727,16 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
                           ),
                         ),
                         DropdownMenuItem(
+                          value: 'address',
+                          child: Row(
+                            children: [
+                              Icon(Icons.location_on, size: 20),
+                              SizedBox(width: 8),
+                              Text(_i18n.t('enter_address')),
+                            ],
+                          ),
+                        ),
+                        DropdownMenuItem(
                           value: 'manual',
                           child: Row(
                             children: [
@@ -629,6 +771,44 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
                       ),
                     ),
                   if (_isEditing && _locationInputMode == 'map') SizedBox(height: 16),
+
+                  // Address Input
+                  if (_isEditing && _locationInputMode == 'address')
+                    Column(
+                      children: [
+                        TextField(
+                          controller: _addressController,
+                          decoration: InputDecoration(
+                            labelText: _i18n.t('address') + ' *',
+                            hintText: _i18n.t('address_hint'),
+                            border: OutlineInputBorder(),
+                          ),
+                          onSubmitted: (_) => _geocodeAddress(),
+                        ),
+                        SizedBox(height: 12),
+                        SizedBox(
+                          width: double.infinity,
+                          child: FilledButton.icon(
+                            onPressed: _isGeocodingAddress ? null : _geocodeAddress,
+                            icon: _isGeocodingAddress
+                                ? SizedBox(
+                                    width: 20,
+                                    height: 20,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      color: theme.colorScheme.onPrimary,
+                                    ),
+                                  )
+                                : Icon(Icons.search),
+                            label: Text(_i18n.t('find_location')),
+                            style: FilledButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(vertical: 16),
+                            ),
+                          ),
+                        ),
+                        SizedBox(height: 16),
+                      ],
+                    ),
 
                   // Coordinates Display/Input
                   if (_isEditing && _locationInputMode == 'manual')
@@ -684,8 +864,8 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
                     ),
                   if (_isEditing && _locationInputMode == 'map') SizedBox(height: 16),
 
-                  // Address
-                  if (_isEditing)
+                  // Address (only show for manual mode when editing, address mode has it built-in, map mode doesn't need it)
+                  if (_isEditing && _locationInputMode == 'manual')
                     TextField(
                       controller: _addressController,
                       decoration: InputDecoration(
@@ -694,70 +874,13 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
                         border: OutlineInputBorder(),
                       ),
                     )
-                  else if (_addressController.text.isNotEmpty)
+                  else if (!_isEditing && _addressController.text.isNotEmpty)
                     _buildReadOnlyField(
                       label: _i18n.t('address'),
                       value: _addressController.text,
                       theme: theme,
                     ),
-                  if (_isEditing || _addressController.text.isNotEmpty) SizedBox(height: 16),
-
-                  // Type
-                  if (_isEditing)
-                    DropdownButtonFormField<String>(
-                      value: _selectedType,
-                      decoration: InputDecoration(
-                        labelText: _i18n.t('type') + ' *',
-                        border: OutlineInputBorder(),
-                      ),
-                      items: _reportTypes.map((type) {
-                        return DropdownMenuItem(
-                          value: type['value'],
-                          child: Text(type['label']!),
-                        );
-                      }).toList(),
-                      onChanged: (value) {
-                        if (value != null) {
-                          setState(() {
-                            _selectedType = value;
-                          });
-                        }
-                      },
-                    )
-                  else
-                    _buildReadOnlyField(
-                      label: _i18n.t('type'),
-                      value: _reportTypes.firstWhere(
-                        (t) => t['value'] == _selectedType,
-                        orElse: () => {'label': _selectedType},
-                      )['label'] ?? _selectedType,
-                      theme: theme,
-                    ),
-                  SizedBox(height: 16),
-
-                  // Severity - shown in status badges when viewing, dropdown when editing
-                  if (_isEditing)
-                    DropdownButtonFormField<ReportSeverity>(
-                      value: _selectedSeverity,
-                      decoration: InputDecoration(
-                        labelText: _i18n.t('severity') + ' *',
-                        border: OutlineInputBorder(),
-                      ),
-                      items: ReportSeverity.values.map((severity) {
-                        return DropdownMenuItem(
-                          value: severity,
-                          child: Text(severity.name),
-                        );
-                      }).toList(),
-                      onChanged: (value) {
-                        if (value != null) {
-                          setState(() {
-                            _selectedSeverity = value;
-                          });
-                        }
-                      },
-                    ),
-                  if (_isEditing) SizedBox(height: 16),
+                  if ((_isEditing && _locationInputMode == 'manual') || (!_isEditing && _addressController.text.isNotEmpty)) SizedBox(height: 16),
 
                   // Status (only for existing reports when editing - shown in badges when viewing)
                   if (!_isNew && _isEditing && canEdit) ...[
@@ -783,24 +906,7 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
                     ),
                     SizedBox(height: 16),
                   ],
-
-                  // Contact
-                  if (_isEditing)
-                    TextField(
-                      controller: _contactController,
-                      decoration: InputDecoration(
-                        labelText: _i18n.t('contact'),
-                        hintText: _i18n.t('contact_info_hint'),
-                        border: OutlineInputBorder(),
-                      ),
-                    )
-                  else if (_contactController.text.isNotEmpty)
-                    _buildReadOnlyField(
-                      label: _i18n.t('contact'),
-                      value: _contactController.text,
-                      theme: theme,
-                    ),
-                  SizedBox(height: 24),
+                  SizedBox(height: 8),
 
                   // Images Section
                   Text(

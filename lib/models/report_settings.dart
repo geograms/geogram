@@ -5,7 +5,7 @@
 
 /// Settings for report collections
 class ReportSettings {
-  /// Default TTL for new reports (in seconds, 30 days)
+  /// Default TTL for new reports (in seconds, 2 days)
   final int defaultTtl;
 
   /// Auto-archive resolved reports after days
@@ -30,7 +30,7 @@ class ReportSettings {
   final bool showExpired;
 
   ReportSettings({
-    this.defaultTtl = 2592000, // 30 days
+    this.defaultTtl = 172800, // 2 days
     this.autoArchiveResolved = 90, // 90 days
     this.enableVerification = true,
     this.minVerifications = 3,
@@ -43,7 +43,7 @@ class ReportSettings {
   /// Create from JSON
   factory ReportSettings.fromJson(Map<String, dynamic> json) {
     return ReportSettings(
-      defaultTtl: json['defaultTtl'] as int? ?? 2592000,
+      defaultTtl: json['defaultTtl'] as int? ?? 172800,
       autoArchiveResolved: json['autoArchiveResolved'] as int? ?? 90,
       enableVerification: json['enableVerification'] as bool? ?? true,
       minVerifications: json['minVerifications'] as int? ?? 3,

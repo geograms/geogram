@@ -3,6 +3,65 @@
  * License: Apache-2.0
  */
 
+/// Status of relay share for an alert
+enum RelayShareStatusType {
+  pending,
+  confirmed,
+  failed;
+
+  static RelayShareStatusType fromString(String value) {
+    return RelayShareStatusType.values.firstWhere(
+      (e) => e.name == value.toLowerCase(),
+      orElse: () => RelayShareStatusType.pending,
+    );
+  }
+}
+
+/// Tracks the status of sharing an alert to a specific relay
+class RelayShareStatus {
+  final String relayUrl;
+  final DateTime sentAt;
+  final RelayShareStatusType status;
+
+  RelayShareStatus({
+    required this.relayUrl,
+    required this.sentAt,
+    required this.status,
+  });
+
+  /// Parse from text line: "wss://relay.example.com,2025-12-06T10:30:00Z,confirmed"
+  factory RelayShareStatus.fromLine(String line) {
+    final parts = line.split(',');
+    if (parts.length >= 3) {
+      return RelayShareStatus(
+        relayUrl: parts[0].trim(),
+        sentAt: DateTime.tryParse(parts[1].trim()) ?? DateTime.now(),
+        status: RelayShareStatusType.fromString(parts[2].trim()),
+      );
+    }
+    throw FormatException('Invalid relay_sent format: $line');
+  }
+
+  /// Export to text line
+  String toLine() => '$relayUrl,${sentAt.toUtc().toIso8601String()},${status.name}';
+
+  /// Create copy with updated status
+  RelayShareStatus copyWith({
+    String? relayUrl,
+    DateTime? sentAt,
+    RelayShareStatusType? status,
+  }) {
+    return RelayShareStatus(
+      relayUrl: relayUrl ?? this.relayUrl,
+      sentAt: sentAt ?? this.sentAt,
+      status: status ?? this.status,
+    );
+  }
+
+  @override
+  String toString() => 'RelayShareStatus($relayUrl, ${status.name})';
+}
+
 /// Severity levels for reports
 enum ReportSeverity {
   emergency,
@@ -73,6 +132,8 @@ class Report {
   final Map<String, String> titles;
   final Map<String, String> descriptions;
   final Map<String, String> metadata;
+  final List<RelayShareStatus> relayShares;
+  final String? nostrEventId;
 
   Report({
     required this.folderName,
@@ -103,6 +164,8 @@ class Report {
     this.titles = const {},
     this.descriptions = const {},
     this.metadata = const {},
+    this.relayShares = const [],
+    this.nostrEventId,
   });
 
   /// Check if user has liked this report
@@ -144,6 +207,13 @@ class Report {
 
   /// Get signature
   String? get signature => metadata['signature'];
+
+  /// Get signed timestamp (Unix seconds)
+  int? get signedAt {
+    final value = metadata['signed_at'];
+    if (value == null) return null;
+    return int.tryParse(value);
+  }
 
   /// Check if report is signed with NOSTR
   bool get isSigned => metadata.containsKey('signature');
@@ -198,6 +268,36 @@ class Report {
     return subscribers.contains(npub);
   }
 
+  /// Check if alert has been shared to any relay
+  bool get isSharedToRelays => relayShares.isNotEmpty;
+
+  /// Check if alert has been shared to a specific relay
+  bool isSharedToRelay(String relayUrl) {
+    return relayShares.any((s) => s.relayUrl == relayUrl);
+  }
+
+  /// Check if alert needs sharing to a specific relay (not confirmed)
+  bool needsSharingToRelay(String relayUrl) {
+    final share = relayShares.where((s) => s.relayUrl == relayUrl).firstOrNull;
+    if (share == null) return true;
+    return share.status != RelayShareStatusType.confirmed;
+  }
+
+  /// Get share status for a specific relay
+  RelayShareStatus? getRelayShareStatus(String relayUrl) {
+    return relayShares.where((s) => s.relayUrl == relayUrl).firstOrNull;
+  }
+
+  /// Get count of confirmed relays
+  int get confirmedRelayCount {
+    return relayShares.where((s) => s.status == RelayShareStatusType.confirmed).length;
+  }
+
+  /// Get count of failed relays
+  int get failedRelayCount {
+    return relayShares.where((s) => s.status == RelayShareStatusType.failed).length;
+  }
+
   /// Parse report from text
   static Report fromText(String text, String folderName) {
     final lines = text.split('\n');
@@ -249,6 +349,8 @@ class Report {
     List<String> likedBy = [];
     int likeCount = 0;
     Map<String, String> metadata = {};
+    List<RelayShareStatus> relayShares = [];
+    String? nostrEventId;
 
     int contentStart = headerEnd;
     for (int i = headerEnd; i < lines.length; i++) {
@@ -310,7 +412,18 @@ class Report {
         if (colonIndex > 0) {
           final key = metaLine.substring(0, colonIndex).trim();
           final value = metaLine.substring(colonIndex + 1).trim();
-          metadata[key] = value;
+          // Handle special relay sharing metadata
+          if (key == 'relay_sent') {
+            try {
+              relayShares.add(RelayShareStatus.fromLine(value));
+            } catch (_) {
+              // Ignore malformed relay_sent entries
+            }
+          } else if (key == 'nostr_event_id') {
+            nostrEventId = value;
+          } else {
+            metadata[key] = value;
+          }
         }
       } else if (line.trim().isEmpty && i > headerEnd) {
         contentStart = i + 1;
@@ -320,6 +433,7 @@ class Report {
 
     // Parse descriptions
     final descriptions = <String, String>{};
+    int metadataStart = lines.length;
     if (contentStart < lines.length) {
       String? currentLang;
       final descLines = <String>[];
@@ -335,7 +449,8 @@ class Report {
           }
           currentLang = line.substring(1, line.length - 1).toUpperCase();
         } else if (line.startsWith('-->')) {
-          // Metadata section, stop parsing descriptions
+          // Metadata section, stop parsing descriptions but remember where it starts
+          metadataStart = i;
           break;
         } else if (currentLang != null) {
           descLines.add(line);
@@ -348,6 +463,31 @@ class Report {
       // Save last language or single language
       if (descLines.isNotEmpty) {
         descriptions[currentLang ?? 'EN'] = descLines.join('\n').trim();
+      }
+    }
+
+    // Parse trailing metadata after descriptions (npub, signature, relay_sent, nostr_event_id)
+    for (int i = metadataStart; i < lines.length; i++) {
+      final line = lines[i];
+      if (line.startsWith('-->')) {
+        final metaLine = line.substring(3).trim();
+        final colonIndex = metaLine.indexOf(':');
+        if (colonIndex > 0) {
+          final key = metaLine.substring(0, colonIndex).trim();
+          final value = metaLine.substring(colonIndex + 1).trim();
+          // Handle special relay sharing metadata
+          if (key == 'relay_sent') {
+            try {
+              relayShares.add(RelayShareStatus.fromLine(value));
+            } catch (_) {
+              // Ignore malformed relay_sent entries
+            }
+          } else if (key == 'nostr_event_id') {
+            nostrEventId = value;
+          } else {
+            metadata[key] = value;
+          }
+        }
       }
     }
 
@@ -385,6 +525,8 @@ class Report {
       titles: titles,
       descriptions: descriptions,
       metadata: metadata,
+      relayShares: relayShares,
+      nostrEventId: nostrEventId,
     );
   }
 
@@ -489,6 +631,14 @@ class Report {
       buffer.writeln('--> signature: $sig');
     }
 
+    // Relay sharing metadata (after signature)
+    if (nostrEventId != null && nostrEventId!.isNotEmpty) {
+      buffer.writeln('--> nostr_event_id: $nostrEventId');
+    }
+    for (final share in relayShares) {
+      buffer.writeln('--> relay_sent: ${share.toLine()}');
+    }
+
     return buffer.toString();
   }
 
@@ -522,6 +672,8 @@ class Report {
     Map<String, String>? titles,
     Map<String, String>? descriptions,
     Map<String, String>? metadata,
+    List<RelayShareStatus>? relayShares,
+    String? nostrEventId,
   }) {
     return Report(
       folderName: folderName ?? this.folderName,
@@ -552,6 +704,8 @@ class Report {
       titles: titles ?? this.titles,
       descriptions: descriptions ?? this.descriptions,
       metadata: metadata ?? this.metadata,
+      relayShares: relayShares ?? this.relayShares,
+      nostrEventId: nostrEventId ?? this.nostrEventId,
     );
   }
 

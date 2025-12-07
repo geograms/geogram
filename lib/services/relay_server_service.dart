@@ -13,6 +13,9 @@ import '../services/profile_service.dart';
 import '../services/callsign_generator.dart';
 import '../services/storage_config.dart';
 import '../models/blog_post.dart';
+import '../util/nostr_event.dart';
+import '../util/nostr_crypto.dart';
+import '../util/event_bus.dart';
 import '../version.dart';
 
 /// Relay server settings
@@ -380,23 +383,210 @@ class RelayServerService {
 
         if (type == 'hello') {
           // Client hello handshake
-          final callsign = message['callsign'] as String?;
-          client.callsign = callsign;
-
-          // Send hello response
-          final response = {
-            'type': 'hello_response',
-            'server': 'geogram-desktop-relay',
-            'version': appVersion,
-            'callsign': ProfileService().getProfile().callsign,
-          };
-          client.socket.add(jsonEncode(response));
-          LogService().log('Hello from client: $callsign');
+          _handleHelloMessage(client, message);
+        } else if (type == 'EVENT') {
+          // NOSTR EVENT message
+          _handleNostrEvent(client, message);
+        } else if (type == 'PING') {
+          // Heartbeat ping
+          client.socket.add(jsonEncode({'type': 'PONG'}));
         }
       }
     } catch (e) {
       LogService().log('WebSocket message error: $e');
     }
+  }
+
+  /// Handle hello message from client
+  void _handleHelloMessage(ConnectedClient client, Map<String, dynamic> message) {
+    final event = message['event'] as Map<String, dynamic>?;
+    String? callsign;
+    String? npub;
+
+    if (event != null) {
+      // Extract callsign from hello event tags
+      final tags = event['tags'] as List<dynamic>?;
+      if (tags != null) {
+        for (final tag in tags) {
+          if (tag is List && tag.isNotEmpty) {
+            if (tag[0] == 'callsign' && tag.length > 1) {
+              callsign = tag[1] as String;
+            }
+          }
+        }
+      }
+      // Get npub from pubkey
+      final pubkey = event['pubkey'] as String?;
+      if (pubkey != null) {
+        npub = NostrCrypto.encodeNpub(pubkey);
+      }
+    } else {
+      // Legacy format without event wrapper
+      callsign = message['callsign'] as String?;
+    }
+
+    client.callsign = callsign;
+
+    // Send hello acknowledgment
+    final response = {
+      'type': 'hello_ack',
+      'success': true,
+      'message': 'Welcome to Geogram Relay',
+      'server': 'geogram-desktop-relay',
+      'version': appVersion,
+      'relay_id': ProfileService().getProfile().callsign,
+    };
+    client.socket.add(jsonEncode(response));
+
+    LogService().log('Hello from client: $callsign (npub: ${npub?.substring(0, 20)}...)');
+
+    // Fire client connected event
+    EventBus().fire(ClientConnectedEvent(
+      clientId: client.id,
+      callsign: callsign,
+      npub: npub,
+    ));
+  }
+
+  /// Handle NOSTR EVENT message
+  Future<void> _handleNostrEvent(ConnectedClient client, Map<String, dynamic> message) async {
+    try {
+      final eventData = message['event'] as Map<String, dynamic>?;
+      if (eventData == null) {
+        _sendOkResponse(client, null, false, 'Missing event data');
+        return;
+      }
+
+      final event = NostrEvent.fromJson(eventData);
+      final eventId = event.id ?? '';
+
+      // Verify signature
+      if (!event.verify()) {
+        LogService().log('Alert event signature verification failed');
+        _sendOkResponse(client, eventId, false, 'Invalid signature');
+        return;
+      }
+
+      // Handle based on event kind
+      if (event.kind == NostrEventKind.applicationSpecificData) {
+        // Check for alert tag
+        final alertTag = event.getTagValue('t');
+        if (alertTag == 'alert') {
+          await _handleAlertEvent(client, event);
+          return;
+        }
+      }
+
+      // Unknown event kind - accept but don't process
+      LogService().log('Received event kind ${event.kind} - ignoring');
+      _sendOkResponse(client, eventId, true, 'Event received but not processed');
+    } catch (e) {
+      LogService().log('Error handling NOSTR event: $e');
+      _sendOkResponse(client, null, false, 'Error: $e');
+    }
+  }
+
+  /// Handle alert event (kind 30078 with t=alert tag)
+  Future<void> _handleAlertEvent(ConnectedClient client, NostrEvent event) async {
+    final eventId = event.id ?? '';
+
+    try {
+      // Extract alert metadata from tags
+      final folderName = event.getTagValue('d') ?? '';
+      final coordsStr = event.getTagValue('g') ?? '';
+      final severity = event.getTagValue('severity') ?? 'info';
+      final status = event.getTagValue('status') ?? 'open';
+      final alertType = event.getTagValue('type') ?? 'other';
+
+      // Parse coordinates
+      double latitude = 0;
+      double longitude = 0;
+      if (coordsStr.contains(',')) {
+        final parts = coordsStr.split(',');
+        latitude = double.tryParse(parts[0]) ?? 0;
+        longitude = double.tryParse(parts[1]) ?? 0;
+      }
+
+      // Get sender info
+      final senderNpub = NostrCrypto.encodeNpub(event.pubkey);
+      final senderCallsign = client.callsign ?? 'X1${NostrCrypto.deriveCallsign(event.pubkey)}';
+
+      LogService().log('═══════════════════════════════════════════════════');
+      LogService().log('ALERT RECEIVED');
+      LogService().log('═══════════════════════════════════════════════════');
+      LogService().log('Event ID: $eventId');
+      LogService().log('From: $senderCallsign');
+      LogService().log('Folder: $folderName');
+      LogService().log('Coordinates: $latitude, $longitude');
+      LogService().log('Severity: $severity');
+      LogService().log('Status: $status');
+      LogService().log('Type: $alertType');
+      LogService().log('Content length: ${event.content.length} chars');
+      LogService().log('═══════════════════════════════════════════════════');
+
+      // Store alert
+      await _storeAlert(senderCallsign, folderName, event.content);
+
+      // Fire event for subscribers
+      EventBus().fire(AlertReceivedEvent(
+        eventId: eventId,
+        senderCallsign: senderCallsign,
+        senderNpub: senderNpub,
+        folderName: folderName,
+        latitude: latitude,
+        longitude: longitude,
+        severity: severity,
+        status: status,
+        type: alertType,
+        content: event.content,
+        verified: true,
+      ));
+
+      // Send OK acknowledgment
+      _sendOkResponse(client, eventId, true, 'Alert stored successfully');
+
+      // Notify all connected clients about the new alert
+      _broadcastUpdate('UPDATE:$senderCallsign/alerts/$folderName');
+    } catch (e) {
+      LogService().log('Error storing alert: $e');
+      _sendOkResponse(client, eventId, false, 'Storage error: $e');
+    }
+  }
+
+  /// Store alert in devices/{callsign}/alerts/{folderName}/report.txt
+  Future<void> _storeAlert(String callsign, String folderName, String content) async {
+    final storageConfig = StorageConfig();
+    final devicesDir = storageConfig.devicesDir;
+    final alertPath = '$devicesDir/$callsign/alerts/$folderName';
+
+    final alertDir = Directory(alertPath);
+    if (!await alertDir.exists()) {
+      await alertDir.create(recursive: true);
+    }
+
+    final reportFile = File('$alertPath/report.txt');
+    await reportFile.writeAsString(content, flush: true);
+
+    LogService().log('Alert stored at: $alertPath/report.txt');
+  }
+
+  /// Send NOSTR OK response
+  void _sendOkResponse(ConnectedClient client, String? eventId, bool success, String message) {
+    final response = jsonEncode(['OK', eventId ?? '', success, message]);
+    client.socket.add(response);
+    LogService().log('Sent OK response: success=$success, message=$message');
+  }
+
+  /// Broadcast update to all connected clients
+  void _broadcastUpdate(String updateMessage) {
+    for (final client in _clients.values) {
+      try {
+        client.socket.add(updateMessage);
+      } catch (e) {
+        LogService().log('Error broadcasting to client ${client.id}: $e');
+      }
+    }
+    LogService().log('Broadcast update to ${_clients.length} clients: $updateMessage');
   }
 
   /// Handle /api/status endpoint

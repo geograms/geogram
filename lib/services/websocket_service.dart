@@ -16,8 +16,12 @@ import '../util/tlsh.dart';
 import '../models/update_notification.dart';
 import '../models/blog_post.dart';
 
-/// WebSocket service for relay connections
+/// WebSocket service for relay connections (singleton)
 class WebSocketService {
+  static final WebSocketService _instance = WebSocketService._internal();
+  factory WebSocketService() => _instance;
+  WebSocketService._internal();
+
   WebSocketChannel? _channel;
   StreamSubscription? _subscription;
   final _messageController = StreamController<Map<String, dynamic>>.broadcast();
@@ -145,7 +149,22 @@ class WebSocketService {
             LogService().log('══════════════════════════════════════');
             LogService().log('Raw message: ${rawMessage.length > 500 ? "${rawMessage.substring(0, 500)}..." : rawMessage}');
 
-            final data = jsonDecode(rawMessage) as Map<String, dynamic>;
+            // Parse the JSON - could be array (NOSTR protocol) or object (custom protocol)
+            final decoded = jsonDecode(rawMessage);
+
+            // Handle NOSTR standard array format: ["OK", event_id, success, message]
+            if (decoded is List && decoded.isNotEmpty && decoded[0] == 'OK') {
+              final eventId = decoded.length > 1 ? decoded[1] as String? : null;
+              final success = decoded.length > 2 ? decoded[2] as bool? ?? false : false;
+              final okMessage = decoded.length > 3 ? decoded[3] as String? : null;
+              LogService().log('✓ Received NOSTR OK: event=${eventId?.substring(0, 16)}..., success=$success');
+              if (eventId != null && eventId.isNotEmpty) {
+                _handleOkResponse(eventId, success, okMessage);
+              }
+              return;
+            }
+
+            final data = decoded as Map<String, dynamic>;
             LogService().log('Message type: ${data['type']}');
 
             if (data['type'] == 'PONG') {
@@ -183,6 +202,15 @@ class WebSocketService {
                 data['headers'] as String?,
                 data['body'] as String?,
               );
+            } else if (data['type'] == 'OK') {
+              // NOSTR OK response: {"type": "OK", "event_id": "...", "success": true/false, "message": "..."}
+              final eventId = data['event_id'] as String?;
+              final success = data['success'] as bool? ?? false;
+              final message = data['message'] as String?;
+              LogService().log('✓ Received OK response for event ${eventId?.substring(0, 16)}...: success=$success');
+              if (eventId != null) {
+                _handleOkResponse(eventId, success, message);
+              }
             }
 
             _messageController.add(data);
@@ -306,6 +334,63 @@ class WebSocketService {
       LogService().log('Error sending message: $e');
       _handleConnectionLoss();
       return false;
+    }
+  }
+
+  // Pending OK responses keyed by event ID
+  final Map<String, Completer<({bool success, String? message})>> _pendingOkResponses = {};
+
+  /// Send a NOSTR event and wait for OK acknowledgment from the relay.
+  /// Returns (success: true/false, message: error message if failed).
+  /// Throws TimeoutException if no response within timeout.
+  Future<({bool success, String? message})> sendEventAndWaitForOk(
+    Map<String, dynamic> eventMessage,
+    String eventId, {
+    Duration timeout = const Duration(seconds: 10),
+  }) async {
+    if (!await ensureConnected()) {
+      LogService().log('Cannot send event: not connected to relay');
+      return (success: false, message: 'Not connected to relay');
+    }
+
+    // Create completer for this event
+    final completer = Completer<({bool success, String? message})>();
+    _pendingOkResponses[eventId] = completer;
+
+    try {
+      // Send the event
+      final json = jsonEncode(eventMessage);
+      LogService().log('Sending NOSTR event (waiting for OK): ${json.length > 200 ? "${json.substring(0, 200)}..." : json}');
+      _channel!.sink.add(json);
+      LogService().log('✓ Event sent, waiting for OK response...');
+
+      // Wait for response with timeout
+      final result = await completer.future.timeout(
+        timeout,
+        onTimeout: () {
+          LogService().log('✗ Timeout waiting for OK response for event $eventId');
+          return (success: false, message: 'Timeout waiting for relay response');
+        },
+      );
+
+      return result;
+    } catch (e) {
+      LogService().log('Error sending event: $e');
+      _handleConnectionLoss();
+      return (success: false, message: e.toString());
+    } finally {
+      _pendingOkResponses.remove(eventId);
+    }
+  }
+
+  /// Handle OK response from relay for a pending event
+  void _handleOkResponse(String eventId, bool success, String? message) {
+    final completer = _pendingOkResponses[eventId];
+    if (completer != null && !completer.isCompleted) {
+      LogService().log('Received OK for event $eventId: success=$success, message=$message');
+      completer.complete((success: success, message: message));
+    } else {
+      LogService().log('Received OK for unknown/completed event $eventId');
     }
   }
 

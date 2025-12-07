@@ -1213,5 +1213,25 @@
   "onboarding_permission_internet_short": "Para relays NOSTR e mapas",
   "onboarding_permission_install": "Instalar Atualizações",
   "onboarding_permission_install_short": "Para atualizações in-app do GitHub",
-  "onboarding_privacy_short": "Os teus dados ficam no dispositivo. A localização só é partilhada quando escolheres."
+  "onboarding_privacy_short": "Os teus dados ficam no dispositivo. A localização só é partilhada quando escolheres.",
+
+  "enter_address": "Introduzir Morada",
+  "enter_address_first": "Introduza uma morada primeiro",
+  "find_location": "Encontrar Localização",
+  "find_location_first": "Por favor encontre a localização primeiro clicando em 'Encontrar Localização'",
+  "location_found": "Localização encontrada",
+  "address_not_found": "Morada não encontrada. Tente outra morada.",
+  "geocoding_failed": "Falha ao procurar morada. Verifique a ligação.",
+  "coordinates_required": "Coordenadas válidas são necessárias",
+  "coordinates_out_of_range": "Coordenadas fora do intervalo",
+
+  "generate_new": "Gerar Novo",
+
+  "upload_unsent_alerts": "Enviar alertas pendentes",
+  "sent_to_relays": "Enviado para {0} relay(s)",
+  "relay_send_failed": "Falha ao enviar para o relay",
+  "not_sent_to_relay": "Ainda não enviado para o relay",
+  "alerts_uploaded": "{0} alerta(s) enviado(s) com sucesso",
+  "upload_failed": "Falha no envio",
+  "failed": "falhou"
 }

@@ -59,6 +59,21 @@ run_tile_tests() {
     $DART bin/tile_server_test.dart
 }
 
+run_alert_tests() {
+    echo "========================================"
+    echo "Running Alert Sharing Tests"
+    echo "========================================"
+    echo "This test will:"
+    echo "  - Start a relay server on port 45691"
+    echo "  - Create a mock client with NOSTR keys"
+    echo "  - Send an alert event to the relay"
+    echo "  - Verify signature verification"
+    echo "  - Verify alert storage on disk"
+    echo "  - Verify EventBus notification"
+    echo ""
+    $DART bin/alert_sharing_test.dart
+}
+
 run_flutter_tests() {
     echo "========================================"
     echo "Running Flutter Widget Tests"
@@ -86,6 +101,9 @@ case "${1:-relay}" in
     tiles)
         run_tile_tests
         ;;
+    alerts)
+        run_alert_tests
+        ;;
     flutter|widget)
         run_flutter_tests
         ;;
@@ -93,6 +111,8 @@ case "${1:-relay}" in
         run_relay_tests
         echo ""
         run_tile_tests
+        echo ""
+        run_alert_tests
         ;;
     help|--help|-h)
         echo "Usage: $0 [command]"
@@ -100,15 +120,17 @@ case "${1:-relay}" in
         echo "Commands:"
         echo "  relay    Run relay API tests (standalone) [default]"
         echo "  tiles    Run tile server tests (standalone, tests caching)"
+        echo "  alerts   Run alert sharing tests (NOSTR events, storage)"
         echo "  flutter  Run Flutter widget tests (placeholder)"
-        echo "  all      Run relay + tile tests"
+        echo "  all      Run relay + tile + alert tests"
         echo "  help     Show this help message"
         echo ""
-        echo "Tile tests verify:"
-        echo "  - Tile fetching from OpenStreetMap"
-        echo "  - Memory caching of tiles"
-        echo "  - Disk caching of tiles"
-        echo "  - Cache hit verification on repeated requests"
+        echo "Alert tests verify:"
+        echo "  - NOSTR event creation and signing"
+        echo "  - WebSocket communication with relay"
+        echo "  - Alert event verification (BIP-340 Schnorr)"
+        echo "  - Alert storage on relay disk"
+        echo "  - EventBus notification to subscribers"
         echo ""
         ;;
     *)

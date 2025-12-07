@@ -1682,6 +1682,8 @@ class PureRelayServer {
         await _handleTileRequest(request);
       } else if (path == '/api/cli' && method == 'POST') {
         await _handleCliCommand(request);
+      } else if (path == '/alerts' || path == '/api/alerts') {
+        await _handleAlertsPage(request);
       } else if (path == '/') {
         await _handleRoot(request);
       } else if (_isBlogPath(path)) {
@@ -1987,7 +1989,7 @@ class PureRelayServer {
 
   /// Handle incoming NOSTR event from WebSocket
   /// Format: ["EVENT", {id, pubkey, created_at, kind, tags, content, sig}]
-  void _handleNostrEvent(PureConnectedClient client, dynamic nostrEvent) {
+  Future<void> _handleNostrEvent(PureConnectedClient client, dynamic nostrEvent) async {
     try {
       // Parse NOSTR message format: ["EVENT", {...}]
       if (nostrEvent is! List || nostrEvent.length < 2) {
@@ -2015,9 +2017,21 @@ class PureRelayServer {
       // Verify the signature (BIP-340 Schnorr)
       if (!event.verify()) {
         _log('WARN', 'NOSTR event signature verification failed');
+        _sendOkResponse(client, event.id, false, 'Invalid signature');
         return;
       }
 
+      // Route based on event kind
+      if (event.kind == NostrEventKind.applicationSpecificData) {
+        // Check if this is an alert event
+        final alertTag = event.getTagValue('t');
+        if (alertTag == 'alert') {
+          await _handleAlertEvent(client, event);
+          return;
+        }
+      }
+
+      // Default: handle as chat message (kind 1 or other text notes)
       final content = event.content;
       if (content.isEmpty) {
         _log('WARN', 'NOSTR event has no content');
@@ -2093,6 +2107,405 @@ class PureRelayServer {
     } catch (e) {
       _log('ERROR', 'Error handling NOSTR event: $e');
     }
+  }
+
+  /// Handle alert event (kind 30078 with t=alert tag)
+  Future<void> _handleAlertEvent(PureConnectedClient client, NostrEvent event) async {
+    final eventId = event.id ?? '';
+
+    try {
+      // Extract alert metadata from tags
+      final folderName = event.getTagValue('d') ?? '';
+      final coordsStr = event.getTagValue('g') ?? '';
+      final severity = event.getTagValue('severity') ?? 'info';
+      final status = event.getTagValue('status') ?? 'open';
+      final alertType = event.getTagValue('type') ?? 'other';
+
+      // Parse coordinates
+      double latitude = 0;
+      double longitude = 0;
+      if (coordsStr.contains(',')) {
+        final parts = coordsStr.split(',');
+        latitude = double.tryParse(parts[0]) ?? 0;
+        longitude = double.tryParse(parts[1]) ?? 0;
+      }
+
+      // Get sender info
+      final senderNpub = NostrCrypto.encodeNpub(event.pubkey);
+      final senderCallsign = client.callsign ?? event.callsign;
+
+      _log('INFO', '═══════════════════════════════════════════════════');
+      _log('INFO', 'ALERT RECEIVED');
+      _log('INFO', '═══════════════════════════════════════════════════');
+      _log('INFO', 'Event ID: $eventId');
+      _log('INFO', 'From: $senderCallsign');
+      _log('INFO', 'Folder: $folderName');
+      _log('INFO', 'Coordinates: $latitude, $longitude');
+      _log('INFO', 'Severity: $severity');
+      _log('INFO', 'Status: $status');
+      _log('INFO', 'Type: $alertType');
+      _log('INFO', 'Content length: ${event.content.length} chars');
+      _log('INFO', '═══════════════════════════════════════════════════');
+
+      // Store alert
+      await _storeAlert(senderCallsign, folderName, event.content);
+
+      // Fire event for subscribers
+      EventBus().fire(AlertReceivedEvent(
+        eventId: eventId,
+        senderCallsign: senderCallsign,
+        senderNpub: senderNpub,
+        folderName: folderName,
+        latitude: latitude,
+        longitude: longitude,
+        severity: severity,
+        status: status,
+        type: alertType,
+        content: event.content,
+        verified: true,
+      ));
+
+      // Send OK acknowledgment
+      _sendOkResponse(client, eventId, true, 'Alert stored successfully');
+
+      // Notify all connected clients about the new alert
+      _broadcastUpdate('UPDATE:$senderCallsign/alerts/$folderName');
+    } catch (e) {
+      _log('ERROR', 'Error storing alert: $e');
+      _sendOkResponse(client, eventId, false, 'Storage error: $e');
+    }
+  }
+
+  /// Store alert in devices/{callsign}/alerts/{folderName}/report.txt
+  Future<void> _storeAlert(String callsign, String folderName, String content) async {
+    final devicesDir = PureStorageConfig().devicesDir;
+    final alertPath = '$devicesDir/$callsign/alerts/$folderName';
+
+    final alertDir = Directory(alertPath);
+    if (!await alertDir.exists()) {
+      await alertDir.create(recursive: true);
+    }
+
+    final reportFile = File('$alertPath/report.txt');
+    await reportFile.writeAsString(content, flush: true);
+
+    _log('INFO', 'Alert stored at: $alertPath/report.txt');
+  }
+
+  /// Handle GET /alerts - Display public alerts page
+  Future<void> _handleAlertsPage(HttpRequest request) async {
+    try {
+      final alerts = await _loadAllAlerts();
+      final html = _buildAlertsHtml(alerts);
+
+      request.response.headers.contentType = ContentType.html;
+      request.response.write(html);
+    } catch (e) {
+      _log('ERROR', 'Error loading alerts: $e');
+      request.response.statusCode = 500;
+      request.response.write('Error loading alerts');
+    }
+  }
+
+  /// Load all alerts from all devices
+  Future<List<Map<String, dynamic>>> _loadAllAlerts() async {
+    final alerts = <Map<String, dynamic>>[];
+    final devicesDir = Directory(PureStorageConfig().devicesDir);
+
+    if (!await devicesDir.exists()) {
+      return alerts;
+    }
+
+    // Iterate through all device directories
+    await for (final deviceEntity in devicesDir.list()) {
+      if (deviceEntity is! Directory) continue;
+
+      final callsign = deviceEntity.path.split('/').last;
+      final alertsDir = Directory('${deviceEntity.path}/alerts');
+
+      if (!await alertsDir.exists()) continue;
+
+      // Iterate through alert folders
+      await for (final alertEntity in alertsDir.list()) {
+        if (alertEntity is! Directory) continue;
+
+        final reportFile = File('${alertEntity.path}/report.txt');
+        if (!await reportFile.exists()) continue;
+
+        try {
+          final content = await reportFile.readAsString();
+          final alert = _parseAlertContent(content, callsign, alertEntity.path.split('/').last);
+
+          // Only include open/in-progress alerts
+          if (alert['status'] == 'open' || alert['status'] == 'in-progress') {
+            alerts.add(alert);
+          }
+        } catch (e) {
+          _log('WARN', 'Failed to parse alert: ${alertEntity.path}');
+        }
+      }
+    }
+
+    // Sort by severity (emergency first) then by date (newest first)
+    alerts.sort((a, b) {
+      final severityOrder = {'emergency': 0, 'urgent': 1, 'attention': 2, 'info': 3};
+      final severityCompare = (severityOrder[a['severity']] ?? 3).compareTo(severityOrder[b['severity']] ?? 3);
+      if (severityCompare != 0) return severityCompare;
+      return (b['created'] as String).compareTo(a['created'] as String);
+    });
+
+    return alerts;
+  }
+
+  /// Parse alert content from report.txt
+  Map<String, dynamic> _parseAlertContent(String content, String callsign, String folderName) {
+    final lines = content.split('\n');
+    final alert = <String, dynamic>{
+      'callsign': callsign,
+      'folderName': folderName,
+      'title': folderName,
+      'severity': 'info',
+      'status': 'open',
+      'type': 'other',
+      'created': '',
+      'latitude': 0.0,
+      'longitude': 0.0,
+      'description': '',
+    };
+
+    final descLines = <String>[];
+    bool inDescription = false;
+
+    for (final line in lines) {
+      if (line.startsWith('# REPORT: ')) {
+        alert['title'] = line.substring(10).trim();
+      } else if (line.startsWith('# REPORT_EN: ')) {
+        alert['title'] = line.substring(13).trim();
+      } else if (line.startsWith('CREATED: ')) {
+        alert['created'] = line.substring(9).trim();
+      } else if (line.startsWith('AUTHOR: ')) {
+        alert['author'] = line.substring(8).trim();
+      } else if (line.startsWith('COORDINATES: ')) {
+        final coords = line.substring(13).split(',');
+        if (coords.length == 2) {
+          alert['latitude'] = double.tryParse(coords[0].trim()) ?? 0.0;
+          alert['longitude'] = double.tryParse(coords[1].trim()) ?? 0.0;
+        }
+      } else if (line.startsWith('SEVERITY: ')) {
+        alert['severity'] = line.substring(10).trim().toLowerCase();
+      } else if (line.startsWith('STATUS: ')) {
+        alert['status'] = line.substring(8).trim().toLowerCase();
+      } else if (line.startsWith('TYPE: ')) {
+        alert['type'] = line.substring(6).trim();
+      } else if (line.startsWith('ADDRESS: ')) {
+        alert['address'] = line.substring(9).trim();
+      } else if (line.startsWith('-->')) {
+        // Metadata section, stop description
+        inDescription = false;
+      } else if (line.trim().isEmpty && !inDescription && alert['created'] != '') {
+        // Empty line after header starts description
+        inDescription = true;
+      } else if (inDescription && !line.startsWith('[')) {
+        descLines.add(line);
+      }
+    }
+
+    alert['description'] = descLines.join('\n').trim();
+    if (alert['description'].length > 300) {
+      alert['description'] = alert['description'].substring(0, 300) + '...';
+    }
+
+    return alert;
+  }
+
+  /// Build HTML page for alerts
+  String _buildAlertsHtml(List<Map<String, dynamic>> alerts) {
+    final alertsHtml = alerts.isEmpty
+        ? '<p class="no-alerts">No active alerts at this time.</p>'
+        : alerts.map((alert) => _buildAlertCard(alert)).join('\n');
+
+    return '''<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Active Alerts - ${_settings.name}</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #1a1a2e;
+      color: #eee;
+      line-height: 1.6;
+      min-height: 100vh;
+    }
+    header {
+      background: linear-gradient(135deg, #16213e 0%, #1a1a2e 100%);
+      padding: 20px;
+      border-bottom: 1px solid #333;
+    }
+    header h1 {
+      font-size: 1.5rem;
+      color: #fff;
+    }
+    header p {
+      color: #888;
+      font-size: 0.9rem;
+    }
+    main {
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 20px;
+    }
+    .alert-card {
+      background: #16213e;
+      border-radius: 12px;
+      padding: 20px;
+      margin-bottom: 16px;
+      border-left: 4px solid #666;
+      transition: transform 0.2s;
+    }
+    .alert-card:hover {
+      transform: translateX(4px);
+    }
+    .alert-card.emergency { border-left-color: #e74c3c; background: linear-gradient(90deg, rgba(231,76,60,0.1) 0%, #16213e 30%); }
+    .alert-card.urgent { border-left-color: #e67e22; background: linear-gradient(90deg, rgba(230,126,34,0.1) 0%, #16213e 30%); }
+    .alert-card.attention { border-left-color: #f1c40f; background: linear-gradient(90deg, rgba(241,196,15,0.1) 0%, #16213e 30%); }
+    .alert-card.info { border-left-color: #3498db; background: linear-gradient(90deg, rgba(52,152,219,0.1) 0%, #16213e 30%); }
+    .alert-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 12px;
+    }
+    .alert-title {
+      font-size: 1.2rem;
+      font-weight: 600;
+      color: #fff;
+    }
+    .alert-badges {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .badge {
+      padding: 4px 10px;
+      border-radius: 20px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+    }
+    .badge.emergency { background: #e74c3c; color: #fff; }
+    .badge.urgent { background: #e67e22; color: #fff; }
+    .badge.attention { background: #f1c40f; color: #000; }
+    .badge.info { background: #3498db; color: #fff; }
+    .badge.type { background: #444; color: #ccc; }
+    .alert-meta {
+      display: flex;
+      gap: 16px;
+      flex-wrap: wrap;
+      font-size: 0.85rem;
+      color: #888;
+      margin-bottom: 12px;
+    }
+    .alert-meta span {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .alert-description {
+      color: #ccc;
+      font-size: 0.95rem;
+    }
+    .no-alerts {
+      text-align: center;
+      color: #666;
+      padding: 60px 20px;
+      font-size: 1.1rem;
+    }
+    .footer {
+      text-align: center;
+      padding: 30px;
+      color: #555;
+      font-size: 0.85rem;
+    }
+    .footer a { color: #3498db; text-decoration: none; }
+    @media (max-width: 600px) {
+      .alert-header { flex-direction: column; gap: 10px; }
+      .alert-meta { flex-direction: column; gap: 8px; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>🚨 Active Alerts</h1>
+    <p>${_settings.name} • ${alerts.length} active alert${alerts.length == 1 ? '' : 's'}</p>
+  </header>
+  <main>
+    $alertsHtml
+  </main>
+  <footer class="footer">
+    Powered by <a href="https://geogram.radio">Geogram</a>
+  </footer>
+</body>
+</html>''';
+  }
+
+  /// Build HTML card for a single alert
+  String _buildAlertCard(Map<String, dynamic> alert) {
+    final severity = alert['severity'] as String;
+    final title = _escapeHtml(alert['title'] as String);
+    final type = _escapeHtml(alert['type'] as String);
+    final created = alert['created'] as String;
+    final author = _escapeHtml(alert['author'] as String? ?? alert['callsign'] as String);
+    final description = _escapeHtml(alert['description'] as String);
+    final address = alert['address'] as String?;
+    final lat = alert['latitude'] as double;
+    final lon = alert['longitude'] as double;
+
+    final addressHtml = address != null && address.isNotEmpty
+        ? '<span>📍 ${_escapeHtml(address)}</span>'
+        : '<span>📍 ${lat.toStringAsFixed(4)}, ${lon.toStringAsFixed(4)}</span>';
+
+    return '''
+    <div class="alert-card $severity">
+      <div class="alert-header">
+        <div class="alert-title">$title</div>
+        <div class="alert-badges">
+          <span class="badge $severity">$severity</span>
+          <span class="badge type">$type</span>
+        </div>
+      </div>
+      <div class="alert-meta">
+        <span>👤 $author</span>
+        <span>🕐 $created</span>
+        $addressHtml
+      </div>
+      <div class="alert-description">$description</div>
+    </div>''';
+  }
+
+  /// Send NOSTR OK response
+  void _sendOkResponse(PureConnectedClient client, String? eventId, bool success, String message) {
+    final response = jsonEncode(['OK', eventId ?? '', success, message]);
+    try {
+      client.socket.add(response);
+    } catch (e) {
+      _log('ERROR', 'Failed to send OK response: $e');
+    }
+    _log('INFO', 'Sent OK response: success=$success, message=$message');
+  }
+
+  /// Broadcast update to all connected clients
+  void _broadcastUpdate(String updateMessage) {
+    for (final c in _clients.values) {
+      try {
+        c.socket.add(updateMessage);
+      } catch (e) {
+        _log('ERROR', 'Error broadcasting to client ${c.id}: $e');
+      }
+    }
+    _log('INFO', 'Broadcast update to ${_clients.length} clients: $updateMessage');
   }
 
   Future<void> _handleStatus(HttpRequest request) async {

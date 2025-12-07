@@ -205,3 +205,32 @@ class StatusUpdateEvent extends AppEvent {
 }
 
 enum StatusType { info, success, warning, error }
+
+/// Alert received from a device
+class AlertReceivedEvent extends AppEvent {
+  final String eventId;
+  final String senderCallsign;
+  final String senderNpub;
+  final String folderName;
+  final double latitude;
+  final double longitude;
+  final String severity;
+  final String status;
+  final String type;
+  final String content;
+  final bool verified;
+
+  AlertReceivedEvent({
+    required this.eventId,
+    required this.senderCallsign,
+    required this.senderNpub,
+    required this.folderName,
+    required this.latitude,
+    required this.longitude,
+    required this.severity,
+    required this.status,
+    required this.type,
+    required this.content,
+    this.verified = false,
+  });
+}

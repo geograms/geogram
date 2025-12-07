@@ -1219,5 +1219,25 @@
   "onboarding_permission_internet_short": "For NOSTR relays and map tiles",
   "onboarding_permission_install": "Install Updates",
   "onboarding_permission_install_short": "For in-app updates from GitHub",
-  "onboarding_privacy_short": "Your data stays on your device. Location is only shared when you choose."
+  "onboarding_privacy_short": "Your data stays on your device. Location is only shared when you choose.",
+
+  "enter_address": "Enter Address",
+  "enter_address_first": "Enter an address first",
+  "find_location": "Find Location",
+  "find_location_first": "Please find your location first by clicking 'Find Location'",
+  "location_found": "Location found",
+  "address_not_found": "Address not found. Try a different address.",
+  "geocoding_failed": "Failed to look up address. Check your connection.",
+  "coordinates_required": "Valid coordinates are required",
+  "coordinates_out_of_range": "Coordinates out of range",
+
+  "generate_new": "Generate New",
+
+  "upload_unsent_alerts": "Upload unsent alerts",
+  "sent_to_relays": "Sent to {0} relay(s)",
+  "relay_send_failed": "Failed to send to relay",
+  "not_sent_to_relay": "Not yet sent to relay",
+  "alerts_uploaded": "{0} alert(s) uploaded successfully",
+  "upload_failed": "Upload failed",
+  "failed": "failed"
 }

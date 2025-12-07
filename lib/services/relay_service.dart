@@ -21,7 +21,7 @@ class RelayService {
 
   List<Relay> _relays = [];
   bool _initialized = false;
-  WebSocketService? _wsService;
+  final WebSocketService _wsService = WebSocketService();
 
   /// Default relays
   static final List<Relay> _defaultRelays = [
@@ -378,18 +378,14 @@ class RelayService {
       LogService().log('URL: $url');
 
       // Disconnect existing connection if any
-      if (_wsService != null) {
+      if (_wsService.isConnected) {
         LogService().log('Disconnecting previous connection...');
-        _wsService!.disconnect();
-        _wsService = null;
+        _wsService.disconnect();
       }
-
-      // Create new WebSocket service
-      _wsService = WebSocketService();
 
       // Attempt connection with hello handshake
       final startTime = DateTime.now();
-      final success = await _wsService!.connectAndHello(url);
+      final success = await _wsService.connectAndHello(url);
 
       if (success) {
         final latency = DateTime.now().difference(startTime).inMilliseconds;
@@ -484,10 +480,9 @@ class RelayService {
 
   /// Disconnect from current relay
   void disconnect() {
-    if (_wsService != null) {
+    if (_wsService.isConnected) {
       LogService().log('Disconnecting from relay...');
-      _wsService!.disconnect();
-      _wsService = null;
+      _wsService.disconnect();
 
       // Update all relays as disconnected
       for (var i = 0; i < _relays.length; i++) {
@@ -509,7 +504,7 @@ class RelayService {
   }
 
   /// Get stream of update notifications from connected relay
-  Stream<UpdateNotification>? get updates => _wsService?.updates;
+  Stream<UpdateNotification> get updates => _wsService.updates;
 
   /// Get HTTP base URL for a relay
   String _getHttpBaseUrl(String wsUrl) {
@@ -701,9 +696,9 @@ class RelayService {
     try {
       final profile = ProfileService().getProfile();
 
-      if (useNostrProtocol && _wsService != null) {
+      if (useNostrProtocol) {
         // Verify WebSocket connection is alive before attempting to send
-        final isConnected = await _wsService!.ensureConnected();
+        final isConnected = await _wsService.ensureConnected();
         if (!isConnected) {
           LogService().log('WebSocket not connected, falling back to HTTP');
           // Fall through to HTTP fallback below
@@ -748,7 +743,7 @@ class RelayService {
           print('');
 
           // Use sendWithVerification for reliable delivery
-          final sent = await _wsService!.sendWithVerification({'nostr_event': nostrMessage});
+          final sent = await _wsService.sendWithVerification({'nostr_event': nostrMessage});
           if (sent) {
             return true;
           } else {
@@ -848,7 +843,7 @@ class RelayService {
 
   /// Subscribe to a chat room for real-time NOSTR events
   void subscribeToRoom(String roomId) {
-    if (_wsService == null || !_wsService!.isConnected) {
+    if (!_wsService.isConnected) {
       LogService().log('Cannot subscribe: not connected to relay');
       return;
     }
@@ -861,19 +856,19 @@ class RelayService {
     };
 
     final reqMessage = NostrRelayMessage.req(subscriptionId, filter);
-    _wsService!.send({'nostr_req': reqMessage});
+    _wsService.send({'nostr_req': reqMessage});
     LogService().log('Subscribed to room: $roomId');
   }
 
   /// Unsubscribe from a chat room
   void unsubscribeFromRoom(String roomId) {
-    if (_wsService == null || !_wsService!.isConnected) {
+    if (!_wsService.isConnected) {
       return;
     }
 
     final subscriptionId = 'room_$roomId';
     final closeMessage = NostrRelayMessage.close(subscriptionId);
-    _wsService!.send({'nostr_close': closeMessage});
+    _wsService.send({'nostr_close': closeMessage});
     LogService().log('Unsubscribed from room: $roomId');
   }
 
