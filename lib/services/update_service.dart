@@ -404,7 +404,8 @@ class UpdateService {
       LogService().log('Downloading update from: $downloadUrl');
 
       // On Android, use external cache directory for better FileProvider compatibility
-      final Directory tempDir;
+      // Use dynamic to handle type differences between dart:io and io_stub on web
+      late final dynamic tempDir;
       if (!kIsWeb && Platform.isAndroid) {
         final externalCacheDirs = await getExternalCacheDirectories();
         if (externalCacheDirs != null && externalCacheDirs.isNotEmpty) {
@@ -606,44 +607,35 @@ class UpdateService {
   /// Verify APK file integrity by checking ZIP structure
   /// APK files are ZIP archives that must contain AndroidManifest.xml
   Future<bool> _verifyApkIntegrity(String filePath) async {
+    // Not supported on web
+    if (kIsWeb) return true;
+
     try {
       final file = File(filePath);
       if (!await file.exists()) return false;
 
-      // Read first 4 bytes to check ZIP magic number (PK\x03\x04)
-      final raf = await file.open(mode: FileMode.read);
-      try {
-        final header = await raf.read(4);
-        if (header.length < 4) return false;
+      // Read file bytes to check ZIP structure
+      final bytes = await file.readAsBytes();
+      if (bytes.length < 22) return false; // Minimum ZIP size
 
-        // Check ZIP magic number: 0x50 0x4B 0x03 0x04 (PK..)
-        if (header[0] != 0x50 || header[1] != 0x4B ||
-            header[2] != 0x03 || header[3] != 0x04) {
-          LogService().log('APK verification failed: Invalid ZIP header');
-          return false;
-        }
-
-        // Check end of central directory signature at the end of file
-        // This ensures the ZIP file is complete
-        final fileSize = await file.length();
-        if (fileSize < 22) return false; // Minimum ZIP size
-
-        // Read last 22 bytes (minimum end of central directory size)
-        await raf.setPosition(fileSize - 22);
-        final eocd = await raf.read(22);
-
-        // Check for end of central directory signature: 0x50 0x4B 0x05 0x06
-        if (eocd[0] != 0x50 || eocd[1] != 0x4B ||
-            eocd[2] != 0x05 || eocd[3] != 0x06) {
-          LogService().log('APK verification failed: Missing end of central directory');
-          return false;
-        }
-
-        LogService().log('APK ZIP structure verified');
-        return true;
-      } finally {
-        await raf.close();
+      // Check ZIP magic number at start: 0x50 0x4B 0x03 0x04 (PK..)
+      if (bytes[0] != 0x50 || bytes[1] != 0x4B ||
+          bytes[2] != 0x03 || bytes[3] != 0x04) {
+        LogService().log('APK verification failed: Invalid ZIP header');
+        return false;
       }
+
+      // Check end of central directory signature at the end of file
+      // This ensures the ZIP file is complete: 0x50 0x4B 0x05 0x06
+      final eocdOffset = bytes.length - 22;
+      if (bytes[eocdOffset] != 0x50 || bytes[eocdOffset + 1] != 0x4B ||
+          bytes[eocdOffset + 2] != 0x05 || bytes[eocdOffset + 3] != 0x06) {
+        LogService().log('APK verification failed: Missing end of central directory');
+        return false;
+      }
+
+      LogService().log('APK ZIP structure verified');
+      return true;
     } catch (e) {
       LogService().log('APK verification error: $e');
       return false;
@@ -657,14 +649,14 @@ class UpdateService {
     try {
       // Clear from temp directory
       final tempDir = await getTemporaryDirectory();
-      await _clearDownloadsInDir(tempDir);
+      await _clearDownloadsInDir(tempDir.path);
 
       // Also clear from external cache on Android
       if (Platform.isAndroid) {
         final externalCacheDirs = await getExternalCacheDirectories();
         if (externalCacheDirs != null) {
           for (final dir in externalCacheDirs) {
-            await _clearDownloadsInDir(dir);
+            await _clearDownloadsInDir(dir.path);
           }
         }
       }
@@ -675,7 +667,8 @@ class UpdateService {
     }
   }
 
-  Future<void> _clearDownloadsInDir(Directory dir) async {
+  Future<void> _clearDownloadsInDir(String dirPath) async {
+    final dir = Directory(dirPath);
     await for (final entity in dir.list()) {
       if (entity is File) {
         final path = entity.path;
