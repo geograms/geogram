@@ -14,6 +14,7 @@ import '../util/chat_api.dart';
 import 'station_cache_service.dart';
 import 'station_service.dart';
 import 'station_discovery_service.dart';
+import 'direct_message_service.dart';
 import 'log_service.dart';
 
 /// Service for managing remote devices we've contacted
@@ -105,6 +106,7 @@ class DevicesService {
   }
 
   /// Get all known devices
+  /// Sorted: Online first, then by name, unreachable at bottom
   List<RemoteDevice> getAllDevices() {
     return _devices.values.toList()
       ..sort((a, b) {
@@ -112,7 +114,8 @@ class DevicesService {
         if (a.isOnline != b.isOnline) {
           return a.isOnline ? -1 : 1;
         }
-        return a.name.compareTo(b.name);
+        // Then sort by display name
+        return a.displayName.compareTo(b.displayName);
       });
   }
 
@@ -126,12 +129,39 @@ class DevicesService {
     final device = _devices[callsign.toUpperCase()];
     if (device == null) return false;
 
+    // Store previous online state to detect transitions
+    final wasOnline = device.isOnline;
+
+    bool isNowOnline;
     if (device.url == null) {
       // Try to find via station proxy
-      return await _checkViaRelayProxy(device);
+      isNowOnline = await _checkViaRelayProxy(device);
+    } else {
+      isNowOnline = await _checkDirectConnection(device);
     }
 
-    return await _checkDirectConnection(device);
+    // Trigger DM sync when device becomes reachable
+    if (!wasOnline && isNowOnline && device.url != null) {
+      _triggerDMSync(device.callsign, device.url!);
+    }
+
+    return isNowOnline;
+  }
+
+  /// Trigger DM sync with a device that just came online
+  void _triggerDMSync(String callsign, String deviceUrl) {
+    LogService().log('DevicesService: Device $callsign came online, triggering DM sync');
+
+    // Run sync in background (don't await)
+    DirectMessageService().syncWithDevice(callsign, deviceUrl: deviceUrl).then((result) {
+      if (result.success) {
+        LogService().log('DevicesService: DM sync with $callsign completed - received: ${result.messagesReceived}, sent: ${result.messagesSent}');
+      } else {
+        LogService().log('DevicesService: DM sync with $callsign failed: ${result.error}');
+      }
+    }).catchError((e) {
+      LogService().log('DevicesService: DM sync with $callsign error: $e');
+    });
   }
 
   /// Check device via station proxy
@@ -199,8 +229,90 @@ class DevicesService {
 
   /// Check all devices reachability
   Future<void> refreshAllDevices() async {
+    // First, fetch connected clients from connected station
+    await _fetchStationClients();
+
+    // Then check reachability for all known devices
     for (final device in _devices.values) {
       await checkReachability(device.callsign);
+    }
+  }
+
+  /// Fetch connected clients from the connected station
+  Future<void> _fetchStationClients() async {
+    try {
+      final station = _stationService.getConnectedRelay();
+      if (station == null) return;
+
+      final baseUrl = station.url
+          .replaceFirst('ws://', 'http://')
+          .replaceFirst('wss://', 'https://');
+
+      final response = await http.get(
+        Uri.parse('$baseUrl/api/clients'),
+      ).timeout(const Duration(seconds: 10));
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        final clients = data['clients'] as List<dynamic>?;
+
+        if (clients != null) {
+          for (final clientData in clients) {
+            final callsign = clientData['callsign'] as String?;
+            if (callsign == null) continue;
+
+            final normalizedCallsign = callsign.toUpperCase();
+
+            // Parse connection types
+            final connectionTypes = <String>[];
+            final rawTypes = clientData['connection_types'] as List<dynamic>?;
+            if (rawTypes != null) {
+              for (final t in rawTypes) {
+                connectionTypes.add(t.toString());
+              }
+            }
+
+            // Update existing device or create new one
+            if (_devices.containsKey(normalizedCallsign)) {
+              final device = _devices[normalizedCallsign]!;
+              device.isOnline = true;
+              device.nickname = clientData['nickname'] as String?;
+              device.npub = clientData['npub'] as String?;
+              device.latitude = clientData['latitude'] as double?;
+              device.longitude = clientData['longitude'] as double?;
+              // Merge connection methods
+              for (final method in connectionTypes) {
+                if (!device.connectionMethods.contains(method)) {
+                  device.connectionMethods = [...device.connectionMethods, method];
+                }
+              }
+              device.source = DeviceSourceType.station;
+              device.lastSeen = DateTime.now();
+            } else {
+              // Create new device from station client
+              _devices[normalizedCallsign] = RemoteDevice(
+                callsign: normalizedCallsign,
+                name: clientData['nickname'] as String? ?? normalizedCallsign,
+                nickname: clientData['nickname'] as String?,
+                npub: clientData['npub'] as String?,
+                isOnline: true,
+                hasCachedData: false,
+                collections: [],
+                latitude: clientData['latitude'] as double?,
+                longitude: clientData['longitude'] as double?,
+                connectionMethods: connectionTypes,
+                source: DeviceSourceType.station,
+                lastSeen: DateTime.now(),
+              );
+            }
+          }
+
+          _notifyListeners();
+          LogService().log('DevicesService: Fetched ${clients.length} clients from station');
+        }
+      }
+    } catch (e) {
+      LogService().log('DevicesService: Error fetching station clients: $e');
     }
   }
 
@@ -405,7 +517,9 @@ class DevicesService {
 class RemoteDevice {
   final String callsign;
   String name;
+  String? nickname;
   String? url;
+  String? npub;
   bool isOnline;
   int? latency;
   DateTime? lastChecked;
@@ -415,11 +529,15 @@ class RemoteDevice {
   List<RemoteCollection> collections;
   double? latitude;
   double? longitude;
+  List<String> connectionMethods;
+  DeviceSourceType source;
 
   RemoteDevice({
     required this.callsign,
     required this.name,
+    this.nickname,
     this.url,
+    this.npub,
     this.isOnline = false,
     this.latency,
     this.lastChecked,
@@ -429,7 +547,30 @@ class RemoteDevice {
     required this.collections,
     this.latitude,
     this.longitude,
+    this.connectionMethods = const [],
+    this.source = DeviceSourceType.local,
   });
+
+  /// Get display name (nickname or callsign)
+  String get displayName => nickname ?? name;
+
+  /// Get connection method display label
+  static String getConnectionMethodLabel(String method) {
+    switch (method) {
+      case 'wifi':
+        return 'Wi-Fi';
+      case 'internet':
+        return 'Internet';
+      case 'bluetooth':
+        return 'Bluetooth';
+      case 'lora':
+        return 'LoRa';
+      case 'radio':
+        return 'Radio';
+      default:
+        return method;
+    }
+  }
 
   /// Get status string
   String get statusText {

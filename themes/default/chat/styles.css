@@ -1,0 +1,186 @@
+/* Chat App - Theme Overrides */
+
+.chat-container {
+  display: grid;
+  grid-template-columns: 250px 1fr;
+  gap: var(--spacing-lg);
+  min-height: 60vh;
+}
+
+@media (max-width: 768px) {
+  .chat-container {
+    grid-template-columns: 1fr;
+  }
+  .channel-list {
+    display: none;
+  }
+}
+
+/* Channel List */
+.channel-list {
+  background-color: var(--color-bg-secondary);
+  border-radius: var(--border-radius);
+  padding: var(--spacing-md);
+}
+
+.channel-item {
+  padding: var(--spacing-sm) var(--spacing-md);
+  border-radius: var(--border-radius-sm);
+  cursor: pointer;
+  transition: background-color var(--transition-fast);
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+}
+
+.channel-item:hover {
+  background-color: var(--color-bg-tertiary);
+}
+
+.channel-item.active {
+  background-color: var(--color-accent);
+  color: white;
+}
+
+.channel-icon {
+  font-size: var(--font-size-lg);
+}
+
+.channel-name {
+  font-weight: 500;
+}
+
+.channel-unread {
+  margin-left: auto;
+  background-color: var(--color-accent);
+  color: white;
+  font-size: var(--font-size-xs);
+  padding: 2px 6px;
+  border-radius: 10px;
+}
+
+/* Messages Container */
+.messages-container {
+  background-color: var(--color-bg);
+  border: 1px solid var(--color-border-light);
+  border-radius: var(--border-radius);
+  overflow: hidden;
+}
+
+.messages-list {
+  padding: var(--spacing-md);
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-md);
+}
+
+/* Message Bubble */
+.message {
+  display: flex;
+  gap: var(--spacing-md);
+  padding: var(--spacing-md);
+  border-radius: var(--border-radius);
+  transition: background-color var(--transition-fast);
+}
+
+.message:hover {
+  background-color: var(--color-bg-secondary);
+}
+
+.message-avatar {
+  flex-shrink: 0;
+}
+
+.message-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.message-header {
+  display: flex;
+  align-items: baseline;
+  gap: var(--spacing-sm);
+  margin-bottom: var(--spacing-xs);
+}
+
+.message-author {
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.message-time {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+}
+
+.message-body {
+  color: var(--color-text-secondary);
+  line-height: var(--line-height);
+  word-wrap: break-word;
+}
+
+.message-body p {
+  margin-bottom: var(--spacing-sm);
+}
+
+.message-body p:last-child {
+  margin-bottom: 0;
+}
+
+/* Attachments */
+.message-attachments {
+  margin-top: var(--spacing-sm);
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-sm);
+}
+
+.attachment {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  padding: var(--spacing-xs) var(--spacing-sm);
+  background-color: var(--color-bg-secondary);
+  border-radius: var(--border-radius-sm);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+.attachment:hover {
+  background-color: var(--color-bg-tertiary);
+}
+
+/* Reactions */
+.message-reactions {
+  margin-top: var(--spacing-sm);
+  display: flex;
+  gap: var(--spacing-xs);
+}
+
+.reaction {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  background-color: var(--color-bg-secondary);
+  border-radius: 12px;
+  font-size: var(--font-size-sm);
+}
+
+/* Date Separator */
+.date-separator {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-md);
+  margin: var(--spacing-lg) 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.date-separator::before,
+.date-separator::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background-color: var(--color-border-light);
+}

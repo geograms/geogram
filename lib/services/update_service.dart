@@ -271,12 +271,17 @@ class UpdateService {
             }
           }
 
+          // Check if backup is pinned (via .pinned marker file)
+          final pinnedMarker = File('${entity.path}.pinned');
+          final isPinned = await pinnedMarker.exists();
+
           backups.add(BackupInfo(
             filename: filename,
             version: version,
             timestamp: stat.modified,
             sizeBytes: stat.size,
             path: entity.path,
+            isPinned: isPinned,
           ));
         }
       }
@@ -332,13 +337,17 @@ class UpdateService {
   }
 
   /// Cleanup old backups beyond the maximum limit
+  /// Pinned backups are never removed during cleanup
   Future<void> _cleanupOldBackups() async {
     try {
       final backups = await listBackups();
       final maxBackups = _settings?.maxBackups ?? 5;
 
-      if (backups.length > maxBackups) {
-        final toRemove = backups.sublist(maxBackups);
+      // Separate pinned and unpinned backups
+      final unpinnedBackups = backups.where((b) => !b.isPinned).toList();
+
+      if (unpinnedBackups.length > maxBackups) {
+        final toRemove = unpinnedBackups.sublist(maxBackups);
         for (final backup in toRemove) {
           LogService().log('Removing old backup: ${backup.filename}');
           await File(backup.path).delete();
@@ -743,6 +752,11 @@ class UpdateService {
       final file = File(backup.path);
       if (await file.exists()) {
         await file.delete();
+        // Also delete pinned marker if it exists
+        final pinnedMarker = File('${backup.path}.pinned');
+        if (await pinnedMarker.exists()) {
+          await pinnedMarker.delete();
+        }
         LogService().log('Deleted backup: ${backup.filename}');
         return true;
       }
@@ -750,6 +764,47 @@ class UpdateService {
     } catch (e) {
       LogService().log('Error deleting backup: $e');
       return false;
+    }
+  }
+
+  /// Pin a backup to prevent auto-deletion during cleanup
+  Future<bool> pinBackup(BackupInfo backup) async {
+    if (kIsWeb) return false;
+
+    try {
+      final pinnedMarker = File('${backup.path}.pinned');
+      await pinnedMarker.writeAsString(DateTime.now().toIso8601String());
+      LogService().log('Pinned backup: ${backup.filename}');
+      return true;
+    } catch (e) {
+      LogService().log('Error pinning backup: $e');
+      return false;
+    }
+  }
+
+  /// Unpin a backup to allow auto-deletion during cleanup
+  Future<bool> unpinBackup(BackupInfo backup) async {
+    if (kIsWeb) return false;
+
+    try {
+      final pinnedMarker = File('${backup.path}.pinned');
+      if (await pinnedMarker.exists()) {
+        await pinnedMarker.delete();
+        LogService().log('Unpinned backup: ${backup.filename}');
+      }
+      return true;
+    } catch (e) {
+      LogService().log('Error unpinning backup: $e');
+      return false;
+    }
+  }
+
+  /// Toggle pin status of a backup
+  Future<bool> togglePinBackup(BackupInfo backup) async {
+    if (backup.isPinned) {
+      return await unpinBackup(backup);
+    } else {
+      return await pinBackup(backup);
     }
   }
 

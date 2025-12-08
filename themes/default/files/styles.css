@@ -1,0 +1,238 @@
+/* Files App - Theme Overrides */
+
+/* Files Header */
+.files-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: var(--spacing-md);
+  gap: var(--spacing-md);
+}
+
+@media (max-width: 768px) {
+  .files-header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
+
+.files-stats {
+  display: flex;
+  gap: var(--spacing-lg);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.files-stats strong {
+  color: var(--color-text);
+}
+
+/* Breadcrumb */
+.breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  padding: var(--spacing-sm) var(--spacing-md);
+  background-color: var(--color-bg-secondary);
+  border-radius: var(--border-radius);
+  margin-bottom: var(--spacing-md);
+  font-size: var(--font-size-sm);
+  overflow-x: auto;
+}
+
+.breadcrumb-item {
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.breadcrumb-item:hover {
+  color: var(--color-accent);
+}
+
+.breadcrumb-item.active {
+  color: var(--color-text);
+  font-weight: 500;
+}
+
+.breadcrumb-item:not(:last-child)::after {
+  content: '/';
+  margin-left: var(--spacing-xs);
+  color: var(--color-text-muted);
+}
+
+/* Files Container */
+.files-container {
+  display: grid;
+  grid-template-columns: 250px 1fr;
+  gap: var(--spacing-lg);
+}
+
+@media (max-width: 768px) {
+  .files-container {
+    grid-template-columns: 1fr;
+  }
+  .file-tree {
+    display: none;
+  }
+}
+
+/* File Tree */
+.file-tree {
+  background-color: var(--color-bg-secondary);
+  border-radius: var(--border-radius);
+  padding: var(--spacing-md);
+  max-height: 70vh;
+  overflow-y: auto;
+}
+
+.tree-node {
+  padding: var(--spacing-xs) 0;
+}
+
+.tree-node-header {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  padding: var(--spacing-xs) var(--spacing-sm);
+  border-radius: var(--border-radius-sm);
+  cursor: pointer;
+  transition: background-color var(--transition-fast);
+}
+
+.tree-node-header:hover {
+  background-color: var(--color-bg-tertiary);
+}
+
+.tree-node-header.selected {
+  background-color: var(--color-accent);
+  color: white;
+}
+
+.tree-toggle {
+  width: 16px;
+  text-align: center;
+  font-size: var(--font-size-xs);
+}
+
+.tree-icon {
+  font-size: var(--font-size-base);
+}
+
+.tree-name {
+  font-size: var(--font-size-sm);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tree-children {
+  padding-left: var(--spacing-md);
+  margin-left: var(--spacing-sm);
+  border-left: 1px solid var(--color-border-light);
+}
+
+/* File List Container */
+.file-list-container {
+  background-color: var(--color-bg);
+  border: 1px solid var(--color-border-light);
+  border-radius: var(--border-radius);
+  overflow: hidden;
+}
+
+/* File List */
+.file-list {
+  max-height: 70vh;
+  overflow-y: auto;
+}
+
+/* File Item */
+.file-item {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-md);
+  padding: var(--spacing-md);
+  border-bottom: 1px solid var(--color-border-light);
+  transition: background-color var(--transition-fast);
+  cursor: pointer;
+}
+
+.file-item:last-child {
+  border-bottom: none;
+}
+
+.file-item:hover {
+  background-color: var(--color-bg-secondary);
+}
+
+.file-item[data-type="directory"] {
+  font-weight: 500;
+}
+
+/* File Icon */
+.file-icon {
+  font-size: var(--font-size-xl);
+  width: 32px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+/* File Info */
+.file-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.file-name {
+  color: var(--color-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.file-type {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+}
+
+/* File Size */
+.file-size {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+  white-space: nowrap;
+  min-width: 70px;
+  text-align: right;
+}
+
+/* File Hash */
+.file-hash {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  background-color: var(--color-bg-secondary);
+  padding: 2px 6px;
+  border-radius: var(--border-radius-sm);
+  cursor: help;
+}
+
+/* Empty State */
+.files-empty {
+  padding: var(--spacing-2xl);
+  text-align: center;
+  color: var(--color-text-muted);
+}
+
+.files-empty-icon {
+  font-size: 3rem;
+  margin-bottom: var(--spacing-md);
+  opacity: 0.5;
+}
+
+/* Selected File */
+.file-item.selected {
+  background-color: var(--color-bg-secondary);
+  border-left: 3px solid var(--color-accent);
+}

@@ -278,6 +278,58 @@ In addition to the EventBus (used internally), the station broadcasts UPDATE not
 
 These are sent alongside `chat_message` JSON payloads to all connected WebSocket clients when a message is posted from any source.
 
+### DirectMessageReceivedEvent
+
+Fired when a direct message is received (either locally or via sync).
+
+```dart
+class DirectMessageReceivedEvent extends AppEvent {
+  final String fromCallsign;    // Sender's callsign
+  final String toCallsign;      // Recipient's callsign (local user)
+  final String content;         // Message content
+  final String messageTimestamp; // Message timestamp (YYYY-MM-DD HH:MM_ss)
+  final String? npub;           // Sender's NOSTR public key
+  final String? signature;      // NOSTR signature
+  final bool verified;          // Signature verification status
+  final bool fromSync;          // True if received via sync, false if local
+}
+```
+
+### DirectMessageSyncEvent
+
+Fired when a DM sync operation completes with another device.
+
+```dart
+class DirectMessageSyncEvent extends AppEvent {
+  final String otherCallsign;   // The callsign we synced with
+  final int newMessages;        // Number of new messages received
+  final int sentMessages;       // Number of messages sent to other device
+  final bool success;           // Whether sync completed successfully
+  final String? error;          // Error message if failed
+}
+```
+
+**Usage Example:**
+
+```dart
+// Listen for incoming DMs
+EventBus().on<DirectMessageReceivedEvent>((event) {
+  if (!event.fromSync) {
+    // New message arrived locally
+    showNotification('Message from ${event.fromCallsign}');
+  }
+});
+
+// Listen for sync completion
+EventBus().on<DirectMessageSyncEvent>((event) {
+  if (event.success && event.newMessages > 0) {
+    showToast('${event.newMessages} new messages synced');
+  }
+});
+```
+
+---
+
 ## Future Extensions
 
 Events defined but not yet integrated:

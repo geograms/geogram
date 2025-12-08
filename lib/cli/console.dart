@@ -7,6 +7,7 @@ import '../services/collection_service.dart';
 import '../services/profile_service.dart';
 import '../services/callsign_generator.dart';
 import '../services/station_server_service.dart';
+import '../services/web_theme_service.dart';
 import '../version.dart';
 
 /// Main CLI console for geogram-desktop
@@ -19,9 +20,9 @@ class Console {
 
   /// Directory-specific commands
   static const Map<String, List<String>> dirCommands = {
-    '/': ['ls', 'cd', 'pwd', 'status', 'help', 'quit', 'exit', 'clear', 'station'],
+    '/': ['ls', 'cd', 'pwd', 'status', 'help', 'quit', 'exit', 'clear', 'station', 'theme'],
     '/profiles': ['ls', 'cd', 'pwd', 'profile', 'status', 'help', 'quit', 'exit', 'clear'],
-    '/config': ['ls', 'cd', 'pwd', 'set', 'get', 'status', 'help', 'quit', 'exit', 'clear'],
+    '/config': ['ls', 'cd', 'pwd', 'set', 'get', 'theme', 'status', 'help', 'quit', 'exit', 'clear'],
     '/logs': ['ls', 'cd', 'pwd', 'tail', 'status', 'help', 'quit', 'exit', 'clear'],
     '/station': ['ls', 'cd', 'pwd', 'start', 'stop', 'status', 'port', 'cache', 'help', 'quit', 'exit', 'clear'],
   };
@@ -47,6 +48,9 @@ class Console {
 
       // Initialize station server service
       await StationServerService().initialize();
+
+      // Initialize web theme service
+      await WebThemeService().init();
 
       LogService().log('CLI services initialized');
     } catch (e) {
@@ -133,6 +137,9 @@ class Console {
       case 'station':
         await _handleRelay(args);
         break;
+      case 'theme':
+        await _handleTheme(args);
+        break;
       case 'clear':
         stdout.write('\x1B[2J\x1B[H');
         break;
@@ -174,6 +181,13 @@ class Console {
     stdout.writeln('    station port <port>  Set station server port');
     stdout.writeln('    station cache clear  Clear tile cache');
     stdout.writeln('    station cache stats  Show cache statistics');
+    stdout.writeln();
+    stdout.writeln('  \x1B[33mWeb Themes:\x1B[0m');
+    stdout.writeln('    theme              Show current web theme');
+    stdout.writeln('    theme list         List available themes');
+    stdout.writeln('    theme set <name>   Set the active web theme');
+    stdout.writeln('    theme path         Show themes folder path');
+    stdout.writeln('    theme reset        Re-extract bundled themes');
     stdout.writeln();
     stdout.writeln('  \x1B[33mGeneral:\x1B[0m');
     stdout.writeln('    status             Show application status');
@@ -370,6 +384,85 @@ class Console {
         _printError('Unknown cache command: $subcommand');
         _printError('Available: clear, stats');
     }
+  }
+
+  /// Handle theme command
+  Future<void> _handleTheme(List<String> args) async {
+    final themeService = WebThemeService();
+
+    if (args.isEmpty) {
+      // Show current theme
+      final currentTheme = themeService.getCurrentTheme();
+      stdout.writeln('Current web theme: \x1B[32m$currentTheme\x1B[0m');
+      return;
+    }
+
+    final subcommand = args[0].toLowerCase();
+    final subargs = args.length > 1 ? args.sublist(1) : <String>[];
+
+    switch (subcommand) {
+      case 'list':
+        await _handleThemeList();
+        break;
+      case 'set':
+        await _handleThemeSet(subargs);
+        break;
+      case 'path':
+        stdout.writeln('Themes folder: ${themeService.themesDir}');
+        break;
+      case 'reset':
+        stdout.writeln('Re-extracting bundled themes...');
+        await themeService.resetBundledThemes();
+        stdout.writeln('\x1B[32mBundled themes extracted successfully\x1B[0m');
+        break;
+      default:
+        _printError('Unknown theme command: $subcommand');
+        _printError('Available: list, set, path, reset');
+    }
+  }
+
+  /// List available themes
+  Future<void> _handleThemeList() async {
+    final themeService = WebThemeService();
+    final themes = await themeService.getAvailableThemes();
+    final currentTheme = themeService.getCurrentTheme();
+
+    stdout.writeln();
+    stdout.writeln('\x1B[1mAvailable Web Themes:\x1B[0m');
+    stdout.writeln('-' * 40);
+
+    for (final theme in themes) {
+      final isActive = theme == currentTheme;
+      final marker = isActive ? '\x1B[32m* \x1B[0m' : '  ';
+      final label = isActive ? ' (active)' : '';
+      stdout.writeln('$marker$theme$label');
+    }
+
+    stdout.writeln();
+    stdout.writeln('Themes folder: ${themeService.themesDir}');
+    stdout.writeln('To add themes, create a new folder with styles.css inside.');
+    stdout.writeln();
+  }
+
+  /// Set the active theme
+  Future<void> _handleThemeSet(List<String> args) async {
+    if (args.isEmpty) {
+      _printError('Usage: theme set <theme-name>');
+      return;
+    }
+
+    final themeName = args[0];
+    final themeService = WebThemeService();
+
+    // Check if theme exists
+    if (!await themeService.themeExists(themeName)) {
+      _printError('Theme not found: $themeName');
+      stdout.writeln('Use "theme list" to see available themes.');
+      return;
+    }
+
+    themeService.setCurrentTheme(themeName);
+    stdout.writeln('\x1B[32mWeb theme set to: $themeName\x1B[0m');
   }
 
   /// Handle ls command

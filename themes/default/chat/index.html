@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{TITLE}} - Chat</title>
+  <style>{{GLOBAL_STYLES}}</style>
+  <style>{{APP_STYLES}}</style>
+</head>
+<body>
+  <header class="header">
+    <div class="container">
+      <div class="header-content">
+        <div>
+          <h1 class="header-title">{{COLLECTION_NAME}}</h1>
+          <p class="header-subtitle">{{COLLECTION_DESCRIPTION}}</p>
+        </div>
+        <nav class="nav">
+          <span class="badge">Chat</span>
+        </nav>
+      </div>
+    </div>
+  </header>
+
+  <main class="main">
+    <div class="container">
+      <div class="search-container">
+        <input type="text" class="input search-input" placeholder="Search messages..." id="search">
+      </div>
+
+      <div class="chat-container">
+        <div class="channel-list" id="channels">
+          <!-- Channels will be populated by JavaScript -->
+        </div>
+
+        <div class="messages-container">
+          <div class="messages-list" id="messages">
+            {{CONTENT}}
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <footer class="footer">
+    <div class="container">
+      <p>Generated on {{GENERATED_DATE}}</p>
+    </div>
+  </footer>
+
+  <script>
+    window.GEOGRAM_DATA = {{DATA_JSON}};
+    {{SCRIPTS}}
+  </script>
+  <script>
+    // Search functionality
+    document.getElementById('search').addEventListener('input', function(e) {
+      const query = e.target.value.toLowerCase();
+      const messages = document.querySelectorAll('.message');
+      messages.forEach(msg => {
+        const text = msg.textContent.toLowerCase();
+        msg.style.display = text.includes(query) ? '' : 'none';
+      });
+    });
+  </script>
+</body>
+</html>

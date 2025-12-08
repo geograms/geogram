@@ -11,7 +11,9 @@ import '../services/log_service.dart';
 import '../services/profile_service.dart';
 import '../services/station_cache_service.dart';
 import '../services/chat_notification_service.dart';
+import '../services/callsign_generator.dart';
 import 'chat_browser_page.dart';
+import 'dm_chat_page.dart';
 
 /// Page for browsing remote devices and their collections
 class DevicesBrowserPage extends StatefulWidget {
@@ -37,12 +39,25 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
   String? _error;
   int _totalUnreadMessages = 0;
   StreamSubscription<Map<String, int>>? _unreadSubscription;
+  Timer? _refreshTimer;
+
+  static const Duration _refreshInterval = Duration(seconds: 30);
 
   @override
   void initState() {
     super.initState();
     _initialize();
     _subscribeToUnreadCounts();
+    _startAutoRefresh();
+  }
+
+  void _startAutoRefresh() {
+    _refreshTimer?.cancel();
+    _refreshTimer = Timer.periodic(_refreshInterval, (_) {
+      if (mounted && !_isLoading) {
+        _refreshDevices();
+      }
+    });
   }
 
   void _subscribeToUnreadCounts() {
@@ -90,6 +105,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
 
   @override
   void dispose() {
+    _refreshTimer?.cancel();
     _unreadSubscription?.cancel();
     super.dispose();
   }
@@ -326,6 +342,9 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
 
   Widget _buildDeviceListTile(ThemeData theme, RemoteDevice device) {
     final isSelected = _selectedDevice?.callsign == device.callsign;
+    final profile = _profileService.getProfile();
+    final distanceStr = device.getDistanceString(profile.latitude, profile.longitude);
+    final isStation = CallsignGenerator.isStationCallsign(device.callsign);
 
     return ListTile(
       selected: isSelected,
@@ -333,10 +352,14 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
       leading: Stack(
         children: [
           CircleAvatar(
-            backgroundColor: theme.colorScheme.primaryContainer,
+            backgroundColor: isStation
+                ? theme.colorScheme.tertiaryContainer
+                : theme.colorScheme.primaryContainer,
             child: Icon(
-              Icons.devices,
-              color: theme.colorScheme.primary,
+              isStation ? Icons.cell_tower : Icons.smartphone,
+              color: isStation
+                  ? theme.colorScheme.tertiary
+                  : theme.colorScheme.primary,
             ),
           ),
           // Online indicator
@@ -358,47 +381,64 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
           ),
         ],
       ),
-      title: Text(
-        device.name,
-        style: TextStyle(
-          fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-        ),
+      title: Row(
+        children: [
+          Expanded(
+            child: Text(
+              device.displayName,
+              style: TextStyle(
+                fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+              ),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          if (distanceStr != null)
+            Padding(
+              padding: const EdgeInsets.only(left: 8),
+              child: Text(
+                distanceStr,
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ),
+        ],
       ),
       subtitle: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // Callsign
           Text(
             device.callsign,
             style: theme.textTheme.bodySmall?.copyWith(
               fontFamily: 'monospace',
             ),
           ),
+          const SizedBox(height: 4),
+          // Connection methods tags and status
           Wrap(
-            spacing: 8,
+            spacing: 4,
+            runSpacing: 4,
             children: [
-              Text(
-                device.isOnline ? _i18n.t('online') : _i18n.t('offline'),
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: device.isOnline ? Colors.green : Colors.grey,
+              // Connection method tags
+              ...device.connectionMethods.map((method) => _buildConnectionTag(
+                theme,
+                RemoteDevice.getConnectionMethodLabel(method),
+                _getConnectionMethodColor(method),
+              )),
+              // Unreachable tag if offline
+              if (!device.isOnline)
+                _buildConnectionTag(
+                  theme,
+                  _i18n.t('unreachable'),
+                  Colors.red,
                 ),
-              ),
-              if (device.hasCachedData)
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      Icons.download_done,
-                      size: 14,
-                      color: theme.colorScheme.primary,
-                    ),
-                    const SizedBox(width: 2),
-                    Text(
-                      _i18n.t('cached'),
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: theme.colorScheme.primary,
-                      ),
-                    ),
-                  ],
+              // Cached indicator
+              if (device.hasCachedData && !device.isOnline)
+                _buildConnectionTag(
+                  theme,
+                  _i18n.t('cached'),
+                  theme.colorScheme.primary,
                 ),
             ],
           ),
@@ -407,23 +447,15 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Builder(
-            builder: (context) {
-              final profile = _profileService.getProfile();
-              final distanceStr = device.getDistanceString(profile.latitude, profile.longitude);
-              if (distanceStr != null) {
-                return Padding(
-                  padding: const EdgeInsets.only(right: 8),
-                  child: Text(
-                    distanceStr,
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant,
-                    ),
-                  ),
-                );
-              }
-              return const SizedBox.shrink();
-            },
+          // Direct message button
+          IconButton(
+            icon: Icon(
+              Icons.message_outlined,
+              color: theme.colorScheme.primary,
+              size: 20,
+            ),
+            onPressed: () => _openDirectMessage(device),
+            tooltip: _i18n.t('send_message'),
           ),
           IconButton(
             icon: Icon(
@@ -438,6 +470,44 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
       ),
       onTap: () => _selectDevice(device),
     );
+  }
+
+  /// Build a small tag widget for connection methods
+  Widget _buildConnectionTag(ThemeData theme, String label, Color color) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.15),
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(color: color.withValues(alpha: 0.3)),
+      ),
+      child: Text(
+        label,
+        style: theme.textTheme.bodySmall?.copyWith(
+          color: color,
+          fontSize: 10,
+          fontWeight: FontWeight.w500,
+        ),
+      ),
+    );
+  }
+
+  /// Get color for connection method
+  Color _getConnectionMethodColor(String method) {
+    switch (method) {
+      case 'wifi':
+        return Colors.blue;
+      case 'internet':
+        return Colors.green;
+      case 'bluetooth':
+        return Colors.indigo;
+      case 'lora':
+        return Colors.orange;
+      case 'radio':
+        return Colors.purple;
+      default:
+        return Colors.grey;
+    }
   }
 
   Future<void> _confirmDeleteDevice(RemoteDevice device) async {
@@ -472,8 +542,21 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
     }
   }
 
+  /// Open direct message chat with a device
+  void _openDirectMessage(RemoteDevice device) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => DMChatPage(
+          otherCallsign: device.callsign,
+        ),
+      ),
+    );
+  }
+
   Widget _buildDeviceDetail(ThemeData theme) {
     final device = _selectedDevice!;
+    final isStation = CallsignGenerator.isStationCallsign(device.callsign);
 
     return Column(
       children: [
@@ -498,10 +581,14 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
                 ),
               CircleAvatar(
                 radius: 24,
-                backgroundColor: theme.colorScheme.primaryContainer,
+                backgroundColor: isStation
+                    ? theme.colorScheme.tertiaryContainer
+                    : theme.colorScheme.primaryContainer,
                 child: Icon(
-                  Icons.devices,
-                  color: theme.colorScheme.primary,
+                  isStation ? Icons.cell_tower : Icons.smartphone,
+                  color: isStation
+                      ? theme.colorScheme.tertiary
+                      : theme.colorScheme.primary,
                   size: 28,
                 ),
               ),
@@ -511,7 +598,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      device.name,
+                      device.displayName,
                       style: theme.textTheme.titleLarge?.copyWith(
                         fontWeight: FontWeight.bold,
                       ),

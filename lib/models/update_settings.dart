@@ -204,6 +204,7 @@ class BackupInfo {
   final DateTime timestamp;
   final int sizeBytes;
   final String path;
+  final bool isPinned;
 
   BackupInfo({
     required this.filename,
@@ -211,6 +212,7 @@ class BackupInfo {
     required this.timestamp,
     required this.sizeBytes,
     required this.path,
+    this.isPinned = false,
   });
 
   factory BackupInfo.fromJson(Map<String, dynamic> json) {
@@ -220,6 +222,7 @@ class BackupInfo {
       timestamp: DateTime.parse(json['timestamp'] as String),
       sizeBytes: json['sizeBytes'] as int,
       path: json['path'] as String,
+      isPinned: json['isPinned'] as bool? ?? false,
     );
   }
 
@@ -230,7 +233,20 @@ class BackupInfo {
       'timestamp': timestamp.toIso8601String(),
       'sizeBytes': sizeBytes,
       'path': path,
+      'isPinned': isPinned,
     };
+  }
+
+  /// Create a copy with updated isPinned status
+  BackupInfo copyWith({bool? isPinned}) {
+    return BackupInfo(
+      filename: filename,
+      version: version,
+      timestamp: timestamp,
+      sizeBytes: sizeBytes,
+      path: path,
+      isPinned: isPinned ?? this.isPinned,
+    );
   }
 
   String get formattedSize {

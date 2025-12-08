@@ -12,7 +12,9 @@ import '../services/config_service.dart';
 import '../services/profile_service.dart';
 import '../services/callsign_generator.dart';
 import '../services/storage_config.dart';
+import '../services/direct_message_service.dart';
 import '../models/blog_post.dart';
+import '../models/chat_message.dart';
 import '../util/nostr_event.dart';
 import '../util/nostr_crypto.dart';
 import '../util/event_bus.dart';
@@ -99,11 +101,78 @@ class RelayServerSettings {
   }
 }
 
+/// Connection type enum
+enum ConnectionType {
+  localWifi,
+  internet,
+  bluetooth,
+  lora,
+  radio,
+  other;
+
+  String get displayName {
+    switch (this) {
+      case ConnectionType.localWifi:
+        return 'Local Wi-Fi';
+      case ConnectionType.internet:
+        return 'Internet';
+      case ConnectionType.bluetooth:
+        return 'Bluetooth';
+      case ConnectionType.lora:
+        return 'LoRa';
+      case ConnectionType.radio:
+        return 'Radio';
+      case ConnectionType.other:
+        return 'Other';
+    }
+  }
+
+  String get code {
+    switch (this) {
+      case ConnectionType.localWifi:
+        return 'wifi';
+      case ConnectionType.internet:
+        return 'internet';
+      case ConnectionType.bluetooth:
+        return 'bluetooth';
+      case ConnectionType.lora:
+        return 'lora';
+      case ConnectionType.radio:
+        return 'radio';
+      case ConnectionType.other:
+        return 'other';
+    }
+  }
+
+  static ConnectionType fromCode(String code) {
+    switch (code) {
+      case 'wifi':
+        return ConnectionType.localWifi;
+      case 'internet':
+        return ConnectionType.internet;
+      case 'bluetooth':
+        return ConnectionType.bluetooth;
+      case 'lora':
+        return ConnectionType.lora;
+      case 'radio':
+        return ConnectionType.radio;
+      default:
+        return ConnectionType.other;
+    }
+  }
+}
+
 /// Connected WebSocket client
 class ConnectedClient {
   final WebSocket socket;
   final String id;
   String? callsign;
+  String? nickname;
+  String? npub;
+  String? remoteAddress;
+  ConnectionType connectionType;
+  double? latitude;
+  double? longitude;
   DateTime connectedAt;
   DateTime lastActivity;
 
@@ -111,8 +180,52 @@ class ConnectedClient {
     required this.socket,
     required this.id,
     this.callsign,
+    this.nickname,
+    this.npub,
+    this.remoteAddress,
+    this.connectionType = ConnectionType.other,
+    this.latitude,
+    this.longitude,
   })  : connectedAt = DateTime.now(),
         lastActivity = DateTime.now();
+
+  /// Detect connection type from remote address
+  static ConnectionType detectConnectionType(String? address) {
+    if (address == null) return ConnectionType.other;
+
+    // Local network addresses (Wi-Fi)
+    if (address.startsWith('192.168.') ||
+        address.startsWith('10.') ||
+        address.startsWith('172.16.') ||
+        address.startsWith('172.17.') ||
+        address.startsWith('172.18.') ||
+        address.startsWith('172.19.') ||
+        address.startsWith('172.2') ||
+        address.startsWith('172.30.') ||
+        address.startsWith('172.31.') ||
+        address == '127.0.0.1' ||
+        address == 'localhost') {
+      return ConnectionType.localWifi;
+    }
+
+    // Public IPs are likely internet
+    return ConnectionType.internet;
+  }
+
+  /// Convert to JSON for API response
+  Map<String, dynamic> toJson() {
+    return {
+      'id': id,
+      'callsign': callsign,
+      'nickname': nickname ?? callsign,
+      'npub': npub,
+      'connection_type': connectionType.code,
+      'latitude': latitude,
+      'longitude': longitude,
+      'connected_at': connectedAt.toIso8601String(),
+      'last_activity': lastActivity.toIso8601String(),
+    };
+  }
 }
 
 /// Tile cache for station server
@@ -323,6 +436,8 @@ class StationServerService {
       // Route requests
       if (path == '/api/status' || path == '/status') {
         await _handleStatus(request);
+      } else if (path == '/api/clients') {
+        await _handleClients(request);
       } else if (path == '/api/chat/rooms') {
         await _handleChatRooms(request);
       } else if (path.startsWith('/api/chat/rooms/') && path.endsWith('/messages')) {
@@ -331,6 +446,8 @@ class StationServerService {
         await _handleTileRequest(request);
       } else if (_isBlogPath(path)) {
         await _handleBlogRequest(request);
+      } else if (path.contains('/api/dm/')) {
+        await _handleDMRequest(request);
       } else if (path == '/') {
         await _handleRoot(request);
       } else {
@@ -351,10 +468,20 @@ class StationServerService {
     try {
       final socket = await WebSocketTransformer.upgrade(request);
       final clientId = DateTime.now().millisecondsSinceEpoch.toString();
-      final client = ConnectedClient(socket: socket, id: clientId);
+
+      // Get remote address for connection type detection
+      final remoteAddress = request.connectionInfo?.remoteAddress.address;
+      final connectionType = ConnectedClient.detectConnectionType(remoteAddress);
+
+      final client = ConnectedClient(
+        socket: socket,
+        id: clientId,
+        remoteAddress: remoteAddress,
+        connectionType: connectionType,
+      );
 
       _clients[clientId] = client;
-      LogService().log('WebSocket client connected: $clientId');
+      LogService().log('WebSocket client connected: $clientId from $remoteAddress ($connectionType)');
 
       socket.listen(
         (data) => _handleWebSocketMessage(client, data),
@@ -402,15 +529,25 @@ class StationServerService {
     final event = message['event'] as Map<String, dynamic>?;
     String? callsign;
     String? npub;
+    String? nickname;
+    double? latitude;
+    double? longitude;
 
     if (event != null) {
-      // Extract callsign from hello event tags
+      // Extract data from hello event tags
       final tags = event['tags'] as List<dynamic>?;
       if (tags != null) {
         for (final tag in tags) {
           if (tag is List && tag.isNotEmpty) {
-            if (tag[0] == 'callsign' && tag.length > 1) {
+            final tagName = tag[0] as String;
+            if (tagName == 'callsign' && tag.length > 1) {
               callsign = tag[1] as String;
+            } else if (tagName == 'nickname' && tag.length > 1) {
+              nickname = tag[1] as String;
+            } else if (tagName == 'lat' && tag.length > 1) {
+              latitude = double.tryParse(tag[1].toString());
+            } else if (tagName == 'lon' && tag.length > 1) {
+              longitude = double.tryParse(tag[1].toString());
             }
           }
         }
@@ -423,9 +560,17 @@ class StationServerService {
     } else {
       // Legacy format without event wrapper
       callsign = message['callsign'] as String?;
+      nickname = message['nickname'] as String?;
+      latitude = message['latitude'] as double?;
+      longitude = message['longitude'] as double?;
     }
 
+    // Update client info
     client.callsign = callsign;
+    client.nickname = nickname ?? callsign;
+    client.npub = npub;
+    client.latitude = latitude;
+    client.longitude = longitude;
 
     // Send hello acknowledgment
     final response = {
@@ -617,6 +762,54 @@ class StationServerService {
 
     request.response.headers.contentType = ContentType.json;
     request.response.write(jsonEncode(status));
+  }
+
+  /// Handle /api/clients endpoint - returns list of connected clients
+  Future<void> _handleClients(HttpRequest request) async {
+    final profile = ProfileService().getProfile();
+
+    // Group clients by callsign and aggregate connection types
+    final clientsByCallsign = <String, Map<String, dynamic>>{};
+
+    for (final client in _clients.values) {
+      final callsign = client.callsign ?? 'unknown';
+
+      if (clientsByCallsign.containsKey(callsign)) {
+        // Add connection type to existing entry if not already present
+        final existing = clientsByCallsign[callsign]!;
+        final connectionTypes = existing['connection_types'] as List<String>;
+        if (!connectionTypes.contains(client.connectionType.code)) {
+          connectionTypes.add(client.connectionType.code);
+        }
+        // Update last activity if more recent
+        final existingActivity = DateTime.parse(existing['last_activity'] as String);
+        if (client.lastActivity.isAfter(existingActivity)) {
+          existing['last_activity'] = client.lastActivity.toIso8601String();
+        }
+      } else {
+        // Create new entry
+        clientsByCallsign[callsign] = {
+          'callsign': client.callsign,
+          'nickname': client.nickname ?? client.callsign,
+          'npub': client.npub,
+          'connection_types': [client.connectionType.code],
+          'latitude': client.latitude,
+          'longitude': client.longitude,
+          'connected_at': client.connectedAt.toIso8601String(),
+          'last_activity': client.lastActivity.toIso8601String(),
+          'is_online': true,
+        };
+      }
+    }
+
+    final response = {
+      'station': profile.callsign,
+      'count': clientsByCallsign.length,
+      'clients': clientsByCallsign.values.toList(),
+    };
+
+    request.response.headers.contentType = ContentType.json;
+    request.response.write(jsonEncode(response));
   }
 
   /// Handle / root endpoint
@@ -1107,6 +1300,127 @@ class StationServerService {
         .replaceAll('>', '&gt;')
         .replaceAll('"', '&quot;')
         .replaceAll("'", '&#39;');
+  }
+
+  /// Handle DM sync API requests
+  /// Routes:
+  ///   GET /{callsign}/api/dm/conversations - List DM conversations
+  ///   GET /{callsign}/api/dm/sync/{otherCallsign}?since=timestamp - Get messages since timestamp
+  ///   POST /{callsign}/api/dm/sync/{otherCallsign} - Receive and merge messages
+  Future<void> _handleDMRequest(HttpRequest request) async {
+    final path = request.uri.path;
+    final method = request.method;
+
+    // Parse path: /{callsign}/api/dm/...
+    final pathParts = path.split('/').where((p) => p.isNotEmpty).toList();
+    if (pathParts.length < 3 || pathParts[1] != 'api' || pathParts[2] != 'dm') {
+      request.response.statusCode = 400;
+      request.response.write('Invalid DM API path');
+      return;
+    }
+
+    final requestedCallsign = pathParts[0].toUpperCase();
+    final myCallsign = ProfileService().getProfile().callsign.toUpperCase();
+
+    // Verify the request is for this station's callsign
+    if (requestedCallsign != myCallsign) {
+      request.response.statusCode = 404;
+      request.response.write('Callsign not found on this station');
+      return;
+    }
+
+    final dmService = DirectMessageService();
+    await dmService.initialize();
+
+    try {
+      if (pathParts.length == 4 && pathParts[3] == 'conversations') {
+        // GET /{callsign}/api/dm/conversations
+        if (method == 'GET') {
+          final conversations = await dmService.listConversations();
+          final response = {
+            'conversations': conversations.map((c) => {
+              'callsign': c.otherCallsign,
+              'lastMessage': c.lastMessageTime?.toIso8601String(),
+              'unread': c.unreadCount,
+            }).toList(),
+          };
+          request.response.headers.contentType = ContentType.json;
+          request.response.write(jsonEncode(response));
+        } else {
+          request.response.statusCode = 405;
+          request.response.write('Method not allowed');
+        }
+      } else if (pathParts.length == 5 && pathParts[3] == 'sync') {
+        // GET/POST /{callsign}/api/dm/sync/{otherCallsign}
+        final otherCallsign = pathParts[4].toUpperCase();
+
+        if (method == 'GET') {
+          // Get messages since timestamp
+          final sinceParam = request.uri.queryParameters['since'] ?? '';
+          final messages = sinceParam.isNotEmpty
+              ? await dmService.loadMessagesSince(otherCallsign, sinceParam)
+              : await dmService.loadMessages(otherCallsign, limit: 100);
+
+          final response = {
+            'messages': messages.map((m) => m.toJson()).toList(),
+            'timestamp': DateTime.now().toIso8601String(),
+          };
+          request.response.headers.contentType = ContentType.json;
+          request.response.write(jsonEncode(response));
+        } else if (method == 'POST') {
+          // Receive and merge messages from remote
+          final body = await utf8.decoder.bind(request).join();
+          final data = jsonDecode(body) as Map<String, dynamic>;
+          final incomingMessages = <ChatMessage>[];
+
+          if (data['messages'] is List) {
+            for (final msgJson in data['messages']) {
+              incomingMessages.add(ChatMessage.fromJson(msgJson));
+            }
+          }
+
+          // Ensure conversation exists
+          await dmService.getOrCreateConversation(otherCallsign);
+
+          // Merge messages (this uses the internal merge which fires events)
+          int accepted = 0;
+          if (incomingMessages.isNotEmpty) {
+            final local = await dmService.loadMessages(otherCallsign, limit: 99999);
+            final existing = <String>{};
+            for (final msg in local) {
+              existing.add('${msg.timestamp}|${msg.author}');
+            }
+
+            for (final msg in incomingMessages) {
+              final id = '${msg.timestamp}|${msg.author}';
+              if (!existing.contains(id)) {
+                // Save directly to conversation
+                await dmService.sendMessage(otherCallsign, msg.content);
+                accepted++;
+              }
+            }
+          }
+
+          final response = {
+            'success': true,
+            'accepted': accepted,
+            'timestamp': DateTime.now().toIso8601String(),
+          };
+          request.response.headers.contentType = ContentType.json;
+          request.response.write(jsonEncode(response));
+        } else {
+          request.response.statusCode = 405;
+          request.response.write('Method not allowed');
+        }
+      } else {
+        request.response.statusCode = 404;
+        request.response.write('DM endpoint not found');
+      }
+    } catch (e) {
+      LogService().log('DM API error: $e');
+      request.response.statusCode = 500;
+      request.response.write('Internal server error: $e');
+    }
   }
 
   /// Get server status

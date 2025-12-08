@@ -6,6 +6,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../models/update_settings.dart';
 import '../services/update_service.dart';
+import '../services/i18n_service.dart';
 
 class UpdatePage extends StatefulWidget {
   const UpdatePage({super.key});
@@ -16,6 +17,7 @@ class UpdatePage extends StatefulWidget {
 
 class _UpdatePageState extends State<UpdatePage> {
   final UpdateService _updateService = UpdateService();
+  final I18nService _i18n = I18nService();
   ReleaseInfo? _latestRelease;
   List<BackupInfo> _backups = [];
   bool _isLoading = false;
@@ -50,7 +52,7 @@ class _UpdatePageState extends State<UpdatePage> {
     setState(() {
       _isLoading = true;
       _error = null;
-      _statusMessage = 'Checking for updates...';
+      _statusMessage = _i18n.t('checking_for_updates');
     });
 
     try {
@@ -61,12 +63,12 @@ class _UpdatePageState extends State<UpdatePage> {
           _latestRelease!.version,
         );
         if (isNewer) {
-          _statusMessage = 'Update available: ${_latestRelease!.version}';
+          _statusMessage = _i18n.t('update_available_msg', params: [_latestRelease!.version]);
         } else {
-          _statusMessage = 'You are running the latest version';
+          _statusMessage = _i18n.t('running_latest_version');
         }
       } else {
-        _statusMessage = 'Could not check for updates';
+        _statusMessage = _i18n.t('could_not_check_updates');
       }
     } catch (e) {
       _error = e.toString();
@@ -90,19 +92,16 @@ class _UpdatePageState extends State<UpdatePage> {
           final shouldOpenSettings = await showDialog<bool>(
             context: context,
             builder: (context) => AlertDialog(
-              title: const Text('Permission Required'),
-              content: const Text(
-                'To install updates, Geogram needs permission to install apps from unknown sources.\n\n'
-                'Tap "Open Settings" to enable this permission, then return here to try again.',
-              ),
+              title: Text(_i18n.t('permission_required')),
+              content: Text(_i18n.t('permission_required_msg')),
               actions: [
                 TextButton(
                   onPressed: () => Navigator.pop(context, false),
-                  child: const Text('Cancel'),
+                  child: Text(_i18n.t('cancel')),
                 ),
                 FilledButton(
                   onPressed: () => Navigator.pop(context, true),
-                  child: const Text('Open Settings'),
+                  child: Text(_i18n.t('open_settings')),
                 ),
               ],
             ),
@@ -118,7 +117,7 @@ class _UpdatePageState extends State<UpdatePage> {
 
     setState(() {
       _isLoading = true;
-      _statusMessage = 'Downloading update...';
+      _statusMessage = _i18n.t('downloading_update');
     });
 
     try {
@@ -131,33 +130,29 @@ class _UpdatePageState extends State<UpdatePage> {
 
       if (downloadPath != null) {
         setState(() {
-          _statusMessage = 'Applying update...';
+          _statusMessage = _i18n.t('applying_update');
         });
 
         final success = await _updateService.applyUpdate(downloadPath);
         if (success) {
           final platform = _updateService.detectPlatform();
           if (platform == UpdatePlatform.android) {
-            _statusMessage = 'APK installer launched. Follow the prompts to complete installation.\n\n'
-                'Note: If you see "Problem parsing the package", you may need to uninstall the current app first '
-                '(this happens when switching from debug to release builds due to different signing keys).';
+            _statusMessage = _i18n.t('apk_installer_launched');
           } else {
-            _statusMessage = 'Update installed! Please restart the application.';
+            _statusMessage = _i18n.t('update_installed_restart');
             _backups = await _updateService.listBackups();
           }
         } else {
           // On Android, this might mean the permission was revoked during download
           if (!kIsWeb && Platform.isAndroid) {
-            _error = 'Could not install update. Please check that "Install unknown apps" is enabled for Geogram in Settings.\n\n'
-                'If installation fails with "Problem parsing the package", try uninstalling the app first '
-                '(required when switching from debug to release builds).';
+            _error = _i18n.t('install_update_failed');
           } else {
-            _error = 'Failed to apply update';
+            _error = _i18n.t('apply_update_failed');
           }
           _statusMessage = null;
         }
       } else {
-        _error = 'Download failed or no binary available for this platform';
+        _error = _i18n.t('download_failed');
         _statusMessage = null;
       }
     } catch (e) {
@@ -174,19 +169,16 @@ class _UpdatePageState extends State<UpdatePage> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Confirm Rollback'),
-        content: Text(
-          'Are you sure you want to rollback to version ${backup.version ?? "unknown"}?\n\n'
-          'The application will need to be restarted after the rollback.',
-        ),
+        title: Text(_i18n.t('confirm_rollback')),
+        content: Text(_i18n.t('confirm_rollback_msg', params: [backup.version ?? 'unknown'])),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
+            child: Text(_i18n.t('cancel')),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, true),
-            child: const Text('Rollback'),
+            child: Text(_i18n.t('rollback')),
           ),
         ],
       ),
@@ -196,15 +188,15 @@ class _UpdatePageState extends State<UpdatePage> {
 
     setState(() {
       _isLoading = true;
-      _statusMessage = 'Rolling back...';
+      _statusMessage = _i18n.t('rolling_back');
     });
 
     try {
       final success = await _updateService.rollback(backup);
       if (success) {
-        _statusMessage = 'Rollback complete! Please restart the application.';
+        _statusMessage = _i18n.t('rollback_complete');
       } else {
-        _error = 'Rollback failed';
+        _error = _i18n.t('rollback_failed');
         _statusMessage = null;
       }
     } catch (e) {
@@ -221,19 +213,19 @@ class _UpdatePageState extends State<UpdatePage> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Delete Backup'),
-        content: Text('Are you sure you want to delete "${backup.filename}"?'),
+        title: Text(_i18n.t('delete_backup_title')),
+        content: Text(_i18n.t('delete_backup_confirm', params: [backup.filename])),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
+            child: Text(_i18n.t('cancel')),
           ),
           FilledButton(
             style: FilledButton.styleFrom(
               backgroundColor: Theme.of(context).colorScheme.error,
             ),
             onPressed: () => Navigator.pop(context, true),
-            child: const Text('Delete'),
+            child: Text(_i18n.t('delete')),
           ),
         ],
       ),
@@ -248,7 +240,24 @@ class _UpdatePageState extends State<UpdatePage> {
       });
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Backup deleted')),
+          SnackBar(content: Text(_i18n.t('backup_deleted'))),
+        );
+      }
+    }
+  }
+
+  Future<void> _togglePinBackup(BackupInfo backup) async {
+    final success = await _updateService.togglePinBackup(backup);
+    if (success) {
+      // Reload backups to reflect the new pin status
+      _backups = await _updateService.listBackups();
+      setState(() {});
+      if (mounted) {
+        final message = backup.isPinned
+            ? _i18n.t('backup_unpinned')
+            : _i18n.t('backup_pinned');
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(message)),
         );
       }
     }
@@ -283,7 +292,7 @@ class _UpdatePageState extends State<UpdatePage> {
     setState(() {
       _isLoading = true;
       _error = null;
-      _statusMessage = 'Clearing download cache...';
+      _statusMessage = _i18n.t('clearing_download_cache');
     });
 
     try {
@@ -291,7 +300,7 @@ class _UpdatePageState extends State<UpdatePage> {
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Download cache cleared')),
+          SnackBar(content: Text(_i18n.t('download_cache_cleared'))),
         );
       }
 
@@ -321,10 +330,10 @@ class _UpdatePageState extends State<UpdatePage> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Software Updates'),
+        title: Text(_i18n.t('software_updates')),
       ),
       body: RefreshIndicator(
-        onRefresh: _loadData,
+        onRefresh: _checkForUpdates,
         child: SingleChildScrollView(
           physics: const AlwaysScrollableScrollPhysics(),
           padding: const EdgeInsets.all(24),
@@ -346,7 +355,7 @@ class _UpdatePageState extends State<UpdatePage> {
                           ),
                           const SizedBox(width: 12),
                           Text(
-                            'Current Version',
+                            _i18n.t('current_version'),
                             style: Theme.of(context).textTheme.titleMedium?.copyWith(
                                   fontWeight: FontWeight.bold,
                                 ),
@@ -354,12 +363,12 @@ class _UpdatePageState extends State<UpdatePage> {
                         ],
                       ),
                       const SizedBox(height: 16),
-                      _buildInfoRow('Version', 'v$currentVersion'),
-                      _buildInfoRow('Platform', platform.name.toUpperCase()),
-                      _buildInfoRow('Binary Type', platform.binaryPattern),
+                      _buildInfoRow(_i18n.t('version'), 'v$currentVersion'),
+                      _buildInfoRow(_i18n.t('platform'), platform.name.toUpperCase()),
+                      _buildInfoRow(_i18n.t('binary_type'), platform.binaryPattern),
                       if (settings.lastCheckTime != null)
                         _buildInfoRow(
-                          'Last Check',
+                          _i18n.t('last_check'),
                           _formatDateTime(settings.lastCheckTime!),
                         ),
                     ],
@@ -389,7 +398,7 @@ class _UpdatePageState extends State<UpdatePage> {
                               mainAxisAlignment: MainAxisAlignment.spaceBetween,
                               children: [
                                 Text(
-                                  downloadStatus.isNotEmpty ? downloadStatus : 'Downloading...',
+                                  downloadStatus.isNotEmpty ? downloadStatus : _i18n.t('downloading'),
                                   style: Theme.of(context).textTheme.bodyMedium,
                                 ),
                                 Text(
@@ -447,7 +456,7 @@ class _UpdatePageState extends State<UpdatePage> {
                             TextButton.icon(
                               onPressed: _isLoading ? null : _clearAndRetry,
                               icon: const Icon(Icons.refresh, size: 18),
-                              label: const Text('Clear Cache & Retry'),
+                              label: Text(_i18n.t('clear_cache_retry')),
                             ),
                           ],
                         ),
@@ -474,7 +483,7 @@ class _UpdatePageState extends State<UpdatePage> {
                             ),
                             const SizedBox(width: 12),
                             Text(
-                              'Release Details',
+                              _i18n.t('release_details'),
                               style: Theme.of(context).textTheme.titleMedium?.copyWith(
                                     fontWeight: FontWeight.bold,
                                   ),
@@ -482,16 +491,16 @@ class _UpdatePageState extends State<UpdatePage> {
                           ],
                         ),
                         const SizedBox(height: 16),
-                        _buildInfoRow('Version', 'v${_latestRelease!.version}'),
+                        _buildInfoRow(_i18n.t('version'), 'v${_latestRelease!.version}'),
                         if (_latestRelease!.name != null)
-                          _buildInfoRow('Name', _latestRelease!.name!),
+                          _buildInfoRow(_i18n.t('name'), _latestRelease!.name!),
                         if (_latestRelease!.publishedAt != null)
                           _buildInfoRow(
-                            'Released',
+                            _i18n.t('released'),
                             _formatDateString(_latestRelease!.publishedAt!),
                           ),
                         _buildInfoRow(
-                          'Available for',
+                          _i18n.t('available_for'),
                           _latestRelease!.assets.keys.map((k) => k.toUpperCase()).join(', '),
                         ),
                         if (_latestRelease!.body != null &&
@@ -500,7 +509,7 @@ class _UpdatePageState extends State<UpdatePage> {
                           const Divider(),
                           const SizedBox(height: 12),
                           Text(
-                            'Release Notes:',
+                            _i18n.t('release_notes'),
                             style: Theme.of(context).textTheme.titleSmall,
                           ),
                           const SizedBox(height: 8),
@@ -514,7 +523,7 @@ class _UpdatePageState extends State<UpdatePage> {
                           TextButton.icon(
                             onPressed: () => _launchURL(_latestRelease!.htmlUrl!),
                             icon: const Icon(Icons.open_in_new, size: 18),
-                            label: const Text('View on GitHub'),
+                            label: Text(_i18n.t('view_on_github')),
                           ),
                         ],
                       ],
@@ -527,12 +536,12 @@ class _UpdatePageState extends State<UpdatePage> {
               // Backups Section
               if (!kIsWeb) ...[
                 Text(
-                  'Rollback Backups',
+                  _i18n.t('rollback_backups'),
                   style: Theme.of(context).textTheme.headlineSmall,
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  'Previous versions are saved automatically before updates.',
+                  _i18n.t('rollback_backups_desc'),
                   style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                         color: Theme.of(context).colorScheme.onSurfaceVariant,
                       ),
@@ -552,7 +561,7 @@ class _UpdatePageState extends State<UpdatePage> {
                             ),
                             const SizedBox(height: 16),
                             Text(
-                              'No backups available',
+                              _i18n.t('no_backups_available'),
                               style: Theme.of(context).textTheme.bodyLarge?.copyWith(
                                     color: Theme.of(context).colorScheme.outline,
                                   ),
@@ -568,10 +577,59 @@ class _UpdatePageState extends State<UpdatePage> {
                     return Card(
                       margin: const EdgeInsets.only(bottom: 8),
                       child: ListTile(
-                        leading: CircleAvatar(
-                          child: Text('${index + 1}'),
+                        leading: Stack(
+                          children: [
+                            CircleAvatar(
+                              backgroundColor: backup.isPinned
+                                  ? Theme.of(context).colorScheme.primaryContainer
+                                  : null,
+                              child: Text('${index + 1}'),
+                            ),
+                            if (backup.isPinned)
+                              Positioned(
+                                right: -2,
+                                bottom: -2,
+                                child: Container(
+                                  padding: const EdgeInsets.all(2),
+                                  decoration: BoxDecoration(
+                                    color: Theme.of(context).colorScheme.primary,
+                                    shape: BoxShape.circle,
+                                  ),
+                                  child: Icon(
+                                    Icons.push_pin,
+                                    size: 12,
+                                    color: Theme.of(context).colorScheme.onPrimary,
+                                  ),
+                                ),
+                              ),
+                          ],
                         ),
-                        title: Text('v${backup.version ?? "unknown"}'),
+                        title: Row(
+                          children: [
+                            Text('v${backup.version ?? "unknown"}'),
+                            if (backup.isPinned) ...[
+                              const SizedBox(width: 8),
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 6,
+                                  vertical: 2,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: Theme.of(context).colorScheme.primaryContainer,
+                                  borderRadius: BorderRadius.circular(4),
+                                ),
+                                child: Text(
+                                  _i18n.t('pinned'),
+                                  style: TextStyle(
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.bold,
+                                    color: Theme.of(context).colorScheme.onPrimaryContainer,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
                         subtitle: Text(
                           '${backup.formattedSize} • ${_formatDateTime(backup.timestamp)}',
                         ),
@@ -579,8 +637,20 @@ class _UpdatePageState extends State<UpdatePage> {
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             IconButton(
+                              icon: Icon(
+                                backup.isPinned ? Icons.push_pin : Icons.push_pin_outlined,
+                                color: backup.isPinned
+                                    ? Theme.of(context).colorScheme.primary
+                                    : null,
+                              ),
+                              tooltip: backup.isPinned
+                                  ? _i18n.t('unpin_backup')
+                                  : _i18n.t('pin_backup'),
+                              onPressed: _isLoading ? null : () => _togglePinBackup(backup),
+                            ),
+                            IconButton(
                               icon: const Icon(Icons.restore),
-                              tooltip: 'Rollback to this version',
+                              tooltip: _i18n.t('rollback_to_version'),
                               onPressed: _isLoading ? null : () => _rollback(backup),
                             ),
                             IconButton(
@@ -588,7 +658,7 @@ class _UpdatePageState extends State<UpdatePage> {
                                 Icons.delete_outline,
                                 color: Theme.of(context).colorScheme.error,
                               ),
-                              tooltip: 'Delete backup',
+                              tooltip: _i18n.t('delete_backup'),
                               onPressed: _isLoading ? null : () => _deleteBackup(backup),
                             ),
                           ],
@@ -602,7 +672,7 @@ class _UpdatePageState extends State<UpdatePage> {
 
               // Settings Section
               Text(
-                'Update Settings',
+                _i18n.t('update_settings'),
                 style: Theme.of(context).textTheme.headlineSmall,
               ),
               const SizedBox(height: 16),
@@ -610,8 +680,8 @@ class _UpdatePageState extends State<UpdatePage> {
                 child: Column(
                   children: [
                     SwitchListTile(
-                      title: const Text('Auto-check for updates'),
-                      subtitle: const Text('Check for updates when app starts'),
+                      title: Text(_i18n.t('auto_check_updates')),
+                      subtitle: Text(_i18n.t('auto_check_updates_desc')),
                       value: settings.autoCheckUpdates,
                       onChanged: (value) async {
                         await _updateService.updateSettings(
@@ -622,8 +692,8 @@ class _UpdatePageState extends State<UpdatePage> {
                     ),
                     const Divider(height: 1),
                     SwitchListTile(
-                      title: const Text('Update notifications'),
-                      subtitle: const Text('Notify when updates are available'),
+                      title: Text(_i18n.t('update_notifications')),
+                      subtitle: Text(_i18n.t('update_notifications_desc')),
                       value: settings.notifyOnUpdate,
                       onChanged: (value) async {
                         await _updateService.updateSettings(
@@ -634,8 +704,8 @@ class _UpdatePageState extends State<UpdatePage> {
                     ),
                     const Divider(height: 1),
                     ListTile(
-                      title: const Text('Maximum backups'),
-                      subtitle: Text('Keep ${settings.maxBackups} previous versions'),
+                      title: Text(_i18n.t('maximum_backups')),
+                      subtitle: Text(_i18n.t('keep_previous_versions', params: [settings.maxBackups.toString()])),
                       trailing: DropdownButton<int>(
                         value: settings.maxBackups,
                         items: [3, 5, 10, 15, 20]
@@ -676,28 +746,28 @@ class _UpdatePageState extends State<UpdatePage> {
     if (isDownloading) {
       cardColor = Theme.of(context).colorScheme.primaryContainer;
       icon = Icons.downloading;
-      title = 'Downloading Update...';
-      subtitle = 'Please wait while the update downloads';
+      title = _i18n.t('downloading_update');
+      subtitle = _i18n.t('downloading_update_wait');
     } else if (_isLoading) {
       cardColor = Theme.of(context).colorScheme.surfaceContainerHighest;
       icon = Icons.sync;
-      title = 'Checking...';
-      subtitle = _statusMessage ?? 'Please wait';
+      title = _i18n.t('checking');
+      subtitle = _statusMessage ?? _i18n.t('please_wait');
     } else if (hasUpdate && !kIsWeb) {
       cardColor = Theme.of(context).colorScheme.primaryContainer;
       icon = Icons.system_update;
-      title = 'Update Available';
-      subtitle = 'Tap to download and install v${_latestRelease!.version}';
+      title = _i18n.t('update_available_title');
+      subtitle = _i18n.t('tap_to_download_install', params: [_latestRelease!.version]);
     } else if (_latestRelease != null) {
       cardColor = Theme.of(context).colorScheme.secondaryContainer;
       icon = Icons.check_circle_outline;
-      title = 'Up to Date';
-      subtitle = 'Tap to check for updates';
+      title = _i18n.t('up_to_date');
+      subtitle = _i18n.t('tap_to_check_updates');
     } else {
       cardColor = Theme.of(context).colorScheme.surfaceContainerHighest;
       icon = Icons.refresh;
-      title = 'Check for Updates';
-      subtitle = 'Tap to check for new versions';
+      title = _i18n.t('check_for_updates');
+      subtitle = _i18n.t('tap_to_check_new_versions');
     }
 
     return Card(

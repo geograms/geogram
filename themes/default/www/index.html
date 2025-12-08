@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{TITLE}}</title>
+  <style>{{GLOBAL_STYLES}}</style>
+  <style>{{APP_STYLES}}</style>
+</head>
+<body>
+  <header class="header">
+    <div class="container">
+      <div class="header-content">
+        <div>
+          <h1 class="header-title">{{COLLECTION_NAME}}</h1>
+          <p class="header-subtitle">{{COLLECTION_DESCRIPTION}}</p>
+        </div>
+        <nav class="nav">
+          <a href="#" class="nav-link active">Home</a>
+          <a href="#about" class="nav-link">About</a>
+          <a href="#files" class="nav-link">Files</a>
+        </nav>
+      </div>
+    </div>
+  </header>
+
+  <main class="main">
+    <div class="container">
+      <section class="hero">
+        <h2 class="hero-title">{{COLLECTION_NAME}}</h2>
+        <p class="hero-description">{{COLLECTION_DESCRIPTION}}</p>
+      </section>
+
+      <section class="content-section" id="content">
+        {{CONTENT}}
+      </section>
+
+      <section class="files-section" id="files">
+        <h2>Files</h2>
+        <div class="search-container">
+          <input type="text" class="input search-input" placeholder="Search files..." id="search">
+        </div>
+        <div class="file-list" id="file-list">
+          <!-- File list will be populated by JavaScript -->
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <footer class="footer">
+    <div class="container">
+      <p>Generated on {{GENERATED_DATE}}</p>
+    </div>
+  </footer>
+
+  <script>
+    window.GEOGRAM_DATA = {{DATA_JSON}};
+    {{SCRIPTS}}
+  </script>
+  <script>
+    // Render file list
+    function renderFiles() {
+      const container = document.getElementById('file-list');
+      const data = window.GEOGRAM_DATA || { files: [] };
+      const files = data.files || [];
+
+      if (files.length === 0) {
+        container.innerHTML = '<div class="empty-state"><p>No files available</p></div>';
+        return;
+      }
+
+      container.innerHTML = files.map(file => `
+        <div class="file-item" data-name="${file.name.toLowerCase()}">
+          <span class="file-icon">${file.type === 'directory' ? '📁' : '📄'}</span>
+          <span class="file-name">${file.name}</span>
+          <span class="file-size">${file.size ? formatSize(file.size) : ''}</span>
+        </div>
+      `).join('');
+    }
+
+    function formatSize(bytes) {
+      if (bytes < 1024) return bytes + ' B';
+      if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+      return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+    }
+
+    // Search functionality
+    document.getElementById('search').addEventListener('input', function(e) {
+      const query = e.target.value.toLowerCase();
+      const items = document.querySelectorAll('.file-item');
+      items.forEach(item => {
+        const name = item.dataset.name;
+        item.style.display = name.includes(query) ? '' : 'none';
+      });
+    });
+
+    renderFiles();
+  </script>
+</body>
+</html>

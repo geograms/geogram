@@ -18,6 +18,7 @@ import 'services/i18n_service.dart';
 import 'services/chat_notification_service.dart';
 import 'services/update_service.dart';
 import 'services/storage_config.dart';
+import 'services/web_theme_service.dart';
 import 'cli/pure_storage_config.dart';
 import 'models/collection.dart';
 import 'util/file_icon_helper.dart';
@@ -124,6 +125,10 @@ void main() async {
       ConfigService().init().then((_) => LogService().log('ConfigService initialized')),
       I18nService().init().then((_) => LogService().log('I18nService initialized')),
     ]);
+
+    // Initialize web theme service (extracts bundled themes on first run)
+    await WebThemeService().init();
+    LogService().log('WebThemeService initialized');
 
     // Initialize profile and collection services
     await CollectionService().init();
@@ -1776,6 +1781,65 @@ class _SettingsPageState extends State<SettingsPage> {
     }
   }
 
+  Future<void> _showWebThemeDialog() async {
+    final themeService = WebThemeService();
+    final themes = await themeService.getAvailableThemes();
+    final currentTheme = themeService.getCurrentTheme();
+
+    if (!mounted) return;
+
+    final selectedTheme = await showDialog<String>(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: Text(_i18n.t('select_web_theme')),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: themes.map((themeName) {
+                return RadioListTile<String>(
+                  title: Text(themeName[0].toUpperCase() + themeName.substring(1)),
+                  subtitle: Text(themeName == 'default'
+                    ? _i18n.t('web_theme_default_desc')
+                    : _i18n.t('web_theme_custom_desc')),
+                  value: themeName,
+                  groupValue: currentTheme,
+                  onChanged: (String? value) {
+                    Navigator.pop(context, value);
+                  },
+                );
+              }).toList(),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () async {
+                // Open themes folder
+                if (!kIsWeb) {
+                  final themesPath = themeService.themesDir;
+                  final uri = Uri.directory(themesPath);
+                  if (await canLaunchUrl(uri)) {
+                    await launchUrl(uri);
+                  }
+                }
+              },
+              child: Text(_i18n.t('open_themes_folder')),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: Text(_i18n.t('cancel')),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (selectedTheme != null && selectedTheme != currentTheme) {
+      themeService.setCurrentTheme(selectedTheme);
+      setState(() {});
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return ListView(
@@ -1859,9 +1923,17 @@ class _SettingsPageState extends State<SettingsPage> {
           onTap: _showLanguageDialog,
         ),
         ListTile(
+          leading: const Icon(Icons.palette_outlined),
+          title: Text(_i18n.t('web_theme')),
+          subtitle: Text(WebThemeService().getCurrentTheme()[0].toUpperCase() +
+            WebThemeService().getCurrentTheme().substring(1)),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: _showWebThemeDialog,
+        ),
+        ListTile(
           leading: const Icon(Icons.system_update),
-          title: const Text('Software Updates'),
-          subtitle: const Text('Check for updates and rollback'),
+          title: Text(_i18n.t('software_updates')),
+          subtitle: Text(_i18n.t('software_updates_subtitle')),
           trailing: const Icon(Icons.chevron_right),
           onTap: () {
             Navigator.push(

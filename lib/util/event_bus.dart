@@ -234,3 +234,43 @@ class AlertReceivedEvent extends AppEvent {
     this.verified = false,
   });
 }
+
+/// Direct message received (1:1 private chat)
+class DirectMessageReceivedEvent extends AppEvent {
+  final String fromCallsign;    // Sender's callsign
+  final String toCallsign;      // Recipient's callsign (local user)
+  final String content;         // Message content
+  final String messageTimestamp; // Message timestamp (YYYY-MM-DD HH:MM_ss)
+  final String? npub;           // Sender's NOSTR public key
+  final String? signature;      // NOSTR signature
+  final bool verified;          // Signature verification status
+  final bool fromSync;          // True if received via sync, false if local
+
+  DirectMessageReceivedEvent({
+    required this.fromCallsign,
+    required this.toCallsign,
+    required this.content,
+    required this.messageTimestamp,
+    this.npub,
+    this.signature,
+    this.verified = false,
+    this.fromSync = false,
+  });
+}
+
+/// Direct message sync completed
+class DirectMessageSyncEvent extends AppEvent {
+  final String otherCallsign;   // The callsign we synced with
+  final int newMessages;        // Number of new messages received
+  final int sentMessages;       // Number of messages sent to other device
+  final bool success;           // Whether sync completed successfully
+  final String? error;          // Error message if failed
+
+  DirectMessageSyncEvent({
+    required this.otherCallsign,
+    required this.newMessages,
+    required this.sentMessages,
+    required this.success,
+    this.error,
+  });
+}

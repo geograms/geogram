@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{TITLE}} - Files</title>
+  <style>{{GLOBAL_STYLES}}</style>
+  <style>{{APP_STYLES}}</style>
+</head>
+<body>
+  <header class="header">
+    <div class="container">
+      <div class="header-content">
+        <div>
+          <h1 class="header-title">{{COLLECTION_NAME}}</h1>
+          <p class="header-subtitle">{{COLLECTION_DESCRIPTION}}</p>
+        </div>
+        <nav class="nav">
+          <span class="badge">Files</span>
+        </nav>
+      </div>
+    </div>
+  </header>
+
+  <main class="main">
+    <div class="container">
+      <div class="files-header">
+        <div class="search-container">
+          <input type="text" class="input search-input" placeholder="Search files..." id="search">
+        </div>
+        <div class="files-stats">
+          <span class="stat"><strong id="file-count">0</strong> files</span>
+          <span class="stat"><strong id="dir-count">0</strong> folders</span>
+          <span class="stat"><strong id="total-size">0 B</strong> total</span>
+        </div>
+      </div>
+
+      <div class="breadcrumb" id="breadcrumb">
+        <span class="breadcrumb-item active">Root</span>
+      </div>
+
+      <div class="files-container">
+        <div class="file-tree" id="tree">
+          <!-- Tree view will be populated by JavaScript -->
+        </div>
+
+        <div class="file-list-container">
+          <div class="file-list" id="files">
+            {{CONTENT}}
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <footer class="footer">
+    <div class="container">
+      <p>Generated on {{GENERATED_DATE}}</p>
+    </div>
+  </footer>
+
+  <script>
+    window.GEOGRAM_DATA = {{DATA_JSON}};
+    {{SCRIPTS}}
+  </script>
+  <script>
+    // Format file size
+    function formatSize(bytes) {
+      if (bytes === 0) return '0 B';
+      if (bytes < 1024) return bytes + ' B';
+      if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+      if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+      return (bytes / (1024 * 1024 * 1024)).toFixed(1) + ' GB';
+    }
+
+    // Get file icon based on extension
+    function getFileIcon(filename) {
+      const ext = filename.split('.').pop().toLowerCase();
+      const icons = {
+        'pdf': '📕', 'doc': '📘', 'docx': '📘', 'txt': '📄',
+        'jpg': '🖼️', 'jpeg': '🖼️', 'png': '🖼️', 'gif': '🖼️', 'svg': '🖼️',
+        'mp3': '🎵', 'wav': '🎵', 'ogg': '🎵',
+        'mp4': '🎬', 'avi': '🎬', 'mkv': '🎬', 'mov': '🎬',
+        'zip': '📦', 'rar': '📦', 'tar': '📦', 'gz': '📦',
+        'js': '📜', 'ts': '📜', 'py': '📜', 'rb': '📜', 'go': '📜',
+        'html': '🌐', 'css': '🎨', 'json': '📋', 'xml': '📋'
+      };
+      return icons[ext] || '📄';
+    }
+
+    // Render file list
+    function renderFiles() {
+      const container = document.getElementById('files');
+      const data = window.GEOGRAM_DATA || { files: [] };
+      const files = data.files || [];
+
+      if (files.length === 0) return;
+
+      // Calculate stats
+      let fileCount = 0, dirCount = 0, totalSize = 0;
+      files.forEach(f => {
+        if (f.type === 'directory') dirCount++;
+        else { fileCount++; totalSize += f.size || 0; }
+      });
+
+      document.getElementById('file-count').textContent = fileCount;
+      document.getElementById('dir-count').textContent = dirCount;
+      document.getElementById('total-size').textContent = formatSize(totalSize);
+
+      container.innerHTML = files.map(file => `
+        <div class="file-item" data-name="${file.name.toLowerCase()}" data-type="${file.type}">
+          <span class="file-icon">${file.type === 'directory' ? '📁' : getFileIcon(file.name)}</span>
+          <div class="file-info">
+            <span class="file-name">${file.name}</span>
+            ${file.mimeType ? `<span class="file-type">${file.mimeType}</span>` : ''}
+          </div>
+          <span class="file-size">${file.size ? formatSize(file.size) : ''}</span>
+          ${file.hashes && file.hashes.sha1 ? `<span class="file-hash" title="${file.hashes.sha1}">${file.hashes.sha1.substring(0, 8)}</span>` : ''}
+        </div>
+      `).join('');
+    }
+
+    // Search functionality
+    document.getElementById('search').addEventListener('input', function(e) {
+      const query = e.target.value.toLowerCase();
+      const items = document.querySelectorAll('.file-item');
+      items.forEach(item => {
+        const name = item.dataset.name;
+        item.style.display = name.includes(query) ? '' : 'none';
+      });
+    });
+
+    renderFiles();
+  </script>
+</body>
+</html>
