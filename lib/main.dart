@@ -794,7 +794,7 @@ class _CollectionsPageState extends State<CollectionsPage> {
                             Text(
                               _allCollections.isEmpty
                                   ? _i18n.t('no_collections_yet')
-                                  : _i18n.t('no_collections_found'),
+                                  : _i18n.t('no_apps_found'),
                               style: Theme.of(context).textTheme.titleLarge,
                             ),
                             const SizedBox(height: 8),

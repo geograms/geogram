@@ -968,13 +968,13 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
           ),
           const SizedBox(height: 16),
           Text(
-            _i18n.t('no_collections_found'),
+            _i18n.t('no_apps_found'),
             style: theme.textTheme.titleMedium,
           ),
           const SizedBox(height: 8),
           Text(
             _selectedDevice!.isOnline
-                ? _i18n.t('device_has_no_public_collections')
+                ? _i18n.t('device_has_no_public_apps')
                 : _i18n.t('device_offline_no_cache'),
             style: theme.textTheme.bodyMedium?.copyWith(
               color: theme.colorScheme.onSurfaceVariant,

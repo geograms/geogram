@@ -467,8 +467,9 @@ class _UpdatePageState extends State<UpdatePage> {
 
               if (_error != null) const SizedBox(height: 16),
 
-              // Latest Release Card (details)
-              if (_latestRelease != null && !_updateService.isDownloading)
+              // Latest Release Card (details) - only show when up to date, hide when update available
+              // to let user focus on the action button
+              if (_latestRelease != null && !_updateService.isDownloading && !hasUpdate)
                 Card(
                   child: Padding(
                     padding: const EdgeInsets.all(20),
