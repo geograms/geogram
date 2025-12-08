@@ -420,6 +420,11 @@ class _HomePageState extends State<HomePage> {
       return;
     }
 
+    // Don't show banner if UpdatePage is currently visible
+    if (updateService.isUpdatePageVisible) {
+      return;
+    }
+
     final latestRelease = updateService.getLatestRelease();
     if (latestRelease == null || !mounted) return;
 

@@ -29,7 +29,16 @@ class _UpdatePageState extends State<UpdatePage> {
   @override
   void initState() {
     super.initState();
+    // Mark that UpdatePage is visible to suppress the update banner
+    _updateService.isUpdatePageVisible = true;
     _loadData();
+  }
+
+  @override
+  void dispose() {
+    // Mark that UpdatePage is no longer visible
+    _updateService.isUpdatePageVisible = false;
+    super.dispose();
   }
 
   Future<void> _loadData() async {

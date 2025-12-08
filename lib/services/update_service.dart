@@ -38,6 +38,10 @@ class UpdateService {
   /// Notifier for download progress (0.0 to 1.0)
   final ValueNotifier<double> downloadProgress = ValueNotifier(0.0);
 
+  /// Flag to indicate if the UpdatePage is currently visible
+  /// When true, the update banner should not be shown
+  bool isUpdatePageVisible = false;
+
   /// Progress update throttling - only update UI every 100ms or 1% change
   DateTime _lastProgressUpdate = DateTime.now();
   double _lastProgressValue = 0.0;
