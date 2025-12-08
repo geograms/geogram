@@ -442,38 +442,36 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
           ),
         ],
       ),
-      title: Row(
-        children: [
-          Expanded(
-            child: Text(
-              device.displayName,
-              style: TextStyle(
-                fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-              ),
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-          if (distanceStr != null)
-            Padding(
-              padding: const EdgeInsets.only(left: 8),
-              child: Text(
-                distanceStr,
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant,
-                ),
-              ),
-            ),
-        ],
+      title: Text(
+        device.displayName,
+        style: TextStyle(
+          fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+        ),
+        overflow: TextOverflow.ellipsis,
       ),
       subtitle: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Callsign
-          Text(
-            device.callsign,
-            style: theme.textTheme.bodySmall?.copyWith(
-              fontFamily: 'monospace',
-            ),
+          // Callsign and distance
+          Row(
+            children: [
+              Text(
+                device.callsign,
+                style: theme.textTheme.bodySmall?.copyWith(
+                  fontFamily: 'monospace',
+                ),
+              ),
+              if (distanceStr != null)
+                Padding(
+                  padding: const EdgeInsets.only(left: 8),
+                  child: Text(
+                    distanceStr,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ),
+            ],
           ),
           const SizedBox(height: 4),
           // Connection methods tags and status
