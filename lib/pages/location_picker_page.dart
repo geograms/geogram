@@ -333,10 +333,6 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
       _mapController.move(_selectedPosition, 15.0);
 
       LogService().log('GPS location: ${position.latitude}, ${position.longitude}');
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(_i18n.t('location_detected_gps'))),
-      );
     }
   }
 
@@ -388,10 +384,6 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
       _mapController.move(_selectedPosition, 15.0);
 
       LogService().log('Browser geolocation: ${position.latitude}, ${position.longitude}');
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(_i18n.t('location_detected_browser'))),
-      );
     }
   }
 
@@ -418,11 +410,6 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
         _mapController.move(_selectedPosition, 10.0);
 
         LogService().log('IP-based location: $lat, $lon ($city, $country)');
-
-        final locationText = city.isNotEmpty ? '$city, $country' : _i18n.t('location_detected');
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(locationText)),
-        );
       }
     } else {
       throw Exception('Failed to fetch IP location: ${response.statusCode}');
