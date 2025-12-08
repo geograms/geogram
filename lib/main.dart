@@ -453,16 +453,16 @@ class _HomePageState extends State<HomePage> {
           FilledButton(
             onPressed: () {
               ScaffoldMessenger.of(context).hideCurrentMaterialBanner();
-              // Navigate to Updates page
+              // Navigate to Updates page and start download immediately
               setState(() {
                 _selectedIndex = 3; // Settings tab
               });
-              // After settings page loads, navigate to Updates
+              // After settings page loads, navigate to Updates with autoInstall
               WidgetsBinding.instance.addPostFrameCallback((_) {
                 if (mounted) {
                   Navigator.push(
                     context,
-                    MaterialPageRoute(builder: (_) => const UpdatePage()),
+                    MaterialPageRoute(builder: (_) => const UpdatePage(autoInstall: true)),
                   );
                 }
               });

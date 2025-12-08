@@ -9,7 +9,9 @@ import '../services/update_service.dart';
 import '../services/i18n_service.dart';
 
 class UpdatePage extends StatefulWidget {
-  const UpdatePage({super.key});
+  final bool autoInstall;
+
+  const UpdatePage({super.key, this.autoInstall = false});
 
   @override
   State<UpdatePage> createState() => _UpdatePageState();
@@ -45,6 +47,17 @@ class _UpdatePageState extends State<UpdatePage> {
       setState(() {
         _isLoading = false;
       });
+    }
+
+    // Auto-install if requested and update is available
+    if (widget.autoInstall && _latestRelease != null) {
+      final isNewer = _updateService.isNewerVersion(
+        _updateService.getCurrentVersion(),
+        _latestRelease!.version,
+      );
+      if (isNewer) {
+        _downloadAndInstall();
+      }
     }
   }
 

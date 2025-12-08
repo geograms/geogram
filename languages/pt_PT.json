@@ -1202,7 +1202,7 @@
   "welcome_message": "Uma conta foi gerada automaticamente para si. Pode alterar as definições do seu perfil mais tarde em Definições.",
   "your_callsign": "O Seu Indicativo",
   "welcome_customize_hint": "O seu indicativo único para a rede Geogram é apresentado acima.",
-  "later": "OK",
+  "later": "Ignorar",
   "customize_profile": "Ir para Definições",
   "login_with_extension": "Entrar com Extensão NOSTR",
   "extension_login_description": "Use a extensão do navegador (Alby, nos2x, etc.) para entrar. A sua chave privada permanece segura na extensão.",
@@ -1269,7 +1269,7 @@
 
   "update_available": "Atualização Disponível",
   "update_available_version": "A versão {0} está disponível para download",
-  "view_update": "Ver Atualização",
+  "view_update": "Instalar Atualização",
 
   "web_theme": "Tema Web",
   "select_web_theme": "Selecionar Tema Web",
