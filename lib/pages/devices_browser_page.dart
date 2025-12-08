@@ -324,16 +324,20 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
           ),
         ),
 
-        // Device list
+        // Device list with pull-to-refresh
         Expanded(
           child: _devices.isEmpty
               ? _buildNoDevices(theme)
-              : ListView.builder(
-                  itemCount: _devices.length,
-                  itemBuilder: (context, index) {
-                    final device = _devices[index];
-                    return _buildDeviceListTile(theme, device);
-                  },
+              : RefreshIndicator(
+                  onRefresh: _refreshDevices,
+                  child: ListView.builder(
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    itemCount: _devices.length,
+                    itemBuilder: (context, index) {
+                      final device = _devices[index];
+                      return _buildDeviceListTile(theme, device);
+                    },
+                  ),
                 ),
         ),
       ],
@@ -343,7 +347,8 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
   Widget _buildDeviceListTile(ThemeData theme, RemoteDevice device) {
     final isSelected = _selectedDevice?.callsign == device.callsign;
     final profile = _profileService.getProfile();
-    final distanceStr = device.getDistanceString(profile.latitude, profile.longitude);
+    final distanceKm = device.calculateDistance(profile.latitude, profile.longitude);
+    final distanceStr = _formatDistance(distanceKm);
     final isStation = CallsignGenerator.isStationCallsign(device.callsign);
 
     return ListTile(
@@ -490,6 +495,18 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
         ),
       ),
     );
+  }
+
+  /// Format distance with translations
+  String? _formatDistance(double? distanceKm) {
+    if (distanceKm == null) return null;
+
+    if (distanceKm < 1) {
+      final meters = (distanceKm * 1000).round();
+      return _i18n.t('meters_away', params: [meters.toString()]);
+    } else {
+      return _i18n.t('kilometers_away', params: [distanceKm.toStringAsFixed(1)]);
+    }
   }
 
   /// Get color for connection method
