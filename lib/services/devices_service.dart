@@ -288,13 +288,16 @@ class DevicesService {
 
         final normalizedCallsign = callsign.toUpperCase();
 
-        // Parse connection types
+        // Parse connection types - default to 'internet' if connected via station
         final connectionTypes = <String>[];
         final rawTypes = deviceData['connection_types'] as List<dynamic>?;
-        if (rawTypes != null) {
+        if (rawTypes != null && rawTypes.isNotEmpty) {
           for (final t in rawTypes) {
             connectionTypes.add(t.toString());
           }
+        } else {
+          // Default to internet since device is connected via station
+          connectionTypes.add('internet');
         }
 
         // Update existing device or create new one
@@ -305,11 +308,15 @@ class DevicesService {
           device.npub = deviceData['npub'] as String?;
           device.latitude = deviceData['latitude'] as double?;
           device.longitude = deviceData['longitude'] as double?;
-          // Merge connection methods
+          // Merge connection methods - ensure at least 'internet' is present
           for (final method in connectionTypes) {
             if (!device.connectionMethods.contains(method)) {
               device.connectionMethods = [...device.connectionMethods, method];
             }
+          }
+          // Ensure 'internet' tag if no connection methods
+          if (device.connectionMethods.isEmpty) {
+            device.connectionMethods = ['internet'];
           }
           device.source = DeviceSourceType.station;
           device.lastSeen = DateTime.now();
@@ -581,9 +588,11 @@ class RemoteDevice {
 
   /// Get connection method display label
   static String getConnectionMethodLabel(String method) {
-    switch (method) {
+    switch (method.toLowerCase()) {
       case 'wifi':
-        return 'Wi-Fi';
+      case 'wifi_local':
+      case 'wifi-local':
+        return 'Wi-Fi Local';
       case 'internet':
         return 'Internet';
       case 'bluetooth':
@@ -592,6 +601,15 @@ class RemoteDevice {
         return 'LoRa';
       case 'radio':
         return 'Radio';
+      case 'esp32mesh':
+      case 'esp32_mesh':
+        return 'ESP32 Mesh';
+      case 'wifi_halow':
+      case 'wifi-halow':
+      case 'halow':
+        return 'Wi-Fi HaLow';
+      case 'lan':
+        return 'LAN';
       default:
         return method;
     }

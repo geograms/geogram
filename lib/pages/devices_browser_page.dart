@@ -572,8 +572,10 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
 
   /// Get color for connection method
   Color _getConnectionMethodColor(String method) {
-    switch (method) {
+    switch (method.toLowerCase()) {
       case 'wifi':
+      case 'wifi_local':
+      case 'wifi-local':
         return Colors.blue;
       case 'internet':
         return Colors.green;
@@ -583,6 +585,15 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
         return Colors.orange;
       case 'radio':
         return Colors.purple;
+      case 'esp32mesh':
+      case 'esp32_mesh':
+        return Colors.teal;
+      case 'wifi_halow':
+      case 'wifi-halow':
+      case 'halow':
+        return Colors.cyan;
+      case 'lan':
+        return Colors.blueGrey;
       default:
         return Colors.grey;
     }
