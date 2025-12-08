@@ -238,6 +238,8 @@
   "select_location": "Selecionar Localização",
   "change_location": "Alterar Localização",
   "location_saved": "Localização guardada com sucesso",
+  "save_location": "Guardar Localização",
+  "go_to_coordinates": "Ir para coordenadas",
   "error_saving_location": "Erro ao guardar localização: {0}",
   "invalid_coordinates_error": "Coordenadas inválidas",
   "enable_notifications": "Ativar Notificações",

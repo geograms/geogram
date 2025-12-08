@@ -238,6 +238,8 @@
   "location_detected": "Location detected",
   "close": "Close",
   "location_saved": "Location saved successfully",
+  "save_location": "Save Location",
+  "go_to_coordinates": "Go to coordinates",
   "error_saving_location": "Error saving location: {0}",
   "invalid_coordinates_error": "Invalid coordinates",
   "enable_notifications": "Enable Notifications",
