@@ -296,7 +296,7 @@ class _HomePageState extends State<HomePage> {
   /// Create default collections for first launch
   Future<void> _createDefaultCollections() async {
     final collectionService = CollectionService();
-    final defaultTypes = ['places', 'events', 'blog', 'alerts', 'chat'];
+    final defaultTypes = ['chat', 'blog', 'alerts'];
 
     for (final type in defaultTypes) {
       try {
@@ -311,8 +311,7 @@ class _HomePageState extends State<HomePage> {
       }
     }
 
-    // Refresh collections list
-    setState(() {});
+    // Collections will be loaded by CollectionsPage when it initializes
   }
 
   /// Show welcome dialog with generated callsign
