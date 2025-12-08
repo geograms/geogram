@@ -1607,16 +1607,21 @@ class StationServerService {
   /// Store downloaded asset filenames for API responses
   Map<String, String> _downloadedAssets = {};
   Map<String, String> _assetFilenames = {};
+  String? _currentDownloadVersion;
 
   /// Download all assets from GitHub release
   Future<void> _downloadAllPlatformBinaries(Map<String, dynamic> releaseJson) async {
     final assets = releaseJson['assets'] as List<dynamic>?;
     if (assets == null) return;
 
+    final tagName = releaseJson['tag_name'] as String? ?? '';
+    final version = tagName.replaceFirst(RegExp(r'^v'), '');
+    _currentDownloadVersion = version;
+
     _downloadedAssets.clear();
     _assetFilenames.clear();
 
-    // Download all assets
+    // Download all assets to version-specific folder
     for (final asset in assets) {
       final assetMap = asset as Map<String, dynamic>;
       final filename = assetMap['name'] as String? ?? '';
@@ -1626,29 +1631,39 @@ class StationServerService {
 
       final assetType = UpdateAssetType.fromFilename(filename);
       if (assetType != UpdateAssetType.unknown) {
-        final success = await _downloadBinary(assetType, filename, downloadUrl);
+        final success = await _downloadBinary(version, filename, downloadUrl);
         if (success) {
-          _downloadedAssets[assetType.name] = '/updates/${assetType.name}/$filename';
+          _downloadedAssets[assetType.name] = '/updates/$version/$filename';
           _assetFilenames[assetType.name] = filename;
         }
       }
     }
   }
 
-  /// Download a single binary file
-  Future<bool> _downloadBinary(UpdateAssetType assetType, String filename, String url) async {
+  /// Download a single binary file to version folder
+  Future<bool> _downloadBinary(String version, String filename, String url) async {
     if (_updatesDirectory == null) return false;
 
     try {
-      LogService().log('Downloading ${assetType.displayName} ($filename)...');
+      LogService().log('Downloading $filename for v$version...');
 
-      // Create asset type subdirectory
-      final assetDir = Directory('$_updatesDirectory/${assetType.name}');
-      if (!await assetDir.exists()) {
-        await assetDir.create(recursive: true);
+      // Create version subdirectory: updates/{version}/
+      final versionDir = Directory('$_updatesDirectory/$version');
+      if (!await versionDir.exists()) {
+        await versionDir.create(recursive: true);
       }
 
-      final targetPath = '${assetDir.path}/$filename';
+      final targetPath = '${versionDir.path}/$filename';
+
+      // Check if file already exists (for resume/archive)
+      final existingFile = File(targetPath);
+      if (await existingFile.exists()) {
+        final existingSize = await existingFile.length();
+        if (existingSize > 1000) {
+          LogService().log('File already exists: $filename (${(existingSize / (1024 * 1024)).toStringAsFixed(1)}MB)');
+          return true;
+        }
+      }
 
       final response = await http.get(
         Uri.parse(url),
@@ -1658,19 +1673,19 @@ class StationServerService {
       if (response.statusCode == 200) {
         await File(targetPath).writeAsBytes(response.bodyBytes);
         final sizeMb = (response.bodyBytes.length / (1024 * 1024)).toStringAsFixed(1);
-        LogService().log('Downloaded ${assetType.displayName}: ${sizeMb}MB');
+        LogService().log('Downloaded $filename: ${sizeMb}MB');
         return true;
       } else {
-        LogService().log('Failed to download ${assetType.displayName}: ${response.statusCode}');
+        LogService().log('Failed to download $filename: ${response.statusCode}');
         return false;
       }
     } catch (e) {
-      LogService().log('Error downloading ${assetType.displayName} binary: $e');
+      LogService().log('Error downloading $filename: $e');
       return false;
     }
   }
 
-  /// Build asset URLs pointing to this station
+  /// Build asset URLs pointing to this station (version-based paths)
   Map<String, String> _buildAssetUrls() => _downloadedAssets;
 
   /// Build asset filenames map
@@ -1697,7 +1712,7 @@ class StationServerService {
     }
   }
 
-  /// Handle GET /updates/{assetType}/{filename} - Serve binary file
+  /// Handle GET /updates/{version}/{filename} - Serve binary file
   Future<void> _handleUpdateDownload(HttpRequest request) async {
     if (request.method != 'GET') {
       request.response.statusCode = 405;
@@ -1706,16 +1721,16 @@ class StationServerService {
     }
 
     final path = request.uri.path;
-    // Expected format: /updates/{assetType}/{filename}
+    // Expected format: /updates/{version}/{filename}
     final parts = path.split('/').where((p) => p.isNotEmpty).toList();
 
     if (parts.length < 3) {
       request.response.statusCode = 400;
-      request.response.write('Invalid path format. Expected: /updates/{assetType}/{filename}');
+      request.response.write('Invalid path format. Expected: /updates/{version}/{filename}');
       return;
     }
 
-    final assetTypeName = parts[1];
+    final version = parts[1];
     final filename = parts.sublist(2).join('/');
 
     if (_updatesDirectory == null) {
@@ -1724,7 +1739,7 @@ class StationServerService {
       return;
     }
 
-    final filePath = '$_updatesDirectory/$assetTypeName/$filename';
+    final filePath = '$_updatesDirectory/$version/$filename';
     final file = File(filePath);
 
     if (!await file.exists()) {

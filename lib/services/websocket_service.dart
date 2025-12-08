@@ -78,6 +78,24 @@ class WebSocketService {
       LogService().log('User callsign: ${profile.callsign}');
       LogService().log('User npub: ${profile.npub.substring(0, 20)}...');
 
+      // Detect platform for device type identification
+      String platform;
+      if (kIsWeb) {
+        platform = 'Web';
+      } else if (Platform.isAndroid) {
+        platform = 'Android';
+      } else if (Platform.isIOS) {
+        platform = 'iOS';
+      } else if (Platform.isMacOS) {
+        platform = 'macOS';
+      } else if (Platform.isWindows) {
+        platform = 'Windows';
+      } else if (Platform.isLinux) {
+        platform = 'Linux';
+      } else {
+        platform = 'Desktop';
+      }
+
       // Create hello event (include nickname for friendly URL support, location for distance)
       final event = NostrEvent.createHello(
         npub: profile.npub,
@@ -85,6 +103,7 @@ class WebSocketService {
         nickname: profile.nickname,
         latitude: profile.latitude,
         longitude: profile.longitude,
+        platform: platform,
       );
       event.calculateId();
 

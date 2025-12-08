@@ -96,6 +96,8 @@ class DevicesService {
               collections: [],
               latitude: station.latitude,
               longitude: station.longitude,
+              connectionMethods: station.isConnected ? ['internet'] : [],
+              source: DeviceSourceType.station,
             );
           }
         }
@@ -239,7 +241,10 @@ class DevicesService {
 
   /// Check all devices reachability
   Future<void> refreshAllDevices() async {
-    // First, fetch connected clients from connected station (internet)
+    // First, ensure connected station is in device list with 'internet' tag
+    await _updateConnectedStation();
+
+    // Then, fetch connected clients from connected station (internet)
     await _fetchStationClients();
 
     // Then discover devices on local WiFi network
@@ -248,6 +253,52 @@ class DevicesService {
     // Finally check reachability for all known devices
     for (final device in _devices.values) {
       await checkReachability(device.callsign);
+    }
+  }
+
+  /// Update the connected station as a device with 'internet' connection
+  Future<void> _updateConnectedStation() async {
+    try {
+      final station = _stationService.getConnectedRelay();
+      if (station == null || station.callsign == null) return;
+
+      final normalizedCallsign = station.callsign!.toUpperCase();
+
+      if (_devices.containsKey(normalizedCallsign)) {
+        // Update existing device
+        final device = _devices[normalizedCallsign]!;
+        device.isOnline = true;
+        device.url = station.url;
+        device.latitude = station.latitude;
+        device.longitude = station.longitude;
+        device.lastSeen = DateTime.now();
+        // Ensure 'internet' tag is present
+        if (!device.connectionMethods.contains('internet')) {
+          device.connectionMethods = [...device.connectionMethods, 'internet'];
+        }
+        device.source = DeviceSourceType.station;
+        LogService().log('DevicesService: Updated connected station: $normalizedCallsign');
+      } else {
+        // Add new device for the station
+        _devices[normalizedCallsign] = RemoteDevice(
+          callsign: normalizedCallsign,
+          name: station.name,
+          url: station.url,
+          isOnline: true,
+          hasCachedData: false,
+          collections: [],
+          latitude: station.latitude,
+          longitude: station.longitude,
+          connectionMethods: ['internet'],
+          source: DeviceSourceType.station,
+          lastSeen: DateTime.now(),
+        );
+        LogService().log('DevicesService: Added connected station as device: $normalizedCallsign');
+      }
+
+      _notifyListeners();
+    } catch (e) {
+      LogService().log('DevicesService: Error updating connected station: $e');
     }
   }
 

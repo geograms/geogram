@@ -119,6 +119,7 @@ class NostrEvent {
     String? nickname,
     double? latitude,
     double? longitude,
+    String? platform,
   }) {
     // Convert npub to pubkey hex
     final pubkeyHex = NostrCrypto.decodeNpub(npub);
@@ -135,12 +136,18 @@ class NostrEvent {
       tags.add(['latitude', latitude.toString()]);
       tags.add(['longitude', longitude.toString()]);
     }
+    // Include platform if provided
+    if (platform != null && platform.isNotEmpty) {
+      tags.add(['platform', platform]);
+    }
+    // Build content with platform name
+    final platformName = platform ?? 'Desktop';
     return NostrEvent(
       pubkey: pubkeyHex,
       createdAt: DateTime.now().millisecondsSinceEpoch ~/ 1000,
       kind: NostrEventKind.textNote,
       tags: tags,
-      content: 'Hello from Geogram Desktop',
+      content: 'Hello from Geogram $platformName',
     );
   }
 

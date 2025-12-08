@@ -381,6 +381,7 @@ class PureConnectedClient {
   String? callsign;
   String? nickname;
   String? deviceType;
+  String? platform;
   String? version;
   String? address;
   DateTime connectedAt;
@@ -392,6 +393,7 @@ class PureConnectedClient {
     this.callsign,
     this.nickname,
     this.deviceType,
+    this.platform,
     this.version,
     this.address,
   })  : connectedAt = DateTime.now(),
@@ -402,6 +404,7 @@ class PureConnectedClient {
         'callsign': callsign ?? 'Unknown',
         'nickname': nickname,
         'device_type': deviceType ?? 'Unknown',
+        'platform': platform,
         'version': version,
         'address': address,
         'connected_at': connectedAt.toIso8601String(),
@@ -1755,8 +1758,9 @@ class PureStationServer {
             // Check for Nostr event format (used by desktop/mobile clients)
             final event = message['event'] as Map<String, dynamic>?;
             if (event != null) {
-              // Extract callsign and nickname from event tags: [['callsign', 'VALUE'], ['nickname', 'VALUE'], ...]
+              // Extract callsign, nickname, and platform from event tags
               final tags = event['tags'] as List<dynamic>?;
+              String? platform;
               if (tags != null) {
                 for (final tag in tags) {
                   if (tag is List && tag.length >= 2) {
@@ -1764,18 +1768,34 @@ class PureStationServer {
                       callsign = tag[1] as String?;
                     } else if (tag[0] == 'nickname') {
                       nickname = tag[1] as String?;
+                    } else if (tag[0] == 'platform') {
+                      platform = tag[1] as String?;
                     }
                   }
                 }
               }
-              // Detect device type from content
-              final content = event['content'] as String? ?? '';
-              if (content.contains('Desktop')) {
-                deviceType = 'desktop';
-              } else if (content.contains('Mobile') || content.contains('Android') || content.contains('iOS')) {
-                deviceType = 'mobile';
+              // Set device type from platform tag or detect from content
+              if (platform != null) {
+                // Use platform tag directly (Android, iOS, Web, Linux, Windows, macOS)
+                if (platform == 'Android' || platform == 'iOS') {
+                  deviceType = 'mobile';
+                } else if (platform == 'Web') {
+                  deviceType = 'web';
+                } else {
+                  deviceType = 'desktop';
+                }
+                // Store the actual platform for more specific identification
+                client.platform = platform;
               } else {
-                deviceType = 'client';
+                // Fallback: detect device type from content
+                final content = event['content'] as String? ?? '';
+                if (content.contains('Android') || content.contains('iOS')) {
+                  deviceType = 'mobile';
+                } else if (content.contains('Web')) {
+                  deviceType = 'web';
+                } else {
+                  deviceType = 'desktop';
+                }
               }
             }
 
