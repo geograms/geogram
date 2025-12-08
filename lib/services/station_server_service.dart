@@ -37,6 +37,7 @@ class RelayServerSettings {
   bool updateMirrorEnabled;      // Enable/disable update mirroring from GitHub
   int updateCheckInterval;       // Polling interval in seconds (default: 120 = 2 min)
   String? lastMirroredVersion;   // Track what version has been downloaded
+  String updateMirrorUrl;        // GitHub API URL for releases (can be changed for different repos)
 
   RelayServerSettings({
     this.port = 8080,
@@ -52,6 +53,7 @@ class RelayServerSettings {
     this.updateMirrorEnabled = true,
     this.updateCheckInterval = 120,
     this.lastMirroredVersion,
+    this.updateMirrorUrl = 'https://api.github.com/repos/geograms/geogram-desktop/releases/latest',
   });
 
   factory RelayServerSettings.fromJson(Map<String, dynamic> json) {
@@ -69,6 +71,7 @@ class RelayServerSettings {
       updateMirrorEnabled: json['updateMirrorEnabled'] as bool? ?? true,
       updateCheckInterval: json['updateCheckInterval'] as int? ?? 120,
       lastMirroredVersion: json['lastMirroredVersion'] as String?,
+      updateMirrorUrl: json['updateMirrorUrl'] as String? ?? 'https://api.github.com/repos/geograms/geogram-desktop/releases/latest',
     );
   }
 
@@ -86,6 +89,7 @@ class RelayServerSettings {
         'updateMirrorEnabled': updateMirrorEnabled,
         'updateCheckInterval': updateCheckInterval,
         'lastMirroredVersion': lastMirroredVersion,
+        'updateMirrorUrl': updateMirrorUrl,
       };
 
   RelayServerSettings copyWith({
@@ -102,6 +106,7 @@ class RelayServerSettings {
     bool? updateMirrorEnabled,
     int? updateCheckInterval,
     String? lastMirroredVersion,
+    String? updateMirrorUrl,
   }) {
     return RelayServerSettings(
       port: port ?? this.port,
@@ -117,6 +122,7 @@ class RelayServerSettings {
       updateMirrorEnabled: updateMirrorEnabled ?? this.updateMirrorEnabled,
       updateCheckInterval: updateCheckInterval ?? this.updateCheckInterval,
       lastMirroredVersion: lastMirroredVersion ?? this.lastMirroredVersion,
+      updateMirrorUrl: updateMirrorUrl ?? this.updateMirrorUrl,
     );
   }
 }
@@ -354,8 +360,8 @@ class StationServerService {
     _tilesDirectory = '${appDir.path}/tiles';
     await Directory(_tilesDirectory!).create(recursive: true);
 
-    // Create updates directory
-    _updatesDirectory = '${appDir.path}/updates';
+    // Create updates directory in current working directory (for server deployments)
+    _updatesDirectory = '${Directory.current.path}/updates';
     await Directory(_updatesDirectory!).create(recursive: true);
 
     // Load cached release info if exists
@@ -1546,12 +1552,10 @@ class StationServerService {
 
     try {
       _isDownloadingUpdates = true;
-      LogService().log('Checking GitHub for updates...');
-
-      const url = 'https://api.github.com/repos/geograms/geogram-desktop/releases/latest';
+      LogService().log('Checking for updates from: ${_settings.updateMirrorUrl}');
 
       final response = await http.get(
-        Uri.parse(url),
+        Uri.parse(_settings.updateMirrorUrl),
         headers: {
           'Accept': 'application/vnd.github.v3+json',
           'User-Agent': 'Geogram-Station-Updater',

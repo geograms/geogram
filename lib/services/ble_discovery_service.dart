@@ -5,7 +5,11 @@
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io' show Platform;
 import 'dart:math';
+import 'dart:typed_data';
+import 'package:ble_peripheral/ble_peripheral.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'log_service.dart';
 
@@ -65,6 +69,10 @@ class BLEDiscoveryService {
   /// Scanning state
   bool _isScanning = false;
   bool get isScanning => _isScanning;
+
+  /// Advertising state
+  bool _isAdvertising = false;
+  bool get isAdvertising => _isAdvertising;
 
   /// Scan results subscription
   StreamSubscription<List<ScanResult>>? _scanSubscription;
@@ -146,23 +154,77 @@ class BLEDiscoveryService {
     }
   }
 
+  /// Start advertising as a Geogram device so others can discover us
+  Future<void> startAdvertising(String callsign) async {
+    if (_isAdvertising) {
+      LogService().log('BLEDiscovery: Already advertising');
+      return;
+    }
+
+    // BLE advertising not available on web or desktop (Linux/Windows/macOS)
+    if (kIsWeb) {
+      LogService().log('BLEDiscovery: Advertising not available on web');
+      return;
+    }
+
+    try {
+      // Initialize BLE peripheral
+      await BlePeripheral.initialize();
+
+      // Build advertising data: [marker][callsign]
+      final List<int> serviceData = [geogramMarker, ...utf8.encode(callsign)];
+
+      // Limit to 20 bytes (BLE advertising limit minus overhead)
+      final truncatedData = serviceData.length > 20
+          ? Uint8List.fromList(serviceData.sublist(0, 20))
+          : Uint8List.fromList(serviceData);
+
+      // Start advertising with our service UUID and data
+      await BlePeripheral.startAdvertising(
+        services: [serviceUUID],
+        localName: 'Geogram',
+        manufacturerData: ManufacturerData(
+          manufacturerId: 0xFFFF, // Test manufacturer ID
+          data: truncatedData,
+        ),
+      );
+
+      _isAdvertising = true;
+      LogService().log('BLEDiscovery: Started advertising as $callsign');
+    } catch (e) {
+      LogService().log('BLEDiscovery: Error starting advertising: $e');
+      _isAdvertising = false;
+    }
+  }
+
+  /// Stop advertising
+  Future<void> stopAdvertising() async {
+    if (!_isAdvertising) return;
+
+    try {
+      await BlePeripheral.stopAdvertising();
+      _isAdvertising = false;
+      LogService().log('BLEDiscovery: Stopped advertising');
+    } catch (e) {
+      LogService().log('BLEDiscovery: Error stopping advertising: $e');
+    }
+  }
+
   /// Process a BLE advertisement
   void _processAdvertisement(ScanResult result) {
     // Check for Geogram service data
     final serviceData = result.advertisementData.serviceData;
     final data = serviceData[Guid(serviceUUID)];
 
-    // Check if this is a Geogram device
+    // Only accept devices with our service UUID and data
     if (data == null || data.isEmpty) {
-      // No service data with our UUID, but device was found with our service
-      // This might be a Geogram device without advertising data
-      _addOrUpdateDevice(result, null);
+      // No Geogram service data - ignore this device
       return;
     }
 
-    // Check for Geogram marker
+    // Check for Geogram marker (first byte must be '>')
     if (data[0] != geogramMarker) {
-      LogService().log('BLEDiscovery: Device found but no Geogram marker');
+      LogService().log('BLEDiscovery: Device ${result.device.remoteId.str} has service but no Geogram marker');
       return;
     }
 
@@ -425,6 +487,7 @@ class BLEDiscoveryService {
   /// Dispose resources
   void dispose() {
     stopScanning();
+    stopAdvertising();
     _devicesController.close();
   }
 }

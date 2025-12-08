@@ -18,6 +18,7 @@ import 'station_discovery_service.dart';
 import 'direct_message_service.dart';
 import 'log_service.dart';
 import 'ble_discovery_service.dart';
+import 'profile_service.dart';
 
 /// Service for managing remote devices we've contacted
 class DevicesService {
@@ -65,6 +66,12 @@ class DevicesService {
       _bleSubscription = _bleService!.devicesStream.listen((bleDevices) {
         _handleBLEDevices(bleDevices);
       });
+
+      // Start advertising so other Geogram devices can discover us
+      final profile = ProfileService().getProfile();
+      if (profile.callsign != null) {
+        await _bleService!.startAdvertising(profile.callsign!);
+      }
 
       LogService().log('DevicesService: BLE discovery initialized');
     } catch (e) {

@@ -3,6 +3,7 @@
 #
 
 list(APPEND FLUTTER_PLUGIN_LIST
+  ble_peripheral
   geolocator_windows
   objectbox_flutter_libs
   screen_retriever_windows

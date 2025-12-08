@@ -49,6 +49,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "0.2.2"
+  ble_peripheral:
+    dependency: "direct main"
+    description:
+      name: ble_peripheral
+      sha256: "858d370709507155bbf69e6160e9cb81d802e664f133a649a38b9ca04439884c"
+      url: "https://pub.dev"
+    source: hosted
+    version: "2.4.0"
   bluez:
     dependency: transitive
     description:

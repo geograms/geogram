@@ -43,8 +43,15 @@ class _OnboardingPageState extends State<OnboardingPage> {
     // Request Bluetooth permissions (Android only)
     try {
       if (!kIsWeb && Platform.isAndroid) {
-        // This will trigger the Bluetooth permission dialog on Android 12+
-        await FlutterBluePlus.turnOn();
+        // Check if Bluetooth is supported
+        if (await FlutterBluePlus.isSupported) {
+          // Try to turn on Bluetooth (will request BLUETOOTH_CONNECT permission)
+          await FlutterBluePlus.turnOn();
+
+          // Start a brief scan to trigger BLUETOOTH_SCAN permission dialog
+          await FlutterBluePlus.startScan(timeout: const Duration(seconds: 1));
+          await FlutterBluePlus.stopScan();
+        }
       }
     } catch (e) {
       // Continue even if Bluetooth permission request fails
