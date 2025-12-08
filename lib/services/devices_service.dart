@@ -232,12 +232,45 @@ class DevicesService {
     return false;
   }
 
-  /// Check device via direct connection (local WiFi)
+  /// Check if an IP address is a private/local network address
+  bool _isPrivateIP(String host) {
+    // Handle localhost
+    if (host == 'localhost' || host == '127.0.0.1') return true;
+
+    // Try to parse as IP address
+    final parts = host.split('.');
+    if (parts.length != 4) return false;
+
+    try {
+      final octets = parts.map(int.parse).toList();
+
+      // 10.0.0.0 - 10.255.255.255
+      if (octets[0] == 10) return true;
+
+      // 172.16.0.0 - 172.31.255.255
+      if (octets[0] == 172 && octets[1] >= 16 && octets[1] <= 31) return true;
+
+      // 192.168.0.0 - 192.168.255.255
+      if (octets[0] == 192 && octets[1] == 168) return true;
+
+      // 127.0.0.0 - 127.255.255.255 (loopback)
+      if (octets[0] == 127) return true;
+
+      return false;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /// Check device via direct connection (local WiFi or direct internet)
   Future<bool> _checkDirectConnection(RemoteDevice device) async {
     if (device.url == null) return false;
 
     try {
       final baseUrl = device.url!.replaceFirst('ws://', 'http://').replaceFirst('wss://', 'https://');
+      final uri = Uri.parse(baseUrl);
+      final isLocalIP = _isPrivateIP(uri.host);
+
       final stopwatch = Stopwatch()..start();
 
       final response = await http.get(
@@ -251,10 +284,17 @@ class DevicesService {
         device.latency = stopwatch.elapsedMilliseconds;
         device.lastChecked = DateTime.now();
 
-        // Add local connection method if not present
-        if (!device.connectionMethods.contains('wifi_local') &&
-            !device.connectionMethods.contains('lan')) {
-          device.connectionMethods = [...device.connectionMethods, 'wifi_local'];
+        // Add appropriate connection method based on IP type
+        if (isLocalIP) {
+          if (!device.connectionMethods.contains('wifi_local') &&
+              !device.connectionMethods.contains('lan')) {
+            device.connectionMethods = [...device.connectionMethods, 'wifi_local'];
+          }
+        } else {
+          // Public IP - this is an internet connection
+          if (!device.connectionMethods.contains('internet')) {
+            device.connectionMethods = [...device.connectionMethods, 'internet'];
+          }
         }
 
         _notifyListeners();
