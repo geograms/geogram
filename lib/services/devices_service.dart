@@ -239,6 +239,7 @@ class DevicesService {
   }
 
   /// Fetch connected clients from the connected station
+  /// Tries /api/devices first (CLI station), then /api/clients (GUI station)
   Future<void> _fetchStationClients() async {
     try {
       final station = _stationService.getConnectedRelay();
@@ -256,83 +257,95 @@ class DevicesService {
       final uri = Uri.parse(baseUrl);
       baseUrl = '${uri.scheme}://${uri.host}${uri.hasPort ? ':${uri.port}' : ''}';
 
-      final clientsUrl = '$baseUrl/api/clients';
-      LogService().log('DevicesService: Fetching clients from: $clientsUrl');
+      // Try /api/devices first (CLI station format), then /api/clients (GUI station format)
+      List<dynamic>? clients;
+      String? successEndpoint;
 
-      final response = await http.get(
-        Uri.parse(clientsUrl),
-      ).timeout(const Duration(seconds: 10));
+      for (final endpoint in ['/api/devices', '/api/clients']) {
+        final url = '$baseUrl$endpoint';
+        LogService().log('DevicesService: Trying: $url');
 
-      LogService().log('DevicesService: Station clients response: ${response.statusCode}');
+        try {
+          final response = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 10));
 
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body);
-        final clients = data['clients'] as List<dynamic>?;
-
-        LogService().log('DevicesService: Received ${clients?.length ?? 0} clients from station');
-
-        if (clients != null) {
-          for (final clientData in clients) {
-            final callsign = clientData['callsign'] as String?;
-            if (callsign == null || callsign.isEmpty) {
-              LogService().log('DevicesService: Skipping client with no callsign');
-              continue;
-            }
-
-            final normalizedCallsign = callsign.toUpperCase();
-
-            // Parse connection types
-            final connectionTypes = <String>[];
-            final rawTypes = clientData['connection_types'] as List<dynamic>?;
-            if (rawTypes != null) {
-              for (final t in rawTypes) {
-                connectionTypes.add(t.toString());
-              }
-            }
-
-            // Update existing device or create new one
-            if (_devices.containsKey(normalizedCallsign)) {
-              final device = _devices[normalizedCallsign]!;
-              device.isOnline = true;
-              device.nickname = clientData['nickname'] as String?;
-              device.npub = clientData['npub'] as String?;
-              device.latitude = clientData['latitude'] as double?;
-              device.longitude = clientData['longitude'] as double?;
-              // Merge connection methods
-              for (final method in connectionTypes) {
-                if (!device.connectionMethods.contains(method)) {
-                  device.connectionMethods = [...device.connectionMethods, method];
-                }
-              }
-              device.source = DeviceSourceType.station;
-              device.lastSeen = DateTime.now();
-              LogService().log('DevicesService: Updated device: $normalizedCallsign');
-            } else {
-              // Create new device from station client
-              _devices[normalizedCallsign] = RemoteDevice(
-                callsign: normalizedCallsign,
-                name: clientData['nickname'] as String? ?? normalizedCallsign,
-                nickname: clientData['nickname'] as String?,
-                npub: clientData['npub'] as String?,
-                isOnline: true,
-                hasCachedData: false,
-                collections: [],
-                latitude: clientData['latitude'] as double?,
-                longitude: clientData['longitude'] as double?,
-                connectionMethods: connectionTypes,
-                source: DeviceSourceType.station,
-                lastSeen: DateTime.now(),
-              );
-              LogService().log('DevicesService: Added new device from station: $normalizedCallsign');
+          if (response.statusCode == 200) {
+            final data = json.decode(response.body);
+            // Try both 'devices' and 'clients' keys
+            clients = data['devices'] as List<dynamic>? ?? data['clients'] as List<dynamic>?;
+            if (clients != null) {
+              successEndpoint = endpoint;
+              break;
             }
           }
-
-          _notifyListeners();
-          LogService().log('DevicesService: Fetched ${clients.length} clients from station ${station.name}');
+        } catch (e) {
+          LogService().log('DevicesService: $endpoint failed: $e');
         }
-      } else {
-        LogService().log('DevicesService: Failed to fetch clients: HTTP ${response.statusCode}');
       }
+
+      if (clients == null) {
+        LogService().log('DevicesService: No clients endpoint available on station');
+        return;
+      }
+
+      LogService().log('DevicesService: Received ${clients.length} devices from $successEndpoint');
+
+      for (final clientData in clients) {
+        final callsign = clientData['callsign'] as String?;
+        if (callsign == null || callsign.isEmpty || callsign == 'Unknown') {
+          LogService().log('DevicesService: Skipping client with no callsign');
+          continue;
+        }
+
+        final normalizedCallsign = callsign.toUpperCase();
+
+        // Parse connection types (GUI station format)
+        final connectionTypes = <String>[];
+        final rawTypes = clientData['connection_types'] as List<dynamic>?;
+        if (rawTypes != null) {
+          for (final t in rawTypes) {
+            connectionTypes.add(t.toString());
+          }
+        }
+
+        // Update existing device or create new one
+        if (_devices.containsKey(normalizedCallsign)) {
+          final device = _devices[normalizedCallsign]!;
+          device.isOnline = true;
+          device.nickname = clientData['nickname'] as String?;
+          device.npub = clientData['npub'] as String?;
+          device.latitude = clientData['latitude'] as double?;
+          device.longitude = clientData['longitude'] as double?;
+          // Merge connection methods
+          for (final method in connectionTypes) {
+            if (!device.connectionMethods.contains(method)) {
+              device.connectionMethods = [...device.connectionMethods, method];
+            }
+          }
+          device.source = DeviceSourceType.station;
+          device.lastSeen = DateTime.now();
+          LogService().log('DevicesService: Updated device: $normalizedCallsign');
+        } else {
+          // Create new device from station client
+          _devices[normalizedCallsign] = RemoteDevice(
+            callsign: normalizedCallsign,
+            name: clientData['nickname'] as String? ?? normalizedCallsign,
+            nickname: clientData['nickname'] as String?,
+            npub: clientData['npub'] as String?,
+            isOnline: true,
+            hasCachedData: false,
+            collections: [],
+            latitude: clientData['latitude'] as double?,
+            longitude: clientData['longitude'] as double?,
+            connectionMethods: connectionTypes,
+            source: DeviceSourceType.station,
+            lastSeen: DateTime.now(),
+          );
+          LogService().log('DevicesService: Added new device from station: $normalizedCallsign');
+        }
+      }
+
+      _notifyListeners();
+      LogService().log('DevicesService: Fetched ${clients.length} devices from station ${station.name}');
     } catch (e) {
       LogService().log('DevicesService: Error fetching station clients: $e');
     }
