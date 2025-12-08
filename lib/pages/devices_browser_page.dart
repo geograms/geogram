@@ -492,7 +492,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
                 _buildConnectionTag(
                   theme,
                   _i18n.t('unreachable'),
-                  Colors.red,
+                  Colors.grey,
                 ),
               // Cached indicator
               if (device.hasCachedData && !device.isOnline)

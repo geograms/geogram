@@ -371,7 +371,7 @@
   "connected_with_latency": "Connected ({0}ms)",
   "meters_away": "{0} meters away",
   "kilometers_away": "{0} kilometers away",
-  "same_location": "Same location",
+  "same_location": "Same network",
   "title_defined_by_default": "Title is defined by default",
   "channels": "Channels",
   "new_channel": "New channel",
