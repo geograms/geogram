@@ -351,6 +351,17 @@ class PureConsole {
       // Initialize station server
       await _station.initialize();
 
+      // Sync profile location to station settings (for /status endpoint)
+      final profile = _profileService.activeProfile;
+      if (profile != null && profile.latitude != null && profile.longitude != null) {
+        final updatedSettings = _station.settings.copyWith(
+          latitude: profile.latitude,
+          longitude: profile.longitude,
+          location: profile.locationName,
+        );
+        await _station.updateSettings(updatedSettings);
+      }
+
       // Enable quiet mode by default (logs go to buffer, not stderr)
       // Users can disable with 'verbose' command or view logs with 'top'/'tail'
       _station.quietMode = true;
@@ -2595,6 +2606,14 @@ class PureConsole {
     );
 
     await _profileService.updateProfile(updatedProfile);
+
+    // Also update station settings so /status endpoint returns coordinates
+    final updatedStationSettings = _station.settings.copyWith(
+      latitude: result.latitude,
+      longitude: result.longitude,
+      location: result.locationName,
+    );
+    await _station.updateSettings(updatedStationSettings);
 
     stdout.writeln('\x1B[32mLocation detected successfully:\x1B[0m');
     stdout.writeln('  Location: ${result.locationName}');
