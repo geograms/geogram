@@ -138,19 +138,21 @@ class DevicesService {
     // Store previous online state to detect transitions
     final wasOnline = device.isOnline;
 
-    bool isNowOnline;
-    if (device.url == null) {
-      // Try to find via station proxy
-      isNowOnline = await _checkViaRelayProxy(device);
-    } else {
-      // Try direct connection first (local WiFi)
-      isNowOnline = await _checkDirectConnection(device);
+    bool directOk = false;
+    bool proxyOk = false;
 
-      // If direct connection fails, fallback to station proxy
-      if (!isNowOnline) {
-        isNowOnline = await _checkViaRelayProxy(device);
-      }
+    // Try direct connection first (local WiFi) if device has a URL
+    if (device.url != null) {
+      directOk = await _checkDirectConnection(device);
     }
+
+    // Always check via station proxy for internet connectivity
+    proxyOk = await _checkViaRelayProxy(device);
+
+    // Device is online if ANY connection method works
+    final isNowOnline = directOk || proxyOk;
+    device.isOnline = isNowOnline;
+    _notifyListeners();
 
     // Trigger DM sync when device becomes reachable
     if (!wasOnline && isNowOnline && device.url != null) {
@@ -180,7 +182,13 @@ class DevicesService {
   Future<bool> _checkViaRelayProxy(RemoteDevice device) async {
     // Get connected station
     final station = _stationService.getConnectedRelay();
-    if (station == null) return false;
+    if (station == null) {
+      // No station connection - remove 'internet' from connectionMethods
+      device.connectionMethods = device.connectionMethods
+          .where((m) => m != 'internet')
+          .toList();
+      return false;
+    }
 
     try {
       final baseUrl = station.url.replaceFirst('ws://', 'http://').replaceFirst('wss://', 'https://');
@@ -194,21 +202,37 @@ class DevicesService {
 
         device.isOnline = isConnected;
         device.lastChecked = DateTime.now();
-        _notifyListeners();
 
+        // Update connectionMethods based on result
+        if (isConnected) {
+          if (!device.connectionMethods.contains('internet')) {
+            device.connectionMethods = [...device.connectionMethods, 'internet'];
+          }
+        } else {
+          // Device not connected via station - remove 'internet' tag
+          device.connectionMethods = device.connectionMethods
+              .where((m) => m != 'internet')
+              .toList();
+        }
+
+        _notifyListeners();
         return isConnected;
       }
     } catch (e) {
       LogService().log('DevicesService: Error checking device ${device.callsign}: $e');
     }
 
-    device.isOnline = false;
+    // Failed to check - remove 'internet' from connectionMethods
+    device.connectionMethods = device.connectionMethods
+        .where((m) => m != 'internet')
+        .toList();
+    device.isOnline = device.connectionMethods.isNotEmpty; // Online if other methods exist
     device.lastChecked = DateTime.now();
     _notifyListeners();
     return false;
   }
 
-  /// Check device via direct connection
+  /// Check device via direct connection (local WiFi)
   Future<bool> _checkDirectConnection(RemoteDevice device) async {
     if (device.url == null) return false;
 
@@ -226,14 +250,25 @@ class DevicesService {
         device.isOnline = true;
         device.latency = stopwatch.elapsedMilliseconds;
         device.lastChecked = DateTime.now();
+
+        // Add local connection method if not present
+        if (!device.connectionMethods.contains('wifi_local') &&
+            !device.connectionMethods.contains('lan')) {
+          device.connectionMethods = [...device.connectionMethods, 'wifi_local'];
+        }
+
         _notifyListeners();
         return true;
       }
     } catch (e) {
-      LogService().log('DevicesService: Error checking device ${device.callsign}: $e');
+      LogService().log('DevicesService: Direct connection to ${device.callsign} failed: $e');
     }
 
-    device.isOnline = false;
+    // Direct connection failed - remove local connection methods
+    device.connectionMethods = device.connectionMethods
+        .where((m) => m != 'wifi_local' && m != 'lan')
+        .toList();
+    // Don't set isOnline = false here - let the caller try other methods
     device.lastChecked = DateTime.now();
     _notifyListeners();
     return false;
