@@ -37,6 +37,12 @@ enum DebugAction {
 
   /// Disconnect from station
   disconnectStation,
+
+  /// Send direct message to a device
+  sendDM,
+
+  /// Sync DMs with a device
+  syncDM,
 }
 
 /// Toast message to be displayed
@@ -244,6 +250,22 @@ class DebugController {
     triggerAction(DebugAction.disconnectStation);
   }
 
+  /// Trigger sending a direct message
+  void triggerSendDM({required String callsign, required String content}) {
+    triggerAction(
+      DebugAction.sendDM,
+      params: {'callsign': callsign, 'content': content},
+    );
+  }
+
+  /// Trigger DM sync with a device
+  void triggerSyncDM({required String callsign, String? deviceUrl}) {
+    triggerAction(
+      DebugAction.syncDM,
+      params: {'callsign': callsign, 'url': deviceUrl},
+    );
+  }
+
   /// Get available actions for API response
   static List<Map<String, dynamic>> getAvailableActions() {
     return [
@@ -311,6 +333,22 @@ class DebugController {
         'action': 'disconnect_station',
         'description': 'Disconnect from current station',
         'params': {},
+      },
+      {
+        'action': 'send_dm',
+        'description': 'Send a direct message to another device',
+        'params': {
+          'callsign': 'Target device callsign (required)',
+          'content': 'Message content (required)',
+        },
+      },
+      {
+        'action': 'sync_dm',
+        'description': 'Sync DM messages with a remote device',
+        'params': {
+          'callsign': 'Target device callsign (required)',
+          'url': '(optional) Device URL for direct sync',
+        },
       },
     ];
   }
@@ -386,6 +424,34 @@ class DebugController {
       case 'disconnect_station':
         triggerDisconnectStation();
         return {'success': true, 'message': 'Station disconnection triggered'};
+
+      case 'send_dm':
+        final callsign = params['callsign'] as String?;
+        final content = params['content'] as String?;
+        if (callsign == null || callsign.isEmpty) {
+          return {'success': false, 'error': 'Missing callsign parameter'};
+        }
+        if (content == null || content.isEmpty) {
+          return {'success': false, 'error': 'Missing content parameter'};
+        }
+        triggerSendDM(callsign: callsign, content: content);
+        return {
+          'success': true,
+          'message': 'DM send triggered to $callsign',
+          'callsign': callsign,
+        };
+
+      case 'sync_dm':
+        final callsign = params['callsign'] as String?;
+        if (callsign == null || callsign.isEmpty) {
+          return {'success': false, 'error': 'Missing callsign parameter'};
+        }
+        triggerSyncDM(callsign: callsign, deviceUrl: params['url'] as String?);
+        return {
+          'success': true,
+          'message': 'DM sync triggered with $callsign',
+          'callsign': callsign,
+        };
 
       default:
         return {

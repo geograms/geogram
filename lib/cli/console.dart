@@ -8,6 +8,10 @@ import '../services/profile_service.dart';
 import '../services/callsign_generator.dart';
 import '../services/station_server_service.dart';
 import '../services/web_theme_service.dart';
+import '../services/log_api_service.dart';
+import '../services/security_service.dart';
+import '../services/storage_config.dart';
+import '../services/app_args.dart';
 import '../version.dart';
 
 /// Main CLI console for geogram-desktop
@@ -37,6 +41,9 @@ class Console {
   /// Initialize services for CLI mode
   Future<void> _initializeServices() async {
     try {
+      // Initialize storage configuration first (uses custom data dir from CLI args)
+      await StorageConfig().init(customBaseDir: AppArgs().dataDir);
+
       await LogService().init();
       await ConfigService().init();
       await CollectionService().init();
@@ -51,6 +58,20 @@ class Console {
 
       // Initialize web theme service
       await WebThemeService().init();
+
+      // Start HTTP API if requested via command line
+      if (AppArgs().httpApi) {
+        SecurityService().httpApiEnabled = true;
+        await LogApiService().start();
+        LogService().log('HTTP API started on port ${LogApiService().port} (CLI mode)');
+        stdout.writeln('HTTP API started on port ${LogApiService().port}');
+      }
+
+      // Enable Debug API if requested via command line
+      if (AppArgs().debugApi) {
+        SecurityService().debugApiEnabled = true;
+        LogService().log('Debug API enabled (CLI mode)');
+      }
 
       LogService().log('CLI services initialized');
     } catch (e) {

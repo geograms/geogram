@@ -326,14 +326,137 @@ Posts a message to a chat room.
 
 ### Direct Messages
 
-#### GET /api/dm/{recipientId}/messages
+Direct messages (DMs) enable 1:1 communication between devices. Messages are stored locally and can be synced when devices are online.
 
-Returns direct messages with a specific recipient.
+#### GET /api/dm/conversations
+
+Returns list of all DM conversations.
+
+**Response (200 OK):**
+```json
+{
+  "conversations": [
+    {
+      "callsign": "REMOTE-42",
+      "myCallsign": "USER-123",
+      "lastMessage": "2024-12-09T10:30:00Z",
+      "lastMessagePreview": "Hello!",
+      "lastMessageAuthor": "USER-123",
+      "unread": 2,
+      "isOnline": true,
+      "lastSyncTime": "2024-12-09T10:00:00Z"
+    }
+  ],
+  "total": 1
+}
+```
+
+#### GET /api/dm/{callsign}/messages
+
+Returns direct messages with a specific device.
 
 **Parameters:**
 | Parameter | Description |
 |-----------|-------------|
-| `recipientId` | Recipient's callsign or identifier |
+| `callsign` | Target device's callsign |
+
+**Query Parameters:**
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `limit` | 100 | Maximum messages to return (1-500) |
+
+**Response (200 OK):**
+```json
+{
+  "targetCallsign": "REMOTE-42",
+  "messages": [
+    {
+      "author": "USER-123",
+      "timestamp": "2024-12-09 10:30_15",
+      "content": "Hello!",
+      "npub": "npub1abc...",
+      "signature": "3a4f8c92...",
+      "verified": true
+    }
+  ],
+  "count": 1
+}
+```
+
+#### POST /api/dm/{callsign}/messages
+
+Sends a direct message to a device. Messages are signed with the sender's NOSTR key.
+
+**Parameters:**
+| Parameter | Description |
+|-----------|-------------|
+| `callsign` | Target device's callsign |
+
+**Request Body:**
+```json
+{
+  "content": "Hello from the API!"
+}
+```
+
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "targetCallsign": "REMOTE-42",
+  "timestamp": "2024-12-09T10:30:15Z"
+}
+```
+
+#### GET /api/dm/sync/{callsign}
+
+Gets messages for synchronization with a remote device.
+
+**Parameters:**
+| Parameter | Description |
+|-----------|-------------|
+| `callsign` | Target device's callsign |
+
+**Query Parameters:**
+| Parameter | Description |
+|-----------|-------------|
+| `since` | ISO timestamp to get messages since |
+
+**Response (200 OK):**
+```json
+{
+  "messages": [...],
+  "timestamp": "2024-12-09T10:30:00Z"
+}
+```
+
+#### POST /api/dm/sync/{callsign}
+
+Receives and merges messages from a remote device during sync.
+
+**Request Body:**
+```json
+{
+  "messages": [
+    {
+      "author": "REMOTE-42",
+      "timestamp": "2024-12-09 10:25_00",
+      "content": "Hello back!",
+      "npub": "npub1xyz...",
+      "signature": "5e1a9c6f..."
+    }
+  ]
+}
+```
+
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "accepted": 1,
+  "timestamp": "2024-12-09T10:30:00Z"
+}
+```
 
 ---
 
@@ -500,10 +623,13 @@ Triggers a debug action.
 | `ble_scan` | Start BLE device discovery | None |
 | `ble_advertise` | Start BLE advertising | `callsign` (optional): Callsign to advertise |
 | `ble_hello` | Send BLE HELLO handshake to a device | `device_id` (optional): Target device ID, or first discovered device |
+| `ble_send` | Send test data to a BLE device | `device_id` (optional), `data` (optional): String, `size` (optional): Bytes |
 | `refresh_devices` | Refresh all device sources | None |
 | `local_scan` | Scan local network for devices | None |
 | `connect_station` | Connect to a station | `url` (optional): Station WebSocket URL |
 | `disconnect_station` | Disconnect from current station | None |
+| `send_dm` | Send a direct message | `callsign`: Target callsign (required), `content`: Message (required) |
+| `sync_dm` | Sync DMs with a device | `callsign`: Target callsign (required), `url` (optional): Device URL |
 
 **Response - Success (200 OK):**
 ```json
@@ -565,7 +691,70 @@ curl -X POST http://localhost:3456/api/debug \
 # Navigate to devices and trigger BLE scan (chained)
 curl -X POST http://localhost:3456/api/debug -d '{"action": "navigate", "panel": "devices"}' && \
 curl -X POST http://localhost:3456/api/debug -d '{"action": "ble_scan"}'
+
+# Send a direct message
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action": "send_dm", "callsign": "REMOTE-42", "content": "Hello from debug API!"}'
+
+# Sync DMs with a device
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action": "sync_dm", "callsign": "REMOTE-42", "url": "http://192.168.1.100:3456"}'
 ```
+
+---
+
+### Devices (Debug)
+
+#### GET /api/devices
+
+Returns list of discovered devices. **Requires Debug API to be enabled.**
+
+**Response (200 OK):**
+```json
+{
+  "myCallsign": "USER-123",
+  "devices": [
+    {
+      "callsign": "REMOTE-42",
+      "name": "Remote Station",
+      "nickname": "Alice",
+      "url": "http://192.168.1.100:3456",
+      "npub": "npub1abc...",
+      "isOnline": true,
+      "latency": 45,
+      "lastSeen": "2024-12-09T10:30:00Z",
+      "latitude": 38.72,
+      "longitude": -9.14,
+      "connectionMethods": ["wifi_local", "internet"],
+      "source": "station",
+      "bleProximity": null,
+      "bleRssi": null
+    }
+  ],
+  "total": 1,
+  "isBLEAvailable": true,
+  "isBLEScanning": false
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `callsign` | string | Device callsign |
+| `name` | string | Device name |
+| `nickname` | string | Display nickname (if set) |
+| `url` | string | Device HTTP URL (for direct connection) |
+| `npub` | string | NOSTR public key |
+| `isOnline` | bool | Current online status |
+| `latency` | int | Connection latency in ms |
+| `lastSeen` | string | ISO 8601 last activity timestamp |
+| `connectionMethods` | array | Available connections: `wifi_local`, `internet`, `bluetooth`, `lora` |
+| `source` | string | Discovery source: `local`, `station`, `ble`, `direct` |
+| `bleProximity` | string | BLE proximity: "Very close", "Nearby", "In range", "Far" |
+| `bleRssi` | int | BLE signal strength in dBm |
+
+**Response (403 Forbidden):** Debug API is disabled.
 
 ---
 

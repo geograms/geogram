@@ -59,21 +59,16 @@ void main() async {
 
   // Parse command line arguments early (before any other initialization)
   if (!kIsWeb) {
-    final args = Platform.executableArguments;
-    // Also check the script arguments (everything after --)
-    final scriptArgs = <String>[];
-    bool foundDashes = false;
-    for (final arg in args) {
-      if (arg == '--') {
-        foundDashes = true;
-        continue;
-      }
-      if (foundDashes) {
-        scriptArgs.add(arg);
-      }
+    // For Flutter desktop apps, Platform.executableArguments contains Flutter engine args
+    // On Linux, we read /proc/self/cmdline to get the actual command-line arguments
+    List<String> allArgs = [];
+    try {
+      final cmdline = File('/proc/self/cmdline').readAsStringSync();
+      allArgs = cmdline.split('\x00').where((s) => s.isNotEmpty).skip(1).toList();
+    } catch (e) {
+      // Fallback to executableArguments (may be empty for desktop)
+      allArgs = Platform.executableArguments;
     }
-    // Combine all possible argument sources
-    final allArgs = [...args, ...scriptArgs];
 
     // Parse arguments into AppArgs singleton
     AppArgs().parse(allArgs);
@@ -211,7 +206,17 @@ void main() async {
       LogService().log('StationDiscoveryService started (deferred)');
 
       // Start peer discovery API service (port 3456 for local device discovery)
-      // Only start if HTTP API is enabled in security settings
+      // Enable via CLI flags if specified (--http-api, --debug-api)
+      if (AppArgs().httpApi && !SecurityService().httpApiEnabled) {
+        SecurityService().httpApiEnabled = true;
+        LogService().log('HTTP API enabled via --http-api flag');
+      }
+      if (AppArgs().debugApi && !SecurityService().debugApiEnabled) {
+        SecurityService().debugApiEnabled = true;
+        LogService().log('Debug API enabled via --debug-api flag');
+      }
+
+      // Only start if HTTP API is enabled in security settings or via CLI
       if (SecurityService().httpApiEnabled) {
         await LogApiService().start();
         LogService().log('Peer discovery API started on port ${LogApiService().port} (deferred)');

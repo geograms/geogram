@@ -15,6 +15,8 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 ///   --port=PORT, -p PORT       API server port (default: 3456)
 ///   --data-dir=PATH, -d PATH   Data directory (default: ~/.local/share/geogram-desktop)
 ///   --cli                      Run in CLI mode (no GUI)
+///   --http-api                 Enable HTTP API on startup
+///   --debug-api                Enable Debug API on startup
 ///   --help, -h                 Show help and exit
 ///   --version, -v              Show version and exit
 ///   --verbose                  Enable verbose logging
@@ -41,6 +43,8 @@ class AppArgs {
   int _port = defaultPort;
   String? _dataDir;
   bool _cliMode = false;
+  bool _httpApi = false;
+  bool _debugApi = false;
   bool _showHelp = false;
   bool _showVersion = false;
   bool _verbose = false;
@@ -53,6 +57,12 @@ class AppArgs {
 
   /// Whether running in CLI mode (no GUI)
   bool get cliMode => _cliMode;
+
+  /// Whether to enable HTTP API on startup
+  bool get httpApi => _httpApi;
+
+  /// Whether to enable Debug API on startup
+  bool get debugApi => _debugApi;
 
   /// Whether to show help and exit
   bool get showHelp => _showHelp;
@@ -172,6 +182,16 @@ class AppArgs {
         continue;
       }
 
+      if (arg == '--http-api') {
+        _httpApi = true;
+        continue;
+      }
+
+      if (arg == '--debug-api') {
+        _debugApi = true;
+        continue;
+      }
+
       if (arg == '--help' || arg == '-h') {
         _showHelp = true;
         continue;
@@ -195,6 +215,8 @@ class AppArgs {
     _port = defaultPort;
     _dataDir = null;
     _cliMode = false;
+    _httpApi = false;
+    _debugApi = false;
     _showHelp = false;
     _showVersion = false;
     _verbose = false;
@@ -212,6 +234,8 @@ Options:
   --port=PORT, -p PORT       API server port (default: $defaultPort)
   --data-dir=PATH, -d PATH   Data directory path
   --cli                      Run in CLI mode (no GUI)
+  --http-api                 Enable HTTP API on startup
+  --debug-api                Enable Debug API on startup
   --verbose                  Enable verbose logging
   --help, -h                 Show this help message
   --version, -v              Show version information
@@ -245,6 +269,8 @@ Examples:
       'port': _port,
       'dataDir': _dataDir,
       'cliMode': _cliMode,
+      'httpApi': _httpApi,
+      'debugApi': _debugApi,
       'verbose': _verbose,
       'initialized': _initialized,
     };
@@ -252,6 +278,6 @@ Examples:
 
   @override
   String toString() {
-    return 'AppArgs(port: $_port, dataDir: $_dataDir, cliMode: $_cliMode, verbose: $_verbose)';
+    return 'AppArgs(port: $_port, dataDir: $_dataDir, cliMode: $_cliMode, httpApi: $_httpApi, debugApi: $_debugApi, verbose: $_verbose)';
   }
 }

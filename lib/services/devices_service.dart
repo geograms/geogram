@@ -148,6 +148,22 @@ class DevicesService {
         final size = event.params['size'] as int?;
         await _sendBLEDataToDevice(deviceId, data, size);
         break;
+
+      case DebugAction.sendDM:
+        final callsign = event.params['callsign'] as String?;
+        final content = event.params['content'] as String?;
+        if (callsign != null && content != null) {
+          await _sendDirectMessage(callsign, content);
+        }
+        break;
+
+      case DebugAction.syncDM:
+        final callsign = event.params['callsign'] as String?;
+        final url = event.params['url'] as String?;
+        if (callsign != null) {
+          await _syncDirectMessages(callsign, url);
+        }
+        break;
     }
   }
 
@@ -1379,6 +1395,47 @@ class DevicesService {
   /// Notify listeners of changes
   void _notifyListeners() {
     _devicesController.add(getAllDevices());
+  }
+
+  /// Send a direct message to another device
+  Future<void> _sendDirectMessage(String callsign, String content) async {
+    try {
+      final dmService = DirectMessageService();
+      await dmService.initialize();
+      await dmService.sendMessage(callsign, content);
+      LogService().log('DevicesService: DM sent to $callsign');
+    } catch (e) {
+      LogService().log('DevicesService: Error sending DM to $callsign: $e');
+    }
+  }
+
+  /// Sync DM messages with a remote device
+  Future<void> _syncDirectMessages(String callsign, String? deviceUrl) async {
+    try {
+      // Try to find device URL if not provided
+      String? url = deviceUrl;
+      if (url == null) {
+        final device = getDevice(callsign);
+        url = device?.url;
+      }
+
+      if (url == null) {
+        LogService().log('DevicesService: No URL for DM sync with $callsign');
+        return;
+      }
+
+      final dmService = DirectMessageService();
+      await dmService.initialize();
+      final result = await dmService.syncWithDevice(callsign, deviceUrl: url);
+
+      if (result.success) {
+        LogService().log('DevicesService: DM sync with $callsign - received: ${result.messagesReceived}, sent: ${result.messagesSent}');
+      } else {
+        LogService().log('DevicesService: DM sync with $callsign failed: ${result.error}');
+      }
+    } catch (e) {
+      LogService().log('DevicesService: Error syncing DMs with $callsign: $e');
+    }
   }
 
   /// Dispose resources

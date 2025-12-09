@@ -7,10 +7,16 @@ import 'package:shelf/shelf.dart' as shelf;
 import 'package:shelf/shelf_io.dart' as shelf_io;
 import 'log_service.dart';
 import 'profile_service.dart';
+import 'collection_service.dart';
 import 'debug_controller.dart';
 import 'security_service.dart';
+import 'chat_service.dart';
+import 'direct_message_service.dart';
+import 'devices_service.dart';
 import 'app_args.dart';
 import '../version.dart';
+import '../models/chat_message.dart';
+import '../util/nostr_event.dart';
 
 class LogApiService {
   static final LogApiService _instance = LogApiService._internal();
@@ -47,8 +53,48 @@ class LogApiService {
       );
 
       LogService().log('LogApiService: Started on http://0.0.0.0:$port (accessible from network)');
+
+      // Auto-initialize ChatService if a chat collection exists
+      await _initializeChatServiceIfNeeded();
     } catch (e) {
       LogService().log('LogApiService: Error starting server: $e');
+    }
+  }
+
+  /// Initialize ChatService if a chat collection exists in the active profile's directory
+  /// This is called lazily on each chat request to ensure it picks up collections created
+  /// after the API starts (e.g., during deferred initialization)
+  Future<bool> _initializeChatServiceIfNeeded() async {
+    try {
+      final chatService = ChatService();
+
+      // Already initialized
+      if (chatService.collectionPath != null) {
+        return true;
+      }
+
+      // Find chat collection in active profile's directory
+      final collectionsDir = CollectionService().collectionsDirectory;
+      if (collectionsDir == null) {
+        return false;
+      }
+
+      final chatDir = io.Directory('$collectionsDir/chat');
+      if (!await chatDir.exists()) {
+        return false;
+      }
+
+      // Get active profile's npub for admin
+      final activeProfile = ProfileService().getProfile();
+      final npub = activeProfile.npub;
+
+      // Initialize ChatService with the chat collection
+      await chatService.initializeCollection(chatDir.path, creatorNpub: npub);
+      LogService().log('LogApiService: ChatService lazily initialized with ${chatService.channels.length} channels');
+      return true;
+    } catch (e) {
+      LogService().log('LogApiService: Error initializing ChatService: $e');
+      return false;
     }
   }
 
@@ -67,7 +113,7 @@ class LogApiService {
     final headers = {
       'Access-Control-Allow-Origin': '*',
       'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type',
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization',
       'Content-Type': 'application/json',
     };
 
@@ -116,6 +162,72 @@ class LogApiService {
       }
     }
 
+    // Chat API endpoints
+    if ((urlPath == 'api/chat' || urlPath == 'api/chat/') && request.method == 'GET') {
+      return await _handleChatRoomsRequest(request, headers);
+    }
+
+    // Chat room messages: GET or POST
+    if (urlPath.startsWith('api/chat/') && urlPath.endsWith('/messages')) {
+      final roomId = _extractRoomIdFromPath(urlPath);
+      if (roomId != null) {
+        if (request.method == 'GET') {
+          return await _handleChatMessagesRequest(request, roomId, headers);
+        } else if (request.method == 'POST') {
+          return await _handleChatPostMessageRequest(request, roomId, headers);
+        }
+      }
+    }
+
+    // Chat room files
+    if (urlPath.startsWith('api/chat/') && urlPath.endsWith('/files')) {
+      final roomId = _extractRoomIdFromPath(urlPath);
+      if (roomId != null && request.method == 'GET') {
+        return await _handleChatFilesRequest(request, roomId, headers);
+      }
+    }
+
+    // DM API endpoints (for device-to-device direct messages)
+    // GET /api/dm/conversations - list DM conversations
+    if ((urlPath == 'api/dm/conversations' || urlPath == 'api/dm/conversations/') && request.method == 'GET') {
+      return await _handleDMConversationsRequest(request, headers);
+    }
+
+    // GET/POST /api/dm/{callsign}/messages - get or send DM messages
+    if (urlPath.startsWith('api/dm/') && urlPath.endsWith('/messages')) {
+      final targetCallsign = _extractCallsignFromDMPath(urlPath);
+      if (targetCallsign != null) {
+        if (request.method == 'GET') {
+          return await _handleDMMessagesRequest(request, targetCallsign, headers);
+        } else if (request.method == 'POST') {
+          return await _handleDMPostMessageRequest(request, targetCallsign, headers);
+        }
+      }
+    }
+
+    // GET/POST /api/dm/sync/{callsign} - sync DM messages with remote device
+    if (urlPath.startsWith('api/dm/sync/')) {
+      final targetCallsign = urlPath.substring('api/dm/sync/'.length).toUpperCase();
+      if (targetCallsign.isNotEmpty) {
+        if (request.method == 'GET') {
+          return await _handleDMSyncGetRequest(request, targetCallsign, headers);
+        } else if (request.method == 'POST') {
+          return await _handleDMSyncPostRequest(request, targetCallsign, headers);
+        }
+      }
+    }
+
+    // Devices API endpoint (for debug - list discovered devices)
+    if ((urlPath == 'api/devices' || urlPath == 'api/devices/') && request.method == 'GET') {
+      if (!SecurityService().debugApiEnabled) {
+        return shelf.Response.forbidden(
+          jsonEncode({'error': 'Debug API is disabled', 'code': 'DEBUG_API_DISABLED'}),
+          headers: headers,
+        );
+      }
+      return await _handleDevicesRequest(request, headers);
+    }
+
     // API root: /api/ or /api
     if ((urlPath == 'api' || urlPath == 'api/') && request.method == 'GET') {
       return _handleApiRootRequest(headers);
@@ -160,6 +272,13 @@ class LogApiService {
           '/api/log': 'Get log entries (supports ?filter=text&limit=100)',
           '/api/files': 'Browse collections (supports ?path=subfolder)',
           '/api/files/content': 'Get file content (supports ?path=file/path)',
+          '/api/chat/': 'List chat rooms (supports NOSTR auth for private rooms)',
+          '/api/chat/{roomId}/messages': 'GET messages, POST to send (supports NOSTR-signed events)',
+          '/api/chat/{roomId}/files': 'List files in a chat room',
+          '/api/dm/conversations': 'List direct message conversations',
+          '/api/dm/{callsign}/messages': 'GET/POST direct messages with a device',
+          '/api/dm/sync/{callsign}': 'Sync DM messages with remote device',
+          '/api/devices': 'List discovered devices (requires debug API enabled)',
           '/api/debug': 'Debug API - GET for status, POST to trigger actions (requires debug API enabled)',
         },
       }),
@@ -789,6 +908,874 @@ class LogApiService {
           'error': 'Invalid JSON body',
           'details': e.toString(),
         }),
+        headers: headers,
+      );
+    }
+  }
+
+  // ============================================================
+  // Chat API endpoints
+  // ============================================================
+
+  /// Extract room ID from paths like 'api/chat/{roomId}/messages'
+  String? _extractRoomIdFromPath(String urlPath) {
+    // Pattern: api/chat/{roomId}/messages or api/chat/{roomId}/files
+    final regex = RegExp(r'^api/chat/([^/]+)/(messages|files)$');
+    final match = regex.firstMatch(urlPath);
+    if (match != null) {
+      return Uri.decodeComponent(match.group(1)!);
+    }
+    return null;
+  }
+
+  /// Verify NOSTR authorization header and return npub if valid
+  /// Header format: Authorization: Nostr <base64_encoded_signed_event>
+  String? _verifyNostrAuth(shelf.Request request) {
+    final authHeader = request.headers['authorization'];
+    if (authHeader == null || !authHeader.startsWith('Nostr ')) {
+      return null;
+    }
+
+    try {
+      final base64Event = authHeader.substring(6); // Remove 'Nostr ' prefix
+      final eventJson = utf8.decode(base64Decode(base64Event));
+      final eventData = jsonDecode(eventJson) as Map<String, dynamic>;
+      final event = NostrEvent.fromJson(eventData);
+
+      // Verify the signature
+      if (!event.verify()) {
+        LogService().log('LogApiService: NOSTR auth failed - invalid signature');
+        return null;
+      }
+
+      // Check event is recent (within 5 minutes) to prevent replay attacks
+      final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+      if ((now - event.createdAt).abs() > 300) {
+        LogService().log('LogApiService: NOSTR auth failed - event too old');
+        return null;
+      }
+
+      return event.npub;
+    } catch (e) {
+      LogService().log('LogApiService: NOSTR auth failed - parse error: $e');
+      return null;
+    }
+  }
+
+  /// Check if npub can access a chat room
+  Future<bool> _canAccessChatRoom(String roomId, String? npub) async {
+    final chatService = ChatService();
+    final channel = chatService.getChannel(roomId);
+    if (channel == null) {
+      return false;
+    }
+
+    // Get visibility from config (default to PUBLIC)
+    final config = channel.config;
+    final visibility = config?.visibility ?? 'PUBLIC';
+
+    // PUBLIC rooms are accessible to everyone
+    if (visibility == 'PUBLIC') {
+      return true;
+    }
+
+    // Non-public rooms require authentication
+    if (npub == null) {
+      return false;
+    }
+
+    // Admin can access everything
+    final security = chatService.security;
+    if (security.isAdmin(npub)) {
+      return true;
+    }
+
+    // Check if room is open to all ('*' in participants)
+    if (channel.participants.contains('*')) {
+      return true;
+    }
+
+    // Check if user's callsign is in participants
+    // We need to map npub -> callsign through participants list
+    final participants = chatService.participants;
+    for (final entry in participants.entries) {
+      if (entry.value == npub && channel.participants.contains(entry.key)) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  /// Handle GET /api/chat/rooms - List available chat rooms
+  Future<shelf.Response> _handleChatRoomsRequest(
+    shelf.Request request,
+    Map<String, String> headers,
+  ) async {
+    try {
+      // Try to lazily initialize ChatService if not already done
+      await _initializeChatServiceIfNeeded();
+
+      final chatService = ChatService();
+
+      // Check if chat service is initialized
+      if (chatService.collectionPath == null) {
+        return shelf.Response.ok(
+          jsonEncode({
+            'rooms': [],
+            'total': 0,
+            'authenticated': false,
+            'message': 'No chat collection loaded',
+          }),
+          headers: headers,
+        );
+      }
+
+      // Get authenticated npub (if any)
+      String? authNpub = _verifyNostrAuth(request);
+
+      // Also check query parameter for npub (useful for testing, but less secure)
+      final queryNpub = request.url.queryParameters['npub'];
+      if (authNpub == null && queryNpub != null && queryNpub.startsWith('npub1')) {
+        // Note: query parameter alone doesn't prove identity - only for public room listing
+        authNpub = null; // Don't trust unverified npub for access control
+      }
+
+      final rooms = <Map<String, dynamic>>[];
+
+      for (final channel in chatService.channels) {
+        // Check if user can access this room
+        final canAccess = await _canAccessChatRoom(channel.id, authNpub);
+
+        // Only include rooms the user can access (or public rooms)
+        final visibility = channel.config?.visibility ?? 'PUBLIC';
+        if (!canAccess && visibility != 'PUBLIC') {
+          continue;
+        }
+
+        rooms.add({
+          'id': channel.id,
+          'name': channel.name,
+          'description': channel.description,
+          'type': channel.isMain ? 'main' : (channel.isDirect ? 'direct' : 'group'),
+          'visibility': visibility,
+          'participants': channel.participants,
+          'lastMessage': channel.lastMessageTime?.toIso8601String(),
+          'folder': channel.folder,
+        });
+      }
+
+      return shelf.Response.ok(
+        jsonEncode({
+          'rooms': rooms,
+          'total': rooms.length,
+          'authenticated': authNpub != null,
+        }),
+        headers: headers,
+      );
+    } catch (e) {
+      LogService().log('LogApiService: Error handling chat rooms request: $e');
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'error': e.toString()}),
+        headers: headers,
+      );
+    }
+  }
+
+  /// Handle GET /api/chat/rooms/{roomId}/messages - Get messages from a room
+  Future<shelf.Response> _handleChatMessagesRequest(
+    shelf.Request request,
+    String roomId,
+    Map<String, String> headers,
+  ) async {
+    try {
+      // Try to lazily initialize ChatService if not already done
+      await _initializeChatServiceIfNeeded();
+
+      final chatService = ChatService();
+
+      // Check if chat service is initialized
+      if (chatService.collectionPath == null) {
+        return shelf.Response.notFound(
+          jsonEncode({'error': 'No chat collection loaded'}),
+          headers: headers,
+        );
+      }
+
+      // Verify access
+      final authNpub = _verifyNostrAuth(request);
+      final canAccess = await _canAccessChatRoom(roomId, authNpub);
+      if (!canAccess) {
+        return shelf.Response.forbidden(
+          jsonEncode({
+            'error': 'Access denied',
+            'code': 'ROOM_ACCESS_DENIED',
+            'hint': authNpub == null
+                ? 'Authentication required for this room. Use Authorization: Nostr <signed_event> header.'
+                : 'Your npub is not authorized for this room.',
+          }),
+          headers: headers,
+        );
+      }
+
+      // Parse query parameters
+      final queryParams = request.url.queryParameters;
+      final limitParam = queryParams['limit'];
+      final beforeParam = queryParams['before'];
+      final afterParam = queryParams['after'];
+
+      int limit = 50;
+      if (limitParam != null) {
+        limit = int.tryParse(limitParam) ?? 50;
+        limit = limit.clamp(1, 500);
+      }
+
+      DateTime? startDate;
+      DateTime? endDate;
+      if (afterParam != null) {
+        startDate = DateTime.tryParse(afterParam);
+      }
+      if (beforeParam != null) {
+        endDate = DateTime.tryParse(beforeParam);
+      }
+
+      // Load messages
+      final messages = await chatService.loadMessages(
+        roomId,
+        startDate: startDate,
+        endDate: endDate,
+        limit: limit + 1, // Fetch one extra to determine if there are more
+      );
+
+      final hasMore = messages.length > limit;
+      final returnMessages = hasMore ? messages.sublist(0, limit) : messages;
+
+      // Convert to JSON-friendly format
+      final messageList = returnMessages.map((msg) {
+        return {
+          'author': msg.author,
+          'timestamp': msg.timestamp,
+          'content': msg.content,
+          'npub': msg.npub,
+          'signature': msg.signature,
+          'verified': msg.isVerified,
+          'hasFile': msg.hasFile,
+          'file': msg.attachedFile,
+          'hasLocation': msg.hasLocation,
+          'latitude': msg.latitude,
+          'longitude': msg.longitude,
+          'metadata': msg.metadata,
+        };
+      }).toList();
+
+      return shelf.Response.ok(
+        jsonEncode({
+          'roomId': roomId,
+          'messages': messageList,
+          'count': messageList.length,
+          'hasMore': hasMore,
+          'limit': limit,
+        }),
+        headers: headers,
+      );
+    } catch (e) {
+      LogService().log('LogApiService: Error handling chat messages request: $e');
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'error': e.toString()}),
+        headers: headers,
+      );
+    }
+  }
+
+  /// Handle POST /api/chat/rooms/{roomId}/messages - Post a message
+  Future<shelf.Response> _handleChatPostMessageRequest(
+    shelf.Request request,
+    String roomId,
+    Map<String, String> headers,
+  ) async {
+    try {
+      // Try to lazily initialize ChatService if not already done
+      await _initializeChatServiceIfNeeded();
+
+      final chatService = ChatService();
+
+      // Check if chat service is initialized
+      if (chatService.collectionPath == null) {
+        return shelf.Response.notFound(
+          jsonEncode({'error': 'No chat collection loaded'}),
+          headers: headers,
+        );
+      }
+
+      // Check if room exists
+      final channel = chatService.getChannel(roomId);
+      if (channel == null) {
+        return shelf.Response.notFound(
+          jsonEncode({'error': 'Room not found', 'roomId': roomId}),
+          headers: headers,
+        );
+      }
+
+      // Check if room is read-only
+      if (channel.config?.readonly == true) {
+        return shelf.Response.forbidden(
+          jsonEncode({'error': 'Room is read-only', 'code': 'ROOM_READ_ONLY'}),
+          headers: headers,
+        );
+      }
+
+      // Parse request body
+      final bodyStr = await request.readAsString();
+      if (bodyStr.isEmpty) {
+        return shelf.Response.badRequest(
+          body: jsonEncode({'error': 'Missing request body'}),
+          headers: headers,
+        );
+      }
+
+      final body = jsonDecode(bodyStr) as Map<String, dynamic>;
+
+      String author;
+      String content;
+      String? npub;
+      String? signature;
+      String? eventId;
+
+      if (body.containsKey('event')) {
+        // NOSTR-signed message from external user
+        final eventData = body['event'] as Map<String, dynamic>;
+        final event = NostrEvent.fromJson(eventData);
+
+        // Verify the event signature
+        if (!event.verify()) {
+          return shelf.Response.forbidden(
+            jsonEncode({
+              'error': 'Invalid event signature',
+              'code': 'INVALID_SIGNATURE',
+            }),
+            headers: headers,
+          );
+        }
+
+        // Validate event kind (must be kind 1 = text note)
+        if (event.kind != NostrEventKind.textNote) {
+          return shelf.Response.badRequest(
+            body: jsonEncode({
+              'error': 'Invalid event kind',
+              'expected': NostrEventKind.textNote,
+              'received': event.kind,
+            }),
+            headers: headers,
+          );
+        }
+
+        // Validate room tag matches
+        final roomTag = event.getTagValue('room');
+        if (roomTag != null && roomTag != roomId) {
+          return shelf.Response.badRequest(
+            body: jsonEncode({
+              'error': 'Room tag mismatch',
+              'expected': roomId,
+              'received': roomTag,
+            }),
+            headers: headers,
+          );
+        }
+
+        // Check access for the event author
+        final canAccess = await _canAccessChatRoom(roomId, event.npub);
+        if (!canAccess) {
+          return shelf.Response.forbidden(
+            jsonEncode({
+              'error': 'Event author not authorized for this room',
+              'code': 'AUTHOR_ACCESS_DENIED',
+            }),
+            headers: headers,
+          );
+        }
+
+        // Use callsign from tag or derive from npub
+        author = event.getTagValue('callsign') ?? event.callsign;
+        content = event.content;
+        npub = event.npub;
+        signature = event.sig;
+        eventId = event.id;
+
+      } else if (body.containsKey('content')) {
+        // Simple message from device owner (no auth required for device's own messages)
+        content = body['content'] as String;
+
+        // Use device's profile
+        try {
+          final profile = ProfileService().getProfile();
+          author = profile.callsign;
+          npub = profile.npub;
+        } catch (e) {
+          return shelf.Response.internalServerError(
+            body: jsonEncode({'error': 'Profile not initialized'}),
+            headers: headers,
+          );
+        }
+      } else {
+        return shelf.Response.badRequest(
+          body: jsonEncode({
+            'error': 'Missing content or event field',
+            'hint': 'Provide either "content" for device message or "event" for NOSTR-signed message',
+          }),
+          headers: headers,
+        );
+      }
+
+      // Validate content length
+      final maxLength = channel.config?.maxSizeText ?? 10000;
+      if (content.length > maxLength) {
+        return shelf.Response.badRequest(
+          body: jsonEncode({
+            'error': 'Content too long',
+            'maxLength': maxLength,
+            'received': content.length,
+          }),
+          headers: headers,
+        );
+      }
+
+      // Create and save message
+      final metadata = <String, String>{};
+      if (npub != null) metadata['npub'] = npub;
+      if (signature != null) metadata['signature'] = signature;
+      if (eventId != null) metadata['event_id'] = eventId;
+
+      final message = ChatMessage.now(
+        author: author,
+        content: content,
+        metadata: metadata,
+      );
+
+      await chatService.saveMessage(roomId, message);
+
+      LogService().log('LogApiService: Chat message posted to $roomId by $author');
+
+      return shelf.Response.ok(
+        jsonEncode({
+          'success': true,
+          'timestamp': message.timestamp,
+          'author': author,
+          'eventId': eventId,
+        }),
+        headers: headers,
+      );
+    } catch (e) {
+      LogService().log('LogApiService: Error posting chat message: $e');
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'error': e.toString()}),
+        headers: headers,
+      );
+    }
+  }
+
+  /// Handle GET /api/chat/rooms/{roomId}/files - List files in a chat room
+  Future<shelf.Response> _handleChatFilesRequest(
+    shelf.Request request,
+    String roomId,
+    Map<String, String> headers,
+  ) async {
+    try {
+      // Try to lazily initialize ChatService if not already done
+      await _initializeChatServiceIfNeeded();
+
+      final chatService = ChatService();
+
+      // Check if chat service is initialized
+      if (chatService.collectionPath == null) {
+        return shelf.Response.notFound(
+          jsonEncode({'error': 'No chat collection loaded'}),
+          headers: headers,
+        );
+      }
+
+      // Verify access
+      final authNpub = _verifyNostrAuth(request);
+      final canAccess = await _canAccessChatRoom(roomId, authNpub);
+      if (!canAccess) {
+        return shelf.Response.forbidden(
+          jsonEncode({
+            'error': 'Access denied',
+            'code': 'ROOM_ACCESS_DENIED',
+          }),
+          headers: headers,
+        );
+      }
+
+      // Get channel
+      final channel = chatService.getChannel(roomId);
+      if (channel == null) {
+        return shelf.Response.notFound(
+          jsonEncode({'error': 'Room not found', 'roomId': roomId}),
+          headers: headers,
+        );
+      }
+
+      final collectionPath = chatService.collectionPath!;
+      final channelPath = path.join(collectionPath, channel.folder);
+      final files = <Map<String, dynamic>>[];
+
+      // For main channel, files are in year/files/ subfolders
+      if (channel.isMain) {
+        final channelDir = io.Directory(channelPath);
+        if (await channelDir.exists()) {
+          await for (final yearEntity in channelDir.list()) {
+            if (yearEntity is io.Directory) {
+              final yearName = path.basename(yearEntity.path);
+              // Check if it's a year folder (4 digits)
+              if (RegExp(r'^\d{4}$').hasMatch(yearName)) {
+                final filesDir = io.Directory(path.join(yearEntity.path, 'files'));
+                if (await filesDir.exists()) {
+                  await for (final file in filesDir.list()) {
+                    if (file is io.File) {
+                      final stat = await file.stat();
+                      files.add({
+                        'name': path.basename(file.path),
+                        'size': stat.size,
+                        'year': yearName,
+                        'modified': stat.modified.toIso8601String(),
+                      });
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      } else {
+        // For other channels, files are in channel/files/
+        final filesDir = io.Directory(path.join(channelPath, 'files'));
+        if (await filesDir.exists()) {
+          await for (final file in filesDir.list()) {
+            if (file is io.File) {
+              final stat = await file.stat();
+              files.add({
+                'name': path.basename(file.path),
+                'size': stat.size,
+                'modified': stat.modified.toIso8601String(),
+              });
+            }
+          }
+        }
+      }
+
+      // Sort by modification time (newest first)
+      files.sort((a, b) {
+        final aTime = DateTime.parse(a['modified'] as String);
+        final bTime = DateTime.parse(b['modified'] as String);
+        return bTime.compareTo(aTime);
+      });
+
+      return shelf.Response.ok(
+        jsonEncode({
+          'roomId': roomId,
+          'files': files,
+          'total': files.length,
+        }),
+        headers: headers,
+      );
+    } catch (e) {
+      LogService().log('LogApiService: Error listing chat files: $e');
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'error': e.toString()}),
+        headers: headers,
+      );
+    }
+  }
+
+  // ============================================================
+  // DM API endpoints
+  // ============================================================
+
+  /// Extract callsign from DM path like 'api/dm/{callsign}/messages'
+  String? _extractCallsignFromDMPath(String urlPath) {
+    final regex = RegExp(r'^api/dm/([^/]+)/messages$');
+    final match = regex.firstMatch(urlPath);
+    if (match != null) {
+      return Uri.decodeComponent(match.group(1)!).toUpperCase();
+    }
+    return null;
+  }
+
+  /// Handle GET /api/dm/conversations - list DM conversations
+  Future<shelf.Response> _handleDMConversationsRequest(
+    shelf.Request request,
+    Map<String, String> headers,
+  ) async {
+    try {
+      final dmService = DirectMessageService();
+      await dmService.initialize();
+
+      final conversations = await dmService.listConversations();
+
+      return shelf.Response.ok(
+        jsonEncode({
+          'conversations': conversations.map((c) => {
+            'callsign': c.otherCallsign,
+            'myCallsign': c.myCallsign,
+            'lastMessage': c.lastMessageTime?.toIso8601String(),
+            'lastMessagePreview': c.lastMessagePreview,
+            'lastMessageAuthor': c.lastMessageAuthor,
+            'unread': c.unreadCount,
+            'isOnline': c.isOnline,
+            'lastSyncTime': c.lastSyncTime?.toIso8601String(),
+          }).toList(),
+          'total': conversations.length,
+        }),
+        headers: headers,
+      );
+    } catch (e) {
+      LogService().log('LogApiService: Error listing DM conversations: $e');
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'error': e.toString()}),
+        headers: headers,
+      );
+    }
+  }
+
+  /// Handle GET /api/dm/{callsign}/messages - get DM messages
+  Future<shelf.Response> _handleDMMessagesRequest(
+    shelf.Request request,
+    String targetCallsign,
+    Map<String, String> headers,
+  ) async {
+    try {
+      final dmService = DirectMessageService();
+      await dmService.initialize();
+
+      // Parse query parameters
+      final queryParams = request.url.queryParameters;
+      final limitParam = queryParams['limit'];
+      int limit = 100;
+      if (limitParam != null) {
+        limit = int.tryParse(limitParam) ?? 100;
+        limit = limit.clamp(1, 500);
+      }
+
+      final messages = await dmService.loadMessages(targetCallsign, limit: limit);
+
+      return shelf.Response.ok(
+        jsonEncode({
+          'targetCallsign': targetCallsign,
+          'messages': messages.map((m) => {
+            'author': m.author,
+            'timestamp': m.timestamp,
+            'content': m.content,
+            'npub': m.npub,
+            'signature': m.signature,
+            'verified': m.isVerified,
+          }).toList(),
+          'count': messages.length,
+        }),
+        headers: headers,
+      );
+    } catch (e) {
+      LogService().log('LogApiService: Error getting DM messages: $e');
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'error': e.toString()}),
+        headers: headers,
+      );
+    }
+  }
+
+  /// Handle POST /api/dm/{callsign}/messages - send DM message
+  Future<shelf.Response> _handleDMPostMessageRequest(
+    shelf.Request request,
+    String targetCallsign,
+    Map<String, String> headers,
+  ) async {
+    try {
+      final dmService = DirectMessageService();
+      await dmService.initialize();
+
+      final bodyStr = await request.readAsString();
+      if (bodyStr.isEmpty) {
+        return shelf.Response.badRequest(
+          body: jsonEncode({'error': 'Missing request body'}),
+          headers: headers,
+        );
+      }
+
+      final body = jsonDecode(bodyStr) as Map<String, dynamic>;
+      final content = body['content'] as String?;
+
+      if (content == null || content.isEmpty) {
+        return shelf.Response.badRequest(
+          body: jsonEncode({'error': 'Missing content field'}),
+          headers: headers,
+        );
+      }
+
+      // Send the message
+      await dmService.sendMessage(targetCallsign, content);
+
+      LogService().log('LogApiService: DM sent to $targetCallsign');
+
+      return shelf.Response.ok(
+        jsonEncode({
+          'success': true,
+          'targetCallsign': targetCallsign,
+          'timestamp': DateTime.now().toIso8601String(),
+        }),
+        headers: headers,
+      );
+    } catch (e) {
+      LogService().log('LogApiService: Error sending DM: $e');
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'error': e.toString()}),
+        headers: headers,
+      );
+    }
+  }
+
+  /// Handle GET /api/dm/sync/{callsign} - get messages for sync
+  Future<shelf.Response> _handleDMSyncGetRequest(
+    shelf.Request request,
+    String targetCallsign,
+    Map<String, String> headers,
+  ) async {
+    try {
+      final dmService = DirectMessageService();
+      await dmService.initialize();
+
+      final queryParams = request.url.queryParameters;
+      final sinceParam = queryParams['since'] ?? '';
+
+      List<ChatMessage> messages;
+      if (sinceParam.isNotEmpty) {
+        messages = await dmService.loadMessagesSince(targetCallsign, sinceParam);
+      } else {
+        messages = await dmService.loadMessages(targetCallsign, limit: 100);
+      }
+
+      return shelf.Response.ok(
+        jsonEncode({
+          'messages': messages.map((m) => m.toJson()).toList(),
+          'timestamp': DateTime.now().toIso8601String(),
+        }),
+        headers: headers,
+      );
+    } catch (e) {
+      LogService().log('LogApiService: Error getting DM sync: $e');
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'error': e.toString()}),
+        headers: headers,
+      );
+    }
+  }
+
+  /// Handle POST /api/dm/sync/{callsign} - receive synced messages
+  Future<shelf.Response> _handleDMSyncPostRequest(
+    shelf.Request request,
+    String targetCallsign,
+    Map<String, String> headers,
+  ) async {
+    try {
+      final dmService = DirectMessageService();
+      await dmService.initialize();
+
+      final bodyStr = await request.readAsString();
+      final body = jsonDecode(bodyStr) as Map<String, dynamic>;
+      final incomingMessages = <ChatMessage>[];
+
+      if (body['messages'] is List) {
+        for (final msgJson in body['messages']) {
+          incomingMessages.add(ChatMessage.fromJson(msgJson));
+        }
+      }
+
+      // Ensure conversation exists
+      await dmService.getOrCreateConversation(targetCallsign);
+
+      // Merge messages (deduplication based on timestamp + author)
+      int accepted = 0;
+      if (incomingMessages.isNotEmpty) {
+        final local = await dmService.loadMessages(targetCallsign, limit: 99999);
+        final existing = <String>{};
+        for (final msg in local) {
+          existing.add('${msg.timestamp}|${msg.author}');
+        }
+
+        for (final msg in incomingMessages) {
+          final id = '${msg.timestamp}|${msg.author}';
+          if (!existing.contains(id)) {
+            // Save message directly (don't use sendMessage which would re-sign)
+            await dmService.sendMessage(targetCallsign, msg.content);
+            accepted++;
+          }
+        }
+      }
+
+      return shelf.Response.ok(
+        jsonEncode({
+          'success': true,
+          'accepted': accepted,
+          'timestamp': DateTime.now().toIso8601String(),
+        }),
+        headers: headers,
+      );
+    } catch (e) {
+      LogService().log('LogApiService: Error syncing DM: $e');
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'error': e.toString()}),
+        headers: headers,
+      );
+    }
+  }
+
+  // ============================================================
+  // Devices API endpoint (debug)
+  // ============================================================
+
+  /// Handle GET /api/devices - list discovered devices
+  Future<shelf.Response> _handleDevicesRequest(
+    shelf.Request request,
+    Map<String, String> headers,
+  ) async {
+    try {
+      final devicesService = DevicesService();
+      final devices = devicesService.getAllDevices();
+
+      String myCallsign = '';
+      try {
+        myCallsign = ProfileService().getProfile().callsign;
+      } catch (e) {
+        // Profile not initialized
+      }
+
+      return shelf.Response.ok(
+        jsonEncode({
+          'myCallsign': myCallsign,
+          'devices': devices.map((d) => {
+            'callsign': d.callsign,
+            'name': d.name,
+            'nickname': d.nickname,
+            'url': d.url,
+            'npub': d.npub,
+            'isOnline': d.isOnline,
+            'latency': d.latency,
+            'lastSeen': d.lastSeen?.toIso8601String(),
+            'latitude': d.latitude,
+            'longitude': d.longitude,
+            'connectionMethods': d.connectionMethods,
+            'source': d.source.name,
+            'bleProximity': d.bleProximity,
+            'bleRssi': d.bleRssi,
+          }).toList(),
+          'total': devices.length,
+          'isBLEAvailable': devicesService.isBLEAvailable,
+          'isBLEScanning': devicesService.isBLEScanning,
+        }),
+        headers: headers,
+      );
+    } catch (e) {
+      LogService().log('LogApiService: Error listing devices: $e');
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'error': e.toString()}),
         headers: headers,
       );
     }
