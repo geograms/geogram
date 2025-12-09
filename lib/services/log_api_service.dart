@@ -75,26 +75,34 @@ class LogApiService {
       return shelf.Response.ok('', headers: headers);
     }
 
-    if (request.url.path == 'log' && request.method == 'GET') {
+    final urlPath = request.url.path;
+
+    // All API endpoints are under /api/
+    // Legacy endpoints (without /api/) are also supported for backward compatibility
+
+    // Log endpoint: /api/log or /log (legacy)
+    if ((urlPath == 'api/log' || urlPath == 'log') && request.method == 'GET') {
       return _handleLogRequest(request, headers);
     }
 
-    // API status endpoint (for station discovery compatibility)
-    if ((request.url.path == 'api/status' || request.url.path == 'station/status') &&
+    // Status endpoint: /api/status, /station/status (legacy for discovery)
+    if ((urlPath == 'api/status' || urlPath == 'station/status') &&
         request.method == 'GET') {
       return _handleStatusRequest(headers);
     }
 
-    if (request.url.path == 'files' && request.method == 'GET') {
+    // Files endpoint: /api/files or /files (legacy)
+    if ((urlPath == 'api/files' || urlPath == 'files') && request.method == 'GET') {
       return _handleFilesRequest(request, headers);
     }
 
-    if (request.url.path == 'files/content' && request.method == 'GET') {
+    // File content endpoint: /api/files/content or /files/content (legacy)
+    if ((urlPath == 'api/files/content' || urlPath == 'files/content') && request.method == 'GET') {
       return _handleFileContentRequest(request, headers);
     }
 
     // Debug API endpoint (only if enabled in security settings)
-    if (request.url.path == 'api/debug') {
+    if (urlPath == 'api/debug') {
       if (!SecurityService().debugApiEnabled) {
         return shelf.Response.forbidden(
           jsonEncode({'error': 'Debug API is disabled', 'code': 'DEBUG_API_DISABLED'}),
@@ -108,36 +116,53 @@ class LogApiService {
       }
     }
 
-    if (request.url.path == '' || request.url.path == '/' && request.method == 'GET') {
-      // Get callsign from profile service
-      String callsign = '';
-      try {
-        final profile = ProfileService().getProfile();
-        callsign = profile.callsign;
-      } catch (e) {
-        // Profile service not initialized
-      }
+    // API root: /api/ or /api
+    if ((urlPath == 'api' || urlPath == 'api/') && request.method == 'GET') {
+      return _handleApiRootRequest(headers);
+    }
 
+    // Legacy root endpoint (redirect hint to /api/)
+    if ((urlPath == '' || urlPath == '/') && request.method == 'GET') {
       return shelf.Response.ok(
         jsonEncode({
-          'service': 'Geogram Desktop',
-          'version': appVersion,
-          'type': 'geogram-desktop',
-          'callsign': callsign,
-          'hostname': io.Platform.localHostname,
-          'endpoints': {
-            '/log': 'Get log entries (supports ?filter=text&limit=100)',
-            '/files': 'Browse collections (supports ?path=subfolder)',
-            '/files/content': 'Get file content (supports ?path=file/path)',
-            '/api/debug': 'Debug API - GET for status, POST to trigger actions',
-          },
+          'message': 'Geogram API available at /api/',
+          'api_url': '/api/',
         }),
         headers: headers,
       );
     }
 
     return shelf.Response.notFound(
-      jsonEncode({'error': 'Not found'}),
+      jsonEncode({'error': 'Not found', 'hint': 'API endpoints are available at /api/'}),
+      headers: headers,
+    );
+  }
+
+  /// Handle /api/ root endpoint - list available endpoints
+  shelf.Response _handleApiRootRequest(Map<String, String> headers) {
+    String callsign = '';
+    try {
+      final profile = ProfileService().getProfile();
+      callsign = profile.callsign;
+    } catch (e) {
+      // Profile service not initialized
+    }
+
+    return shelf.Response.ok(
+      jsonEncode({
+        'service': 'Geogram Desktop',
+        'version': appVersion,
+        'type': 'geogram-desktop',
+        'callsign': callsign,
+        'hostname': io.Platform.localHostname,
+        'endpoints': {
+          '/api/status': 'Device status and location',
+          '/api/log': 'Get log entries (supports ?filter=text&limit=100)',
+          '/api/files': 'Browse collections (supports ?path=subfolder)',
+          '/api/files/content': 'Get file content (supports ?path=file/path)',
+          '/api/debug': 'Debug API - GET for status, POST to trigger actions (requires debug API enabled)',
+        },
+      }),
       headers: headers,
     );
   }

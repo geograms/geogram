@@ -13,8 +13,16 @@ Security settings are managed by the `SecurityService` singleton and are persist
 Controls whether the HTTP API server is running and accessible to other devices on the network.
 
 - **Default**: `true` (enabled)
-- **When enabled**: Other devices on the same network can discover this device and connect to it via HTTP
+- **When enabled**: Other devices on the same network can discover this device and connect to it via HTTP at `/api/`
 - **When disabled**: The HTTP server is stopped and no incoming connections are accepted
+
+All API endpoints are available under `/api/`:
+- `/api/` - API root with endpoint listing
+- `/api/status` - Device status and location
+- `/api/log` - Log entries
+- `/api/files` - Browse collections
+- `/api/files/content` - Get file content
+- `/api/debug` - Debug API (requires debug API enabled)
 
 **Usage in code:**
 ```dart

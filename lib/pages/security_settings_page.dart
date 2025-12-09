@@ -85,11 +85,11 @@ class _SecuritySettingsPageState extends State<SecuritySettingsPage> {
 
   void _copyApiUrl() {
     if (_localIpAddress == null) return;
-    final url = 'http://$_localIpAddress:${AppArgs().port}';
+    final url = 'http://$_localIpAddress:${AppArgs().port}/api/';
     Clipboard.setData(ClipboardData(text: url));
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(_i18n.t('copied_to_clipboard')),
+        content: Text(_i18n.t('url_copied')),
         duration: const Duration(seconds: 2),
       ),
     );
@@ -203,7 +203,7 @@ class _SecuritySettingsPageState extends State<SecuritySettingsPage> {
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text(
-                        'http://$_localIpAddress:$port',
+                        'http://$_localIpAddress:$port/api/',
                         style: theme.textTheme.bodyMedium?.copyWith(
                           fontFamily: 'monospace',
                           color: theme.colorScheme.secondary,

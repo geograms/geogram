@@ -1371,5 +1371,6 @@
   "location_granularity_description": "Control how precisely your location is shared with other devices. A larger value means more privacy but less precise location.",
   "precise": "Precise",
   "city": "City",
-  "region": "Region"
+  "region": "Region",
+  "url_copied": "URL copied to clipboard"
 }
