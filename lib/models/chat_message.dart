@@ -181,6 +181,30 @@ class ChatMessage implements Comparable<ChatMessage> {
   /// Get author's npub
   String? get npub => getMeta('npub');
 
+  /// Get message delivery status (for DMs)
+  MessageStatus? get deliveryStatus {
+    final status = getMeta('status');
+    if (status == null) return null;
+    return MessageStatus.values.firstWhere(
+      (s) => s.name == status,
+      orElse: () => MessageStatus.delivered, // Legacy messages assumed delivered
+    );
+  }
+
+  /// Check if message is pending delivery
+  bool get isPending => deliveryStatus == MessageStatus.pending;
+
+  /// Check if message was delivered
+  bool get isDelivered => deliveryStatus == MessageStatus.delivered || deliveryStatus == null;
+
+  /// Check if message delivery failed
+  bool get isFailed => deliveryStatus == MessageStatus.failed;
+
+  /// Set message delivery status
+  void setDeliveryStatus(MessageStatus status) {
+    setMeta('status', status.name);
+  }
+
   /// Check if message quotes another message
   bool get isQuote => hasMeta('quote');
 
@@ -313,4 +337,11 @@ enum ChatMessageType {
   simple, // Regular text message
   poll, // Poll message
   announcement, // System announcement
+}
+
+/// Message delivery status for DMs
+enum MessageStatus {
+  pending, // Saved locally, awaiting remote confirmation
+  delivered, // HTTP 200 received from remote device
+  failed, // HTTP error or timeout
 }

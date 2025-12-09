@@ -164,6 +164,11 @@ class DevicesService {
           await _syncDirectMessages(callsign, url);
         }
         break;
+
+      case DebugAction.addDevice:
+        // Handled directly by DebugController.executeAction()
+        // which calls DevicesService().addDevice() directly
+        break;
     }
   }
 
@@ -1367,7 +1372,7 @@ class DevicesService {
   }
 
   /// Add a device from discovery or manual entry
-  Future<void> addDevice(String callsign, {String? name, String? url}) async {
+  Future<void> addDevice(String callsign, {String? name, String? url, bool isOnline = false}) async {
     final normalizedCallsign = callsign.toUpperCase();
 
     if (!_devices.containsKey(normalizedCallsign)) {
@@ -1375,11 +1380,20 @@ class DevicesService {
         callsign: normalizedCallsign,
         name: name ?? normalizedCallsign,
         url: url,
-        isOnline: false,
+        isOnline: isOnline,
         hasCachedData: false,
         collections: [],
       );
-
+      _notifyListeners();
+    } else {
+      // Device exists, update it
+      final device = _devices[normalizedCallsign]!;
+      if (url != null) device.url = url;
+      if (name != null) device.name = name;
+      if (isOnline) {
+        device.isOnline = true;
+        device.lastSeen = DateTime.now();
+      }
       _notifyListeners();
     }
   }

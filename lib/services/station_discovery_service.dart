@@ -6,6 +6,8 @@ import 'dart:convert';
 import '../models/station.dart';
 import '../services/station_service.dart';
 import '../services/log_service.dart';
+import '../services/app_args.dart';
+import '../services/devices_service.dart';
 
 /// Result of a network scan for a geogram device
 class NetworkScanResult {
@@ -67,6 +69,7 @@ class StationDiscoveryService {
   final Duration _scanInterval = const Duration(minutes: 5);
   final Duration _requestTimeout = const Duration(milliseconds: 1500); // Increased timeout for reliability
   final Duration _startupDelay = const Duration(seconds: 5);
+  final Duration _localhostScanDelay = const Duration(seconds: 10); // Longer delay when scanning localhost for other instances
   static const int _maxConcurrentConnections = 30; // Limit concurrent connections to avoid "too many open files"
 
   /// Start automatic discovery
@@ -77,15 +80,28 @@ class StationDiscoveryService {
       return;
     }
 
-    LogService().log('Starting station auto-discovery service (delayed ${_startupDelay.inSeconds}s)');
+    // Use longer delay when --scan-localhost is enabled to allow other instances to start
+    final localhostScanEnabled = AppArgs().scanLocalhostEnabled;
+    final initialDelay = localhostScanEnabled ? _localhostScanDelay : _startupDelay;
+
+    if (localhostScanEnabled) {
+      final range = AppArgs().scanLocalhostRange;
+      LogService().log('StationDiscovery: Localhost port scanning enabled (range: $range)');
+      LogService().log('StationDiscovery: Will scan localhost ports in ${initialDelay.inSeconds}s to allow other instances to start');
+    }
+
+    LogService().log('Starting station auto-discovery service (delayed ${initialDelay.inSeconds}s)');
 
     // Delay initial scan to let the app initialize fully
     // This prevents "too many open files" errors on startup
-    Timer(_startupDelay, () {
+    // Use longer delay when scanning localhost to allow other instances to start first
+    Timer(initialDelay, () {
+      LogService().log('StationDiscovery: Initial scan starting now');
       discover();
 
       // Schedule periodic scans every 5 minutes
       _discoveryTimer = Timer.periodic(_scanInterval, (_) {
+        LogService().log('StationDiscovery: Periodic scan starting');
         discover();
       });
     });
@@ -167,24 +183,90 @@ class StationDiscoveryService {
         }
       }
 
-      // Total: localhost ports (x2 for both localhost and 127.0.0.1) + (254 hosts * ports per range)
-      final totalHosts = (_ports.length * 2) + (ranges.length * 254 * _ports.length);
+      // Check if localhost port range scanning is enabled via --scan-localhost flag
+      final localhostPortRange = AppArgs().scanLocalhostPorts;
+      final localhostRangeSize = localhostPortRange != null
+          ? (localhostPortRange.$2 - localhostPortRange.$1 + 1)
+          : 0;
+
+      // Total: localhost ports (x2 for both localhost and 127.0.0.1) + localhost range + (254 hosts * ports per range)
+      final totalHosts = (_ports.length * 2) + localhostRangeSize + (ranges.length * 254 * _ports.length);
       int scannedHosts = 0;
 
+      LogService().log('StationDiscovery: Scanning standard localhost ports: ${_ports.join(", ")}');
       onProgress?.call('Scanning localhost...', scannedHosts, totalHosts, results);
 
       // Always scan localhost first - try both 'localhost' hostname and '127.0.0.1'
       // Some systems resolve localhost to IPv6 ::1, so we need to check both
+      int standardLocalhostFound = 0;
       for (var host in ['localhost', '127.0.0.1']) {
         for (var port in _ports) {
           if (shouldCancel?.call() == true) break;
           final result = await _checkGeogramDevice(host, port, timeoutMs);
           if (result != null) {
+            standardLocalhostFound++;
+            LogService().log('StationDiscovery: Found device at $host:$port - callsign: ${result.callsign ?? "unknown"}, type: ${result.type}');
             addResult(result);
             onProgress?.call('Found: ${result.type} at $host:$port', scannedHosts, totalHosts, results);
           }
           scannedHosts++;
         }
+      }
+      LogService().log('StationDiscovery: Standard localhost scan found $standardLocalhostFound device(s)');
+
+      // Scan extended localhost port range if --scan-localhost flag is set
+      // This is useful for testing with multiple Geogram instances on the same machine
+      if (localhostPortRange != null) {
+        final (startPort, endPort) = localhostPortRange;
+        final portCount = endPort - startPort + 1;
+        LogService().log('StationDiscovery: === LOCALHOST SCAN START ===');
+        LogService().log('StationDiscovery: Scanning localhost ports $startPort-$endPort ($portCount ports) for other Geogram instances');
+        onProgress?.call('Scanning localhost ports $startPort-$endPort...', scannedHosts, totalHosts, results);
+
+        // Build list of localhost ports to scan
+        final localhostTargets = <int>[];
+        for (int port = startPort; port <= endPort; port++) {
+          // Skip ports we already scanned in the standard ports list
+          if (!_ports.contains(port)) {
+            localhostTargets.add(port);
+          }
+        }
+
+        LogService().log('StationDiscovery: Will scan ${localhostTargets.length} localhost ports (excluding standard ports)');
+        int foundCount = 0;
+
+        // Process localhost ports in batches
+        for (int batchStart = 0; batchStart < localhostTargets.length; batchStart += _maxConcurrentConnections) {
+          if (shouldCancel?.call() == true) {
+            LogService().log('StationDiscovery: Localhost scan cancelled');
+            break;
+          }
+
+          final batchEnd = (batchStart + _maxConcurrentConnections).clamp(0, localhostTargets.length);
+          final batch = localhostTargets.sublist(batchStart, batchEnd);
+
+          final futures = batch.map((port) async {
+            final result = await _checkGeogramDevice('127.0.0.1', port, timeoutMs);
+            if (result != null) {
+              foundCount++;
+              LogService().log('StationDiscovery: FOUND Geogram instance at localhost:$port - callsign: ${result.callsign ?? "unknown"}, type: ${result.type}');
+              addResult(result);
+              onProgress?.call('Found: ${result.type} at localhost:$port', scannedHosts, totalHosts, results);
+            }
+          }).toList();
+
+          await Future.wait(futures).timeout(
+            Duration(milliseconds: timeoutMs * 3),
+            onTimeout: () => [],
+          );
+
+          scannedHosts += batch.length;
+          onProgress?.call('Scanning localhost ports...', scannedHosts, totalHosts, results);
+        }
+
+        LogService().log('StationDiscovery: === LOCALHOST SCAN COMPLETE === Found $foundCount device(s)');
+      } else {
+        LogService().log('StationDiscovery: Localhost port range scanning not enabled (use --scan-localhost=START-END)');
       }
 
       // Scan each network range
@@ -472,11 +554,47 @@ class StationDiscoveryService {
 
       // Always scan localhost first
       int foundCount = 0;
-      LogService().log('  Scanning localhost (127.0.0.1)...');
+      LogService().log('  Scanning localhost (127.0.0.1) on standard ports...');
       for (var port in _ports) {
         final station = await _checkRelay('127.0.0.1', port);
         if (station != null) {
           foundCount++;
+          LogService().log('    Found device at localhost:$port');
+        }
+      }
+
+      // Scan extended localhost port range if --scan-localhost flag is set
+      final localhostPortRange = AppArgs().scanLocalhostPorts;
+      if (localhostPortRange != null) {
+        final (startPort, endPort) = localhostPortRange;
+        final portCount = endPort - startPort + 1;
+        LogService().log('  Scanning localhost ports $startPort-$endPort ($portCount ports)...');
+
+        // Build list of localhost ports to scan (excluding standard ports)
+        final localhostTargets = <int>[];
+        for (int port = startPort; port <= endPort; port++) {
+          if (!_ports.contains(port)) {
+            localhostTargets.add(port);
+          }
+        }
+
+        // Process localhost ports in batches
+        for (int batchStart = 0; batchStart < localhostTargets.length; batchStart += _maxConcurrentConnections) {
+          final batchEnd = (batchStart + _maxConcurrentConnections).clamp(0, localhostTargets.length);
+          final batch = localhostTargets.sublist(batchStart, batchEnd);
+
+          final futures = batch.map((port) async {
+            final station = await _checkRelay('127.0.0.1', port);
+            if (station != null) {
+              foundCount++;
+              LogService().log('    Found Geogram instance at localhost:$port');
+            }
+          }).toList();
+
+          await Future.wait(futures).timeout(
+            const Duration(seconds: 5),
+            onTimeout: () => [],
+          );
         }
       }
 
@@ -544,7 +662,7 @@ class StationDiscoveryService {
     return foundCount;
   }
 
-  /// Check if a station exists at given IP and port
+  /// Check if a station or desktop client exists at given IP and port
   Future<Station?> _checkRelay(String ip, int port) async {
     try {
       // Use /api/status endpoint for detection (returns JSON)
@@ -556,9 +674,10 @@ class StationDiscoveryService {
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body) as Map<String, dynamic>;
+        final service = data['service'] as String? ?? '';
 
         // Check if it's a Geogram station
-        if (data['service'] == 'Geogram Station Server') {
+        if (service == 'Geogram Station Server') {
           LogService().log('✓ Found station at $ip:$port');
 
           // Create station object with callsign
@@ -577,6 +696,33 @@ class StationDiscoveryService {
           await _addDiscoveredRelay(station);
 
           return station;
+        }
+
+        // Check if it's a Geogram Desktop client (for device-to-device DM)
+        if (service == 'Geogram Desktop') {
+          final callsign = data['callsign'] as String?;
+          final name = data['nickname'] as String? ?? data['name'] as String? ?? callsign;
+          final deviceUrl = 'http://$ip:$port';
+
+          if (callsign != null && callsign.isNotEmpty) {
+            LogService().log('✓ Found desktop client at $ip:$port - callsign: $callsign');
+
+            // Add to devices service for DM functionality (sets isOnline: true)
+            await DevicesService().addDevice(
+              callsign,
+              name: name,
+              url: deviceUrl,
+              isOnline: true,
+            );
+
+            // Return a dummy station to indicate success (so foundCount is incremented)
+            return Station(
+              url: deviceUrl,
+              name: name ?? callsign,
+              callsign: callsign,
+              status: 'online',
+            );
+          }
         }
       }
     } catch (e) {

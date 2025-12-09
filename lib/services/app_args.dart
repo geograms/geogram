@@ -20,6 +20,8 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 ///   --new-identity             Create a new identity on startup (useful for testing)
 ///   --identity-type=TYPE       Identity type: 'client' (default) or 'station'
 ///   --nickname=NAME            Nickname for the new identity
+///   --skip-intro               Skip the intro/welcome screen on first launch
+///   --scan-localhost=RANGE     Scan localhost ports for other instances (e.g., 5000-6000)
 ///   --help, -h                 Show help and exit
 ///   --version, -v              Show version and exit
 ///   --verbose                  Enable verbose logging
@@ -52,6 +54,8 @@ class AppArgs {
   bool _newIdentity = false;
   String _identityType = 'client'; // 'client' or 'station'
   String? _nickname;
+  bool _skipIntro = false;
+  String? _scanLocalhostRange; // e.g., "5000-6000" for scanning localhost ports
   bool _showHelp = false;
   bool _showVersion = false;
   bool _verbose = false;
@@ -82,6 +86,28 @@ class AppArgs {
 
   /// Nickname for the new identity
   String? get nickname => _nickname;
+
+  /// Whether to skip the intro/welcome screen on first launch
+  bool get skipIntro => _skipIntro;
+
+  /// Localhost port range to scan for other Geogram instances (e.g., "5000-6000")
+  String? get scanLocalhostRange => _scanLocalhostRange;
+
+  /// Whether localhost port scanning is enabled
+  bool get scanLocalhostEnabled => _scanLocalhostRange != null;
+
+  /// Get the localhost port range as start/end integers
+  /// Returns null if not set or invalid format
+  (int, int)? get scanLocalhostPorts {
+    if (_scanLocalhostRange == null) return null;
+    final parts = _scanLocalhostRange!.split('-');
+    if (parts.length != 2) return null;
+    final start = int.tryParse(parts[0].trim());
+    final end = int.tryParse(parts[1].trim());
+    if (start == null || end == null) return null;
+    if (start < 1 || end > 65535 || start > end) return null;
+    return (start, end);
+  }
 
   /// Whether to show help and exit
   bool get showHelp => _showHelp;
@@ -231,6 +257,17 @@ class AppArgs {
         continue;
       }
 
+      if (arg == '--skip-intro') {
+        _skipIntro = true;
+        continue;
+      }
+
+      // --scan-localhost=RANGE format (e.g., --scan-localhost=5000-6000)
+      if (arg.startsWith('--scan-localhost=')) {
+        _scanLocalhostRange = arg.substring('--scan-localhost='.length);
+        continue;
+      }
+
       if (arg == '--help' || arg == '-h') {
         _showHelp = true;
         continue;
@@ -259,6 +296,8 @@ class AppArgs {
     _newIdentity = false;
     _identityType = 'client';
     _nickname = null;
+    _skipIntro = false;
+    _scanLocalhostRange = null;
     _showHelp = false;
     _showVersion = false;
     _verbose = false;
@@ -281,6 +320,8 @@ Options:
   --new-identity             Create a new identity on startup
   --identity-type=TYPE       Identity type: 'client' (default) or 'station'
   --nickname=NAME            Nickname for the new identity
+  --skip-intro               Skip intro/welcome screen on first launch
+  --scan-localhost=RANGE     Scan localhost ports for other instances (e.g., 5000-6000)
   --verbose                  Enable verbose logging
   --help, -h                 Show this help message
   --version, -v              Show version information
@@ -325,6 +366,8 @@ Examples:
       'newIdentity': _newIdentity,
       'identityType': _identityType,
       'nickname': _nickname,
+      'skipIntro': _skipIntro,
+      'scanLocalhostRange': _scanLocalhostRange,
       'verbose': _verbose,
       'initialized': _initialized,
     };
@@ -332,6 +375,6 @@ Examples:
 
   @override
   String toString() {
-    return 'AppArgs(port: $_port, dataDir: $_dataDir, cliMode: $_cliMode, httpApi: $_httpApi, debugApi: $_debugApi, newIdentity: $_newIdentity, identityType: $_identityType, nickname: $_nickname, verbose: $_verbose)';
+    return 'AppArgs(port: $_port, dataDir: $_dataDir, cliMode: $_cliMode, httpApi: $_httpApi, debugApi: $_debugApi, newIdentity: $_newIdentity, identityType: $_identityType, nickname: $_nickname, skipIntro: $_skipIntro, scanLocalhostRange: $_scanLocalhostRange, verbose: $_verbose)';
   }
 }

@@ -5,6 +5,7 @@
 
 import 'dart:async';
 import 'package:flutter/foundation.dart';
+import 'devices_service.dart';
 
 /// Debug action types that can be triggered via API
 enum DebugAction {
@@ -43,6 +44,9 @@ enum DebugAction {
 
   /// Sync DMs with a device
   syncDM,
+
+  /// Add a device with URL (for testing)
+  addDevice,
 }
 
 /// Toast message to be displayed
@@ -266,6 +270,14 @@ class DebugController {
     );
   }
 
+  /// Trigger adding a device with URL (for testing)
+  void triggerAddDevice({required String callsign, required String url}) {
+    triggerAction(
+      DebugAction.addDevice,
+      params: {'callsign': callsign, 'url': url},
+    );
+  }
+
   /// Get available actions for API response
   static List<Map<String, dynamic>> getAvailableActions() {
     return [
@@ -348,6 +360,14 @@ class DebugController {
         'params': {
           'callsign': 'Target device callsign (required)',
           'url': '(optional) Device URL for direct sync',
+        },
+      },
+      {
+        'action': 'add_device',
+        'description': 'Add a device with URL (for testing DM auto-push)',
+        'params': {
+          'callsign': 'Device callsign (required)',
+          'url': 'Device HTTP API URL (required)',
         },
       },
     ];
@@ -451,6 +471,25 @@ class DebugController {
           'success': true,
           'message': 'DM sync triggered with $callsign',
           'callsign': callsign,
+        };
+
+      case 'add_device':
+        final callsign = params['callsign'] as String?;
+        final url = params['url'] as String?;
+        if (callsign == null || callsign.isEmpty) {
+          return {'success': false, 'error': 'Missing callsign parameter'};
+        }
+        if (url == null || url.isEmpty) {
+          return {'success': false, 'error': 'Missing url parameter'};
+        }
+        // Call DevicesService directly to add the device
+        DevicesService().addDevice(callsign, url: url);
+        triggerAddDevice(callsign: callsign, url: url);
+        return {
+          'success': true,
+          'message': 'Device added: $callsign at $url',
+          'callsign': callsign,
+          'url': url,
         };
 
       default:

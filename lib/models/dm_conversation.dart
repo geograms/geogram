@@ -17,6 +17,11 @@ class DMConversation {
   /// Format: devices/{otherCallsign}/chat/{myCallsign}
   final String path;
 
+  /// The other party's NOSTR public key (npub) - cryptographically binds the
+  /// conversation to a specific identity. Once set, messages from a different
+  /// npub claiming the same callsign will be rejected.
+  String? otherNpub;
+
   /// Last message timestamp (for sorting)
   DateTime? lastMessageTime;
 
@@ -39,6 +44,7 @@ class DMConversation {
     required this.otherCallsign,
     required this.myCallsign,
     required this.path,
+    this.otherNpub,
     this.lastMessageTime,
     this.unreadCount = 0,
     this.lastSyncTime,
@@ -105,6 +111,7 @@ class DMConversation {
       otherCallsign: json['otherCallsign'] as String,
       myCallsign: myCallsign,
       path: json['path'] as String,
+      otherNpub: json['otherNpub'] as String?,
       lastMessageTime: json['lastMessageTime'] != null
           ? DateTime.parse(json['lastMessageTime'] as String)
           : null,
@@ -123,6 +130,7 @@ class DMConversation {
     return {
       'otherCallsign': otherCallsign,
       'path': path,
+      if (otherNpub != null) 'otherNpub': otherNpub,
       if (lastMessageTime != null)
         'lastMessageTime': lastMessageTime!.toIso8601String(),
       'unreadCount': unreadCount,
@@ -139,6 +147,7 @@ class DMConversation {
     String? otherCallsign,
     String? myCallsign,
     String? path,
+    String? otherNpub,
     DateTime? lastMessageTime,
     int? unreadCount,
     DateTime? lastSyncTime,
@@ -150,6 +159,7 @@ class DMConversation {
       otherCallsign: otherCallsign ?? this.otherCallsign,
       myCallsign: myCallsign ?? this.myCallsign,
       path: path ?? this.path,
+      otherNpub: otherNpub ?? this.otherNpub,
       lastMessageTime: lastMessageTime ?? this.lastMessageTime,
       unreadCount: unreadCount ?? this.unreadCount,
       lastSyncTime: lastSyncTime ?? this.lastSyncTime,

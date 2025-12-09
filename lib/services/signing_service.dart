@@ -115,13 +115,37 @@ class SigningService {
     }
   }
 
-  /// Generate a BIP-340 Schnorr signature for arbitrary data
-  /// Used for chat message signatures
+  /// Generate a BIP-340 Schnorr signature for chat messages
+  ///
+  /// Per chat-format-specification.md, tags are:
+  /// [['t', 'chat'], ['room', roomId], ['callsign', callsign]]
+  ///
+  /// Metadata should include:
+  /// - 'room': the room/channel ID (required)
+  /// - 'callsign': the author's callsign (required)
+  ///
+  /// The [createdAt] parameter should be the Unix timestamp (seconds) that
+  /// matches the message timestamp. This ensures verification can reconstruct
+  /// the exact same event. If not provided, uses current time.
   Future<String?> generateSignature(
     String content,
     Map<String, String> metadata,
-    Profile profile,
-  ) async {
+    Profile profile, {
+    int? createdAt,
+  }) async {
+    final signedEvent = await generateSignedEvent(content, metadata, profile, createdAt: createdAt);
+    return signedEvent?.sig;
+  }
+
+  /// Generate a complete signed NOSTR event for chat message content
+  /// Returns the full signed event (id, pubkey, created_at, kind, tags, content, sig)
+  /// This is the canonical representation that can be verified by receivers
+  Future<NostrEvent?> generateSignedEvent(
+    String content,
+    Map<String, String> metadata,
+    Profile profile, {
+    int? createdAt,
+  }) async {
     try {
       if (!canSign(profile)) {
         return null;
@@ -130,21 +154,27 @@ class SigningService {
       // Get pubkey hex
       final pubkeyHex = NostrCrypto.decodeNpub(profile.npub);
 
+      // Build tags per chat-format-specification.md
+      final roomId = metadata['room'] ?? metadata['channel'] ?? 'main';
+      final callsign = metadata['callsign'] ?? profile.callsign;
+
       // Create a NOSTR event for signing
+      // Use provided createdAt to match message timestamp exactly
       final event = NostrEvent.textNote(
         pubkeyHex: pubkeyHex,
         content: content,
         tags: [
           ['t', 'chat'],
-          ['channel', metadata['channel'] ?? 'main'],
+          ['room', roomId],
+          ['callsign', callsign],
         ],
+        createdAt: createdAt,
       );
 
-      // Sign the event
-      final signedEvent = await signEvent(event, profile);
-      return signedEvent?.sig;
+      // Sign the event (this also calculates the ID)
+      return await signEvent(event, profile);
     } catch (e) {
-      LogService().log('Error generating signature: $e');
+      LogService().log('Error generating signed event: $e');
       return null;
     }
   }

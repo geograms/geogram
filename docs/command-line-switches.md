@@ -18,6 +18,8 @@ Options:
   --new-identity             Create a new identity on startup
   --identity-type=TYPE       Identity type: 'client' (default) or 'station'
   --nickname=NAME            Nickname for the new identity
+  --skip-intro               Skip intro/welcome screen on first launch
+  --scan-localhost=RANGE     Scan localhost ports for other instances (e.g., 5000-6000)
   --verbose                  Enable verbose logging
   --help, -h                 Show help message
   --version, -v              Show version information
@@ -171,6 +173,49 @@ Sets the nickname for the new identity when using `--new-identity`.
 geogram_desktop --new-identity --nickname="Alice"
 geogram_desktop --new-identity --identity-type=station --nickname="HQ Station"
 ```
+
+### --skip-intro
+
+Skip the intro/welcome screen on first launch. This is useful for automated testing scenarios where you don't want to manually dismiss the welcome dialog.
+
+```bash
+# Skip intro when creating a new test identity
+geogram_desktop --new-identity --skip-intro --data-dir=/tmp/test
+
+# Combined with HTTP API for automated testing
+geogram_desktop --new-identity --skip-intro --http-api --debug-api --port=5678
+```
+
+**Use cases:**
+- Automated testing and CI/CD pipelines
+- Running multiple test instances without manual interaction
+- Script-based testing where human intervention is not possible
+
+### --scan-localhost
+
+Scan a range of localhost ports for other Geogram instances running on the same machine. This enables discovery of parallel test instances without requiring network scanning.
+
+```bash
+# Scan ports 5000-6000 for other instances
+geogram_desktop --scan-localhost=5000-6000
+
+# Full testing setup with two instances
+# Terminal 1:
+geogram_desktop --port=5577 --data-dir=/tmp/instance-a --scan-localhost=5500-5600
+
+# Terminal 2:
+geogram_desktop --port=5588 --data-dir=/tmp/instance-b --scan-localhost=5500-5600
+```
+
+**Format:** `--scan-localhost=START-END` where START and END are port numbers (1-65535).
+
+**Use cases:**
+- Testing device-to-device communication on a single machine
+- Development with multiple local instances
+- CI/CD pipelines running parallel test instances
+- Debugging DM and chat functionality locally
+
+**Note:** The standard ports (3456, 8080, 80, 8081, 3000, 5000) are always scanned on localhost regardless of this flag. This flag adds an additional port range to scan.
 
 ### --verbose
 

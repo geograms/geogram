@@ -51,6 +51,8 @@ class _DMChatPageState extends State<DMChatPage> {
 
   @override
   void dispose() {
+    // Clear current conversation to resume tracking unread
+    _dmService.setCurrentConversation(null);
     _messageSubscription?.cancel();
     _syncSubscription?.cancel();
     super.dispose();
@@ -86,8 +88,8 @@ class _DMChatPageState extends State<DMChatPage> {
       await _dmService.initialize();
       _conversation = await _dmService.getOrCreateConversation(widget.otherCallsign);
 
-      // Mark as read
-      await _dmService.markAsRead(widget.otherCallsign);
+      // Mark this as the current conversation (prevents incrementing unread while viewing)
+      _dmService.setCurrentConversation(widget.otherCallsign);
 
       await _loadMessages();
     } catch (e) {
@@ -128,6 +130,16 @@ class _DMChatPageState extends State<DMChatPage> {
     try {
       await _dmService.sendMessage(widget.otherCallsign, content.trim());
       await _loadMessages();
+    } on DMMustBeReachableException {
+      // Device is not reachable - show specific error
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(_i18n.t('device_not_reachable')),
+            backgroundColor: Colors.orange,
+          ),
+        );
+      }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -241,8 +253,30 @@ class _DMChatPageState extends State<DMChatPage> {
       );
     }
 
+    final device = _devicesService.getDevice(widget.otherCallsign);
+    final isOnline = device?.isOnline ?? false;
+
     return Column(
       children: [
+        // Offline banner
+        if (!isOnline)
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            color: Colors.orange.shade100,
+            child: Row(
+              children: [
+                Icon(Icons.wifi_off, size: 16, color: Colors.orange.shade900),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    _i18n.t('device_offline_cannot_send'),
+                    style: TextStyle(color: Colors.orange.shade900, fontSize: 13),
+                  ),
+                ),
+              ],
+            ),
+          ),
         // Messages list
         Expanded(
           child: _messages.isEmpty
@@ -258,15 +292,29 @@ class _DMChatPageState extends State<DMChatPage> {
                 ),
         ),
         // Message input
-        if (!_isSending)
+        if (_isSending)
+          Container(
+            padding: const EdgeInsets.all(16),
+            child: const Center(child: CircularProgressIndicator()),
+          )
+        else if (isOnline)
           MessageInputWidget(
             onSend: (content, filePath) => _sendMessage(content),
             allowFiles: false, // DMs don't support file attachments yet
           )
         else
+          // Disabled input when offline
           Container(
-            padding: const EdgeInsets.all(16),
-            child: const Center(child: CircularProgressIndicator()),
+            padding: const EdgeInsets.all(12),
+            child: TextField(
+              enabled: false,
+              decoration: InputDecoration(
+                hintText: _i18n.t('device_offline'),
+                border: const OutlineInputBorder(),
+                filled: true,
+                fillColor: Colors.grey.shade200,
+              ),
+            ),
           ),
       ],
     );

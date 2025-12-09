@@ -13,6 +13,7 @@ import '../services/profile_service.dart';
 import '../services/station_cache_service.dart';
 import '../services/chat_notification_service.dart';
 import '../services/callsign_generator.dart';
+import '../services/direct_message_service.dart';
 import 'chat_browser_page.dart';
 import 'dm_chat_page.dart';
 
@@ -30,6 +31,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
   final ProfileService _profileService = ProfileService();
   final I18nService _i18n = I18nService();
   final ChatNotificationService _chatNotificationService = ChatNotificationService();
+  final DirectMessageService _dmService = DirectMessageService();
 
   List<RemoteDevice> _devices = [];
   String _myCallsign = '';
@@ -39,7 +41,9 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
   bool _isLoadingCollections = false;
   String? _error;
   int _totalUnreadMessages = 0;
+  Map<String, int> _dmUnreadCounts = {};
   StreamSubscription<Map<String, int>>? _unreadSubscription;
+  StreamSubscription<Map<String, int>>? _dmUnreadSubscription;
   Timer? _refreshTimer;
 
   static const Duration _refreshInterval = Duration(seconds: 30);
@@ -67,6 +71,16 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
       if (mounted) {
         setState(() {
           _totalUnreadMessages = counts.values.fold(0, (sum, count) => sum + count);
+        });
+      }
+    });
+
+    // Subscribe to DM unread counts
+    _dmUnreadCounts = _dmService.unreadCounts;
+    _dmUnreadSubscription = _dmService.unreadCountsStream.listen((counts) {
+      if (mounted) {
+        setState(() {
+          _dmUnreadCounts = counts;
         });
       }
     });
@@ -109,6 +123,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
   void dispose() {
     _refreshTimer?.cancel();
     _unreadSubscription?.cancel();
+    _dmUnreadSubscription?.cancel();
     super.dispose();
   }
 
@@ -508,15 +523,23 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // Direct message button
-          IconButton(
-            icon: Icon(
-              Icons.message_outlined,
-              color: theme.colorScheme.primary,
-              size: 20,
+          // Direct message button with unread badge
+          Badge(
+            isLabelVisible: (_dmUnreadCounts[device.callsign] ?? 0) > 0,
+            label: Text(
+              (_dmUnreadCounts[device.callsign] ?? 0) > 99
+                  ? '99+'
+                  : '${_dmUnreadCounts[device.callsign] ?? 0}',
             ),
-            onPressed: () => _openDirectMessage(device),
-            tooltip: _i18n.t('send_message'),
+            child: IconButton(
+              icon: Icon(
+                Icons.message_outlined,
+                color: theme.colorScheme.primary,
+                size: 20,
+              ),
+              onPressed: () => _openDirectMessage(device),
+              tooltip: _i18n.t('send_message'),
+            ),
           ),
           IconButton(
             icon: Icon(

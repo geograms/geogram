@@ -12,6 +12,7 @@ import '../models/chat_message.dart';
 import '../models/chat_channel.dart';
 import '../models/chat_security.dart';
 import '../platform/file_system_service.dart';
+import 'profile_service.dart';
 
 /// Notification when chat files change
 class ChatFileChange {
@@ -454,6 +455,43 @@ class ChatService {
     } catch (e) {
       return null;
     }
+  }
+
+  /// Get or create a direct message channel with another device
+  /// Room ID = other device's callsign (uppercase)
+  /// Creates a RESTRICTED chat room where only the two participants can access
+  Future<ChatChannel> getOrCreateDirectChannel(String otherCallsign) async {
+    final roomId = otherCallsign.toUpperCase();
+    final myCallsign = ProfileService().getProfile().callsign.toUpperCase();
+
+    // Check if channel already exists
+    final existing = getChannel(roomId);
+    if (existing != null) {
+      return existing;
+    }
+
+    // Create new RESTRICTED direct channel
+    // Both participants are added: myCallsign and otherCallsign
+    final config = ChatChannelConfig(
+      id: roomId,
+      name: 'Chat with $roomId',
+      description: 'Direct message with $roomId',
+      visibility: 'RESTRICTED',
+    );
+
+    final channel = ChatChannel(
+      id: roomId,
+      type: ChatChannelType.direct,
+      name: 'Chat with $roomId',
+      folder: roomId,
+      participants: [myCallsign, roomId],
+      description: 'Direct message with $roomId',
+      created: DateTime.now(),
+      config: config,
+    );
+
+    await createChannel(channel);
+    return channel;
   }
 
   /// Load messages for a channel

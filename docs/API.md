@@ -326,7 +326,49 @@ Posts a message to a chat room.
 
 ### Direct Messages
 
-Direct messages (DMs) enable 1:1 communication between devices. Messages are stored locally and can be synced when devices are online.
+Direct messages (DMs) enable 1:1 communication between devices. DMs are implemented as **RESTRICTED chat rooms** using the standard chat API.
+
+#### DM Architecture
+
+DMs use a symmetric room ID system:
+- **Device A (callsign "ALICE")** has a room named **"BOB"** for chatting with BOB
+- **Device B (callsign "BOB")** has a room named **"ALICE"** for chatting with ALICE
+
+Both devices store messages in their own `chat/{OTHER_CALLSIGN}/` directory.
+
+**To send a DM via the Chat API:**
+```bash
+# ALICE sends a message to BOB
+# POST to BOB's device: /api/chat/ALICE/messages
+# (The room on BOB's device is named "ALICE")
+curl -X POST http://BOB_DEVICE_IP:3456/api/chat/ALICE/messages \
+  -H "Content-Type: application/json" \
+  -d '{
+    "event": {
+      "pubkey": "ALICE_HEX_PUBKEY",
+      "created_at": 1733745600,
+      "kind": 1,
+      "tags": [["t", "chat"], ["room", "ALICE"], ["callsign", "ALICE"]],
+      "content": "Hello BOB!",
+      "sig": "NOSTR_SIGNATURE"
+    }
+  }'
+```
+
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "timestamp": "2024-12-09 10:00_00",
+  "author": "ALICE"
+}
+```
+
+The receiving device auto-creates the DM channel if it doesn't exist.
+
+#### Legacy DM API (Deprecated)
+
+The following endpoints are kept for backward compatibility but the chat API is preferred:
 
 #### GET /api/dm/conversations
 

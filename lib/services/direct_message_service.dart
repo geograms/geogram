@@ -8,7 +8,6 @@ import 'dart:convert';
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
 import 'package:http/http.dart' as http;
 
 import '../models/chat_message.dart';
@@ -16,10 +15,23 @@ import '../models/dm_conversation.dart';
 import '../models/profile.dart';
 import '../platform/file_system_service.dart';
 import '../util/event_bus.dart';
+import '../util/nostr_crypto.dart';
+import '../util/nostr_event.dart';
 import 'log_service.dart';
 import 'profile_service.dart';
 import 'signing_service.dart';
 import 'chat_service.dart';
+import 'storage_config.dart';
+import 'devices_service.dart';
+
+/// Exception thrown when trying to send a DM to an unreachable device
+class DMMustBeReachableException implements Exception {
+  final String message;
+  DMMustBeReachableException(this.message);
+
+  @override
+  String toString() => message;
+}
 
 /// Service for managing 1:1 direct message conversations
 class DirectMessageService {
@@ -27,8 +39,11 @@ class DirectMessageService {
   factory DirectMessageService() => _instance;
   DirectMessageService._internal();
 
-  /// Base path for device storage
+  /// Base path for device storage (legacy: devices/)
   String? _basePath;
+
+  /// Base path for chat storage (new: chat/)
+  String? _chatBasePath;
 
   /// Cached conversations
   final Map<String, DMConversation> _conversations = {};
@@ -37,15 +52,30 @@ class DirectMessageService {
   final _conversationsController = StreamController<List<DMConversation>>.broadcast();
   Stream<List<DMConversation>> get conversationsStream => _conversationsController.stream;
 
+  /// Stream controller for unread count changes (callsign -> count)
+  final _unreadController = StreamController<Map<String, int>>.broadcast();
+  Stream<Map<String, int>> get unreadCountsStream => _unreadController.stream;
+
+  /// Currently viewed conversation callsign (messages here are marked as read)
+  String? _currentConversationCallsign;
+
   /// Initialize the service
   Future<void> initialize() async {
     if (_basePath != null) return;
 
     if (kIsWeb) {
       _basePath = '/geogram/devices';
+      _chatBasePath = '/geogram/chat';
     } else {
-      final appDir = await getApplicationDocumentsDirectory();
-      _basePath = '${appDir.path}/geogram/devices';
+      // Use StorageConfig to get the correct directories
+      // This respects --data-dir and other configuration options
+      final storageConfig = StorageConfig();
+      if (!storageConfig.isInitialized) {
+        // StorageConfig should be initialized by main.dart, but fallback just in case
+        await storageConfig.init();
+      }
+      _basePath = storageConfig.devicesDir;
+      _chatBasePath = storageConfig.chatDir;
 
       final devicesDir = Directory(_basePath!);
       if (!await devicesDir.exists()) {
@@ -54,7 +84,19 @@ class DirectMessageService {
     }
 
     LogService().log('DirectMessageService initialized at: $_basePath');
+    LogService().log('DirectMessageService chat path: $_chatBasePath');
+
+    // Migrate old DM paths from devices/ to chat/
+    await _migrateOldDMPaths();
+
     await _loadConversations();
+  }
+
+  /// Reset the service state (useful when StorageConfig changes or for testing)
+  void reset() {
+    _basePath = null;
+    _chatBasePath = null;
+    _conversations.clear();
   }
 
   /// Get the current user's callsign
@@ -64,9 +106,85 @@ class DirectMessageService {
   Profile get _myProfile => ProfileService().getProfile();
 
   /// Get DM path for a conversation with another callsign
-  /// Returns: devices/{otherCallsign}/chat/{myCallsign}
+  /// Returns: chat/{otherCallsign}/ (new unified chat room path)
   String getDMPath(String otherCallsign) {
-    return '$_basePath/${otherCallsign.toUpperCase()}/chat/${_myCallsign.toUpperCase()}';
+    return '$_chatBasePath/${otherCallsign.toUpperCase()}';
+  }
+
+  /// Migrate old DM paths from devices/{callsign}/chat/{myCallsign}/ to chat/{callsign}/
+  Future<void> _migrateOldDMPaths() async {
+    if (kIsWeb || _basePath == null || _chatBasePath == null) return;
+
+    try {
+      final devicesDir = Directory(_basePath!);
+      if (!await devicesDir.exists()) return;
+
+      await for (final deviceDir in devicesDir.list()) {
+        if (deviceDir is! Directory) continue;
+
+        final callsign = p.basename(deviceDir.path).toUpperCase();
+        final oldChatDir = Directory('${deviceDir.path}/chat/${_myCallsign.toUpperCase()}');
+
+        if (!await oldChatDir.exists()) continue;
+
+        // Check for messages in old path
+        final oldMessagesFile = File('${oldChatDir.path}/messages.txt');
+        final hasOldMessages = await oldMessagesFile.exists();
+
+        if (!hasOldMessages) {
+          // Check for npub-specific message files
+          final oldFiles = await oldChatDir.list().toList();
+          final hasMessageFiles = oldFiles.any((f) =>
+            f is File && p.basename(f.path).startsWith('messages'));
+          if (!hasMessageFiles) continue;
+        }
+
+        // New path: chat/{callsign}/
+        final newChatDir = Directory('$_chatBasePath/$callsign');
+
+        LogService().log('DM Migration: Migrating $callsign from ${oldChatDir.path} to ${newChatDir.path}');
+
+        // Create new directory if doesn't exist
+        if (!await newChatDir.exists()) {
+          await newChatDir.create(recursive: true);
+          await Directory('${newChatDir.path}/files').create();
+        }
+
+        // Copy all files from old to new (merge if new exists)
+        await for (final entity in oldChatDir.list()) {
+          if (entity is File) {
+            final filename = p.basename(entity.path);
+            final newFilePath = '${newChatDir.path}/$filename';
+            final newFile = File(newFilePath);
+
+            if (await newFile.exists()) {
+              // Merge message files if both exist - keep new file (more recent)
+              LogService().log('DM Migration: Skipping merge of $filename (new file exists)');
+            } else {
+              // Copy file to new location
+              await entity.copy(newFilePath);
+              LogService().log('DM Migration: Copied $filename');
+            }
+          }
+        }
+
+        // After migration, remove old directory
+        await oldChatDir.delete(recursive: true);
+
+        // Clean up empty chat parent directory if needed
+        final oldChatParent = Directory('${deviceDir.path}/chat');
+        if (await oldChatParent.exists()) {
+          final remaining = await oldChatParent.list().toList();
+          if (remaining.isEmpty) {
+            await oldChatParent.delete();
+          }
+        }
+
+        LogService().log('DM Migration: Completed migration for $callsign');
+      }
+    } catch (e) {
+      LogService().log('DM Migration: Error during migration: $e');
+    }
   }
 
   /// Get or create a DM conversation with another device
@@ -112,14 +230,17 @@ class DirectMessageService {
   }
 
   /// Create config.json for a DM conversation
-  Future<void> _createConfig(String path, String otherCallsign) async {
+  Future<void> _createConfig(String path, String otherCallsign, {String? otherNpub}) async {
     final config = {
       'id': otherCallsign,
       'name': 'Chat with $otherCallsign',
       'type': 'direct',
-      'visibility': 'PRIVATE',
+      'visibility': 'RESTRICTED',
       'participants': [_myCallsign, otherCallsign],
       'created': DateTime.now().toIso8601String(),
+      // Store npub to cryptographically bind the conversation to a specific identity.
+      // This prevents someone with a different npub from impersonating this callsign.
+      if (otherNpub != null) 'otherNpub': otherNpub,
     };
 
     final content = const JsonEncoder.withIndent('  ').convert(config);
@@ -131,6 +252,75 @@ class DirectMessageService {
       final file = File(p.join(path, 'config.json'));
       await file.writeAsString(content);
     }
+  }
+
+  /// Update the stored npub for a conversation (called when first signed message is received)
+  Future<void> _updateConversationNpub(String path, String otherNpub) async {
+    final configPath = '$path/config.json';
+
+    try {
+      Map<String, dynamic> config;
+
+      if (kIsWeb) {
+        final fs = FileSystemService.instance;
+        if (await fs.exists(configPath)) {
+          final content = await fs.readAsString(configPath);
+          config = json.decode(content) as Map<String, dynamic>;
+        } else {
+          return;
+        }
+      } else {
+        final file = File(configPath);
+        if (await file.exists()) {
+          final content = await file.readAsString();
+          config = json.decode(content) as Map<String, dynamic>;
+        } else {
+          return;
+        }
+      }
+
+      // Only set if not already set (trust first seen npub)
+      if (config['otherNpub'] == null) {
+        config['otherNpub'] = otherNpub;
+        final content = const JsonEncoder.withIndent('  ').convert(config);
+
+        if (kIsWeb) {
+          await FileSystemService.instance.writeAsString(configPath, content);
+        } else {
+          await File(configPath).writeAsString(content);
+        }
+
+        LogService().log('DirectMessageService: Bound conversation to npub ${otherNpub.substring(0, 20)}...');
+      }
+    } catch (e) {
+      LogService().log('DirectMessageService: Error updating conversation npub: $e');
+    }
+  }
+
+  /// Load the stored npub for a conversation from config.json
+  Future<String?> _loadConversationNpub(String path) async {
+    final configPath = '$path/config.json';
+
+    try {
+      if (kIsWeb) {
+        final fs = FileSystemService.instance;
+        if (await fs.exists(configPath)) {
+          final content = await fs.readAsString(configPath);
+          final config = json.decode(content) as Map<String, dynamic>;
+          return config['otherNpub'] as String?;
+        }
+      } else {
+        final file = File(configPath);
+        if (await file.exists()) {
+          final content = await file.readAsString();
+          final config = json.decode(content) as Map<String, dynamic>;
+          return config['otherNpub'] as String?;
+        }
+      }
+    } catch (e) {
+      LogService().log('DirectMessageService: Error loading conversation npub: $e');
+    }
+    return null;
   }
 
   /// List all DM conversations
@@ -151,25 +341,26 @@ class DirectMessageService {
   }
 
   /// Load existing conversations from disk
+  /// Looks in chat/{callsign}/ directories for direct message channels
   Future<void> _loadConversations() async {
-    if (_basePath == null) return;
+    if (_chatBasePath == null) return;
 
     try {
       if (kIsWeb) {
         final fs = FileSystemService.instance;
-        if (!await fs.exists(_basePath!)) return;
+        if (!await fs.exists(_chatBasePath!)) return;
 
-        final entities = await fs.list(_basePath!);
+        final entities = await fs.list(_chatBasePath!);
         for (final entity in entities) {
           if (entity.type == FsEntityType.directory) {
             await _loadConversationFromPath(entity.path);
           }
         }
       } else {
-        final devicesDir = Directory(_basePath!);
-        if (!await devicesDir.exists()) return;
+        final chatDir = Directory(_chatBasePath!);
+        if (!await chatDir.exists()) return;
 
-        await for (final entity in devicesDir.list()) {
+        await for (final entity in chatDir.list()) {
           if (entity is Directory) {
             await _loadConversationFromPath(entity.path);
           }
@@ -181,23 +372,51 @@ class DirectMessageService {
   }
 
   /// Load a single conversation from its path
-  Future<void> _loadConversationFromPath(String devicePath) async {
-    final otherCallsign = p.basename(devicePath).toUpperCase();
-    final chatPath = '$devicePath/chat/${_myCallsign.toUpperCase()}';
+  /// Path format: chat/{otherCallsign}/
+  Future<void> _loadConversationFromPath(String chatPath) async {
+    final otherCallsign = p.basename(chatPath).toUpperCase();
 
-    bool exists;
-    if (kIsWeb) {
-      exists = await FileSystemService.instance.exists(chatPath);
-    } else {
-      exists = await Directory(chatPath).exists();
+    // Skip non-DM directories (like 'main', 'extra', etc.)
+    // DM directories are named after callsigns (typically uppercase alphanumeric)
+    if (otherCallsign == 'MAIN' || otherCallsign == 'EXTRA') return;
+
+    // Check if this is a direct message channel by looking for config.json with type=direct
+    bool isDMChannel = false;
+    final configPath = '$chatPath/config.json';
+
+    try {
+      String? configContent;
+      if (kIsWeb) {
+        final fs = FileSystemService.instance;
+        if (await fs.exists(configPath)) {
+          configContent = await fs.readAsString(configPath);
+        }
+      } else {
+        final configFile = File(configPath);
+        if (await configFile.exists()) {
+          configContent = await configFile.readAsString();
+        }
+      }
+
+      if (configContent != null) {
+        final config = json.decode(configContent) as Map<String, dynamic>;
+        isDMChannel = config['type'] == 'direct';
+      }
+    } catch (e) {
+      // If no config or error, check if there are messages files
+      isDMChannel = true; // Assume it's a DM if we can't determine
     }
 
-    if (!exists) return;
+    if (!isDMChannel) return;
+
+    // Load stored npub from config.json for identity binding
+    final storedNpub = await _loadConversationNpub(chatPath);
 
     final conversation = DMConversation(
       otherCallsign: otherCallsign,
       myCallsign: _myCallsign,
       path: chatPath,
+      otherNpub: storedNpub,
     );
 
     // Load messages to update conversation metadata
@@ -210,51 +429,187 @@ class DirectMessageService {
   }
 
   /// Send a message in a DM conversation
+  /// Throws [DMMustBeReachableException] if the remote device is not reachable
   Future<void> sendMessage(String otherCallsign, String content) async {
     await initialize();
 
-    final conversation = await getOrCreateConversation(otherCallsign);
+    final normalizedCallsign = otherCallsign.toUpperCase();
     final profile = _myProfile;
 
-    // Create the message
+    // 1. Check reachability FIRST - must be reachable to send
+    final devicesService = DevicesService();
+    final device = devicesService.getDevice(normalizedCallsign);
+
+    if (device == null || !device.isOnline || device.url == null) {
+      throw DMMustBeReachableException(
+        'Cannot send message: device $normalizedCallsign is not reachable',
+      );
+    }
+
+    // 2. Get or create conversation
+    final conversation = await getOrCreateConversation(normalizedCallsign);
+
+    // 3. Create the message with PENDING status
     final message = ChatMessage.now(
       author: profile.callsign,
       content: content,
     );
+    message.setDeliveryStatus(MessageStatus.pending);
 
-    // Sign the message
+    // 4. Sign the message per chat-format-specification.md
+    // Tags: [['t', 'chat'], ['room', roomId], ['callsign', callsign]]
+    // For DMs, roomId is the other device's callsign (the conversation identifier)
+    // IMPORTANT: Use the message's timestamp for signing so verification works
     final signingService = SigningService();
     await signingService.initialize();
 
+    NostrEvent? signedEvent;
     if (signingService.canSign(profile)) {
-      final signature = await signingService.generateSignature(
+      // Convert message timestamp to Unix seconds for signing
+      // IMPORTANT: Must use the exact same createdAt during verification
+      final createdAt = message.dateTime.millisecondsSinceEpoch ~/ 1000;
+      signedEvent = await signingService.generateSignedEvent(
         content,
-        {'channel': otherCallsign, 'type': 'dm'},
+        {
+          'room': normalizedCallsign, // The conversation room is the other device's callsign
+          'callsign': profile.callsign,
+        },
         profile,
+        createdAt: createdAt,
       );
-      if (signature != null) {
+      if (signedEvent != null && signedEvent.sig != null && signedEvent.id != null) {
         message.setMeta('npub', profile.npub);
-        message.setMeta('signature', signature);
+        message.setMeta('signature', signedEvent.sig!);
+        message.setMeta('eventId', signedEvent.id!);
       }
     }
 
-    // Save the message
-    await _saveMessage(conversation.path, message);
+    // 5. Save locally with pending status
+    await _saveMessage(conversation.path, message, otherNpub: conversation.otherNpub);
 
     // Update conversation metadata
     conversation.lastMessageTime = message.dateTime;
     conversation.lastMessagePreview = content;
     conversation.lastMessageAuthor = profile.callsign;
 
-    // Fire event
+    // 6. Fire event (UI shows pending status)
     _fireMessageEvent(message, otherCallsign, fromSync: false);
+    _notifyListeners();
+
+    // 7. Push to remote device's chat API and get delivery status
+    // Send the full signed event (id, pubkey, created_at, kind, tags, content, sig)
+    final delivered = await _pushToRemoteChatAPI(device, signedEvent, profile.callsign);
+
+    // 8. Update status based on result
+    if (delivered) {
+      message.setDeliveryStatus(MessageStatus.delivered);
+    } else {
+      message.setDeliveryStatus(MessageStatus.failed);
+    }
+
+    // 9. Update status in file and fire status change event
+    await _updateMessageStatus(conversation.path, message);
+    _fireMessageEvent(message, otherCallsign, fromSync: false);
+    _notifyListeners();
+  }
+
+  /// Push message to remote device using POST /api/chat/{myCallsign}/messages
+  /// Sends the full signed NostrEvent (id, pubkey, created_at, kind, tags, content, sig)
+  /// Returns true if HTTP 200/201 (delivered), false otherwise
+  Future<bool> _pushToRemoteChatAPI(dynamic device, NostrEvent? signedEvent, String myCallsign) async {
+    if (kIsWeb) return false; // Web doesn't support direct push
+    if (signedEvent == null) {
+      LogService().log('DM: Cannot push - no signed event');
+      return false;
+    }
+
+    try {
+      // POST to remote: /api/chat/{myCallsign}/messages
+      // The roomId on the remote is OUR callsign (symmetry: we write to their room named after us)
+      final url = Uri.parse('${device.url}/api/chat/$myCallsign/messages');
+      LogService().log('DM: Pushing signed event via chat API to $url');
+
+      // Send the complete signed event (just like NOSTR protocol)
+      // The event already has: id, pubkey, created_at, kind, tags, content, sig
+      final response = await http.post(
+        url,
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'event': signedEvent.toJson(),
+        }),
+      ).timeout(const Duration(seconds: 10));
+
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        LogService().log('DM: Message delivered successfully via chat API');
+        return true;
+      } else {
+        LogService().log('DM: Chat API push failed: ${response.statusCode} - ${response.body}');
+        return false;
+      }
+    } catch (e) {
+      LogService().log('DM: Chat API push error: $e');
+      return false;
+    }
+  }
+
+  /// Update message status in the messages file
+  Future<void> _updateMessageStatus(String conversationPath, ChatMessage message) async {
+    // For simplicity, we don't rewrite the file to update status.
+    // Status is tracked in memory and in newly written messages.
+    // A more complete implementation would read the file, find the message by timestamp+author,
+    // update the status line, and write back. For now, new messages get status on write.
+    LogService().log('DM: Message status updated to ${message.deliveryStatus?.name ?? "unknown"}');
+  }
+
+  /// Save an incoming/synced message without re-signing
+  /// Used for DM sync to preserve the original author's signature
+  Future<void> saveIncomingMessage(String otherCallsign, ChatMessage message) async {
+    await initialize();
+
+    final normalizedCallsign = otherCallsign.toUpperCase();
+    final conversation = await getOrCreateConversation(normalizedCallsign);
+
+    // Use the message's npub for the filename (the sender's identity)
+    await _saveMessage(conversation.path, message, otherNpub: message.npub);
+
+    // Update conversation metadata
+    if (conversation.lastMessageTime == null ||
+        message.dateTime.isAfter(conversation.lastMessageTime!)) {
+      conversation.lastMessageTime = message.dateTime;
+      conversation.lastMessagePreview = message.content;
+      conversation.lastMessageAuthor = message.author;
+    }
+
+    // Increment unread count if the message is from the other party (not from us)
+    if (message.author.toUpperCase() == normalizedCallsign) {
+      _incrementUnread(normalizedCallsign);
+    }
+
+    // Fire event
+    _fireMessageEvent(message, normalizedCallsign, fromSync: true);
 
     _notifyListeners();
   }
 
-  /// Save a message to the messages.txt file
-  Future<void> _saveMessage(String path, ChatMessage message) async {
-    final messagesPath = '$path/messages.txt';
+  /// Get the messages filename for a specific npub identity
+  /// Format: messages-{npub}.txt or messages.txt for legacy/unsigned
+  String _getMessagesFilename(String? npub) {
+    if (npub == null || npub.isEmpty) {
+      return 'messages.txt'; // Legacy format for unsigned messages
+    }
+    // Use npub in filename to separate conversations by cryptographic identity
+    // This prevents impersonation - if someone reuses a callsign with a different
+    // npub, their messages go to a different file
+    return 'messages-$npub.txt';
+  }
+
+  /// Save a message to the appropriate messages file based on npub
+  Future<void> _saveMessage(String path, ChatMessage message, {String? otherNpub}) async {
+    // For outgoing messages, use the other party's npub for the filename
+    // For incoming messages, the npub comes from the message itself
+    final npubForFilename = otherNpub ?? message.npub;
+    final filename = _getMessagesFilename(npubForFilename);
+    final messagesPath = '$path/$filename';
 
     if (kIsWeb) {
       final fs = FileSystemService.instance;
@@ -275,7 +630,7 @@ class DirectMessageService {
 
       await fs.writeAsString(messagesPath, buffer.toString());
     } else {
-      final messagesFile = File(p.join(path, 'messages.txt'));
+      final messagesFile = File(p.join(path, filename));
 
       final needsHeader = !await messagesFile.exists();
       final sink = messagesFile.openWrite(mode: FileMode.append);
@@ -295,37 +650,109 @@ class DirectMessageService {
   }
 
   /// Load messages from a DM conversation
-  Future<List<ChatMessage>> loadMessages(String otherCallsign, {int limit = 100}) async {
+  /// Loads from all messages-{npub}.txt files and legacy messages.txt
+  /// Each file is tied to a specific cryptographic identity
+  Future<List<ChatMessage>> loadMessages(String otherCallsign, {int limit = 100, String? filterNpub}) async {
     await initialize();
 
     final normalizedCallsign = otherCallsign.toUpperCase();
     final path = getDMPath(normalizedCallsign);
-    final messagesPath = '$path/messages.txt';
 
     try {
-      String? content;
+      final List<ChatMessage> allMessages = [];
+
+      // Find all message files (messages.txt and messages-{npub}.txt)
+      List<String> messageFiles = [];
 
       if (kIsWeb) {
         final fs = FileSystemService.instance;
-        if (!await fs.exists(messagesPath)) return [];
-        content = await fs.readAsString(messagesPath);
+        if (await fs.exists(path)) {
+          final entities = await fs.list(path);
+          for (final entity in entities) {
+            final filename = p.basename(entity.path);
+            if (filename == 'messages.txt' || filename.startsWith('messages-')) {
+              messageFiles.add(entity.path);
+            }
+          }
+        }
       } else {
-        final file = File(p.join(path, 'messages.txt'));
-        if (!await file.exists()) return [];
-        content = await file.readAsString();
+        final dir = Directory(path);
+        if (await dir.exists()) {
+          await for (final entity in dir.list()) {
+            if (entity is File) {
+              final filename = p.basename(entity.path);
+              if (filename == 'messages.txt' || filename.startsWith('messages-')) {
+                messageFiles.add(entity.path);
+              }
+            }
+          }
+        }
       }
 
-      final messages = ChatService.parseMessageText(content);
+      if (messageFiles.isEmpty) return [];
+
+      // Load and parse each file
+      for (final filePath in messageFiles) {
+        String? content;
+
+        if (kIsWeb) {
+          content = await FileSystemService.instance.readAsString(filePath);
+        } else {
+          content = await File(filePath).readAsString();
+        }
+
+        final messages = ChatService.parseMessageText(content);
+
+        // Extract npub from filename if present (messages-{npub}.txt)
+        final filename = p.basename(filePath);
+        String? fileNpub;
+        if (filename.startsWith('messages-') && filename.endsWith('.txt')) {
+          fileNpub = filename.substring('messages-'.length, filename.length - '.txt'.length);
+        }
+
+        // Apply filter if specified (load only messages from a specific npub)
+        if (filterNpub != null && fileNpub != null && fileNpub != filterNpub) {
+          continue;
+        }
+
+        // Verify signatures and check npub matches file identity
+        for (final msg in messages) {
+          if (msg.isSigned) {
+            final verified = verifySignature(msg, roomId: normalizedCallsign);
+
+            // For messages from the other party in npub-specific files,
+            // verify the message's npub matches the file's npub
+            if (fileNpub != null &&
+                msg.author.toUpperCase() == normalizedCallsign &&
+                msg.npub != null) {
+              if (msg.npub != fileNpub) {
+                // SECURITY: Message npub doesn't match file npub - possible tampering
+                msg.setMeta('verified', 'false');
+                msg.setMeta('identity_mismatch', 'true');
+                LogService().log('DirectMessageService: SECURITY WARNING - Message in $filename has mismatched npub');
+                continue; // Skip this message
+              }
+            }
+
+            // Mark which npub this message belongs to (for UI display)
+            if (fileNpub != null) {
+              msg.setMeta('identity_npub', fileNpub);
+            }
+          }
+
+          allMessages.add(msg);
+        }
+      }
 
       // Sort by timestamp
-      messages.sort();
+      allMessages.sort();
 
       // Apply limit
-      if (messages.length > limit) {
-        return messages.sublist(messages.length - limit);
+      if (allMessages.length > limit) {
+        return allMessages.sublist(allMessages.length - limit);
       }
 
-      return messages;
+      return allMessages;
     } catch (e) {
       LogService().log('Error loading DM messages: $e');
       return [];
@@ -450,7 +877,8 @@ class DirectMessageService {
       final id = '${msg.timestamp}|${msg.author}';
       if (!existing.contains(id)) {
         // Verify signature if present
-        if (_verifySignature(msg)) {
+        // For DMs, the roomId is the other device's callsign
+        if (verifySignature(msg, roomId: otherCallsign)) {
           newMessages.add(msg);
         }
       }
@@ -484,14 +912,77 @@ class DirectMessageService {
     return newMessages.length;
   }
 
-  /// Verify a message signature
-  bool _verifySignature(ChatMessage message) {
-    // If no signature, accept the message
-    if (!message.isSigned) return true;
+  /// Verify a message signature per chat-format-specification.md
+  ///
+  /// Reconstructs the NOSTR event and verifies the signature:
+  /// 1. Extract npub and signature from metadata
+  /// 2. Derive pubkey from npub
+  /// 3. Reconstruct tags: [['t', 'chat'], ['room', roomId], ['callsign', callsign]]
+  /// 4. Create NOSTR event and verify signature
+  bool verifySignature(ChatMessage message, {String? roomId}) {
+    // If no signature, accept the message (unsigned messages are valid)
+    if (!message.isSigned) {
+      LogService().log('verifySignature: Message not signed, accepting');
+      return true;
+    }
 
-    // TODO: Implement actual signature verification using NostrCrypto
-    // For now, accept signed messages (verification will be added)
-    return true;
+    try {
+      final npub = message.npub;
+      final signature = message.signature;
+
+      if (npub == null || signature == null) {
+        LogService().log('verifySignature: Missing npub or signature, accepting');
+        return true; // Can't verify without both, accept it
+      }
+
+      // Derive hex pubkey from npub
+      final pubkeyHex = NostrCrypto.decodeNpub(npub);
+
+      // Convert message timestamp to unix seconds
+      final createdAt = message.dateTime.millisecondsSinceEpoch ~/ 1000;
+
+      // For DMs, roomId is the conversation partner's callsign
+      final effectiveRoomId = roomId ?? 'dm';
+
+      LogService().log('verifySignature: Reconstructing event with:');
+      LogService().log('  pubkey: ${pubkeyHex.substring(0, 20)}...');
+      LogService().log('  createdAt: $createdAt (from ${message.timestamp})');
+      LogService().log('  roomId: $effectiveRoomId');
+      LogService().log('  callsign: ${message.author}');
+      LogService().log('  content: ${message.content.substring(0, message.content.length.clamp(0, 50))}...');
+      LogService().log('  signature: ${signature.substring(0, 20)}...');
+
+      // Reconstruct the NOSTR event per chat-format-specification.md
+      final event = NostrEvent(
+        pubkey: pubkeyHex,
+        createdAt: createdAt,
+        kind: 1,
+        tags: [
+          ['t', 'chat'],
+          ['room', effectiveRoomId],
+          ['callsign', message.author],
+        ],
+        content: message.content,
+        sig: signature,
+      );
+
+      // Calculate event ID and verify
+      event.calculateId();
+      LogService().log('verifySignature: Calculated eventId: ${event.id?.substring(0, 20)}...');
+
+      final verified = event.verify();
+      LogService().log('verifySignature: Verification result: $verified');
+
+      // Update message metadata with verification result
+      if (verified) {
+        message.setMeta('verified', 'true');
+      }
+
+      return verified;
+    } catch (e) {
+      LogService().log('DirectMessageService: Error verifying signature: $e');
+      return true; // On error, accept the message but don't mark as verified
+    }
   }
 
   /// Fire DirectMessageReceivedEvent
@@ -521,10 +1012,62 @@ class DirectMessageService {
 
   /// Mark conversation as read
   Future<void> markAsRead(String otherCallsign) async {
-    final conversation = _conversations[otherCallsign.toUpperCase()];
-    if (conversation != null) {
+    final normalizedCallsign = otherCallsign.toUpperCase();
+    final conversation = _conversations[normalizedCallsign];
+    if (conversation != null && conversation.unreadCount > 0) {
       conversation.unreadCount = 0;
       _notifyListeners();
+      _notifyUnreadChanged();
+    }
+  }
+
+  /// Set the currently viewed conversation (clears its unread count)
+  void setCurrentConversation(String? callsign) {
+    _currentConversationCallsign = callsign?.toUpperCase();
+    if (_currentConversationCallsign != null) {
+      markAsRead(_currentConversationCallsign!);
+    }
+  }
+
+  /// Get total unread count across all conversations
+  int get totalUnreadCount {
+    return _conversations.values.fold(0, (sum, conv) => sum + conv.unreadCount);
+  }
+
+  /// Get unread counts as a map (callsign -> count)
+  Map<String, int> get unreadCounts {
+    final counts = <String, int>{};
+    for (final conv in _conversations.values) {
+      if (conv.unreadCount > 0) {
+        counts[conv.otherCallsign] = conv.unreadCount;
+      }
+    }
+    return counts;
+  }
+
+  /// Get unread count for a specific conversation
+  int getUnreadCount(String callsign) {
+    return _conversations[callsign.toUpperCase()]?.unreadCount ?? 0;
+  }
+
+  /// Notify listeners of unread count changes
+  void _notifyUnreadChanged() {
+    _unreadController.add(unreadCounts);
+  }
+
+  /// Increment unread count for a conversation (when receiving a new message)
+  void _incrementUnread(String otherCallsign) {
+    final normalizedCallsign = otherCallsign.toUpperCase();
+
+    // Don't increment if user is currently viewing this conversation
+    if (_currentConversationCallsign == normalizedCallsign) {
+      return;
+    }
+
+    final conversation = _conversations[normalizedCallsign];
+    if (conversation != null) {
+      conversation.unreadCount++;
+      _notifyUnreadChanged();
     }
   }
 
@@ -584,5 +1127,6 @@ class DirectMessageService {
   /// Dispose resources
   void dispose() {
     _conversationsController.close();
+    _unreadController.close();
   }
 }

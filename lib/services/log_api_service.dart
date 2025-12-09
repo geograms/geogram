@@ -963,7 +963,9 @@ class LogApiService {
   }
 
   /// Check if npub can access a chat room
-  Future<bool> _canAccessChatRoom(String roomId, String? npub) async {
+  /// For DM channels (type: direct), also accepts a callsign parameter to allow access
+  /// based on callsign matching the room participants
+  Future<bool> _canAccessChatRoom(String roomId, String? npub, {String? callsign}) async {
     final chatService = ChatService();
     final channel = chatService.getChannel(roomId);
     if (channel == null) {
@@ -979,14 +981,14 @@ class LogApiService {
       return true;
     }
 
-    // Non-public rooms require authentication
-    if (npub == null) {
+    // Non-public rooms require authentication (npub or callsign for DMs)
+    if (npub == null && callsign == null) {
       return false;
     }
 
     // Admin can access everything
     final security = chatService.security;
-    if (security.isAdmin(npub)) {
+    if (npub != null && security.isAdmin(npub)) {
       return true;
     }
 
@@ -995,12 +997,26 @@ class LogApiService {
       return true;
     }
 
-    // Check if user's callsign is in participants
-    // We need to map npub -> callsign through participants list
-    final participants = chatService.participants;
-    for (final entry in participants.entries) {
-      if (entry.value == npub && channel.participants.contains(entry.key)) {
+    // For DM channels (type: direct), allow access if callsign is in participants
+    // This allows the sender (roomId = their callsign) to post to the DM channel
+    if (channel.isDirect && callsign != null) {
+      if (channel.participants.any((p) => p.toUpperCase() == callsign.toUpperCase())) {
         return true;
+      }
+      // Also allow if the callsign matches the roomId (sender is writing to recipient's DM room)
+      if (roomId.toUpperCase() == callsign.toUpperCase()) {
+        return true;
+      }
+    }
+
+    // Check if user's callsign is in participants via npub mapping
+    // We need to map npub -> callsign through participants list
+    if (npub != null) {
+      final participants = chatService.participants;
+      for (final entry in participants.entries) {
+        if (entry.value == npub && channel.participants.contains(entry.key)) {
+          return true;
+        }
       }
     }
 
@@ -1089,7 +1105,50 @@ class LogApiService {
     Map<String, String> headers,
   ) async {
     try {
-      // Try to lazily initialize ChatService if not already done
+      // Check if roomId looks like a callsign (uppercase alphanumeric)
+      // If so, this is a DM channel - use DirectMessageService
+      final isCallsignLike = RegExp(r'^[A-Z0-9]{3,}$').hasMatch(roomId.toUpperCase());
+
+      if (isCallsignLike) {
+        // This is a DM request - use DirectMessageService
+        final dmService = DirectMessageService();
+        await dmService.initialize();
+
+        // Parse query parameters
+        final queryParams = request.url.queryParameters;
+        final limitParam = queryParams['limit'];
+        int limit = 50;
+        if (limitParam != null) {
+          limit = int.tryParse(limitParam) ?? 50;
+          limit = limit.clamp(1, 500);
+        }
+
+        final messages = await dmService.loadMessages(roomId.toUpperCase(), limit: limit);
+
+        final messageList = messages.map((msg) {
+          return {
+            'author': msg.author,
+            'timestamp': msg.timestamp,
+            'content': msg.content,
+            'npub': msg.npub,
+            'signature': msg.signature,
+            'verified': msg.isVerified,
+          };
+        }).toList();
+
+        return shelf.Response.ok(
+          jsonEncode({
+            'roomId': roomId.toUpperCase(),
+            'messages': messageList,
+            'count': messageList.length,
+            'hasMore': false,
+            'limit': limit,
+          }),
+          headers: headers,
+        );
+      }
+
+      // Regular chat room - use ChatService
       await _initializeChatServiceIfNeeded();
 
       final chatService = ChatService();
@@ -1194,7 +1253,16 @@ class LogApiService {
     Map<String, String> headers,
   ) async {
     try {
-      // Try to lazily initialize ChatService if not already done
+      // Check if roomId looks like a callsign (uppercase alphanumeric)
+      // If so, this is a DM channel - route through DirectMessageService
+      final isCallsignLike = RegExp(r'^[A-Z0-9]{3,}$').hasMatch(roomId.toUpperCase());
+
+      if (isCallsignLike) {
+        // This is a DM request - handle via DirectMessageService
+        return await _handleDMViaChatAPI(request, roomId.toUpperCase(), headers);
+      }
+
+      // Regular chat room - use ChatService
       await _initializeChatServiceIfNeeded();
 
       final chatService = ChatService();
@@ -1282,8 +1350,11 @@ class LogApiService {
           );
         }
 
+        // Use callsign from tag or derive from npub
+        author = event.getTagValue('callsign') ?? event.callsign;
+
         // Check access for the event author
-        final canAccess = await _canAccessChatRoom(roomId, event.npub);
+        final canAccess = await _canAccessChatRoom(roomId, event.npub, callsign: author);
         if (!canAccess) {
           return shelf.Response.forbidden(
             jsonEncode({
@@ -1293,9 +1364,6 @@ class LogApiService {
             headers: headers,
           );
         }
-
-        // Use callsign from tag or derive from npub
-        author = event.getTagValue('callsign') ?? event.callsign;
         content = event.content;
         npub = event.npub;
         signature = event.sig;
@@ -1366,6 +1434,144 @@ class LogApiService {
       );
     } catch (e) {
       LogService().log('LogApiService: Error posting chat message: $e');
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'error': e.toString()}),
+        headers: headers,
+      );
+    }
+  }
+
+  /// Handle DM messages via /api/chat/{callsign}/messages
+  /// This routes callsign-like roomIds through DirectMessageService
+  /// which stores messages at chat/{callsign}/ instead of the main chat collection
+  Future<shelf.Response> _handleDMViaChatAPI(
+    shelf.Request request,
+    String senderCallsign,
+    Map<String, String> headers,
+  ) async {
+    try {
+      LogService().log('LogApiService: Handling DM via Chat API for sender: $senderCallsign');
+
+      // Parse request body
+      final bodyStr = await request.readAsString();
+      if (bodyStr.isEmpty) {
+        return shelf.Response.badRequest(
+          body: jsonEncode({'error': 'Missing request body'}),
+          headers: headers,
+        );
+      }
+
+      final body = jsonDecode(bodyStr) as Map<String, dynamic>;
+
+      String author;
+      String content;
+      String? npub;
+      String? signature;
+      String? eventId;
+
+      if (body.containsKey('event')) {
+        // NOSTR-signed message from external user
+        final eventData = body['event'] as Map<String, dynamic>;
+        final event = NostrEvent.fromJson(eventData);
+
+        // Verify the event signature
+        if (!event.verify()) {
+          return shelf.Response.forbidden(
+            jsonEncode({
+              'error': 'Invalid event signature',
+              'code': 'INVALID_SIGNATURE',
+            }),
+            headers: headers,
+          );
+        }
+
+        // Validate event kind (must be kind 1 = text note)
+        if (event.kind != NostrEventKind.textNote) {
+          return shelf.Response.badRequest(
+            body: jsonEncode({
+              'error': 'Invalid event kind',
+              'expected': NostrEventKind.textNote,
+              'received': event.kind,
+            }),
+            headers: headers,
+          );
+        }
+
+        // Use callsign from tag or derive from npub
+        author = event.getTagValue('callsign') ?? event.callsign;
+
+        // Verify the sender matches the roomId (the roomId IS the sender's callsign for DMs)
+        if (author.toUpperCase() != senderCallsign) {
+          return shelf.Response.forbidden(
+            jsonEncode({
+              'error': 'Sender callsign mismatch',
+              'expected': senderCallsign,
+              'received': author,
+              'code': 'SENDER_MISMATCH',
+            }),
+            headers: headers,
+          );
+        }
+
+        content = event.content;
+        npub = event.npub;
+        signature = event.sig;
+        eventId = event.id;
+
+      } else if (body.containsKey('content')) {
+        // Simple message - use device's profile
+        content = body['content'] as String;
+        try {
+          final profile = ProfileService().getProfile();
+          author = profile.callsign;
+          npub = profile.npub;
+        } catch (e) {
+          return shelf.Response.internalServerError(
+            body: jsonEncode({'error': 'Profile not initialized'}),
+            headers: headers,
+          );
+        }
+      } else {
+        return shelf.Response.badRequest(
+          body: jsonEncode({
+            'error': 'Missing content or event field',
+            'hint': 'Provide either "content" for device message or "event" for NOSTR-signed message',
+          }),
+          headers: headers,
+        );
+      }
+
+      // Create message with metadata
+      final metadata = <String, String>{};
+      if (npub != null) metadata['npub'] = npub;
+      if (signature != null) metadata['signature'] = signature;
+      if (eventId != null) metadata['event_id'] = eventId;
+
+      final message = ChatMessage.now(
+        author: author,
+        content: content,
+        metadata: metadata,
+      );
+
+      // Use DirectMessageService to save the incoming DM
+      // The senderCallsign is the "other" party in the DM conversation
+      final dmService = DirectMessageService();
+      await dmService.initialize();
+      await dmService.saveIncomingMessage(senderCallsign, message);
+
+      LogService().log('LogApiService: DM saved from $author to chat/$senderCallsign/');
+
+      return shelf.Response.ok(
+        jsonEncode({
+          'success': true,
+          'timestamp': message.timestamp,
+          'author': author,
+          'eventId': eventId,
+        }),
+        headers: headers,
+      );
+    } catch (e) {
+      LogService().log('LogApiService: Error handling DM via Chat API: $e');
       return shelf.Response.internalServerError(
         body: jsonEncode({'error': e.toString()}),
         headers: headers,
@@ -1669,6 +1875,11 @@ class LogApiService {
   }
 
   /// Handle POST /api/dm/sync/{callsign} - receive synced messages
+  ///
+  /// Security: Only accepts messages that are:
+  /// 1. From targetCallsign (messages they sent to us)
+  /// 2. From ourselves (our messages they're returning to us)
+  /// 3. Have valid NOSTR signatures
   Future<shelf.Response> _handleDMSyncPostRequest(
     shelf.Request request,
     String targetCallsign,
@@ -1677,6 +1888,17 @@ class LogApiService {
     try {
       final dmService = DirectMessageService();
       await dmService.initialize();
+
+      // Get our callsign for validation
+      String myCallsign = '';
+      try {
+        myCallsign = ProfileService().getProfile().callsign.toUpperCase();
+      } catch (e) {
+        return shelf.Response.internalServerError(
+          body: jsonEncode({'error': 'Profile not available'}),
+          headers: headers,
+        );
+      }
 
       final bodyStr = await request.readAsString();
       final body = jsonDecode(bodyStr) as Map<String, dynamic>;
@@ -1693,27 +1915,68 @@ class LogApiService {
 
       // Merge messages (deduplication based on timestamp + author)
       int accepted = 0;
+      int rejected = 0;
+      LogService().log('DM sync: Processing ${incomingMessages.length} messages from $targetCallsign (myCallsign=$myCallsign)');
       if (incomingMessages.isNotEmpty) {
         final local = await dmService.loadMessages(targetCallsign, limit: 99999);
         final existing = <String>{};
         for (final msg in local) {
           existing.add('${msg.timestamp}|${msg.author}');
         }
+        LogService().log('DM sync: Have ${existing.length} existing messages');
 
         for (final msg in incomingMessages) {
+          LogService().log('DM sync: Processing message from ${msg.author} at ${msg.timestamp}');
+          LogService().log('DM sync: isSigned=${msg.isSigned}, npub=${msg.npub}, signature=${msg.signature?.substring(0, 20) ?? "null"}...');
+
+          // Security check: message author must be either:
+          // - targetCallsign (messages FROM them)
+          // - our callsign (our messages being returned)
+          final authorUpper = msg.author.toUpperCase();
+          if (authorUpper != targetCallsign.toUpperCase() && authorUpper != myCallsign) {
+            LogService().log('DM sync rejected: invalid author ${msg.author} (expected $targetCallsign or $myCallsign)');
+            rejected++;
+            continue;
+          }
+          LogService().log('DM sync: Author check passed (author=$authorUpper, target=${targetCallsign.toUpperCase()}, my=$myCallsign)');
+
+          // Security check: message must have valid signature if signed
+          // Note: Unsigned messages are accepted (signature is optional)
+          // For signed messages, verify cryptographically using NOSTR NIP-01
+          if (msg.isSigned) {
+            // For DM signature verification, the roomId must be the receiver's callsign (myCallsign)
+            // because when the sender signed the message, they used the recipient's callsign as the room
+            // (a DM conversation is identified by the "other" party's callsign)
+            LogService().log('DM sync: Verifying signature for ${msg.author} with roomId=$myCallsign...');
+            final verified = dmService.verifySignature(msg, roomId: myCallsign);
+            LogService().log('DM sync: Signature verification result: $verified');
+            if (!verified) {
+              LogService().log('DM sync rejected: invalid signature from ${msg.author}');
+              rejected++;
+              continue;
+            }
+          } else {
+            LogService().log('DM sync: Message is not signed, skipping verification');
+          }
+
           final id = '${msg.timestamp}|${msg.author}';
           if (!existing.contains(id)) {
-            // Save message directly (don't use sendMessage which would re-sign)
-            await dmService.sendMessage(targetCallsign, msg.content);
+            // Save message directly preserving original author signature
+            LogService().log('DM sync: Saving new message $id');
+            await dmService.saveIncomingMessage(targetCallsign, msg);
             accepted++;
+          } else {
+            LogService().log('DM sync: Message $id already exists, skipping');
           }
         }
       }
+      LogService().log('DM sync complete: accepted=$accepted, rejected=$rejected');
 
       return shelf.Response.ok(
         jsonEncode({
           'success': true,
           'accepted': accepted,
+          'rejected': rejected,
           'timestamp': DateTime.now().toIso8601String(),
         }),
         headers: headers,

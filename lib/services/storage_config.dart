@@ -52,6 +52,9 @@ class StorageConfig {
   /// Get the devices directory path
   String get devicesDir => path.join(baseDir, 'devices');
 
+  /// Get the chat directory path (for DM conversations as restricted chat rooms)
+  String get chatDir => path.join(baseDir, 'chat');
+
   /// Get the tiles cache directory path
   String get tilesDir => path.join(baseDir, 'tiles');
 
@@ -174,6 +177,7 @@ class StorageConfig {
     final directories = [
       base,
       path.join(base, 'devices'),
+      path.join(base, 'chat'),
       path.join(base, 'tiles'),
       path.join(base, 'ssl'),
       path.join(base, 'logs'),

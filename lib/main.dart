@@ -372,6 +372,14 @@ class _HomePageState extends State<HomePage> {
         if (mounted) {
           await _createDefaultCollections();
           if (mounted) {
+            // Check if --skip-intro flag was passed (useful for automated testing)
+            if (AppArgs().skipIntro) {
+              // Mark first launch as complete and skip all intro screens
+              ConfigService().set('firstLaunchComplete', true);
+              LogService().log('Skipping intro screens (--skip-intro flag)');
+              return;
+            }
+
             // On Android, show full onboarding with permissions
             // On other platforms, show simple welcome dialog
             if (!kIsWeb && Platform.isAndroid) {
