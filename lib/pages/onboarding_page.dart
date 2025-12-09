@@ -1,10 +1,12 @@
 import 'dart:io' show Platform;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:geolocator/geolocator.dart';
 
+import '../services/ble_permission_service.dart';
+import '../services/devices_service.dart';
 import '../services/i18n_service.dart';
+import '../services/log_service.dart';
 
 /// Onboarding page for Android that introduces Geogram and requests permissions
 class OnboardingPage extends StatefulWidget {
@@ -41,19 +43,20 @@ class _OnboardingPageState extends State<OnboardingPage> {
     }
 
     // Request Bluetooth permissions (Android only)
+    // This includes BLUETOOTH_SCAN, BLUETOOTH_CONNECT, BLUETOOTH_ADVERTISE, and battery optimization
     try {
       if (!kIsWeb && Platform.isAndroid) {
-        // Check if Bluetooth is supported
-        if (await FlutterBluePlus.isSupported) {
-          // Try to turn on Bluetooth (will request BLUETOOTH_CONNECT permission)
-          await FlutterBluePlus.turnOn();
+        LogService().log('Onboarding: Requesting BLE permissions...');
+        final granted = await BLEPermissionService().requestAllPermissions();
+        LogService().log('Onboarding: BLE permissions granted: $granted');
 
-          // Start a brief scan to trigger BLUETOOTH_SCAN permission dialog
-          await FlutterBluePlus.startScan(timeout: const Duration(seconds: 1));
-          await FlutterBluePlus.stopScan();
-        }
+        // Initialize BLE now that permissions are granted
+        LogService().log('Onboarding: Initializing BLE after permissions...');
+        await DevicesService().initializeBLEAfterOnboarding();
+        LogService().log('Onboarding: BLE initialized');
       }
     } catch (e) {
+      LogService().log('Onboarding: Error during BLE setup: $e');
       // Continue even if Bluetooth permission request fails
     }
 
@@ -156,6 +159,15 @@ class _OnboardingPageState extends State<OnboardingPage> {
                 _i18n.t('onboarding_permission_bluetooth'),
                 _i18n.t('onboarding_permission_bluetooth_short'),
               ),
+
+              // Battery optimization exemption (Android only)
+              if (!kIsWeb && Platform.isAndroid)
+                _buildPermissionItem(
+                  theme,
+                  Icons.battery_saver,
+                  'Battery Optimization',
+                  'Run in background for device discovery',
+                ),
 
               // Install permission
               _buildPermissionItem(

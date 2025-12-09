@@ -8,6 +8,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:window_manager/window_manager.dart' if (dart.library.html) 'platform/window_manager_stub.dart';
 import 'services/log_service.dart';
 import 'services/log_api_service.dart';
+import 'services/debug_controller.dart';
 import 'services/config_service.dart';
 import 'services/collection_service.dart';
 import 'services/profile_service.dart';
@@ -17,8 +18,11 @@ import 'services/notification_service.dart';
 import 'services/i18n_service.dart';
 import 'services/chat_notification_service.dart';
 import 'services/update_service.dart';
+import 'services/devices_service.dart';
+import 'services/ble_permission_service.dart';
 import 'services/storage_config.dart';
 import 'services/web_theme_service.dart';
+import 'services/app_args.dart';
 import 'cli/pure_storage_config.dart';
 import 'models/collection.dart';
 import 'util/file_icon_helper.dart';
@@ -51,7 +55,7 @@ import 'cli/console.dart';
 void main() async {
   print('MAIN: Starting Geogram (kIsWeb: $kIsWeb)'); // Debug
 
-  // Check for CLI mode before Flutter initialization
+  // Parse command line arguments early (before any other initialization)
   if (!kIsWeb) {
     final args = Platform.executableArguments;
     // Also check the script arguments (everything after --)
@@ -69,7 +73,28 @@ void main() async {
     // Combine all possible argument sources
     final allArgs = [...args, ...scriptArgs];
 
-    if (allArgs.contains('-cli') || allArgs.contains('--cli')) {
+    // Parse arguments into AppArgs singleton
+    AppArgs().parse(allArgs);
+
+    // Handle --help flag
+    if (AppArgs().showHelp) {
+      print(AppArgs.getHelpText());
+      exit(0);
+    }
+
+    // Handle --version flag
+    if (AppArgs().showVersion) {
+      print('Geogram Desktop v1.0.0'); // TODO: Use version.dart
+      exit(0);
+    }
+
+    // Log parsed arguments
+    if (AppArgs().verbose) {
+      print('MAIN: Parsed arguments: ${AppArgs().toMap()}');
+    }
+
+    // Check for CLI mode
+    if (AppArgs().cliMode) {
       // Run CLI mode without Flutter
       await runCliMode(allArgs);
       return;
@@ -107,12 +132,18 @@ void main() async {
   await LogService().init();
   LogService().log('Geogram Desktop starting...');
 
+  // Log command line configuration
+  if (!kIsWeb && AppArgs().isInitialized) {
+    LogService().log('CLI args: port=${AppArgs().port}, dataDir=${AppArgs().dataDir ?? "default"}');
+  }
+
   try {
     // PHASE 1: Critical services (must complete before UI)
     // These are fast and required for the app to function
 
     // Initialize storage configuration first (all other services depend on it)
-    await StorageConfig().init();
+    // Use custom data directory from CLI args if specified
+    await StorageConfig().init(customBaseDir: AppArgs().dataDir);
     LogService().log('StorageConfig initialized: ${StorageConfig().baseDir}');
 
     // Also initialize PureStorageConfig with same base directory
@@ -180,6 +211,29 @@ void main() async {
       // Start peer discovery API service (port 3456 for local device discovery)
       await LogApiService().start();
       LogService().log('Peer discovery API started on port 3456 (deferred)');
+
+      // Check if first launch is complete (user has seen onboarding screen)
+      final firstLaunchComplete = ConfigService().getNestedValue('firstLaunchComplete', false) as bool;
+
+      // For first-time users on Android, skip BLE initialization here
+      // The onboarding screen will request permissions and then reinitialize BLE
+      if (!kIsWeb && Platform.isAndroid && !firstLaunchComplete) {
+        LogService().log('DevicesService: Skipping BLE init for first launch - onboarding will handle permissions');
+        // Initialize DevicesService but skip BLE on first launch
+        await DevicesService().initialize(skipBLE: true);
+        LogService().log('DevicesService initialized (deferred, BLE skipped for onboarding)');
+      } else {
+        // For returning users on Android, request any missing permissions first
+        if (!kIsWeb && Platform.isAndroid && firstLaunchComplete) {
+          LogService().log('Requesting BLE permissions on Android (returning user)...');
+          final granted = await BLEPermissionService().requestAllPermissions();
+          LogService().log('BLE permissions request completed: granted=$granted');
+        }
+
+        // Initialize DevicesService with BLE for all platforms / returning users
+        await DevicesService().initialize();
+        LogService().log('DevicesService initialized (deferred)');
+      }
     } catch (e, stackTrace) {
       LogService().log('ERROR during deferred initialization: $e');
       LogService().log('Stack trace: $stackTrace');
@@ -227,6 +281,7 @@ class _HomePageState extends State<HomePage> {
   int _selectedIndex = 0;
   final I18nService _i18n = I18nService();
   final ProfileService _profileService = ProfileService();
+  final DebugController _debugController = DebugController();
 
   static const List<Widget> _pages = [
     CollectionsPage(),
@@ -245,9 +300,53 @@ class _HomePageState extends State<HomePage> {
     _profileService.profileNotifier.addListener(_onProfileChanged);
     // Listen for update availability notifications
     UpdateService().updateAvailable.addListener(_onUpdateAvailable);
+    // Listen for debug navigation requests
+    _debugController.panelNotifier.addListener(_onDebugNavigate);
+    // Listen for debug toast requests
+    _debugController.toastNotifier.addListener(_onDebugToast);
 
     // Check for first launch and show profile setup
     _checkFirstLaunch();
+  }
+
+  @override
+  void dispose() {
+    _i18n.languageNotifier.removeListener(_onLanguageChanged);
+    _profileService.profileNotifier.removeListener(_onProfileChanged);
+    UpdateService().updateAvailable.removeListener(_onUpdateAvailable);
+    _debugController.panelNotifier.removeListener(_onDebugNavigate);
+    _debugController.toastNotifier.removeListener(_onDebugToast);
+    super.dispose();
+  }
+
+  /// Handle debug API navigation requests
+  void _onDebugNavigate() {
+    final panelIndex = _debugController.panelNotifier.value;
+    if (panelIndex != null && panelIndex >= 0 && panelIndex < _pages.length) {
+      setState(() {
+        _selectedIndex = panelIndex;
+      });
+      // Reset the notifier to allow repeated navigations to same panel
+      _debugController.panelNotifier.value = null;
+      LogService().log('Debug: Navigated to panel $panelIndex');
+    }
+  }
+
+  /// Handle debug API toast requests
+  void _onDebugToast() {
+    final toast = _debugController.toastNotifier.value;
+    if (toast != null && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(toast.message),
+          duration: toast.duration,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      // Reset the notifier to allow repeated toasts
+      _debugController.toastNotifier.value = null;
+      LogService().log('Debug: Toast shown: ${toast.message}');
+    }
   }
 
   /// Check if this is the first launch and show welcome dialog or onboarding
@@ -384,7 +483,7 @@ class _HomePageState extends State<HomePage> {
                   onPressed: () {
                     Navigator.pop(context);
                   },
-                  child: Text(_i18n.t('later')),
+                  child: Text(_i18n.t('onboarding_continue')),
                 ),
               ],
             ),
@@ -392,14 +491,6 @@ class _HomePageState extends State<HomePage> {
         },
       ),
     );
-  }
-
-  @override
-  void dispose() {
-    _i18n.languageNotifier.removeListener(_onLanguageChanged);
-    _profileService.profileNotifier.removeListener(_onProfileChanged);
-    UpdateService().updateAvailable.removeListener(_onUpdateAvailable);
-    super.dispose();
   }
 
   void _onLanguageChanged() {
@@ -422,6 +513,12 @@ class _HomePageState extends State<HomePage> {
 
     // Don't show banner if UpdatePage is currently visible
     if (updateService.isUpdatePageVisible) {
+      return;
+    }
+
+    // Don't show banner during onboarding - let user complete initial setup first
+    final firstLaunchComplete = ConfigService().getNestedValue('firstLaunchComplete', false) as bool;
+    if (!firstLaunchComplete) {
       return;
     }
 

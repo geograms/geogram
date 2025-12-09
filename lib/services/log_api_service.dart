@@ -7,6 +7,8 @@ import 'package:shelf/shelf.dart' as shelf;
 import 'package:shelf/shelf_io.dart' as shelf_io;
 import 'log_service.dart';
 import 'profile_service.dart';
+import 'debug_controller.dart';
+import 'app_args.dart';
 import '../version.dart';
 
 class LogApiService {
@@ -16,7 +18,9 @@ class LogApiService {
 
   // Use dynamic to avoid type conflicts between stub and real dart:io
   dynamic _server;
-  final int port = 3456; // Standard geogram peer discovery port
+
+  /// Get the configured port from AppArgs (defaults to 3456)
+  int get port => AppArgs().port;
 
   Future<void> start() async {
     // HTTP server not supported on web
@@ -88,6 +92,15 @@ class LogApiService {
       return _handleFileContentRequest(request, headers);
     }
 
+    // Debug API endpoint
+    if (request.url.path == 'api/debug') {
+      if (request.method == 'GET') {
+        return _handleDebugGetRequest(headers);
+      } else if (request.method == 'POST') {
+        return await _handleDebugPostRequest(request, headers);
+      }
+    }
+
     if (request.url.path == '' || request.url.path == '/' && request.method == 'GET') {
       // Get callsign from profile service
       String callsign = '';
@@ -109,6 +122,7 @@ class LogApiService {
             '/log': 'Get log entries (supports ?filter=text&limit=100)',
             '/files': 'Browse collections (supports ?path=subfolder)',
             '/files/content': 'Get file content (supports ?path=file/path)',
+            '/api/debug': 'Debug API - GET for status, POST to trigger actions',
           },
         }),
         headers: headers,
@@ -611,6 +625,108 @@ class LogApiService {
       LogService().log('LogApiService: Error reading file content: $e');
       return shelf.Response.internalServerError(
         body: jsonEncode({'error': e.toString()}),
+        headers: headers,
+      );
+    }
+  }
+
+  /// Handle GET /api/debug - Returns available actions and status
+  shelf.Response _handleDebugGetRequest(Map<String, String> headers) {
+    final debugController = DebugController();
+    final recentActions = debugController.actionHistory
+        .reversed
+        .take(10)
+        .map((e) => {
+              'action': e.action.name,
+              'params': e.params,
+              'timestamp': e.timestamp.toIso8601String(),
+            })
+        .toList();
+
+    String callsign = '';
+    try {
+      final profile = ProfileService().getProfile();
+      callsign = profile.callsign;
+    } catch (e) {
+      // Profile service not initialized
+    }
+
+    return shelf.Response.ok(
+      jsonEncode({
+        'service': 'Geogram Debug API',
+        'version': appVersion,
+        'callsign': callsign,
+        'available_actions': DebugController.getAvailableActions(),
+        'recent_actions': recentActions,
+        'panels': {
+          'collections': 0,
+          'maps': 1,
+          'devices': 2,
+          'settings': 3,
+          'logs': 4,
+        },
+        'usage': {
+          'navigate': 'POST /api/debug with {"action": "navigate", "panel": "devices"}',
+          'ble_scan': 'POST /api/debug with {"action": "ble_scan"}',
+          'refresh': 'POST /api/debug with {"action": "refresh_devices"}',
+        },
+      }),
+      headers: headers,
+    );
+  }
+
+  /// Handle POST /api/debug - Execute a debug action
+  Future<shelf.Response> _handleDebugPostRequest(
+    shelf.Request request,
+    Map<String, String> headers,
+  ) async {
+    try {
+      final body = await request.readAsString();
+      if (body.isEmpty) {
+        return shelf.Response.badRequest(
+          body: jsonEncode({
+            'error': 'Missing request body',
+            'usage': 'POST with JSON body: {"action": "navigate", "panel": "devices"}',
+          }),
+          headers: headers,
+        );
+      }
+
+      final data = jsonDecode(body) as Map<String, dynamic>;
+      final action = data['action'] as String?;
+
+      if (action == null) {
+        return shelf.Response.badRequest(
+          body: jsonEncode({
+            'error': 'Missing action field',
+            'available_actions':
+                DebugController.getAvailableActions().map((a) => a['action']).toList(),
+          }),
+          headers: headers,
+        );
+      }
+
+      // Remove action from params and pass the rest
+      final params = Map<String, dynamic>.from(data)..remove('action');
+
+      final debugController = DebugController();
+      final result = debugController.executeAction(action, params);
+
+      LogService().log('LogApiService: Debug action executed: $action -> $result');
+
+      final statusCode = result['success'] == true ? 200 : 400;
+      return shelf.Response(
+        statusCode,
+        body: jsonEncode(result),
+        headers: headers,
+      );
+    } catch (e) {
+      LogService().log('LogApiService: Error handling debug request: $e');
+      return shelf.Response.badRequest(
+        body: jsonEncode({
+          'error': 'Invalid JSON body',
+          'details': e.toString(),
+        }),
         headers: headers,
       );
     }

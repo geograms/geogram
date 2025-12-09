@@ -14,6 +14,8 @@ This document describes the HTTP API endpoints available on Geogram radio statio
   - [Chat](#chat)
   - [Direct Messages](#direct-messages)
   - [Blog](#blog)
+  - [Logs](#logs)
+  - [Debug API](#debug-api)
 - [WebSocket Connection](#websocket-connection)
 - [Station Configuration](#station-configuration)
 
@@ -354,6 +356,215 @@ Serves a user's blog post as HTML.
 **Example:**
 ```bash
 curl http://192.168.1.100:8080/alice/blog/my-first-post.html
+```
+
+---
+
+### Logs
+
+#### GET /log
+
+Returns application logs with optional filtering and pagination.
+
+**Base URL:** `http://localhost:3456/log`
+
+**Query Parameters:**
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `filter` | string | (none) | Filter logs containing this text (case-insensitive) |
+| `limit` | int | 100 | Maximum number of log entries to return |
+
+**Response (200 OK):**
+```json
+{
+  "filter": "BLE",
+  "limit": 20,
+  "count": 15,
+  "logs": [
+    "[2024-12-08 10:00:00] BLEDiscovery: Started scanning...",
+    "[2024-12-08 10:00:01] BLEDiscovery: Found device X164GH",
+    "[2024-12-08 10:00:02] BLEDiscovery: Connected to device"
+  ]
+}
+```
+
+**Example Usage:**
+```bash
+# Get last 100 logs
+curl http://localhost:3456/log
+
+# Filter logs containing "BLE"
+curl "http://localhost:3456/log?filter=BLE&limit=50"
+
+# Get service-related logs
+curl "http://localhost:3456/log?filter=Service&limit=20"
+```
+
+---
+
+### Debug API
+
+The Debug API allows triggering actions in the Geogram desktop client remotely. This is useful for automation, testing, and integration with external tools.
+
+**Base URL:** `http://localhost:3456/api/debug`
+
+#### GET /api/debug
+
+Returns available debug actions and recent action history.
+
+**Response (200 OK):**
+```json
+{
+  "service": "Geogram Debug API",
+  "version": "1.5.47",
+  "callsign": "USER-123",
+  "available_actions": [
+    {
+      "action": "navigate",
+      "description": "Navigate to a panel",
+      "params": {
+        "panel": "Panel name: collections, maps, devices, settings, logs"
+      }
+    },
+    {
+      "action": "ble_scan",
+      "description": "Start BLE device discovery scan",
+      "params": {}
+    },
+    {
+      "action": "ble_advertise",
+      "description": "Start BLE advertising",
+      "params": {
+        "callsign": "(optional) Callsign to advertise"
+      }
+    },
+    {
+      "action": "ble_hello",
+      "description": "Send HELLO handshake to a BLE device",
+      "params": {
+        "device_id": "(optional) BLE device ID to connect to, or first discovered device"
+      }
+    },
+    {
+      "action": "refresh_devices",
+      "description": "Refresh all devices (BLE, local network, station)",
+      "params": {}
+    },
+    {
+      "action": "local_scan",
+      "description": "Scan local network for devices",
+      "params": {}
+    },
+    {
+      "action": "connect_station",
+      "description": "Connect to a station",
+      "params": {
+        "url": "(optional) Station WebSocket URL"
+      }
+    },
+    {
+      "action": "disconnect_station",
+      "description": "Disconnect from current station",
+      "params": {}
+    }
+  ],
+  "recent_actions": [],
+  "panels": {
+    "collections": 0,
+    "maps": 1,
+    "devices": 2,
+    "settings": 3,
+    "logs": 4
+  }
+}
+```
+
+#### POST /api/debug
+
+Triggers a debug action.
+
+**Request Body:**
+```json
+{
+  "action": "action_name",
+  "param1": "value1"
+}
+```
+
+**Available Actions:**
+
+| Action | Description | Parameters |
+|--------|-------------|------------|
+| `navigate` | Navigate to a UI panel | `panel`: Panel name (collections, maps, devices, settings, logs) |
+| `toast` | Show a toast/snackbar message on the UI | `message`: Text to display, `duration` (optional): Seconds (default: 3) |
+| `ble_scan` | Start BLE device discovery | None |
+| `ble_advertise` | Start BLE advertising | `callsign` (optional): Callsign to advertise |
+| `ble_hello` | Send BLE HELLO handshake to a device | `device_id` (optional): Target device ID, or first discovered device |
+| `refresh_devices` | Refresh all device sources | None |
+| `local_scan` | Scan local network for devices | None |
+| `connect_station` | Connect to a station | `url` (optional): Station WebSocket URL |
+| `disconnect_station` | Disconnect from current station | None |
+
+**Response - Success (200 OK):**
+```json
+{
+  "success": true,
+  "message": "BLE scan triggered"
+}
+```
+
+**Response - Error (400 Bad Request):**
+```json
+{
+  "success": false,
+  "error": "Unknown action: invalid_action",
+  "available_actions": ["navigate", "ble_scan", "ble_advertise", "refresh_devices", "local_scan", "connect_station", "disconnect_station"]
+}
+```
+
+**Example Usage:**
+```bash
+# Get available actions
+curl http://localhost:3456/api/debug
+
+# Navigate to devices panel (BLE/Bluetooth view)
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action": "navigate", "panel": "devices"}'
+
+# Show a toast message on the UI
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action": "toast", "message": "Hello from the test script!", "duration": 5}'
+
+# Trigger BLE scan
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action": "ble_scan"}'
+
+# Start BLE advertising
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action": "ble_advertise"}'
+
+# Refresh all devices
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action": "refresh_devices"}'
+
+# Send BLE HELLO handshake to first discovered device
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action": "ble_hello"}'
+
+# Send BLE HELLO to a specific device
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action": "ble_hello", "device_id": "5B:2F:49:2E:8C:05"}'
+
+# Navigate to devices and trigger BLE scan (chained)
+curl -X POST http://localhost:3456/api/debug -d '{"action": "navigate", "panel": "devices"}' && \
+curl -X POST http://localhost:3456/api/debug -d '{"action": "ble_scan"}'
 ```
 
 ---

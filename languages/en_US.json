@@ -1210,7 +1210,7 @@
   "welcome_message": "An account was automatically generated for you. You can change your profile settings later in Settings.",
   "your_callsign": "Your Callsign",
   "welcome_customize_hint": "Your unique callsign for the Geogram network is shown above.",
-  "later": "Ignore",
+  "later": "Later",
   "customize_profile": "Go to Settings",
   "login_with_extension": "Login with NOSTR Extension",
   "extension_login_description": "Use your browser extension (Alby, nos2x, etc.) to sign in. Your private key stays secure in the extension.",

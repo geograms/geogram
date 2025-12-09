@@ -9,14 +9,17 @@ import 'dart:io' show Platform;
 import 'dart:math';
 import 'dart:typed_data';
 import 'package:ble_peripheral/ble_peripheral.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show VoidCallback, kIsWeb;
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
+import 'ble_identity_service.dart';
+import 'ble_permission_service.dart';
 import 'log_service.dart';
 
 /// Represents a device discovered via BLE
 class BLEDevice {
-  final String deviceId;       // BLE device platform ID
-  String? callsign;            // From HELLO handshake
+  final String deviceId;       // BLE device platform ID (MAC address)
+  String? callsign;            // From HELLO handshake or advertisement
+  int? geogramDeviceId;        // Device ID 1-15 from advertisement (APRS SSID compatible)
   String? npub;                // From HELLO handshake (pubkey)
   String? nickname;            // From HELLO handshake
   double? latitude;            // From HELLO handshake
@@ -29,6 +32,7 @@ class BLEDevice {
   BLEDevice({
     required this.deviceId,
     this.callsign,
+    this.geogramDeviceId,
     this.npub,
     this.nickname,
     this.latitude,
@@ -38,6 +42,17 @@ class BLEDevice {
     required this.lastSeen,
     this.bleDevice,
   });
+
+  /// Get full identity string (callsign-deviceId) for stable identification
+  /// This remains constant even when MAC address changes (Android)
+  /// Format is APRS SSID compatible (e.g., "X34PSK-7")
+  String? get fullIdentity {
+    if (callsign == null) return null;
+    if (geogramDeviceId != null) {
+      return '$callsign-$geogramDeviceId';
+    }
+    return callsign;
+  }
 
   /// Get display name (nickname, callsign, or device ID)
   String get displayName => nickname ?? callsign ?? 'BLE Device $deviceId';
@@ -134,13 +149,22 @@ class BLEDiscoveryService {
       // Listen for scan results
       _scanSubscription = FlutterBluePlus.scanResults.listen((results) {
         for (final result in results) {
+          // Log ALL devices found for debugging
+          final name = result.device.platformName.isNotEmpty
+              ? result.device.platformName
+              : result.advertisementData.advName;
+          final hasService = result.advertisementData.serviceUuids.any(
+            (uuid) => uuid.toString().toLowerCase() == serviceUUID.toLowerCase()
+          );
+          LogService().log('BLEDiscovery: Found device ${result.device.remoteId.str} name="$name" rssi=${result.rssi} hasGeogramService=$hasService');
           _processAdvertisement(result);
         }
       });
 
-      // Start scanning with service UUID filter
+      // Start scanning WITHOUT service filter to see all devices
+      // Then filter in _processAdvertisement
       await FlutterBluePlus.startScan(
-        withServices: [Guid(serviceUUID)],
+        // withServices: [Guid(serviceUUID)],  // Disabled for debugging
         timeout: timeout,
       );
 
@@ -170,6 +194,7 @@ class BLEDiscoveryService {
   }
 
   /// Start advertising as a Geogram device so others can discover us
+  /// Uses BLEIdentityService to build advertising data with device_id
   Future<void> startAdvertising(String callsign) async {
     if (_isAdvertising) {
       LogService().log('BLEDiscovery: Already advertising');
@@ -202,25 +227,26 @@ class BLEDiscoveryService {
           LogService().log('BLEDiscovery: Bluetooth not enabled, skipping advertising');
           return;
         }
+
+        // Check if we have advertise permission from permission service
+        final permissionService = BLEPermissionService();
+        if (!permissionService.hasAdvertisePermission) {
+          // Try to request permission
+          final granted = await permissionService.requestAllPermissions();
+          if (!granted || !permissionService.hasAdvertisePermission) {
+            LogService().log('BLEDiscovery: BLE advertise permission not granted');
+            return;
+          }
+        }
       }
 
       // Initialize BLE peripheral
       await BlePeripheral.initialize();
 
-      // Request BLE advertise permission (Android 12+ requires BLUETOOTH_ADVERTISE)
-      final hasPermission = await BlePeripheral.askBlePermission();
-      if (!hasPermission) {
-        LogService().log('BLEDiscovery: BLE advertise permission not granted');
-        return;
-      }
-
-      // Build advertising data: [marker][callsign]
-      final List<int> serviceData = [geogramMarker, ...utf8.encode(callsign)];
-
-      // Limit to 20 bytes (BLE advertising limit minus overhead)
-      final truncatedData = serviceData.length > 20
-          ? Uint8List.fromList(serviceData.sublist(0, 20))
-          : Uint8List.fromList(serviceData);
+      // Build advertising data using BLEIdentityService
+      // Format: [0x3E marker][device_id: 2 bytes][callsign: up to 17 bytes]
+      final identityService = BLEIdentityService();
+      final advertisingData = identityService.buildAdvertisingData();
 
       // Start advertising with our service UUID and data
       await BlePeripheral.startAdvertising(
@@ -228,12 +254,12 @@ class BLEDiscoveryService {
         localName: 'Geogram',
         manufacturerData: ManufacturerData(
           manufacturerId: 0xFFFF, // Test manufacturer ID
-          data: truncatedData,
+          data: advertisingData,
         ),
       );
 
       _isAdvertising = true;
-      LogService().log('BLEDiscovery: Started advertising as $callsign');
+      LogService().log('BLEDiscovery: Started advertising as ${identityService.fullIdentity}');
     } catch (e, stackTrace) {
       // SecurityException on Android means BLUETOOTH_ADVERTISE permission not granted
       final errorStr = e.toString();
@@ -272,19 +298,47 @@ class BLEDiscoveryService {
     final serviceData = result.advertisementData.serviceData;
     final data = serviceData[Guid(serviceUUID)];
 
-    // Only accept devices with our service UUID and data
-    if (data == null || data.isEmpty) {
-      // No Geogram service data - ignore this device
-      return;
+    // Check for service data with our UUID
+    if (data != null && data.isNotEmpty) {
+      // Check for Geogram marker (first byte must be '>')
+      if (data[0] == geogramMarker) {
+        _addOrUpdateDevice(result, data);
+        return;
+      }
     }
 
-    // Check for Geogram marker (first byte must be '>')
-    if (data[0] != geogramMarker) {
-      LogService().log('BLEDiscovery: Device ${result.device.remoteId.str} has service but no Geogram marker');
-      return;
+    // Also check manufacturer data (0xFFFF = test manufacturer ID)
+    final mfgData = result.advertisementData.manufacturerData;
+    if (mfgData.isNotEmpty) {
+      // Check each manufacturer entry
+      for (final entry in mfgData.entries) {
+        final mfgBytes = entry.value;
+        if (mfgBytes.isNotEmpty && mfgBytes[0] == geogramMarker) {
+          LogService().log('BLEDiscovery: Found Geogram device via manufacturer data: ${result.device.remoteId.str}');
+          _addOrUpdateDevice(result, mfgBytes);
+          return;
+        }
+      }
     }
 
-    _addOrUpdateDevice(result, data);
+    // Also accept devices advertising as "Geogram" by name
+    final advName = result.advertisementData.advName;
+    final platformName = result.device.platformName;
+    if (advName == 'Geogram' || platformName == 'Geogram') {
+      LogService().log('BLEDiscovery: Found Geogram device by name: ${result.device.remoteId.str}');
+      // Try to extract callsign from manufacturer data if available
+      List<int>? callsignData;
+      if (mfgData.isNotEmpty) {
+        for (final entry in mfgData.entries) {
+          if (entry.value.isNotEmpty) {
+            callsignData = entry.value;
+            break;
+          }
+        }
+      }
+      _addOrUpdateDevice(result, callsignData);
+      return;
+    }
   }
 
   /// Add or update a discovered device
@@ -293,20 +347,31 @@ class BLEDiscoveryService {
     final rssi = result.rssi;
     final proximity = estimateProximity(rssi);
 
-    // Parse callsign from advertising data if available
+    // Parse identity from advertising data if available
     String? callsign;
+    int? geogramDeviceId;
+
     if (advertisingData != null && advertisingData.length > 1) {
-      // Skip the marker byte and try to extract callsign
       try {
-        // Advertising data format: [marker][callsign bytes...]
-        final callsignBytes = advertisingData.sublist(1);
-        // Find null terminator or end
-        final endIndex = callsignBytes.indexOf(0);
-        final effectiveBytes = endIndex > 0 ? callsignBytes.sublist(0, endIndex) : callsignBytes;
-        callsign = utf8.decode(effectiveBytes, allowMalformed: true).trim();
-        if (callsign.isEmpty) callsign = null;
+        // Use BLEIdentityService to parse advertising data
+        // Format: [0x3E marker][device_id: 2 bytes][callsign: up to 17 bytes]
+        final parsed = BLEIdentityService.parseAdvertisingData(
+          Uint8List.fromList(advertisingData),
+        );
+
+        if (parsed != null) {
+          callsign = parsed.callsign;
+          geogramDeviceId = parsed.deviceId;
+        } else {
+          // Fallback: try legacy format [marker][callsign...]
+          final callsignBytes = advertisingData.sublist(1);
+          final endIndex = callsignBytes.indexOf(0);
+          final effectiveBytes = endIndex > 0 ? callsignBytes.sublist(0, endIndex) : callsignBytes;
+          callsign = utf8.decode(effectiveBytes, allowMalformed: true).trim();
+          if (callsign.isEmpty) callsign = null;
+        }
       } catch (e) {
-        LogService().log('BLEDiscovery: Error parsing callsign: $e');
+        LogService().log('BLEDiscovery: Error parsing advertising data: $e');
       }
     }
 
@@ -317,17 +382,30 @@ class BLEDiscoveryService {
       device.proximity = proximity;
       device.lastSeen = DateTime.now();
       if (callsign != null) device.callsign = callsign;
+      if (geogramDeviceId != null) device.geogramDeviceId = geogramDeviceId;
     } else {
       // Add new device
-      _discoveredDevices[deviceId] = BLEDevice(
+      final newDevice = BLEDevice(
         deviceId: deviceId,
         callsign: callsign,
+        geogramDeviceId: geogramDeviceId,
         rssi: rssi,
         proximity: proximity,
         lastSeen: DateTime.now(),
         bleDevice: result.device,
       );
-      LogService().log('BLEDiscovery: Found new device: $deviceId (callsign: $callsign, RSSI: $rssi, proximity: $proximity)');
+      _discoveredDevices[deviceId] = newDevice;
+      LogService().log('BLEDiscovery: Found new device: $deviceId '
+          '(identity: ${newDevice.fullIdentity ?? "unknown"}, '
+          'RSSI: $rssi, proximity: $proximity)');
+    }
+
+    // Update identity service with MAC-to-identity mapping
+    if (callsign != null) {
+      final fullIdentity = geogramDeviceId != null
+          ? '$callsign-$geogramDeviceId'
+          : callsign;
+      BLEIdentityService().updateMacForIdentity(fullIdentity, deviceId);
     }
 
     _notifyListeners();
@@ -474,24 +552,51 @@ class BLEDiscoveryService {
   }
 
   /// Send JSON over BLE (chunked if needed)
+  /// Uses 300-byte parcels with pauses between to avoid connection drops
   Future<void> _sendJsonOverBLE(BluetoothCharacteristic char, String jsonStr) async {
     final bytes = utf8.encode(jsonStr);
     final mtu = await char.device.mtu.first;
     final chunkSize = mtu - 3; // Leave room for ATT header
+    const parcelSize = 280; // Max bytes per parcel (below 300 threshold)
 
-    LogService().log('BLEDiscovery: Sending ${bytes.length} bytes, MTU: $mtu, chunk size: $chunkSize');
+    LogService().log('BLEDiscovery: Sending ${bytes.length} bytes (MTU: $mtu, chunk: $chunkSize, parcel: $parcelSize)');
 
     if (bytes.length <= chunkSize) {
       // Single write
       await char.write(bytes, withoutResponse: false);
     } else {
-      // Chunked write
-      for (int i = 0; i < bytes.length; i += chunkSize) {
-        final end = (i + chunkSize < bytes.length) ? i + chunkSize : bytes.length;
-        final chunk = bytes.sublist(i, end);
-        await char.write(chunk, withoutResponse: false);
-        await Future.delayed(const Duration(milliseconds: 20)); // Small delay between chunks
+      // Send in parcels of ~280 bytes with longer pause between parcels
+      final totalParcels = (bytes.length / parcelSize).ceil();
+      LogService().log('BLEDiscovery: Sending ${bytes.length} bytes in $totalParcels parcels');
+
+      for (int parcelStart = 0; parcelStart < bytes.length; parcelStart += parcelSize) {
+        final parcelEnd = (parcelStart + parcelSize < bytes.length) ? parcelStart + parcelSize : bytes.length;
+        final parcelNum = (parcelStart / parcelSize).floor() + 1;
+
+        LogService().log('BLEDiscovery: Sending parcel $parcelNum/$totalParcels (bytes $parcelStart-$parcelEnd)');
+
+        // Send this parcel in MTU-sized chunks
+        for (int i = parcelStart; i < parcelEnd; i += chunkSize) {
+          final end = (i + chunkSize < parcelEnd) ? i + chunkSize : parcelEnd;
+          final chunk = bytes.sublist(i, end);
+
+          try {
+            await char.write(chunk, withoutResponse: true);
+            // Small delay between chunks within a parcel
+            await Future.delayed(const Duration(milliseconds: 30));
+          } catch (e) {
+            LogService().log('BLEDiscovery: Parcel $parcelNum chunk failed: $e');
+            rethrow;
+          }
+        }
+
+        // Longer pause between parcels to let BLE stack recover
+        if (parcelEnd < bytes.length) {
+          LogService().log('BLEDiscovery: Parcel $parcelNum complete, pausing before next...');
+          await Future.delayed(const Duration(milliseconds: 500));
+        }
       }
+      LogService().log('BLEDiscovery: All $totalParcels parcels sent successfully');
     }
   }
 
@@ -540,10 +645,376 @@ class BLEDiscoveryService {
     _devicesController.add(getAllDevices());
   }
 
+  // ============================================
+  // Connection Pooling and Message Exchange
+  // ============================================
+
+  /// Connection pool for reusing BLE connections
+  final Map<String, _BLEConnection> _connectionPool = {};
+
+  /// Connection timeout for small data exchanges
+  static const _connectionTimeout = Duration(minutes: 2);
+
+  /// Threshold for keeping connection open (10KB)
+  static const _largeDataThreshold = 10 * 1024;
+
+  /// Send a message to a BLE device and wait for response
+  Future<Map<String, dynamic>?> sendMessage(
+    BLEDevice device,
+    Map<String, dynamic> message, {
+    Duration timeout = const Duration(seconds: 10),
+  }) async {
+    if (device.bleDevice == null) {
+      LogService().log('BLEDiscovery: No BLE device reference for ${device.deviceId}');
+      return null;
+    }
+
+    final messageJson = json.encode(message);
+    final messageSize = utf8.encode(messageJson).length;
+    final keepConnection = messageSize >= _largeDataThreshold;
+
+    try {
+      // Get or create connection
+      final connection = await _getOrCreateConnection(device);
+      if (connection == null) {
+        return null;
+      }
+
+      LogService().log('BLEDiscovery: Connection ready, sending message ($messageSize bytes)');
+
+      // Send message and wait for response
+      final response = await connection.sendAndReceive(messageJson, timeout: timeout);
+      LogService().log('BLEDiscovery: Message sent, response: ${response != null}');
+
+      // Manage connection based on data size
+      if (keepConnection) {
+        // Large data - keep connection and reset timeout
+        connection.resetTimeout();
+        LogService().log('BLEDiscovery: Keeping connection for large data ($messageSize bytes)');
+      } else {
+        // Small data - schedule disconnect
+        connection.scheduleDisconnect(_connectionTimeout);
+      }
+
+      return response;
+    } catch (e) {
+      LogService().log('BLEDiscovery: Error sending message: $e');
+      // Remove failed connection from pool
+      await _removeConnection(device.deviceId);
+      return null;
+    }
+  }
+
+  /// Get existing connection or create new one
+  Future<_BLEConnection?> _getOrCreateConnection(BLEDevice device) async {
+    final deviceId = device.deviceId;
+
+    // Check for existing valid connection
+    if (_connectionPool.containsKey(deviceId)) {
+      final existing = _connectionPool[deviceId]!;
+      if (existing.isConnected) {
+        LogService().log('BLEDiscovery: Reusing existing connection to $deviceId');
+        return existing;
+      } else {
+        // Connection is stale, remove it
+        await _removeConnection(deviceId);
+      }
+    }
+
+    // Create new connection
+    // Get BluetoothDevice - either from device or create new from ID
+    final bleDevice = device.bleDevice ?? BluetoothDevice.fromId(deviceId);
+
+    try {
+      LogService().log('BLEDiscovery: Creating new connection to $deviceId');
+      LogService().log('BLEDiscovery: Using ${device.bleDevice != null ? "cached" : "new"} BluetoothDevice for $deviceId');
+
+      await bleDevice.connect(timeout: const Duration(seconds: 10));
+
+      // Discover services
+      final services = await bleDevice.discoverServices();
+
+      // Log all discovered services for debugging
+      LogService().log('BLEDiscovery: Found ${services.length} services on $deviceId');
+      for (final svc in services) {
+        LogService().log('BLEDiscovery: Service: ${svc.uuid.toString()}');
+      }
+
+      // Match both short (fff0) and long UUID formats
+      final shortServiceUUID = 'fff0';
+      final geogramService = services.firstWhere(
+        (s) {
+          final uuid = s.uuid.toString().toLowerCase();
+          return uuid == serviceUUID.toLowerCase() ||
+                 uuid == shortServiceUUID ||
+                 uuid.contains(shortServiceUUID);
+        },
+        orElse: () => throw Exception('Geogram service not found (looking for $serviceUUID or $shortServiceUUID)'),
+      );
+
+      // Find characteristics (match both short and long UUID formats)
+      BluetoothCharacteristic? writeChar;
+      BluetoothCharacteristic? notifyChar;
+      const shortWriteCharUUID = 'fff1';
+      const shortNotifyCharUUID = 'fff2';
+
+      LogService().log('BLEDiscovery: Found ${geogramService.characteristics.length} characteristics');
+      for (final char in geogramService.characteristics) {
+        final charUuid = char.uuid.toString().toLowerCase();
+        LogService().log('BLEDiscovery: Characteristic: $charUuid');
+        if (charUuid == writeCharUUID.toLowerCase() || charUuid == shortWriteCharUUID || charUuid.contains(shortWriteCharUUID)) {
+          writeChar = char;
+        } else if (charUuid == notifyCharUUID.toLowerCase() || charUuid == shortNotifyCharUUID || charUuid.contains(shortNotifyCharUUID)) {
+          notifyChar = char;
+        }
+      }
+
+      if (writeChar == null || notifyChar == null) {
+        throw Exception('Required characteristics not found (write: ${writeChar != null}, notify: ${notifyChar != null})');
+      }
+
+      // Request higher MTU for faster transfer
+      try {
+        final requestedMtu = await bleDevice.requestMtu(512);
+        LogService().log('BLEDiscovery: Requested MTU 512, got $requestedMtu');
+      } catch (e) {
+        LogService().log('BLEDiscovery: MTU request failed: $e');
+      }
+
+      // Subscribe to notifications
+      await notifyChar.setNotifyValue(true);
+      LogService().log('BLEDiscovery: Subscribed to notifications');
+
+      // Small delay to let subscription stabilize on the server side
+      await Future.delayed(const Duration(milliseconds: 200));
+
+      // Create connection object
+      final connection = _BLEConnection(
+        deviceId: deviceId,
+        device: bleDevice,
+        writeChar: writeChar,
+        notifyChar: notifyChar,
+        onDisconnect: () => _removeConnection(deviceId),
+      );
+
+      _connectionPool[deviceId] = connection;
+      LogService().log('BLEDiscovery: Connection established to $deviceId');
+
+      return connection;
+    } catch (e) {
+      LogService().log('BLEDiscovery: Failed to connect to $deviceId: $e');
+      try {
+        await bleDevice.disconnect();
+      } catch (_) {}
+      return null;
+    }
+  }
+
+  /// Remove connection from pool and disconnect
+  Future<void> _removeConnection(String deviceId) async {
+    final connection = _connectionPool.remove(deviceId);
+    if (connection != null) {
+      await connection.dispose();
+      LogService().log('BLEDiscovery: Connection to $deviceId removed from pool');
+    }
+  }
+
+  /// Close all pooled connections
+  Future<void> closeAllConnections() async {
+    for (final deviceId in _connectionPool.keys.toList()) {
+      await _removeConnection(deviceId);
+    }
+  }
+
   /// Dispose resources
   void dispose() {
     stopScanning();
     stopAdvertising();
+    closeAllConnections();
     _devicesController.close();
+  }
+}
+
+/// Internal class to manage a single BLE connection
+class _BLEConnection {
+  final String deviceId;
+  final BluetoothDevice device;
+  final BluetoothCharacteristic writeChar;
+  final BluetoothCharacteristic notifyChar;
+  final VoidCallback onDisconnect;
+
+  bool _isConnected = true;
+  Timer? _disconnectTimer;
+  StreamSubscription<List<int>>? _notifySubscription;
+
+  // Buffer for receiving chunked data
+  final List<int> _receiveBuffer = [];
+
+  // Pending request completers
+  final Map<String, Completer<Map<String, dynamic>>> _pendingRequests = {};
+
+  _BLEConnection({
+    required this.deviceId,
+    required this.device,
+    required this.writeChar,
+    required this.notifyChar,
+    required this.onDisconnect,
+  }) {
+    // Listen to notifications
+    _notifySubscription = notifyChar.onValueReceived.listen(_handleNotification);
+
+    // Listen for disconnection
+    device.connectionState.listen((state) {
+      if (state == BluetoothConnectionState.disconnected) {
+        _isConnected = false;
+        onDisconnect();
+      }
+    });
+  }
+
+  bool get isConnected => _isConnected;
+
+  /// Handle incoming notification data
+  void _handleNotification(List<int> data) {
+    _receiveBuffer.addAll(data);
+
+    // Try to parse as complete JSON
+    try {
+      final jsonStr = utf8.decode(_receiveBuffer);
+
+      // Check if JSON is complete
+      if (jsonStr.contains('}')) {
+        final response = json.decode(jsonStr) as Map<String, dynamic>;
+        _receiveBuffer.clear();
+
+        // Complete pending request if ID matches
+        final messageId = response['id'] as String?;
+        if (messageId != null && _pendingRequests.containsKey(messageId)) {
+          _pendingRequests[messageId]!.complete(response);
+          _pendingRequests.remove(messageId);
+        }
+      }
+    } catch (e) {
+      // JSON not complete yet, wait for more chunks
+    }
+  }
+
+  /// Send message and wait for response
+  Future<Map<String, dynamic>?> sendAndReceive(
+    String messageJson, {
+    Duration timeout = const Duration(seconds: 10),
+  }) async {
+    // Parse message to get ID
+    final message = json.decode(messageJson) as Map<String, dynamic>;
+    final messageId = message['id'] as String?;
+
+    if (messageId == null) {
+      throw Exception('Message must have an ID');
+    }
+
+    // Create completer for response
+    final completer = Completer<Map<String, dynamic>>();
+    _pendingRequests[messageId] = completer;
+
+    try {
+      // Send the message (chunked if needed)
+      await _sendChunked(messageJson);
+
+      // Wait for response with timeout
+      final response = await completer.future.timeout(
+        timeout,
+        onTimeout: () {
+          _pendingRequests.remove(messageId);
+          throw TimeoutException('No response received', timeout);
+        },
+      );
+
+      return response;
+    } catch (e) {
+      _pendingRequests.remove(messageId);
+      rethrow;
+    }
+  }
+
+  /// Send data with chunking if needed
+  /// Uses 280-byte parcels with pauses between to avoid connection drops
+  Future<void> _sendChunked(String jsonStr) async {
+    final bytes = utf8.encode(jsonStr);
+    final mtu = await device.mtu.first;
+    final chunkSize = mtu - 3; // Leave room for ATT header
+    const parcelSize = 280; // Max bytes per parcel (below 300 threshold)
+
+    LogService().log('BLEDiscovery: Sending ${bytes.length} bytes (MTU: $mtu, chunk: $chunkSize, parcel: $parcelSize)');
+
+    if (bytes.length <= chunkSize) {
+      // Single write for small messages
+      await writeChar.write(bytes, withoutResponse: false);
+      LogService().log('BLEDiscovery: Message written successfully');
+    } else {
+      // Send in parcels of ~280 bytes with longer pause between parcels
+      final totalParcels = (bytes.length / parcelSize).ceil();
+      LogService().log('BLEDiscovery: Sending ${bytes.length} bytes in $totalParcels parcels');
+
+      for (int parcelStart = 0; parcelStart < bytes.length; parcelStart += parcelSize) {
+        final parcelEnd = (parcelStart + parcelSize < bytes.length) ? parcelStart + parcelSize : bytes.length;
+        final parcelNum = (parcelStart / parcelSize).floor() + 1;
+
+        LogService().log('BLEDiscovery: Sending parcel $parcelNum/$totalParcels (bytes $parcelStart-$parcelEnd)');
+
+        // Send this parcel in MTU-sized chunks
+        for (int i = parcelStart; i < parcelEnd; i += chunkSize) {
+          final end = (i + chunkSize < parcelEnd) ? i + chunkSize : parcelEnd;
+          final chunk = bytes.sublist(i, end);
+
+          try {
+            await writeChar.write(chunk, withoutResponse: true);
+            // Small delay between chunks within a parcel
+            await Future.delayed(const Duration(milliseconds: 30));
+          } catch (e) {
+            LogService().log('BLEDiscovery: Parcel $parcelNum chunk failed: $e');
+            rethrow;
+          }
+        }
+
+        // Longer pause between parcels to let BLE stack recover
+        if (parcelEnd < bytes.length) {
+          LogService().log('BLEDiscovery: Parcel $parcelNum complete, pausing before next...');
+          await Future.delayed(const Duration(milliseconds: 500));
+        }
+      }
+      LogService().log('BLEDiscovery: All $totalParcels parcels sent successfully');
+    }
+  }
+
+  /// Schedule automatic disconnect after timeout
+  void scheduleDisconnect(Duration timeout) {
+    _disconnectTimer?.cancel();
+    _disconnectTimer = Timer(timeout, () {
+      LogService().log('BLEDiscovery: Connection timeout, disconnecting $deviceId');
+      dispose();
+      onDisconnect();
+    });
+  }
+
+  /// Reset disconnect timer (for active connections)
+  void resetTimeout() {
+    _disconnectTimer?.cancel();
+    _disconnectTimer = null;
+  }
+
+  /// Dispose connection
+  Future<void> dispose() async {
+    _disconnectTimer?.cancel();
+    _disconnectTimer = null;
+    await _notifySubscription?.cancel();
+    _pendingRequests.clear();
+    _receiveBuffer.clear();
+
+    if (_isConnected) {
+      try {
+        await device.disconnect();
+      } catch (_) {}
+      _isConnected = false;
+    }
   }
 }

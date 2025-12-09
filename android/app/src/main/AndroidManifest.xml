@@ -15,6 +15,9 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
+    <!-- Battery optimization exemption for background BLE operations -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+
     <!-- Permission to install APK updates -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 

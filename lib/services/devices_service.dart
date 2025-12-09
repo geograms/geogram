@@ -7,6 +7,7 @@ import 'dart:convert';
 import 'dart:async';
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'dart:math';
+import 'dart:typed_data';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:http/http.dart' as http;
 import '../models/device_source.dart';
@@ -18,7 +19,12 @@ import 'station_discovery_service.dart';
 import 'direct_message_service.dart';
 import 'log_service.dart';
 import 'ble_discovery_service.dart';
+import 'ble_message_service.dart';
 import 'profile_service.dart';
+import 'signing_service.dart';
+import 'debug_controller.dart';
+import '../util/nostr_event.dart';
+import '../models/profile.dart';
 
 /// Service for managing remote devices we've contacted
 class DevicesService {
@@ -34,6 +40,13 @@ class DevicesService {
   BLEDiscoveryService? _bleService;
   StreamSubscription<List<BLEDevice>>? _bleSubscription;
 
+  /// BLE messaging service for chat/data exchange
+  BLEMessageService? _bleMessageService;
+  StreamSubscription<BLEChatMessage>? _bleChatSubscription;
+
+  /// Debug controller subscription
+  StreamSubscription<DebugActionEvent>? _debugSubscription;
+
   /// Cache of known devices with their status
   final Map<String, RemoteDevice> _devices = {};
 
@@ -41,15 +54,233 @@ class DevicesService {
   final _devicesController = StreamController<List<RemoteDevice>>.broadcast();
   Stream<List<RemoteDevice>> get devicesStream => _devicesController.stream;
 
+  /// Stream controller for incoming BLE chat messages
+  final _bleChatController = StreamController<BLEChatMessage>.broadcast();
+  Stream<BLEChatMessage> get bleChatStream => _bleChatController.stream;
+
   /// Track when last local network scan was performed
   DateTime? _lastLocalScanTime;
   static const _localScanInterval = Duration(minutes: 5);
 
   /// Initialize the service
-  Future<void> initialize() async {
+  /// [skipBLE] - If true, skip BLE initialization (used for first-time Android users
+  /// who need to see onboarding screen before permission dialogs)
+  Future<void> initialize({bool skipBLE = false}) async {
     await _cacheService.initialize();
     await _loadCachedDevices();
-    await _initializeBLE();
+    if (!skipBLE) {
+      await _initializeBLE();
+    } else {
+      LogService().log('DevicesService: BLE initialization skipped');
+    }
+    _subscribeToDebugActions();
+  }
+
+  /// Initialize BLE after onboarding (for first-time Android users)
+  Future<void> initializeBLEAfterOnboarding() async {
+    if (_bleService == null) {
+      LogService().log('DevicesService: Initializing BLE after onboarding');
+      await _initializeBLE();
+    }
+  }
+
+  /// Subscribe to debug action events
+  void _subscribeToDebugActions() {
+    _debugSubscription?.cancel();
+    _debugSubscription = DebugController().actionStream.listen((event) {
+      _handleDebugAction(event);
+    });
+    LogService().log('DevicesService: Subscribed to debug actions');
+  }
+
+  /// Handle debug action events
+  Future<void> _handleDebugAction(DebugActionEvent event) async {
+    LogService().log('DevicesService: Handling debug action: ${event.action}');
+
+    switch (event.action) {
+      case DebugAction.bleScan:
+        await _discoverBLEDevices();
+        break;
+
+      case DebugAction.bleAdvertise:
+        final callsign = event.params['callsign'] as String?;
+        await _startBLEAdvertisingWithCallsign(callsign);
+        break;
+
+      case DebugAction.bleHello:
+        final deviceId = event.params['device_id'] as String?;
+        await _sendBLEHelloToDevice(deviceId);
+        break;
+
+      case DebugAction.refreshDevices:
+        await refreshAllDevices();
+        break;
+
+      case DebugAction.localNetworkScan:
+        await forceLocalScan();
+        break;
+
+      case DebugAction.connectStation:
+        // Station connection is handled by StationService
+        LogService().log('DevicesService: Station connection handled by StationService');
+        break;
+
+      case DebugAction.disconnectStation:
+        // Station disconnection is handled by StationService
+        LogService().log('DevicesService: Station disconnection handled by StationService');
+        break;
+
+      case DebugAction.navigateToPanel:
+        // Navigation is handled by the UI (main.dart)
+        break;
+
+      case DebugAction.showToast:
+        // Toast display is handled by the UI (main.dart)
+        break;
+
+      case DebugAction.bleSend:
+        final deviceId = event.params['device_id'] as String?;
+        final data = event.params['data'] as String?;
+        final size = event.params['size'] as int?;
+        await _sendBLEDataToDevice(deviceId, data, size);
+        break;
+    }
+  }
+
+  /// Send data to a specific BLE device for testing
+  /// Uses the parcel protocol for reliable transmission of larger payloads
+  Future<bool> _sendBLEDataToDevice(String? deviceId, String? data, int? size) async {
+    if (_bleService == null || _bleMessageService == null) {
+      LogService().log('DevicesService: BLE not available for data send');
+      return false;
+    }
+
+    final devices = _bleService!.getAllDevices();
+    if (devices.isEmpty) {
+      LogService().log('DevicesService: No BLE devices for data send');
+      return false;
+    }
+
+    // Find target device
+    BLEDevice? targetDevice;
+    if (deviceId != null) {
+      targetDevice = devices.firstWhere(
+        (d) => d.deviceId == deviceId || d.callsign == deviceId,
+        orElse: () => devices.first,
+      );
+    } else {
+      targetDevice = devices.first;
+    }
+
+    // Generate test data
+    Uint8List testData;
+    if (data != null) {
+      testData = Uint8List.fromList(utf8.encode(data));
+    } else if (size != null && size > 0) {
+      // Generate random data of specified size
+      final random = Random();
+      testData = Uint8List.fromList(
+        List.generate(size, (i) => 65 + random.nextInt(26)), // A-Z
+      );
+    } else {
+      testData = Uint8List.fromList(utf8.encode('TEST_DATA_${DateTime.now().millisecondsSinceEpoch}'));
+    }
+
+    LogService().log('DevicesService: Sending ${testData.length} bytes to ${targetDevice.callsign ?? targetDevice.deviceId} via parcel protocol');
+
+    try {
+      // Use parcel-based transfer for reliable delivery
+      final success = await _bleMessageService!.sendData(
+        device: targetDevice,
+        data: testData,
+        timeout: const Duration(seconds: 60),
+      );
+
+      if (success) {
+        LogService().log('DevicesService: Data sent successfully (${testData.length} bytes)');
+      } else {
+        LogService().log('DevicesService: Data send failed');
+      }
+      return success;
+    } catch (e) {
+      LogService().log('DevicesService: Data send failed: $e');
+      return false;
+    }
+  }
+
+  /// Send HELLO handshake to a specific BLE device or the first discovered device
+  Future<void> _sendBLEHelloToDevice(String? deviceId) async {
+    if (_bleService == null) {
+      LogService().log('DevicesService: BLE not available for HELLO');
+      return;
+    }
+
+    final devices = _bleService!.getAllDevices();
+    if (devices.isEmpty) {
+      LogService().log('DevicesService: No BLE devices discovered for HELLO');
+      return;
+    }
+
+    // Find device by ID, callsign, or use first discovered
+    BLEDevice? targetDevice;
+    if (deviceId != null) {
+      // First try exact match on deviceId (MAC address)
+      targetDevice = devices.cast<BLEDevice?>().firstWhere(
+        (d) => d?.deviceId == deviceId,
+        orElse: () => null,
+      );
+      // Then try matching by callsign
+      if (targetDevice == null) {
+        targetDevice = devices.cast<BLEDevice?>().firstWhere(
+          (d) => d?.callsign == deviceId,
+          orElse: () => null,
+        );
+      }
+      // Fallback to first device if no match
+      if (targetDevice == null) {
+        LogService().log('DevicesService: No device found matching "$deviceId", using first discovered');
+        targetDevice = devices.first;
+      }
+    } else {
+      targetDevice = devices.first;
+    }
+
+    LogService().log('DevicesService: Sending HELLO to ${targetDevice.deviceId} (${targetDevice.callsign ?? "unknown"})');
+
+    try {
+      final success = await sendBLEHello(targetDevice);
+      if (success) {
+        LogService().log('DevicesService: HELLO handshake successful with ${targetDevice.deviceId}');
+      } else {
+        LogService().log('DevicesService: HELLO handshake failed with ${targetDevice.deviceId}');
+      }
+    } catch (e) {
+      LogService().log('DevicesService: Error during HELLO handshake: $e');
+    }
+  }
+
+  /// Start BLE advertising with optional callsign override
+  Future<void> _startBLEAdvertisingWithCallsign(String? callsign) async {
+    if (_bleService == null) return;
+
+    final profile = ProfileService().getProfile();
+    final effectiveCallsign = callsign ?? profile.callsign;
+
+    if (effectiveCallsign.isEmpty) {
+      LogService().log('DevicesService: Cannot advertise - no callsign');
+      return;
+    }
+
+    try {
+      await _bleService!.startAdvertising(effectiveCallsign);
+      if (_bleService!.isAdvertising) {
+        LogService().log('DevicesService: BLE advertising started as $effectiveCallsign');
+      } else {
+        LogService().log('DevicesService: BLE advertising not started (permission denied or unavailable)');
+      }
+    } catch (e) {
+      LogService().log('DevicesService: BLE advertising failed: $e');
+    }
   }
 
   /// Initialize BLE discovery (not available on web)
@@ -71,15 +302,101 @@ class DevicesService {
 
       // Start advertising in background (don't block initialization)
       _startBLEAdvertising();
+
+      // Initialize BLE messaging service
+      await _initializeBLEMessaging();
     } catch (e, stackTrace) {
       LogService().log('DevicesService: Failed to initialize BLE: $e\n$stackTrace');
       _bleService = null;
     }
   }
 
+  /// Initialize BLE messaging service for chat/data exchange
+  Future<void> _initializeBLEMessaging() async {
+    try {
+      LogService().log('DevicesService: Starting BLE messaging initialization (canBeServer: ${BLEMessageService.canBeServer})');
+
+      final profile = ProfileService().getProfile();
+      if (profile.callsign.isEmpty) {
+        LogService().log('DevicesService: No callsign set, skipping BLE messaging init');
+        return;
+      }
+
+      LogService().log('DevicesService: Profile callsign: ${profile.callsign}');
+
+      // Build NOSTR-signed event for HELLO handshakes
+      final helloEvent = await _buildHelloEvent(profile);
+      LogService().log('DevicesService: Built HELLO event for BLE handshakes');
+
+      _bleMessageService = BLEMessageService();
+      await _bleMessageService!.initialize(
+        event: helloEvent,
+        callsign: profile.callsign,
+      );
+
+      // Subscribe to incoming BLE chat messages
+      _bleChatSubscription = _bleMessageService!.incomingChats.listen((message) {
+        LogService().log('DevicesService: BLE chat from ${message.author}: ${message.content}');
+        _bleChatController.add(message);
+      });
+
+      LogService().log('DevicesService: BLE messaging initialized successfully (isInitialized: ${_bleMessageService!.isInitialized})');
+    } catch (e, stackTrace) {
+      LogService().log('DevicesService: Failed to initialize BLE messaging: $e');
+      LogService().log('DevicesService: Stack trace: $stackTrace');
+    }
+  }
+
+  /// Build HELLO event for BLE handshakes
+  Future<Map<String, dynamic>> _buildHelloEvent(Profile profile) async {
+    final pubkey = profile.npub.isNotEmpty ? profile.npub : '';
+    final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+
+    final tags = <List<String>>[
+      ['callsign', profile.callsign],
+      if (profile.nickname.isNotEmpty) ['nickname', profile.nickname],
+    ];
+
+    // Add location if available
+    if (profile.latitude != null && profile.longitude != null) {
+      tags.add(['latitude', profile.latitude.toString()]);
+      tags.add(['longitude', profile.longitude.toString()]);
+    }
+
+    // Create event
+    final nostrEvent = NostrEvent(
+      pubkey: pubkey,
+      createdAt: now,
+      kind: 30078, // Application-specific data
+      tags: tags,
+      content: '',
+    );
+
+    // Sign event if possible
+    try {
+      final signingService = SigningService();
+      final signedEvent = await signingService.signEvent(nostrEvent, profile);
+      if (signedEvent != null) {
+        return signedEvent.toJson();
+      }
+    } catch (e) {
+      LogService().log('DevicesService: Could not sign HELLO event: $e');
+    }
+
+    return nostrEvent.toJson();
+  }
+
   /// Start BLE advertising (separate from initialization to avoid crashes)
+  /// Note: On Android/iOS, advertising is handled by BLEGattServerService instead
   Future<void> _startBLEAdvertising() async {
     if (_bleService == null) return;
+
+    // On Android/iOS, the GATT server handles advertising (BLEMessageService)
+    // Don't start basic advertising here as it would conflict
+    if (BLEMessageService.canBeServer) {
+      LogService().log('DevicesService: Skipping basic advertising - GATT server will handle it');
+      return;
+    }
 
     // Delay advertising start to allow permission dialogs to complete
     await Future.delayed(const Duration(seconds: 2));
@@ -465,6 +782,77 @@ class DevicesService {
 
   /// Check if BLE is currently scanning
   bool get isBLEScanning => _bleService?.isScanning ?? false;
+
+  /// Check if BLE messaging is available
+  bool get isBLEMessagingAvailable => _bleMessageService?.isInitialized ?? false;
+
+  /// Send chat message to a device via BLE
+  /// Returns true if message was delivered successfully
+  Future<bool> sendChatViaBLE({
+    required String targetCallsign,
+    required String content,
+    String channel = 'main',
+  }) async {
+    if (_bleMessageService == null) {
+      LogService().log('DevicesService: BLE messaging not available');
+      return false;
+    }
+
+    return await _bleMessageService!.sendChatToCallsign(
+      targetCallsign: targetCallsign,
+      content: content,
+      channel: channel,
+    );
+  }
+
+  /// Send chat to a specific BLE device
+  Future<bool> sendChatToBLEDevice({
+    required BLEDevice device,
+    required String content,
+    String channel = 'main',
+  }) async {
+    if (_bleMessageService == null) {
+      LogService().log('DevicesService: BLE messaging not available');
+      return false;
+    }
+
+    return await _bleMessageService!.sendChat(
+      device: device,
+      content: content,
+      channel: channel,
+    );
+  }
+
+  /// Broadcast chat to all connected BLE clients (server mode only)
+  Future<void> broadcastChatViaBLE({
+    required String content,
+    String channel = 'main',
+  }) async {
+    if (_bleMessageService == null) {
+      LogService().log('DevicesService: BLE messaging not available');
+      return;
+    }
+
+    await _bleMessageService!.broadcastChat(
+      content: content,
+      channel: channel,
+    );
+  }
+
+  /// Send HELLO handshake to a BLE device
+  Future<bool> sendBLEHello(BLEDevice device) async {
+    if (_bleMessageService == null) {
+      LogService().log('DevicesService: BLE messaging not available');
+      return false;
+    }
+
+    return await _bleMessageService!.sendHello(device);
+  }
+
+  /// Get list of connected BLE clients (server mode)
+  List<String> get connectedBLEClients {
+    return _bleMessageService?.connectedClients ?? [];
+  }
 
   /// Update the connected station as a device with 'internet' connection
   Future<void> _updateConnectedStation() async {
@@ -942,8 +1330,12 @@ class DevicesService {
   /// Dispose resources
   void dispose() {
     _bleSubscription?.cancel();
+    _bleChatSubscription?.cancel();
+    _debugSubscription?.cancel();
     _bleService?.dispose();
+    _bleMessageService?.dispose();
     _devicesController.close();
+    _bleChatController.close();
   }
 }
 
