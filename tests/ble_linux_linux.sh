@@ -2,12 +2,12 @@
 # BLE Test: Linux to Linux (Automated)
 #
 # This script launches two Geogram Desktop instances on separate ports
-# with isolated data directories, then runs BLE communication tests.
+# with isolated temporary data directories, then runs BLE communication tests.
+# Temporary directories are automatically cleaned up on exit.
 #
 # Usage:
-#   ./test/ble_linux_linux.sh              # Auto-launch two instances and test
-#   ./test/ble_linux_linux.sh --cleanup    # Just cleanup old test directories
-#   ./test/ble_linux_linux.sh --manual IP  # Test against manually started instance
+#   ./tests/ble_linux_linux.sh              # Auto-launch two instances and test
+#   ./tests/ble_linux_linux.sh --manual IP  # Test against manually started instance
 #
 # What it tests:
 #   1. BLE scanning and device discovery
@@ -27,12 +27,13 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 # Test configuration
 INSTANCE1_PORT=3455
 INSTANCE2_PORT=3466
-TEST_DATA_BASE="/tmp/geogram-test"
-INSTANCE1_DIR="${TEST_DATA_BASE}/instance1"
-INSTANCE2_DIR="${TEST_DATA_BASE}/instance2"
 GEOGRAM_BINARY="${PROJECT_DIR}/build/linux/x64/release/bundle/geogram_desktop"
 STARTUP_TIMEOUT=30
 TEST_DOC_SIZE=2000
+
+# Temporary directories (created at runtime)
+INSTANCE1_DIR=""
+INSTANCE2_DIR=""
 
 # PIDs for cleanup
 INSTANCE1_PID=""
@@ -113,26 +114,27 @@ cleanup() {
         fi
     done
 
+    # Remove temporary directories
+    if [ -n "$INSTANCE1_DIR" ] && [ -d "$INSTANCE1_DIR" ]; then
+        print_info "Removing temp directory: $INSTANCE1_DIR"
+        rm -rf "$INSTANCE1_DIR"
+    fi
+
+    if [ -n "$INSTANCE2_DIR" ] && [ -d "$INSTANCE2_DIR" ]; then
+        print_info "Removing temp directory: $INSTANCE2_DIR"
+        rm -rf "$INSTANCE2_DIR"
+    fi
+
     print_info "Cleanup complete"
 }
 
-# Cleanup test directories
-cleanup_directories() {
-    print_info "Removing old test directories..."
-    if [ -d "$TEST_DATA_BASE" ]; then
-        rm -rf "$TEST_DATA_BASE"
-        print_info "Removed $TEST_DATA_BASE"
-    fi
-}
-
-# Create fresh test directories
+# Create fresh temporary directories
 setup_directories() {
-    cleanup_directories
-    print_info "Creating test directories..."
-    mkdir -p "$INSTANCE1_DIR"
-    mkdir -p "$INSTANCE2_DIR"
-    print_info "Created $INSTANCE1_DIR"
-    print_info "Created $INSTANCE2_DIR"
+    print_info "Creating temporary test directories..."
+    INSTANCE1_DIR=$(mktemp -d -t geogram_ble_test1_XXXXXX)
+    INSTANCE2_DIR=$(mktemp -d -t geogram_ble_test2_XXXXXX)
+    print_info "Instance 1 temp dir: $INSTANCE1_DIR"
+    print_info "Instance 2 temp dir: $INSTANCE2_DIR"
 }
 
 # Check if binary exists
@@ -245,6 +247,7 @@ launch_instance() {
     local port="$1"
     local data_dir="$2"
     local name="$3"
+    local nickname="$4"
 
     print_info "Launching $name on port $port..."
     print_info "  Data dir: $data_dir"
@@ -257,10 +260,15 @@ launch_instance() {
         sleep 2
     fi
 
-    # Launch with display
+    # Launch with display and new identity
     DISPLAY="${DISPLAY:-:0}" "$GEOGRAM_BINARY" \
         --port="$port" \
         --data-dir="$data_dir" \
+        --http-api \
+        --debug-api \
+        --new-identity \
+        --identity-type=client \
+        --nickname="$nickname" \
         > "${data_dir}/stdout.log" 2>&1 &
 
     echo $!
@@ -455,11 +463,6 @@ print_header "BLE Test: Linux to Linux (Automated)"
 
 # Parse arguments
 case "${1:-}" in
-    --cleanup)
-        cleanup_directories
-        print_success "Cleanup complete"
-        exit 0
-        ;;
     --manual)
         # Manual mode - use externally started instances
         if [ -z "${2:-}" ]; then
@@ -475,9 +478,10 @@ case "${1:-}" in
         echo ""
         echo "Options:"
         echo "  (none)      Auto-launch two instances and run tests"
-        echo "  --cleanup   Just cleanup old test directories"
         echo "  --manual IP Test against manually started instance"
         echo "  --help      Show this help"
+        echo ""
+        echo "Note: Temporary directories are automatically created and cleaned up."
         exit 0
         ;;
 esac
@@ -491,13 +495,13 @@ setup_directories
 # Launch two instances
 print_subheader "Launching Geogram Instances"
 
-INSTANCE1_PID=$(launch_instance "$INSTANCE1_PORT" "$INSTANCE1_DIR" "Instance 1")
+INSTANCE1_PID=$(launch_instance "$INSTANCE1_PORT" "$INSTANCE1_DIR" "Instance 1" "BLE Test Device 1")
 print_info "Instance 1 PID: $INSTANCE1_PID"
 
 # Small delay between launches
 sleep 2
 
-INSTANCE2_PID=$(launch_instance "$INSTANCE2_PORT" "$INSTANCE2_DIR" "Instance 2")
+INSTANCE2_PID=$(launch_instance "$INSTANCE2_PORT" "$INSTANCE2_DIR" "Instance 2" "BLE Test Device 2")
 print_info "Instance 2 PID: $INSTANCE2_PID"
 
 # Wait for both instances to start
@@ -565,8 +569,4 @@ print_subheader "Instance 2 (last 20 BLE logs)"
 get_logs "$INSTANCE2_PORT" "BLE" 20 | jq -r '.logs[]' 2>/dev/null | tail -10 || echo "(no logs)"
 
 # Cleanup happens via trap
-print_info ""
-print_info "Test data directories preserved at: $TEST_DATA_BASE"
-print_info "To cleanup: $0 --cleanup"
-
 exit $TEST_RESULT
