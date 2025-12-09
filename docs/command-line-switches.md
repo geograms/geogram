@@ -13,6 +13,8 @@ Options:
   --port=PORT, -p PORT       API server port (default: 3456)
   --data-dir=PATH, -d PATH   Data directory path
   --cli                      Run in CLI mode (no GUI)
+  --http-api                 Enable HTTP API on startup
+  --debug-api                Enable Debug API on startup
   --verbose                  Enable verbose logging
   --help, -h                 Show help message
   --version, -v              Show version information
@@ -81,6 +83,42 @@ Run in CLI (Command Line Interface) mode without the GUI.
 geogram_desktop --cli
 ```
 
+### --http-api
+
+Enable the HTTP API server on startup. By default, the HTTP API is disabled and must be enabled manually via the GUI or this flag.
+
+```bash
+geogram_desktop --http-api
+
+# Combined with custom port
+geogram_desktop --http-api --port=5678
+
+# For automated testing
+geogram_desktop --http-api --debug-api --data-dir=/tmp/test
+```
+
+**Use cases:**
+- Automated testing and CI/CD pipelines
+- Headless operation with API access
+- Remote device control and monitoring
+
+### --debug-api
+
+Enable the Debug API on startup. The Debug API provides additional endpoints for testing and automation, including:
+- Device discovery and BLE operations
+- Navigation control
+- Direct message testing
+- Toast notifications
+
+```bash
+geogram_desktop --debug-api
+
+# Typically used with --http-api
+geogram_desktop --http-api --debug-api
+```
+
+**Security note:** The Debug API should only be enabled in trusted environments as it allows remote control of the application.
+
 ### --verbose
 
 Enable verbose logging for debugging.
@@ -140,16 +178,34 @@ geogram_desktop --port=3457 --data-dir=~/.geogram-instance2
 Run tests against specific ports:
 
 ```bash
-# Start app on test port
-geogram_desktop --port=3460 --data-dir=/tmp/geogram-test &
+# Start app on test port with API enabled
+geogram_desktop --port=3460 --data-dir=/tmp/geogram-test --http-api --debug-api &
 
 # Run tests
-./test/ble_linux_linux.sh
 curl http://localhost:3460/api/debug
+curl http://localhost:3460/api/devices
 
 # Cleanup
 kill %1
 rm -rf /tmp/geogram-test
+```
+
+### Device-to-Device DM Testing
+
+Test direct messaging between two instances:
+
+```bash
+# Use the provided test script
+./test/run_dm_test.sh
+
+# Or manually run two instances
+geogram_desktop --port=5678 --data-dir=/tmp/instance1 --http-api --debug-api &
+geogram_desktop --port=5679 --data-dir=/tmp/instance2 --http-api --debug-api &
+
+# Send a message from instance 1 to instance 2's callsign
+curl -X POST http://localhost:5678/api/dm/X2TEST/messages \
+    -H "Content-Type: application/json" \
+    -d '{"content": "Hello from instance 1!"}'
 ```
 
 ### Clean Environment Testing
