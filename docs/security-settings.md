@@ -64,7 +64,7 @@ SecurityService().debugApiEnabled = true;
 
 Controls how precisely location data is shared with other devices. This is a privacy feature that rounds coordinates to a configurable precision.
 
-- **Default**: `50000.0` (50 km) - middle position on the slider
+- **Default**: `25000.0` (25 km) - city level, middle position on the slider
 - **Minimum**: `5.0` meters (very precise)
 - **Maximum**: `100000.0` meters (100 km, very private)
 
@@ -101,11 +101,11 @@ final (roundedLat, roundedLon) = SecurityService().applyLocationGranularity(
 
 // For slider UI (0.0 to 1.0)
 final sliderValue = SecurityService().locationGranularitySliderValue;
-SecurityService().locationGranularitySliderValue = 0.5; // Sets to ~50km
+SecurityService().locationGranularitySliderValue = 0.5; // Sets to ~700m (logarithmic scale middle)
 
 // Get human-readable display
-final display = SecurityService().locationGranularityDisplay; // e.g., "50 km"
-final level = SecurityService().privacyLevelDescription; // e.g., "Regional level"
+final display = SecurityService().locationGranularityDisplay; // e.g., "25 km"
+final level = SecurityService().privacyLevelDescription; // e.g., "City level"
 ```
 
 ## Configuration File
@@ -121,7 +121,7 @@ Example configuration:
   "security": {
     "httpApiEnabled": true,
     "debugApiEnabled": false,
-    "locationGranularityMeters": 50000.0
+    "locationGranularityMeters": 25000.0
   }
 }
 ```

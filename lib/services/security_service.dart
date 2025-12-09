@@ -27,7 +27,7 @@ class SecurityService {
   // Default values
   static const bool _defaultDebugApiEnabled = false;
   static const bool _defaultHttpApiEnabled = true;
-  static const double _defaultLocationGranularity = 50000.0; // 50 km default (middle of slider)
+  static const double _defaultLocationGranularity = 25000.0; // 25 km default (middle of slider, city level)
 
   // Location granularity bounds (logarithmic scale from 5m to 100km)
   static const double minGranularityMeters = 5.0;
@@ -135,18 +135,16 @@ class SecurityService {
   /// Get a human-readable description of the current privacy level
   String get privacyLevelDescription {
     final meters = locationGranularityMeters;
-    if (meters <= 10) {
+    if (meters <= 50) {
       return 'Very precise (exact location)';
-    } else if (meters <= 100) {
+    } else if (meters <= 500) {
       return 'Precise (street level)';
-    } else if (meters <= 1000) {
+    } else if (meters <= 5000) {
       return 'Neighborhood level';
-    } else if (meters <= 10000) {
-      return 'City/town level';
-    } else if (meters <= 50000) {
-      return 'Regional level';
+    } else if (meters <= 40000) {
+      return 'City level';
     } else {
-      return 'Country/area level';
+      return 'Region level';
     }
   }
 
