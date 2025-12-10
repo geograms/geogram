@@ -155,7 +155,10 @@ class StationTransport extends Transport with TransportMixin {
     final uri = Uri.parse('$httpUrl/$targetCallsign${message.path}');
     final method = message.method?.toUpperCase() ?? 'GET';
     final headers = message.headers ?? {'Content-Type': 'application/json'};
-    final body = message.payload != null ? jsonEncode(message.payload) : null;
+    // payload may already be a JSON string (from DM API) - don't double-encode
+    final body = message.payload != null
+        ? (message.payload is String ? message.payload : jsonEncode(message.payload))
+        : null;
 
     LogService().log('StationTransport: $method ${message.path} to $targetCallsign via station');
 

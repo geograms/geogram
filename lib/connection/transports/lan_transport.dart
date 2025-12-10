@@ -150,7 +150,10 @@ class LanTransport extends Transport with TransportMixin {
     final uri = Uri.parse('$baseUrl${message.path}');
     final method = message.method?.toUpperCase() ?? 'GET';
     final headers = message.headers ?? {'Content-Type': 'application/json'};
-    final body = message.payload != null ? jsonEncode(message.payload) : null;
+    // payload may already be a JSON string (from DM API) - don't double-encode
+    final body = message.payload != null
+        ? (message.payload is String ? message.payload : jsonEncode(message.payload))
+        : null;
 
     LogService().log('LanTransport: $method ${message.path} to ${message.targetCallsign}');
 
