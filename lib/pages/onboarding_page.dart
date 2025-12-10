@@ -75,57 +75,57 @@ class _OnboardingPageState extends State<OnboardingPage> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const SizedBox(height: 32),
+              const SizedBox(height: 16),
 
-              // Header with icon
-              Center(
-                child: Container(
-                  width: 80,
-                  height: 80,
-                  decoration: BoxDecoration(
-                    color: theme.colorScheme.primaryContainer,
-                    borderRadius: BorderRadius.circular(20),
+              // Header with icon on left, text on right
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(
+                    width: 64,
+                    height: 64,
+                    decoration: BoxDecoration(
+                      color: theme.colorScheme.primaryContainer,
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    child: Icon(
+                      Icons.satellite_alt,
+                      size: 32,
+                      color: theme.colorScheme.primary,
+                    ),
                   ),
-                  child: Icon(
-                    Icons.satellite_alt,
-                    size: 40,
-                    color: theme.colorScheme.primary,
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          _i18n.t('onboarding_welcome_title'),
+                          style: theme.textTheme.titleLarge?.copyWith(
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          _i18n.t('onboarding_welcome_subtitle'),
+                          style: theme.textTheme.titleSmall?.copyWith(
+                            color: theme.colorScheme.primary,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          _i18n.t('onboarding_intro_description'),
+                          style: theme.textTheme.bodyMedium?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
-                ),
+                ],
               ),
+
               const SizedBox(height: 24),
-
-              // Title
-              Center(
-                child: Text(
-                  _i18n.t('onboarding_welcome_title'),
-                  style: theme.textTheme.headlineMedium?.copyWith(
-                    fontWeight: FontWeight.bold,
-                  ),
-                  textAlign: TextAlign.center,
-                ),
-              ),
-              const SizedBox(height: 8),
-              Center(
-                child: Text(
-                  _i18n.t('onboarding_welcome_subtitle'),
-                  style: theme.textTheme.titleMedium?.copyWith(
-                    color: theme.colorScheme.primary,
-                  ),
-                  textAlign: TextAlign.center,
-                ),
-              ),
-              const SizedBox(height: 24),
-
-              // Description
-              Text(
-                _i18n.t('onboarding_intro_description'),
-                style: theme.textTheme.bodyLarge?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant,
-                ),
-              ),
-
-              const SizedBox(height: 32),
 
               // Permissions section
               Text(
@@ -177,7 +177,7 @@ class _OnboardingPageState extends State<OnboardingPage> {
                 _i18n.t('onboarding_permission_install_short'),
               ),
 
-              const SizedBox(height: 24),
+              const SizedBox(height: 16),
 
               // Privacy note
               Container(
@@ -207,7 +207,7 @@ class _OnboardingPageState extends State<OnboardingPage> {
                 ),
               ),
 
-              const SizedBox(height: 32),
+              const SizedBox(height: 20),
 
               // Continue button
               SizedBox(
