@@ -407,6 +407,7 @@ class PureConnectedClient {
   final String id;
   String? callsign;
   String? nickname;
+  String? color;
   String? deviceType;
   String? platform;
   String? version;
@@ -421,6 +422,7 @@ class PureConnectedClient {
     required this.id,
     this.callsign,
     this.nickname,
+    this.color,
     this.deviceType,
     this.platform,
     this.version,
@@ -434,6 +436,7 @@ class PureConnectedClient {
         'id': id,
         'callsign': callsign ?? 'Unknown',
         'nickname': nickname,
+        'color': color,
         'device_type': deviceType ?? 'Unknown',
         'platform': platform,
         'version': version,
@@ -1818,8 +1821,9 @@ class PureStationServer {
             final event = message['event'] as Map<String, dynamic>?;
             double? latitude;
             double? longitude;
+            String? color;
             if (event != null) {
-              // Extract callsign, nickname, platform, and coordinates from event tags
+              // Extract callsign, nickname, platform, color, and coordinates from event tags
               final tags = event['tags'] as List<dynamic>?;
               String? platform;
               if (tags != null) {
@@ -1831,6 +1835,8 @@ class PureStationServer {
                       nickname = tag[1] as String?;
                     } else if (tag[0] == 'platform') {
                       platform = tag[1] as String?;
+                    } else if (tag[0] == 'color') {
+                      color = tag[1] as String?;
                     } else if (tag[0] == 'latitude') {
                       latitude = double.tryParse(tag[1].toString());
                     } else if (tag[0] == 'longitude') {
@@ -1866,6 +1872,7 @@ class PureStationServer {
 
             client.callsign = callsign;
             client.nickname = nickname;
+            client.color = color;
             client.deviceType = deviceType;
             client.version = version;
             client.latitude = latitude;

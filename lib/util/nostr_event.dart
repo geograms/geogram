@@ -117,6 +117,7 @@ class NostrEvent {
     required String npub,
     required String callsign,
     String? nickname,
+    String? color,
     double? latitude,
     double? longitude,
     String? platform,
@@ -130,6 +131,10 @@ class NostrEvent {
     // Include nickname if provided and not empty (for friendly URL support)
     if (nickname != null && nickname.isNotEmpty) {
       tags.add(['nickname', nickname]);
+    }
+    // Include preferred color if set
+    if (color != null && color.isNotEmpty) {
+      tags.add(['color', color]);
     }
     // Include location if both coordinates are provided
     if (latitude != null && longitude != null) {

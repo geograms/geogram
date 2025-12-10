@@ -293,11 +293,13 @@ class LogApiService {
     double? latitude;
     double? longitude;
     String? nickname;
+    String? color;
 
     try {
       final profile = ProfileService().getProfile();
       callsign = profile.callsign;
       nickname = profile.nickname;
+      color = profile.preferredColor;
 
       // Get location: prefer profile, fallback to UserLocationService (GPS/IP-based)
       double? rawLat = profile.latitude;
@@ -349,6 +351,11 @@ class LogApiService {
     // Add nickname if available
     if (nickname != null && nickname.isNotEmpty) {
       response['nickname'] = nickname;
+    }
+
+    // Add preferred color if set
+    if (color != null && color.isNotEmpty) {
+      response['color'] = color;
     }
 
     return shelf.Response.ok(

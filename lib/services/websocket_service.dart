@@ -130,6 +130,7 @@ class WebSocketService {
         npub: profile.npub,
         callsign: profile.callsign,
         nickname: profile.nickname,
+        color: profile.preferredColor,
         latitude: roundedLat,
         longitude: roundedLon,
         platform: platform,

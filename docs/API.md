@@ -365,15 +365,21 @@ Returns detailed station status and configuration.
 ```json
 {
   "name": "Geogram Desktop Station",
-  "version": "1.5.36",
-  "callsign": "STATION-42",
+  "version": "1.6.16",
+  "callsign": "X1ABCD",
+  "nickname": "Alice",
+  "color": "purple",
   "description": "My local Geogram station",
   "connected_devices": 5,
   "uptime": 3600,
   "station_mode": true,
-  "location": "Grid Square",
-  "latitude": 38.7169,
-  "longitude": -9.1399,
+  "location": {
+    "latitude": 38.72,
+    "longitude": -9.14,
+    "precision_km": 25
+  },
+  "latitude": 38.72,
+  "longitude": -9.14,
   "tile_server": true,
   "osm_fallback": true,
   "cache_size": 150,
@@ -383,20 +389,25 @@ Returns detailed station status and configuration.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `name` | string | Station name |
+| `name` | string | Station/device name |
 | `version` | string | Geogram version |
-| `callsign` | string | Station callsign |
+| `callsign` | string | Device callsign (e.g., X1ABCD) |
+| `nickname` | string | User's display name (optional) |
+| `color` | string | User's preferred color: red, blue, green, yellow, purple, orange, pink, cyan |
 | `description` | string | Station description |
-| `connected_devices` | int | Number of connected clients |
-| `uptime` | int | Uptime in seconds |
+| `connected_devices` | int | Number of connected clients (stations only) |
+| `uptime` | int | Uptime in seconds (stations only) |
 | `station_mode` | bool | Whether running as station |
-| `location` | string | Location description |
-| `latitude` | float | Station latitude |
-| `longitude` | float | Station longitude |
-| `tile_server` | bool | Tile server enabled |
-| `osm_fallback` | bool | OSM fallback enabled |
-| `cache_size` | int | Tiles in cache |
-| `cache_size_bytes` | int | Cache size in bytes |
+| `location` | object | Location with privacy precision |
+| `location.latitude` | float | Latitude (rounded to privacy precision) |
+| `location.longitude` | float | Longitude (rounded to privacy precision) |
+| `location.precision_km` | int | Location privacy precision in km (from Security settings) |
+| `latitude` | float | Latitude (top-level, for backwards compatibility) |
+| `longitude` | float | Longitude (top-level, for backwards compatibility) |
+| `tile_server` | bool | Tile server enabled (stations only) |
+| `osm_fallback` | bool | OSM fallback enabled (stations only) |
+| `cache_size` | int | Tiles in cache (stations only) |
+| `cache_size_bytes` | int | Cache size in bytes (stations only) |
 
 ---
 
@@ -409,14 +420,14 @@ Returns list of connected clients, grouped by callsign.
 **Response (200 OK):**
 ```json
 {
-  "station": "STATION-42",
+  "station": "X3WFE4",
   "count": 3,
   "clients": [
     {
-      "callsign": "USER-123",
+      "callsign": "X1ABCD",
       "nickname": "Alice",
+      "color": "purple",
       "npub": "npub1abc...",
-      "connection_types": ["local", "lora"],
       "latitude": 38.72,
       "longitude": -9.14,
       "connected_at": "2024-12-08T10:00:00Z",
