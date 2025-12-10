@@ -74,11 +74,13 @@ class UpdateService {
         if (lastCheckedVersion != null && lastCheckedVersion.isNotEmpty) {
           final wasUpdateAvailable = isNewerVersion(getCurrentVersion(), lastCheckedVersion);
           if (wasUpdateAvailable) {
-            // Create a minimal ReleaseInfo so the banner can show the version
+            // Create ReleaseInfo with cached release notes so changelog is visible
             _latestRelease = ReleaseInfo(
               version: lastCheckedVersion,
               tagName: 'v$lastCheckedVersion',
               name: 'Version $lastCheckedVersion',
+              body: _settings?.lastCheckedReleaseBody,
+              htmlUrl: _settings?.lastCheckedHtmlUrl,
             );
             updateAvailable.value = true;
             LogService().log('Restored update available state: $lastCheckedVersion > ${getCurrentVersion()}');
@@ -261,6 +263,8 @@ class UpdateService {
     _settings = _settings?.copyWith(
       lastCheckTime: DateTime.now(),
       lastCheckedVersion: release.version,
+      lastCheckedReleaseBody: release.body,
+      lastCheckedHtmlUrl: release.htmlUrl,
     );
     _saveSettings();
 

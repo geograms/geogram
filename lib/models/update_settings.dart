@@ -160,6 +160,8 @@ class UpdateSettings {
   int maxBackups;
   DateTime? lastCheckTime;
   String? lastCheckedVersion;
+  String? lastCheckedReleaseBody; // Cached release notes/changelog
+  String? lastCheckedHtmlUrl; // GitHub release URL
 
   UpdateSettings({
     this.autoCheckUpdates = true,
@@ -170,6 +172,8 @@ class UpdateSettings {
     this.maxBackups = 5,
     this.lastCheckTime,
     this.lastCheckedVersion,
+    this.lastCheckedReleaseBody,
+    this.lastCheckedHtmlUrl,
   });
 
   factory UpdateSettings.fromJson(Map<String, dynamic> json) {
@@ -185,6 +189,8 @@ class UpdateSettings {
           ? DateTime.tryParse(json['lastCheckTime'] as String)
           : null,
       lastCheckedVersion: json['lastCheckedVersion'] as String?,
+      lastCheckedReleaseBody: json['lastCheckedReleaseBody'] as String?,
+      lastCheckedHtmlUrl: json['lastCheckedHtmlUrl'] as String?,
     );
   }
 
@@ -198,6 +204,8 @@ class UpdateSettings {
       'maxBackups': maxBackups,
       'lastCheckTime': lastCheckTime?.toIso8601String(),
       'lastCheckedVersion': lastCheckedVersion,
+      'lastCheckedReleaseBody': lastCheckedReleaseBody,
+      'lastCheckedHtmlUrl': lastCheckedHtmlUrl,
     };
   }
 
@@ -210,6 +218,8 @@ class UpdateSettings {
     int? maxBackups,
     DateTime? lastCheckTime,
     String? lastCheckedVersion,
+    String? lastCheckedReleaseBody,
+    String? lastCheckedHtmlUrl,
   }) {
     return UpdateSettings(
       autoCheckUpdates: autoCheckUpdates ?? this.autoCheckUpdates,
@@ -220,6 +230,8 @@ class UpdateSettings {
       maxBackups: maxBackups ?? this.maxBackups,
       lastCheckTime: lastCheckTime ?? this.lastCheckTime,
       lastCheckedVersion: lastCheckedVersion ?? this.lastCheckedVersion,
+      lastCheckedReleaseBody: lastCheckedReleaseBody ?? this.lastCheckedReleaseBody,
+      lastCheckedHtmlUrl: lastCheckedHtmlUrl ?? this.lastCheckedHtmlUrl,
     );
   }
 }
