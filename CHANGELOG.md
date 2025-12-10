@@ -1,5 +1,11 @@
 # Geogram Desktop Changelog
 
+## 2025-12-10 - v1.6.14
+
+### Changes
+- Add i18n strings for BLE+ upgrade and folder features
+
+
 ## 2025-12-10 - v1.6.11
 
 ### Changes
