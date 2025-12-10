@@ -655,18 +655,22 @@ class DevicesService {
     final config = ConfigService();
     final foldersJson = config.get('deviceFolders', <dynamic>[]) as List<dynamic>;
     final folders = foldersJson.map((json) => DeviceFolder.fromJson(json as Map<String, dynamic>)).toList();
+    final expandedStates = _getFolderExpandedStates();
 
     // Ensure default folder exists
     if (!folders.any((f) => f.id == defaultFolderId)) {
-      folders.insert(0, DeviceFolder(id: defaultFolderId, name: 'Discovered', isDefault: true));
+      folders.insert(0, DeviceFolder(id: defaultFolderId, name: 'Discovered', isDefault: true, order: -1000));
     }
 
-    // Sort: default first, then by name
-    folders.sort((a, b) {
-      if (a.isDefault) return -1;
-      if (b.isDefault) return 1;
-      return a.name.compareTo(b.name);
-    });
+    // Apply saved expanded states
+    for (final folder in folders) {
+      if (expandedStates.containsKey(folder.id)) {
+        folder.isExpanded = expandedStates[folder.id]!;
+      }
+    }
+
+    // Sort by order (default folder has order -1000 to stay first unless moved)
+    folders.sort((a, b) => a.order.compareTo(b.order));
 
     return folders;
   }
@@ -674,15 +678,56 @@ class DevicesService {
   /// Save folders to config
   void _saveFolders(List<DeviceFolder> folders) {
     final config = ConfigService();
-    config.set('deviceFolders', folders.where((f) => !f.isDefault).map((f) => f.toJson()).toList());
+    // Save all folders including default folder (for order persistence)
+    config.set('deviceFolders', folders.map((f) => f.toJson()).toList());
     _devicesController.add(getAllDevices());
+  }
+
+  /// Get folder expanded states from config
+  Map<String, bool> _getFolderExpandedStates() {
+    final config = ConfigService();
+    final states = config.get('folderExpandedStates', <String, dynamic>{}) as Map<String, dynamic>;
+    return states.map((k, v) => MapEntry(k, v as bool));
+  }
+
+  /// Save folder expanded state
+  void setFolderExpanded(String folderId, bool isExpanded) {
+    final states = _getFolderExpandedStates();
+    states[folderId] = isExpanded;
+    ConfigService().set('folderExpandedStates', states);
+  }
+
+  /// Get folder expanded state
+  bool isFolderExpanded(String folderId) {
+    final states = _getFolderExpandedStates();
+    return states[folderId] ?? true; // Default to expanded
+  }
+
+  /// Reorder folders - move folder to new position
+  void reorderFolders(int oldIndex, int newIndex) {
+    final folders = getFolders();
+    if (oldIndex < 0 || oldIndex >= folders.length) return;
+    if (newIndex < 0 || newIndex >= folders.length) return;
+
+    final folder = folders.removeAt(oldIndex);
+    folders.insert(newIndex, folder);
+
+    // Update order values
+    for (int i = 0; i < folders.length; i++) {
+      folders[i].order = i;
+    }
+
+    _saveFolders(folders);
+    LogService().log('DevicesService: Reordered folders, moved ${folder.name} from $oldIndex to $newIndex');
   }
 
   /// Create a new folder
   DeviceFolder createFolder(String name) {
     final folders = getFolders();
     final id = 'folder_${DateTime.now().millisecondsSinceEpoch}';
-    final folder = DeviceFolder(id: id, name: name);
+    // New folders get order at the end
+    final maxOrder = folders.isEmpty ? 0 : folders.map((f) => f.order).reduce((a, b) => a > b ? a : b);
+    final folder = DeviceFolder(id: id, name: name, order: maxOrder + 1);
     folders.add(folder);
     _saveFolders(folders);
     LogService().log('DevicesService: Created folder "$name" with id $id');
@@ -2008,12 +2053,14 @@ class DeviceFolder {
   String name;
   final bool isDefault;
   bool isExpanded;
+  int order;  // Lower number = higher in list
 
   DeviceFolder({
     required this.id,
     required this.name,
     this.isDefault = false,
     this.isExpanded = true,
+    this.order = 0,
   });
 
   factory DeviceFolder.fromJson(Map<String, dynamic> json) {
@@ -2022,6 +2069,7 @@ class DeviceFolder {
       name: json['name'] as String,
       isDefault: json['isDefault'] as bool? ?? false,
       isExpanded: json['isExpanded'] as bool? ?? true,
+      order: json['order'] as int? ?? 0,
     );
   }
 
@@ -2031,6 +2079,7 @@ class DeviceFolder {
       'name': name,
       'isDefault': isDefault,
       'isExpanded': isExpanded,
+      'order': order,
     };
   }
 }

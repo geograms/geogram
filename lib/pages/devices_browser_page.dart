@@ -55,9 +55,6 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
   bool _isMultiSelectMode = false;
   final Set<String> _selectedCallsigns = {};
 
-  // Folder expansion state
-  final Map<String, bool> _expandedFolders = {};
-
   static const Duration _refreshInterval = Duration(seconds: 30);
 
   @override
@@ -563,45 +560,63 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
 
     return RefreshIndicator(
       onRefresh: () => _refreshDevices(force: true),
-      child: ListView.builder(
+      child: ReorderableListView.builder(
         physics: const AlwaysScrollableScrollPhysics(),
         itemCount: folders.length,
+        buildDefaultDragHandles: false,
+        onReorder: (oldIndex, newIndex) {
+          if (newIndex > oldIndex) newIndex--;
+          _devicesService.reorderFolders(oldIndex, newIndex);
+          setState(() {});
+        },
         itemBuilder: (context, index) {
           final folder = folders[index];
-          return _buildFolderSection(theme, folder);
+          return _buildFolderSection(theme, folder, index);
         },
       ),
     );
   }
 
   /// Build a folder section with its devices
-  Widget _buildFolderSection(ThemeData theme, DeviceFolder folder) {
+  Widget _buildFolderSection(ThemeData theme, DeviceFolder folder, int index) {
     final devicesInFolder = _devicesService.getDevicesInFolder(
       folder.id == DevicesService.defaultFolderId ? null : folder.id,
     );
-    final isExpanded = _expandedFolders[folder.id] ?? true;
+    final isExpanded = folder.isExpanded;
     final deviceCount = devicesInFolder.length;
 
     return Column(
+      key: ValueKey(folder.id),
       children: [
         // Folder header
         InkWell(
           onTap: () {
-            setState(() {
-              _expandedFolders[folder.id] = !isExpanded;
-            });
+            _devicesService.setFolderExpanded(folder.id, !isExpanded);
+            setState(() {});
           },
           child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
             color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
             child: Row(
               children: [
+                // Drag handle for reordering
+                ReorderableDragStartListener(
+                  index: index,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    child: Icon(
+                      Icons.drag_handle,
+                      size: 20,
+                      color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.5),
+                    ),
+                  ),
+                ),
                 Icon(
                   isExpanded ? Icons.expand_more : Icons.chevron_right,
                   size: 24,
                   color: theme.colorScheme.onSurfaceVariant,
                 ),
-                const SizedBox(width: 8),
+                const SizedBox(width: 4),
                 Icon(
                   folder.isDefault ? Icons.inbox : Icons.folder,
                   size: 20,
