@@ -328,6 +328,62 @@ EventBus().on<DirectMessageSyncEvent>((event) {
 });
 ```
 
+### ConnectionStateChangedEvent
+
+Fired when a connection type becomes available or unavailable. This enables apps to react to connectivity changes and update UI accordingly.
+
+```dart
+enum ConnectionType {
+  station,    // Station relay (internet) connection
+  lan,        // Local network connection
+  bluetooth,  // Bluetooth Low Energy connection
+}
+
+class ConnectionStateChangedEvent extends AppEvent {
+  final ConnectionType connectionType;
+  final bool isConnected;
+  final String? stationUrl;      // For station: the URL connected to
+  final String? stationCallsign; // For station: the station's callsign
+}
+```
+
+**Publishers:**
+
+| Service | Event | Trigger |
+|---------|-------|---------|
+| `WebSocketService` | station connected | Receives `hello_ack` with `success: true` |
+| `WebSocketService` | station disconnected | Connection loss or explicit disconnect |
+| `BLEDiscoveryService` | bluetooth available | Bluetooth adapter turns on |
+| `BLEDiscoveryService` | bluetooth unavailable | Bluetooth adapter turns off |
+
+**Usage Example:**
+
+```dart
+// Subscribe to connection changes
+EventBus().on<ConnectionStateChangedEvent>((event) {
+  if (event.connectionType == ConnectionType.station) {
+    if (event.isConnected) {
+      print('Connected to station: ${event.stationCallsign}');
+    } else {
+      print('Disconnected from station');
+    }
+  } else if (event.connectionType == ConnectionType.bluetooth) {
+    print('Bluetooth is now ${event.isConnected ? "available" : "unavailable"}');
+  }
+});
+
+// Use for UI updates (e.g., filtering connection method tags)
+if (mounted) {
+  setState(() {
+    // Rebuild UI to reflect new connection state
+  });
+}
+```
+
+**Integrated Subscribers:**
+
+- `DevicesBrowserPage` - Refreshes connection method tags when connectivity changes
+
 ---
 
 ## Future Extensions

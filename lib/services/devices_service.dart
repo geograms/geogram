@@ -332,6 +332,9 @@ class DevicesService {
     try {
       _bleService = BLEDiscoveryService();
 
+      // Initialize BLE service (starts monitoring Bluetooth adapter state)
+      await _bleService!.initialize();
+
       // Subscribe to BLE device discoveries
       _bleSubscription = _bleService!.devicesStream.listen((bleDevices) {
         _handleBLEDevices(bleDevices);

@@ -17,6 +17,7 @@ import '../services/direct_message_service.dart';
 import '../services/station_discovery_service.dart';
 import '../services/station_service.dart';
 import '../services/websocket_service.dart';
+import '../util/event_bus.dart';
 import 'chat_browser_page.dart';
 import 'dm_chat_page.dart';
 
@@ -57,6 +58,9 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
   bool _isMultiSelectMode = false;
   final Set<String> _selectedCallsigns = {};
 
+  // Connection state subscription
+  EventSubscription<ConnectionStateChangedEvent>? _connectionStateSubscription;
+
   static const Duration _refreshInterval = Duration(seconds: 30);
 
   @override
@@ -64,7 +68,20 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
     super.initState();
     _initialize();
     _subscribeToUnreadCounts();
+    _subscribeToConnectionStateChanges();
     _startAutoRefresh();
+  }
+
+  /// Subscribe to connection state changes to refresh UI when connectivity changes
+  void _subscribeToConnectionStateChanges() {
+    _connectionStateSubscription = EventBus().on<ConnectionStateChangedEvent>((event) {
+      LogService().log('DevicesBrowserPage: Connection state changed - ${event.connectionType} ${event.isConnected ? "connected" : "disconnected"}');
+      if (mounted) {
+        setState(() {
+          // Trigger rebuild to update connection method tags
+        });
+      }
+    });
   }
 
   void _startAutoRefresh() {
@@ -135,6 +152,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
     _refreshTimer?.cancel();
     _unreadSubscription?.cancel();
     _dmUnreadSubscription?.cancel();
+    _connectionStateSubscription?.cancel();
     super.dispose();
   }
 

@@ -274,3 +274,29 @@ class DirectMessageSyncEvent extends AppEvent {
     this.error,
   });
 }
+
+/// Connection type for ConnectionStateChangedEvent
+enum ConnectionType {
+  station,    // Station relay (internet) connection
+  lan,        // Local network connection
+  bluetooth,  // Bluetooth Low Energy connection
+}
+
+/// Connection state changed event
+/// Fired when a connection type becomes available or unavailable
+class ConnectionStateChangedEvent extends AppEvent {
+  final ConnectionType connectionType;
+  final bool isConnected;
+  final String? stationUrl;     // For station: the URL connected to
+  final String? stationCallsign; // For station: the station's callsign
+
+  ConnectionStateChangedEvent({
+    required this.connectionType,
+    required this.isConnected,
+    this.stationUrl,
+    this.stationCallsign,
+  });
+
+  @override
+  String toString() => 'ConnectionStateChangedEvent(type: $connectionType, connected: $isConnected)';
+}

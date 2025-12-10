@@ -15,6 +15,7 @@ import '../services/collection_service.dart';
 import '../services/signing_service.dart';
 import '../util/nostr_event.dart';
 import '../util/tlsh.dart';
+import '../util/event_bus.dart';
 import '../models/update_notification.dart';
 import '../models/blog_post.dart';
 
@@ -33,6 +34,9 @@ class WebSocketService {
   String? _stationUrl;
   bool _shouldReconnect = false;
   bool _isReconnecting = false;
+  bool _lastConnectionState = false; // Track last state to avoid duplicate events
+  String? _connectedStationCallsign;
+  final EventBus _eventBus = EventBus();
 
   Stream<Map<String, dynamic>> get messages => _messageController.stream;
   Stream<UpdateNotification> get updates => _updateController.stream;
@@ -195,12 +199,15 @@ class WebSocketService {
               LogService().log('✓ PONG received from station');
             } else if (data['type'] == 'hello_ack') {
               final success = data['success'] as bool? ?? false;
+              final stationId = data['station_id'] as String?;
               if (success) {
                 LogService().log('✓ Hello acknowledged!');
-                LogService().log('Station ID: ${data['station_id']}');
+                LogService().log('Station ID: $stationId');
                 LogService().log('Message: ${data['message']}');
                 LogService().log('══════════════════════════════════════');
                 _isReconnecting = false; // Reset reconnecting flag on successful connection
+                // Fire connected event
+                _fireConnectionStateChanged(true, stationCallsign: stationId);
               } else {
                 LogService().log('✗ Hello rejected');
                 LogService().log('Reason: ${data['message']}');
@@ -282,6 +289,9 @@ class WebSocketService {
     }
     _channel = null;
     _subscription = null;
+
+    // Fire disconnected event
+    _fireConnectionStateChanged(false);
   }
 
   /// Send message to station
@@ -1014,7 +1024,31 @@ class WebSocketService {
     _subscription?.cancel();
     _subscription = null;
 
+    // Fire disconnected event
+    _fireConnectionStateChanged(false);
+
     LogService().log('Connection lost - will attempt reconnection in 10 seconds');
+  }
+
+  /// Fire connection state changed event (only if state actually changed)
+  void _fireConnectionStateChanged(bool connected, {String? stationCallsign}) {
+    if (connected == _lastConnectionState) {
+      return; // No change, don't fire duplicate event
+    }
+
+    _lastConnectionState = connected;
+    if (connected) {
+      _connectedStationCallsign = stationCallsign;
+    }
+
+    LogService().log('ConnectionStateChanged: station ${connected ? "connected" : "disconnected"}');
+
+    _eventBus.fire(ConnectionStateChangedEvent(
+      connectionType: ConnectionType.station,
+      isConnected: connected,
+      stationUrl: connected ? _stationUrl : null,
+      stationCallsign: connected ? _connectedStationCallsign : null,
+    ));
   }
 
   /// Attempt to reconnect to station

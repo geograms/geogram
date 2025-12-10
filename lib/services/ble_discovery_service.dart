@@ -15,6 +15,7 @@ import 'app_args.dart';
 import 'ble_identity_service.dart';
 import 'ble_permission_service.dart';
 import 'log_service.dart';
+import '../util/event_bus.dart';
 
 /// Represents a device discovered via BLE
 class BLEDevice {
@@ -92,6 +93,58 @@ class BLEDiscoveryService {
 
   /// Scan results subscription
   StreamSubscription<List<ScanResult>>? _scanSubscription;
+
+  /// Event bus for connection state changes
+  final EventBus _eventBus = EventBus();
+
+  /// Bluetooth adapter state subscription
+  StreamSubscription<BluetoothAdapterState>? _adapterStateSubscription;
+
+  /// Last known Bluetooth availability state (to avoid duplicate events)
+  bool _lastBluetoothAvailable = false;
+
+  /// Initialize the service and start monitoring Bluetooth adapter state
+  Future<void> initialize() async {
+    if (kIsWeb) return; // BLE not supported on web
+
+    // Check initial state
+    try {
+      final isSupported = await FlutterBluePlus.isSupported;
+      if (!isSupported) {
+        LogService().log('BLEDiscovery: Bluetooth not supported');
+        return;
+      }
+
+      // Monitor adapter state changes
+      _adapterStateSubscription = FlutterBluePlus.adapterState.listen((state) {
+        final isAvailable = state == BluetoothAdapterState.on;
+        _fireBluetoothStateChanged(isAvailable);
+      });
+
+      // Fire initial state
+      final state = await FlutterBluePlus.adapterState.first;
+      final isAvailable = state == BluetoothAdapterState.on;
+      _fireBluetoothStateChanged(isAvailable);
+    } catch (e) {
+      LogService().log('BLEDiscovery: Error initializing: $e');
+    }
+  }
+
+  /// Fire Bluetooth state changed event (only if state actually changed)
+  void _fireBluetoothStateChanged(bool isAvailable) {
+    if (isAvailable == _lastBluetoothAvailable) {
+      return; // No change, don't fire duplicate event
+    }
+
+    _lastBluetoothAvailable = isAvailable;
+    LogService().log('ConnectionStateChanged: bluetooth ${isAvailable ? "available" : "unavailable"}');
+
+    _eventBus.fire(ConnectionStateChangedEvent(
+      connectionType: ConnectionType.bluetooth,
+      isConnected: isAvailable,
+    ));
+  }
+
 
   /// Check if BLE is supported and available
   Future<bool> isAvailable() async {
@@ -853,6 +906,7 @@ class BLEDiscoveryService {
 
   /// Dispose resources
   void dispose() {
+    _adapterStateSubscription?.cancel();
     stopScanning();
     stopAdvertising();
     closeAllConnections();
