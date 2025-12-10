@@ -55,6 +55,9 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
   bool _isMultiSelectMode = false;
   final Set<String> _selectedCallsigns = {};
 
+  // Folder expansion state
+  final Map<String, bool> _expandedFolders = {};
+
   static const Duration _refreshInterval = Duration(seconds: 30);
 
   @override
@@ -413,6 +416,21 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
               onSelected: _handleMenuAction,
               itemBuilder: (context) => [
                 PopupMenuItem<String>(
+                  value: 'new_folder',
+                  child: Row(
+                    children: [
+                      Icon(
+                        Icons.create_new_folder_outlined,
+                        size: 20,
+                        color: theme.colorScheme.primary,
+                      ),
+                      const SizedBox(width: 12),
+                      Text(_i18n.t('new_folder')),
+                    ],
+                  ),
+                ),
+                const PopupMenuDivider(),
+                PopupMenuItem<String>(
                   value: 'select_multiple',
                   child: Row(
                     children: [
@@ -425,6 +443,30 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
                       Text(_isMultiSelectMode
                           ? _i18n.t('exit_selection')
                           : _i18n.t('select_multiple')),
+                    ],
+                  ),
+                ),
+                PopupMenuItem<String>(
+                  value: 'move_to_folder',
+                  enabled: _isMultiSelectMode && _selectedCallsigns.isNotEmpty,
+                  child: Row(
+                    children: [
+                      Icon(
+                        Icons.drive_file_move_outlined,
+                        size: 20,
+                        color: _isMultiSelectMode && _selectedCallsigns.isNotEmpty
+                            ? theme.colorScheme.primary
+                            : theme.colorScheme.onSurface.withValues(alpha: 0.38),
+                      ),
+                      const SizedBox(width: 12),
+                      Text(
+                        _i18n.t('move_to_folder'),
+                        style: TextStyle(
+                          color: _isMultiSelectMode && _selectedCallsigns.isNotEmpty
+                              ? null
+                              : theme.colorScheme.onSurface.withValues(alpha: 0.38),
+                        ),
+                      ),
                     ],
                   ),
                 ),
@@ -447,26 +489,6 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
                           color: _isMultiSelectMode && _selectedCallsigns.isNotEmpty
                               ? theme.colorScheme.error
                               : theme.colorScheme.onSurface.withValues(alpha: 0.38),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                PopupMenuItem<String>(
-                  value: 'move_to_folder',
-                  enabled: false, // Future feature
-                  child: Row(
-                    children: [
-                      Icon(
-                        Icons.folder_outlined,
-                        size: 20,
-                        color: theme.colorScheme.onSurface.withValues(alpha: 0.38),
-                      ),
-                      const SizedBox(width: 12),
-                      Text(
-                        _i18n.t('move_to_folder'),
-                        style: TextStyle(
-                          color: theme.colorScheme.onSurface.withValues(alpha: 0.38),
                         ),
                       ),
                     ],
@@ -532,8 +554,10 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
   }
 
   Widget _buildDeviceList(ThemeData theme) {
-    // Device list with pull-to-refresh (header moved to AppBar)
-    if (_devices.isEmpty) {
+    final folders = _devicesService.getFolders();
+
+    // If no devices at all, show empty state
+    if (_devices.isEmpty && folders.length <= 1) {
       return _buildNoDevices(theme);
     }
 
@@ -541,13 +565,340 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
       onRefresh: () => _refreshDevices(force: true),
       child: ListView.builder(
         physics: const AlwaysScrollableScrollPhysics(),
-        itemCount: _devices.length,
+        itemCount: folders.length,
         itemBuilder: (context, index) {
-          final device = _devices[index];
-          return _buildDeviceListTile(theme, device);
+          final folder = folders[index];
+          return _buildFolderSection(theme, folder);
         },
       ),
     );
+  }
+
+  /// Build a folder section with its devices
+  Widget _buildFolderSection(ThemeData theme, DeviceFolder folder) {
+    final devicesInFolder = _devicesService.getDevicesInFolder(
+      folder.id == DevicesService.defaultFolderId ? null : folder.id,
+    );
+    final isExpanded = _expandedFolders[folder.id] ?? true;
+    final deviceCount = devicesInFolder.length;
+
+    return Column(
+      children: [
+        // Folder header
+        InkWell(
+          onTap: () {
+            setState(() {
+              _expandedFolders[folder.id] = !isExpanded;
+            });
+          },
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
+            child: Row(
+              children: [
+                Icon(
+                  isExpanded ? Icons.expand_more : Icons.chevron_right,
+                  size: 24,
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+                const SizedBox(width: 8),
+                Icon(
+                  folder.isDefault ? Icons.inbox : Icons.folder,
+                  size: 20,
+                  color: theme.colorScheme.primary,
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    folder.name,
+                    style: theme.textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+                // Device count badge
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: theme.colorScheme.primaryContainer,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text(
+                    '$deviceCount',
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: theme.colorScheme.onPrimaryContainer,
+                    ),
+                  ),
+                ),
+                // Folder options menu (not for default folder on some actions)
+                PopupMenuButton<String>(
+                  icon: Icon(
+                    Icons.more_vert,
+                    size: 20,
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                  tooltip: _i18n.t('folder_options'),
+                  onSelected: (action) => _handleFolderAction(folder, action),
+                  itemBuilder: (context) => [
+                    if (!folder.isDefault)
+                      PopupMenuItem<String>(
+                        value: 'rename',
+                        child: Row(
+                          children: [
+                            Icon(Icons.edit_outlined, size: 20, color: theme.colorScheme.primary),
+                            const SizedBox(width: 12),
+                            Text(_i18n.t('rename')),
+                          ],
+                        ),
+                      ),
+                    if (!folder.isDefault)
+                      PopupMenuItem<String>(
+                        value: 'empty',
+                        enabled: deviceCount > 0,
+                        child: Row(
+                          children: [
+                            Icon(
+                              Icons.cleaning_services_outlined,
+                              size: 20,
+                              color: deviceCount > 0 ? theme.colorScheme.primary : theme.colorScheme.onSurface.withValues(alpha: 0.38),
+                            ),
+                            const SizedBox(width: 12),
+                            Text(
+                              _i18n.t('empty_folder'),
+                              style: TextStyle(
+                                color: deviceCount > 0 ? null : theme.colorScheme.onSurface.withValues(alpha: 0.38),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    if (!folder.isDefault)
+                      PopupMenuItem<String>(
+                        value: 'delete',
+                        child: Row(
+                          children: [
+                            Icon(Icons.delete_outline, size: 20, color: theme.colorScheme.error),
+                            const SizedBox(width: 12),
+                            Text(_i18n.t('delete_folder'), style: TextStyle(color: theme.colorScheme.error)),
+                          ],
+                        ),
+                      ),
+                    if (folder.isDefault && deviceCount > 0)
+                      PopupMenuItem<String>(
+                        value: 'select_all',
+                        child: Row(
+                          children: [
+                            Icon(Icons.select_all, size: 20, color: theme.colorScheme.primary),
+                            const SizedBox(width: 12),
+                            Text(_i18n.t('select_all')),
+                          ],
+                        ),
+                      ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+        // Devices in folder (when expanded)
+        if (isExpanded)
+          ...devicesInFolder.map((device) => DragTarget<String>(
+            onWillAcceptWithDetails: (details) => true,
+            onAcceptWithDetails: (details) {
+              _devicesService.moveDeviceToFolder(
+                details.data,
+                folder.id == DevicesService.defaultFolderId ? null : folder.id,
+              );
+              setState(() {});
+            },
+            builder: (context, candidateData, rejectedData) {
+              return Draggable<String>(
+                data: device.callsign,
+                feedback: Material(
+                  elevation: 4,
+                  borderRadius: BorderRadius.circular(8),
+                  child: Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: theme.colorScheme.primaryContainer,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.smartphone, color: theme.colorScheme.primary),
+                        const SizedBox(width: 8),
+                        Text(device.displayName),
+                      ],
+                    ),
+                  ),
+                ),
+                childWhenDragging: Opacity(
+                  opacity: 0.5,
+                  child: _buildDeviceListTile(theme, device),
+                ),
+                child: _buildDeviceListTile(theme, device),
+              );
+            },
+          )),
+        // Drop zone at folder level
+        if (isExpanded && devicesInFolder.isEmpty)
+          DragTarget<String>(
+            onWillAcceptWithDetails: (details) => true,
+            onAcceptWithDetails: (details) {
+              _devicesService.moveDeviceToFolder(
+                details.data,
+                folder.id == DevicesService.defaultFolderId ? null : folder.id,
+              );
+              setState(() {});
+            },
+            builder: (context, candidateData, rejectedData) {
+              return Container(
+                height: 60,
+                margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                decoration: BoxDecoration(
+                  border: Border.all(
+                    color: candidateData.isNotEmpty
+                        ? theme.colorScheme.primary
+                        : theme.colorScheme.outline.withValues(alpha: 0.3),
+                    style: BorderStyle.solid,
+                    width: candidateData.isNotEmpty ? 2 : 1,
+                  ),
+                  borderRadius: BorderRadius.circular(8),
+                  color: candidateData.isNotEmpty
+                      ? theme.colorScheme.primaryContainer.withValues(alpha: 0.3)
+                      : null,
+                ),
+                child: Center(
+                  child: Text(
+                    _i18n.t('drop_devices_here'),
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
+      ],
+    );
+  }
+
+  /// Handle folder menu actions
+  Future<void> _handleFolderAction(DeviceFolder folder, String action) async {
+    switch (action) {
+      case 'rename':
+        await _showRenameFolderDialog(folder);
+        break;
+      case 'empty':
+        await _confirmEmptyFolder(folder);
+        break;
+      case 'delete':
+        await _confirmDeleteFolder(folder);
+        break;
+      case 'select_all':
+        final devices = _devicesService.getDevicesInFolder(
+          folder.id == DevicesService.defaultFolderId ? null : folder.id,
+        );
+        setState(() {
+          _isMultiSelectMode = true;
+          for (final device in devices) {
+            _selectedCallsigns.add(device.callsign);
+          }
+        });
+        break;
+    }
+  }
+
+  /// Show dialog to rename a folder
+  Future<void> _showRenameFolderDialog(DeviceFolder folder) async {
+    final controller = TextEditingController(text: folder.name);
+    final result = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(_i18n.t('rename_folder')),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: InputDecoration(
+            labelText: _i18n.t('folder_name'),
+          ),
+          onSubmitted: (value) => Navigator.pop(context, value),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text(_i18n.t('cancel')),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, controller.text),
+            child: Text(_i18n.t('save')),
+          ),
+        ],
+      ),
+    );
+
+    if (result != null && result.trim().isNotEmpty && result.trim() != folder.name) {
+      _devicesService.renameFolder(folder.id, result.trim());
+      setState(() {});
+    }
+  }
+
+  /// Confirm emptying a folder
+  Future<void> _confirmEmptyFolder(DeviceFolder folder) async {
+    final deviceCount = _devicesService.getDevicesInFolder(folder.id).length;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(_i18n.t('empty_folder')),
+        content: Text(_i18n.t('empty_folder_confirm', params: [folder.name, deviceCount.toString()])),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text(_i18n.t('cancel')),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: Text(_i18n.t('empty')),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      _devicesService.emptyFolder(folder.id);
+      setState(() {});
+    }
+  }
+
+  /// Confirm deleting a folder
+  Future<void> _confirmDeleteFolder(DeviceFolder folder) async {
+    final deviceCount = _devicesService.getDevicesInFolder(folder.id).length;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(_i18n.t('delete_folder')),
+        content: Text(_i18n.t('delete_folder_confirm', params: [folder.name, deviceCount.toString()])),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text(_i18n.t('cancel')),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(context).colorScheme.error,
+            ),
+            child: Text(_i18n.t('delete')),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      await _devicesService.deleteFolder(folder.id);
+      setState(() {});
+    }
   }
 
   Widget _buildDeviceListTile(ThemeData theme, RemoteDevice device) {
@@ -950,6 +1301,9 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
   /// Handle hamburger menu actions
   void _handleMenuAction(String action) {
     switch (action) {
+      case 'new_folder':
+        _showNewFolderDialog();
+        break;
       case 'select_multiple':
         setState(() {
           if (_isMultiSelectMode) {
@@ -966,8 +1320,88 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
         }
         break;
       case 'move_to_folder':
-        // Future feature - do nothing for now
+        if (_selectedCallsigns.isNotEmpty) {
+          _showMoveToFolderDialog(_selectedCallsigns.toList());
+        }
         break;
+    }
+  }
+
+  /// Show dialog to create a new folder
+  Future<void> _showNewFolderDialog() async {
+    final controller = TextEditingController();
+    final result = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(_i18n.t('new_folder')),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: InputDecoration(
+            labelText: _i18n.t('folder_name'),
+            hintText: _i18n.t('enter_folder_name'),
+          ),
+          onSubmitted: (value) => Navigator.pop(context, value),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text(_i18n.t('cancel')),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, controller.text),
+            child: Text(_i18n.t('create')),
+          ),
+        ],
+      ),
+    );
+
+    if (result != null && result.trim().isNotEmpty) {
+      _devicesService.createFolder(result.trim());
+      setState(() {});
+    }
+  }
+
+  /// Show dialog to select folder for moving devices
+  Future<void> _showMoveToFolderDialog(List<String> callsigns) async {
+    final folders = _devicesService.getFolders();
+    final result = await showDialog<String?>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(_i18n.t('move_to_folder')),
+        content: SizedBox(
+          width: 300,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(_i18n.t('select_destination_folder')),
+              const SizedBox(height: 16),
+              ...folders.map((folder) => ListTile(
+                leading: Icon(
+                  folder.isDefault ? Icons.inbox : Icons.folder,
+                  color: Theme.of(context).colorScheme.primary,
+                ),
+                title: Text(folder.name),
+                onTap: () => Navigator.pop(context, folder.id == DevicesService.defaultFolderId ? null : folder.id),
+              )),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, 'cancel'),
+            child: Text(_i18n.t('cancel')),
+          ),
+        ],
+      ),
+    );
+
+    if (result != null && result != 'cancel') {
+      _devicesService.moveDevicesToFolder(callsigns, result);
+      if (_isMultiSelectMode) {
+        _exitMultiSelectMode();
+      }
+      setState(() {});
     }
   }
 

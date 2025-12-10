@@ -567,10 +567,12 @@ class DevicesService {
   /// Sorted: Pinned first, then online, then by name
   List<RemoteDevice> getAllDevices() {
     final pinnedCallsigns = _getPinnedDevices();
+    final folderAssignments = _getDeviceFolderAssignments();
 
-    // Update isPinned flag for each device
+    // Update isPinned and folderId flags for each device
     for (final device in _devices.values) {
       device.isPinned = pinnedCallsigns.contains(device.callsign);
+      device.folderId = folderAssignments[device.callsign];
     }
 
     return _devices.values.toList()
@@ -642,6 +644,143 @@ class DevicesService {
   bool isDevicePinned(String callsign) {
     return _getPinnedDevices().contains(callsign.toUpperCase());
   }
+
+  // ============ Folder Management ============
+
+  /// Default folder ID for devices without an assigned folder
+  static const String defaultFolderId = 'discovered';
+
+  /// Get all folders
+  List<DeviceFolder> getFolders() {
+    final config = ConfigService();
+    final foldersJson = config.get('deviceFolders', <dynamic>[]) as List<dynamic>;
+    final folders = foldersJson.map((json) => DeviceFolder.fromJson(json as Map<String, dynamic>)).toList();
+
+    // Ensure default folder exists
+    if (!folders.any((f) => f.id == defaultFolderId)) {
+      folders.insert(0, DeviceFolder(id: defaultFolderId, name: 'Discovered', isDefault: true));
+    }
+
+    // Sort: default first, then by name
+    folders.sort((a, b) {
+      if (a.isDefault) return -1;
+      if (b.isDefault) return 1;
+      return a.name.compareTo(b.name);
+    });
+
+    return folders;
+  }
+
+  /// Save folders to config
+  void _saveFolders(List<DeviceFolder> folders) {
+    final config = ConfigService();
+    config.set('deviceFolders', folders.where((f) => !f.isDefault).map((f) => f.toJson()).toList());
+    _devicesController.add(getAllDevices());
+  }
+
+  /// Create a new folder
+  DeviceFolder createFolder(String name) {
+    final folders = getFolders();
+    final id = 'folder_${DateTime.now().millisecondsSinceEpoch}';
+    final folder = DeviceFolder(id: id, name: name);
+    folders.add(folder);
+    _saveFolders(folders);
+    LogService().log('DevicesService: Created folder "$name" with id $id');
+    return folder;
+  }
+
+  /// Rename a folder
+  void renameFolder(String folderId, String newName) {
+    if (folderId == defaultFolderId) return; // Can't rename default folder
+    final folders = getFolders();
+    final folder = folders.firstWhere((f) => f.id == folderId, orElse: () => DeviceFolder(id: '', name: ''));
+    if (folder.id.isNotEmpty) {
+      folder.name = newName;
+      _saveFolders(folders);
+      LogService().log('DevicesService: Renamed folder $folderId to "$newName"');
+    }
+  }
+
+  /// Delete a folder and all devices in it
+  Future<void> deleteFolder(String folderId) async {
+    if (folderId == defaultFolderId) return; // Can't delete default folder
+
+    // Remove all devices in this folder
+    final devicesToRemove = _devices.values.where((d) => d.folderId == folderId).toList();
+    for (final device in devicesToRemove) {
+      await removeDevice(device.callsign);
+    }
+
+    // Remove the folder
+    final folders = getFolders();
+    folders.removeWhere((f) => f.id == folderId);
+    _saveFolders(folders);
+    LogService().log('DevicesService: Deleted folder $folderId with ${devicesToRemove.length} devices');
+  }
+
+  /// Empty a folder (move all devices to default folder)
+  void emptyFolder(String folderId) {
+    if (folderId == defaultFolderId) return; // Can't empty default folder
+
+    final devicesInFolder = _devices.values.where((d) => d.folderId == folderId).toList();
+    for (final device in devicesInFolder) {
+      moveDeviceToFolder(device.callsign, null); // null = default folder
+    }
+    LogService().log('DevicesService: Emptied folder $folderId, moved ${devicesInFolder.length} devices to Discovered');
+  }
+
+  /// Move a device to a folder
+  void moveDeviceToFolder(String callsign, String? folderId) {
+    final normalized = callsign.toUpperCase();
+    final device = _devices[normalized];
+    if (device != null) {
+      device.folderId = folderId;
+      _saveDeviceFolderAssignment(normalized, folderId);
+      _devicesController.add(getAllDevices());
+      LogService().log('DevicesService: Moved device $normalized to folder ${folderId ?? defaultFolderId}');
+    }
+  }
+
+  /// Move multiple devices to a folder
+  void moveDevicesToFolder(List<String> callsigns, String? folderId) {
+    for (final callsign in callsigns) {
+      moveDeviceToFolder(callsign, folderId);
+    }
+  }
+
+  /// Get folder assignment map from config
+  Map<String, String?> _getDeviceFolderAssignments() {
+    final config = ConfigService();
+    final assignments = config.get('deviceFolderAssignments', <String, dynamic>{}) as Map<String, dynamic>;
+    return assignments.map((k, v) => MapEntry(k, v as String?));
+  }
+
+  /// Save a single device's folder assignment
+  void _saveDeviceFolderAssignment(String callsign, String? folderId) {
+    final assignments = _getDeviceFolderAssignments();
+    if (folderId == null) {
+      assignments.remove(callsign);
+    } else {
+      assignments[callsign] = folderId;
+    }
+    ConfigService().set('deviceFolderAssignments', assignments);
+  }
+
+  /// Get the folder ID for a device
+  String? getDeviceFolderId(String callsign) {
+    return _getDeviceFolderAssignments()[callsign.toUpperCase()];
+  }
+
+  /// Get devices in a specific folder
+  List<RemoteDevice> getDevicesInFolder(String? folderId) {
+    final targetFolderId = folderId ?? defaultFolderId;
+    return getAllDevices().where((d) {
+      final deviceFolder = d.folderId ?? defaultFolderId;
+      return deviceFolder == targetFolderId || (targetFolderId == defaultFolderId && d.folderId == null);
+    }).toList();
+  }
+
+  // ============ End Folder Management ============
 
   /// Make an API request to a remote device, using ConnectionManager for routing
   /// This enables device-to-device communication using the best available transport
@@ -1681,6 +1820,7 @@ class RemoteDevice {
   List<String> connectionMethods;
   DeviceSourceType source;
   bool isPinned;
+  String? folderId;  // Folder this device belongs to (null = default "Discovered" folder)
 
   /// BLE-specific fields
   String? bleProximity;  // "Very close", "Nearby", "In range", "Far"
@@ -1706,6 +1846,7 @@ class RemoteDevice {
     this.bleProximity,
     this.bleRssi,
     this.isPinned = false,
+    this.folderId,
   });
 
   /// Get display name (nickname or callsign)
@@ -1858,5 +1999,38 @@ class RemoteCollection {
       case 'photos': return 'photo_library';
       default: return 'folder';
     }
+  }
+}
+
+/// Represents a folder for organizing devices
+class DeviceFolder {
+  String id;
+  String name;
+  final bool isDefault;
+  bool isExpanded;
+
+  DeviceFolder({
+    required this.id,
+    required this.name,
+    this.isDefault = false,
+    this.isExpanded = true,
+  });
+
+  factory DeviceFolder.fromJson(Map<String, dynamic> json) {
+    return DeviceFolder(
+      id: json['id'] as String,
+      name: json['name'] as String,
+      isDefault: json['isDefault'] as bool? ?? false,
+      isExpanded: json['isExpanded'] as bool? ?? true,
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'id': id,
+      'name': name,
+      'isDefault': isDefault,
+      'isExpanded': isExpanded,
+    };
   }
 }
