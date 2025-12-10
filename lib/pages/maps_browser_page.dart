@@ -593,14 +593,8 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
     _saveMapState();
     _loadItems();
 
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(_i18n.t(successMessageKey)),
-          backgroundColor: Colors.green,
-        ),
-      );
-    }
+    // No success notification needed - the map moving to new location is enough feedback
+    LogService().log('Location detected: $lat, $lon (${_i18n.t(successMessageKey)})');
   }
 
   Color _getTypeColor(MapItemType type) {
