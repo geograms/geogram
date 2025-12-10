@@ -853,7 +853,18 @@ class _UpdatePageState extends State<UpdatePage> {
           releaseDateStr = _latestRelease!.publishedAt!;
         }
       }
-      subtitle = _i18n.t('tap_to_download_install', params: [_latestRelease!.version, releaseDateStr]);
+      // Determine source - station URL or GitHub
+      String source = 'GitHub';
+      if (_latestRelease!.stationBaseUrl != null) {
+        // Extract hostname from station URL (e.g., "https://p2p.radio" -> "p2p.radio")
+        try {
+          final uri = Uri.parse(_latestRelease!.stationBaseUrl!);
+          source = uri.host;
+        } catch (e) {
+          source = _latestRelease!.stationBaseUrl!;
+        }
+      }
+      subtitle = _i18n.t('install_version_from_source', params: [_latestRelease!.version, source, releaseDateStr]);
     } else if (_latestRelease != null) {
       cardColor = Theme.of(context).colorScheme.secondaryContainer;
       icon = Icons.check_circle_outline;

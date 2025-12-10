@@ -162,6 +162,8 @@ class UpdateSettings {
   String? lastCheckedVersion;
   String? lastCheckedReleaseBody; // Cached release notes/changelog
   String? lastCheckedHtmlUrl; // GitHub release URL
+  String? lastCheckedStationUrl; // Station URL if from station (null = GitHub)
+  String? lastCheckedPublishedAt; // Release date ISO string
 
   UpdateSettings({
     this.autoCheckUpdates = true,
@@ -174,6 +176,8 @@ class UpdateSettings {
     this.lastCheckedVersion,
     this.lastCheckedReleaseBody,
     this.lastCheckedHtmlUrl,
+    this.lastCheckedStationUrl,
+    this.lastCheckedPublishedAt,
   });
 
   factory UpdateSettings.fromJson(Map<String, dynamic> json) {
@@ -191,6 +195,8 @@ class UpdateSettings {
       lastCheckedVersion: json['lastCheckedVersion'] as String?,
       lastCheckedReleaseBody: json['lastCheckedReleaseBody'] as String?,
       lastCheckedHtmlUrl: json['lastCheckedHtmlUrl'] as String?,
+      lastCheckedStationUrl: json['lastCheckedStationUrl'] as String?,
+      lastCheckedPublishedAt: json['lastCheckedPublishedAt'] as String?,
     );
   }
 
@@ -206,6 +212,8 @@ class UpdateSettings {
       'lastCheckedVersion': lastCheckedVersion,
       'lastCheckedReleaseBody': lastCheckedReleaseBody,
       'lastCheckedHtmlUrl': lastCheckedHtmlUrl,
+      'lastCheckedStationUrl': lastCheckedStationUrl,
+      'lastCheckedPublishedAt': lastCheckedPublishedAt,
     };
   }
 
@@ -220,6 +228,8 @@ class UpdateSettings {
     String? lastCheckedVersion,
     String? lastCheckedReleaseBody,
     String? lastCheckedHtmlUrl,
+    String? lastCheckedStationUrl,
+    String? lastCheckedPublishedAt,
   }) {
     return UpdateSettings(
       autoCheckUpdates: autoCheckUpdates ?? this.autoCheckUpdates,
@@ -232,6 +242,8 @@ class UpdateSettings {
       lastCheckedVersion: lastCheckedVersion ?? this.lastCheckedVersion,
       lastCheckedReleaseBody: lastCheckedReleaseBody ?? this.lastCheckedReleaseBody,
       lastCheckedHtmlUrl: lastCheckedHtmlUrl ?? this.lastCheckedHtmlUrl,
+      lastCheckedStationUrl: lastCheckedStationUrl ?? this.lastCheckedStationUrl,
+      lastCheckedPublishedAt: lastCheckedPublishedAt ?? this.lastCheckedPublishedAt,
     );
   }
 }

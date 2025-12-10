@@ -81,6 +81,8 @@ class UpdateService {
               name: 'Version $lastCheckedVersion',
               body: _settings?.lastCheckedReleaseBody,
               htmlUrl: _settings?.lastCheckedHtmlUrl,
+              stationBaseUrl: _settings?.lastCheckedStationUrl,
+              publishedAt: _settings?.lastCheckedPublishedAt,
             );
             updateAvailable.value = true;
             LogService().log('Restored update available state: $lastCheckedVersion > ${getCurrentVersion()}');
@@ -265,6 +267,8 @@ class UpdateService {
       lastCheckedVersion: release.version,
       lastCheckedReleaseBody: release.body,
       lastCheckedHtmlUrl: release.htmlUrl,
+      lastCheckedStationUrl: release.stationBaseUrl,
+      lastCheckedPublishedAt: release.publishedAt,
     );
     _saveSettings();
 

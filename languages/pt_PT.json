@@ -1346,6 +1346,7 @@
   "please_wait": "Por favor aguarde",
   "update_available_title": "Atualização Disponível",
   "tap_to_download_install": "Toque para transferir e instalar v{0}, lançado a {1}",
+  "install_version_from_source": "Instalar v{0} de {1}, lançado a {2}",
   "up_to_date": "Atualizado",
   "tap_to_check_updates": "Toque para verificar atualizações",
   "check_for_updates": "Verificar Atualizações",

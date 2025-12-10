@@ -1431,6 +1431,7 @@
   "please_wait": "Please wait",
   "update_available_title": "Update Available",
   "tap_to_download_install": "Tap to download and install v{0}, released at {1}",
+  "install_version_from_source": "Install v{0} from {1}, released {2}",
   "up_to_date": "Up to Date",
   "tap_to_check_updates": "Tap to check for updates",
   "check_for_updates": "Check for Updates",
