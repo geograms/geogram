@@ -1232,6 +1232,16 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     }
   }
 
+  /// Handle system back button - return to channel list if viewing a channel in portrait mode
+  void _handleBackButton() {
+    if (_selectedChannel != null || _selectedStationRoom != null) {
+      setState(() {
+        _selectedChannel = null;
+        _selectedStationRoom = null;
+      });
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -1239,7 +1249,17 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     final screenWidth = MediaQuery.of(context).size.width;
     final isWideScreen = screenWidth >= 600;
 
-    return Scaffold(
+    // In portrait mode, intercept back button when viewing a channel
+    final shouldInterceptBack = !isWideScreen && (_selectedChannel != null || _selectedStationRoom != null);
+
+    return PopScope(
+      canPop: !shouldInterceptBack,
+      onPopInvokedWithResult: (didPop, result) {
+        if (!didPop && shouldInterceptBack) {
+          _handleBackButton();
+        }
+      },
+      child: Scaffold(
       appBar: AppBar(
         backgroundColor: theme.colorScheme.surface,
         surfaceTintColor: Colors.transparent,
@@ -1300,6 +1320,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
         ],
       ),
       body: _buildBody(theme),
+      ),
     );
   }
 

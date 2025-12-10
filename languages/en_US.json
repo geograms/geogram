@@ -1451,5 +1451,29 @@
   "precise": "Precise",
   "city": "City",
   "region": "Region",
-  "url_copied": "URL copied to clipboard"
+  "url_copied": "URL copied to clipboard",
+
+  "pin": "Pin",
+  "unpin": "Unpin",
+  "more_options": "More options",
+  "menu": "Menu",
+  "select_multiple": "Select multiple",
+  "exit_selection": "Exit selection",
+  "delete_selected": "Delete selected",
+  "move_to_folder": "Move to folder",
+  "selected_count": "{0} selected",
+  "new_folder": "New folder",
+  "folder_options": "Folder options",
+  "discovered_folder": "Discovered",
+  "drop_devices_here": "Drop devices here",
+
+  "upgrade_to_ble_plus": "Upgrade to BLE+",
+  "upgrade_ble_plus_description": "Upgrade {0} to BLE+ for faster data transfers.",
+  "benefits_of_ble_plus": "Benefits of BLE+:",
+  "ble_plus_faster_transfers": "Faster transfers (~2-3 Mbps vs ~0.1-0.5 Mbps)",
+  "ble_plus_better_large_files": "Better for large files and batch operations",
+  "ble_plus_discovery_note": "BLE still used for discovery (no constant pairing)",
+  "ble_plus_pairing_info": "This will show a Bluetooth pairing dialog. Both devices must accept the pairing PIN.",
+  "upgrade": "Upgrade",
+  "ble_plus_upgrade_initiated": "BLE+ upgrade initiated for {0}. Please accept the pairing on both devices."
 }

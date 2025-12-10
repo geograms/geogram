@@ -1178,7 +1178,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
                         ),
                         const SizedBox(width: 12),
                         Text(
-                          'Upgrade to BLE+',
+                          _i18n.t('upgrade_to_ble_plus'),
                           style: TextStyle(
                             color: hasBLE ? null : theme.disabledColor,
                           ),
@@ -1622,11 +1622,11 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Row(
+        title: Row(
           children: [
-            Icon(Icons.bluetooth, color: Colors.blue),
-            SizedBox(width: 8),
-            Text('Upgrade to BLE+'),
+            const Icon(Icons.bluetooth, color: Colors.blue),
+            const SizedBox(width: 8),
+            Text(_i18n.t('upgrade_to_ble_plus')),
           ],
         ),
         content: Column(
@@ -1634,21 +1634,21 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              'Upgrade ${device.displayName} to BLE+ for faster data transfers.',
+              _i18n.t('upgrade_ble_plus_description', params: [device.displayName]),
               style: theme.textTheme.bodyLarge,
             ),
             const SizedBox(height: 16),
-            const Text(
-              'Benefits of BLE+:',
-              style: TextStyle(fontWeight: FontWeight.bold),
+            Text(
+              _i18n.t('benefits_of_ble_plus'),
+              style: const TextStyle(fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 8),
-            const Text('• Faster transfers (~2-3 Mbps vs ~0.1-0.5 Mbps)'),
-            const Text('• Better for large files and batch operations'),
-            const Text('• BLE still used for discovery (no constant pairing)'),
+            Text('• ${_i18n.t('ble_plus_faster_transfers')}'),
+            Text('• ${_i18n.t('ble_plus_better_large_files')}'),
+            Text('• ${_i18n.t('ble_plus_discovery_note')}'),
             const SizedBox(height: 16),
             Text(
-              'This will show a Bluetooth pairing dialog. Both devices must accept the pairing PIN.',
+              _i18n.t('ble_plus_pairing_info'),
               style: theme.textTheme.bodySmall?.copyWith(
                 color: theme.colorScheme.onSurfaceVariant,
               ),
@@ -1658,11 +1658,11 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
+            child: Text(_i18n.t('cancel')),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, true),
-            child: const Text('Upgrade'),
+            child: Text(_i18n.t('upgrade')),
           ),
         ],
       ),
@@ -1676,8 +1676,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(
-          'BLE+ upgrade initiated for ${device.callsign}. '
-          'Please accept the pairing on both devices.',
+          _i18n.t('ble_plus_upgrade_initiated', params: [device.callsign]),
         ),
         backgroundColor: Colors.blue,
       ),

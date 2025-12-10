@@ -67,27 +67,6 @@ class AboutPage extends StatelessWidget {
 
             const SizedBox(height: 32),
 
-            // Tagline
-            Center(
-              child: Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: Theme.of(context).colorScheme.primaryContainer,
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Text(
-                  _i18n.t('about_tagline'),
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                        color: Theme.of(context).colorScheme.onPrimaryContainer,
-                        fontWeight: FontWeight.bold,
-                      ),
-                  textAlign: TextAlign.center,
-                ),
-              ),
-            ),
-
-            const SizedBox(height: 32),
-
             // Description
             Text(
               _i18n.t('about'),
