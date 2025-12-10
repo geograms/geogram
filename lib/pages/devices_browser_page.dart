@@ -361,6 +361,11 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
     final theme = Theme.of(context);
     final isNarrow = MediaQuery.of(context).size.width < 600;
 
+    // Calculate total device counts for title
+    final allDevices = _devicesService.getAllDevices();
+    final totalDeviceCount = allDevices.length;
+    final activeDeviceCount = allDevices.where((d) => d.isOnline).length;
+
     // Handle system back button on mobile when viewing device detail
     final shouldInterceptBack = isNarrow && _selectedDevice != null;
 
@@ -373,11 +378,30 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
       },
       child: Scaffold(
         appBar: AppBar(
-          title: Text(_isMultiSelectMode
-              ? _i18n.t('selected_count', params: [_selectedCallsigns.length.toString()])
+          title: _isMultiSelectMode
+              ? Text(_i18n.t('selected_count', params: [_selectedCallsigns.length.toString()]))
               : (_selectedDevice != null && isNarrow
-                  ? _selectedDevice!.displayName
-                  : _i18n.t('devices'))),
+                  ? Text(_selectedDevice!.displayName)
+                  : Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(_i18n.t('devices')),
+                        const SizedBox(width: 8),
+                        Text(
+                          '$activeDeviceCount',
+                          style: TextStyle(
+                            color: activeDeviceCount > 0 ? Colors.green : theme.colorScheme.onSurfaceVariant,
+                            fontWeight: activeDeviceCount > 0 ? FontWeight.bold : FontWeight.normal,
+                          ),
+                        ),
+                        Text(
+                          '/$totalDeviceCount',
+                          style: TextStyle(
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ],
+                    )),
           leading: _isMultiSelectMode
               ? IconButton(
                   icon: const Icon(Icons.close),
@@ -634,7 +658,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
                 ),
                 // Device count badge
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                   decoration: BoxDecoration(
                     color: theme.colorScheme.surfaceContainerHighest,
                     borderRadius: BorderRadius.circular(4),
@@ -644,14 +668,14 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
                     children: [
                       Text(
                         '$activeCount',
-                        style: theme.textTheme.labelSmall?.copyWith(
+                        style: theme.textTheme.bodyMedium?.copyWith(
                           color: activeCount > 0 ? Colors.green : theme.colorScheme.onSurfaceVariant,
                           fontWeight: activeCount > 0 ? FontWeight.bold : FontWeight.normal,
                         ),
                       ),
                       Text(
                         '/$deviceCount',
-                        style: theme.textTheme.labelSmall?.copyWith(
+                        style: theme.textTheme.bodyMedium?.copyWith(
                           color: theme.colorScheme.onSurfaceVariant,
                         ),
                       ),
