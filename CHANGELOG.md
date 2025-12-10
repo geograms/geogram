@@ -1,5 +1,18 @@
 # Geogram Desktop Changelog
 
+## 2025-12-10 - v1.6.4
+
+### Changes
+- Remove pending status - only save messages after delivery confirmed
+- Add automated DM delivery test script
+- Fix double JSON encoding in transport API requests
+- Fix DM verification by using stored created_at instead of recalculating
+- Fix DM signature verification using wrong roomId for incoming messages
+- Disable back gesture on onboarding screen to ensure permissions are requested
+- Redesign onboarding header to horizontal layout for better visibility on small screens
+- Add WebRTC NAT hole punching for direct P2P connections
+
+
 ## 2025-12-10 - v1.6.3
 
 ### Changes
