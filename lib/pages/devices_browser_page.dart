@@ -51,6 +51,10 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
   StreamSubscription<Map<String, int>>? _dmUnreadSubscription;
   Timer? _refreshTimer;
 
+  // Multi-select mode
+  bool _isMultiSelectMode = false;
+  final Set<String> _selectedCallsigns = {};
+
   static const Duration _refreshInterval = Duration(seconds: 30);
 
   @override
@@ -369,15 +373,23 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
       },
       child: Scaffold(
         appBar: AppBar(
-          title: Text(_selectedDevice != null && isNarrow
-              ? _selectedDevice!.displayName
-              : _i18n.t('devices')),
-          leading: _selectedDevice != null && isNarrow
+          title: Text(_isMultiSelectMode
+              ? _i18n.t('selected_count', params: [_selectedCallsigns.length.toString()])
+              : (_selectedDevice != null && isNarrow
+                  ? _selectedDevice!.displayName
+                  : _i18n.t('devices'))),
+          leading: _isMultiSelectMode
               ? IconButton(
-                  icon: const Icon(Icons.arrow_back),
-                  onPressed: () => setState(() => _selectedDevice = null),
+                  icon: const Icon(Icons.close),
+                  onPressed: _exitMultiSelectMode,
+                  tooltip: _i18n.t('cancel'),
                 )
-              : null,
+              : (_selectedDevice != null && isNarrow
+                  ? IconButton(
+                      icon: const Icon(Icons.arrow_back),
+                      onPressed: () => setState(() => _selectedDevice = null),
+                    )
+                  : null),
           actions: [
             if (_isLoading || _isScanning)
               const Padding(
@@ -394,6 +406,74 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
                 onPressed: _scanAndRefresh,
                 tooltip: _i18n.t('refresh'),
               ),
+            // Hamburger menu for bulk actions
+            PopupMenuButton<String>(
+              icon: const Icon(Icons.menu),
+              tooltip: _i18n.t('menu'),
+              onSelected: _handleMenuAction,
+              itemBuilder: (context) => [
+                PopupMenuItem<String>(
+                  value: 'select_multiple',
+                  child: Row(
+                    children: [
+                      Icon(
+                        _isMultiSelectMode ? Icons.check_box : Icons.check_box_outline_blank,
+                        size: 20,
+                        color: theme.colorScheme.primary,
+                      ),
+                      const SizedBox(width: 12),
+                      Text(_isMultiSelectMode
+                          ? _i18n.t('exit_selection')
+                          : _i18n.t('select_multiple')),
+                    ],
+                  ),
+                ),
+                PopupMenuItem<String>(
+                  value: 'delete_selected',
+                  enabled: _isMultiSelectMode && _selectedCallsigns.isNotEmpty,
+                  child: Row(
+                    children: [
+                      Icon(
+                        Icons.delete_outline,
+                        size: 20,
+                        color: _isMultiSelectMode && _selectedCallsigns.isNotEmpty
+                            ? theme.colorScheme.error
+                            : theme.colorScheme.onSurface.withValues(alpha: 0.38),
+                      ),
+                      const SizedBox(width: 12),
+                      Text(
+                        _i18n.t('delete_selected'),
+                        style: TextStyle(
+                          color: _isMultiSelectMode && _selectedCallsigns.isNotEmpty
+                              ? theme.colorScheme.error
+                              : theme.colorScheme.onSurface.withValues(alpha: 0.38),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                PopupMenuItem<String>(
+                  value: 'move_to_folder',
+                  enabled: false, // Future feature
+                  child: Row(
+                    children: [
+                      Icon(
+                        Icons.folder_outlined,
+                        size: 20,
+                        color: theme.colorScheme.onSurface.withValues(alpha: 0.38),
+                      ),
+                      const SizedBox(width: 12),
+                      Text(
+                        _i18n.t('move_to_folder'),
+                        style: TextStyle(
+                          color: theme.colorScheme.onSurface.withValues(alpha: 0.38),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
           ],
         ),
         body: _buildBody(theme),
@@ -472,15 +552,21 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
 
   Widget _buildDeviceListTile(ThemeData theme, RemoteDevice device) {
     final isSelected = _selectedDevice?.callsign == device.callsign;
+    final isChecked = _selectedCallsigns.contains(device.callsign);
     final profile = _profileService.getProfile();
     final distanceKm = device.calculateDistance(profile.latitude, profile.longitude);
     final distanceStr = _formatDistance(device, distanceKm);
     final isStation = CallsignGenerator.isStationCallsign(device.callsign);
 
     return ListTile(
-      selected: isSelected,
+      selected: isSelected && !_isMultiSelectMode,
       selectedTileColor: theme.colorScheme.primaryContainer.withValues(alpha: 0.3),
-      leading: Stack(
+      leading: _isMultiSelectMode
+          ? Checkbox(
+              value: isChecked,
+              onChanged: (_) => _toggleDeviceSelection(device.callsign),
+            )
+          : Stack(
         children: [
           CircleAvatar(
             backgroundColor: isStation
@@ -674,7 +760,13 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
           ),
         ],
       ),
-      onTap: () => _selectDevice(device),
+      onTap: () {
+        if (_isMultiSelectMode) {
+          _toggleDeviceSelection(device.callsign);
+        } else {
+          _selectDevice(device);
+        }
+      },
     );
   }
 
@@ -852,6 +944,85 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
       }
       _devices = _filterRemoteDevices(_devicesService.getAllDevices());
       setState(() {});
+    }
+  }
+
+  /// Handle hamburger menu actions
+  void _handleMenuAction(String action) {
+    switch (action) {
+      case 'select_multiple':
+        setState(() {
+          if (_isMultiSelectMode) {
+            _exitMultiSelectMode();
+          } else {
+            _isMultiSelectMode = true;
+            _selectedCallsigns.clear();
+          }
+        });
+        break;
+      case 'delete_selected':
+        if (_selectedCallsigns.isNotEmpty) {
+          _confirmDeleteSelected();
+        }
+        break;
+      case 'move_to_folder':
+        // Future feature - do nothing for now
+        break;
+    }
+  }
+
+  /// Exit multi-select mode
+  void _exitMultiSelectMode() {
+    setState(() {
+      _isMultiSelectMode = false;
+      _selectedCallsigns.clear();
+    });
+  }
+
+  /// Toggle device selection in multi-select mode
+  void _toggleDeviceSelection(String callsign) {
+    setState(() {
+      if (_selectedCallsigns.contains(callsign)) {
+        _selectedCallsigns.remove(callsign);
+      } else {
+        _selectedCallsigns.add(callsign);
+      }
+    });
+  }
+
+  /// Confirm and delete selected devices
+  Future<void> _confirmDeleteSelected() async {
+    final count = _selectedCallsigns.length;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(_i18n.t('delete_devices')),
+        content: Text(_i18n.t('delete_devices_confirm', params: [count.toString()])),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text(_i18n.t('cancel')),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(context).colorScheme.error,
+            ),
+            child: Text(_i18n.t('delete')),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      for (final callsign in _selectedCallsigns.toList()) {
+        await _devicesService.removeDevice(callsign);
+        if (_selectedDevice?.callsign == callsign) {
+          _selectedDevice = null;
+        }
+      }
+      _devices = _filterRemoteDevices(_devicesService.getAllDevices());
+      _exitMultiSelectMode();
     }
   }
 
