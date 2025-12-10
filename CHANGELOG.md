@@ -1,5 +1,11 @@
 # Geogram Desktop Changelog
 
+## 2025-12-10 - v1.6.15
+
+### Changes
+- Fix Android-to-Android BLE communication, add foreground service
+
+
 ## 2025-12-10 - v1.6.14
 
 ### Changes
