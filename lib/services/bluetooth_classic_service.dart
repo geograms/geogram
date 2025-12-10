@@ -73,11 +73,12 @@ class BluetoothClassicService {
   bool get isInitialized => _isInitialized;
 
   /// Check if Bluetooth Classic is available on this platform
+  /// Currently restricted to Android only as it's the only fully tested platform
   static bool get isAvailable {
     if (kIsWeb) return false;
     if (AppArgs().internetOnly) return false;
-    // Available on Android, Linux, macOS, Windows
-    return Platform.isAndroid || Platform.isLinux || Platform.isMacOS || Platform.isWindows;
+    // Only Android is fully tested for BLE+
+    return Platform.isAndroid;
   }
 
   /// Check if this platform can act as a Bluetooth Classic server
@@ -90,8 +91,8 @@ class BluetoothClassicService {
   /// Check if this platform can act as a Bluetooth Classic client
   static bool get canBeClient {
     if (kIsWeb) return false;
-    // All non-web platforms can be clients
-    return Platform.isAndroid || Platform.isLinux || Platform.isMacOS || Platform.isWindows;
+    // Only Android is currently supported (both server and client)
+    return Platform.isAndroid;
   }
 
   /// Initialize the Bluetooth Classic service

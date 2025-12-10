@@ -1100,13 +1100,6 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
                 RemoteDevice.getConnectionMethodLabel(method),
                 _getConnectionMethodColor(method),
               )),
-              // Unreachable tag if offline
-              if (!device.isOnline)
-                _buildConnectionTag(
-                  theme,
-                  _i18n.t('unreachable'),
-                  Colors.grey,
-                ),
               // Cached indicator
               if (device.hasCachedData && !device.isOnline)
                 _buildConnectionTag(

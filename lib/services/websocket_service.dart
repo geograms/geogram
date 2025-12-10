@@ -31,12 +31,16 @@ class WebSocketService {
   final _updateController = StreamController<UpdateNotification>.broadcast();
   Timer? _reconnectTimer;
   Timer? _pingTimer;
+  Timer? _disconnectGraceTimer;  // Timer to mark as disconnected after grace period
   String? _stationUrl;
   bool _shouldReconnect = false;
   bool _isReconnecting = false;
   bool _lastConnectionState = false; // Track last state to avoid duplicate events
   String? _connectedStationCallsign;
   final EventBus _eventBus = EventBus();
+
+  /// Grace period before marking station as disconnected (allows brief reconnection)
+  static const _disconnectGracePeriod = Duration(seconds: 5);
 
   Stream<Map<String, dynamic>> get messages => _messageController.stream;
   Stream<UpdateNotification> get updates => _updateController.stream;
@@ -206,6 +210,9 @@ class WebSocketService {
                 LogService().log('Message: ${data['message']}');
                 LogService().log('══════════════════════════════════════');
                 _isReconnecting = false; // Reset reconnecting flag on successful connection
+                // Cancel disconnect grace timer since we're now connected
+                _disconnectGraceTimer?.cancel();
+                _disconnectGraceTimer = null;
                 // Fire connected event
                 _fireConnectionStateChanged(true, stationCallsign: stationId);
               } else {
@@ -281,6 +288,8 @@ class WebSocketService {
     _reconnectTimer = null;
     _pingTimer?.cancel();
     _pingTimer = null;
+    _disconnectGraceTimer?.cancel();
+    _disconnectGraceTimer = null;
     _subscription?.cancel();
     try {
       _channel?.sink.close();
@@ -1016,18 +1025,32 @@ class WebSocketService {
 
   /// Handle connection loss
   void _handleConnectionLoss() {
-    if (!_shouldReconnect || _isReconnecting) {
-      return;
-    }
-
+    // Clean up channel regardless of reconnect state
     _channel = null;
     _subscription?.cancel();
     _subscription = null;
 
-    // Fire disconnected event
-    _fireConnectionStateChanged(false);
+    // If not attempting reconnection, mark as disconnected immediately
+    if (!_shouldReconnect) {
+      _disconnectGraceTimer?.cancel();
+      _disconnectGraceTimer = null;
+      _fireConnectionStateChanged(false);
+      return;
+    }
 
-    LogService().log('Connection lost - will attempt reconnection in 10 seconds');
+    // Start grace period timer - if not reconnected within 5 seconds, mark as disconnected
+    if (_disconnectGraceTimer == null || !_disconnectGraceTimer!.isActive) {
+      LogService().log('Connection lost - starting ${_disconnectGracePeriod.inSeconds}s grace period');
+      _disconnectGraceTimer = Timer(_disconnectGracePeriod, () {
+        // Grace period expired without reconnection - mark as disconnected
+        if (_channel == null) {
+          LogService().log('Grace period expired - marking station as disconnected');
+          _fireConnectionStateChanged(false);
+        }
+      });
+    }
+
+    LogService().log('Connection lost - will attempt reconnection');
   }
 
   /// Fire connection state changed event (only if state actually changed)
@@ -1074,6 +1097,7 @@ class WebSocketService {
     disconnect();
     _reconnectTimer?.cancel();
     _pingTimer?.cancel();
+    _disconnectGraceTimer?.cancel();
     _messageController.close();
     _updateController.close();
   }
