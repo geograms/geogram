@@ -1,5 +1,11 @@
 # Geogram Desktop Changelog
 
+## 2025-12-10 - v1.6.5
+
+### Changes
+- Update app icons and improve onboarding UI
+
+
 ## 2025-12-10 - v1.6.4
 
 ### Changes
