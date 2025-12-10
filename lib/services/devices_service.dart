@@ -565,9 +565,11 @@ class DevicesService {
 
   /// Get all known devices
   /// Sorted: Pinned first, then online, then by name
+  /// Excludes the current user's own device
   List<RemoteDevice> getAllDevices() {
     final pinnedCallsigns = _getPinnedDevices();
     final folderAssignments = _getDeviceFolderAssignments();
+    final ownCallsign = ProfileService().getProfile().callsign.toUpperCase();
 
     // Update isPinned and folderId flags for each device
     for (final device in _devices.values) {
@@ -575,7 +577,9 @@ class DevicesService {
       device.folderId = folderAssignments[device.callsign];
     }
 
-    return _devices.values.toList()
+    return _devices.values
+      .where((d) => d.callsign.toUpperCase() != ownCallsign) // Exclude own device
+      .toList()
       ..sort((a, b) {
         // Pinned devices first
         if (a.isPinned != b.isPinned) {

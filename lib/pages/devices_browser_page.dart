@@ -584,6 +584,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
     );
     final isExpanded = folder.isExpanded;
     final deviceCount = devicesInFolder.length;
+    final activeCount = devicesInFolder.where((d) => d.isOnline).length;
 
     return Column(
       key: ValueKey(folder.id),
@@ -638,11 +639,23 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
                     color: theme.colorScheme.surfaceContainerHighest,
                     borderRadius: BorderRadius.circular(4),
                   ),
-                  child: Text(
-                    '$deviceCount',
-                    style: theme.textTheme.labelSmall?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant,
-                    ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        '$activeCount',
+                        style: theme.textTheme.labelSmall?.copyWith(
+                          color: activeCount > 0 ? Colors.green : theme.colorScheme.onSurfaceVariant,
+                          fontWeight: activeCount > 0 ? FontWeight.bold : FontWeight.normal,
+                        ),
+                      ),
+                      Text(
+                        '/$deviceCount',
+                        style: theme.textTheme.labelSmall?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
                 // Folder options menu (not for default folder on some actions)
