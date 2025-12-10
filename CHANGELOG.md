@@ -1,5 +1,11 @@
 # Geogram Desktop Changelog
 
+## 2025-12-10 - v1.6.9
+
+### Changes
+- Add folder organization for devices
+
+
 ## 2025-12-10 - v1.6.8
 
 ### Changes
