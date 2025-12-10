@@ -7,7 +7,9 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:crypto/crypto.dart';
 import 'package:mime/mime.dart';
 import 'package:markdown/markdown.dart' as md;
+import 'package:http/http.dart' as http;
 import '../services/log_service.dart';
+import '../services/log_api_service.dart';
 import '../services/profile_service.dart';
 import '../services/collection_service.dart';
 import '../services/signing_service.dart';
@@ -299,6 +301,9 @@ class WebSocketService {
   /// Check if connected (channel exists)
   bool get isConnected => _channel != null;
 
+  /// Get currently connected station URL (or null if not connected)
+  String? get connectedUrl => _channel != null ? _stationUrl : null;
+
   /// Ensure WebSocket is connected and ready to send messages.
   /// Returns true if connected, false if connection failed.
   /// If disconnected, attempts to reconnect before returning.
@@ -559,11 +564,12 @@ class WebSocketService {
     }
 
     try {
-      LogService().log('HTTP Request: $method $path');
+      LogService().log('Station proxy HTTP request: $method $path');
 
-      // Check if this is a blog API request
-      if (path.startsWith('/api/blog/')) {
-        await _handleBlogApiRequest(requestId, path);
+      // Forward ALL /api/* requests to local LogApiService HTTP server
+      // This enables DM, chat, status, and other API calls to work through station proxy
+      if (path.startsWith('/api/')) {
+        await _forwardToLocalApi(requestId, method, path, headersJson, body);
         return;
       }
 
@@ -714,6 +720,64 @@ class WebSocketService {
     } catch (e) {
       LogService().log('Error handling blog API request: $e');
       _sendHttpResponse(requestId, 500, {'Content-Type': 'text/plain'}, 'Internal Server Error: $e');
+    }
+  }
+
+  /// Forward API request to local LogApiService HTTP server
+  /// This enables station proxy to access device's full API
+  Future<void> _forwardToLocalApi(
+    String requestId,
+    String method,
+    String path,
+    String? headersJson,
+    String? body,
+  ) async {
+    try {
+      final localPort = LogApiService().port;
+      final uri = Uri.parse('http://localhost:$localPort$path');
+
+      // Parse headers from JSON if provided
+      Map<String, String> headers = {'Content-Type': 'application/json'};
+      if (headersJson != null && headersJson.isNotEmpty) {
+        try {
+          final parsed = jsonDecode(headersJson) as Map<String, dynamic>;
+          headers = parsed.map((k, v) => MapEntry(k, v.toString()));
+        } catch (_) {
+          // Keep default headers if parsing fails
+        }
+      }
+
+      // Make request to local server
+      http.Response response;
+      switch (method.toUpperCase()) {
+        case 'GET':
+          response = await http.get(uri, headers: headers).timeout(const Duration(seconds: 25));
+          break;
+        case 'POST':
+          response = await http.post(uri, headers: headers, body: body).timeout(const Duration(seconds: 25));
+          break;
+        case 'PUT':
+          response = await http.put(uri, headers: headers, body: body).timeout(const Duration(seconds: 25));
+          break;
+        case 'DELETE':
+          response = await http.delete(uri, headers: headers).timeout(const Duration(seconds: 25));
+          break;
+        default:
+          response = await http.get(uri, headers: headers).timeout(const Duration(seconds: 25));
+      }
+
+      // Send response back through WebSocket to station
+      _sendHttpResponse(
+        requestId,
+        response.statusCode,
+        {'Content-Type': response.headers['content-type'] ?? 'application/json'},
+        response.body,
+      );
+
+      LogService().log('Station proxy forwarded: $method $path -> ${response.statusCode}');
+    } catch (e) {
+      LogService().log('Error forwarding to local API: $e');
+      _sendHttpResponse(requestId, 502, {'Content-Type': 'text/plain'}, 'Bad Gateway: $e');
     }
   }
 

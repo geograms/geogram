@@ -9,6 +9,7 @@ import 'dart:io' show Platform;
 import 'dart:typed_data';
 import 'package:ble_peripheral/ble_peripheral.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
+import 'app_args.dart';
 import 'ble_permission_service.dart';
 import 'log_service.dart';
 
@@ -72,6 +73,12 @@ class BLEGattServerService {
     if (_isInitialized) return;
     if (!isSupported) {
       LogService().log('BLEGattServer: Not supported on this platform');
+      return;
+    }
+
+    // Refuse in internet-only mode
+    if (AppArgs().internetOnly) {
+      LogService().log('BLEGattServer: Disabled in internet-only mode');
       return;
     }
 
@@ -168,6 +175,12 @@ class BLEGattServerService {
 
   /// Start the GATT server (begin advertising)
   Future<void> startServer(String callsign) async {
+    // Refuse in internet-only mode
+    if (AppArgs().internetOnly) {
+      LogService().log('BLEGattServer: Disabled in internet-only mode');
+      return;
+    }
+
     if (!_isInitialized) {
       await initialize();
     }

@@ -1,5 +1,11 @@
 # Geogram Desktop Changelog
 
+## 2025-12-10 - v1.6.3
+
+### Changes
+- Add ConnectionManager for unified device-to-device communication
+
+
 ## 2025-11-18
 
 ### Added

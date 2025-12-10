@@ -1305,6 +1305,7 @@ class LogApiService {
 
       String author;
       String content;
+      int? createdAt;
       String? npub;
       String? signature;
       String? eventId;
@@ -1365,6 +1366,7 @@ class LogApiService {
           );
         }
         content = event.content;
+        createdAt = event.createdAt;
         npub = event.npub;
         signature = event.sig;
         eventId = event.id;
@@ -1408,10 +1410,12 @@ class LogApiService {
       }
 
       // Create and save message
+      // Order: created_at, npub, event_id, signature (signature last for readability)
       final metadata = <String, String>{};
+      if (createdAt != null) metadata['created_at'] = createdAt.toString();
       if (npub != null) metadata['npub'] = npub;
-      if (signature != null) metadata['signature'] = signature;
       if (eventId != null) metadata['event_id'] = eventId;
+      if (signature != null) metadata['signature'] = signature;
 
       final message = ChatMessage.now(
         author: author,
@@ -1465,6 +1469,7 @@ class LogApiService {
 
       String author;
       String content;
+      int? createdAt;
       String? npub;
       String? signature;
       String? eventId;
@@ -1514,6 +1519,7 @@ class LogApiService {
         }
 
         content = event.content;
+        createdAt = event.createdAt;
         npub = event.npub;
         signature = event.sig;
         eventId = event.id;
@@ -1542,10 +1548,12 @@ class LogApiService {
       }
 
       // Create message with metadata
+      // Order: created_at, npub, event_id, signature (signature last for readability)
       final metadata = <String, String>{};
+      if (createdAt != null) metadata['created_at'] = createdAt.toString();
       if (npub != null) metadata['npub'] = npub;
-      if (signature != null) metadata['signature'] = signature;
       if (eventId != null) metadata['event_id'] = eventId;
+      if (signature != null) metadata['signature'] = signature;
 
       final message = ChatMessage.now(
         author: author,

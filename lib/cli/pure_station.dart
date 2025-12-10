@@ -1651,7 +1651,7 @@ class PureStationServer {
         await _handleRelayStatus(request);
       } else if (path == '/api/stats') {
         await _handleStats(request);
-      } else if (path == '/api/devices') {
+      } else if (path == '/api/devices' || path == '/api/clients') {
         await _handleDevices(request);
       } else if (path.startsWith('/device/')) {
         await _handleDeviceProxy(request);
@@ -1691,6 +1691,9 @@ class PureStationServer {
         await _handleAlertsApi(request);
       } else if (path == '/') {
         await _handleRoot(request);
+      } else if (_isCallsignApiPath(path)) {
+        // /{callsign}/api/* - proxy to connected device
+        await _handleCallsignApiProxy(request);
       } else if (_isBlogPath(path)) {
         await _handleBlogRequest(request);
       } else if (_isCallsignOrNicknamePath(path)) {
@@ -1804,11 +1807,13 @@ class PureStationServer {
             client.deviceType = deviceType;
             client.version = version;
 
+            // Send hello_ack (expected by desktop/mobile clients)
             final response = {
-              'type': 'hello_response',
-              'server': 'geogram-desktop-station',
+              'type': 'hello_ack',
+              'success': true,
+              'station_id': _settings.callsign,
+              'message': 'Welcome to ${_settings.name}',
               'version': cliAppVersion,
-              'callsign': _settings.callsign,
             };
             client.socket.add(jsonEncode(response));
             final nicknameInfo = client.nickname != null ? ' [${client.nickname}]' : '';
@@ -2741,9 +2746,26 @@ class PureStationServer {
   }
 
   Future<void> _handleDevices(HttpRequest request) async {
-    final devices = _clients.values.map((c) => c.toJson()).toList();
+    final path = request.uri.path;
+    final clients = _clients.values.map((c) {
+      final json = c.toJson();
+      // Add is_online field
+      json['is_online'] = true;
+      return json;
+    }).toList();
+
     request.response.headers.contentType = ContentType.json;
-    request.response.write(jsonEncode({'devices': devices}));
+
+    // Return different format for /api/clients vs /api/devices
+    if (path == '/api/clients') {
+      request.response.write(jsonEncode({
+        'station': _settings.callsign,
+        'count': clients.length,
+        'clients': clients,
+      }));
+    } else {
+      request.response.write(jsonEncode({'devices': clients}));
+    }
   }
 
   /// GET /station/status - List connected devices and stations
@@ -2877,6 +2899,134 @@ class PureStationServer {
     } catch (e) {
       request.response.statusCode = 502;
       request.response.write('Bad Gateway: $e');
+    } finally {
+      _pendingProxyRequests.remove(requestId);
+    }
+  }
+
+  /// Check if path matches /{callsign}/api/* pattern
+  bool _isCallsignApiPath(String path) {
+    // Pattern: /{callsign}/api/{endpoint}
+    // Callsigns are alphanumeric (X1ABC, etc.) followed by /api/
+    final regex = RegExp(r'^/([A-Za-z0-9]+)/api/');
+    return regex.hasMatch(path);
+  }
+
+  /// Handle /{callsign}/api/* requests - proxy to connected device
+  Future<void> _handleCallsignApiProxy(HttpRequest request) async {
+    final path = request.uri.path;
+
+    // Parse path: /{callsign}/api/{endpoint}
+    final regex = RegExp(r'^/([A-Za-z0-9]+)(/api/.*)$');
+    final match = regex.firstMatch(path);
+
+    if (match == null) {
+      request.response.statusCode = 400;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({'error': 'Invalid path format'}));
+      return;
+    }
+
+    final callsign = match.group(1)!;
+    final apiPath = match.group(2)!; // /api/{endpoint}
+
+    // Find the client by callsign (case-insensitive)
+    PureConnectedClient? foundClient;
+    for (final c in _clients.values) {
+      if (c.callsign?.toLowerCase() == callsign.toLowerCase()) {
+        foundClient = c;
+        break;
+      }
+    }
+
+    if (foundClient == null) {
+      request.response.statusCode = 404;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({
+        'error': 'Device not connected',
+        'callsign': callsign.toUpperCase(),
+        'message': 'The device ${callsign.toUpperCase()} is not currently connected to this station',
+      }));
+      return;
+    }
+
+    final client = foundClient;
+    _log('INFO', 'Device proxy: ${request.method} $path -> ${client.callsign} $apiPath');
+
+    // Proxy request to device via WebSocket
+    final requestId = DateTime.now().millisecondsSinceEpoch.toString();
+    final proxyRequest = {
+      'type': 'HTTP_REQUEST',
+      'requestId': requestId,
+      'method': request.method,
+      'path': apiPath,
+      'headers': jsonEncode({}),
+      'body': '',
+    };
+
+    // Read request body if present
+    if (request.contentLength > 0) {
+      final body = await utf8.decodeStream(request);
+      proxyRequest['body'] = body;
+    }
+
+    // Send request to device and wait for response
+    final completer = Completer<Map<String, dynamic>>();
+    _pendingProxyRequests[requestId] = completer;
+
+    try {
+      client.socket.add(jsonEncode(proxyRequest));
+
+      // Wait for response with timeout
+      final response = await completer.future.timeout(
+        const Duration(seconds: 30),
+        onTimeout: () => {
+          'type': 'HTTP_RESPONSE',
+          'statusCode': 504,
+          'responseHeaders': '{"Content-Type": "application/json"}',
+          'responseBody': jsonEncode({
+            'error': 'Gateway Timeout',
+            'message': 'Device ${callsign.toUpperCase()} did not respond in time',
+          }),
+          'isBase64': false,
+        },
+      );
+
+      request.response.statusCode = response['statusCode'] ?? 500;
+      if (response['responseHeaders'] != null) {
+        try {
+          final headers = jsonDecode(response['responseHeaders'] as String) as Map<String, dynamic>;
+          headers.forEach((key, value) {
+            if (key.toLowerCase() == 'content-type') {
+              final ct = value.toString();
+              if (ct.contains('json')) {
+                request.response.headers.contentType = ContentType.json;
+              } else if (ct.contains('html')) {
+                request.response.headers.contentType = ContentType.html;
+              } else if (ct.contains('text')) {
+                request.response.headers.contentType = ContentType.text;
+              }
+            }
+          });
+        } catch (_) {}
+      }
+
+      final body = response['responseBody'] ?? '';
+      final isBase64 = response['isBase64'] == true;
+      if (isBase64) {
+        request.response.add(base64Decode(body));
+      } else {
+        request.response.write(body);
+      }
+
+      _log('INFO', 'Device proxy response: ${response['statusCode']} for ${client.callsign} $apiPath');
+    } catch (e) {
+      request.response.statusCode = 502;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({
+        'error': 'Bad Gateway',
+        'message': e.toString(),
+      }));
     } finally {
       _pendingProxyRequests.remove(requestId);
     }

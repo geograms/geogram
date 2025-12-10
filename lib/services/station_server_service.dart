@@ -340,6 +340,9 @@ class StationServerService {
   DateTime? _startTime;
   String? _tilesDirectory;
 
+  // Pending HTTP proxy requests (requestId -> completer)
+  final Map<String, Completer<Map<String, dynamic>>> _pendingHttpRequests = {};
+
   // Update mirror state
   Timer? _updatePollTimer;
   Map<String, dynamic>? _cachedRelease;
@@ -498,6 +501,9 @@ class StationServerService {
         await _handleBlogRequest(request);
       } else if (path.contains('/api/dm/')) {
         await _handleDMRequest(request);
+      } else if (_isDeviceProxyPath(path)) {
+        // Proxy API requests to connected devices: /{callsign}/api/*
+        await _handleDeviceProxyRequest(request);
       } else if (path == '/') {
         await _handleRoot(request);
       } else {
@@ -567,6 +573,9 @@ class StationServerService {
         } else if (type == 'PING') {
           // Heartbeat ping
           client.socket.add(jsonEncode({'type': 'PONG'}));
+        } else if (type == 'HTTP_RESPONSE') {
+          // Response from client for proxied HTTP request
+          _handleHttpResponse(message);
         }
       }
     } catch (e) {
@@ -1057,6 +1066,152 @@ class StationServerService {
     // Pattern: /{identifier}/blog/{filename}.html
     final regex = RegExp(r'^/([^/]+)/blog/([^/]+)\.html$');
     return regex.hasMatch(path);
+  }
+
+  /// Check if path is a device proxy path (/{callsign}/api/*)
+  bool _isDeviceProxyPath(String path) {
+    // Pattern: /{callsign}/api/{endpoint}
+    // Must have at least 3 segments: /{callsign}/api/{something}
+    final parts = path.split('/').where((p) => p.isNotEmpty).toList();
+    return parts.length >= 3 && parts[1] == 'api';
+  }
+
+  /// Handle device proxy request - forwards API requests to connected devices via WebSocket
+  Future<void> _handleDeviceProxyRequest(HttpRequest request) async {
+    final path = request.uri.path;
+    final method = request.method;
+
+    // Parse path: /{callsign}/api/{endpoint}
+    final parts = path.split('/').where((p) => p.isNotEmpty).toList();
+    if (parts.length < 3 || parts[1] != 'api') {
+      request.response.statusCode = 400;
+      request.response.write('Invalid device proxy path');
+      return;
+    }
+
+    final targetCallsign = parts[0].toUpperCase();
+    final apiPath = '/${parts.sublist(1).join('/')}'; // /api/{endpoint}
+
+    LogService().log('Device proxy request: $method $path -> $targetCallsign $apiPath');
+
+    // Find connected client by callsign
+    ConnectedClient? targetClient;
+    for (final client in _clients.values) {
+      if (client.callsign?.toUpperCase() == targetCallsign) {
+        targetClient = client;
+        break;
+      }
+    }
+
+    if (targetClient == null) {
+      request.response.statusCode = 404;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({
+        'error': 'Device not connected',
+        'callsign': targetCallsign,
+        'message': 'The device $targetCallsign is not currently connected to this station',
+      }));
+      return;
+    }
+
+    // Read request body if POST/PUT
+    String? bodyContent;
+    if (method == 'POST' || method == 'PUT') {
+      bodyContent = await utf8.decoder.bind(request).join();
+    }
+
+    // Generate unique request ID
+    final requestId = '${DateTime.now().millisecondsSinceEpoch}-${targetCallsign.hashCode}';
+
+    // Create completer for the response
+    final completer = Completer<Map<String, dynamic>>();
+    _pendingHttpRequests[requestId] = completer;
+
+    try {
+      // Send HTTP_REQUEST to the target client via WebSocket
+      final httpRequestMessage = {
+        'type': 'HTTP_REQUEST',
+        'requestId': requestId,
+        'method': method,
+        'path': apiPath,
+        'headers': jsonEncode({}),
+        'body': bodyContent,
+      };
+
+      targetClient.socket.add(jsonEncode(httpRequestMessage));
+      LogService().log('Sent HTTP_REQUEST to $targetCallsign: $method $apiPath (requestId: $requestId)');
+
+      // Wait for response with timeout
+      final response = await completer.future.timeout(
+        const Duration(seconds: 30),
+        onTimeout: () {
+          LogService().log('HTTP proxy timeout for $targetCallsign $apiPath');
+          return {
+            'statusCode': 504,
+            'responseHeaders': '{"Content-Type": "application/json"}',
+            'responseBody': jsonEncode({
+              'error': 'Gateway Timeout',
+              'message': 'Device $targetCallsign did not respond in time',
+            }),
+            'isBase64': false,
+          };
+        },
+      );
+
+      // Forward the response to the HTTP caller
+      final statusCode = response['statusCode'] as int? ?? 500;
+      final responseHeadersJson = response['responseHeaders'] as String? ?? '{}';
+      final responseBody = response['responseBody'] as String? ?? '';
+      final isBase64 = response['isBase64'] as bool? ?? false;
+
+      request.response.statusCode = statusCode;
+
+      // Parse and apply response headers
+      try {
+        final responseHeaders = jsonDecode(responseHeadersJson) as Map<String, dynamic>;
+        for (final entry in responseHeaders.entries) {
+          if (entry.key.toLowerCase() == 'content-type') {
+            final ct = entry.value.toString();
+            if (ct.contains('json')) {
+              request.response.headers.contentType = ContentType.json;
+            } else if (ct.contains('html')) {
+              request.response.headers.contentType = ContentType.html;
+            } else if (ct.contains('text')) {
+              request.response.headers.contentType = ContentType.text;
+            }
+          }
+        }
+      } catch (_) {}
+
+      // Write response body
+      if (isBase64) {
+        request.response.add(base64Decode(responseBody));
+      } else {
+        request.response.write(responseBody);
+      }
+
+      LogService().log('Device proxy response: $statusCode for $targetCallsign $apiPath');
+    } finally {
+      _pendingHttpRequests.remove(requestId);
+    }
+  }
+
+  /// Handle HTTP_RESPONSE from a connected client
+  void _handleHttpResponse(Map<String, dynamic> message) {
+    final requestId = message['requestId'] as String?;
+    if (requestId == null) {
+      LogService().log('HTTP_RESPONSE missing requestId');
+      return;
+    }
+
+    final completer = _pendingHttpRequests[requestId];
+    if (completer == null) {
+      LogService().log('HTTP_RESPONSE for unknown requestId: $requestId');
+      return;
+    }
+
+    LogService().log('Received HTTP_RESPONSE for requestId: $requestId');
+    completer.complete(message);
   }
 
   /// Handle blog post request - serves markdown as HTML

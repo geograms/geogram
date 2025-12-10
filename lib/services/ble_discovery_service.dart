@@ -11,6 +11,7 @@ import 'dart:typed_data';
 import 'package:ble_peripheral/ble_peripheral.dart';
 import 'package:flutter/foundation.dart' show VoidCallback, kIsWeb;
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
+import 'app_args.dart';
 import 'ble_identity_service.dart';
 import 'ble_permission_service.dart';
 import 'log_service.dart';
@@ -133,6 +134,12 @@ class BLEDiscoveryService {
 
   /// Start scanning for nearby Geogram devices
   Future<void> startScanning({Duration timeout = const Duration(seconds: 10)}) async {
+    // Refuse to scan in internet-only mode
+    if (AppArgs().internetOnly) {
+      LogService().log('BLEDiscovery: Scanning disabled in internet-only mode');
+      return;
+    }
+
     if (_isScanning) {
       LogService().log('BLEDiscovery: Already scanning');
       return;
@@ -196,6 +203,12 @@ class BLEDiscoveryService {
   /// Start advertising as a Geogram device so others can discover us
   /// Uses BLEIdentityService to build advertising data with device_id
   Future<void> startAdvertising(String callsign) async {
+    // Refuse to advertise in internet-only mode
+    if (AppArgs().internetOnly) {
+      LogService().log('BLEDiscovery: Advertising disabled in internet-only mode');
+      return;
+    }
+
     if (_isAdvertising) {
       LogService().log('BLEDiscovery: Already advertising');
       return;
@@ -413,6 +426,12 @@ class BLEDiscoveryService {
 
   /// Connect to a device and perform HELLO handshake
   Future<bool> connectAndHello(BLEDevice device, Map<String, dynamic> helloEvent) async {
+    // Refuse in internet-only mode
+    if (AppArgs().internetOnly) {
+      LogService().log('BLEDiscovery: Connect disabled in internet-only mode');
+      return false;
+    }
+
     if (device.bleDevice == null) {
       LogService().log('BLEDiscovery: No BLE device reference for ${device.deviceId}');
       return false;
@@ -664,6 +683,12 @@ class BLEDiscoveryService {
     Map<String, dynamic> message, {
     Duration timeout = const Duration(seconds: 10),
   }) async {
+    // Refuse in internet-only mode
+    if (AppArgs().internetOnly) {
+      LogService().log('BLEDiscovery: Send message disabled in internet-only mode');
+      return null;
+    }
+
     if (device.bleDevice == null) {
       LogService().log('BLEDiscovery: No BLE device reference for ${device.deviceId}');
       return null;

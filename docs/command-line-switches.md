@@ -20,6 +20,8 @@ Options:
   --nickname=NAME            Nickname for the new identity
   --skip-intro               Skip intro/welcome screen on first launch
   --scan-localhost=RANGE     Scan localhost ports for other instances (e.g., 5000-6000)
+  --internet-only            Disable local network and BLE, use station proxy only
+  --no-update                Disable automatic update checks on startup
   --verbose                  Enable verbose logging
   --help, -h                 Show help message
   --version, -v              Show version information
@@ -216,6 +218,50 @@ geogram_desktop --port=5588 --data-dir=/tmp/instance-b --scan-localhost=5500-560
 - Debugging DM and chat functionality locally
 
 **Note:** The standard ports (3456, 8080, 80, 8081, 3000, 5000) are always scanned on localhost regardless of this flag. This flag adds an additional port range to scan.
+
+### --internet-only
+
+Disable local network and Bluetooth discovery, forcing all device communication through a station proxy. This is useful for testing station-based routing where devices communicate only through an internet-accessible station.
+
+```bash
+# Run in internet-only mode
+geogram_desktop --internet-only
+
+# Testing station proxy with two instances
+# Both instances connect to a station and communicate through it
+geogram_desktop --port=5577 --data-dir=/tmp/instance-a --internet-only --http-api
+geogram_desktop --port=5588 --data-dir=/tmp/instance-b --internet-only --http-api
+```
+
+**When enabled:**
+- No local network scanning (WiFi/LAN discovery disabled)
+- No Bluetooth/BLE scanning or advertising
+- All device API requests go through station proxy
+- Devices discover each other only via station's connected client list
+
+**Use cases:**
+- Testing station API proxy functionality
+- Simulating devices that can only communicate via internet
+- Testing device-to-device messaging through station relay
+- Verifying station proxy fallback behavior
+
+### --no-update
+
+Disable automatic update checks on startup. By default, Geogram checks for new versions on launch and notifies the user if an update is available.
+
+```bash
+# Disable update checks
+geogram_desktop --no-update
+
+# Common in test scripts
+geogram_desktop --new-identity --skip-intro --http-api --no-update
+```
+
+**Use cases:**
+- Automated testing and CI/CD pipelines where update prompts would interfere
+- Running multiple test instances that don't need update notifications
+- Offline environments where update checks would timeout
+- Development and debugging sessions
 
 ### --verbose
 

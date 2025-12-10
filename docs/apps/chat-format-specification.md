@@ -278,10 +278,13 @@ Maybe later
 **Stored Fields** (minimal format):
 - `npub: bech32_public_key` - Author's NOSTR public key
 - `signature: hex_signature` - BIP-340 Schnorr signature
+- `created_at: unix_timestamp` - Unix timestamp in seconds (optional but recommended)
 
 **Calculated Fields** (not stored, reconstructed at runtime):
 - `event_id` - SHA256 hash of serialized NOSTR event (deterministic)
 - `verified` - Boolean result of signature verification
+
+**Note on created_at**: While the message timestamp in the header (`YYYY-MM-DD HH:MM_ss`) can be converted to Unix seconds, storing the exact `created_at` value used during signing ensures signature verification works correctly. This is especially important when messages are synced between devices, as the `created_at` must match exactly for the event ID calculation to produce the same result.
 
 **Optional**: Yes - messages may be signed or unsigned
 
@@ -375,6 +378,7 @@ Hey, what's up! :-)
 Hey, what's up! :-)
 --> lat: 38.7223
 --> lon: -9.1393
+--> created_at: 1725735016
 --> npub: npub1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq3z0qwe
 --> signature: 3a4f8c92e1b5d6a7f2e9c4b8d1a6e3f9c2b5e8a1d4f7c0b3e6a9d2f5c8e1b4a7
 ```
@@ -593,26 +597,32 @@ To reconstruct a valid NOSTR event from stored data:
 ```
 1. Parse the file header to extract roomId: "general"
 2. Parse the message header to extract:
-   - timestamp: 2025-12-04 15:12:23 → Unix timestamp 1733325143
+   - timestamp: 2025-12-04 15:12:23
    - callsign: "TESTCALL"
 3. Parse metadata to extract:
    - npub: "npub1zv3k2dhzaffqe9xycu0lt0cmfcs3knlr3n2gaevpnq0pwj3dmd9sxzh6w0"
+   - created_at: 1733325143 (if present, use this; otherwise convert timestamp)
    - signature: "f6f6c590..."
 4. Derive pubkey from npub using bech32 decoding:
    - pubkey: "13236536e2ea520c94c4c71ff5bf1b4e211b4fe38cd48ee581981e174a2ddb4b"
-5. Construct the NOSTR event:
+5. Determine created_at value:
+   - If `created_at` metadata exists: use that exact value
+   - Otherwise: convert message timestamp to Unix seconds
+6. Construct the NOSTR event:
    - pubkey: derived hex pubkey
-   - created_at: Unix timestamp
+   - created_at: Unix timestamp (from step 5)
    - kind: 1 (text note)
    - tags: [['t', 'chat'], ['room', 'general'], ['callsign', 'TESTCALL']]
    - content: "Hello from the markdown format!"
    - sig: stored signature
-6. Calculate event ID:
+7. Calculate event ID:
    - Serialize: [0, pubkey, created_at, kind, tags, content]
    - Hash: SHA256 of JSON-serialized array
    - Result: "ca24e74d687916ebe65275125119af9a6cdf3e96cd53cd4cba881d80c951084c"
-7. Verify signature using BIP-340 Schnorr verification
+8. Verify signature using BIP-340 Schnorr verification
 ```
+
+**Important**: The `created_at` value MUST match exactly what was used during signing. Storing the `created_at` metadata ensures this, especially when syncing messages between devices.
 
 ### Reconstructed NOSTR Event (JSON)
 

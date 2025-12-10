@@ -14,6 +14,8 @@ import '../services/station_cache_service.dart';
 import '../services/chat_notification_service.dart';
 import '../services/callsign_generator.dart';
 import '../services/direct_message_service.dart';
+import '../services/station_discovery_service.dart';
+import '../services/station_service.dart';
 import 'chat_browser_page.dart';
 import 'dm_chat_page.dart';
 
@@ -32,6 +34,8 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
   final I18nService _i18n = I18nService();
   final ChatNotificationService _chatNotificationService = ChatNotificationService();
   final DirectMessageService _dmService = DirectMessageService();
+  final StationDiscoveryService _discoveryService = StationDiscoveryService();
+  final StationService _stationService = StationService();
 
   List<RemoteDevice> _devices = [];
   String _myCallsign = '';
@@ -39,6 +43,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
   List<RemoteCollection> _collections = [];
   bool _isLoading = true;
   bool _isLoadingCollections = false;
+  bool _isScanning = false;
   String? _error;
   int _totalUnreadMessages = 0;
   Map<String, int> _dmUnreadCounts = {};
@@ -180,6 +185,54 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
     }
 
     return false;
+  }
+
+  /// Full scan: localhost ports, LAN, and connect to preferred station
+  /// This is triggered by the Refresh button
+  Future<void> _scanAndRefresh() async {
+    if (_isScanning) return;
+
+    setState(() => _isScanning = true);
+    LogService().log('DevicesBrowserPage: Starting full scan (localhost, LAN, station)');
+
+    try {
+      // Step 1: Run network discovery scan (includes localhost and LAN)
+      // This scans localhost ports, and LAN for devices
+      LogService().log('DevicesBrowserPage: Step 1 - Running network discovery scan');
+      await _discoveryService.discover();
+
+      // Step 2: Try to connect to preferred station if not already connected
+      LogService().log('DevicesBrowserPage: Step 2 - Checking station connection');
+      final connectedStation = _stationService.getConnectedRelay();
+      if (connectedStation == null || !connectedStation.isConnected) {
+        // Find preferred station
+        final allStations = _stationService.getAllStations();
+        final preferredStation = allStations.where((s) => s.status == 'preferred').firstOrNull;
+
+        if (preferredStation != null) {
+          LogService().log('DevicesBrowserPage: Connecting to preferred station: ${preferredStation.name}');
+          await _stationService.connectRelay(preferredStation.url);
+        } else if (allStations.isNotEmpty) {
+          // Connect to first available station if no preferred
+          LogService().log('DevicesBrowserPage: Connecting to first available station: ${allStations.first.name}');
+          await _stationService.connectRelay(allStations.first.url);
+        }
+      }
+
+      // Step 3: Refresh device list (fetches from station and checks reachability)
+      LogService().log('DevicesBrowserPage: Step 3 - Refreshing device list');
+      await _devicesService.refreshAllDevices(force: true);
+
+      // Update local device list
+      _devices = _filterRemoteDevices(_devicesService.getAllDevices());
+      LogService().log('DevicesBrowserPage: Full scan complete, found ${_devices.length} devices');
+    } catch (e) {
+      LogService().log('DevicesBrowserPage: Error during scan: $e');
+    } finally {
+      if (mounted) {
+        setState(() => _isScanning = false);
+      }
+    }
   }
 
   Future<void> _selectDevice(RemoteDevice device) async {
@@ -326,7 +379,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
                 )
               : null,
           actions: [
-            if (_isLoading)
+            if (_isLoading || _isScanning)
               const Padding(
                 padding: EdgeInsets.all(16),
                 child: SizedBox(
@@ -338,7 +391,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
             else
               IconButton(
                 icon: const Icon(Icons.refresh),
-                onPressed: () => _refreshDevices(force: true),
+                onPressed: _scanAndRefresh,
                 tooltip: _i18n.t('refresh'),
               ),
           ],

@@ -22,6 +22,8 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 ///   --nickname=NAME            Nickname for the new identity
 ///   --skip-intro               Skip the intro/welcome screen on first launch
 ///   --scan-localhost=RANGE     Scan localhost ports for other instances (e.g., 5000-6000)
+///   --internet-only            Disable local network and Bluetooth scanning (station proxy only)
+///   --no-update                Disable automatic update checks on startup
 ///   --help, -h                 Show help and exit
 ///   --version, -v              Show version and exit
 ///   --verbose                  Enable verbose logging
@@ -56,6 +58,8 @@ class AppArgs {
   String? _nickname;
   bool _skipIntro = false;
   String? _scanLocalhostRange; // e.g., "5000-6000" for scanning localhost ports
+  bool _internetOnly = false; // Disable local network and BLE, use station proxy only
+  bool _noUpdate = false; // Disable automatic update checks on startup
   bool _showHelp = false;
   bool _showVersion = false;
   bool _verbose = false;
@@ -95,6 +99,13 @@ class AppArgs {
 
   /// Whether localhost port scanning is enabled
   bool get scanLocalhostEnabled => _scanLocalhostRange != null;
+
+  /// Whether internet-only mode is enabled (no local network or BLE scanning)
+  /// When enabled, devices communicate only through station proxy
+  bool get internetOnly => _internetOnly;
+
+  /// Whether automatic update checks are disabled
+  bool get noUpdate => _noUpdate;
 
   /// Get the localhost port range as start/end integers
   /// Returns null if not set or invalid format
@@ -268,6 +279,16 @@ class AppArgs {
         continue;
       }
 
+      if (arg == '--internet-only') {
+        _internetOnly = true;
+        continue;
+      }
+
+      if (arg == '--no-update') {
+        _noUpdate = true;
+        continue;
+      }
+
       if (arg == '--help' || arg == '-h') {
         _showHelp = true;
         continue;
@@ -298,6 +319,8 @@ class AppArgs {
     _nickname = null;
     _skipIntro = false;
     _scanLocalhostRange = null;
+    _internetOnly = false;
+    _noUpdate = false;
     _showHelp = false;
     _showVersion = false;
     _verbose = false;
@@ -322,6 +345,8 @@ Options:
   --nickname=NAME            Nickname for the new identity
   --skip-intro               Skip intro/welcome screen on first launch
   --scan-localhost=RANGE     Scan localhost ports for other instances (e.g., 5000-6000)
+  --internet-only            Disable local network and BLE scanning (station proxy only)
+  --no-update                Disable automatic update checks on startup
   --verbose                  Enable verbose logging
   --help, -h                 Show this help message
   --version, -v              Show version information
@@ -368,6 +393,8 @@ Examples:
       'nickname': _nickname,
       'skipIntro': _skipIntro,
       'scanLocalhostRange': _scanLocalhostRange,
+      'internetOnly': _internetOnly,
+      'noUpdate': _noUpdate,
       'verbose': _verbose,
       'initialized': _initialized,
     };
@@ -375,6 +402,6 @@ Examples:
 
   @override
   String toString() {
-    return 'AppArgs(port: $_port, dataDir: $_dataDir, cliMode: $_cliMode, httpApi: $_httpApi, debugApi: $_debugApi, newIdentity: $_newIdentity, identityType: $_identityType, nickname: $_nickname, skipIntro: $_skipIntro, scanLocalhostRange: $_scanLocalhostRange, verbose: $_verbose)';
+    return 'AppArgs(port: $_port, dataDir: $_dataDir, cliMode: $_cliMode, httpApi: $_httpApi, debugApi: $_debugApi, newIdentity: $_newIdentity, identityType: $_identityType, nickname: $_nickname, skipIntro: $_skipIntro, scanLocalhostRange: $_scanLocalhostRange, internetOnly: $_internetOnly, noUpdate: $_noUpdate, verbose: $_verbose)';
   }
 }

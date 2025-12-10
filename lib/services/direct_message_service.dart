@@ -8,8 +8,6 @@ import 'dart:convert';
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:path/path.dart' as p;
-import 'package:http/http.dart' as http;
-
 import '../models/chat_message.dart';
 import '../models/dm_conversation.dart';
 import '../models/profile.dart';
@@ -23,6 +21,7 @@ import 'signing_service.dart';
 import 'chat_service.dart';
 import 'storage_config.dart';
 import 'devices_service.dart';
+import 'station_service.dart';
 
 /// Exception thrown when trying to send a DM to an unreachable device
 class DMMustBeReachableException implements Exception {
@@ -437,10 +436,16 @@ class DirectMessageService {
     final profile = _myProfile;
 
     // 1. Check reachability FIRST - must be reachable to send
+    // Device is reachable if:
+    // a) It's online with a direct URL, OR
+    // b) We're connected to a station (can use station proxy)
     final devicesService = DevicesService();
     final device = devicesService.getDevice(normalizedCallsign);
+    final station = StationService().getConnectedRelay();
+    final hasStationProxy = station != null;
+    final hasDirectConnection = device != null && device.isOnline && device.url != null;
 
-    if (device == null || !device.isOnline || device.url == null) {
+    if (!hasDirectConnection && !hasStationProxy) {
       throw DMMustBeReachableException(
         'Cannot send message: device $normalizedCallsign is not reachable',
       );
@@ -478,9 +483,11 @@ class DirectMessageService {
         createdAt: createdAt,
       );
       if (signedEvent != null && signedEvent.sig != null && signedEvent.id != null) {
+        // Store created_at first - receivers need this to reconstruct the exact NOSTR event for verification
+        message.setMeta('created_at', signedEvent.createdAt.toString());
         message.setMeta('npub', profile.npub);
-        message.setMeta('signature', signedEvent.sig!);
         message.setMeta('eventId', signedEvent.id!);
+        message.setMeta('signature', signedEvent.sig!);
       }
     }
 
@@ -515,6 +522,7 @@ class DirectMessageService {
 
   /// Push message to remote device using POST /api/chat/{myCallsign}/messages
   /// Sends the full signed NostrEvent (id, pubkey, created_at, kind, tags, content, sig)
+  /// Uses station proxy if direct connection is not available
   /// Returns true if HTTP 200/201 (delivered), false otherwise
   Future<bool> _pushToRemoteChatAPI(dynamic device, NostrEvent? signedEvent, String myCallsign) async {
     if (kIsWeb) return false; // Web doesn't support direct push
@@ -526,18 +534,26 @@ class DirectMessageService {
     try {
       // POST to remote: /api/chat/{myCallsign}/messages
       // The roomId on the remote is OUR callsign (symmetry: we write to their room named after us)
-      final url = Uri.parse('${device.url}/api/chat/$myCallsign/messages');
-      LogService().log('DM: Pushing signed event via chat API to $url');
+      final path = '/api/chat/$myCallsign/messages';
+      final body = jsonEncode({
+        'event': signedEvent.toJson(),
+      });
 
-      // Send the complete signed event (just like NOSTR protocol)
-      // The event already has: id, pubkey, created_at, kind, tags, content, sig
-      final response = await http.post(
-        url,
+      LogService().log('DM: Pushing signed event via chat API to ${device.callsign} path: $path');
+
+      // Use DevicesService helper which tries direct connection first, then falls back to station proxy
+      final response = await DevicesService().makeDeviceApiRequest(
+        callsign: device.callsign,
+        method: 'POST',
+        path: path,
         headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'event': signedEvent.toJson(),
-        }),
-      ).timeout(const Duration(seconds: 10));
+        body: body,
+      );
+
+      if (response == null) {
+        LogService().log('DM: No route to device ${device.callsign} (no direct or station proxy)');
+        return false;
+      }
 
       if (response.statusCode == 200 || response.statusCode == 201) {
         LogService().log('DM: Message delivered successfully via chat API');
@@ -591,16 +607,12 @@ class DirectMessageService {
     _notifyListeners();
   }
 
-  /// Get the messages filename for a specific npub identity
-  /// Format: messages-{npub}.txt or messages.txt for legacy/unsigned
+  /// Get the messages filename for a DM conversation
+  /// Always use messages.txt for consistency with the chat system
   String _getMessagesFilename(String? npub) {
-    if (npub == null || npub.isEmpty) {
-      return 'messages.txt'; // Legacy format for unsigned messages
-    }
-    // Use npub in filename to separate conversations by cryptographic identity
-    // This prevents impersonation - if someone reuses a callsign with a different
-    // npub, their messages go to a different file
-    return 'messages-$npub.txt';
+    // Use single messages.txt file like regular chat system
+    // The npub is stored in message metadata for verification
+    return 'messages.txt';
   }
 
   /// Save a message to the appropriate messages file based on npub
@@ -766,6 +778,7 @@ class DirectMessageService {
   }
 
   /// Sync messages with a remote device
+  /// Uses station proxy if direct connection is not available
   Future<DMSyncResult> syncWithDevice(String callsign, {String? deviceUrl}) async {
     await initialize();
 
@@ -774,34 +787,33 @@ class DirectMessageService {
     final lastSync = conversation?.lastSyncTime?.toIso8601String() ?? '';
 
     try {
-      // Determine the URL to use
-      String? baseUrl = deviceUrl;
-      if (baseUrl == null) {
-        // Try to find the device URL from DevicesService
-        // For now, we'll return a failed result if no URL provided
-        return DMSyncResult(
-          otherCallsign: normalizedCallsign,
-          messagesReceived: 0,
-          messagesSent: 0,
-          success: false,
-          error: 'No device URL available',
-        );
-      }
+      // Step 1: Fetch remote messages using DevicesService (supports station proxy)
+      final fetchPath = '/$_myCallsign/api/dm/sync/$normalizedCallsign?since=$lastSync';
+      LogService().log('DM Sync: Fetching from $normalizedCallsign path: $fetchPath');
 
-      baseUrl = baseUrl.replaceFirst('ws://', 'http://').replaceFirst('wss://', 'https://');
-
-      // Step 1: Fetch remote messages
-      final fetchUrl = '$baseUrl/$_myCallsign/api/dm/sync/$normalizedCallsign?since=$lastSync';
-      final fetchResponse = await http.get(Uri.parse(fetchUrl)).timeout(const Duration(seconds: 10));
+      final fetchResponse = await DevicesService().makeDeviceApiRequest(
+        callsign: normalizedCallsign,
+        method: 'GET',
+        path: fetchPath,
+      );
 
       List<ChatMessage> remoteMessages = [];
-      if (fetchResponse.statusCode == 200) {
+      if (fetchResponse != null && fetchResponse.statusCode == 200) {
         final data = json.decode(fetchResponse.body);
         if (data['messages'] is List) {
           for (final msgJson in data['messages']) {
             remoteMessages.add(ChatMessage.fromJson(msgJson));
           }
         }
+      } else if (fetchResponse == null) {
+        LogService().log('DM Sync: No route to $normalizedCallsign');
+        return DMSyncResult(
+          otherCallsign: normalizedCallsign,
+          messagesReceived: 0,
+          messagesSent: 0,
+          success: false,
+          error: 'No route to device (no direct or station proxy)',
+        );
       }
 
       // Step 2: Merge remote messages into local
@@ -815,16 +827,18 @@ class DirectMessageService {
       int sent = 0;
 
       if (localMessages.isNotEmpty) {
-        final pushUrl = '$baseUrl/$_myCallsign/api/dm/sync/$normalizedCallsign';
-        final pushResponse = await http.post(
-          Uri.parse(pushUrl),
+        final pushPath = '/$_myCallsign/api/dm/sync/$normalizedCallsign';
+        final pushResponse = await DevicesService().makeDeviceApiRequest(
+          callsign: normalizedCallsign,
+          method: 'POST',
+          path: pushPath,
           headers: {'Content-Type': 'application/json'},
           body: json.encode({
             'messages': localMessages.map((m) => m.toJson()).toList(),
           }),
-        ).timeout(const Duration(seconds: 10));
+        );
 
-        if (pushResponse.statusCode == 200) {
+        if (pushResponse != null && pushResponse.statusCode == 200) {
           final data = json.decode(pushResponse.body);
           sent = data['accepted'] as int? ?? localMessages.length;
         }

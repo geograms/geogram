@@ -7,6 +7,7 @@ import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 
 import '../models/update_settings.dart';
+import '../services/app_args.dart';
 import '../services/config_service.dart';
 import '../services/log_service.dart';
 import '../services/station_service.dart';
@@ -56,6 +57,12 @@ class UpdateService {
       await _loadSettings();
       _initialized = true;
       LogService().log('UpdateService initialized');
+
+      // Skip update checks if --no-update flag is set
+      if (AppArgs().noUpdate) {
+        LogService().log('UpdateService: Update checks disabled via --no-update flag');
+        return;
+      }
 
       // Auto-check for updates if enabled - always check on startup
       if (_settings?.autoCheckUpdates == true) {

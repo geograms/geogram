@@ -495,12 +495,33 @@ class StationService {
   }
 
   /// Get currently connected station
+  /// First checks Station model's isConnected flag, then falls back to checking
+  /// actual WebSocket connection state (handles auto-connect scenarios)
   Station? getConnectedRelay() {
+    // First try to find a station marked as connected
     try {
       return _stations.firstWhere((r) => r.isConnected);
     } catch (e) {
-      return null;
+      // No station marked as connected, check actual WebSocket state
     }
+
+    // Fallback: Check if WebSocket is actually connected and return matching station
+    final connectedUrl = _wsService.connectedUrl;
+    if (connectedUrl != null && _wsService.isConnected) {
+      try {
+        return _stations.firstWhere((r) => r.url == connectedUrl);
+      } catch (e) {
+        // WebSocket is connected but URL not in stations list
+        // Return a temporary Station object for the connected URL
+        return Station(
+          url: connectedUrl,
+          name: 'Connected Station',
+          isConnected: true,
+        );
+      }
+    }
+
+    return null;
   }
 
   /// Get stream of update notifications from connected station

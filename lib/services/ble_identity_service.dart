@@ -10,6 +10,7 @@ import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 
+import 'app_args.dart';
 import 'collection_service.dart';
 import 'log_service.dart';
 
@@ -245,6 +246,12 @@ class BLEIdentityService {
   /// Start periodic advertisement (every 30 seconds)
   void startPeriodicAdvertisement() {
     if (kIsWeb) return;
+
+    // Refuse in internet-only mode
+    if (AppArgs().internetOnly) {
+      LogService().log('BLEIdentity: Periodic advertisement disabled in internet-only mode');
+      return;
+    }
 
     // Stop any existing timer
     _advertisementTimer?.cancel();

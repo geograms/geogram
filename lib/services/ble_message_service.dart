@@ -10,6 +10,7 @@ import 'dart:typed_data';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import '../models/ble_message.dart';
 import '../models/ble_parcel.dart';
+import 'app_args.dart';
 import 'ble_discovery_service.dart';
 import 'ble_gatt_server_service.dart';
 import 'ble_identity_service.dart';
@@ -92,6 +93,12 @@ class BLEMessageService {
     required Map<String, dynamic> event,
     required String callsign,
   }) async {
+    // Refuse to initialize in internet-only mode
+    if (AppArgs().internetOnly) {
+      LogService().log('BLEMessageService: Disabled in internet-only mode');
+      return;
+    }
+
     if (_isInitialized) {
       LogService().log('BLEMessageService: Already initialized');
       return;
