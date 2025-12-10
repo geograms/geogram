@@ -961,8 +961,12 @@ class DirectMessageService {
       // Derive hex pubkey from npub
       final pubkeyHex = NostrCrypto.decodeNpub(npub);
 
-      // Convert message timestamp to unix seconds
-      final createdAt = message.dateTime.millisecondsSinceEpoch ~/ 1000;
+      // Use stored created_at for verification (same value used during signing)
+      // Fall back to calculating from timestamp if not available
+      final createdAtStr = message.getMeta('created_at');
+      final createdAt = createdAtStr != null
+          ? int.parse(createdAtStr)
+          : message.dateTime.millisecondsSinceEpoch ~/ 1000;
 
       // For DMs, roomId is the conversation partner's callsign
       final effectiveRoomId = roomId ?? 'dm';
