@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../models/chat_message.dart';
 import '../services/profile_service.dart';
+import '../services/devices_service.dart';
 
 /// Widget for displaying a single chat message bubble
 class MessageBubbleWidget extends StatelessWidget {
@@ -41,6 +42,15 @@ class MessageBubbleWidget extends StatelessWidget {
          currentProfile.npub.isNotEmpty &&
          message.npub == currentProfile.npub);
 
+    // Get sender's preferred color from cached device status
+    final Color bubbleColor;
+    if (isOwnMessage) {
+      bubbleColor = theme.colorScheme.primaryContainer;
+    } else {
+      final device = DevicesService().getDevice(message.author);
+      bubbleColor = _getBubbleColor(device?.preferredColor, theme);
+    }
+
     return Align(
       alignment: isOwnMessage ? Alignment.centerRight : Alignment.centerLeft,
       child: Container(
@@ -73,9 +83,7 @@ class MessageBubbleWidget extends StatelessWidget {
                   vertical: 10,
                 ),
                 decoration: BoxDecoration(
-                  color: isOwnMessage
-                      ? theme.colorScheme.primaryContainer
-                      : theme.colorScheme.surfaceVariant,
+                  color: bubbleColor,
                   borderRadius: BorderRadius.circular(18),
                 ),
                 child: Column(
@@ -424,5 +432,45 @@ class MessageBubbleWidget extends StatelessWidget {
         ],
       ),
     );
+  }
+
+  /// Convert color name to Material Color with appropriate shade for bubble background
+  Color _getBubbleColor(String? colorName, ThemeData theme) {
+    if (colorName == null || colorName.isEmpty) {
+      return theme.colorScheme.surfaceVariant;
+    }
+
+    final MaterialColor baseColor;
+    switch (colorName.toLowerCase()) {
+      case 'red':
+        baseColor = Colors.red;
+        break;
+      case 'green':
+        baseColor = Colors.green;
+        break;
+      case 'yellow':
+        baseColor = Colors.amber;
+        break;
+      case 'purple':
+        baseColor = Colors.purple;
+        break;
+      case 'orange':
+        baseColor = Colors.orange;
+        break;
+      case 'pink':
+        baseColor = Colors.pink;
+        break;
+      case 'cyan':
+        baseColor = Colors.cyan;
+        break;
+      case 'blue':
+        baseColor = Colors.blue;
+        break;
+      default:
+        return theme.colorScheme.surfaceVariant;
+    }
+
+    // Use shade100 for a subtle bubble background
+    return baseColor.shade100;
   }
 }
