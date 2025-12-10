@@ -1,5 +1,14 @@
 # Geogram Desktop Changelog
 
+## 2025-12-10 - v1.6.11
+
+### Changes
+- Remove success snackbar from location detection on Maps panel
+- Add diagnostic logging for default collections creation
+- Add i18n support for About page and Device folders
+- Persist folder state and add drag-to-reorder folders
+
+
 ## 2025-12-10 - v1.6.10
 
 ### Changes
