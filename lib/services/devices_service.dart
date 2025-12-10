@@ -549,16 +549,30 @@ class DevicesService {
         // Use station URL if available, otherwise use cached station URL
         final deviceUrl = matchingRelay?.url ?? cachedRelayUrl;
 
+        // Load cached status from disk
+        final statusCache = await _loadDeviceStatusCache(callsign);
+
         _devices[callsign] = RemoteDevice(
           callsign: callsign,
-          name: matchingRelay?.name ?? callsign,
-          url: deviceUrl,
+          name: statusCache?['nickname'] as String? ?? matchingRelay?.name ?? callsign,
+          nickname: statusCache?['nickname'] as String?,
+          url: statusCache?['url'] as String? ?? deviceUrl,
+          npub: statusCache?['npub'] as String?,
           isOnline: false,
           lastSeen: cacheTime,
+          lastFetched: statusCache?['lastFetched'] != null
+              ? DateTime.tryParse(statusCache!['lastFetched'] as String)
+              : null,
           hasCachedData: true,
           collections: [],
-          latitude: matchingRelay?.latitude,
-          longitude: matchingRelay?.longitude,
+          latitude: statusCache?['latitude'] as double? ?? matchingRelay?.latitude,
+          longitude: statusCache?['longitude'] as double? ?? matchingRelay?.longitude,
+          preferredColor: statusCache?['color'] as String?,
+          connectionMethods: statusCache?['connectionMethods'] != null
+              ? List<String>.from(statusCache!['connectionMethods'] as List)
+              : [],
+          bleProximity: statusCache?['bleProximity'] as String?,
+          bleRssi: statusCache?['bleRssi'] as int?,
         );
       }
 
@@ -1197,6 +1211,14 @@ class DevicesService {
           if (data['nickname'] != null) {
             device.nickname = data['nickname'] as String?;
           }
+
+          // Extract preferred color if available
+          if (data['color'] != null) {
+            device.preferredColor = data['color'] as String?;
+          }
+
+          // Update fetch timestamp
+          device.lastFetched = DateTime.now();
         } catch (e) {
           // Ignore JSON parsing errors - location is optional
         }
@@ -1213,6 +1235,9 @@ class DevicesService {
             device.connectionMethods = [...device.connectionMethods, 'internet'];
           }
         }
+
+        // Cache device status to disk
+        await _saveDeviceStatusCache(device);
 
         _notifyListeners();
         return true;
@@ -1592,6 +1617,8 @@ class DevicesService {
           device.npub = deviceData['npub'] as String?;
           device.latitude = deviceData['latitude'] as double?;
           device.longitude = deviceData['longitude'] as double?;
+          device.preferredColor = deviceData['color'] as String?;
+          device.lastFetched = DateTime.now();
           // Merge connection methods - ensure at least 'internet' is present
           for (final method in connectionTypes) {
             if (!device.connectionMethods.contains(method)) {
@@ -1604,10 +1631,12 @@ class DevicesService {
           }
           device.source = DeviceSourceType.station;
           device.lastSeen = DateTime.now();
+          // Cache device status to disk
+          await _saveDeviceStatusCache(device);
           LogService().log('DevicesService: Updated device: $normalizedCallsign');
         } else {
           // Create new device from station
-          _devices[normalizedCallsign] = RemoteDevice(
+          final device = RemoteDevice(
             callsign: normalizedCallsign,
             name: deviceData['nickname'] as String? ?? normalizedCallsign,
             nickname: deviceData['nickname'] as String?,
@@ -1617,10 +1646,15 @@ class DevicesService {
             collections: [],
             latitude: deviceData['latitude'] as double?,
             longitude: deviceData['longitude'] as double?,
+            preferredColor: deviceData['color'] as String?,
             connectionMethods: connectionTypes,
             source: DeviceSourceType.station,
             lastSeen: DateTime.now(),
+            lastFetched: DateTime.now(),
           );
+          _devices[normalizedCallsign] = device;
+          // Cache device status to disk
+          await _saveDeviceStatusCache(device);
           LogService().log('DevicesService: Added new device from station: $normalizedCallsign');
         }
       }
@@ -1785,6 +1819,51 @@ class DevicesService {
     }
   }
 
+  /// Save device status to disk cache for offline access
+  Future<void> _saveDeviceStatusCache(RemoteDevice device) async {
+    try {
+      final cacheDir = await _cacheService.getDeviceCacheDir(device.callsign);
+      if (cacheDir == null) return;
+
+      final statusFile = File('${cacheDir.path}/status.json');
+      final data = {
+        'callsign': device.callsign,
+        'nickname': device.nickname,
+        'color': device.preferredColor,
+        'latitude': device.latitude,
+        'longitude': device.longitude,
+        'npub': device.npub,
+        'url': device.url,
+        'lastSeen': device.lastSeen?.toIso8601String(),
+        'lastFetched': device.lastFetched?.toIso8601String(),
+        'connectionMethods': device.connectionMethods,
+        'bleProximity': device.bleProximity,
+        'bleRssi': device.bleRssi,
+        'updatedAt': DateTime.now().toIso8601String(),
+      };
+      await statusFile.writeAsString(json.encode(data));
+    } catch (e) {
+      LogService().log('DevicesService: Error saving status cache: $e');
+    }
+  }
+
+  /// Load device status from disk cache
+  Future<Map<String, dynamic>?> _loadDeviceStatusCache(String callsign) async {
+    try {
+      final cacheDir = await _cacheService.getDeviceCacheDir(callsign);
+      if (cacheDir == null) return null;
+
+      final statusFile = File('${cacheDir.path}/status.json');
+      if (await statusFile.exists()) {
+        final content = await statusFile.readAsString();
+        return json.decode(content) as Map<String, dynamic>;
+      }
+    } catch (e) {
+      LogService().log('DevicesService: Error loading status cache: $e');
+    }
+    return null;
+  }
+
   /// Add a device from discovery or manual entry
   Future<void> addDevice(String callsign, {String? name, String? url, bool isOnline = false}) async {
     final normalizedCallsign = callsign.toUpperCase();
@@ -1903,6 +1982,9 @@ class RemoteDevice {
   String? bleProximity;  // "Very close", "Nearby", "In range", "Far"
   int? bleRssi;          // Signal strength in dBm
 
+  /// User's preferred color from profile
+  String? preferredColor;
+
   RemoteDevice({
     required this.callsign,
     required this.name,
@@ -1922,6 +2004,7 @@ class RemoteDevice {
     this.source = DeviceSourceType.local,
     this.bleProximity,
     this.bleRssi,
+    this.preferredColor,
     this.isPinned = false,
     this.folderId,
   });
