@@ -47,6 +47,15 @@ enum DebugAction {
 
   /// Add a device with URL (for testing)
   addDevice,
+
+  /// Start voice recording (for testing)
+  voiceRecord,
+
+  /// Stop voice recording and return file path (for testing)
+  voiceStop,
+
+  /// Get voice recording status (for testing)
+  voiceStatus,
 }
 
 /// Toast message to be displayed
@@ -278,6 +287,24 @@ class DebugController {
     );
   }
 
+  /// Trigger voice recording start
+  void triggerVoiceRecord({String? outputDir}) {
+    triggerAction(
+      DebugAction.voiceRecord,
+      params: {'output_dir': outputDir},
+    );
+  }
+
+  /// Trigger voice recording stop
+  void triggerVoiceStop() {
+    triggerAction(DebugAction.voiceStop);
+  }
+
+  /// Trigger voice status check
+  void triggerVoiceStatus() {
+    triggerAction(DebugAction.voiceStatus);
+  }
+
   /// Get available actions for API response
   static List<Map<String, dynamic>> getAvailableActions() {
     return [
@@ -369,6 +396,23 @@ class DebugController {
           'callsign': 'Device callsign (required)',
           'url': 'Device HTTP API URL (required)',
         },
+      },
+      {
+        'action': 'voice_record',
+        'description': 'Start voice recording (for testing)',
+        'params': {
+          'duration': '(optional) Max recording duration in seconds (default: 5)',
+        },
+      },
+      {
+        'action': 'voice_stop',
+        'description': 'Stop voice recording and get file path',
+        'params': {},
+      },
+      {
+        'action': 'voice_status',
+        'description': 'Get voice recording status',
+        'params': {},
       },
     ];
   }
