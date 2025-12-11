@@ -26,11 +26,16 @@ class AudioService {
   AudioService._internal();
 
   final AudioRecorder _recorder = AudioRecorder();
-  final AudioPlayer _player = AudioPlayer();
+  AudioPlayer? _player; // Lazy init - not available on Linux
   AlsaRecorder? _alsaRecorder;
   AlsaPlayer? _alsaPlayer;
   StreamSubscription? _alsaPositionSub;
   StreamSubscription? _alsaStateSub;
+
+  // Playback state for Linux (when using ALSA)
+  bool _alsaIsPlaying = false;
+  Duration _alsaPosition = Duration.zero;
+  Duration? _alsaDuration;
 
   // Recording state
   bool _isRecording = false;
@@ -64,23 +69,32 @@ class AudioService {
   bool get isRecording => _isRecording;
 
   /// Whether currently playing
-  bool get isPlaying => _player.playing;
+  bool get isPlaying => _alsaPlayer != null ? _alsaIsPlaying : (_player?.playing ?? false);
 
   /// Current playback position
-  Duration get position => _player.position;
+  Duration get position => _alsaPlayer != null ? _alsaPosition : (_player?.position ?? Duration.zero);
 
   /// Total duration of loaded audio
-  Duration? get duration => _player.duration;
+  Duration? get duration => _alsaPlayer != null ? _alsaDuration : _player?.duration;
 
   /// Initialize the service and set up listeners
   Future<void> initialize() async {
+    // On Linux, use ALSA for playback (just_audio has no Linux implementation)
+    if (isLinuxPlatform) {
+      LogService().log('AudioService initialized (Linux/ALSA mode)');
+      return;
+    }
+
+    // Initialize just_audio for other platforms
+    _player = AudioPlayer();
+
     // Forward player state changes
-    _player.playerStateStream.listen((state) {
+    _player!.playerStateStream.listen((state) {
       _playerStateController.add(state);
     });
 
     // Forward position updates
-    _player.positionStream.listen((position) {
+    _player!.positionStream.listen((position) {
       _positionController.add(position);
     });
 
@@ -494,10 +508,14 @@ class AudioService {
       }
 
       Duration? duration;
+      if (_player == null) {
+        LogService().log('AudioService: just_audio not available on this platform');
+        return null;
+      }
       if (filePath.startsWith('http://') || filePath.startsWith('https://')) {
-        duration = await _player.setUrl(filePath);
+        duration = await _player!.setUrl(filePath);
       } else {
-        duration = await _player.setFilePath(filePath);
+        duration = await _player!.setFilePath(filePath);
       }
 
       LogService().log('AudioService: Loaded ${filePath.split('/').last}, duration: ${duration?.inSeconds}s');
@@ -540,28 +558,36 @@ class AudioService {
       _alsaPlayer!.initialize();
       _alsaPlayer!.load(samples, sampleRate, channels);
 
-      // Forward streams
+      // Store duration
+      _alsaDuration = _alsaPlayer!.duration;
+
+      // Forward streams and update local state
       _alsaPositionSub = _alsaPlayer!.positionStream.listen((pos) {
+        _alsaPosition = pos;
         _positionController.add(pos);
       });
       _alsaStateSub = _alsaPlayer!.stateStream.listen((state) {
         switch (state) {
           case AlsaPlayerState.playing:
+            _alsaIsPlaying = true;
             _playerStateController.add(PlayerState(true, ProcessingState.ready));
             break;
           case AlsaPlayerState.paused:
+            _alsaIsPlaying = false;
             _playerStateController.add(PlayerState(false, ProcessingState.ready));
             break;
           case AlsaPlayerState.completed:
+            _alsaIsPlaying = false;
             _playerStateController.add(PlayerState(false, ProcessingState.completed));
             break;
           case AlsaPlayerState.stopped:
+            _alsaIsPlaying = false;
             _playerStateController.add(PlayerState(false, ProcessingState.idle));
             break;
         }
       });
 
-      final duration = _alsaPlayer!.duration;
+      final duration = _alsaDuration;
       LogService().log('AudioService: ALSA loaded ${filePath.split('/').last}, duration: ${duration?.inSeconds}s');
       return duration;
     } catch (e, stackTrace) {
@@ -576,8 +602,8 @@ class AudioService {
     try {
       if (_alsaPlayer != null) {
         await _alsaPlayer!.play();
-      } else {
-        await _player.play();
+      } else if (_player != null) {
+        await _player!.play();
       }
     } catch (e) {
       LogService().log('AudioService: Failed to play: $e');
@@ -589,8 +615,8 @@ class AudioService {
     try {
       if (_alsaPlayer != null) {
         _alsaPlayer!.pause();
-      } else {
-        await _player.pause();
+      } else if (_player != null) {
+        await _player!.pause();
       }
     } catch (e) {
       LogService().log('AudioService: Failed to pause: $e');
@@ -606,8 +632,10 @@ class AudioService {
         _alsaStateSub?.cancel();
         _alsaPlayer!.dispose();
         _alsaPlayer = null;
-      } else {
-        await _player.stop();
+        _alsaIsPlaying = false;
+        _alsaPosition = Duration.zero;
+      } else if (_player != null) {
+        await _player!.stop();
       }
     } catch (e) {
       LogService().log('AudioService: Failed to stop: $e');
@@ -619,8 +647,8 @@ class AudioService {
     try {
       if (_alsaPlayer != null) {
         _alsaPlayer!.seek(position);
-      } else {
-        await _player.seek(position);
+      } else if (_player != null) {
+        await _player!.seek(position);
       }
     } catch (e) {
       LogService().log('AudioService: Failed to seek: $e');
@@ -636,6 +664,12 @@ class AudioService {
         // 20ms per packet
         final durationMs = packets.length * 20;
         return durationMs ~/ 1000;
+      }
+
+      // On Linux, just_audio is not available
+      if (isLinuxPlatform) {
+        LogService().log('AudioService: Cannot get duration - just_audio not available on Linux');
+        return null;
       }
 
       final tempPlayer = AudioPlayer();
@@ -659,7 +693,7 @@ class AudioService {
   Future<void> dispose() async {
     _durationTimer?.cancel();
     await _recorder.dispose();
-    await _player.dispose();
+    await _player?.dispose();
     _alsaPositionSub?.cancel();
     _alsaStateSub?.cancel();
     _alsaPlayer?.dispose();
