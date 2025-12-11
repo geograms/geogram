@@ -523,6 +523,165 @@ class DirectMessageService {
     _notifyListeners();
   }
 
+  /// Send a voice message in a DM conversation
+  /// [voiceFilePath] - Path to the recorded voice file (will be copied to DM files folder)
+  /// [durationSeconds] - Duration of the voice message in seconds
+  /// Throws [DMMustBeReachableException] if the remote device is not reachable
+  Future<void> sendVoiceMessage(String otherCallsign, String voiceFilePath, int durationSeconds) async {
+    await initialize();
+
+    final normalizedCallsign = otherCallsign.toUpperCase();
+    final profile = _myProfile;
+
+    // 1. Check reachability FIRST - must be reachable to send
+    final devicesService = DevicesService();
+    final device = devicesService.getDevice(normalizedCallsign);
+    final station = StationService().getConnectedRelay();
+    final hasStationProxy = station != null;
+    final hasDirectConnection = device != null && device.isOnline && device.url != null;
+
+    if (!hasDirectConnection && !hasStationProxy) {
+      throw DMMustBeReachableException(
+        'Cannot send voice message: device $normalizedCallsign is not reachable',
+      );
+    }
+
+    // 2. Get or create conversation
+    final conversation = await getOrCreateConversation(normalizedCallsign);
+
+    // 3. Copy voice file to conversation files folder
+    final voiceFileName = await _copyVoiceFile(voiceFilePath, conversation.path);
+    if (voiceFileName == null) {
+      throw DMDeliveryFailedException('Failed to copy voice file');
+    }
+
+    // 4. Create the message with voice metadata (empty content for voice-only messages)
+    final message = ChatMessage.now(
+      author: profile.callsign,
+      content: '',
+      metadata: {
+        'voice': voiceFileName,
+        'duration': durationSeconds.toString(),
+      },
+    );
+
+    // 5. Sign the message per chat-format-specification.md
+    final signingService = SigningService();
+    await signingService.initialize();
+
+    NostrEvent? signedEvent;
+    if (signingService.canSign(profile)) {
+      final createdAt = message.dateTime.millisecondsSinceEpoch ~/ 1000;
+      // For voice messages, we sign a descriptor string since content is empty
+      final contentToSign = '[voice:$voiceFileName:${durationSeconds}s]';
+      signedEvent = await signingService.generateSignedEvent(
+        contentToSign,
+        {
+          'room': normalizedCallsign,
+          'callsign': profile.callsign,
+          'voice': voiceFileName,
+          'duration': durationSeconds.toString(),
+        },
+        profile,
+        createdAt: createdAt,
+      );
+      if (signedEvent != null && signedEvent.sig != null && signedEvent.id != null) {
+        message.setMeta('created_at', signedEvent.createdAt.toString());
+        message.setMeta('npub', profile.npub);
+        message.setMeta('eventId', signedEvent.id!);
+        message.setMeta('signature', signedEvent.sig!);
+      }
+    }
+
+    // 6. Push to remote device's chat API FIRST
+    final delivered = await _pushToRemoteChatAPI(device, signedEvent, profile.callsign);
+
+    // 7. Only save locally if delivered successfully
+    if (!delivered) {
+      // Clean up copied file on failure
+      await _deleteVoiceFile(conversation.path, voiceFileName);
+      throw DMDeliveryFailedException(
+        'Failed to deliver voice message to $normalizedCallsign',
+      );
+    }
+
+    // 8. Save locally (message was delivered)
+    await _saveMessage(conversation.path, message, otherNpub: conversation.otherNpub);
+
+    // Update conversation metadata
+    conversation.lastMessageTime = message.dateTime;
+    conversation.lastMessagePreview = '🎤 Voice message (${durationSeconds}s)';
+    conversation.lastMessageAuthor = profile.callsign;
+
+    // 9. Fire event and notify listeners
+    _fireMessageEvent(message, otherCallsign, fromSync: false);
+    _notifyListeners();
+
+    LogService().log('DM: Sent voice message to $normalizedCallsign (${durationSeconds}s)');
+  }
+
+  /// Copy voice file to conversation files folder
+  /// Returns the filename (not full path) or null on failure
+  Future<String?> _copyVoiceFile(String sourcePath, String conversationPath) async {
+    try {
+      final sourceFile = File(sourcePath);
+      if (!await sourceFile.exists()) {
+        LogService().log('DM: Voice source file not found: $sourcePath');
+        return null;
+      }
+
+      // Create files directory
+      final storagePath = StorageConfig().baseDir;
+      final filesDir = Directory(p.join(storagePath, conversationPath, 'files'));
+      if (!await filesDir.exists()) {
+        await filesDir.create(recursive: true);
+      }
+
+      // Generate unique filename: voice_YYYYMMDD_HHMMSS.webm
+      final now = DateTime.now();
+      final timestamp = '${now.year}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}_'
+          '${now.hour.toString().padLeft(2, '0')}${now.minute.toString().padLeft(2, '0')}${now.second.toString().padLeft(2, '0')}';
+      final extension = p.extension(sourcePath);
+      final fileName = 'voice_$timestamp$extension';
+
+      final destPath = p.join(filesDir.path, fileName);
+      await sourceFile.copy(destPath);
+
+      LogService().log('DM: Copied voice file to $destPath');
+      return fileName;
+    } catch (e) {
+      LogService().log('DM: Failed to copy voice file: $e');
+      return null;
+    }
+  }
+
+  /// Delete a voice file from conversation files folder
+  Future<void> _deleteVoiceFile(String conversationPath, String fileName) async {
+    try {
+      final storagePath = StorageConfig().baseDir;
+      final filePath = p.join(storagePath, conversationPath, 'files', fileName);
+      final file = File(filePath);
+      if (await file.exists()) {
+        await file.delete();
+        LogService().log('DM: Deleted voice file: $filePath');
+      }
+    } catch (e) {
+      LogService().log('DM: Failed to delete voice file: $e');
+    }
+  }
+
+  /// Get the full path to a voice file in a conversation
+  Future<String?> getVoiceFilePath(String otherCallsign, String voiceFileName) async {
+    final normalizedCallsign = otherCallsign.toUpperCase();
+    final storagePath = StorageConfig().baseDir;
+    final filePath = p.join(storagePath, 'chat', normalizedCallsign, 'files', voiceFileName);
+    final file = File(filePath);
+    if (await file.exists()) {
+      return filePath;
+    }
+    return null;
+  }
+
   /// Push message to remote device using POST /api/chat/{myCallsign}/messages
   /// Sends the full signed NostrEvent (id, pubkey, created_at, kind, tags, content, sig)
   /// Uses station proxy if direct connection is not available

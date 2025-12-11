@@ -145,6 +145,18 @@ class ChatMessage implements Comparable<ChatMessage> {
     return fullName;
   }
 
+  /// Check if message is a voice message
+  bool get hasVoice => hasMeta('voice');
+
+  /// Get voice filename
+  String? get voiceFile => getMeta('voice');
+
+  /// Get voice duration in seconds (from 'duration' metadata)
+  int? get voiceDuration {
+    final dur = getMeta('duration');
+    return dur != null ? int.tryParse(dur) : null;
+  }
+
   /// Check if message has location
   bool get hasLocation => hasMeta('lat') && hasMeta('lon');
 

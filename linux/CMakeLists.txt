@@ -116,6 +116,29 @@ foreach(bundled_library ${PLUGIN_BUNDLED_LIBRARIES})
     COMPONENT Runtime)
 endforeach(bundled_library)
 
+# Bundle libopus for Opus audio encoding (used by voice messages)
+# Detect architecture and select the appropriate precompiled library
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
+  set(OPUS_ARCH "aarch64")
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "armv7l|arm")
+  set(OPUS_ARCH "armv7l")
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "i686|i386|i486|i586")
+  set(OPUS_ARCH "i686")
+else()
+  # Default to x86_64 for x86_64, amd64, and any unknown architectures
+  set(OPUS_ARCH "x86_64")
+endif()
+
+set(OPUS_LIB "${CMAKE_CURRENT_SOURCE_DIR}/opus/${OPUS_ARCH}/libopus.so.0")
+if(EXISTS ${OPUS_LIB})
+  install(FILES "${OPUS_LIB}"
+    DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
+    COMPONENT Runtime)
+  message(STATUS "Bundling libopus for ${OPUS_ARCH} from ${OPUS_LIB}")
+else()
+  message(WARNING "libopus not found for ${OPUS_ARCH} at ${OPUS_LIB}")
+endif()
+
 # Copy the native assets provided by the build.dart from all packages.
 set(NATIVE_ASSETS_DIR "${PROJECT_BUILD_DIR}native_assets/linux/")
 install(DIRECTORY "${NATIVE_ASSETS_DIR}"

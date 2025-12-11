@@ -1,7 +1,7 @@
 # Chat Format Specification
 
-**Version**: 1.1
-**Last Updated**: 2025-12-04
+**Version**: 1.2
+**Last Updated**: 2025-12-11
 **Status**: Active
 
 ## Table of Contents
@@ -219,6 +219,37 @@ Meeting at the park entrance.
 Check out this photo!
 --> file: sunset_beach.jpg
 ```
+
+#### Voice Messages
+
+**Purpose**: Audio voice message recordings
+
+**Fields**:
+- `voice`: Filename of voice recording in `files/` subdirectory
+- `duration`: Duration in seconds (for display without decoding)
+
+**Storage**: Voice files stored in `files/` subdirectory
+
+**File Format**:
+- Preferred: Opus codec in WebM container (`.webm`)
+- Fallback: AAC in M4A container (`.m4a`)
+- Encoding: 16 kHz mono, 12 kbps bitrate
+- Maximum duration: 30 seconds (~45 KB)
+
+**Filename Convention**: `voice_{YYYYMMDD}_{HHMMSS}.webm`
+
+**Example**:
+```
+> 2025-12-11 14:30_25 -- X1ABCD
+--> voice: voice_20251211_143025.webm
+--> duration: 12
+```
+
+**Notes**:
+- Voice messages typically have empty content
+- Duration is stored to display playback controls without decoding
+- Files must be fully downloaded before playback (no streaming)
+- No autoplay - user must tap to play
 
 #### Reactions
 
@@ -1045,6 +1076,15 @@ Messages should be inserted in chronological order, not necessarily appended to 
 - [Module System](../geogram-server/src/main/java/geogram/apps/Module.java) - Chat module architecture
 
 ## Change Log
+
+### Version 1.2 (2025-12-11)
+- **Added voice message metadata fields**:
+  - `voice`: Filename of voice recording in `files/` subdirectory
+  - `duration`: Duration in seconds (for playback UI without decoding)
+  - Preferred format: Opus/WebM (~90 KB/min, optimal for speech)
+  - Fallback format: AAC/M4A (for iOS compatibility)
+  - Maximum duration: 30 seconds (~45 KB max file size)
+  - Filename convention: `voice_{YYYYMMDD}_{HHMMSS}.webm`
 
 ### Version 1.1 (2025-12-04)
 - **Header format changed**: Now uses room ID instead of callsign

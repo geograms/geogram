@@ -16,6 +16,8 @@ class MessageListWidget extends StatefulWidget {
   final Function(ChatMessage)? onFileOpen;
   final Function(ChatMessage)? onMessageDelete;
   final bool Function(ChatMessage)? canDeleteMessage;
+  /// Callback to get voice file path for a message
+  final Future<String?> Function(ChatMessage)? getVoiceFilePath;
 
   const MessageListWidget({
     Key? key,
@@ -26,6 +28,7 @@ class MessageListWidget extends StatefulWidget {
     this.onFileOpen,
     this.onMessageDelete,
     this.canDeleteMessage,
+    this.getVoiceFilePath,
   }) : super(key: key);
 
   @override
@@ -150,6 +153,10 @@ class _MessageListWidgetState extends State<MessageListWidget> {
                     canDelete: widget.canDeleteMessage != null
                         ? widget.canDeleteMessage!(message)
                         : false,
+                    // Voice message support
+                    onVoiceDownloadRequested: widget.getVoiceFilePath != null && message.hasVoice
+                        ? () => widget.getVoiceFilePath!(message)
+                        : null,
                   );
                 },
               ),

@@ -13,6 +13,8 @@ import '../services/i18n_service.dart';
 import '../util/event_bus.dart';
 import '../widgets/message_list_widget.dart';
 import '../widgets/message_input_widget.dart';
+import '../widgets/voice_recorder_widget.dart';
+import '../services/audio_service.dart';
 
 /// Page for 1:1 direct message conversation
 class DMChatPage extends StatefulWidget {
@@ -36,6 +38,7 @@ class _DMChatPageState extends State<DMChatPage> {
   DMConversation? _conversation;
   bool _isLoading = true;
   bool _isSending = false;
+  bool _isRecording = false;
   String? _error;
 
   // Event subscriptions
@@ -153,6 +156,65 @@ class _DMChatPageState extends State<DMChatPage> {
         _isSending = false;
       });
     }
+  }
+
+  Future<void> _sendVoiceMessage(String filePath, int durationSeconds) async {
+    setState(() {
+      _isSending = true;
+      _isRecording = false;
+    });
+
+    try {
+      await _dmService.sendVoiceMessage(widget.otherCallsign, filePath, durationSeconds);
+      await _loadMessages();
+    } on DMMustBeReachableException {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(_i18n.t('device_not_reachable')),
+            backgroundColor: Colors.orange,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to send voice message: $e')),
+        );
+      }
+    }
+
+    if (mounted) {
+      setState(() {
+        _isSending = false;
+      });
+    }
+  }
+
+  void _startRecording() async {
+    // Check permission first
+    if (!await AudioService().hasPermission()) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Microphone permission required')),
+        );
+      }
+      return;
+    }
+    setState(() {
+      _isRecording = true;
+    });
+  }
+
+  void _cancelRecording() {
+    setState(() {
+      _isRecording = false;
+    });
+  }
+
+  Future<String?> _getVoiceFilePath(ChatMessage message) async {
+    if (!message.hasVoice || message.voiceFile == null) return null;
+    return await _dmService.getVoiceFilePath(widget.otherCallsign, message.voiceFile!);
   }
 
   Future<void> _syncMessages() async {
@@ -289,18 +351,44 @@ class _DMChatPageState extends State<DMChatPage> {
               : MessageListWidget(
                   messages: _messages,
                   isGroupChat: false, // 1:1 DM conversation
+                  getVoiceFilePath: _getVoiceFilePath,
                 ),
         ),
-        // Message input
+        // Message input / Voice recorder
         if (_isSending)
           Container(
             padding: const EdgeInsets.all(16),
             child: const Center(child: CircularProgressIndicator()),
           )
+        else if (_isRecording)
+          Padding(
+            padding: const EdgeInsets.all(8),
+            child: VoiceRecorderWidget(
+              onSend: _sendVoiceMessage,
+              onCancel: _cancelRecording,
+            ),
+          )
         else if (isOnline)
-          MessageInputWidget(
-            onSend: (content, filePath) => _sendMessage(content),
-            allowFiles: false, // DMs don't support file attachments yet
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              // Mic button - padded to align with MessageInputWidget's internal padding
+              Padding(
+                padding: const EdgeInsets.only(left: 4, bottom: 16),
+                child: IconButton(
+                  icon: const Icon(Icons.mic),
+                  onPressed: _startRecording,
+                  tooltip: 'Record voice message',
+                ),
+              ),
+              // Text input
+              Expanded(
+                child: MessageInputWidget(
+                  onSend: (content, filePath) => _sendMessage(content),
+                  allowFiles: false, // DMs don't support file attachments yet
+                ),
+              ),
+            ],
           )
         else
           // Disabled input when offline

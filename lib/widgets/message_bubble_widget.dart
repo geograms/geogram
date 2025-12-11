@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import '../models/chat_message.dart';
 import '../services/profile_service.dart';
 import '../services/devices_service.dart';
+import 'voice_player_widget.dart';
 
 /// Widget for displaying a single chat message bubble
 class MessageBubbleWidget extends StatelessWidget {
@@ -17,6 +18,10 @@ class MessageBubbleWidget extends StatelessWidget {
   final VoidCallback? onLocationView;
   final VoidCallback? onDelete;
   final bool canDelete;
+  /// Path to the voice file (for voice messages)
+  final String? voiceFilePath;
+  /// Callback to request download of voice file from remote
+  final Future<String?> Function()? onVoiceDownloadRequested;
 
   const MessageBubbleWidget({
     Key? key,
@@ -26,6 +31,8 @@ class MessageBubbleWidget extends StatelessWidget {
     this.onLocationView,
     this.onDelete,
     this.canDelete = false,
+    this.voiceFilePath,
+    this.onVoiceDownloadRequested,
   }) : super(key: key);
 
   @override
@@ -92,8 +99,19 @@ class MessageBubbleWidget extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // Message content
-                    if (message.content.isNotEmpty)
+                    // Voice message player (takes priority over text content)
+                    if (message.hasVoice)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: VoicePlayerWidget(
+                          filePath: voiceFilePath ?? '',
+                          durationSeconds: message.voiceDuration,
+                          isLocal: voiceFilePath != null,
+                          onDownloadRequested: onVoiceDownloadRequested,
+                        ),
+                      )
+                    // Text message content
+                    else if (message.content.isNotEmpty)
                       SelectableText(
                         message.content,
                         style: theme.textTheme.bodyMedium?.copyWith(
