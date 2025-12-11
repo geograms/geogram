@@ -27,6 +27,7 @@ import 'services/app_args.dart';
 import 'services/security_service.dart';
 import 'services/network_monitor_service.dart';
 import 'services/user_location_service.dart';
+import 'services/direct_message_service.dart';
 import 'cli/pure_storage_config.dart';
 import 'connection/connection_manager.dart';
 import 'connection/transports/lan_transport.dart';
@@ -325,6 +326,8 @@ class HomePage extends StatefulWidget {
 
 class _HomePageState extends State<HomePage> {
   int _selectedIndex = 0;
+  int _unreadDmCount = 0;
+  StreamSubscription<Map<String, int>>? _unreadSubscription;
   final I18nService _i18n = I18nService();
   final ProfileService _profileService = ProfileService();
   final DebugController _debugController = DebugController();
@@ -351,6 +354,17 @@ class _HomePageState extends State<HomePage> {
     // Listen for debug toast requests
     _debugController.toastNotifier.addListener(_onDebugToast);
 
+    // Subscribe to DM unread count changes
+    _unreadDmCount = DirectMessageService().totalUnreadCount;
+    _unreadSubscription = DirectMessageService().unreadCountsStream.listen((counts) {
+      final total = counts.values.fold(0, (sum, count) => sum + count);
+      if (total != _unreadDmCount) {
+        setState(() {
+          _unreadDmCount = total;
+        });
+      }
+    });
+
     // Check for first launch and show profile setup
     _checkFirstLaunch();
   }
@@ -362,6 +376,7 @@ class _HomePageState extends State<HomePage> {
     UpdateService().updateAvailable.removeListener(_onUpdateAvailable);
     _debugController.panelNotifier.removeListener(_onDebugNavigate);
     _debugController.toastNotifier.removeListener(_onDebugToast);
+    _unreadSubscription?.cancel();
     super.dispose();
   }
 
@@ -708,8 +723,16 @@ class _HomePageState extends State<HomePage> {
             label: Text(_i18n.t('map')),
           ),
           NavigationDrawerDestination(
-            icon: const Icon(Icons.devices_outlined),
-            selectedIcon: const Icon(Icons.devices),
+            icon: Badge(
+              isLabelVisible: _unreadDmCount > 0,
+              label: Text(_unreadDmCount > 99 ? '99+' : _unreadDmCount.toString()),
+              child: const Icon(Icons.devices_outlined),
+            ),
+            selectedIcon: Badge(
+              isLabelVisible: _unreadDmCount > 0,
+              label: Text(_unreadDmCount > 99 ? '99+' : _unreadDmCount.toString()),
+              child: const Icon(Icons.devices),
+            ),
             label: Text(_i18n.t('devices')),
           ),
           const Divider(),
@@ -745,8 +768,16 @@ class _HomePageState extends State<HomePage> {
             label: _i18n.t('map'),
           ),
           NavigationDestination(
-            icon: const Icon(Icons.devices_outlined),
-            selectedIcon: const Icon(Icons.devices),
+            icon: Badge(
+              isLabelVisible: _unreadDmCount > 0,
+              label: Text(_unreadDmCount > 99 ? '99+' : _unreadDmCount.toString()),
+              child: const Icon(Icons.devices_outlined),
+            ),
+            selectedIcon: Badge(
+              isLabelVisible: _unreadDmCount > 0,
+              label: Text(_unreadDmCount > 99 ? '99+' : _unreadDmCount.toString()),
+              child: const Icon(Icons.devices),
+            ),
             label: _i18n.t('devices'),
           ),
         ],
