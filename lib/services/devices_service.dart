@@ -27,6 +27,7 @@ import 'config_service.dart';
 import 'app_args.dart';
 import 'bluetooth_classic_pairing_service.dart';
 import '../util/nostr_event.dart';
+import '../util/event_bus.dart';
 import '../models/profile.dart';
 import '../connection/connection_manager.dart';
 import '../connection/transports/lan_transport.dart';
@@ -51,6 +52,9 @@ class DevicesService {
 
   /// Debug controller subscription
   StreamSubscription<DebugActionEvent>? _debugSubscription;
+
+  /// Station connection event subscription
+  EventSubscription<ConnectionStateChangedEvent>? _stationConnectionSubscription;
 
   /// Cache of known devices with their status
   final Map<String, RemoteDevice> _devices = {};
@@ -88,6 +92,20 @@ class DevicesService {
       LogService().log('DevicesService: BLE initialization skipped');
     }
     _subscribeToDebugActions();
+    _subscribeToStationConnection();
+  }
+
+  /// Subscribe to station connection events to auto-update station device
+  void _subscribeToStationConnection() {
+    _stationConnectionSubscription?.cancel();
+    _stationConnectionSubscription = EventBus().on<ConnectionStateChangedEvent>((event) {
+      if (event.connectionType == ConnectionType.station && event.isConnected) {
+        _updateConnectedStation(
+          eventCallsign: event.stationCallsign,
+          eventUrl: event.stationUrl,
+        );
+      }
+    });
   }
 
   /// Initialize BLE after onboarding (for first-time Android users)
@@ -1416,43 +1434,75 @@ class DevicesService {
   }
 
   /// Update the connected station as a device with 'internet' connection
-  Future<void> _updateConnectedStation() async {
+  /// [eventCallsign] and [eventUrl] come from the ConnectionStateChangedEvent
+  /// and allow us to fetch station info even before station object is fully populated
+  Future<void> _updateConnectedStation({String? eventCallsign, String? eventUrl}) async {
     try {
       final station = _stationService.getConnectedRelay();
-      if (station == null || station.callsign == null) return;
 
-      final normalizedCallsign = station.callsign!.toUpperCase();
+      // Use event data if station isn't ready yet
+      final callsign = station?.callsign ?? eventCallsign;
+      final url = station?.url ?? eventUrl;
+
+      if (callsign == null || url == null) {
+        LogService().log('DevicesService: _updateConnectedStation - no callsign or url available');
+        return;
+      }
+
+      final normalizedCallsign = callsign.toUpperCase();
+
+      // Get lat/lon from station, or fetch directly if not available
+      double? latitude = station?.latitude;
+      double? longitude = station?.longitude;
+
+      // If station doesn't have lat/lon yet, fetch from API directly
+      if (latitude == null || longitude == null) {
+        try {
+          final httpUrl = url.replaceFirst('ws://', 'http://').replaceFirst('wss://', 'https://');
+          final statusUrl = httpUrl.endsWith('/') ? '${httpUrl}api/status' : '$httpUrl/api/status';
+          final response = await http.get(Uri.parse(statusUrl)).timeout(const Duration(seconds: 10));
+          if (response.statusCode == 200) {
+            final data = jsonDecode(response.body);
+            latitude = (data['latitude'] as num?)?.toDouble();
+            longitude = (data['longitude'] as num?)?.toDouble();
+          }
+        } catch (e) {
+          LogService().log('DevicesService: Error fetching station status: $e');
+        }
+      }
+
+      final stationName = station?.name ?? normalizedCallsign;
 
       if (_devices.containsKey(normalizedCallsign)) {
         // Update existing device
         final device = _devices[normalizedCallsign]!;
         device.isOnline = true;
-        device.url = station.url;
-        device.latitude = station.latitude;
-        device.longitude = station.longitude;
+        device.url = url;
+        device.latitude = latitude;
+        device.longitude = longitude;
         device.lastSeen = DateTime.now();
         // Ensure 'internet' tag is present
         if (!device.connectionMethods.contains('internet')) {
           device.connectionMethods = [...device.connectionMethods, 'internet'];
         }
         device.source = DeviceSourceType.station;
-        LogService().log('DevicesService: Updated connected station: $normalizedCallsign');
+        LogService().log('DevicesService: Updated station device: $normalizedCallsign');
       } else {
         // Add new device for the station
         _devices[normalizedCallsign] = RemoteDevice(
           callsign: normalizedCallsign,
-          name: station.name,
-          url: station.url,
+          name: stationName,
+          url: url,
           isOnline: true,
           hasCachedData: false,
           collections: [],
-          latitude: station.latitude,
-          longitude: station.longitude,
+          latitude: latitude,
+          longitude: longitude,
           connectionMethods: ['internet'],
           source: DeviceSourceType.station,
           lastSeen: DateTime.now(),
         );
-        LogService().log('DevicesService: Added connected station as device: $normalizedCallsign');
+        LogService().log('DevicesService: Added station as device: $normalizedCallsign');
       }
 
       _notifyListeners();
