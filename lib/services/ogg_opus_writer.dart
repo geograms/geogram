@@ -338,3 +338,123 @@ class WavReader {
     throw FormatException('WAV file missing data chunk');
   }
 }
+
+/// Read Opus packets from an OGG container file.
+class OggOpusReader {
+  /// Read an OGG Opus file and return Opus packets with sample rate and channels.
+  /// Returns (packets, sampleRate, channels, preSkip).
+  static Future<(List<Uint8List>, int, int, int)> read(String filePath) async {
+    final file = File(filePath);
+    final bytes = await file.readAsBytes();
+    final data = ByteData.sublistView(bytes);
+
+    final packets = <Uint8List>[];
+    var sampleRate = 48000;
+    var channels = 1;
+    var preSkip = 312;
+    var offset = 0;
+    var isFirstDataPacket = true;
+
+    while (offset < bytes.length) {
+      // Check for OggS magic
+      if (offset + 27 > bytes.length) break;
+      if (bytes[offset] != 0x4F ||
+          bytes[offset + 1] != 0x67 ||
+          bytes[offset + 2] != 0x67 ||
+          bytes[offset + 3] != 0x53) {
+        throw FormatException('Invalid OGG page at offset $offset');
+      }
+
+      // Parse page header
+      // final version = bytes[offset + 4];
+      // final headerType = bytes[offset + 5];
+      // final granulePosition = data.getUint64(offset + 6, Endian.little);
+      // final serialNumber = data.getUint32(offset + 14, Endian.little);
+      // final pageSequence = data.getUint32(offset + 18, Endian.little);
+      // final crc = data.getUint32(offset + 22, Endian.little);
+      final numSegments = bytes[offset + 26];
+
+      if (offset + 27 + numSegments > bytes.length) break;
+
+      // Read segment table
+      var pageDataSize = 0;
+      for (var i = 0; i < numSegments; i++) {
+        pageDataSize += bytes[offset + 27 + i];
+      }
+
+      final pageDataOffset = offset + 27 + numSegments;
+      if (pageDataOffset + pageDataSize > bytes.length) break;
+
+      // Extract page data (may contain one or more packets)
+      final pageData = bytes.sublist(pageDataOffset, pageDataOffset + pageDataSize);
+
+      // Parse packet(s) from page data
+      var packetOffset = 0;
+      var segmentIndex = 0;
+      while (segmentIndex < numSegments) {
+        // Collect segments until we find one < 255 (end of packet)
+        var packetSize = 0;
+        while (segmentIndex < numSegments) {
+          final segSize = bytes[offset + 27 + segmentIndex];
+          packetSize += segSize;
+          segmentIndex++;
+          if (segSize < 255) break; // End of packet
+        }
+
+        if (packetSize > 0 && packetOffset + packetSize <= pageData.length) {
+          final packet = Uint8List.fromList(
+              pageData.sublist(packetOffset, packetOffset + packetSize));
+
+          // Check for OpusHead header
+          if (packet.length >= 8 &&
+              packet[0] == 0x4F &&
+              packet[1] == 0x70 &&
+              packet[2] == 0x75 &&
+              packet[3] == 0x73 &&
+              packet[4] == 0x48 &&
+              packet[5] == 0x65 &&
+              packet[6] == 0x61 &&
+              packet[7] == 0x64) {
+            // OpusHead packet
+            if (packet.length >= 19) {
+              channels = packet[9];
+              preSkip = packet[10] | (packet[11] << 8);
+              sampleRate = packet[12] |
+                  (packet[13] << 8) |
+                  (packet[14] << 16) |
+                  (packet[15] << 24);
+              LogService().log(
+                  'OggOpusReader: OpusHead: ${sampleRate}Hz, ${channels}ch, preSkip=$preSkip');
+            }
+          } else if (packet.length >= 8 &&
+              packet[0] == 0x4F &&
+              packet[1] == 0x70 &&
+              packet[2] == 0x75 &&
+              packet[3] == 0x73 &&
+              packet[4] == 0x54 &&
+              packet[5] == 0x61 &&
+              packet[6] == 0x67 &&
+              packet[7] == 0x73) {
+            // OpusTags packet - skip it
+          } else {
+            // Audio packet
+            packets.add(packet);
+            if (isFirstDataPacket) {
+              LogService().log(
+                  'OggOpusReader: First audio packet: ${packet.length} bytes');
+              isFirstDataPacket = false;
+            }
+          }
+
+          packetOffset += packetSize;
+        }
+      }
+
+      offset = pageDataOffset + pageDataSize;
+    }
+
+    LogService().log(
+        'OggOpusReader: Read ${packets.length} packets from $filePath');
+    return (packets, sampleRate, channels, preSkip);
+  }
+}

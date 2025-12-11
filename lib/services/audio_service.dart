@@ -7,8 +7,10 @@ import 'package:just_audio/just_audio.dart';
 import 'package:path_provider/path_provider.dart';
 import 'log_service.dart';
 import 'opus_encoder.dart';
+import 'opus_decoder.dart';
 import 'ogg_opus_writer.dart';
 import 'alsa_recorder.dart';
+import 'alsa_player.dart';
 
 /// Audio recording and playback service for voice messages.
 ///
@@ -23,6 +25,9 @@ class AudioService {
   final AudioRecorder _recorder = AudioRecorder();
   final AudioPlayer _player = AudioPlayer();
   AlsaRecorder? _alsaRecorder;
+  AlsaPlayer? _alsaPlayer;
+  StreamSubscription? _alsaPositionSub;
+  StreamSubscription? _alsaStateSub;
 
   // Recording state
   bool _isRecording = false;
@@ -477,6 +482,14 @@ class AudioService {
       // Stop any current playback
       await stop();
 
+      // On Linux with local OGG files, use ALSA player
+      if (Platform.isLinux &&
+          AlsaPlayer.isAvailable &&
+          !filePath.startsWith('http') &&
+          filePath.endsWith('.ogg')) {
+        return await _loadAlsa(filePath);
+      }
+
       Duration? duration;
       if (filePath.startsWith('http://') || filePath.startsWith('https://')) {
         duration = await _player.setUrl(filePath);
@@ -492,10 +505,77 @@ class AudioService {
     }
   }
 
+  /// Load OGG/Opus file for ALSA playback on Linux.
+  Future<Duration?> _loadAlsa(String filePath) async {
+    try {
+      // Read and decode OGG/Opus file
+      final (packets, sampleRate, channels, preSkip) =
+          await OggOpusReader.read(filePath);
+
+      if (packets.isEmpty) {
+        LogService().log('AudioService: No audio packets in file');
+        return null;
+      }
+
+      // Decode Opus to PCM
+      final decoder = OpusDecoder(sampleRate: sampleRate, channels: channels);
+      decoder.initialize();
+
+      // Frame size for 20ms at given sample rate
+      final frameSize = (sampleRate * 20) ~/ 1000;
+      final pcmSamples = decoder.decodeAll(packets, frameSize);
+      decoder.dispose();
+
+      // Skip pre-skip samples
+      final skipSamples = preSkip * channels;
+      final samples = skipSamples < pcmSamples.length
+          ? Int16List.fromList(pcmSamples.sublist(skipSamples))
+          : pcmSamples;
+
+      // Initialize ALSA player
+      _alsaPlayer = AlsaPlayer();
+      _alsaPlayer!.initialize();
+      _alsaPlayer!.load(samples, sampleRate, channels);
+
+      // Forward streams
+      _alsaPositionSub = _alsaPlayer!.positionStream.listen((pos) {
+        _positionController.add(pos);
+      });
+      _alsaStateSub = _alsaPlayer!.stateStream.listen((state) {
+        switch (state) {
+          case AlsaPlayerState.playing:
+            _playerStateController.add(PlayerState(true, ProcessingState.ready));
+            break;
+          case AlsaPlayerState.paused:
+            _playerStateController.add(PlayerState(false, ProcessingState.ready));
+            break;
+          case AlsaPlayerState.completed:
+            _playerStateController.add(PlayerState(false, ProcessingState.completed));
+            break;
+          case AlsaPlayerState.stopped:
+            _playerStateController.add(PlayerState(false, ProcessingState.idle));
+            break;
+        }
+      });
+
+      final duration = _alsaPlayer!.duration;
+      LogService().log('AudioService: ALSA loaded ${filePath.split('/').last}, duration: ${duration?.inSeconds}s');
+      return duration;
+    } catch (e, stackTrace) {
+      LogService().log('AudioService: Failed to load ALSA: $e');
+      LogService().log('AudioService: Stack trace: $stackTrace');
+      return null;
+    }
+  }
+
   /// Start or resume playback.
   Future<void> play() async {
     try {
-      await _player.play();
+      if (_alsaPlayer != null) {
+        await _alsaPlayer!.play();
+      } else {
+        await _player.play();
+      }
     } catch (e) {
       LogService().log('AudioService: Failed to play: $e');
     }
@@ -504,7 +584,11 @@ class AudioService {
   /// Pause playback.
   Future<void> pause() async {
     try {
-      await _player.pause();
+      if (_alsaPlayer != null) {
+        _alsaPlayer!.pause();
+      } else {
+        await _player.pause();
+      }
     } catch (e) {
       LogService().log('AudioService: Failed to pause: $e');
     }
@@ -513,7 +597,15 @@ class AudioService {
   /// Stop playback and reset position.
   Future<void> stop() async {
     try {
-      await _player.stop();
+      if (_alsaPlayer != null) {
+        _alsaPlayer!.stop();
+        _alsaPositionSub?.cancel();
+        _alsaStateSub?.cancel();
+        _alsaPlayer!.dispose();
+        _alsaPlayer = null;
+      } else {
+        await _player.stop();
+      }
     } catch (e) {
       LogService().log('AudioService: Failed to stop: $e');
     }
@@ -522,7 +614,11 @@ class AudioService {
   /// Seek to a specific position.
   Future<void> seek(Duration position) async {
     try {
-      await _player.seek(position);
+      if (_alsaPlayer != null) {
+        _alsaPlayer!.seek(position);
+      } else {
+        await _player.seek(position);
+      }
     } catch (e) {
       LogService().log('AudioService: Failed to seek: $e');
     }
@@ -531,6 +627,14 @@ class AudioService {
   /// Get the duration of an audio file without loading it for playback.
   Future<int?> getFileDuration(String filePath) async {
     try {
+      // On Linux with local OGG files, calculate from file
+      if (Platform.isLinux && !filePath.startsWith('http') && filePath.endsWith('.ogg')) {
+        final (packets, sampleRate, _, _) = await OggOpusReader.read(filePath);
+        // 20ms per packet
+        final durationMs = packets.length * 20;
+        return durationMs ~/ 1000;
+      }
+
       final tempPlayer = AudioPlayer();
       Duration? duration;
 
@@ -553,6 +657,9 @@ class AudioService {
     _durationTimer?.cancel();
     await _recorder.dispose();
     await _player.dispose();
+    _alsaPositionSub?.cancel();
+    _alsaStateSub?.cancel();
+    _alsaPlayer?.dispose();
     await _recordingDurationController.close();
     await _playerStateController.close();
     await _positionController.close();
