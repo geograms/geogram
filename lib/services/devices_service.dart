@@ -594,8 +594,11 @@ class DevicesService {
           longitude: statusCache?['longitude'] as double? ?? matchingRelay?.longitude,
           preferredColor: statusCache?['color'] as String?,
           platform: statusCache?['platform'] as String?,
+          // When loading from cache, device is offline - exclude 'internet' tag
           connectionMethods: statusCache?['connectionMethods'] != null
               ? List<String>.from(statusCache!['connectionMethods'] as List)
+                  .where((m) => m != 'internet')
+                  .toList()
               : [],
           bleProximity: statusCache?['bleProximity'] as String?,
           bleRssi: statusCache?['bleRssi'] as int?,
@@ -1674,22 +1677,25 @@ class DevicesService {
 
         final normalizedCallsign = callsign.toUpperCase();
 
-        // Parse connection types - default to 'internet' if connected via station
+        // Check if device is currently online via station
+        final isOnlineViaStation = deviceData['is_online'] == true;
+
+        // Parse connection types - only add 'internet' if actually online via station
         final connectionTypes = <String>[];
         final rawTypes = deviceData['connection_types'] as List<dynamic>?;
         if (rawTypes != null && rawTypes.isNotEmpty) {
           for (final t in rawTypes) {
             connectionTypes.add(t.toString());
           }
-        } else {
-          // Default to internet since device is connected via station
+        } else if (isOnlineViaStation) {
+          // Default to internet only if device is currently online via station
           connectionTypes.add('internet');
         }
 
         // Update existing device or create new one
         if (_devices.containsKey(normalizedCallsign)) {
           final device = _devices[normalizedCallsign]!;
-          device.isOnline = true;
+          device.isOnline = isOnlineViaStation;
           device.nickname = deviceData['nickname'] as String?;
           device.npub = deviceData['npub'] as String?;
           device.latitude = deviceData['latitude'] as double?;
@@ -1697,21 +1703,24 @@ class DevicesService {
           device.preferredColor = deviceData['color'] as String?;
           device.platform = deviceData['platform'] as String?;
           device.lastFetched = DateTime.now();
-          // Merge connection methods - ensure at least 'internet' is present
-          for (final method in connectionTypes) {
-            if (!device.connectionMethods.contains(method)) {
-              device.connectionMethods = [...device.connectionMethods, method];
+          // Merge connection methods only if device is online via station
+          if (isOnlineViaStation) {
+            for (final method in connectionTypes) {
+              if (!device.connectionMethods.contains(method)) {
+                device.connectionMethods = [...device.connectionMethods, method];
+              }
             }
-          }
-          // Ensure 'internet' tag if no connection methods
-          if (device.connectionMethods.isEmpty) {
-            device.connectionMethods = ['internet'];
+          } else {
+            // Device is offline - remove 'internet' tag if present
+            device.connectionMethods = device.connectionMethods
+                .where((m) => m != 'internet')
+                .toList();
           }
           device.source = DeviceSourceType.station;
           device.lastSeen = DateTime.now();
           // Cache device status to disk
           await _saveDeviceStatusCache(device);
-          LogService().log('DevicesService: Updated device: $normalizedCallsign');
+          LogService().log('DevicesService: Updated device: $normalizedCallsign (online: $isOnlineViaStation)');
         } else {
           // Create new device from station
           final device = RemoteDevice(
@@ -1719,7 +1728,7 @@ class DevicesService {
             name: deviceData['nickname'] as String? ?? normalizedCallsign,
             nickname: deviceData['nickname'] as String?,
             npub: deviceData['npub'] as String?,
-            isOnline: true,
+            isOnline: isOnlineViaStation,
             hasCachedData: false,
             collections: [],
             latitude: deviceData['latitude'] as double?,
@@ -1734,7 +1743,7 @@ class DevicesService {
           _devices[normalizedCallsign] = device;
           // Cache device status to disk
           await _saveDeviceStatusCache(device);
-          LogService().log('DevicesService: Added new device from station: $normalizedCallsign');
+          LogService().log('DevicesService: Added new device from station: $normalizedCallsign (online: $isOnlineViaStation)');
         }
       }
 

@@ -1411,18 +1411,7 @@ class _CollectionGridCard extends StatelessWidget {
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
                                 ),
-                                if (collection.filesCount > 0)
-                                  Text(
-                                    '${collection.filesCount} files • ${collection.formattedSize}',
-                                    style: theme.textTheme.bodySmall?.copyWith(
-                                      color: theme.colorScheme.onSurfaceVariant,
-                                      fontSize: 12,
-                                      height: 1.15,
-                                    ),
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                              ],
+                                ],
                             ),
                           ),
                         ],
@@ -1611,16 +1600,6 @@ class _CollectionCard extends StatelessWidget {
               const SizedBox(height: 12),
               Row(
                 children: [
-                  _InfoChip(
-                    icon: Icons.insert_drive_file_outlined,
-                    label: '${collection.filesCount} ${collection.filesCount == 1 ? i18n.t('file') : i18n.t('files')}',
-                  ),
-                  const SizedBox(width: 8),
-                  _InfoChip(
-                    icon: Icons.storage_outlined,
-                    label: collection.formattedSize,
-                  ),
-                  const SizedBox(width: 8),
                   _InfoChip(
                     icon: Icons.calendar_today_outlined,
                     label: collection.formattedDate,

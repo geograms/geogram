@@ -1127,6 +1127,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
         device.displayName,
         style: TextStyle(
           fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+          color: device.isOnline ? null : theme.colorScheme.onSurfaceVariant,
         ),
         overflow: TextOverflow.ellipsis,
       ),
@@ -1141,6 +1142,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
                   device.callsign,
                   style: theme.textTheme.bodySmall?.copyWith(
                     fontFamily: 'monospace',
+                    color: device.isOnline ? null : theme.colorScheme.onSurfaceVariant,
                   ),
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -1163,8 +1165,8 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
             spacing: 4,
             runSpacing: 4,
             children: [
-              // Connection method tags (filtered by current availability)
-              ..._filterAvailableConnectionMethods(device.connectionMethods).map((method) => _buildConnectionTag(
+              // Connection method tags (filtered by current availability, deduplicated by label)
+              ..._getDeduplicatedConnectionTags(device.connectionMethods).map((method) => _buildConnectionTag(
                 theme,
                 RemoteDevice.getConnectionMethodLabel(method),
                 _getConnectionMethodColor(method),
@@ -1360,12 +1362,12 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
     // If BLE RSSI is available, use it exclusively (most accurate for nearby devices)
     if (device.bleRssi != null) {
       final bleDistanceMeters = _estimateBleDistance(device.bleRssi!);
-      return '~$bleDistanceMeters meters';
+      return '(~$bleDistanceMeters m away)';
     }
 
     // If BLE proximity is available but no RSSI, use it
     if (device.bleProximity != null) {
-      return device.bleProximity;
+      return '(${device.bleProximity})';
     }
 
     // Fall back to GPS/IP-based distance if no BLE info
@@ -1429,6 +1431,27 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
       // BLE and other methods are always shown if present
       return true;
     }).toList();
+  }
+
+  /// Get connection tags filtered by availability and deduplicated by display label.
+  /// Multiple internal method names (e.g., 'wifi_local', 'lan') may map to the same
+  /// display label ('LAN'), so we keep only the first occurrence of each label.
+  /// Prefers 'wifi_local' over 'lan' when both exist as wifi_local indicates direct
+  /// local discovery while 'lan' is from station discovery.
+  List<String> _getDeduplicatedConnectionTags(List<String> methods) {
+    final filtered = _filterAvailableConnectionMethods(methods);
+    final seenLabels = <String>{};
+    final result = <String>[];
+
+    for (final method in filtered) {
+      final label = RemoteDevice.getConnectionMethodLabel(method);
+      if (!seenLabels.contains(label)) {
+        seenLabels.add(label);
+        result.add(method);
+      }
+    }
+
+    return result;
   }
 
   /// Get background color for device icon based on preferred color
