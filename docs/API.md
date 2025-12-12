@@ -15,6 +15,8 @@ This document describes the HTTP API endpoints available on Geogram radio statio
   - [Chat](#chat)
   - [Direct Messages](#direct-messages)
   - [Blog](#blog)
+  - [Events](#events)
+  - [Alerts](#alerts)
   - [Logs](#logs)
   - [Debug API](#debug-api)
   - [Backup](#backup)
@@ -965,6 +967,281 @@ curl http://192.168.1.100:8080/alice/blog/my-first-post.html
 
 ---
 
+### Events
+
+The Events API provides read-only access to events stored on a device. Events are community gatherings, meetups, or other scheduled activities.
+
+For detailed specifications, see [Event Format Specification](apps/event-format-specification.md).
+
+#### GET /api/events
+
+Returns list of all events.
+
+**Query Parameters:**
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `year` | (all) | Filter by year (e.g., `2025`) |
+
+**Response (200 OK):**
+```json
+{
+  "events": [
+    {
+      "id": "2025-01-15_community-meetup",
+      "title": "Community Meetup",
+      "author": "X1ABCD",
+      "timestamp": "2025-01-15 14:00_00",
+      "location": "online",
+      "location_name": null,
+      "start_date": null,
+      "end_date": null,
+      "visibility": "public",
+      "like_count": 5,
+      "comment_count": 2,
+      "has_flyer": true,
+      "has_trailer": false,
+      "update_count": 0,
+      "going_count": 12,
+      "interested_count": 8
+    }
+  ],
+  "total": 1,
+  "filters": {
+    "year": 2025
+  }
+}
+```
+
+#### GET /api/events/{eventId}
+
+Returns full details for a specific event.
+
+**Parameters:**
+| Parameter | Description |
+|-----------|-------------|
+| `eventId` | Event ID in format `YYYY-MM-DD_title-slug` |
+
+**Response (200 OK):**
+```json
+{
+  "id": "2025-01-15_community-meetup",
+  "title": "Community Meetup",
+  "author": "X1ABCD",
+  "timestamp": "2025-01-15 14:00_00",
+  "content": "Join us for our monthly community meetup!",
+  "location": "online",
+  "location_name": null,
+  "start_date": null,
+  "end_date": null,
+  "agenda": null,
+  "visibility": "public",
+  "admins": ["npub1abc..."],
+  "moderators": [],
+  "likes": ["X2BCDE", "X3CDEF"],
+  "comments": [],
+  "flyers": ["flyer.jpg"],
+  "trailer": null,
+  "updates": [],
+  "registration": {
+    "going": [{"callsign": "X2BCDE", "npub": "npub1xyz..."}],
+    "interested": []
+  },
+  "links": [],
+  "npub": "npub1abc...",
+  "signature": "hex_signature..."
+}
+```
+
+**Response (404 Not Found):**
+```json
+{
+  "error": "Event not found",
+  "event_id": "2025-01-15_invalid-event"
+}
+```
+
+#### GET /api/events/{eventId}/files/{path}
+
+Returns a file associated with an event (flyer image, trailer video, etc.).
+
+**Parameters:**
+| Parameter | Description |
+|-----------|-------------|
+| `eventId` | Event ID in format `YYYY-MM-DD_title-slug` |
+| `path` | File path relative to event folder |
+
+**Response (200 OK):** Binary file content with appropriate Content-Type.
+
+**Response (404 Not Found):** File not found.
+
+---
+
+### Alerts
+
+The Alerts API provides read-only access to alerts (reports) stored on a device. Alerts are community-reported incidents, hazards, or issues with geographic location.
+
+For detailed specifications, see [Alert Format Specification](apps/alert-format-specification.md).
+
+#### GET /api/alerts
+
+Returns list of all alerts with optional filtering.
+
+**Query Parameters:**
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `status` | (all) | Filter by status: `open`, `inProgress`, `resolved`, `closed` |
+| `lat` | (none) | Latitude for geographic filtering (requires `lon` and `radius`) |
+| `lon` | (none) | Longitude for geographic filtering (requires `lat` and `radius`) |
+| `radius` | (none) | Radius in km for geographic filtering (max 500) |
+
+**Response (200 OK):**
+```json
+{
+  "alerts": [
+    {
+      "id": "2025-12-10_broken-sidewalk",
+      "title": "Broken Sidewalk",
+      "author": "X1ABCD",
+      "created": "2025-12-10 14:30_00",
+      "latitude": 38.7222,
+      "longitude": -9.1393,
+      "severity": "urgent",
+      "type": "infrastructure-broken",
+      "status": "open",
+      "address": "Rua Example 123, Lisbon",
+      "verification_count": 5,
+      "like_count": 3,
+      "has_photos": true
+    }
+  ],
+  "total": 1,
+  "filters": {
+    "status": "open",
+    "lat": 38.72,
+    "lon": -9.14,
+    "radius_km": 50.0
+  }
+}
+```
+
+**Note:** Coordinates in API responses are truncated to 4 decimal places (~11m precision) for privacy.
+
+#### GET /api/alerts/{alertId}
+
+Returns full details for a specific alert.
+
+**Parameters:**
+| Parameter | Description |
+|-----------|-------------|
+| `alertId` | Alert ID in format `YYYY-MM-DD_title-slug` |
+
+**Response (200 OK):**
+```json
+{
+  "id": "2025-12-10_broken-sidewalk",
+  "title": "Broken Sidewalk",
+  "title_translations": {
+    "EN": "Broken Sidewalk",
+    "PT": "Passeio Danificado"
+  },
+  "description": "The sidewalk has a large crack near the bus stop.",
+  "description_translations": {
+    "EN": "The sidewalk has a large crack near the bus stop.",
+    "PT": "O passeio tem uma grande fissura perto da paragem de autocarro."
+  },
+  "author": "X1ABCD",
+  "created": "2025-12-10 14:30_00",
+  "latitude": 38.7222,
+  "longitude": -9.1393,
+  "severity": "urgent",
+  "type": "infrastructure-broken",
+  "status": "open",
+  "address": "Rua Example 123, Lisbon",
+  "contact": "city-services@example.com",
+  "verified_by": ["npub1abc...", "npub1def..."],
+  "verification_count": 5,
+  "liked_by": ["npub1ghi..."],
+  "like_count": 3,
+  "admins": ["npub1author..."],
+  "moderators": [],
+  "ttl": 2592000,
+  "expires": "2026-01-10 14:30_00",
+  "photos": ["photo1.jpg", "photo2.jpg"],
+  "npub": "npub1author...",
+  "signature": "hex_signature..."
+}
+```
+
+**Response (404 Not Found):**
+```json
+{
+  "error": "Alert not found",
+  "alert_id": "2025-12-10_invalid-alert"
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | string | Alert ID (format: `YYYY-MM-DD_title-slug`) |
+| `title` | string | Alert title (default language) |
+| `title_translations` | object | Title in multiple languages |
+| `description` | string | Alert description (default language) |
+| `description_translations` | object | Description in multiple languages |
+| `author` | string | Author's callsign |
+| `created` | string | Creation timestamp (`YYYY-MM-DD HH:MM_ss`) |
+| `latitude` | float | Location latitude (4 decimal places) |
+| `longitude` | float | Location longitude (4 decimal places) |
+| `severity` | string | Severity: `info`, `attention`, `urgent`, `emergency` |
+| `type` | string | Alert type (e.g., `infrastructure-broken`, `safety-hazard`) |
+| `status` | string | Status: `open`, `inProgress`, `resolved`, `closed` |
+| `address` | string | Human-readable address (optional) |
+| `contact` | string | Contact information (optional) |
+| `verified_by` | array | List of NPUBs who verified the alert |
+| `verification_count` | int | Number of verifications |
+| `liked_by` | array | List of NPUBs who liked the alert |
+| `like_count` | int | Number of likes |
+| `admins` | array | List of admin NPUBs |
+| `moderators` | array | List of moderator NPUBs |
+| `ttl` | int | Time-to-live in seconds (optional) |
+| `expires` | string | Expiration timestamp (optional) |
+| `photos` | array | List of photo filenames |
+| `npub` | string | Author's NOSTR public key |
+| `signature` | string | NOSTR signature |
+
+#### GET /api/alerts/{alertId}/files/{filename}
+
+Returns a file associated with an alert (photo).
+
+**Parameters:**
+| Parameter | Description |
+|-----------|-------------|
+| `alertId` | Alert ID in format `YYYY-MM-DD_title-slug` |
+| `filename` | Photo filename (e.g., `photo1.jpg`) |
+
+**Response (200 OK):** Binary file content with appropriate Content-Type (e.g., `image/jpeg`).
+
+**Response (404 Not Found):** File not found.
+
+**Example Usage:**
+```bash
+# List all alerts
+curl http://localhost:3456/api/alerts
+
+# Filter by status
+curl "http://localhost:3456/api/alerts?status=open"
+
+# Filter by location (50km radius around Lisbon)
+curl "http://localhost:3456/api/alerts?lat=38.72&lon=-9.14&radius=50"
+
+# Get specific alert details
+curl http://localhost:3456/api/alerts/2025-12-10_broken-sidewalk
+
+# Download alert photo
+curl -o photo.jpg http://localhost:3456/api/alerts/2025-12-10_broken-sidewalk/files/photo1.jpg
+```
+
+---
+
 ### Logs
 
 #### GET /log
@@ -1123,6 +1400,12 @@ Triggers a debug action.
 | `backup_get_status` | Get current backup/restore status | None |
 | `backup_restore` | Start restore from a provider snapshot | `provider_callsign` (required): Provider callsign, `snapshot_id` (optional): Snapshot date (YYYY-MM-DD) |
 | `backup_list_snapshots` | List available snapshots from a provider | `provider_callsign` (required): Provider callsign |
+| `event_create` | Create an event for testing | `title` (required): Event title, `content` (required): Event content, `location` (required): "online" or "lat,lon", `app_name` (optional): App name (default: "my-events"), `location_name` (optional): Venue name |
+| `event_list` | List all events | `year` (optional): Filter by year |
+| `event_delete` | Delete an event | `event_id` (required): Event ID (e.g., "2025-01-15_party"), `app_name` (optional): App name (default: "my-events") |
+| `alert_create` | Create an alert for testing | `title` (required): Alert title, `description` (required): Alert description, `latitude` (optional): Location lat, `longitude` (optional): Location lon, `severity` (optional): info/attention/urgent/emergency, `type` (optional): Alert type |
+| `alert_list` | List all alerts | `status` (optional): Filter by status |
+| `alert_delete` | Delete an alert | `alert_id` (required): Alert ID (e.g., "2025-12-10_broken-sidewalk") |
 
 **Response - Success (200 OK):**
 ```json

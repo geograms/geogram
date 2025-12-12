@@ -25,6 +25,8 @@ import '../util/nostr_event.dart';
 import 'audio_service.dart';
 import 'backup_service.dart';
 import '../models/backup_models.dart';
+import 'event_service.dart';
+import '../models/report.dart';
 
 class LogApiService {
   static final LogApiService _instance = LogApiService._internal();
@@ -279,6 +281,16 @@ class LogApiService {
       return await _handleBackupRequest(request, urlPath, headers);
     }
 
+    // Events API endpoints (public read-only access to events)
+    if (urlPath == 'api/events' || urlPath == 'api/events/' || urlPath.startsWith('api/events/')) {
+      return await _handleEventsRequest(request, urlPath, headers);
+    }
+
+    // Alerts API endpoints (public read-only access to alerts)
+    if (urlPath == 'api/alerts' || urlPath == 'api/alerts/' || urlPath.startsWith('api/alerts/')) {
+      return await _handleAlertsRequest(request, urlPath, headers);
+    }
+
     // Devices API endpoint (for debug - list discovered devices)
     if ((urlPath == 'api/devices' || urlPath == 'api/devices/') && request.method == 'GET') {
       if (!SecurityService().debugApiEnabled) {
@@ -349,6 +361,13 @@ class LogApiService {
           '/api/backup/status': 'GET current backup/restore status',
           '/api/backup/restore': 'POST start restore from provider',
           '/api/backup/discover': 'POST start discovery, GET /api/backup/discover/{id} for status',
+          '/api/events': 'List all events (supports ?year=YYYY)',
+          '/api/events/{eventId}': 'Get event details',
+          '/api/events/{eventId}/items': 'List event files and folders',
+          '/api/events/{eventId}/files/{path}': 'Get event file content',
+          '/api/alerts': 'List all alerts (supports ?status=X&lat=X&lon=X&radius=X)',
+          '/api/alerts/{alertId}': 'Get alert details',
+          '/api/alerts/{alertId}/files/{path}': 'Get alert file (photo)',
           '/api/devices': 'List discovered devices (requires debug API enabled)',
           '/api/debug': 'Debug API - GET for status, POST to trigger actions (requires debug API enabled)',
         },
@@ -1019,6 +1038,16 @@ class LogApiService {
       // Handle backup actions separately (they are async)
       if (action.toLowerCase().startsWith('backup_')) {
         return await _handleBackupAction(action.toLowerCase(), params, headers);
+      }
+
+      // Handle event actions separately (they are async)
+      if (action.toLowerCase().startsWith('event_')) {
+        return await _handleEventAction(action.toLowerCase(), params, headers);
+      }
+
+      // Handle alert actions separately (they are async)
+      if (action.toLowerCase().startsWith('alert_')) {
+        return await _handleAlertAction(action.toLowerCase(), params, headers);
       }
 
       final debugController = DebugController();
@@ -4303,5 +4332,1098 @@ class LogApiService {
       jsonEncode(status.toJson()),
       headers: headers,
     );
+  }
+
+  // ============================================================
+  // Events API Endpoints (public read-only access)
+  // ============================================================
+
+  /// Main handler for all /api/events/* endpoints
+  Future<shelf.Response> _handleEventsRequest(
+    shelf.Request request,
+    String urlPath,
+    Map<String, String> headers,
+  ) async {
+    if (request.method != 'GET') {
+      return shelf.Response(
+        405,
+        body: jsonEncode({'error': 'Method not allowed. Events API is read-only.'}),
+        headers: headers,
+      );
+    }
+
+    try {
+      String? dataDir;
+      try {
+        dataDir = StorageConfig().baseDir;
+      } catch (e) {
+        return shelf.Response.internalServerError(
+          body: jsonEncode({'error': 'Storage not initialized'}),
+          headers: headers,
+        );
+      }
+
+      // Remove 'api/events' prefix for easier parsing
+      String subPath = '';
+      if (urlPath.startsWith('api/events/')) {
+        subPath = urlPath.substring('api/events/'.length);
+      } else if (urlPath == 'api/events' || urlPath == 'api/events/') {
+        subPath = '';
+      }
+
+      // Remove trailing slash
+      if (subPath.endsWith('/')) {
+        subPath = subPath.substring(0, subPath.length - 1);
+      }
+
+      // GET /api/events - List all events
+      if (subPath.isEmpty) {
+        return await _handleEventsListEvents(request, dataDir, headers);
+      }
+
+      // Parse the sub-path to determine the operation
+      final pathParts = subPath.split('/');
+
+      if (pathParts.length == 1) {
+        // GET /api/events/{eventId} - Get single event
+        final eventId = pathParts[0];
+        return await _handleEventsGetEvent(eventId, dataDir, headers);
+      }
+
+      if (pathParts.length == 2 && pathParts[1] == 'items') {
+        // GET /api/events/{eventId}/items - List event files
+        final eventId = pathParts[0];
+        final itemPath = request.url.queryParameters['path'] ?? '';
+        return await _handleEventsGetItems(eventId, itemPath, dataDir, headers);
+      }
+
+      if (pathParts.length >= 3 && pathParts[1] == 'files') {
+        // GET /api/events/{eventId}/files/{path} - Get event file
+        final eventId = pathParts[0];
+        final filePath = pathParts.sublist(2).join('/');
+        return await _handleEventsGetFile(eventId, filePath, dataDir, headers);
+      }
+
+      return shelf.Response.notFound(
+        jsonEncode({'error': 'Events endpoint not found', 'path': urlPath}),
+        headers: headers,
+      );
+    } catch (e) {
+      LogService().log('LogApiService: Error handling events request: $e');
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'error': e.toString()}),
+        headers: headers,
+      );
+    }
+  }
+
+  /// GET /api/events - List all events
+  Future<shelf.Response> _handleEventsListEvents(
+    shelf.Request request,
+    String dataDir,
+    Map<String, String> headers,
+  ) async {
+    final eventService = EventService();
+
+    // Parse year filter from query parameters
+    int? year;
+    final yearParam = request.url.queryParameters['year'];
+    if (yearParam != null) {
+      year = int.tryParse(yearParam);
+    }
+
+    // Get all events
+    final events = await eventService.getAllEventsGlobal(dataDir, year: year);
+
+    // Get available years
+    final years = await eventService.getAvailableYearsGlobal(dataDir);
+
+    return shelf.Response.ok(
+      jsonEncode({
+        'events': events.map((e) => e.toApiJson(summary: true)).toList(),
+        'years': years,
+        'total': events.length,
+      }),
+      headers: headers,
+    );
+  }
+
+  /// GET /api/events/{eventId} - Get single event details
+  Future<shelf.Response> _handleEventsGetEvent(
+    String eventId,
+    String dataDir,
+    Map<String, String> headers,
+  ) async {
+    final eventService = EventService();
+
+    final event = await eventService.findEventByIdGlobal(eventId, dataDir);
+    if (event == null) {
+      return shelf.Response.notFound(
+        jsonEncode({'error': 'Event not found', 'eventId': eventId}),
+        headers: headers,
+      );
+    }
+
+    return shelf.Response.ok(
+      jsonEncode(event.toApiJson(summary: false)),
+      headers: headers,
+    );
+  }
+
+  /// GET /api/events/{eventId}/items - List event files and folders
+  Future<shelf.Response> _handleEventsGetItems(
+    String eventId,
+    String itemPath,
+    String dataDir,
+    Map<String, String> headers,
+  ) async {
+    final eventService = EventService();
+
+    // Get the event directory path
+    final eventDirPath = await eventService.getEventPath(eventId, dataDir);
+    if (eventDirPath == null) {
+      return shelf.Response.notFound(
+        jsonEncode({'error': 'Event not found', 'eventId': eventId}),
+        headers: headers,
+      );
+    }
+
+    // Build the full path
+    String targetPath = eventDirPath;
+    if (itemPath.isNotEmpty) {
+      // Sanitize path to prevent directory traversal
+      if (itemPath.contains('..')) {
+        return shelf.Response.forbidden(
+          jsonEncode({'error': 'Invalid path'}),
+          headers: headers,
+        );
+      }
+      targetPath = '$eventDirPath/$itemPath';
+    }
+
+    final targetDir = io.Directory(targetPath);
+    if (!await targetDir.exists()) {
+      return shelf.Response.notFound(
+        jsonEncode({'error': 'Path not found', 'path': itemPath}),
+        headers: headers,
+      );
+    }
+
+    final items = <Map<String, dynamic>>[];
+    await for (var entity in targetDir.list()) {
+      final name = path.basename(entity.path);
+
+      // Skip hidden files and special files
+      if (name.startsWith('.') || name == 'event.txt') {
+        continue;
+      }
+
+      if (entity is io.Directory) {
+        // Check if this is a day folder (dayX format)
+        final isDayFolder = RegExp(r'^day\d+$', caseSensitive: false).hasMatch(name);
+        final subItems = await entity.list().length;
+
+        items.add({
+          'name': name,
+          'type': isDayFolder ? 'dayFolder' : 'folder',
+          'item_count': subItems,
+        });
+      } else if (entity is io.File) {
+        final stat = await entity.stat();
+        final ext = path.extension(name).toLowerCase();
+
+        // Determine file type
+        String fileType = 'file';
+        if (['.jpg', '.jpeg', '.png', '.gif', '.webp'].contains(ext)) {
+          fileType = 'image';
+        } else if (['.mp4', '.mov', '.avi', '.webm'].contains(ext)) {
+          fileType = 'video';
+        } else if (['.mp3', '.m4a', '.wav', '.ogg'].contains(ext)) {
+          fileType = 'audio';
+        } else if (['.pdf'].contains(ext)) {
+          fileType = 'document';
+        }
+
+        items.add({
+          'name': name,
+          'type': fileType,
+          'size': stat.size,
+        });
+      }
+    }
+
+    // Sort: folders first, then files alphabetically
+    items.sort((a, b) {
+      final aIsFolder = a['type'] == 'folder' || a['type'] == 'dayFolder';
+      final bIsFolder = b['type'] == 'folder' || b['type'] == 'dayFolder';
+      if (aIsFolder && !bIsFolder) return -1;
+      if (!aIsFolder && bIsFolder) return 1;
+      return (a['name'] as String).compareTo(b['name'] as String);
+    });
+
+    return shelf.Response.ok(
+      jsonEncode({
+        'event_id': eventId,
+        'path': itemPath,
+        'items': items,
+      }),
+      headers: headers,
+    );
+  }
+
+  /// GET /api/events/{eventId}/files/{path} - Get event file content
+  Future<shelf.Response> _handleEventsGetFile(
+    String eventId,
+    String filePath,
+    String dataDir,
+    Map<String, String> headers,
+  ) async {
+    final eventService = EventService();
+
+    // Get the event directory path
+    final eventDirPath = await eventService.getEventPath(eventId, dataDir);
+    if (eventDirPath == null) {
+      return shelf.Response.notFound(
+        jsonEncode({'error': 'Event not found', 'eventId': eventId}),
+        headers: headers,
+      );
+    }
+
+    // Sanitize path to prevent directory traversal
+    if (filePath.contains('..')) {
+      return shelf.Response.forbidden(
+        jsonEncode({'error': 'Invalid path'}),
+        headers: headers,
+      );
+    }
+
+    final fullPath = '$eventDirPath/$filePath';
+    final file = io.File(fullPath);
+
+    if (!await file.exists()) {
+      return shelf.Response.notFound(
+        jsonEncode({'error': 'File not found', 'path': filePath}),
+        headers: headers,
+      );
+    }
+
+    // Determine MIME type
+    final ext = path.extension(filePath).toLowerCase();
+    String contentType = 'application/octet-stream';
+
+    final mimeTypes = {
+      '.jpg': 'image/jpeg',
+      '.jpeg': 'image/jpeg',
+      '.png': 'image/png',
+      '.gif': 'image/gif',
+      '.webp': 'image/webp',
+      '.mp4': 'video/mp4',
+      '.mov': 'video/quicktime',
+      '.avi': 'video/x-msvideo',
+      '.webm': 'video/webm',
+      '.mp3': 'audio/mpeg',
+      '.m4a': 'audio/mp4',
+      '.wav': 'audio/wav',
+      '.ogg': 'audio/ogg',
+      '.pdf': 'application/pdf',
+      '.txt': 'text/plain',
+      '.json': 'application/json',
+      '.html': 'text/html',
+      '.css': 'text/css',
+      '.js': 'application/javascript',
+    };
+
+    if (mimeTypes.containsKey(ext)) {
+      contentType = mimeTypes[ext]!;
+    }
+
+    // Read file bytes
+    final bytes = await file.readAsBytes();
+
+    // Return binary content with appropriate headers
+    return shelf.Response.ok(
+      bytes,
+      headers: {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'GET, OPTIONS',
+        'Content-Type': contentType,
+        'Content-Length': bytes.length.toString(),
+        'Cache-Control': 'public, max-age=86400', // Cache for 1 day
+      },
+    );
+  }
+
+  // ============================================================
+  // Alerts API Endpoints (public read-only access)
+  // ============================================================
+
+  /// Main handler for all /api/alerts/* endpoints
+  Future<shelf.Response> _handleAlertsRequest(
+    shelf.Request request,
+    String urlPath,
+    Map<String, String> headers,
+  ) async {
+    if (request.method != 'GET') {
+      return shelf.Response(
+        405,
+        body: jsonEncode({'error': 'Method not allowed. Alerts API is read-only.'}),
+        headers: headers,
+      );
+    }
+
+    try {
+      String? dataDir;
+      try {
+        dataDir = StorageConfig().baseDir;
+      } catch (e) {
+        return shelf.Response.internalServerError(
+          body: jsonEncode({'error': 'Storage not initialized'}),
+          headers: headers,
+        );
+      }
+
+      // Remove 'api/alerts' prefix for easier parsing
+      String subPath = '';
+      if (urlPath.startsWith('api/alerts/')) {
+        subPath = urlPath.substring('api/alerts/'.length);
+      } else if (urlPath == 'api/alerts' || urlPath == 'api/alerts/') {
+        subPath = '';
+      }
+
+      // Remove trailing slash
+      if (subPath.endsWith('/')) {
+        subPath = subPath.substring(0, subPath.length - 1);
+      }
+
+      // GET /api/alerts - List all alerts
+      if (subPath.isEmpty) {
+        return await _handleAlertsListAlerts(request, dataDir, headers);
+      }
+
+      // Parse the sub-path to determine the operation
+      final pathParts = subPath.split('/');
+
+      if (pathParts.length == 1) {
+        // GET /api/alerts/{alertId} - Get single alert
+        final alertId = pathParts[0];
+        return await _handleAlertsGetAlert(alertId, dataDir, headers);
+      }
+
+      if (pathParts.length >= 3 && pathParts[1] == 'files') {
+        // GET /api/alerts/{alertId}/files/{path} - Get alert file
+        final alertId = pathParts[0];
+        final filePath = pathParts.sublist(2).join('/');
+        return await _handleAlertsGetFile(alertId, filePath, dataDir, headers);
+      }
+
+      return shelf.Response.notFound(
+        jsonEncode({'error': 'Alerts endpoint not found', 'path': urlPath}),
+        headers: headers,
+      );
+    } catch (e) {
+      LogService().log('LogApiService: Error handling alerts request: $e');
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'error': e.toString()}),
+        headers: headers,
+      );
+    }
+  }
+
+  /// GET /api/alerts - List all alerts
+  Future<shelf.Response> _handleAlertsListAlerts(
+    shelf.Request request,
+    String dataDir,
+    Map<String, String> headers,
+  ) async {
+    // Parse query parameters
+    final statusParam = request.url.queryParameters['status'];
+    final latParam = request.url.queryParameters['lat'];
+    final lonParam = request.url.queryParameters['lon'];
+    final radiusParam = request.url.queryParameters['radius'];
+
+    double? lat = latParam != null ? double.tryParse(latParam) : null;
+    double? lon = lonParam != null ? double.tryParse(lonParam) : null;
+    double? radius = radiusParam != null ? double.tryParse(radiusParam) : null;
+
+    // Get all alerts with filters
+    final alertsWithPaths = await _getAllAlertsGlobal(
+      dataDir,
+      status: statusParam,
+      lat: lat,
+      lon: lon,
+      radius: radius,
+    );
+
+    // Build response
+    final alertsJson = <Map<String, dynamic>>[];
+    for (final tuple in alertsWithPaths) {
+      final alert = tuple.$1;
+      final alertPath = tuple.$2;
+
+      // Check if alert has photos
+      final hasPhotos = await _alertHasPhotos(alertPath);
+
+      alertsJson.add(alert.toApiJson(summary: true, hasPhotos: hasPhotos));
+    }
+
+    return shelf.Response.ok(
+      jsonEncode({
+        'alerts': alertsJson,
+        'total': alertsJson.length,
+        'filters': {
+          if (statusParam != null) 'status': statusParam,
+          if (lat != null) 'lat': lat,
+          if (lon != null) 'lon': lon,
+          if (radius != null) 'radius_km': radius,
+        },
+      }),
+      headers: headers,
+    );
+  }
+
+  /// GET /api/alerts/{alertId} - Get single alert details
+  Future<shelf.Response> _handleAlertsGetAlert(
+    String alertId,
+    String dataDir,
+    Map<String, String> headers,
+  ) async {
+    final result = await _getAlertByApiId(alertId, dataDir);
+    if (result == null) {
+      return shelf.Response.notFound(
+        jsonEncode({'error': 'Alert not found', 'alertId': alertId}),
+        headers: headers,
+      );
+    }
+
+    final alert = result.$1;
+    final alertPath = result.$2;
+
+    // Get list of photos
+    final photos = await _getAlertPhotos(alertPath);
+
+    // Build full response with photos list
+    final json = alert.toApiJson(summary: false, hasPhotos: photos.isNotEmpty);
+    json['photos'] = photos;
+
+    return shelf.Response.ok(
+      jsonEncode(json),
+      headers: headers,
+    );
+  }
+
+  /// GET /api/alerts/{alertId}/files/{path} - Get alert file content
+  Future<shelf.Response> _handleAlertsGetFile(
+    String alertId,
+    String filePath,
+    String dataDir,
+    Map<String, String> headers,
+  ) async {
+    final result = await _getAlertByApiId(alertId, dataDir);
+    if (result == null) {
+      return shelf.Response.notFound(
+        jsonEncode({'error': 'Alert not found', 'alertId': alertId}),
+        headers: headers,
+      );
+    }
+
+    final alertPath = result.$2;
+
+    // Sanitize path to prevent directory traversal
+    if (filePath.contains('..')) {
+      return shelf.Response.forbidden(
+        jsonEncode({'error': 'Invalid path'}),
+        headers: headers,
+      );
+    }
+
+    final fullPath = '$alertPath/$filePath';
+    final file = io.File(fullPath);
+
+    if (!await file.exists()) {
+      return shelf.Response.notFound(
+        jsonEncode({'error': 'File not found', 'path': filePath}),
+        headers: headers,
+      );
+    }
+
+    // Determine MIME type
+    final ext = path.extension(filePath).toLowerCase();
+    String contentType = 'application/octet-stream';
+
+    final mimeTypes = {
+      '.jpg': 'image/jpeg',
+      '.jpeg': 'image/jpeg',
+      '.png': 'image/png',
+      '.gif': 'image/gif',
+      '.webp': 'image/webp',
+      '.mp4': 'video/mp4',
+      '.mov': 'video/quicktime',
+      '.mp3': 'audio/mpeg',
+      '.m4a': 'audio/mp4',
+      '.wav': 'audio/wav',
+    };
+
+    if (mimeTypes.containsKey(ext)) {
+      contentType = mimeTypes[ext]!;
+    }
+
+    // Read file bytes
+    final bytes = await file.readAsBytes();
+
+    // Return binary content with appropriate headers
+    return shelf.Response.ok(
+      bytes,
+      headers: {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'GET, OPTIONS',
+        'Content-Type': contentType,
+        'Content-Length': bytes.length.toString(),
+        'Cache-Control': 'public, max-age=86400', // Cache for 1 day
+      },
+    );
+  }
+
+  /// Get all alerts from devices directory
+  /// Returns list of (alert, folderPath) tuples for mapping API ID to folder
+  Future<List<(Report, String)>> _getAllAlertsGlobal(
+    String dataDir, {
+    String? status,
+    double? lat,
+    double? lon,
+    double? radius,
+  }) async {
+    final alerts = <(Report, String)>[];
+    final devicesDir = io.Directory('$dataDir/devices');
+
+    if (!await devicesDir.exists()) return alerts;
+
+    // Scan all devices/{callsign}/alerts/
+    await for (final deviceEntity in devicesDir.list()) {
+      if (deviceEntity is! io.Directory) continue;
+
+      final alertsDir = io.Directory('${deviceEntity.path}/alerts');
+      if (!await alertsDir.exists()) continue;
+
+      await for (final alertEntity in alertsDir.list()) {
+        if (alertEntity is! io.Directory) continue;
+
+        // File is named report.txt for backwards compatibility
+        final alertFile = io.File('${alertEntity.path}/report.txt');
+        if (!await alertFile.exists()) continue;
+
+        try {
+          final content = await alertFile.readAsString();
+          final alert = Report.fromText(content, alertEntity.path.split('/').last);
+
+          // Apply status filter
+          if (status != null && alert.status.toFileString() != status) continue;
+
+          // Apply geographic filter
+          if (lat != null && lon != null && radius != null) {
+            final distance = _calculateHaversineDistance(
+              lat, lon, alert.latitude, alert.longitude,
+            );
+            if (distance > radius) continue;
+          }
+
+          alerts.add((alert, alertEntity.path));
+        } catch (e) {
+          // Skip malformed alerts
+          LogService().log('LogApiService: Error parsing alert ${alertEntity.path}: $e');
+        }
+      }
+    }
+
+    // Sort by date (newest first)
+    alerts.sort((a, b) => b.$1.dateTime.compareTo(a.$1.dateTime));
+    return alerts;
+  }
+
+  /// Find alert by API ID (YYYY-MM-DD_title-slug)
+  /// Scans all alerts and matches by apiId since folder names use different format
+  Future<(Report, String)?> _getAlertByApiId(String apiId, String dataDir) async {
+    final devicesDir = io.Directory('$dataDir/devices');
+    if (!await devicesDir.exists()) return null;
+
+    await for (final deviceEntity in devicesDir.list()) {
+      if (deviceEntity is! io.Directory) continue;
+
+      final alertsDir = io.Directory('${deviceEntity.path}/alerts');
+      if (!await alertsDir.exists()) continue;
+
+      await for (final alertEntity in alertsDir.list()) {
+        if (alertEntity is! io.Directory) continue;
+
+        final alertFile = io.File('${alertEntity.path}/report.txt');
+        if (!await alertFile.exists()) continue;
+
+        try {
+          final content = await alertFile.readAsString();
+          final alert = Report.fromText(content, alertEntity.path.split('/').last);
+
+          // Check if this alert's apiId matches
+          if (alert.apiId == apiId) {
+            return (alert, alertEntity.path);
+          }
+        } catch (e) {
+          // Skip malformed alerts
+        }
+      }
+    }
+    return null;
+  }
+
+  /// Check if an alert has photos
+  Future<bool> _alertHasPhotos(String alertPath) async {
+    final dir = io.Directory(alertPath);
+    if (!await dir.exists()) return false;
+
+    await for (final entity in dir.list()) {
+      if (entity is io.File) {
+        final ext = path.extension(entity.path).toLowerCase();
+        if (['.jpg', '.jpeg', '.png', '.gif', '.webp'].contains(ext)) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  /// Get list of photo filenames in an alert directory
+  Future<List<String>> _getAlertPhotos(String alertPath) async {
+    final photos = <String>[];
+    final dir = io.Directory(alertPath);
+    if (!await dir.exists()) return photos;
+
+    await for (final entity in dir.list()) {
+      if (entity is io.File) {
+        final ext = path.extension(entity.path).toLowerCase();
+        if (['.jpg', '.jpeg', '.png', '.gif', '.webp'].contains(ext)) {
+          photos.add(path.basename(entity.path));
+        }
+      }
+    }
+
+    photos.sort();
+    return photos;
+  }
+
+  /// Calculate haversine distance between two points in kilometers
+  double _calculateHaversineDistance(
+    double lat1, double lon1,
+    double lat2, double lon2,
+  ) {
+    const double earthRadius = 6371; // km
+    final dLat = _toRadians(lat2 - lat1);
+    final dLon = _toRadians(lon2 - lon1);
+
+    final a = sin(dLat / 2) * sin(dLat / 2) +
+        cos(_toRadians(lat1)) * cos(_toRadians(lat2)) *
+        sin(dLon / 2) * sin(dLon / 2);
+
+    final c = 2 * atan2(sqrt(a), sqrt(1 - a));
+    return earthRadius * c;
+  }
+
+  double _toRadians(double degrees) => degrees * pi / 180;
+
+  // ============================================================
+  // Debug API - Event Actions (for testing Events API)
+  // ============================================================
+
+  /// Handle event debug actions asynchronously
+  Future<shelf.Response> _handleEventAction(
+    String action,
+    Map<String, dynamic> params,
+    Map<String, String> headers,
+  ) async {
+    try {
+      // Get data directory from storage config
+      String? dataDir;
+      try {
+        dataDir = StorageConfig().baseDir;
+      } catch (e) {
+        return shelf.Response.internalServerError(
+          body: jsonEncode({
+            'success': false,
+            'error': 'Storage not initialized',
+          }),
+          headers: headers,
+        );
+      }
+
+      switch (action) {
+        case 'event_create':
+          // Create a test event
+          final title = params['title'] as String? ?? 'Test Event ${DateTime.now().millisecondsSinceEpoch}';
+          final content = params['content'] as String? ?? 'This is a test event created via debug API.';
+          final location = params['location'] as String? ?? 'online';
+          final locationName = params['location_name'] as String?;
+          final appName = params['app_name'] as String? ?? 'my-events';
+
+          // Get callsign from profile service
+          String callsign = 'TEST';
+          try {
+            final profile = ProfileService().getProfile();
+            callsign = profile.callsign;
+          } catch (e) {
+            // Profile service not initialized, use TEST callsign
+          }
+
+          // Initialize EventService for this app
+          final eventService = EventService();
+          final collectionPath = '$dataDir/devices/$callsign/$appName';
+
+          // Initialize the events directory
+          await eventService.initializeCollection(collectionPath);
+
+          // Create the event
+          final event = await eventService.createEvent(
+            author: callsign,
+            title: title,
+            location: location,
+            locationName: locationName,
+            content: content,
+          );
+
+          if (event == null) {
+            return shelf.Response.internalServerError(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Failed to create event',
+              }),
+              headers: headers,
+            );
+          }
+
+          LogService().log('LogApiService: Created test event: ${event.id}');
+
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'message': 'Event created',
+              'event': event.toApiJson(),
+            }),
+            headers: headers,
+          );
+
+        case 'event_list':
+          // List all events via the public API helper
+          final year = params['year'] as int?;
+          final events = await EventService().getAllEventsGlobal(dataDir, year: year);
+          final years = await EventService().getAvailableYearsGlobal(dataDir);
+
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'events': events.map((e) => e.toApiJson(summary: true)).toList(),
+              'years': years,
+              'total': events.length,
+            }),
+            headers: headers,
+          );
+
+        case 'event_delete':
+          // Delete an event by ID
+          final eventId = params['event_id'] as String?;
+          if (eventId == null || eventId.isEmpty) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Missing event_id parameter',
+              }),
+              headers: headers,
+            );
+          }
+
+          // Find the event to get its path
+          final eventPath = await EventService().getEventPath(eventId, dataDir);
+          if (eventPath == null) {
+            return shelf.Response.notFound(
+              jsonEncode({
+                'success': false,
+                'error': 'Event not found',
+                'event_id': eventId,
+              }),
+              headers: headers,
+            );
+          }
+
+          // Delete the event directory
+          final eventDir = io.Directory(eventPath);
+          if (await eventDir.exists()) {
+            await eventDir.delete(recursive: true);
+            LogService().log('LogApiService: Deleted event: $eventId');
+
+            return shelf.Response.ok(
+              jsonEncode({
+                'success': true,
+                'message': 'Event deleted',
+                'event_id': eventId,
+              }),
+              headers: headers,
+            );
+          }
+
+          return shelf.Response.notFound(
+            jsonEncode({
+              'success': false,
+              'error': 'Event directory not found',
+              'event_id': eventId,
+            }),
+            headers: headers,
+          );
+
+        default:
+          return shelf.Response.badRequest(
+            body: jsonEncode({
+              'success': false,
+              'error': 'Unknown event action: $action',
+              'available': ['event_create', 'event_list', 'event_delete'],
+            }),
+            headers: headers,
+          );
+      }
+    } catch (e, stack) {
+      LogService().log('LogApiService: Event action error: $e');
+      LogService().log('LogApiService: Stack: $stack');
+      return shelf.Response.internalServerError(
+        body: jsonEncode({
+          'success': false,
+          'error': e.toString(),
+        }),
+        headers: headers,
+      );
+    }
+  }
+
+  // ============================================================
+  // Debug API - Alert Actions (for testing Alerts API)
+  // ============================================================
+
+  /// Handle alert debug actions asynchronously
+  Future<shelf.Response> _handleAlertAction(
+    String action,
+    Map<String, dynamic> params,
+    Map<String, String> headers,
+  ) async {
+    try {
+      // Get data directory from storage config
+      String? dataDir;
+      try {
+        dataDir = StorageConfig().baseDir;
+      } catch (e) {
+        return shelf.Response.internalServerError(
+          body: jsonEncode({
+            'success': false,
+            'error': 'Storage not initialized',
+          }),
+          headers: headers,
+        );
+      }
+
+      switch (action) {
+        case 'alert_create':
+          // Create a test alert
+          final title = params['title'] as String? ?? 'Test Alert ${DateTime.now().millisecondsSinceEpoch}';
+          final description = params['description'] as String? ?? 'This is a test alert created via debug API.';
+          final latitude = (params['latitude'] as num?)?.toDouble() ?? 38.7223;
+          final longitude = (params['longitude'] as num?)?.toDouble() ?? -9.1393;
+          final severity = params['severity'] as String? ?? 'info';
+          final type = params['type'] as String? ?? 'other';
+          final statusParam = params['status'] as String? ?? 'open';
+
+          // Get callsign from profile service
+          String callsign = 'TEST';
+          try {
+            final profile = ProfileService().getProfile();
+            callsign = profile.callsign;
+          } catch (e) {
+            // Profile service not initialized, use TEST callsign
+          }
+
+          // Create timestamp in expected format
+          final now = DateTime.now();
+          final seconds = now.second.toString().padLeft(2, '0');
+          final created = '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')} '
+              '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}_$seconds';
+
+          // Parse severity
+          ReportSeverity reportSeverity;
+          switch (severity.toLowerCase()) {
+            case 'emergency':
+              reportSeverity = ReportSeverity.emergency;
+              break;
+            case 'urgent':
+              reportSeverity = ReportSeverity.urgent;
+              break;
+            case 'attention':
+              reportSeverity = ReportSeverity.attention;
+              break;
+            default:
+              reportSeverity = ReportSeverity.info;
+          }
+
+          // Parse status
+          ReportStatus reportStatus;
+          switch (statusParam.toLowerCase()) {
+            case 'inprogress':
+            case 'in_progress':
+              reportStatus = ReportStatus.inProgress;
+              break;
+            case 'resolved':
+              reportStatus = ReportStatus.resolved;
+              break;
+            case 'closed':
+              reportStatus = ReportStatus.closed;
+              break;
+            default:
+              reportStatus = ReportStatus.open;
+          }
+
+          // Create alert folder name (lat_lon_title format for backwards compatibility)
+          final latStr = latitude.toStringAsFixed(4).replaceAll('.', '_').replaceAll('-', 'n');
+          final lonStr = longitude.toStringAsFixed(4).replaceAll('.', '_').replaceAll('-', 'n');
+          final titleSlug = title.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), '-').replaceAll(RegExp(r'^-+|-+$'), '');
+          final folderName = '${latStr}_${lonStr}_$titleSlug';
+
+          // Create the alert directory
+          final alertDir = io.Directory('$dataDir/devices/$callsign/alerts/$folderName');
+          await alertDir.create(recursive: true);
+
+          // Create the alert object
+          final alert = Report(
+            folderName: folderName,
+            titles: {'EN': title},
+            descriptions: {'EN': description},
+            latitude: latitude,
+            longitude: longitude,
+            type: type,
+            severity: reportSeverity,
+            status: reportStatus,
+            created: created,
+            author: callsign,
+          );
+
+          // Write report.txt
+          final reportFile = io.File('${alertDir.path}/report.txt');
+          await reportFile.writeAsString(alert.exportAsText());
+
+          LogService().log('LogApiService: Created test alert: ${alert.apiId}');
+
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'message': 'Alert created',
+              'alert': alert.toApiJson(),
+            }),
+            headers: headers,
+          );
+
+        case 'alert_list':
+          // List all alerts via the helper
+          final status = params['status'] as String?;
+          final lat = (params['lat'] as num?)?.toDouble();
+          final lon = (params['lon'] as num?)?.toDouble();
+          final radius = (params['radius'] as num?)?.toDouble();
+
+          final alertsWithPaths = await _getAllAlertsGlobal(
+            dataDir,
+            status: status,
+            lat: lat,
+            lon: lon,
+            radius: radius,
+          );
+
+          final alertsJson = <Map<String, dynamic>>[];
+          for (final tuple in alertsWithPaths) {
+            final alert = tuple.$1;
+            final alertPath = tuple.$2;
+            final hasPhotos = await _alertHasPhotos(alertPath);
+            alertsJson.add(alert.toApiJson(summary: true, hasPhotos: hasPhotos));
+          }
+
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'alerts': alertsJson,
+              'total': alertsJson.length,
+            }),
+            headers: headers,
+          );
+
+        case 'alert_delete':
+          // Delete an alert by ID
+          final alertId = params['alert_id'] as String?;
+          if (alertId == null || alertId.isEmpty) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Missing alert_id parameter',
+              }),
+              headers: headers,
+            );
+          }
+
+          // Find the alert to get its path
+          final result = await _getAlertByApiId(alertId, dataDir);
+          if (result == null) {
+            return shelf.Response.notFound(
+              jsonEncode({
+                'success': false,
+                'error': 'Alert not found',
+                'alert_id': alertId,
+              }),
+              headers: headers,
+            );
+          }
+
+          final alertPath = result.$2;
+          final alertDir = io.Directory(alertPath);
+
+          if (await alertDir.exists()) {
+            await alertDir.delete(recursive: true);
+            LogService().log('LogApiService: Deleted alert: $alertId');
+
+            return shelf.Response.ok(
+              jsonEncode({
+                'success': true,
+                'message': 'Alert deleted',
+                'alert_id': alertId,
+              }),
+              headers: headers,
+            );
+          }
+
+          return shelf.Response.notFound(
+            jsonEncode({
+              'success': false,
+              'error': 'Alert directory not found',
+              'alert_id': alertId,
+            }),
+            headers: headers,
+          );
+
+        default:
+          return shelf.Response.badRequest(
+            body: jsonEncode({
+              'success': false,
+              'error': 'Unknown alert action: $action',
+              'available': ['alert_create', 'alert_list', 'alert_delete'],
+            }),
+            headers: headers,
+          );
+      }
+    } catch (e, stack) {
+      LogService().log('LogApiService: Alert action error: $e');
+      LogService().log('LogApiService: Stack: $stack');
+      return shelf.Response.internalServerError(
+        body: jsonEncode({
+          'success': false,
+          'error': e.toString(),
+        }),
+        headers: headers,
+      );
+    }
   }
 }

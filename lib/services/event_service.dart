@@ -1079,4 +1079,227 @@ class EventService {
       return null;
     }
   }
+
+  // ==================== API Helper Methods ====================
+
+  /// Find event by ID across all events apps
+  ///
+  /// This method searches all collections/apps of type 'events' for an event
+  /// with the given ID. Returns null if not found.
+  Future<Event?> findEventByIdGlobal(String eventId, String dataDir) async {
+    try {
+      // Extract year from eventId (format: YYYY-MM-DD_title)
+      if (eventId.length < 10 || !eventId.contains('_')) {
+        print('EventService: Invalid eventId format: $eventId');
+        return null;
+      }
+      final year = eventId.substring(0, 4);
+
+      // Scan collections directory for event-type apps
+      final collectionsDir = Directory('$dataDir/collections');
+      if (!await collectionsDir.exists()) {
+        print('EventService: Collections directory not found');
+        return null;
+      }
+
+      final entities = await collectionsDir.list().toList();
+      for (var entity in entities) {
+        if (entity is Directory) {
+          // Check if this is an events-type app by looking for events subdirectory
+          final eventsSubdir = Directory('${entity.path}/events');
+          if (await eventsSubdir.exists()) {
+            // Look for the event in this app
+            final eventDir = Directory('${entity.path}/events/$year/$eventId');
+            if (await eventDir.exists()) {
+              // Found! Load the event using this collection
+              final savedPath = _collectionPath;
+              _collectionPath = entity.path;
+              final event = await loadEvent(eventId);
+              _collectionPath = savedPath; // Restore original path
+              if (event != null) {
+                return event;
+              }
+            }
+          }
+        }
+      }
+
+      print('EventService: Event not found: $eventId');
+      return null;
+    } catch (e) {
+      print('EventService: Error finding event: $e');
+      return null;
+    }
+  }
+
+  /// Get all events across all events apps
+  ///
+  /// Optionally filter by year. Returns events sorted by date (most recent first).
+  /// Searches both $dataDir/collections/ and $dataDir/devices/{callsign}/ for events.
+  Future<List<Event>> getAllEventsGlobal(String dataDir, {int? year}) async {
+    final allEvents = <Event>[];
+
+    try {
+      // Search in collections directory
+      final collectionsDir = Directory('$dataDir/collections');
+      if (await collectionsDir.exists()) {
+        final entities = await collectionsDir.list().toList();
+        for (var entity in entities) {
+          if (entity is Directory) {
+            // Check if this is an events-type app
+            final eventsSubdir = Directory('${entity.path}/events');
+            if (await eventsSubdir.exists()) {
+              // Load events from this app
+              final savedPath = _collectionPath;
+              _collectionPath = entity.path;
+              final events = await loadEvents(year: year);
+              _collectionPath = savedPath; // Restore original path
+              allEvents.addAll(events);
+            }
+          }
+        }
+      }
+
+      // Also search in devices directory for local events
+      final devicesDir = Directory('$dataDir/devices');
+      if (await devicesDir.exists()) {
+        final deviceEntities = await devicesDir.list().toList();
+        for (var deviceEntity in deviceEntities) {
+          if (deviceEntity is Directory) {
+            // Look for events apps in each device folder
+            final deviceApps = await deviceEntity.list().toList();
+            for (var appEntity in deviceApps) {
+              if (appEntity is Directory) {
+                final eventsSubdir = Directory('${appEntity.path}/events');
+                if (await eventsSubdir.exists()) {
+                  // Load events from this app
+                  final savedPath = _collectionPath;
+                  _collectionPath = appEntity.path;
+                  final events = await loadEvents(year: year);
+                  _collectionPath = savedPath; // Restore original path
+                  allEvents.addAll(events);
+                }
+              }
+            }
+          }
+        }
+      }
+
+      // Sort by date (most recent first)
+      allEvents.sort((a, b) => b.dateTime.compareTo(a.dateTime));
+      return allEvents;
+    } catch (e) {
+      print('EventService: Error loading all events: $e');
+      return [];
+    }
+  }
+
+  /// Get all available years across all events apps
+  /// Searches both $dataDir/collections/ and $dataDir/devices/{callsign}/ for events.
+  Future<List<int>> getAvailableYearsGlobal(String dataDir) async {
+    final years = <int>{};
+
+    try {
+      // Search in collections directory
+      final collectionsDir = Directory('$dataDir/collections');
+      if (await collectionsDir.exists()) {
+        final entities = await collectionsDir.list().toList();
+        for (var entity in entities) {
+          if (entity is Directory) {
+            final eventsSubdir = Directory('${entity.path}/events');
+            if (await eventsSubdir.exists()) {
+              // Get years from this app
+              final savedPath = _collectionPath;
+              _collectionPath = entity.path;
+              final appYears = await getYears();
+              _collectionPath = savedPath;
+              years.addAll(appYears);
+            }
+          }
+        }
+      }
+
+      // Also search in devices directory for local events
+      final devicesDir = Directory('$dataDir/devices');
+      if (await devicesDir.exists()) {
+        final deviceEntities = await devicesDir.list().toList();
+        for (var deviceEntity in deviceEntities) {
+          if (deviceEntity is Directory) {
+            // Look for events apps in each device folder
+            final deviceApps = await deviceEntity.list().toList();
+            for (var appEntity in deviceApps) {
+              if (appEntity is Directory) {
+                final eventsSubdir = Directory('${appEntity.path}/events');
+                if (await eventsSubdir.exists()) {
+                  final savedPath = _collectionPath;
+                  _collectionPath = appEntity.path;
+                  final appYears = await getYears();
+                  _collectionPath = savedPath;
+                  years.addAll(appYears);
+                }
+              }
+            }
+          }
+        }
+      }
+
+      final sortedYears = years.toList()..sort((a, b) => b.compareTo(a));
+      return sortedYears;
+    } catch (e) {
+      print('EventService: Error getting years: $e');
+      return [];
+    }
+  }
+
+  /// Get path to an event's directory
+  ///
+  /// Returns the full path if found, null otherwise
+  /// Searches both $dataDir/collections/ and $dataDir/devices/{callsign}/ for events.
+  Future<String?> getEventPath(String eventId, String dataDir) async {
+    try {
+      if (eventId.length < 10 || !eventId.contains('_')) {
+        return null;
+      }
+      final year = eventId.substring(0, 4);
+
+      // Search in collections directory
+      final collectionsDir = Directory('$dataDir/collections');
+      if (await collectionsDir.exists()) {
+        final entities = await collectionsDir.list().toList();
+        for (var entity in entities) {
+          if (entity is Directory) {
+            final eventDir = Directory('${entity.path}/events/$year/$eventId');
+            if (await eventDir.exists()) {
+              return eventDir.path;
+            }
+          }
+        }
+      }
+
+      // Also search in devices directory for local events
+      final devicesDir = Directory('$dataDir/devices');
+      if (await devicesDir.exists()) {
+        final deviceEntities = await devicesDir.list().toList();
+        for (var deviceEntity in deviceEntities) {
+          if (deviceEntity is Directory) {
+            // Look for events apps in each device folder
+            final deviceApps = await deviceEntity.list().toList();
+            for (var appEntity in deviceApps) {
+              if (appEntity is Directory) {
+                final eventDir = Directory('${appEntity.path}/events/$year/$eventId');
+                if (await eventDir.exists()) {
+                  return eventDir.path;
+                }
+              }
+            }
+          }
+        }
+      }
+
+      return null;
+    } catch (e) {
+      print('EventService: Error getting event path: $e');
+      return null;
+    }
+  }
 }

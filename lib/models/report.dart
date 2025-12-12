@@ -713,4 +713,80 @@ class Report {
   String toString() {
     return 'Report(folder: $folderName, severity: ${severity.name}, status: ${status.name})';
   }
+
+  /// Generate API ID from created timestamp and title (YYYY-MM-DD_title-slug)
+  /// This matches the Events API ID format
+  String get apiId {
+    // Extract date from created timestamp (format: "YYYY-MM-DD HH:MM_ss")
+    final datePart = created.split(' ').first; // "YYYY-MM-DD"
+
+    // Get title and slugify it
+    final title = getTitle('EN');
+    final slug = title
+        .toLowerCase()
+        .replaceAll(RegExp(r'[^a-z0-9]+'), '-')
+        .replaceAll(RegExp(r'^-+|-+$'), '');
+
+    return '${datePart}_$slug';
+  }
+
+  /// Helper to truncate coordinate to 4 decimal places (≈11m precision)
+  double _truncateCoord(double coord) {
+    return (coord * 10000).truncateToDouble() / 10000;
+  }
+
+  /// Convert to API JSON for alerts
+  ///
+  /// When [summary] is true, returns minimal data for list views.
+  /// When [summary] is false, returns full alert detail.
+  Map<String, dynamic> toApiJson({bool summary = false, bool hasPhotos = false}) {
+    // Truncate coordinates to 4 decimal places for privacy
+    final lat = _truncateCoord(latitude);
+    final lon = _truncateCoord(longitude);
+
+    if (summary) {
+      return {
+        'id': apiId,
+        'title': getTitle('EN'),
+        'author': author,
+        'created': created,
+        'latitude': lat,
+        'longitude': lon,
+        'severity': severity.name,
+        'type': type,
+        'status': status.toFileString(),
+        'address': address,
+        'verification_count': verificationCount,
+        'like_count': likeCount,
+        'has_photos': hasPhotos,
+      };
+    }
+    // Full JSON for detail view
+    return {
+      'id': apiId,
+      'title': getTitle('EN'),
+      'title_translations': titles,
+      'description': getDescription('EN'),
+      'description_translations': descriptions,
+      'author': author,
+      'created': created,
+      'latitude': lat,
+      'longitude': lon,
+      'severity': severity.name,
+      'type': type,
+      'status': status.toFileString(),
+      'address': address,
+      'contact': contact,
+      'verified_by': verifiedBy,
+      'verification_count': verificationCount,
+      'liked_by': likedBy,
+      'like_count': likeCount,
+      'admins': admins,
+      'moderators': moderators,
+      'ttl': ttl,
+      'expires': expires,
+      'npub': npub,
+      'signature': signature,
+    };
+  }
 }

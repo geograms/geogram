@@ -35,9 +35,9 @@
 
 ## Overview
 
-This document specifies the text-based format used for storing events in the Geogram system. The events collection type provides a platform for organizing and sharing events with photos, files, location information, and community engagement through likes and comments.
+This document specifies the text-based format used for storing events in the Geogram system. The events app provides a platform for organizing and sharing events with photos, files, location information, and community engagement through likes and comments.
 
-Events combine features from other collection types with unique characteristics designed for event documentation and collaboration.
+Events combine features from other app types with unique characteristics designed for event documentation and collaboration.
 
 ### Key Features
 
@@ -57,43 +57,44 @@ Events combine features from other collection types with unique characteristics 
 ### Directory Structure
 
 ```
-collection_name/
-└── events/
-    ├── 2024/
-    │   ├── 2024-12-25_christmas-party/
-    │   │   ├── event.txt
-    │   │   ├── photo1.jpg
-    │   │   ├── photo2.jpg
-    │   │   ├── group-photo.jpg
-    │   │   ├── document.pdf
-    │   │   ├── team-photos/
-    │   │   │   ├── subfolder.txt
-    │   │   │   ├── team1.jpg
-    │   │   │   ├── team2.jpg
-    │   │   │   └── team3.jpg
-    │   │   └── .reactions/
-    │   │       ├── event.txt
-    │   │       ├── photo1.jpg.txt
-    │   │       ├── group-photo.jpg.txt
-    │   │       └── team-photos.txt
-    │   └── 2024-12-31_new-year-celebration/
+{app_name}/
+├── 2024/
+│   ├── 2024-12-25_christmas-party/
+│   │   ├── event.txt
+│   │   ├── photo1.jpg
+│   │   ├── photo2.jpg
+│   │   ├── group-photo.jpg
+│   │   ├── document.pdf
+│   │   ├── team-photos/
+│   │   │   ├── subfolder.txt
+│   │   │   ├── team1.jpg
+│   │   │   ├── team2.jpg
+│   │   │   └── team3.jpg
+│   │   └── .reactions/
+│   │       ├── event.txt
+│   │       ├── photo1.jpg.txt
+│   │       ├── group-photo.jpg.txt
+│   │       └── team-photos.txt
+│   └── 2024-12-31_new-year-celebration/
+│       ├── event.txt
+│       ├── fireworks.mp4
+│       └── .reactions/
+│           └── event.txt
+└── 2025/
+    ├── 2025-01-15_tech-conference/
+    │   ├── event.txt
+    │   ├── keynote.pdf
+    │   ├── photos/
+    │   │   ├── subfolder.txt
+    │   │   └── speaker1.jpg
+    │   └── .reactions/
     │       ├── event.txt
-    │       ├── fireworks.mp4
-    │       └── .reactions/
-    │           └── event.txt
-    └── 2025/
-        ├── 2025-01-15_tech-conference/
-        │   ├── event.txt
-        │   ├── keynote.pdf
-        │   ├── photos/
-        │   │   ├── subfolder.txt
-        │   │   └── speaker1.jpg
-        │   └── .reactions/
-        │       ├── event.txt
-        │       └── photos.txt
-        └── 2025-02-10_workshop/
-            └── event.txt
+    │       └── photos.txt
+    └── 2025-02-10_workshop/
+        └── event.txt
 ```
+
+Events are organized by year folders (`YYYY/`) within the app. The event folder name includes the full date (`YYYY-MM-DD_title`).
 
 ### Event Folder Naming
 
@@ -125,7 +126,7 @@ Date: 2025-01-10
 
 ### Year Organization
 
-- **Format**: `events/YYYY/` (e.g., `events/2024/`, `events/2025/`)
+- **Format**: `{app_name}/YYYY/` (e.g., `my-events/2024/`, `my-events/2025/`)
 - **Purpose**: Organize events by year for long-term archival
 - **Creation**: Automatically created when first event for that year is added
 - **Benefits**: Easy year-based browsing, archival, and cleanup

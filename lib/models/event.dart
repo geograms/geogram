@@ -459,6 +459,85 @@ class Event {
     );
   }
 
+  /// Convert to API JSON
+  ///
+  /// When [summary] is true, returns minimal data for list views.
+  /// When [summary] is false, returns full event detail.
+  Map<String, dynamic> toApiJson({bool summary = false}) {
+    if (summary) {
+      return {
+        'id': id,
+        'title': title,
+        'author': author,
+        'timestamp': timestamp,
+        'location': location,
+        'location_name': locationName,
+        'start_date': startDate,
+        'end_date': endDate,
+        'visibility': visibility,
+        'like_count': likes.length,
+        'comment_count': comments.length,
+        'has_flyer': flyers.isNotEmpty,
+        'has_trailer': trailer != null,
+        'update_count': updates.length,
+        'going_count': registration?.goingCount ?? 0,
+        'interested_count': registration?.interestedCount ?? 0,
+      };
+    }
+
+    // Full event detail
+    return {
+      'id': id,
+      'title': title,
+      'author': author,
+      'timestamp': timestamp,
+      'content': content,
+      'location': location,
+      'location_name': locationName,
+      'start_date': startDate,
+      'end_date': endDate,
+      'agenda': agenda,
+      'visibility': visibility,
+      'admins': admins,
+      'moderators': moderators,
+      'likes': likes,
+      'comments': comments.map((c) => {
+        'author': c.author,
+        'timestamp': c.timestamp,
+        'content': c.content,
+        'npub': c.npub,
+      }).toList(),
+      'flyers': flyers,
+      'trailer': trailer,
+      'updates': updates.map((u) => {
+        'id': u.id,
+        'title': u.title,
+        'author': u.author,
+        'posted': u.posted,
+        'content': u.content,
+        'like_count': u.likeCount,
+        'comment_count': u.commentCount,
+      }).toList(),
+      'registration': registration != null ? {
+        'going': registration!.going.map((e) => {
+          'callsign': e.callsign,
+          'npub': e.npub,
+        }).toList(),
+        'interested': registration!.interested.map((e) => {
+          'callsign': e.callsign,
+          'npub': e.npub,
+        }).toList(),
+      } : null,
+      'links': links.map((l) => {
+        'url': l.url,
+        'description': l.description,
+        'password': l.password,
+      }).toList(),
+      'npub': npub,
+      'signature': signature,
+    };
+  }
+
   @override
   String toString() {
     return 'Event(id: $id, title: $title, author: $author, location: $location, likes: ${likes.length}, comments: ${comments.length})';

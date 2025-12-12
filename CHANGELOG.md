@@ -1,5 +1,15 @@
 # Geogram Desktop Changelog
 
+## 2025-12-12 - v1.6.28
+
+### Changes
+- Add Events API for remote viewing via /api/events endpoints
+- Add Alerts API for remote viewing via /api/alerts endpoints with geographic filtering
+- Add debug actions for events (event_create, event_list, event_delete)
+- Add debug actions for alerts (alert_create, alert_list, alert_delete)
+- Add alerts API test script (41 tests)
+
+
 ## 2025-12-12 - v1.6.27
 
 ### Changes
