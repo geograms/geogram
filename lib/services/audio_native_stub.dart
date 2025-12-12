@@ -71,9 +71,9 @@ class OpusDecoder {
   void dispose() {}
 }
 
-/// Stub for OggOpusReader - works on all platforms (no FFI)
+/// Stub for OggOpusReader - not available on web
 class OggOpusReader {
-  static Future<(List<Uint8List>, int, int, int)> read(String filePath) async {
+  static Future<(List<Uint8List>, int, int, int, int)> read(String filePath) async {
     throw UnsupportedError('OggOpusReader not available on web');
   }
 }

@@ -8,6 +8,12 @@ bool get isIOSPlatform => false;
 /// Voice messages are not supported on web (browser-dependent, unreliable)
 bool get isVoiceSupported => false;
 
+/// Stub for OGG/Opus decoding (not available on web).
+Future<(Int16List, int, int)?> decodeOggOpus(String filePath) async => null;
+
+/// Stub for creating ALSA player (throws on web).
+Object createAlsaPlayer() => throw UnsupportedError('ALSA not supported on web');
+
 /// Stub File class for web
 class PlatformFile {
   final String path;

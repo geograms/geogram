@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:typed_data';
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:record/record.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:path_provider/path_provider.dart';
@@ -545,29 +544,14 @@ class AudioService {
   /// Load OGG/Opus file for ALSA playback on Linux.
   Future<Duration?> _loadAlsa(String filePath) async {
     try {
-      // Read and decode OGG/Opus file
-      final (packets, sampleRate, channels, preSkip, _) =
-          await OggOpusReader.read(filePath);
-
-      if (packets.isEmpty) {
-        LogService().log('AudioService: No audio packets in file');
+      // Use platform-specific decoding (native only, returns null on web)
+      final result = await decodeOggOpus(filePath);
+      if (result == null) {
+        LogService().log('AudioService: Failed to decode OGG/Opus file');
         return null;
       }
 
-      // Decode Opus to PCM
-      final decoder = OpusDecoder(sampleRate: sampleRate, channels: channels);
-      decoder.initialize();
-
-      // Frame size for 20ms at given sample rate
-      final frameSize = (sampleRate * 20) ~/ 1000;
-      final pcmSamples = decoder.decodeAll(packets, frameSize);
-      decoder.dispose();
-
-      // Skip pre-skip samples
-      final skipSamples = preSkip * channels;
-      final samples = skipSamples < pcmSamples.length
-          ? Int16List.fromList(pcmSamples.sublist(skipSamples))
-          : pcmSamples;
+      final (samples, sampleRate, channels) = result;
 
       // Initialize ALSA player
       _alsaPlayer = AlsaPlayer();
