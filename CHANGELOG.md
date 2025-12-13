@@ -1,5 +1,13 @@
 # Geogram Desktop Changelog
 
+## 2025-12-13 - v1.6.30
+
+### Changes
+- Fix station HTTP relay using direct function calls instead of localhost HTTP
+- Fix device list settings icon position in portrait mode
+- Auto-check for updates when visiting Software Updates page
+
+
 ## 2025-12-12 - v1.6.28
 
 ### Changes
