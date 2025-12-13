@@ -259,14 +259,23 @@ class _ReportBrowserPageState extends State<ReportBrowserPage> {
     if (!mounted) return;
 
     final userLocation = _userLocationService.currentLocation;
+    final profile = _profileService.getProfile();
+    final currentUserCallsign = profile.callsign;
 
     setState(() {
       if (userLocation == null || !userLocation.isValid || _radiusKm >= 500) {
-        // No location or unlimited radius - show all alerts
-        _filteredStationAlerts = List.from(_stationAlerts);
-      } else {
-        // Filter alerts within the radius
+        // No location or unlimited radius - show all alerts (except user's own)
         _filteredStationAlerts = _stationAlerts.where((alert) {
+          // Filter out alerts created by the current user
+          return alert.author != currentUserCallsign;
+        }).toList();
+      } else {
+        // Filter alerts within the radius (except user's own)
+        _filteredStationAlerts = _stationAlerts.where((alert) {
+          // Filter out alerts created by the current user
+          if (alert.author == currentUserCallsign) {
+            return false;
+          }
           final distance = _calculateDistance(
             userLocation.latitude,
             userLocation.longitude,
@@ -1106,7 +1115,7 @@ class _ReportBrowserPageState extends State<ReportBrowserPage> {
           Icon(icon, size: 16, color: color),
           const SizedBox(width: 4),
           Text(
-            _i18n.t(labelKey).toUpperCase(),
+            _i18n.t(labelKey),
             style: TextStyle(
               color: color,
               fontSize: 12,
@@ -1148,7 +1157,7 @@ class _ReportBrowserPageState extends State<ReportBrowserPage> {
         borderRadius: BorderRadius.circular(4),
       ),
       child: Text(
-        _i18n.t(labelKey).toUpperCase(),
+        _i18n.t(labelKey),
         style: TextStyle(
           color: color,
           fontSize: 12,

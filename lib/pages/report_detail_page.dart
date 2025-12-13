@@ -25,6 +25,7 @@ import '../services/log_service.dart';
 import '../services/i18n_service.dart';
 import '../services/alert_feedback_service.dart';
 import 'location_picker_page.dart';
+import 'photo_viewer_page.dart';
 
 /// Page for viewing and editing report details
 class ReportDetailPage extends StatefulWidget {
@@ -154,6 +155,38 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
   String _selectedType = 'other';
   String _locationInputMode = 'map'; // 'map', 'manual', or 'address'
   bool _isGeocodingAddress = false;
+  int _selectedTtlSeconds = 604800; // TTL in seconds, default 1 week
+
+  // TTL options (duration -> label)
+  static const List<Map<String, int>> _ttlOptions = [
+    {'value': 7200, 'label': 2},       // 2 hours
+    {'value': 21600, 'label': 6},      // 6 hours
+    {'value': 43200, 'label': 12},     // 12 hours
+    {'value': 86400, 'label': 24},     // 1 day
+    {'value': 259200, 'label': 72},    // 3 days
+    {'value': 604800, 'label': 168},   // 1 week
+    {'value': 1209600, 'label': 336},  // 2 weeks
+    {'value': 2592000, 'label': 720},  // 1 month
+    {'value': 7776000, 'label': 2160}, // 3 months
+    {'value': 15552000, 'label': 4320},// 6 months
+  ];
+
+  // Helper to get human-readable TTL label
+  static String _getTtlLabel(int seconds) {
+    if (seconds < 86400) {
+      final hours = seconds ~/ 3600;
+      return '$hours hours';
+    } else if (seconds < 604800) {
+      final days = seconds ~/ 86400;
+      return days == 1 ? '1 day' : '$days days';
+    } else if (seconds < 2592000) {
+      final weeks = seconds ~/ 604800;
+      return weeks == 1 ? '1 week' : '$weeks weeks';
+    } else {
+      final months = seconds ~/ 2592000;
+      return months == 1 ? '1 month' : '$months months';
+    }
+  }
 
   // Common report types
   static const List<Map<String, String>> _reportTypes = [
@@ -537,6 +570,20 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
     return ['.jpg', '.jpeg', '.png', '.gif', '.webp'].contains(ext);
   }
 
+  /// Get translated severity label
+  String _getSeverityLabel(ReportSeverity severity) {
+    switch (severity) {
+      case ReportSeverity.emergency:
+        return _i18n.t('severity_emergency');
+      case ReportSeverity.urgent:
+        return _i18n.t('severity_urgent');
+      case ReportSeverity.attention:
+        return _i18n.t('severity_attention');
+      case ReportSeverity.info:
+        return _i18n.t('severity_info');
+    }
+  }
+
   void _removeImage(int index, {bool isExisting = false}) {
     setState(() {
       if (isExisting) {
@@ -545,6 +592,23 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
         _imageFilePaths.removeAt(index);
       }
     });
+  }
+
+  /// Open the photo viewer at the specified index
+  void _openPhotoViewer(int index, {bool isExisting = true}) {
+    // Combine existing and new images for the viewer
+    final allImages = [..._existingImages, ..._imageFilePaths];
+    final actualIndex = isExisting ? index : _existingImages.length + index;
+
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => PhotoViewerPage(
+          imagePaths: allImages,
+          initialIndex: actualIndex,
+        ),
+      ),
+    );
   }
 
   Future<void> _saveImages() async {
@@ -630,6 +694,7 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
           severity: _selectedSeverity,
           type: _selectedType,
           address: _addressController.text.trim().isNotEmpty ? _addressController.text.trim() : null,
+          ttl: _selectedTtlSeconds,
         );
 
         // Save images
@@ -672,77 +737,73 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
     setState(() => _isLoading = false);
   }
 
-  Future<void> _toggleSubscription() async {
-    if (_report == null || _currentUserNpub == null || _currentUserNpub!.isEmpty) return;
+  /// Save and close the panel (for new alerts)
+  Future<void> _saveAndClose() async {
+    // Validate
+    if (_titleController.text.trim().isEmpty) {
+      _showError('Title is required');
+      return;
+    }
+
+    if (_descriptionController.text.trim().isEmpty) {
+      _showError('Description is required');
+      return;
+    }
+
+    final lat = double.tryParse(_latitudeController.text);
+    final lon = double.tryParse(_longitudeController.text);
+
+    if (lat == null || lon == null) {
+      if (_locationInputMode == 'address') {
+        _showError(_i18n.t('find_location_first'));
+      } else {
+        _showError(_i18n.t('coordinates_required'));
+      }
+      return;
+    }
+
+    if (lat < -90 || lat > 90 || lon < -180 || lon > 180) {
+      _showError(_i18n.t('coordinates_out_of_range'));
+      return;
+    }
 
     setState(() => _isLoading = true);
 
     try {
-      if (_report!.isSubscribed(_currentUserNpub!)) {
-        await _reportService.unsubscribe(_report!.folderName, _currentUserNpub!);
-        _showSuccess('Unsubscribed');
-      } else {
-        await _reportService.subscribe(_report!.folderName, _currentUserNpub!);
-        _showSuccess('Subscribed');
+      // Create new report
+      final profile = _profileService.getProfile();
+      if (profile.callsign.isEmpty) {
+        _showError('Please set up your profile first');
+        setState(() => _isLoading = false);
+        return;
       }
 
-      // Reload report
-      _report = await _reportService.loadReport(_report!.folderName);
-      setState(() {});
-    } catch (e) {
-      _showError('Failed to toggle subscription: $e');
-    }
+      _report = await _reportService.createReport(
+        title: _titleController.text.trim(),
+        description: _descriptionController.text.trim(),
+        author: profile.callsign,
+        latitude: lat,
+        longitude: lon,
+        severity: _selectedSeverity,
+        type: _selectedType,
+        address: _addressController.text.trim().isNotEmpty ? _addressController.text.trim() : null,
+        ttl: _selectedTtlSeconds,
+      );
 
-    setState(() => _isLoading = false);
-  }
+      // Save images
+      await _saveImages();
 
-  Future<void> _verify() async {
-    if (_report == null || _currentUserNpub == null || _currentUserNpub!.isEmpty) return;
+      _showSuccess('Report created');
 
-    // Already verified by this user
-    if (_report!.verifiedBy.contains(_currentUserNpub!)) return;
-
-    setState(() => _isLoading = true);
-
-    try {
-      final alertId = _report!.apiId;
-
-      if (_isFromStation) {
-        // For station alerts: update in-memory immediately, save to disk, then sync to station
-        final updatedVerifiedBy = List<String>.from(_report!.verifiedBy)..add(_currentUserNpub!);
-        _report = _report!.copyWith(
-          verifiedBy: updatedVerifiedBy,
-          verificationCount: updatedVerifiedBy.length,
-          lastModified: DateTime.now().toUtc().toIso8601String(),
-        );
-
-        // Save to disk for persistence
-        await _saveStationAlert();
-
-        setState(() {});
-        _showSuccess(_i18n.t('verified'));
-
-        // Sync to station (best-effort)
-        _alertFeedbackService.verifyAlertOnStation(alertId, _currentUserNpub!).ignore();
-      } else {
-        // For local alerts: save locally first, then sync
-        await _reportService.verify(_report!.folderName, _currentUserNpub!);
-        _showSuccess(_i18n.t('verified'));
-
-        // Reload report from local storage
-        _report = await _reportService.loadReport(_report!.folderName);
-        setState(() {});
-
-        // Sync to station (best-effort)
-        if (_report != null) {
-          _alertFeedbackService.verifyAlertOnStation(alertId, _currentUserNpub!).ignore();
-        }
+      // Close the panel after successful save
+      if (mounted) {
+        Navigator.of(context).pop(_report);
       }
     } catch (e) {
-      _showError('Failed to verify: $e');
+      _showError('Failed to save: $e');
+      LogService().log('ReportDetailPage: Error saving: $e');
+      setState(() => _isLoading = false);
     }
-
-    setState(() => _isLoading = false);
   }
 
   @override
@@ -769,7 +830,7 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
                 });
               },
             ),
-          if (_isEditing)
+          if (_isEditing && !_isNew)
             IconButton(
               icon: Icon(Icons.save),
               onPressed: _isLoading ? null : _save,
@@ -800,6 +861,24 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
                           Chip(
                             avatar: Icon(Icons.warning, color: Colors.orange, size: 16),
                             label: Text(_i18n.t('expired')),
+                          ),
+                        // Points chip (clickable)
+                        if (!_isNew && _currentUserNpub != null && _currentUserNpub!.isNotEmpty)
+                          ActionChip(
+                            avatar: Icon(
+                              _report!.hasPointFrom(_currentUserNpub!) ? Icons.star : Icons.star_border,
+                              color: Colors.amber,
+                              size: 16,
+                            ),
+                            label: Text(
+                              _report!.pointCount > 0
+                                  ? '${_report!.pointCount} ${_i18n.t('points').toLowerCase()}'
+                                  : _i18n.t('point'),
+                            ),
+                            backgroundColor: _report!.hasPointFrom(_currentUserNpub!)
+                                ? Colors.amber.withOpacity(0.2)
+                                : null,
+                            onPressed: _isLoading ? null : _togglePoint,
                           ),
                       ],
                     ),
@@ -864,7 +943,7 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
                             items: ReportSeverity.values.map((severity) {
                               return DropdownMenuItem(
                                 value: severity,
-                                child: Text(severity.name),
+                                child: Text(_getSeverityLabel(severity)),
                               );
                             }).toList(),
                             onChanged: (value) {
@@ -895,7 +974,7 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
                         Expanded(
                           child: _buildReadOnlyField(
                             label: _i18n.t('severity'),
-                            value: _selectedSeverity.name,
+                            value: _getSeverityLabel(_selectedSeverity),
                             theme: theme,
                           ),
                         ),
@@ -933,58 +1012,8 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
                   ),
                   SizedBox(height: 8),
 
-                  // Location Input Mode Selector
-                  if (_isEditing)
-                    DropdownButtonFormField<String>(
-                      value: _locationInputMode,
-                      decoration: InputDecoration(
-                        labelText: _i18n.t('input_method'),
-                        border: OutlineInputBorder(),
-                      ),
-                      items: [
-                        DropdownMenuItem(
-                          value: 'map',
-                          child: Row(
-                            children: [
-                              Icon(Icons.map, size: 20),
-                              SizedBox(width: 8),
-                              Text(_i18n.t('pick_on_map')),
-                            ],
-                          ),
-                        ),
-                        DropdownMenuItem(
-                          value: 'address',
-                          child: Row(
-                            children: [
-                              Icon(Icons.location_on, size: 20),
-                              SizedBox(width: 8),
-                              Text(_i18n.t('enter_address')),
-                            ],
-                          ),
-                        ),
-                        DropdownMenuItem(
-                          value: 'manual',
-                          child: Row(
-                            children: [
-                              Icon(Icons.edit_location, size: 20),
-                              SizedBox(width: 8),
-                              Text(_i18n.t('enter_manually')),
-                            ],
-                          ),
-                        ),
-                      ],
-                      onChanged: (value) {
-                        if (value != null) {
-                          setState(() {
-                            _locationInputMode = value;
-                          });
-                        }
-                      },
-                    ),
-                  if (_isEditing) SizedBox(height: 16),
-
                   // Map Picker Button
-                  if (_isEditing && _locationInputMode == 'map')
+                  if (_isEditing)
                     SizedBox(
                       width: double.infinity,
                       child: FilledButton.icon(
@@ -995,118 +1024,19 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
                           padding: const EdgeInsets.symmetric(vertical: 16),
                         ),
                       ),
-                    ),
-                  if (_isEditing && _locationInputMode == 'map') SizedBox(height: 16),
-
-                  // Address Input
-                  if (_isEditing && _locationInputMode == 'address')
-                    Column(
-                      children: [
-                        TextField(
-                          controller: _addressController,
-                          decoration: InputDecoration(
-                            labelText: _i18n.t('address') + ' *',
-                            hintText: _i18n.t('address_hint'),
-                            border: OutlineInputBorder(),
-                          ),
-                          onSubmitted: (_) => _geocodeAddress(),
-                        ),
-                        SizedBox(height: 12),
-                        SizedBox(
-                          width: double.infinity,
-                          child: FilledButton.icon(
-                            onPressed: _isGeocodingAddress ? null : _geocodeAddress,
-                            icon: _isGeocodingAddress
-                                ? SizedBox(
-                                    width: 20,
-                                    height: 20,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                      color: theme.colorScheme.onPrimary,
-                                    ),
-                                  )
-                                : Icon(Icons.search),
-                            label: Text(_i18n.t('find_location')),
-                            style: FilledButton.styleFrom(
-                              padding: const EdgeInsets.symmetric(vertical: 16),
-                            ),
-                          ),
-                        ),
-                        SizedBox(height: 16),
-                      ],
-                    ),
-
-                  // Coordinates Display/Input
-                  if (_isEditing && _locationInputMode == 'manual')
-                    Row(
-                      children: [
-                        Expanded(
-                          child: TextField(
-                            controller: _latitudeController,
-                            decoration: InputDecoration(
-                              labelText: _i18n.t('latitude') + ' *',
-                              border: OutlineInputBorder(),
-                            ),
-                            keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: true),
-                          ),
-                        ),
-                        SizedBox(width: 16),
-                        Expanded(
-                          child: TextField(
-                            controller: _longitudeController,
-                            decoration: InputDecoration(
-                              labelText: _i18n.t('longitude') + ' *',
-                              border: OutlineInputBorder(),
-                            ),
-                            keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: true),
-                          ),
-                        ),
-                      ],
                     )
-                  else if (!_isEditing)
+                  else
                     _buildCoordinatesField(theme),
-                  if (_isEditing && _locationInputMode == 'manual' || !_isEditing) SizedBox(height: 16),
+                  SizedBox(height: 16),
 
-                  // Show current coordinates when using map mode
-                  if (_isEditing && _locationInputMode == 'map')
-                    Container(
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: theme.colorScheme.surfaceContainerHighest,
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Row(
-                        children: [
-                          Icon(Icons.location_on, size: 16, color: theme.colorScheme.primary),
-                          SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              '${_i18n.t('coordinates')}: ${_latitudeController.text}, ${_longitudeController.text}',
-                              style: theme.textTheme.bodySmall,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  if (_isEditing && _locationInputMode == 'map') SizedBox(height: 16),
-
-                  // Address (only show for manual mode when editing, address mode has it built-in, map mode doesn't need it)
-                  if (_isEditing && _locationInputMode == 'manual')
-                    TextField(
-                      controller: _addressController,
-                      decoration: InputDecoration(
-                        labelText: _i18n.t('address'),
-                        hintText: _i18n.t('address_hint'),
-                        border: OutlineInputBorder(),
-                      ),
-                    )
-                  else if (!_isEditing && _addressController.text.isNotEmpty)
+                  // Address (read-only when viewing)
+                  if (!_isEditing && _addressController.text.isNotEmpty)
                     _buildReadOnlyField(
                       label: _i18n.t('address'),
                       value: _addressController.text,
                       theme: theme,
                     ),
-                  if ((_isEditing && _locationInputMode == 'manual') || (!_isEditing && _addressController.text.isNotEmpty)) SizedBox(height: 16),
+                  if (!_isEditing && _addressController.text.isNotEmpty) SizedBox(height: 16),
 
                   // Status (only for existing reports when editing - shown in badges when viewing)
                   if (!_isNew && _isEditing && canEdit) ...[
@@ -1134,23 +1064,95 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
                   ],
                   SizedBox(height: 8),
 
-                  // Images Section
-                  Text(
-                    _i18n.t('photos'),
-                    style: theme.textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.bold,
+                  // Images and Expires Section (two columns for new alerts)
+                  if (_isNew && _isEditing)
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        // Photos column
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                _i18n.t('photos'),
+                                style: theme.textTheme.titleMedium?.copyWith(
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              SizedBox(height: 8),
+                              OutlinedButton.icon(
+                                onPressed: _pickImages,
+                                icon: Icon(Icons.add_photo_alternate),
+                                label: Text(_i18n.t('add_photos')),
+                              ),
+                            ],
+                          ),
+                        ),
+                        SizedBox(width: 16),
+                        // Expires column
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                _i18n.t('expires'),
+                                style: theme.textTheme.titleMedium?.copyWith(
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              SizedBox(height: 8),
+                              DropdownButtonFormField<int>(
+                                value: _selectedTtlSeconds,
+                                isExpanded: true,
+                                decoration: InputDecoration(
+                                  border: OutlineInputBorder(),
+                                  contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                ),
+                                items: _ttlOptions.map((option) {
+                                  final value = option['value']!;
+                                  return DropdownMenuItem<int>(
+                                    value: value,
+                                    child: Text(_getTtlLabel(value)),
+                                  );
+                                }).toList(),
+                                onChanged: (value) {
+                                  if (value != null) {
+                                    setState(() {
+                                      _selectedTtlSeconds = value;
+                                    });
+                                  }
+                                },
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    )
+                  else if (_isEditing) ...[
+                    // Just Photos section for editing existing alerts
+                    Text(
+                      _i18n.t('photos'),
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
-                  ),
-                  SizedBox(height: 8),
-
-                  // Add Images Button
-                  if (_isEditing)
+                    SizedBox(height: 8),
                     OutlinedButton.icon(
                       onPressed: _pickImages,
                       icon: Icon(Icons.add_photo_alternate),
                       label: Text(_i18n.t('add_photos')),
                     ),
-                  if (_isEditing) SizedBox(height: 16),
+                  ] else ...[
+                    // Just Photos title when viewing
+                    Text(
+                      _i18n.t('photos'),
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
+                  SizedBox(height: 16),
 
                   // Display Images (only on native platforms)
                   if (!kIsWeb && (_existingImages.isNotEmpty || _imageFilePaths.isNotEmpty))
@@ -1167,28 +1169,31 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
                             fit: BoxFit.cover,
                           );
                           if (imageWidget == null) return const SizedBox.shrink();
-                          return Stack(
-                            children: [
-                              ClipRRect(
-                                borderRadius: BorderRadius.circular(8),
-                                child: imageWidget,
-                              ),
-                              if (_isEditing)
-                                Positioned(
-                                  top: 4,
-                                  right: 4,
-                                  child: IconButton(
-                                    onPressed: () => _removeImage(entry.key, isExisting: true),
-                                    icon: Icon(Icons.close),
-                                    iconSize: 20,
-                                    style: IconButton.styleFrom(
-                                      backgroundColor: Colors.black54,
-                                      foregroundColor: Colors.white,
-                                      padding: const EdgeInsets.all(4),
+                          return GestureDetector(
+                            onTap: _isEditing ? null : () => _openPhotoViewer(entry.key, isExisting: true),
+                            child: Stack(
+                              children: [
+                                ClipRRect(
+                                  borderRadius: BorderRadius.circular(8),
+                                  child: imageWidget,
+                                ),
+                                if (_isEditing)
+                                  Positioned(
+                                    top: 4,
+                                    right: 4,
+                                    child: IconButton(
+                                      onPressed: () => _removeImage(entry.key, isExisting: true),
+                                      icon: Icon(Icons.close),
+                                      iconSize: 20,
+                                      style: IconButton.styleFrom(
+                                        backgroundColor: Colors.black54,
+                                        foregroundColor: Colors.white,
+                                        padding: const EdgeInsets.all(4),
+                                      ),
                                     ),
                                   ),
-                                ),
-                            ],
+                              ],
+                            ),
                           );
                         }),
                         // New images
@@ -1200,28 +1205,31 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
                             fit: BoxFit.cover,
                           );
                           if (imageWidget == null) return const SizedBox.shrink();
-                          return Stack(
-                            children: [
-                              ClipRRect(
-                                borderRadius: BorderRadius.circular(8),
-                                child: imageWidget,
-                              ),
-                              if (_isEditing)
-                                Positioned(
-                                  top: 4,
-                                  right: 4,
-                                  child: IconButton(
-                                    onPressed: () => _removeImage(entry.key),
-                                    icon: Icon(Icons.close),
-                                    iconSize: 20,
-                                    style: IconButton.styleFrom(
-                                      backgroundColor: Colors.black54,
-                                      foregroundColor: Colors.white,
-                                      padding: const EdgeInsets.all(4),
+                          return GestureDetector(
+                            onTap: _isEditing ? null : () => _openPhotoViewer(entry.key, isExisting: false),
+                            child: Stack(
+                              children: [
+                                ClipRRect(
+                                  borderRadius: BorderRadius.circular(8),
+                                  child: imageWidget,
+                                ),
+                                if (_isEditing)
+                                  Positioned(
+                                    top: 4,
+                                    right: 4,
+                                    child: IconButton(
+                                      onPressed: () => _removeImage(entry.key),
+                                      icon: Icon(Icons.close),
+                                      iconSize: 20,
+                                      style: IconButton.styleFrom(
+                                        backgroundColor: Colors.black54,
+                                        foregroundColor: Colors.white,
+                                        padding: const EdgeInsets.all(4),
+                                      ),
                                     ),
                                   ),
-                                ),
-                            ],
+                              ],
+                            ),
                           );
                         }),
                       ],
@@ -1229,70 +1237,6 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
                   if (_existingImages.isEmpty && _imageFilePaths.isEmpty && !_isEditing)
                     Text(kIsWeb ? _i18n.t('photos_not_available_on_web') : _i18n.t('no_photos_attached')),
                   SizedBox(height: 24),
-
-                  // Likes section (for existing reports)
-                  if (!_isNew && _report != null) ...[
-                    const Divider(),
-                    SizedBox(height: 16),
-                    Row(
-                      children: [
-                        if (_currentUserNpub != null && _currentUserNpub!.isNotEmpty)
-                          ElevatedButton.icon(
-                            onPressed: _isLoading ? null : _togglePoint,
-                            icon: Icon(
-                              _report!.hasPointFrom(_currentUserNpub!) ? Icons.star : Icons.star_border,
-                              color: _report!.hasPointFrom(_currentUserNpub!) ? Colors.amber : null,
-                            ),
-                            label: Text(_report!.hasPointFrom(_currentUserNpub!)
-                                ? _i18n.t('pointed')
-                                : _i18n.t('point')),
-                          ),
-                        if (_report!.pointCount > 0) ...[
-                          SizedBox(width: 16),
-                          Text(
-                            '${_report!.pointCount} ${_i18n.t('points').toLowerCase()}',
-                            style: theme.textTheme.bodyMedium,
-                          ),
-                        ],
-                      ],
-                    ),
-                    SizedBox(height: 24),
-                  ],
-
-                  // Actions (for existing reports)
-                  if (!_isNew && _report != null && _currentUserNpub != null && _currentUserNpub!.isNotEmpty) ...[
-                    const Divider(),
-                    SizedBox(height: 16),
-                    Text(
-                      _i18n.t('actions'),
-                      style: theme.textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    SizedBox(height: 16),
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
-                      children: [
-                        ElevatedButton.icon(
-                          onPressed: _isLoading ? null : _toggleSubscription,
-                          icon: Icon(_report!.isSubscribed(_currentUserNpub!)
-                              ? Icons.notifications_off
-                              : Icons.notifications),
-                          label: Text(_report!.isSubscribed(_currentUserNpub!)
-                              ? _i18n.t('unsubscribe')
-                              : _i18n.t('subscribe')),
-                        ),
-                        if (!_report!.verifiedBy.contains(_currentUserNpub))
-                          ElevatedButton.icon(
-                            onPressed: _isLoading ? null : _verify,
-                            icon: Icon(Icons.verified),
-                            label: Text(_i18n.t('confirm_alert_accurate')),
-                          ),
-                      ],
-                    ),
-                    SizedBox(height: 24),
-                  ],
 
                   // Comments section (for existing reports)
                   if (!_isNew && _report != null) ...[
@@ -1363,6 +1307,21 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
                     ),
                     SizedBox(height: 16),
                     ..._updates.map((update) => _buildUpdateCard(update, theme)),
+                  ],
+
+                  // Save button for new alerts (at bottom-right)
+                  if (_isNew && _isEditing) ...[
+                    SizedBox(height: 24),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        FloatingActionButton.extended(
+                          onPressed: _isLoading ? null : _saveAndClose,
+                          icon: Icon(Icons.save),
+                          label: Text(_i18n.t('save')),
+                        ),
+                      ],
+                    ),
                   ],
                 ],
               ),
@@ -1537,7 +1496,7 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
 
     return Chip(
       avatar: Icon(icon, color: color, size: 16),
-      label: Text(label.toUpperCase()),
+      label: Text(label),
       backgroundColor: color.withOpacity(0.2),
     );
   }
@@ -1566,7 +1525,7 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
     }
 
     return Chip(
-      label: Text(label.toUpperCase()),
+      label: Text(label),
       backgroundColor: color.withOpacity(0.2),
     );
   }

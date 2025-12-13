@@ -1393,92 +1393,42 @@ class _CollectionGridCard extends StatelessWidget {
           children: [
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // Main content: Icon, title, and stats
-                  Expanded(
-                    child: Center(
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        crossAxisAlignment: CrossAxisAlignment.center,
-                        children: [
-                          Badge(
-                            isLabelVisible: unreadCount > 0,
-                            label: Text('$unreadCount'),
-                            child: Icon(
-                              _getCollectionIcon(),
-                              size: 32,
-                              color: theme.colorScheme.primary,
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          Flexible(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Text(
-                                  _getDisplayTitle(),
-                                  style: theme.textTheme.titleSmall?.copyWith(
-                                    fontWeight: FontWeight.w600,
-                                    fontSize: 15,
-                                    height: 1.15,
-                                  ),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                                ],
-                            ),
-                          ),
-                        ],
+              child: Center(
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    Badge(
+                      isLabelVisible: unreadCount > 0,
+                      label: Text('$unreadCount'),
+                      child: Icon(
+                        _getCollectionIcon(),
+                        size: 32,
+                        color: theme.colorScheme.primary,
                       ),
                     ),
-                  ),
-                  // Bottom: Action buttons (only on desktop, hidden on Android)
-                  if (!isAndroid)
-                    SizedBox(
-                      height: 18,
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.end,
-                        children: [
-                          IconButton(
-                            icon: Icon(
-                              collection.isFavorite ? Icons.star : Icons.star_border,
-                              size: 12,
-                            ),
-                            onPressed: onFavoriteToggle,
-                            tooltip: i18n.t('favorite'),
-                            padding: EdgeInsets.zero,
-                            constraints: const BoxConstraints(
-                              minWidth: 18,
-                              minHeight: 18,
-                            ),
-                            color: collection.isFavorite ? Colors.amber : null,
-                          ),
-                          IconButton(
-                            icon: const Icon(Icons.delete_outline, size: 12),
-                            onPressed: onDelete,
-                            tooltip: i18n.t('delete'),
-                            padding: EdgeInsets.zero,
-                            constraints: const BoxConstraints(
-                              minWidth: 18,
-                              minHeight: 18,
-                            ),
-                          ),
-                        ],
+                    const SizedBox(width: 8),
+                    Flexible(
+                      child: Text(
+                        _getDisplayTitle(),
+                        style: theme.textTheme.titleSmall?.copyWith(
+                          fontWeight: FontWeight.w600,
+                          fontSize: 15,
+                          height: 1.15,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                       ),
                     ),
-                ],
+                  ],
+                ),
               ),
             ),
-            // Favorite badge overlay
+            // Favorite badge (top-left corner)
             if (collection.isFavorite)
               Positioned(
                 top: 4,
-                right: 4,
+                left: 4,
                 child: Container(
                   padding: const EdgeInsets.all(3),
                   decoration: BoxDecoration(
@@ -1490,6 +1440,57 @@ class _CollectionGridCard extends StatelessWidget {
                     size: 10,
                     color: Colors.white,
                   ),
+                ),
+              ),
+            // Menu button (top-right corner, only on desktop)
+            if (!isAndroid)
+              Positioned(
+                top: 2,
+                right: 2,
+                child: PopupMenuButton<String>(
+                  icon: Icon(
+                    Icons.more_vert,
+                    size: 18,
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(
+                    minWidth: 24,
+                    minHeight: 24,
+                  ),
+                  tooltip: i18n.t('options'),
+                  onSelected: (value) {
+                    if (value == 'favorite') {
+                      onFavoriteToggle();
+                    } else if (value == 'delete') {
+                      onDelete();
+                    }
+                  },
+                  itemBuilder: (context) => [
+                    PopupMenuItem<String>(
+                      value: 'favorite',
+                      child: Row(
+                        children: [
+                          Icon(
+                            collection.isFavorite ? Icons.star : Icons.star_border,
+                            color: collection.isFavorite ? Colors.amber : null,
+                          ),
+                          const SizedBox(width: 8),
+                          Text(i18n.t('favorite')),
+                        ],
+                      ),
+                    ),
+                    PopupMenuItem<String>(
+                      value: 'delete',
+                      child: Row(
+                        children: [
+                          const Icon(Icons.delete_outline),
+                          const SizedBox(width: 8),
+                          Text(i18n.t('delete')),
+                        ],
+                      ),
+                    ),
+                  ],
                 ),
               ),
           ],
