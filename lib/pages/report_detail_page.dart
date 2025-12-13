@@ -72,8 +72,8 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
       LogService().log('ReportDetailPage: _saveStationAlert() - folderName: ${_report!.folderName}');
       LogService().log('ReportDetailPage: _saveStationAlert() - alertDir: ${alertDir.path}');
       LogService().log('ReportDetailPage: _saveStationAlert() - reportFilePath: $reportFilePath');
-      LogService().log('ReportDetailPage: _saveStationAlert() - likedBy: ${_report!.likedBy}');
-      LogService().log('ReportDetailPage: _saveStationAlert() - likeCount: ${_report!.likeCount}');
+      LogService().log('ReportDetailPage: _saveStationAlert() - pointedBy: ${_report!.pointedBy}');
+      LogService().log('ReportDetailPage: _saveStationAlert() - pointCount: ${_report!.pointCount}');
 
       if (!await alertDir.exists()) {
         await alertDir.create(recursive: true);
@@ -86,8 +86,8 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
 
       // Verify the file was written correctly
       final verifyContent = await reportFile.readAsString();
-      final hasLikedBy = verifyContent.contains('LIKED_BY:');
-      LogService().log('ReportDetailPage: _saveStationAlert() - file written, size: ${verifyContent.length}, hasLikedBy: $hasLikedBy');
+      final hasPointedBy = verifyContent.contains('POINTED_BY:');
+      LogService().log('ReportDetailPage: _saveStationAlert() - file written, size: ${verifyContent.length}, hasPointedBy: $hasPointedBy');
 
       LogService().log('ReportDetailPage: Saved station alert ${_report!.folderName}');
     } catch (e, stack) {
@@ -345,26 +345,26 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
     setState(() => _isLoading = false);
   }
 
-  Future<void> _toggleLike() async {
+  Future<void> _togglePoint() async {
     if (_report == null || _currentUserNpub == null || _currentUserNpub!.isEmpty) return;
 
     setState(() => _isLoading = true);
 
     try {
-      final wasLiked = _report!.isLikedBy(_currentUserNpub!);
+      final wasPointed = _report!.hasPointFrom(_currentUserNpub!);
       final alertId = _report!.apiId;
 
       if (_isFromStation) {
         // For station alerts: update in-memory immediately, save to disk, then sync to station
-        final updatedLikedBy = List<String>.from(_report!.likedBy);
-        if (wasLiked) {
-          updatedLikedBy.remove(_currentUserNpub!);
+        final updatedPointedBy = List<String>.from(_report!.pointedBy);
+        if (wasPointed) {
+          updatedPointedBy.remove(_currentUserNpub!);
         } else {
-          updatedLikedBy.add(_currentUserNpub!);
+          updatedPointedBy.add(_currentUserNpub!);
         }
         _report = _report!.copyWith(
-          likedBy: updatedLikedBy,
-          likeCount: updatedLikedBy.length,
+          pointedBy: updatedPointedBy,
+          pointCount: updatedPointedBy.length,
           lastModified: DateTime.now().toUtc().toIso8601String(),
         );
 
@@ -372,46 +372,46 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
         await _saveStationAlert();
 
         setState(() {});
-        _showSuccess(wasLiked ? _i18n.t('unliked') : _i18n.t('liked'));
+        _showSuccess(wasPointed ? _i18n.t('unpointed') : _i18n.t('pointed'));
 
         // Sync to station (best-effort)
-        if (wasLiked) {
-          _alertFeedbackService.unlikeAlertOnStation(alertId, _currentUserNpub!).catchError((e) {
-            LogService().log('Failed to sync unlike to station: $e');
+        if (wasPointed) {
+          _alertFeedbackService.unpointAlertOnStation(alertId, _currentUserNpub!).catchError((e) {
+            LogService().log('Failed to sync unpoint to station: $e');
           });
         } else {
-          _alertFeedbackService.likeAlertOnStation(alertId, _currentUserNpub!).catchError((e) {
-            LogService().log('Failed to sync like to station: $e');
+          _alertFeedbackService.pointAlertOnStation(alertId, _currentUserNpub!).catchError((e) {
+            LogService().log('Failed to sync point to station: $e');
           });
         }
       } else {
         // For local alerts: save locally first, then sync
-        if (wasLiked) {
-          await _reportService.unlikeReport(_report!.folderName, _currentUserNpub!);
+        if (wasPointed) {
+          await _reportService.unpointReport(_report!.folderName, _currentUserNpub!);
         } else {
-          await _reportService.likeReport(_report!.folderName, _currentUserNpub!);
+          await _reportService.pointReport(_report!.folderName, _currentUserNpub!);
         }
 
         // Reload report from local storage
         _report = await _reportService.loadReport(_report!.folderName);
         setState(() {});
-        _showSuccess(wasLiked ? _i18n.t('unliked') : _i18n.t('liked'));
+        _showSuccess(wasPointed ? _i18n.t('unpointed') : _i18n.t('pointed'));
 
         // Sync to station (best-effort)
         if (_report != null) {
-          if (wasLiked) {
-            _alertFeedbackService.unlikeAlertOnStation(alertId, _currentUserNpub!).catchError((e) {
-              LogService().log('Failed to sync unlike to station: $e');
+          if (wasPointed) {
+            _alertFeedbackService.unpointAlertOnStation(alertId, _currentUserNpub!).catchError((e) {
+              LogService().log('Failed to sync unpoint to station: $e');
             });
           } else {
-            _alertFeedbackService.likeAlertOnStation(alertId, _currentUserNpub!).catchError((e) {
-              LogService().log('Failed to sync like to station: $e');
+            _alertFeedbackService.pointAlertOnStation(alertId, _currentUserNpub!).catchError((e) {
+              LogService().log('Failed to sync point to station: $e');
             });
           }
         }
       }
     } catch (e) {
-      _showError('Failed to toggle like: $e');
+      _showError('Failed to toggle point: $e');
     }
 
     setState(() => _isLoading = false);
@@ -1254,19 +1254,19 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
                       children: [
                         if (_currentUserNpub != null && _currentUserNpub!.isNotEmpty)
                           ElevatedButton.icon(
-                            onPressed: _isLoading ? null : _toggleLike,
+                            onPressed: _isLoading ? null : _togglePoint,
                             icon: Icon(
-                              _report!.isLikedBy(_currentUserNpub!) ? Icons.favorite : Icons.favorite_border,
-                              color: _report!.isLikedBy(_currentUserNpub!) ? Colors.red : null,
+                              _report!.hasPointFrom(_currentUserNpub!) ? Icons.star : Icons.star_border,
+                              color: _report!.hasPointFrom(_currentUserNpub!) ? Colors.amber : null,
                             ),
-                            label: Text(_report!.isLikedBy(_currentUserNpub!)
-                                ? _i18n.t('liked')
-                                : _i18n.t('like')),
+                            label: Text(_report!.hasPointFrom(_currentUserNpub!)
+                                ? _i18n.t('pointed')
+                                : _i18n.t('point')),
                           ),
-                        if (_report!.likeCount > 0) ...[
+                        if (_report!.pointCount > 0) ...[
                           SizedBox(width: 16),
                           Text(
-                            '${_report!.likeCount} ${_i18n.t('likes').toLowerCase()}',
+                            '${_report!.pointCount} ${_i18n.t('points').toLowerCase()}',
                             style: theme.textTheme.bodyMedium,
                           ),
                         ],

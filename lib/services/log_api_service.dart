@@ -27,6 +27,7 @@ import 'backup_service.dart';
 import '../models/backup_models.dart';
 import 'event_service.dart';
 import '../models/report.dart';
+import 'alert_feedback_service.dart';
 
 class LogApiService {
   static final LogApiService _instance = LogApiService._internal();
@@ -4744,10 +4745,10 @@ class LogApiService {
           final action = pathParts[1];
 
           switch (action) {
-            case 'like':
-              return await _handleAlertsLike(request, alertId, dataDir, headers);
-            case 'unlike':
-              return await _handleAlertsUnlike(request, alertId, dataDir, headers);
+            case 'point':
+              return await _handleAlertsPoint(request, alertId, dataDir, headers);
+            case 'unpoint':
+              return await _handleAlertsUnpoint(request, alertId, dataDir, headers);
             case 'verify':
               return await _handleAlertsVerify(request, alertId, dataDir, headers);
             case 'comment':
@@ -4955,8 +4956,8 @@ class LogApiService {
     );
   }
 
-  /// POST /api/alerts/{alertId}/like - Like an alert
-  Future<shelf.Response> _handleAlertsLike(
+  /// POST /api/alerts/{alertId}/point - Point an alert (call attention to it)
+  Future<shelf.Response> _handleAlertsPoint(
     shelf.Request request,
     String alertId,
     String dataDir,
@@ -4985,12 +4986,12 @@ class LogApiService {
       var alert = result.$1;
       final alertPath = result.$2;
 
-      // Add like if not already liked
-      if (!alert.likedBy.contains(npub)) {
-        final updatedLikedBy = List<String>.from(alert.likedBy)..add(npub);
+      // Add point if not already pointed
+      if (!alert.pointedBy.contains(npub)) {
+        final updatedPointedBy = List<String>.from(alert.pointedBy)..add(npub);
         alert = alert.copyWith(
-          likedBy: updatedLikedBy,
-          likeCount: updatedLikedBy.length,
+          pointedBy: updatedPointedBy,
+          pointCount: updatedPointedBy.length,
           lastModified: DateTime.now().toUtc().toIso8601String(),
         );
 
@@ -5002,7 +5003,7 @@ class LogApiService {
       return shelf.Response.ok(
         jsonEncode({
           'success': true,
-          'like_count': alert.likeCount,
+          'point_count': alert.pointCount,
           'last_modified': alert.lastModified,
         }),
         headers: headers,
@@ -5015,8 +5016,8 @@ class LogApiService {
     }
   }
 
-  /// POST /api/alerts/{alertId}/unlike - Unlike an alert
-  Future<shelf.Response> _handleAlertsUnlike(
+  /// POST /api/alerts/{alertId}/unpoint - Unpoint an alert (remove attention call)
+  Future<shelf.Response> _handleAlertsUnpoint(
     shelf.Request request,
     String alertId,
     String dataDir,
@@ -5045,12 +5046,12 @@ class LogApiService {
       var alert = result.$1;
       final alertPath = result.$2;
 
-      // Remove like if present
-      if (alert.likedBy.contains(npub)) {
-        final updatedLikedBy = List<String>.from(alert.likedBy)..remove(npub);
+      // Remove point if present
+      if (alert.pointedBy.contains(npub)) {
+        final updatedPointedBy = List<String>.from(alert.pointedBy)..remove(npub);
         alert = alert.copyWith(
-          likedBy: updatedLikedBy,
-          likeCount: updatedLikedBy.length,
+          pointedBy: updatedPointedBy,
+          pointCount: updatedPointedBy.length,
           lastModified: DateTime.now().toUtc().toIso8601String(),
         );
 
@@ -5062,7 +5063,7 @@ class LogApiService {
       return shelf.Response.ok(
         jsonEncode({
           'success': true,
-          'like_count': alert.likeCount,
+          'point_count': alert.pointCount,
           'last_modified': alert.lastModified,
         }),
         headers: headers,
@@ -5747,8 +5748,8 @@ class LogApiService {
             headers: headers,
           );
 
-        case 'alert_like':
-          // Like/unlike an alert
+        case 'alert_point':
+          // Point/unpoint an alert (call attention to it)
           final alertId = params['alert_id'] as String?;
           if (alertId == null || alertId.isEmpty) {
             return shelf.Response.badRequest(
@@ -5761,8 +5762,8 @@ class LogApiService {
           }
 
           // Find the alert
-          final likeResult = await _getAlertByApiId(alertId, dataDir);
-          if (likeResult == null) {
+          final pointResult = await _getAlertByApiId(alertId, dataDir);
+          if (pointResult == null) {
             return shelf.Response.notFound(
               jsonEncode({
                 'success': false,
@@ -5773,8 +5774,8 @@ class LogApiService {
             );
           }
 
-          final alertToLike = likeResult.$1;
-          final alertPathForLike = likeResult.$2;
+          final alertToPoint = pointResult.$1;
+          final alertPathForPoint = pointResult.$2;
 
           // Get npub from params or use profile
           String? npub = params['npub'] as String?;
@@ -5797,36 +5798,136 @@ class LogApiService {
             );
           }
 
-          // Toggle like
-          final likedBy = List<String>.from(alertToLike.likedBy);
-          final wasLiked = likedBy.contains(npub);
+          // Toggle point
+          final pointedBy = List<String>.from(alertToPoint.pointedBy);
+          final wasPointed = pointedBy.contains(npub);
 
-          if (wasLiked) {
-            likedBy.remove(npub);
+          if (wasPointed) {
+            pointedBy.remove(npub);
           } else {
-            likedBy.add(npub);
+            pointedBy.add(npub);
           }
 
           // Create updated report using copyWith
-          final updatedAlert = alertToLike.copyWith(
-            likedBy: likedBy,
-            likeCount: likedBy.length,
+          final updatedAlert = alertToPoint.copyWith(
+            pointedBy: pointedBy,
+            pointCount: pointedBy.length,
           );
 
           // Save to disk
-          final reportFileForLike = io.File('$alertPathForLike/report.txt');
-          await reportFileForLike.writeAsString(updatedAlert.exportAsText());
+          final reportFileForPoint = io.File('$alertPathForPoint/report.txt');
+          await reportFileForPoint.writeAsString(updatedAlert.exportAsText());
 
-          LogService().log('LogApiService: ${wasLiked ? "Unliked" : "Liked"} alert: $alertId by $npub');
+          LogService().log('LogApiService: ${wasPointed ? "Unpointed" : "Pointed"} alert: $alertId by $npub');
+
+          // Sync to station (best-effort, fire-and-forget)
+          if (wasPointed) {
+            AlertFeedbackService().unpointAlertOnStation(alertId, npub).catchError((e) {
+              LogService().log('Failed to sync unpoint to station: $e');
+            });
+          } else {
+            AlertFeedbackService().pointAlertOnStation(alertId, npub).catchError((e) {
+              LogService().log('Failed to sync point to station: $e');
+            });
+          }
 
           return shelf.Response.ok(
             jsonEncode({
               'success': true,
-              'message': wasLiked ? 'Alert unliked' : 'Alert liked',
+              'message': wasPointed ? 'Alert unpointed' : 'Alert pointed',
               'alert_id': alertId,
-              'liked': !wasLiked,
-              'like_count': updatedAlert.likeCount,
-              'liked_by': updatedAlert.likedBy,
+              'pointed': !wasPointed,
+              'point_count': updatedAlert.pointCount,
+              'pointed_by': updatedAlert.pointedBy,
+            }),
+            headers: headers,
+          );
+
+        case 'alert_verify':
+          // Verify an alert (confirm accuracy)
+          final verifyAlertId = params['alert_id'] as String?;
+          if (verifyAlertId == null || verifyAlertId.isEmpty) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Missing alert_id parameter',
+              }),
+              headers: headers,
+            );
+          }
+
+          // Find the alert
+          final verifyResult = await _getAlertByApiId(verifyAlertId, dataDir);
+          if (verifyResult == null) {
+            return shelf.Response.notFound(
+              jsonEncode({
+                'success': false,
+                'error': 'Alert not found',
+                'alert_id': verifyAlertId,
+              }),
+              headers: headers,
+            );
+          }
+
+          final alertToVerify = verifyResult.$1;
+          final alertPathForVerify = verifyResult.$2;
+
+          // Get npub from params or use profile
+          String? verifyNpub = params['npub'] as String?;
+          if (verifyNpub == null || verifyNpub.isEmpty) {
+            try {
+              final profile = ProfileService().getProfile();
+              verifyNpub = profile.npub;
+            } catch (e) {
+              // Profile not initialized
+            }
+          }
+
+          if (verifyNpub == null || verifyNpub.isEmpty) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Missing npub parameter and no profile npub available',
+              }),
+              headers: headers,
+            );
+          }
+
+          // Add to verifiedBy (verification can only be added, not toggled)
+          final verifiedBy = List<String>.from(alertToVerify.verifiedBy);
+          final wasVerified = verifiedBy.contains(verifyNpub);
+
+          if (!wasVerified) {
+            verifiedBy.add(verifyNpub);
+          }
+
+          // Create updated report using copyWith
+          final updatedVerifyAlert = alertToVerify.copyWith(
+            verifiedBy: verifiedBy,
+            verificationCount: verifiedBy.length,
+          );
+
+          // Save to disk
+          final reportFileForVerify = io.File('$alertPathForVerify/report.txt');
+          await reportFileForVerify.writeAsString(updatedVerifyAlert.exportAsText());
+
+          LogService().log('LogApiService: ${wasVerified ? "Already verified" : "Verified"} alert: $verifyAlertId by $verifyNpub');
+
+          // Sync to station (best-effort, fire-and-forget)
+          if (!wasVerified) {
+            AlertFeedbackService().verifyAlertOnStation(verifyAlertId, verifyNpub).catchError((e) {
+              LogService().log('Failed to sync verify to station: $e');
+            });
+          }
+
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'message': wasVerified ? 'Alert already verified' : 'Alert verified',
+              'alert_id': verifyAlertId,
+              'verified': true,
+              'verification_count': updatedVerifyAlert.verificationCount,
+              'verified_by': updatedVerifyAlert.verifiedBy,
             }),
             headers: headers,
           );
@@ -5918,6 +6019,16 @@ class LogApiService {
 
           LogService().log('LogApiService: Added comment to alert: $alertIdForComment by $author');
 
+          // Sync to station (best-effort, fire-and-forget)
+          AlertFeedbackService().commentOnStation(
+            alertIdForComment,
+            author,
+            content,
+            npub: commentNpub,
+          ).catchError((e) {
+            LogService().log('Failed to sync comment to station: $e');
+          });
+
           return shelf.Response.ok(
             jsonEncode({
               'success': true,
@@ -5935,7 +6046,7 @@ class LogApiService {
             body: jsonEncode({
               'success': false,
               'error': 'Unknown alert action: $action',
-              'available': ['alert_create', 'alert_list', 'alert_delete', 'alert_like', 'alert_comment'],
+              'available': ['alert_create', 'alert_list', 'alert_delete', 'alert_point', 'alert_verify', 'alert_comment'],
             }),
             headers: headers,
           );

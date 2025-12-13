@@ -127,8 +127,8 @@ class Report {
   final List<String> updateAuthorized;
   final List<String> subscribers;
   final int subscriberCount;
-  final List<String> likedBy;
-  final int likeCount;
+  final List<String> pointedBy;
+  final int pointCount;
   final Map<String, String> titles;
   final Map<String, String> descriptions;
   final Map<String, String> metadata;
@@ -160,8 +160,8 @@ class Report {
     this.updateAuthorized = const [],
     this.subscribers = const [],
     this.subscriberCount = 0,
-    this.likedBy = const [],
-    this.likeCount = 0,
+    this.pointedBy = const [],
+    this.pointCount = 0,
     this.titles = const {},
     this.descriptions = const {},
     this.metadata = const {},
@@ -170,10 +170,10 @@ class Report {
     this.lastModified,
   });
 
-  /// Check if user has liked this report
-  bool isLikedBy(String npub) {
+  /// Check if user has pointed this report
+  bool hasPointFrom(String npub) {
     if (npub.isEmpty) return false;
-    return likedBy.contains(npub);
+    return pointedBy.contains(npub);
   }
 
   /// Parse timestamp to DateTime
@@ -358,8 +358,8 @@ class Report {
     List<String> updateAuthorized = [];
     List<String> subscribers = [];
     int subscriberCount = 0;
-    List<String> likedBy = [];
-    int likeCount = 0;
+    List<String> pointedBy = [];
+    int pointCount = 0;
     Map<String, String> metadata = {};
     List<StationShareStatus> stationShares = [];
     String? nostrEventId;
@@ -415,10 +415,10 @@ class Report {
         subscribers = line.substring(13).split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
       } else if (line.startsWith('SUBSCRIBER_COUNT: ')) {
         subscriberCount = int.tryParse(line.substring(18).trim()) ?? 0;
-      } else if (line.startsWith('LIKED_BY: ')) {
-        likedBy = line.substring(10).split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
-      } else if (line.startsWith('LIKE_COUNT: ')) {
-        likeCount = int.tryParse(line.substring(12).trim()) ?? 0;
+      } else if (line.startsWith('POINTED_BY: ')) {
+        pointedBy = line.substring(12).split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
+      } else if (line.startsWith('POINT_COUNT: ')) {
+        pointCount = int.tryParse(line.substring(13).trim()) ?? 0;
       } else if (line.startsWith('LAST_MODIFIED: ')) {
         lastModified = line.substring(15).trim();
       } else if (line.startsWith('-->')) {
@@ -535,8 +535,8 @@ class Report {
       updateAuthorized: updateAuthorized,
       subscribers: subscribers,
       subscriberCount: subscriberCount,
-      likedBy: likedBy,
-      likeCount: likeCount,
+      pointedBy: pointedBy,
+      pointCount: pointCount,
       titles: titles,
       descriptions: descriptions,
       metadata: metadata,
@@ -615,11 +615,11 @@ class Report {
     if (subscriberCount > 0) {
       buffer.writeln('SUBSCRIBER_COUNT: $subscriberCount');
     }
-    if (likedBy.isNotEmpty) {
-      buffer.writeln('LIKED_BY: ${likedBy.join(', ')}');
+    if (pointedBy.isNotEmpty) {
+      buffer.writeln('POINTED_BY: ${pointedBy.join(', ')}');
     }
-    if (likeCount > 0) {
-      buffer.writeln('LIKE_COUNT: $likeCount');
+    if (pointCount > 0) {
+      buffer.writeln('POINT_COUNT: $pointCount');
     }
     if (lastModified != null && lastModified!.isNotEmpty) {
       buffer.writeln('LAST_MODIFIED: $lastModified');
@@ -686,8 +686,8 @@ class Report {
     List<String>? updateAuthorized,
     List<String>? subscribers,
     int? subscriberCount,
-    List<String>? likedBy,
-    int? likeCount,
+    List<String>? pointedBy,
+    int? pointCount,
     Map<String, String>? titles,
     Map<String, String>? descriptions,
     Map<String, String>? metadata,
@@ -719,8 +719,8 @@ class Report {
       updateAuthorized: updateAuthorized ?? this.updateAuthorized,
       subscribers: subscribers ?? this.subscribers,
       subscriberCount: subscriberCount ?? this.subscriberCount,
-      likedBy: likedBy ?? this.likedBy,
-      likeCount: likeCount ?? this.likeCount,
+      pointedBy: pointedBy ?? this.pointedBy,
+      pointCount: pointCount ?? this.pointCount,
       titles: titles ?? this.titles,
       descriptions: descriptions ?? this.descriptions,
       metadata: metadata ?? this.metadata,
@@ -764,8 +764,8 @@ class Report {
         ?.map((e) => e as String)
         .toList() ?? [];
 
-    // Parse liked_by list
-    final likedBy = (json['liked_by'] as List<dynamic>?)
+    // Parse pointed_by list
+    final pointedBy = (json['pointed_by'] as List<dynamic>?)
         ?.map((e) => e as String)
         .toList() ?? [];
 
@@ -801,8 +801,8 @@ class Report {
       contact: json['contact'] as String?,
       verifiedBy: verifiedBy,
       verificationCount: json['verification_count'] as int? ?? verifiedBy.length,
-      likedBy: likedBy,
-      likeCount: json['like_count'] as int? ?? likedBy.length,
+      pointedBy: pointedBy,
+      pointCount: json['point_count'] as int? ?? pointedBy.length,
       admins: admins,
       moderators: moderators,
       ttl: json['ttl'] as int?,
@@ -857,7 +857,7 @@ class Report {
         'status': status.toFileString(),
         'address': address,
         'verification_count': verificationCount,
-        'like_count': likeCount,
+        'point_count': pointCount,
         'has_photos': hasPhotos,
         'last_modified': lastModified,
       };
@@ -880,8 +880,8 @@ class Report {
       'contact': contact,
       'verified_by': verifiedBy,
       'verification_count': verificationCount,
-      'liked_by': likedBy,
-      'like_count': likeCount,
+      'pointed_by': pointedBy,
+      'point_count': pointCount,
       'admins': admins,
       'moderators': moderators,
       'ttl': ttl,

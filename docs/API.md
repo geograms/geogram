@@ -1110,7 +1110,7 @@ Returns list of all alerts with optional filtering.
       "status": "open",
       "address": "Rua Example 123, Lisbon",
       "verification_count": 5,
-      "like_count": 3,
+      "point_count": 3,
       "has_photos": true
     }
   ],
@@ -1160,8 +1160,8 @@ Returns full details for a specific alert.
   "contact": "city-services@example.com",
   "verified_by": ["npub1abc...", "npub1def..."],
   "verification_count": 5,
-  "liked_by": ["npub1ghi..."],
-  "like_count": 3,
+  "pointed_by": ["npub1ghi..."],
+  "point_count": 3,
   "admins": ["npub1author..."],
   "moderators": [],
   "ttl": 2592000,
@@ -1198,8 +1198,8 @@ Returns full details for a specific alert.
 | `contact` | string | Contact information (optional) |
 | `verified_by` | array | List of NPUBs who verified the alert |
 | `verification_count` | int | Number of verifications |
-| `liked_by` | array | List of NPUBs who liked the alert |
-| `like_count` | int | Number of likes |
+| `pointed_by` | array | List of NPUBs who pointed (called attention to) the alert |
+| `point_count` | int | Number of points (attention calls) |
 | `admins` | array | List of admin NPUBs |
 | `moderators` | array | List of moderator NPUBs |
 | `ttl` | int | Time-to-live in seconds (optional) |
@@ -1406,7 +1406,7 @@ Triggers a debug action.
 | `alert_create` | Create an alert for testing | `title` (required): Alert title, `description` (required): Alert description, `latitude` (optional): Location lat, `longitude` (optional): Location lon, `severity` (optional): info/attention/urgent/emergency, `type` (optional): Alert type |
 | `alert_list` | List all alerts | `status` (optional): Filter by status |
 | `alert_delete` | Delete an alert | `alert_id` (required): Alert ID (e.g., "2025-12-10_broken-sidewalk") |
-| `alert_like` | Like/unlike an alert | `alert_id` (required): Alert ID, `npub` (optional): User npub (uses profile npub if not provided) |
+| `alert_point` | Point/unpoint an alert (call attention) | `alert_id` (required): Alert ID, `npub` (optional): User npub (uses profile npub if not provided) |
 | `alert_comment` | Add a comment to an alert | `alert_id` (required): Alert ID, `content` (required): Comment text, `author` (optional): Author callsign, `npub` (optional): Author npub |
 
 **Response - Success (200 OK):**
@@ -1520,15 +1520,15 @@ curl -X POST http://localhost:3456/api/debug \
   -H "Content-Type: application/json" \
   -d '{"action": "backup_restore", "provider_callsign": "X2BCDE", "snapshot_id": "2025-12-12"}'
 
-# Like an alert (toggles like on/off)
+# Point an alert (toggles point on/off - calls attention to it)
 curl -X POST http://localhost:3456/api/debug \
   -H "Content-Type: application/json" \
-  -d '{"action": "alert_like", "alert_id": "38_7222_n9_1393_broken-sidewalk"}'
+  -d '{"action": "alert_point", "alert_id": "38_7222_n9_1393_broken-sidewalk"}'
 
-# Like an alert with specific npub
+# Point an alert with specific npub
 curl -X POST http://localhost:3456/api/debug \
   -H "Content-Type: application/json" \
-  -d '{"action": "alert_like", "alert_id": "38_7222_n9_1393_broken-sidewalk", "npub": "npub1abc..."}'
+  -d '{"action": "alert_point", "alert_id": "38_7222_n9_1393_broken-sidewalk", "npub": "npub1abc..."}'
 
 # Add a comment to an alert
 curl -X POST http://localhost:3456/api/debug \

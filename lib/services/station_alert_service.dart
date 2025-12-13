@@ -96,6 +96,7 @@ class StationAlertService {
     double? radiusKm,
     bool useSince = true,
   }) async {
+    LogService().log('StationAlertService: Starting fetch, useSince=$useSince');
     try {
       final station = _stationService.getPreferredStation();
       if (station == null || station.url.isEmpty) {
@@ -265,7 +266,7 @@ class StationAlertService {
       }
 
       // Parse feedback fields
-      final likedBy = (json['liked_by'] as List<dynamic>?)
+      final pointedBy = (json['pointed_by'] as List<dynamic>?)
           ?.map((e) => e as String)
           .toList() ?? [];
       final verifiedBy = (json['verified_by'] as List<dynamic>?)
@@ -284,8 +285,8 @@ class StationAlertService {
         created: created,
         author: json['author'] as String? ?? callsign,
         address: json['address'] as String?,
-        likedBy: likedBy,
-        likeCount: json['like_count'] as int? ?? likedBy.length,
+        pointedBy: pointedBy,
+        pointCount: json['point_count'] as int? ?? pointedBy.length,
         verifiedBy: verifiedBy,
         verificationCount: json['verification_count'] as int? ?? verifiedBy.length,
         lastModified: json['last_modified'] as String?,

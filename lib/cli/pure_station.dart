@@ -2412,16 +2412,26 @@ class PureStationServer {
         alerts = alerts.where((a) => a['status'] == statusFilter).toList();
       }
 
-      // Filter by since timestamp (compare with created time)
+      // Filter by since timestamp (compare with last_modified or created time)
       if (sinceTimestamp != null) {
         final sinceDate = DateTime.fromMillisecondsSinceEpoch(sinceTimestamp * 1000);
         alerts = alerts.where((alert) {
+          // Prefer last_modified, fall back to created
+          final lastModifiedStr = alert['last_modified'] as String?;
           final createdStr = alert['created'] as String?;
-          if (createdStr == null || createdStr.isEmpty) return true;
+
           try {
-            // Parse format: YYYY-MM-DD HH:MM_ss
-            final created = _parseAlertDateTime(createdStr);
-            return created.isAfter(sinceDate);
+            // Try last_modified first (ISO 8601 format)
+            if (lastModifiedStr != null && lastModifiedStr.isNotEmpty) {
+              final lastModified = DateTime.parse(lastModifiedStr);
+              return lastModified.isAfter(sinceDate);
+            }
+            // Fall back to created time
+            if (createdStr != null && createdStr.isNotEmpty) {
+              final created = _parseAlertDateTime(createdStr);
+              return created.isAfter(sinceDate);
+            }
+            return true; // Include if no timestamps
           } catch (_) {
             return true; // Include if can't parse date
           }
@@ -2642,12 +2652,12 @@ class PureStationServer {
         alert['type'] = line.substring(6).trim();
       } else if (line.startsWith('ADDRESS: ')) {
         alert['address'] = line.substring(9).trim();
-      } else if (line.startsWith('LIKED_BY: ')) {
-        final likedByStr = line.substring(10).trim();
-        alert['liked_by'] = likedByStr.isEmpty ? <String>[] : likedByStr.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
-        alert['like_count'] = (alert['liked_by'] as List).length;
-      } else if (line.startsWith('LIKE_COUNT: ')) {
-        alert['like_count'] = int.tryParse(line.substring(12).trim()) ?? 0;
+      } else if (line.startsWith('POINTED_BY: ')) {
+        final pointedByStr = line.substring(12).trim();
+        alert['pointed_by'] = pointedByStr.isEmpty ? <String>[] : pointedByStr.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
+        alert['point_count'] = (alert['pointed_by'] as List).length;
+      } else if (line.startsWith('POINT_COUNT: ')) {
+        alert['point_count'] = int.tryParse(line.substring(13).trim()) ?? 0;
       } else if (line.startsWith('VERIFIED_BY: ')) {
         final verifiedByStr = line.substring(13).trim();
         alert['verified_by'] = verifiedByStr.isEmpty ? <String>[] : verifiedByStr.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
@@ -2713,11 +2723,11 @@ class PureStationServer {
       final reportFile = File('$alertPath/report.txt');
 
       switch (action) {
-        case 'like':
-          await _handleAlertLike(request, alertPath, reportFile, json, isLike: true);
+        case 'point':
+          await _handleAlertPoint(request, alertPath, reportFile, json, isPoint: true);
           break;
-        case 'unlike':
-          await _handleAlertLike(request, alertPath, reportFile, json, isLike: false);
+        case 'unpoint':
+          await _handleAlertPoint(request, alertPath, reportFile, json, isPoint: false);
           break;
         case 'verify':
           await _handleAlertVerify(request, alertPath, reportFile, json);
@@ -2786,13 +2796,13 @@ class PureStationServer {
     return '${datePart}_$slug';
   }
 
-  /// Handle alert like/unlike
-  Future<void> _handleAlertLike(
+  /// Handle alert point/unpoint
+  Future<void> _handleAlertPoint(
     HttpRequest request,
     String alertPath,
     File reportFile,
     Map<String, dynamic> json, {
-    required bool isLike,
+    required bool isPoint,
   }) async {
     final npub = json['npub'] as String?;
     if (npub == null || npub.isEmpty) {
@@ -2806,39 +2816,39 @@ class PureStationServer {
     final content = await reportFile.readAsString();
     final lines = content.split('\n');
 
-    // Parse current likedBy
-    var likedBy = <String>[];
+    // Parse current pointedBy
+    var pointedBy = <String>[];
     for (final line in lines) {
-      if (line.startsWith('LIKED_BY: ')) {
-        final likedByStr = line.substring(10).trim();
-        likedBy = likedByStr.isEmpty ? [] : likedByStr.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
+      if (line.startsWith('POINTED_BY: ')) {
+        final pointedByStr = line.substring(12).trim();
+        pointedBy = pointedByStr.isEmpty ? [] : pointedByStr.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
         break;
       }
     }
 
-    // Update likedBy
+    // Update pointedBy
     bool changed = false;
-    if (isLike && !likedBy.contains(npub)) {
-      likedBy.add(npub);
+    if (isPoint && !pointedBy.contains(npub)) {
+      pointedBy.add(npub);
       changed = true;
-    } else if (!isLike && likedBy.contains(npub)) {
-      likedBy.remove(npub);
+    } else if (!isPoint && pointedBy.contains(npub)) {
+      pointedBy.remove(npub);
       changed = true;
     }
 
     if (changed) {
       // Update file content
-      final newContent = _updateAlertFeedback(content, likedBy: likedBy);
+      final newContent = _updateAlertFeedback(content, pointedBy: pointedBy);
       await reportFile.writeAsString(newContent, flush: true);
-      _log('INFO', 'Alert ${isLike ? "liked" : "unliked"} by $npub');
+      _log('INFO', 'Alert ${isPoint ? "pointed" : "unpointed"} by $npub');
     }
 
     request.response.statusCode = 200;
     request.response.headers.contentType = ContentType.json;
     request.response.write(jsonEncode({
       'success': true,
-      'liked': isLike ? likedBy.contains(npub) : !likedBy.contains(npub),
-      'like_count': likedBy.length,
+      'pointed': isPoint ? pointedBy.contains(npub) : !pointedBy.contains(npub),
+      'point_count': pointedBy.length,
       'last_modified': DateTime.now().toUtc().toIso8601String(),
     }));
   }
@@ -2963,26 +2973,26 @@ class PureStationServer {
   /// Update alert file with new feedback data
   String _updateAlertFeedback(
     String content, {
-    List<String>? likedBy,
+    List<String>? pointedBy,
     List<String>? verifiedBy,
     String? lastModified,
   }) {
     final lines = content.split('\n');
     final newLines = <String>[];
 
-    bool hasLikedBy = false;
-    bool hasLikeCount = false;
+    bool hasPointedBy = false;
+    bool hasPointCount = false;
     bool hasVerifiedBy = false;
     bool hasVerificationCount = false;
     bool hasLastModified = false;
 
     for (final line in lines) {
-      if (likedBy != null && line.startsWith('LIKED_BY: ')) {
-        newLines.add('LIKED_BY: ${likedBy.join(', ')}');
-        hasLikedBy = true;
-      } else if (likedBy != null && line.startsWith('LIKE_COUNT: ')) {
-        newLines.add('LIKE_COUNT: ${likedBy.length}');
-        hasLikeCount = true;
+      if (pointedBy != null && line.startsWith('POINTED_BY: ')) {
+        newLines.add('POINTED_BY: ${pointedBy.join(', ')}');
+        hasPointedBy = true;
+      } else if (pointedBy != null && line.startsWith('POINT_COUNT: ')) {
+        newLines.add('POINT_COUNT: ${pointedBy.length}');
+        hasPointCount = true;
       } else if (verifiedBy != null && line.startsWith('VERIFIED_BY: ')) {
         newLines.add('VERIFIED_BY: ${verifiedBy.join(', ')}');
         hasVerifiedBy = true;
@@ -3008,11 +3018,11 @@ class PureStationServer {
 
     // Add missing fields
     final toInsert = <String>[];
-    if (likedBy != null && !hasLikedBy && likedBy.isNotEmpty) {
-      toInsert.add('LIKED_BY: ${likedBy.join(', ')}');
+    if (pointedBy != null && !hasPointedBy && pointedBy.isNotEmpty) {
+      toInsert.add('POINTED_BY: ${pointedBy.join(', ')}');
     }
-    if (likedBy != null && !hasLikeCount && likedBy.isNotEmpty) {
-      toInsert.add('LIKE_COUNT: ${likedBy.length}');
+    if (pointedBy != null && !hasPointCount && pointedBy.isNotEmpty) {
+      toInsert.add('POINT_COUNT: ${pointedBy.length}');
     }
     if (verifiedBy != null && !hasVerifiedBy && verifiedBy.isNotEmpty) {
       toInsert.add('VERIFIED_BY: ${verifiedBy.join(', ')}');

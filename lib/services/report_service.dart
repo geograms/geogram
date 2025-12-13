@@ -607,35 +607,35 @@ class ReportService {
     }
   }
 
-  /// Like a report
-  Future<void> likeReport(String folderName, String npub) async {
+  /// Point a report (call attention to it)
+  Future<void> pointReport(String folderName, String npub) async {
     if (npub.isEmpty) return;
 
     final report = await loadReport(folderName);
     if (report == null) return;
 
-    if (!report.likedBy.contains(npub)) {
-      final updatedLikedBy = List<String>.from(report.likedBy)..add(npub);
+    if (!report.pointedBy.contains(npub)) {
+      final updatedPointedBy = List<String>.from(report.pointedBy)..add(npub);
       final updated = report.copyWith(
-        likedBy: updatedLikedBy,
-        likeCount: updatedLikedBy.length,
+        pointedBy: updatedPointedBy,
+        pointCount: updatedPointedBy.length,
       );
       await saveReport(updated, isExpired: await _isReportExpired(folderName));
     }
   }
 
-  /// Unlike a report
-  Future<void> unlikeReport(String folderName, String npub) async {
+  /// Unpoint a report (remove attention call)
+  Future<void> unpointReport(String folderName, String npub) async {
     if (npub.isEmpty) return;
 
     final report = await loadReport(folderName);
     if (report == null) return;
 
-    if (report.likedBy.contains(npub)) {
-      final updatedLikedBy = List<String>.from(report.likedBy)..remove(npub);
+    if (report.pointedBy.contains(npub)) {
+      final updatedPointedBy = List<String>.from(report.pointedBy)..remove(npub);
       final updated = report.copyWith(
-        likedBy: updatedLikedBy,
-        likeCount: updatedLikedBy.length,
+        pointedBy: updatedPointedBy,
+        pointCount: updatedPointedBy.length,
       );
       await saveReport(updated, isExpired: await _isReportExpired(folderName));
     }

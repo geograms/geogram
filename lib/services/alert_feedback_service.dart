@@ -2,7 +2,7 @@
  * Copyright (c) geogram
  * License: Apache-2.0
  *
- * Service for syncing alert feedback (likes, verifications, comments) to station.
+ * Service for syncing alert feedback (points, verifications, comments) to station.
  * Uses best-effort pattern: local changes are saved first, station sync is fire-and-forget.
  */
 
@@ -35,11 +35,11 @@ class AlertFeedbackService {
     return baseUrl;
   }
 
-  /// Like an alert on the station (best-effort)
+  /// Point an alert on the station (best-effort)
   ///
   /// Returns true if successful, false otherwise.
   /// Failures are logged but do not throw.
-  Future<bool> likeAlertOnStation(String alertId, String npub) async {
+  Future<bool> pointAlertOnStation(String alertId, String npub) async {
     try {
       final baseUrl = _getStationHttpUrl();
       if (baseUrl == null) {
@@ -47,7 +47,7 @@ class AlertFeedbackService {
         return false;
       }
 
-      final uri = Uri.parse('$baseUrl/api/alerts/$alertId/like');
+      final uri = Uri.parse('$baseUrl/api/alerts/$alertId/point');
       final response = await http.post(
         uri,
         headers: {
@@ -60,21 +60,21 @@ class AlertFeedbackService {
       if (response.statusCode == 200) {
         final json = jsonDecode(response.body) as Map<String, dynamic>;
         if (json['success'] == true) {
-          LogService().log('AlertFeedbackService: Liked alert $alertId on station');
+          LogService().log('AlertFeedbackService: Pointed alert $alertId on station');
           return true;
         }
       }
 
-      LogService().log('AlertFeedbackService: Failed to like alert: ${response.statusCode}');
+      LogService().log('AlertFeedbackService: Failed to point alert: ${response.statusCode}');
       return false;
     } catch (e) {
-      LogService().log('AlertFeedbackService: Error liking alert on station: $e');
+      LogService().log('AlertFeedbackService: Error pointing alert on station: $e');
       return false;
     }
   }
 
-  /// Unlike an alert on the station (best-effort)
-  Future<bool> unlikeAlertOnStation(String alertId, String npub) async {
+  /// Unpoint an alert on the station (best-effort)
+  Future<bool> unpointAlertOnStation(String alertId, String npub) async {
     try {
       final baseUrl = _getStationHttpUrl();
       if (baseUrl == null) {
@@ -82,7 +82,7 @@ class AlertFeedbackService {
         return false;
       }
 
-      final uri = Uri.parse('$baseUrl/api/alerts/$alertId/unlike');
+      final uri = Uri.parse('$baseUrl/api/alerts/$alertId/unpoint');
       final response = await http.post(
         uri,
         headers: {
@@ -95,15 +95,15 @@ class AlertFeedbackService {
       if (response.statusCode == 200) {
         final json = jsonDecode(response.body) as Map<String, dynamic>;
         if (json['success'] == true) {
-          LogService().log('AlertFeedbackService: Unliked alert $alertId on station');
+          LogService().log('AlertFeedbackService: Unpointed alert $alertId on station');
           return true;
         }
       }
 
-      LogService().log('AlertFeedbackService: Failed to unlike alert: ${response.statusCode}');
+      LogService().log('AlertFeedbackService: Failed to unpoint alert: ${response.statusCode}');
       return false;
     } catch (e) {
-      LogService().log('AlertFeedbackService: Error unliking alert on station: $e');
+      LogService().log('AlertFeedbackService: Error unpointing alert on station: $e');
       return false;
     }
   }

@@ -1038,6 +1038,15 @@ class _ReportBrowserPageState extends State<ReportBrowserPage> {
                       style: theme.textTheme.bodySmall?.copyWith(fontSize: 11),
                     ),
                   ],
+                  if (report.pointCount > 0) ...[
+                    const SizedBox(width: 8),
+                    Icon(Icons.star, size: 14, color: Colors.amber),
+                    const SizedBox(width: 2),
+                    Text(
+                      '${report.pointCount}',
+                      style: theme.textTheme.bodySmall?.copyWith(fontSize: 11),
+                    ),
+                  ],
                   // Show author for station alerts
                   if (!isMyAlert && report.author.isNotEmpty) ...[
                     const SizedBox(width: 8),

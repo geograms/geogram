@@ -130,11 +130,20 @@ class MapItem {
 
   /// Create MapItem from a Report (Alert)
   factory MapItem.fromAlert(Report report, {double? distanceKm, String? languageCode, String? collectionPath, bool isFromStation = false}) {
+    // Build subtitle with severity, status, and points if any
+    final parts = <String>['${report.severity.name} - ${report.status.name}'];
+    if (report.pointCount > 0) {
+      parts.add('★ ${report.pointCount}');
+    }
+    if (report.verificationCount > 0) {
+      parts.add('✓ ${report.verificationCount}');
+    }
+
     return MapItem(
       type: MapItemType.alert,
       id: report.folderName,
       title: report.getTitle(languageCode ?? 'EN'),
-      subtitle: '${report.severity.name} - ${report.status.name}',
+      subtitle: parts.join(' • '),
       latitude: report.latitude,
       longitude: report.longitude,
       distanceKm: distanceKm,
