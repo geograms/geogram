@@ -853,9 +853,10 @@ class WebSocketService {
         response.statusCode,
         {'Content-Type': response.headers['Content-Type'] ?? 'application/json'},
         response.body,
+        isBase64: response.isBase64,
       );
 
-      LogService().log('HTTP_REQUEST: Response sent back to station: $method $path -> ${response.statusCode} (${response.body.length} bytes)');
+      LogService().log('HTTP_REQUEST: Response sent back to station: $method $path -> ${response.statusCode} (${response.body.length} bytes, base64: ${response.isBase64})');
     } catch (e, stack) {
       LogService().log('HTTP_REQUEST: Error in direct API call: $e');
       LogService().log('HTTP_REQUEST: Stack trace: $stack');

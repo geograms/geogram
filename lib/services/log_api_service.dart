@@ -135,8 +135,9 @@ class LogApiService {
   /// Used by WebSocket relay to bypass localhost HTTP connection on Android
   /// which blocks cleartext traffic by default.
   ///
-  /// Returns a tuple of (statusCode, headers, body)
-  Future<({int statusCode, Map<String, String> headers, String body})> handleRequestDirect({
+  /// Returns a tuple of (statusCode, headers, body, isBase64)
+  /// For binary content types (images, etc.), body is base64 encoded and isBase64 is true
+  Future<({int statusCode, Map<String, String> headers, String body, bool isBase64})> handleRequestDirect({
     required String method,
     required String path,
     Map<String, String>? headers,
@@ -159,13 +160,31 @@ class LogApiService {
       // Call the existing handler
       final response = await _handleRequest(request);
 
-      // Read response body
-      final responseBody = await response.readAsString();
+      // Check if response is binary based on Content-Type
+      final contentType = response.headers['Content-Type'] ?? response.headers['content-type'] ?? 'application/json';
+      final isBinaryContent = contentType.startsWith('image/') ||
+          contentType.startsWith('audio/') ||
+          contentType.startsWith('video/') ||
+          contentType == 'application/octet-stream';
+
+      String responseBody;
+      bool isBase64 = false;
+
+      if (isBinaryContent) {
+        // Read as bytes and base64 encode for binary content
+        final bytes = await response.read().expand((chunk) => chunk).toList();
+        responseBody = base64Encode(bytes);
+        isBase64 = true;
+      } else {
+        // Read as string for text content (JSON, HTML, etc.)
+        responseBody = await response.readAsString();
+      }
 
       return (
         statusCode: response.statusCode,
         headers: Map<String, String>.from(response.headers),
         body: responseBody,
+        isBase64: isBase64,
       );
     } catch (e, stack) {
       LogService().log('handleRequestDirect error: $e');
@@ -174,6 +193,7 @@ class LogApiService {
         statusCode: 500,
         headers: <String, String>{'Content-Type': 'application/json'},
         body: jsonEncode({'error': 'Internal Server Error', 'message': e.toString()}),
+        isBase64: false,
       );
     }
   }

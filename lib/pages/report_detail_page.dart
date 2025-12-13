@@ -24,6 +24,7 @@ import '../services/profile_service.dart';
 import '../services/log_service.dart';
 import '../services/i18n_service.dart';
 import '../services/alert_feedback_service.dart';
+import '../services/station_service.dart';
 import 'location_picker_page.dart';
 import 'photo_viewer_page.dart';
 
@@ -551,6 +552,11 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
       ));
       final imagesDir = Directory(path.join(reportDir.path, 'images'));
 
+      // For station alerts, download photos if they don't exist locally
+      if (_isFromStation && !kIsWeb) {
+        await _downloadStationPhotos(imagesDir);
+      }
+
       if (await imagesDir.exists()) {
         final entities = await imagesDir.list().toList();
         setState(() {
@@ -562,6 +568,94 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
       }
     } catch (e) {
       LogService().log('Error loading images: $e');
+    }
+  }
+
+  /// Download photos from station for station alerts
+  Future<void> _downloadStationPhotos(Directory imagesDir) async {
+    if (_report == null || !_isFromStation) return;
+
+    try {
+      final stationCallsign = _report!.metadata['station_callsign'];
+      if (stationCallsign == null || stationCallsign.isEmpty) {
+        LogService().log('ReportDetailPage: No station callsign for photo download');
+        return;
+      }
+
+      // Get station URL
+      final stationService = StationService();
+      final station = stationService.getPreferredStation();
+      if (station == null || station.url.isEmpty) {
+        LogService().log('ReportDetailPage: No station URL for photo download');
+        return;
+      }
+
+      // Build base URL
+      var baseUrl = station.url;
+      if (baseUrl.startsWith('wss://')) {
+        baseUrl = baseUrl.replaceFirst('wss://', 'https://');
+      } else if (baseUrl.startsWith('ws://')) {
+        baseUrl = baseUrl.replaceFirst('ws://', 'http://');
+      }
+
+      // Fetch alert details to get photos list
+      final alertId = _report!.apiId;
+      final detailsUrl = '$baseUrl/$stationCallsign/api/alerts/$alertId';
+      LogService().log('ReportDetailPage: Fetching alert details from $detailsUrl');
+
+      final response = await http.get(
+        Uri.parse(detailsUrl),
+        headers: {'Accept': 'application/json'},
+      ).timeout(const Duration(seconds: 30));
+
+      if (response.statusCode != 200) {
+        LogService().log('ReportDetailPage: Failed to fetch alert details: ${response.statusCode}');
+        return;
+      }
+
+      final json = jsonDecode(response.body) as Map<String, dynamic>;
+      final photos = (json['photos'] as List<dynamic>?)?.cast<String>() ?? [];
+
+      if (photos.isEmpty) {
+        LogService().log('ReportDetailPage: No photos in alert');
+        return;
+      }
+
+      // Create images directory if it doesn't exist
+      if (!await imagesDir.exists()) {
+        await imagesDir.create(recursive: true);
+      }
+
+      // Download each photo
+      for (final photoName in photos) {
+        final localFile = File(path.join(imagesDir.path, photoName));
+
+        // Skip if already downloaded
+        if (await localFile.exists()) {
+          LogService().log('ReportDetailPage: Photo $photoName already exists');
+          continue;
+        }
+
+        final photoUrl = '$baseUrl/$stationCallsign/api/alerts/$alertId/files/$photoName';
+        LogService().log('ReportDetailPage: Downloading photo from $photoUrl');
+
+        try {
+          final photoResponse = await http.get(
+            Uri.parse(photoUrl),
+          ).timeout(const Duration(seconds: 60));
+
+          if (photoResponse.statusCode == 200) {
+            await localFile.writeAsBytes(photoResponse.bodyBytes);
+            LogService().log('ReportDetailPage: Downloaded photo $photoName');
+          } else {
+            LogService().log('ReportDetailPage: Failed to download photo $photoName: ${photoResponse.statusCode}');
+          }
+        } catch (e) {
+          LogService().log('ReportDetailPage: Error downloading photo $photoName: $e');
+        }
+      }
+    } catch (e) {
+      LogService().log('ReportDetailPage: Error downloading station photos: $e');
     }
   }
 
