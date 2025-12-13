@@ -313,9 +313,7 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
           profile.callsign,
           commentContent,
           npub: _currentUserNpub,
-        ).catchError((e) {
-          LogService().log('Failed to sync comment to station: $e');
-        });
+        ).ignore();
       } else {
         // For local alerts: use ReportService
         await _reportService.addComment(
@@ -334,9 +332,7 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
           profile.callsign,
           commentContent,
           npub: _currentUserNpub,
-        ).catchError((e) {
-          LogService().log('Failed to sync comment to station: $e');
-        });
+        ).ignore();
       }
     } catch (e) {
       _showError('Failed to add comment: $e');
@@ -374,15 +370,11 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
         setState(() {});
         _showSuccess(wasPointed ? _i18n.t('unpointed') : _i18n.t('pointed'));
 
-        // Sync to station (best-effort)
+        // Sync to station (best-effort, fire-and-forget)
         if (wasPointed) {
-          _alertFeedbackService.unpointAlertOnStation(alertId, _currentUserNpub!).catchError((e) {
-            LogService().log('Failed to sync unpoint to station: $e');
-          });
+          _alertFeedbackService.unpointAlertOnStation(alertId, _currentUserNpub!).ignore();
         } else {
-          _alertFeedbackService.pointAlertOnStation(alertId, _currentUserNpub!).catchError((e) {
-            LogService().log('Failed to sync point to station: $e');
-          });
+          _alertFeedbackService.pointAlertOnStation(alertId, _currentUserNpub!).ignore();
         }
       } else {
         // For local alerts: save locally first, then sync
@@ -397,16 +389,12 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
         setState(() {});
         _showSuccess(wasPointed ? _i18n.t('unpointed') : _i18n.t('pointed'));
 
-        // Sync to station (best-effort)
+        // Sync to station (best-effort, fire-and-forget)
         if (_report != null) {
           if (wasPointed) {
-            _alertFeedbackService.unpointAlertOnStation(alertId, _currentUserNpub!).catchError((e) {
-              LogService().log('Failed to sync unpoint to station: $e');
-            });
+            _alertFeedbackService.unpointAlertOnStation(alertId, _currentUserNpub!).ignore();
           } else {
-            _alertFeedbackService.pointAlertOnStation(alertId, _currentUserNpub!).catchError((e) {
-              LogService().log('Failed to sync point to station: $e');
-            });
+            _alertFeedbackService.pointAlertOnStation(alertId, _currentUserNpub!).ignore();
           }
         }
       }
@@ -735,9 +723,7 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
         _showSuccess(_i18n.t('verified'));
 
         // Sync to station (best-effort)
-        _alertFeedbackService.verifyAlertOnStation(alertId, _currentUserNpub!).catchError((e) {
-          LogService().log('Failed to sync verification to station: $e');
-        });
+        _alertFeedbackService.verifyAlertOnStation(alertId, _currentUserNpub!).ignore();
       } else {
         // For local alerts: save locally first, then sync
         await _reportService.verify(_report!.folderName, _currentUserNpub!);
@@ -749,9 +735,7 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
 
         // Sync to station (best-effort)
         if (_report != null) {
-          _alertFeedbackService.verifyAlertOnStation(alertId, _currentUserNpub!).catchError((e) {
-            LogService().log('Failed to sync verification to station: $e');
-          });
+          _alertFeedbackService.verifyAlertOnStation(alertId, _currentUserNpub!).ignore();
         }
       }
     } catch (e) {

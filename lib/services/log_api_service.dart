@@ -5822,13 +5822,9 @@ class LogApiService {
 
           // Sync to station (best-effort, fire-and-forget)
           if (wasPointed) {
-            AlertFeedbackService().unpointAlertOnStation(alertId, npub).catchError((e) {
-              LogService().log('Failed to sync unpoint to station: $e');
-            });
+            AlertFeedbackService().unpointAlertOnStation(alertId, npub).ignore();
           } else {
-            AlertFeedbackService().pointAlertOnStation(alertId, npub).catchError((e) {
-              LogService().log('Failed to sync point to station: $e');
-            });
+            AlertFeedbackService().pointAlertOnStation(alertId, npub).ignore();
           }
 
           return shelf.Response.ok(
