@@ -25,6 +25,7 @@ import '../services/log_service.dart';
 import '../services/i18n_service.dart';
 import '../services/alert_feedback_service.dart';
 import '../services/station_service.dart';
+import '../services/station_alert_service.dart';
 import 'location_picker_page.dart';
 import 'photo_viewer_page.dart';
 
@@ -341,13 +342,15 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
         await _loadComments();
         _showSuccess(_i18n.t('comment_added'));
 
-        // Sync to station (best-effort)
+        // Sync to station and refresh on success
         _alertFeedbackService.commentOnStation(
           alertId,
           profile.callsign,
           commentContent,
           npub: _currentUserNpub,
-        ).ignore();
+        ).then((_) {
+          StationAlertService().refreshAlert(_report!.folderName, _report!.metadata['station_callsign'] ?? '');
+        }).catchError((_) {});
       } else {
         // For local alerts: use ReportService
         await _reportService.addComment(
@@ -404,12 +407,14 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
         setState(() {});
         _showSuccess(wasPointed ? _i18n.t('unpointed') : _i18n.t('pointed'));
 
-        // Sync to station (best-effort, fire-and-forget)
-        if (wasPointed) {
-          _alertFeedbackService.unpointAlertOnStation(alertId, _currentUserNpub!).ignore();
-        } else {
-          _alertFeedbackService.pointAlertOnStation(alertId, _currentUserNpub!).ignore();
-        }
+        // Sync to station and refresh on success
+        final stationCall = wasPointed
+            ? _alertFeedbackService.unpointAlertOnStation(alertId, _currentUserNpub!)
+            : _alertFeedbackService.pointAlertOnStation(alertId, _currentUserNpub!);
+
+        stationCall.then((_) {
+          StationAlertService().refreshAlert(_report!.folderName, _report!.metadata['station_callsign'] ?? '');
+        }).catchError((_) {});
       } else {
         // For local alerts: save locally first, then sync
         if (wasPointed) {
@@ -983,6 +988,7 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
                   if (_isEditing)
                     TextField(
                       controller: _titleController,
+                      textCapitalization: TextCapitalization.sentences,
                       decoration: InputDecoration(
                         labelText: _i18n.t('title') + ' *',
                         hintText: _i18n.t('title_hint'),
@@ -1080,6 +1086,7 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
                   if (_isEditing)
                     TextField(
                       controller: _descriptionController,
+                      textCapitalization: TextCapitalization.sentences,
                       decoration: InputDecoration(
                         labelText: _i18n.t('description') + ' *',
                         hintText: _i18n.t('description_hint'),
