@@ -42,14 +42,22 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
   late LatLng _selectedPosition;
   bool _isOnline = true;
   bool _isDetectingLocation = false;
+  double _currentZoom = 17.0; // Default zoom level for usable location selection
 
   // Default to central Europe (Munich/Vienna area)
   static const LatLng _defaultPosition = LatLng(48.0, 10.0);
+  static const double _defaultZoom = 17.0;
 
   @override
   void initState() {
     super.initState();
     _initializeMap();
+
+    // Load saved zoom level preference
+    final savedZoom = _configService.get('lastLocationPickerZoom');
+    if (savedZoom != null) {
+      _currentZoom = (savedZoom as num).toDouble();
+    }
 
     // Priority: 1) provided initialPosition, 2) auto-detect current location, 3) last saved, 4) default
     if (widget.initialPosition != null) {
@@ -98,7 +106,7 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
           _latController.text = lat.toStringAsFixed(6);
           _lonController.text = lon.toStringAsFixed(6);
         });
-        _mapController.move(_selectedPosition, 10.0);
+        _mapController.move(_selectedPosition, _currentZoom);
         LogService().log('Using last saved position');
       } else {
         // Fallback 2: Try GeoIP
@@ -145,7 +153,7 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
         _latController.text = position.latitude.toStringAsFixed(6);
         _lonController.text = position.longitude.toStringAsFixed(6);
       });
-      _mapController.move(_selectedPosition, 15.0);
+      _mapController.move(_selectedPosition, _currentZoom);
       LogService().log('Browser geolocation on start: ${position.latitude}, ${position.longitude}');
     }
   }
@@ -184,7 +192,7 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
         _latController.text = position.latitude.toStringAsFixed(6);
         _lonController.text = position.longitude.toStringAsFixed(6);
       });
-      _mapController.move(_selectedPosition, 15.0);
+      _mapController.move(_selectedPosition, _currentZoom);
       LogService().log('GPS location on start: ${position.latitude}, ${position.longitude}');
     }
   }
@@ -208,7 +216,7 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
 
     // Move map to initial position after build
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      _mapController.move(_selectedPosition, 10.0);
+      _mapController.move(_selectedPosition, _currentZoom);
     });
   }
 
@@ -232,7 +240,7 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
           });
 
           // Smoothly move map to GeoIP location
-          _mapController.move(_selectedPosition, 10.0);
+          _mapController.move(_selectedPosition, _currentZoom);
 
           LogService().log('GeoIP location: $lat, $lon');
         }
@@ -330,7 +338,7 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
         _lonController.text = position.longitude.toStringAsFixed(6);
       });
 
-      _mapController.move(_selectedPosition, 15.0);
+      _mapController.move(_selectedPosition, _currentZoom);
 
       LogService().log('GPS location: ${position.latitude}, ${position.longitude}');
     }
@@ -381,7 +389,7 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
         _lonController.text = position.longitude.toStringAsFixed(6);
       });
 
-      _mapController.move(_selectedPosition, 15.0);
+      _mapController.move(_selectedPosition, _currentZoom);
 
       LogService().log('Browser geolocation: ${position.latitude}, ${position.longitude}');
     }
@@ -407,7 +415,7 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
           _lonController.text = lon.toStringAsFixed(6);
         });
 
-        _mapController.move(_selectedPosition, 10.0);
+        _mapController.move(_selectedPosition, _currentZoom);
 
         LogService().log('IP-based location: $lat, $lon ($city, $country)');
       }
@@ -432,9 +440,10 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
   }
 
   void _confirmSelection() {
-    // Save the selected position for next time
+    // Save the selected position and zoom level for next time
     _configService.set('lastLocationPickerLat', _selectedPosition.latitude);
     _configService.set('lastLocationPickerLon', _selectedPosition.longitude);
+    _configService.set('lastLocationPickerZoom', _mapController.camera.zoom);
 
     if (mounted) {
       Navigator.of(context).pop(_selectedPosition);
@@ -477,7 +486,7 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
                         mapController: _mapController,
                         options: MapOptions(
                           initialCenter: _selectedPosition,
-                          initialZoom: 10.0,
+                          initialZoom: _currentZoom,
                           minZoom: 1.0,
                           maxZoom: 18.0,
                           interactionOptions: const InteractionOptions(
