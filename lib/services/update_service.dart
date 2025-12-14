@@ -29,6 +29,10 @@ class UpdateService {
   bool _isDownloading = false;
   double _downloadProgress = 0.0;
 
+  /// Track completed download path (persists across page navigation)
+  String? _completedDownloadPath;
+  String? _completedDownloadVersion;
+
   /// Track bytes downloaded for current session (for resume info display)
   int _bytesDownloaded = 0;
   int _totalBytes = 0;
@@ -919,6 +923,10 @@ class UpdateService {
         downloadProgress.value = 1.0;
         onProgress?.call(1.0);
 
+        // Store completed download state for UI persistence
+        _completedDownloadPath = tempFilePath;
+        _completedDownloadVersion = release.version;
+
         LogService().log('Downloaded $downloaded bytes to $tempFilePath');
         return tempFilePath;
       } finally {
@@ -1212,6 +1220,61 @@ class UpdateService {
 
   /// Get current download progress (0.0 to 1.0)
   double get currentDownloadProgress => _downloadProgress;
+
+  /// Check if a download is completed and ready to install
+  bool get hasCompletedDownload => _completedDownloadPath != null;
+
+  /// Get the completed download path (if any)
+  String? get completedDownloadPath => _completedDownloadPath;
+
+  /// Get the version of the completed download (if any)
+  String? get completedDownloadVersion => _completedDownloadVersion;
+
+  /// Clear the completed download state (call after successful install or when user cancels)
+  void clearCompletedDownload() {
+    _completedDownloadPath = null;
+    _completedDownloadVersion = null;
+    LogService().log('Cleared completed download state');
+  }
+
+  /// Check if a completed download file exists for a given release version
+  /// Returns the file path if found, null otherwise
+  Future<String?> findCompletedDownload(ReleaseInfo release) async {
+    if (kIsWeb) return null;
+
+    try {
+      final platform = detectPlatform();
+      final extension = platform == UpdatePlatform.windows
+          ? '.exe'
+          : platform == UpdatePlatform.android
+              ? '.apk'
+              : '';
+
+      // Check primary temp directory
+      final tempDir = await getTemporaryDirectory();
+      final tempFilePath = '${tempDir.path}${Platform.pathSeparator}geogram-update-${release.version}$extension';
+      if (await File(tempFilePath).exists()) {
+        LogService().log('Found completed download at: $tempFilePath');
+        return tempFilePath;
+      }
+
+      // Also check external cache on Android
+      if (Platform.isAndroid) {
+        final externalCacheDirs = await getExternalCacheDirectories();
+        if (externalCacheDirs != null && externalCacheDirs.isNotEmpty) {
+          final externalPath = '${externalCacheDirs.first.path}${Platform.pathSeparator}geogram-update-${release.version}$extension';
+          if (await File(externalPath).exists()) {
+            LogService().log('Found completed download at: $externalPath');
+            return externalPath;
+          }
+        }
+      }
+    } catch (e) {
+      LogService().log('Error checking for completed download: $e');
+    }
+
+    return null;
+  }
 
   /// Check if app can install packages (Android 8.0+ permission)
   Future<bool> canInstallPackages() async {

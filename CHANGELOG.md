@@ -1,5 +1,13 @@
 # Geogram Desktop Changelog
 
+## 2025-12-14 - v1.6.38
+
+### Bug Fixes
+- Fix Software Update UI not recognizing completed background downloads
+- When returning to Software Update screen after a background download completes, the UI now shows "Ready to Install" instead of forcing re-download
+- Added `findCompletedDownload()` method to check for existing downloaded update files
+- Added `hasCompletedDownload` state to persist completed download information across page navigation
+
 ## 2025-12-14 - v1.6.37
 
 ### Alert Folder Structure

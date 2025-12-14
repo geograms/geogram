@@ -25,6 +25,7 @@ class _UpdatePageState extends State<UpdatePage> {
   bool _isLoading = false;
   String? _error;
   String? _statusMessage;
+  String? _completedDownloadPath; // Track completed download ready to install
 
   @override
   void initState() {
@@ -51,6 +52,15 @@ class _UpdatePageState extends State<UpdatePage> {
       // Load cached release info first for immediate display
       _latestRelease = _updateService.getLatestRelease();
       _backups = await _updateService.listBackups();
+
+      // Check if there's already a completed download ready to install
+      // This handles the case where download completed in background
+      if (_updateService.hasCompletedDownload) {
+        _completedDownloadPath = _updateService.completedDownloadPath;
+      } else if (_latestRelease != null) {
+        // Check filesystem for completed download (in case app was restarted)
+        _completedDownloadPath = await _updateService.findCompletedDownload(_latestRelease!);
+      }
     } catch (e) {
       _error = e.toString();
     } finally {
@@ -66,7 +76,12 @@ class _UpdatePageState extends State<UpdatePage> {
         _latestRelease!.version,
       );
       if (isNewer) {
-        _downloadAndInstall();
+        // If already downloaded, just install
+        if (_completedDownloadPath != null) {
+          _installCompletedDownload();
+        } else {
+          _downloadAndInstall();
+        }
         return; // Don't check for updates if auto-installing
       }
     }
@@ -238,6 +253,80 @@ class _UpdatePageState extends State<UpdatePage> {
     }
   }
 
+  /// Install a completed download (skip download, go straight to install)
+  Future<void> _installCompletedDownload() async {
+    if (_completedDownloadPath == null) return;
+
+    // On Android, check install permission first
+    if (!kIsWeb && Platform.isAndroid) {
+      final canInstall = await _updateService.canInstallPackages();
+      if (!canInstall) {
+        // Show dialog explaining the permission is needed
+        if (mounted) {
+          final shouldOpenSettings = await showDialog<bool>(
+            context: context,
+            builder: (context) => AlertDialog(
+              title: Text(_i18n.t('permission_required')),
+              content: Text(_i18n.t('permission_required_msg')),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context, false),
+                  child: Text(_i18n.t('cancel')),
+                ),
+                FilledButton(
+                  onPressed: () => Navigator.pop(context, true),
+                  child: Text(_i18n.t('open_settings')),
+                ),
+              ],
+            ),
+          );
+
+          if (shouldOpenSettings == true) {
+            await _updateService.openInstallPermissionSettings();
+          }
+        }
+        return;
+      }
+    }
+
+    setState(() {
+      _isLoading = true;
+      _statusMessage = _i18n.t('applying_update');
+    });
+
+    try {
+      final success = await _updateService.applyUpdate(_completedDownloadPath!);
+      if (success) {
+        // Clear the completed download state after successful install
+        _updateService.clearCompletedDownload();
+        _completedDownloadPath = null;
+
+        final platform = _updateService.detectPlatform();
+        if (platform == UpdatePlatform.android) {
+          _statusMessage = _i18n.t('apk_installer_launched');
+        } else {
+          _statusMessage = _i18n.t('update_installed_restart');
+          _backups = await _updateService.listBackups();
+        }
+      } else {
+        // On Android, this might mean the permission was revoked
+        if (!kIsWeb && Platform.isAndroid) {
+          _error = _i18n.t('install_update_failed');
+        } else {
+          _error = _i18n.t('apply_update_failed');
+        }
+        _statusMessage = null;
+      }
+    } catch (e) {
+      _error = e.toString();
+      _statusMessage = null;
+    } finally {
+      setState(() {
+        _isLoading = false;
+      });
+    }
+  }
+
   Future<void> _rollback(BackupInfo backup) async {
     final confirmed = await showDialog<bool>(
       context: context,
@@ -343,7 +432,7 @@ class _UpdatePageState extends State<UpdatePage> {
     }
   }
 
-  /// Handle tap on update card - either check for updates or install
+  /// Handle tap on update card - either check for updates, install completed download, or download+install
   void _handleUpdateCardTap() {
     if (_isLoading) return;
 
@@ -354,7 +443,12 @@ class _UpdatePageState extends State<UpdatePage> {
         );
 
     if (hasUpdate && !kIsWeb) {
-      _downloadAndInstall();
+      // If download already completed, just install
+      if (_completedDownloadPath != null) {
+        _installCompletedDownload();
+      } else {
+        _downloadAndInstall();
+      }
     } else {
       _checkForUpdates();
     }
@@ -891,6 +985,12 @@ class _UpdatePageState extends State<UpdatePage> {
       icon = Icons.sync;
       title = _i18n.t('checking');
       subtitle = _statusMessage ?? _i18n.t('please_wait');
+    } else if (_completedDownloadPath != null && hasUpdate && !kIsWeb) {
+      // Download completed, ready to install
+      cardColor = Theme.of(context).colorScheme.tertiaryContainer;
+      icon = Icons.install_mobile;
+      title = _i18n.t('ready_to_install');
+      subtitle = _i18n.t('tap_to_install_version', params: [_latestRelease!.version]);
     } else if (hasUpdate && !kIsWeb) {
       cardColor = Theme.of(context).colorScheme.primaryContainer;
       icon = Icons.system_update;
