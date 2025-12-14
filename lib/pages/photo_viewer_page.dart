@@ -4,6 +4,7 @@
  */
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../platform/file_image_helper.dart' as file_helper;
 
 /// Full-screen photo viewer with zoom, pan, and swipe navigation
@@ -25,6 +26,7 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
   late PageController _pageController;
   late int _currentIndex;
   final Map<int, TransformationController> _transformationControllers = {};
+  final FocusNode _focusNode = FocusNode();
 
   @override
   void initState() {
@@ -36,10 +38,27 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
   @override
   void dispose() {
     _pageController.dispose();
+    _focusNode.dispose();
     for (final controller in _transformationControllers.values) {
       controller.dispose();
     }
     super.dispose();
+  }
+
+  KeyEventResult _handleKeyEvent(FocusNode node, KeyEvent event) {
+    if (event is KeyDownEvent) {
+      if (event.logicalKey == LogicalKeyboardKey.arrowLeft) {
+        _goToPrevious();
+        return KeyEventResult.handled;
+      } else if (event.logicalKey == LogicalKeyboardKey.arrowRight) {
+        _goToNext();
+        return KeyEventResult.handled;
+      } else if (event.logicalKey == LogicalKeyboardKey.escape) {
+        Navigator.pop(context);
+        return KeyEventResult.handled;
+      }
+    }
+    return KeyEventResult.ignored;
   }
 
   TransformationController _getTransformationController(int index) {
@@ -78,7 +97,11 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
 
-    return Scaffold(
+    return Focus(
+      focusNode: _focusNode,
+      autofocus: true,
+      onKeyEvent: _handleKeyEvent,
+      child: Scaffold(
       backgroundColor: Colors.black,
       extendBodyBehindAppBar: true,
       appBar: AppBar(
@@ -171,6 +194,7 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
             ),
         ],
       ),
+    ),
     );
   }
 
