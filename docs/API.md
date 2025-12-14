@@ -10,6 +10,8 @@ This document describes the HTTP API endpoints available on Geogram radio statio
 - [Endpoints](#endpoints)
   - [Status](#status)
   - [Clients](#clients)
+  - [Device Proxy](#device-proxy)
+  - [Alert File Upload/Download](#alert-file-uploaddownload-station)
   - [Software Updates](#software-updates)
   - [Map Tiles](#map-tiles)
   - [Chat](#chat)
@@ -570,6 +572,220 @@ curl https://p2p.radio/X1ABCD/api/dm/conversations
 # Check if a device is connected (without proxying)
 curl https://p2p.radio/device/X1ABCD
 ```
+
+---
+
+### Alert File Upload/Download (Station)
+
+Stations can store and serve alert photos uploaded from clients. These endpoints allow clients to upload photos when sharing alerts and download photos when syncing alerts.
+
+#### POST /{callsign}/api/alerts/{folderName}/files/{filename}
+
+Uploads a photo to the station's local storage for an alert.
+
+**Parameters:**
+| Parameter | Description |
+|-----------|-------------|
+| `callsign` | Callsign of the alert owner (uppercase) |
+| `folderName` | Alert folder name (coordinate-based, e.g., `38_7222_n9_1393_broken-sidewalk`) |
+| `filename` | Photo filename (e.g., `photo1.jpg`) |
+
+**Headers:**
+| Header | Description |
+|--------|-------------|
+| `Content-Type` | MIME type (e.g., `image/jpeg`, `image/png`) |
+| `X-Callsign` | Sender's callsign (optional) |
+
+**Request Body:** Binary image data.
+
+**Response (201 Created):**
+```json
+{
+  "success": true,
+  "path": "/X1ABCD/alerts/38_7222_n9_1393_broken-sidewalk/photo1.jpg",
+  "size": 12345
+}
+```
+
+**Response (400 Bad Request):**
+```json
+{
+  "success": false,
+  "error": "Empty file"
+}
+```
+
+#### GET /{callsign}/api/alerts/{folderName}
+
+Returns detailed information about a specific alert, including list of photos.
+
+**Parameters:**
+| Parameter | Description |
+|-----------|-------------|
+| `callsign` | Callsign of the alert owner (uppercase) |
+| `folderName` | Alert folder name (e.g., `38_7223_n9_1393_broken-sidewalk`) |
+
+**Response (200 OK):**
+```json
+{
+  "id": "38_7223_n9_1393_broken-sidewalk",
+  "folder_name": "38_7223_n9_1393_broken-sidewalk",
+  "title": "Broken Sidewalk",
+  "description": "The sidewalk has a large crack near the bus stop.",
+  "latitude": 38.7223,
+  "longitude": -9.1393,
+  "severity": "urgent",
+  "status": "open",
+  "type": "infrastructure-broken",
+  "point_count": 3,
+  "verification_count": 5,
+  "pointed_by": ["npub1abc...", "npub1def..."],
+  "verified_by": ["npub1ghi..."],
+  "last_modified": "2025-12-14T10:30:00Z",
+  "photos": ["photo1.jpg", "photo2.png", "test_photo.png"],
+  "comments": [
+    {
+      "filename": "2025-12-14_10-35-00_X1ABCD.txt",
+      "author": "X1ABCD",
+      "created": "2025-12-14 10:35_00",
+      "content": "I can confirm this issue is still present.",
+      "npub": "npub1xyz...",
+      "signature": "sig123..."
+    }
+  ],
+  "comment_count": 1,
+  "callsign": "X1ABCD",
+  "report_content": "# REPORT: Broken Sidewalk\n..."
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | string | Alert ID (same as folder_name) |
+| `folder_name` | string | Alert folder name |
+| `title` | string | Alert title (default language) |
+| `description` | string | Alert description (default language) |
+| `latitude` | float | Location latitude |
+| `longitude` | float | Location longitude |
+| `severity` | string | Severity: `info`, `attention`, `urgent`, `emergency` |
+| `status` | string | Status: `open`, `inProgress`, `resolved`, `closed` |
+| `type` | string | Alert type (e.g., `infrastructure-broken`) |
+| `point_count` | int | Number of "points" (attention calls) |
+| `verification_count` | int | Number of verifications |
+| `pointed_by` | array | List of NPUBs who pointed the alert |
+| `verified_by` | array | List of NPUBs who verified the alert |
+| `last_modified` | string | ISO 8601 timestamp of last modification |
+| `photos` | array | List of photo filenames in the alert folder |
+| `comments` | array | List of comment objects (see below) |
+| `comment_count` | int | Number of comments |
+| `callsign` | string | Alert owner's callsign |
+| `report_content` | string | Raw report.txt content for sync |
+
+**Comment Object:**
+| Field | Type | Description |
+|-------|------|-------------|
+| `filename` | string | Comment filename |
+| `author` | string | Author's callsign |
+| `created` | string | Creation timestamp (`YYYY-MM-DD HH:MM_ss`) |
+| `content` | string | Comment text |
+| `npub` | string | Author's NOSTR public key (optional) |
+| `signature` | string | NOSTR signature (optional) |
+
+**Response (404 Not Found):**
+```json
+{
+  "error": "Alert not found"
+}
+```
+
+#### POST /{callsign}/api/alerts/{folderName}/comment
+
+Adds a comment to an alert on the station.
+
+**Parameters:**
+| Parameter | Description |
+|-----------|-------------|
+| `callsign` | Callsign of the alert owner (uppercase) |
+| `folderName` | Alert folder name (e.g., `38_7223_n9_1393_broken-sidewalk`) |
+
+**Request Body:**
+```json
+{
+  "content": "I can confirm this issue is still present.",
+  "author": "X1ABCD",
+  "npub": "npub1xyz...",
+  "signature": "sig123..."
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `content` | string | Yes | Comment text |
+| `author` | string | No | Author's callsign (defaults to sender) |
+| `npub` | string | No | Author's NOSTR public key |
+| `signature` | string | No | NOSTR signature for verification |
+
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "filename": "1702000000000.txt",
+  "message": "Comment added successfully"
+}
+```
+
+**Response (404 Not Found):**
+```json
+{
+  "error": "Alert not found"
+}
+```
+
+**Example Usage:**
+```bash
+# Add a comment to an alert
+curl -X POST http://localhost:3457/X1ABCD/api/alerts/38_7222_n9_1393_broken-sidewalk/comment \
+  -H "Content-Type: application/json" \
+  -d '{"content": "I can confirm this issue!", "author": "X2BCDE"}'
+```
+
+#### GET /{callsign}/api/alerts/{folderName}/files/{filename}
+
+Downloads a photo from the station's local storage.
+
+**Parameters:**
+| Parameter | Description |
+|-----------|-------------|
+| `callsign` | Callsign of the alert owner (uppercase) |
+| `folderName` | Alert folder name |
+| `filename` | Photo filename |
+
+**Response (200 OK):** Binary image data with appropriate `Content-Type`.
+
+**Response (404 Not Found):**
+```json
+{
+  "error": "File not found",
+  "path": "/path/to/expected/file"
+}
+```
+
+**Example Usage:**
+```bash
+# Get alert details with photos list
+curl http://localhost:3457/X1ABCD/api/alerts/38_7222_n9_1393_broken-sidewalk
+
+# Upload a photo to station
+curl -X POST http://localhost:3457/X1ABCD/api/alerts/38_7222_n9_1393_broken-sidewalk/files/photo1.jpg \
+  -H "Content-Type: image/jpeg" \
+  -H "X-Callsign: X1ABCD" \
+  --data-binary @photo1.jpg
+
+# Download a photo from station
+curl -o photo1.jpg http://localhost:3457/X1ABCD/api/alerts/38_7222_n9_1393_broken-sidewalk/files/photo1.jpg
+```
+
+**Note:** The station port is typically API port + 1 (e.g., if API is on 3456, station is on 3457).
 
 ---
 
@@ -1405,11 +1621,16 @@ Triggers a debug action.
 | `event_delete` | Delete an event | `event_id` (required): Event ID (e.g., "2025-01-15_party"), `app_name` (optional): App name (default: "my-events") |
 | `alert_create` | Create an alert for testing | `title` (required): Alert title, `description` (required): Alert description, `latitude` (optional): Location lat, `longitude` (optional): Location lon, `severity` (optional): info/attention/urgent/emergency, `type` (optional): Alert type, `photo` (optional): If true, creates a test photo in the alert |
 | `alert_share` | Share an alert to stations | `alert_id` (required): Alert ID (e.g., "38_7222_n9_1393_broken-sidewalk"). Shares the alert via NOSTR event and uploads photos to the station |
+| `alert_sync` | Sync alerts from station | `lat` (optional): Latitude, `lon` (optional): Longitude, `radius` (optional): Radius in km, `use_since` (optional): Only fetch new alerts. Downloads alerts and photos from the connected station |
 | `alert_list` | List all alerts | `status` (optional): Filter by status |
 | `alert_delete` | Delete an alert | `alert_id` (required): Alert ID (e.g., "2025-12-10_broken-sidewalk") |
 | `alert_point` | Point/unpoint an alert (call attention) | `alert_id` (required): Alert ID, `npub` (optional): User npub (uses profile npub if not provided) |
 | `alert_comment` | Add a comment to an alert | `alert_id` (required): Alert ID, `content` (required): Comment text, `author` (optional): Author callsign, `npub` (optional): Author npub |
 | `alert_add_photo` | Add a photo to an alert | `alert_id` (required): Alert ID, `url` (optional): URL to download image from, `name` (optional): Photo filename (default: auto-generated) |
+| `alert_upload_photos` | Upload photos directly to station via HTTP | `alert_id` (required): Alert ID, `station_url` (optional): Station URL (default: connected station). Uploads all photos from the alert folder to the station |
+| `station_server_start` | Start the station server | None. Starts StationServerService on port (API port + 1) |
+| `station_server_stop` | Stop the station server | None. Stops the running station server |
+| `station_server_status` | Get station server status | None. Returns running state, port, and connected client count |
 
 **Response - Success (200 OK):**
 ```json
@@ -1561,6 +1782,33 @@ curl -X POST http://localhost:3456/api/debug \
 curl -X POST http://localhost:3456/api/debug \
   -H "Content-Type: application/json" \
   -d '{"action": "alert_share", "alert_id": "38_7222_n9_1393_test-alert"}'
+
+# Sync alerts from station (downloads alerts and photos)
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action": "alert_sync"}'
+
+# Start the station server (listens on API port + 1)
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action": "station_server_start"}'
+# Returns: {"success": true, "port": 3457, "running": true}
+
+# Get station server status
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action": "station_server_status"}'
+# Returns: {"running": true, "port": 3457, "connected_devices": 2, ...}
+
+# Stop the station server
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action": "station_server_stop"}'
+
+# Upload photos for an alert directly to station
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action": "alert_upload_photos", "alert_id": "38_7222_n9_1393_broken-sidewalk"}'
 ```
 
 ---

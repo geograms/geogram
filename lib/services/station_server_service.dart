@@ -13,6 +13,8 @@ import '../services/profile_service.dart';
 import '../services/callsign_generator.dart';
 import '../services/storage_config.dart';
 import '../services/direct_message_service.dart';
+import '../services/app_args.dart';
+import '../services/station_alert_api.dart';
 import '../models/blog_post.dart';
 import '../models/chat_message.dart';
 import '../models/update_settings.dart';
@@ -339,6 +341,7 @@ class StationServerService {
   bool _running = false;
   DateTime? _startTime;
   String? _tilesDirectory;
+  int? _runningPort; // Actual port the server is running on
 
   // Pending HTTP proxy requests (requestId -> completer)
   final Map<String, Completer<Map<String, dynamic>>> _pendingHttpRequests = {};
@@ -349,10 +352,34 @@ class StationServerService {
   String? _updatesDirectory;
   bool _isDownloadingUpdates = false;
 
+  // Shared alert API handlers
+  StationAlertApi? _alertApi;
+
+  /// Get the shared alert API handlers (lazy initialization)
+  StationAlertApi get alertApi {
+    if (_alertApi == null) {
+      final profile = ProfileService().getProfile();
+      _alertApi = StationAlertApi(
+        dataDir: StorageConfig().baseDir,
+        stationInfo: StationInfo(
+          name: _settings.description ?? 'Geogram Station',
+          callsign: profile.callsign,
+          npub: profile.npub,
+        ),
+        log: (level, message) => LogService().log('StationAlertApi: [$level] $message'),
+      );
+    }
+    return _alertApi!;
+  }
+
   bool get isRunning => _running;
   int get connectedDevices => _clients.length;
   RelayServerSettings get settings => _settings;
   DateTime? get startTime => _startTime;
+
+  /// Get the actual port the station server is running on
+  /// Returns null if server is not running
+  int? get runningPort => _runningPort;
 
   /// Initialize station server service
   Future<void> initialize() async {
@@ -410,16 +437,26 @@ class StationServerService {
     }
 
     try {
+      // Determine the port to use:
+      // - If custom port set in settings (not default 8080), use that
+      // - Otherwise, use AppArgs().port + 1 to avoid conflicts
+      int serverPort = _settings.port;
+      if (_settings.port == 8080 && AppArgs().isInitialized) {
+        // Use the main API port + 1 to keep station server on predictable port
+        serverPort = AppArgs().port + 1;
+      }
+
       _httpServer = await HttpServer.bind(
         InternetAddress.anyIPv4,
-        _settings.port,
+        serverPort,
         shared: true,
       );
 
       _running = true;
       _startTime = DateTime.now();
+      _runningPort = serverPort;
 
-      LogService().log('Station server started on port ${_settings.port}');
+      LogService().log('Station server started on port $serverPort');
 
       // Handle incoming connections
       _httpServer!.listen(_handleRequest, onError: (error) {
@@ -455,6 +492,7 @@ class StationServerService {
     _httpServer = null;
     _running = false;
     _startTime = null;
+    _runningPort = null;
 
     LogService().log('Station server stopped');
   }
@@ -487,6 +525,12 @@ class StationServerService {
         await _handleStatus(request);
       } else if (path == '/api/clients') {
         await _handleClients(request);
+      } else if (path == '/api/alerts' || path == '/api/alerts/list') {
+        // GET /api/alerts - list alerts (using shared handler)
+        await _handleAlertsApi(request);
+      } else if (path.startsWith('/api/alerts/') && method == 'POST') {
+        // POST /api/alerts/{alertId}/{action} - alert feedback (using shared handler)
+        await _handleAlertFeedback(request);
       } else if (path == '/api/chat/rooms') {
         await _handleChatRooms(request);
       } else if (path.startsWith('/api/chat/rooms/') && path.endsWith('/messages')) {
@@ -501,6 +545,15 @@ class StationServerService {
         await _handleBlogRequest(request);
       } else if (path.contains('/api/dm/')) {
         await _handleDMRequest(request);
+      } else if (_isAlertFileUploadPath(path, request.method)) {
+        // Handle alert file uploads - store locally instead of proxying
+        await _handleAlertFileUpload(request);
+      } else if (_isAlertFileFetchPath(path, request.method)) {
+        // Handle alert file downloads - serve from local storage
+        await _handleAlertFileFetch(request);
+      } else if (_isAlertDetailsPath(path) && method == 'GET') {
+        // GET /{callsign}/api/alerts/{alertId} - alert details (using shared handler)
+        await _handleAlertDetails(request);
       } else if (_isDeviceProxyPath(path)) {
         // Proxy API requests to connected devices: /{callsign}/api/*
         await _handleDeviceProxyRequest(request);
@@ -1076,6 +1129,356 @@ class StationServerService {
     return parts.length >= 3 && parts[1] == 'api';
   }
 
+  /// Check if path is an alert file upload path
+  /// Pattern: POST /{callsign}/api/alerts/{folderName}/files/{filename}
+  bool _isAlertFileUploadPath(String path, String method) {
+    if (method != 'POST') return false;
+    final parts = path.split('/').where((p) => p.isNotEmpty).toList();
+    // Should be: [callsign, api, alerts, folderName, files, filename]
+    return parts.length >= 6 &&
+        parts[1] == 'api' &&
+        parts[2] == 'alerts' &&
+        parts[4] == 'files';
+  }
+
+  /// Check if path is an alert file fetch path
+  /// Pattern: GET /{callsign}/api/alerts/{folderName}/files/{filename}
+  bool _isAlertFileFetchPath(String path, String method) {
+    if (method != 'GET') return false;
+    final parts = path.split('/').where((p) => p.isNotEmpty).toList();
+    // Should be: [callsign, api, alerts, folderName, files, filename]
+    return parts.length >= 6 &&
+        parts[1] == 'api' &&
+        parts[2] == 'alerts' &&
+        parts[4] == 'files';
+  }
+
+  /// Handle alert file upload - store file locally on station
+  Future<void> _handleAlertFileUpload(HttpRequest request) async {
+    final path = request.uri.path;
+    final parts = path.split('/').where((p) => p.isNotEmpty).toList();
+
+    // Parse: /{callsign}/api/alerts/{folderName}/files/{filename}
+    if (parts.length < 6) {
+      request.response.statusCode = 400;
+      request.response.write('Invalid path');
+      return;
+    }
+
+    final callsign = parts[0].toUpperCase();
+    final folderName = parts[3];
+    final filename = parts.sublist(5).join('/'); // Handle nested paths
+
+    LogService().log('Alert file upload: $callsign / $folderName / $filename');
+
+    try {
+      // Get the alert storage directory
+      final storageConfig = StorageConfig();
+      final devicesDir = storageConfig.devicesDir;
+      final alertPath = '$devicesDir/$callsign/alerts/$folderName';
+
+      // Create directory if it doesn't exist
+      final alertDir = Directory(alertPath);
+      if (!await alertDir.exists()) {
+        await alertDir.create(recursive: true);
+      }
+
+      // Read the file content from request body
+      final bytes = await request.fold<List<int>>(
+        <int>[],
+        (previous, element) => previous..addAll(element),
+      );
+
+      if (bytes.isEmpty) {
+        request.response.statusCode = 400;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({
+          'success': false,
+          'error': 'Empty file',
+        }));
+        return;
+      }
+
+      // Save the file
+      final filePath = '$alertPath/$filename';
+      final file = File(filePath);
+      await file.writeAsBytes(bytes, flush: true);
+
+      LogService().log('Alert file saved: $filePath (${bytes.length} bytes)');
+
+      request.response.statusCode = 201;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({
+        'success': true,
+        'path': '/$callsign/alerts/$folderName/$filename',
+        'size': bytes.length,
+      }));
+    } catch (e) {
+      LogService().log('Error saving alert file: $e');
+      request.response.statusCode = 500;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({
+        'success': false,
+        'error': e.toString(),
+      }));
+    }
+  }
+
+  /// Handle alert file fetch - serve file from local storage
+  Future<void> _handleAlertFileFetch(HttpRequest request) async {
+    final path = request.uri.path;
+    final parts = path.split('/').where((p) => p.isNotEmpty).toList();
+
+    // Parse: /{callsign}/api/alerts/{folderName}/files/{filename}
+    if (parts.length < 6) {
+      request.response.statusCode = 400;
+      request.response.write('Invalid path');
+      return;
+    }
+
+    final callsign = parts[0].toUpperCase();
+    final folderName = parts[3];
+    final filename = parts.sublist(5).join('/');
+
+    LogService().log('Alert file fetch: $callsign / $folderName / $filename');
+
+    try {
+      // Get the alert storage directory
+      final storageConfig = StorageConfig();
+      final devicesDir = storageConfig.devicesDir;
+      final filePath = '$devicesDir/$callsign/alerts/$folderName/$filename';
+
+      final file = File(filePath);
+      if (!await file.exists()) {
+        request.response.statusCode = 404;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({
+          'error': 'File not found',
+          'path': filePath,
+        }));
+        return;
+      }
+
+      // Determine content type
+      final ext = filename.toLowerCase().split('.').last;
+      String contentType = 'application/octet-stream';
+      if (ext == 'jpg' || ext == 'jpeg') {
+        contentType = 'image/jpeg';
+      } else if (ext == 'png') {
+        contentType = 'image/png';
+      } else if (ext == 'gif') {
+        contentType = 'image/gif';
+      } else if (ext == 'webp') {
+        contentType = 'image/webp';
+      } else if (ext == 'txt') {
+        contentType = 'text/plain';
+      }
+
+      final bytes = await file.readAsBytes();
+      request.response.headers.set('Content-Type', contentType);
+      request.response.headers.set('Content-Length', bytes.length.toString());
+      request.response.add(bytes);
+
+      LogService().log('Alert file served: $filePath (${bytes.length} bytes)');
+    } catch (e) {
+      LogService().log('Error serving alert file: $e');
+      request.response.statusCode = 500;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({
+        'error': e.toString(),
+      }));
+    }
+  }
+
+  /// Check if path matches /{callsign}/api/alerts/{alertId} pattern for alert details
+  bool _isAlertDetailsPath(String path) {
+    // Pattern: /{callsign}/api/alerts/{alertId} (but NOT with /files/ at the end)
+    final regex = RegExp(r'^/([A-Za-z0-9]+)/api/alerts/([^/]+)$');
+    return regex.hasMatch(path);
+  }
+
+  /// Handle GET /api/alerts - list alerts using shared handler
+  Future<void> _handleAlertsApi(HttpRequest request) async {
+    try {
+      final params = request.uri.queryParameters;
+
+      final result = await alertApi.getAlerts(
+        sinceTimestamp: params['since'] != null ? int.tryParse(params['since']!) : null,
+        lat: params['lat'] != null ? double.tryParse(params['lat']!) : null,
+        lon: params['lon'] != null ? double.tryParse(params['lon']!) : null,
+        radiusKm: params['radius'] != null ? double.tryParse(params['radius']!) : null,
+        statusFilter: params['status'],
+      );
+
+      request.response.headers.contentType = ContentType.json;
+      if (result['success'] == false) {
+        request.response.statusCode = 500;
+      }
+      request.response.write(jsonEncode(result));
+    } catch (e) {
+      LogService().log('Error in alerts API: $e');
+      request.response.statusCode = 500;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({
+        'success': false,
+        'error': 'Internal server error',
+        'message': e.toString(),
+      }));
+    }
+  }
+
+  /// Handle POST /api/alerts/{alertId}/{action} - alert feedback using shared handler
+  Future<void> _handleAlertFeedback(HttpRequest request) async {
+    try {
+      final path = request.uri.path;
+
+      // Parse: /api/alerts/{alertId}/{action}
+      final pathParts = path.substring('/api/alerts/'.length).split('/');
+      if (pathParts.length < 2) {
+        request.response.statusCode = 400;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'Invalid path format'}));
+        return;
+      }
+
+      final alertId = pathParts[0];
+      final action = pathParts[1].toLowerCase();
+
+      // Read request body
+      final body = await utf8.decodeStream(request);
+      final json = body.isNotEmpty ? jsonDecode(body) as Map<String, dynamic> : <String, dynamic>{};
+
+      Map<String, dynamic> result;
+
+      switch (action) {
+        case 'point':
+          final npub = json['npub'] as String?;
+          if (npub == null || npub.isEmpty) {
+            request.response.statusCode = 400;
+            request.response.headers.contentType = ContentType.json;
+            request.response.write(jsonEncode({'error': 'Missing npub'}));
+            return;
+          }
+          result = await alertApi.pointAlert(alertId, npub, isPoint: true);
+          break;
+
+        case 'unpoint':
+          final npub = json['npub'] as String?;
+          if (npub == null || npub.isEmpty) {
+            request.response.statusCode = 400;
+            request.response.headers.contentType = ContentType.json;
+            request.response.write(jsonEncode({'error': 'Missing npub'}));
+            return;
+          }
+          result = await alertApi.pointAlert(alertId, npub, isPoint: false);
+          break;
+
+        case 'verify':
+          final npub = json['npub'] as String?;
+          if (npub == null || npub.isEmpty) {
+            request.response.statusCode = 400;
+            request.response.headers.contentType = ContentType.json;
+            request.response.write(jsonEncode({'error': 'Missing npub'}));
+            return;
+          }
+          result = await alertApi.verifyAlert(alertId, npub);
+          break;
+
+        case 'comment':
+          final author = json['author'] as String?;
+          final content = json['content'] as String?;
+          if (author == null || author.isEmpty || content == null || content.isEmpty) {
+            request.response.statusCode = 400;
+            request.response.headers.contentType = ContentType.json;
+            request.response.write(jsonEncode({'error': 'Missing author or content'}));
+            return;
+          }
+          result = await alertApi.addComment(
+            alertId,
+            author,
+            content,
+            npub: json['npub'] as String?,
+            signature: json['signature'] as String?,
+          );
+          break;
+
+        default:
+          request.response.statusCode = 400;
+          request.response.headers.contentType = ContentType.json;
+          request.response.write(jsonEncode({
+            'error': 'Unknown action: $action',
+            'supported': ['point', 'unpoint', 'verify', 'comment'],
+          }));
+          return;
+      }
+
+      // Handle HTTP status code (stored in 'http_status' to avoid conflict with alert 'status' field)
+      final httpStatus = result.remove('http_status') as int?;
+      if (httpStatus != null) {
+        request.response.statusCode = httpStatus;
+      } else if (result.containsKey('error')) {
+        request.response.statusCode = 404;
+      } else {
+        request.response.statusCode = 200;
+      }
+
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode(result));
+    } catch (e) {
+      LogService().log('Error in alert feedback: $e');
+      request.response.statusCode = 500;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({
+        'error': 'Internal server error',
+        'message': e.toString(),
+      }));
+    }
+  }
+
+  /// Handle GET /{callsign}/api/alerts/{alertId} - alert details using shared handler
+  Future<void> _handleAlertDetails(HttpRequest request) async {
+    try {
+      final path = request.uri.path;
+
+      // Parse path: /{callsign}/api/alerts/{alertId}
+      final regex = RegExp(r'^/([A-Za-z0-9]+)/api/alerts/([^/]+)$');
+      final match = regex.firstMatch(path);
+
+      if (match == null) {
+        request.response.statusCode = 400;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'Invalid path format'}));
+        return;
+      }
+
+      final callsign = match.group(1)!.toUpperCase();
+      final alertId = match.group(2)!;
+
+      final result = await alertApi.getAlertDetails(callsign, alertId);
+
+      // Handle HTTP status code (stored in 'http_status' to avoid conflict with alert 'status' field)
+      final httpStatus = result.remove('http_status') as int?;
+      if (httpStatus != null) {
+        request.response.statusCode = httpStatus;
+      } else if (result.containsKey('error')) {
+        request.response.statusCode = 404;
+      } else {
+        request.response.statusCode = 200;
+      }
+
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode(result));
+    } catch (e) {
+      LogService().log('Error in alert details: $e');
+      request.response.statusCode = 500;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({
+        'error': 'Internal server error',
+        'message': e.toString(),
+      }));
+    }
+  }
+
   /// Handle device proxy request - forwards API requests to connected devices via WebSocket
   Future<void> _handleDeviceProxyRequest(HttpRequest request) async {
     final path = request.uri.path;
@@ -1637,7 +2040,7 @@ class StationServerService {
 
     return {
       'running': _running,
-      'port': _settings.port,
+      'port': _runningPort ?? _settings.port,
       'callsign': profile.callsign,
       'connected_devices': _clients.length,
       'uptime': uptime,

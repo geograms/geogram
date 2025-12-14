@@ -8,6 +8,8 @@ import 'package:http/http.dart' as http;
 import 'package:markdown/markdown.dart' as md;
 import 'pure_storage_config.dart';
 import '../models/blog_post.dart';
+import '../models/report.dart';
+import '../services/station_alert_api.dart';
 import '../util/nostr_key_generator.dart';
 import '../util/nostr_event.dart';
 import '../util/nostr_crypto.dart';
@@ -574,6 +576,29 @@ class PureStationServer {
   Map<String, String> _assetFilenames = {};
   String? _currentDownloadVersion;
 
+  // Shared alert API handlers
+  StationAlertApi? _alertApi;
+
+  /// Get the shared alert API handlers (lazy initialization)
+  /// Must only be called after init() has been called (when _dataDir is set)
+  StationAlertApi get alertApi {
+    if (_alertApi == null) {
+      if (_dataDir == null) {
+        throw StateError('alertApi accessed before init() - _dataDir is null');
+      }
+      _alertApi = StationAlertApi(
+        dataDir: _dataDir!,
+        stationInfo: StationInfo(
+          name: _settings.name ?? 'Geogram Station',
+          callsign: _settings.callsign,
+          npub: _settings.npub,
+        ),
+        log: (level, message) => _log(level, message),
+      );
+    }
+    return _alertApi!;
+  }
+
   static const int maxLogEntries = 1000;
 
   /// Access to the event bus for subscribing to station events
@@ -615,30 +640,36 @@ class PureStationServer {
     _updatesDirectory = '$_dataDir/updates';
     await Directory(_updatesDirectory!).create(recursive: true);
 
-    await _loadSettings();
+    final settingsExisted = await _loadSettings();
 
     // Load cached release info if exists
     await _loadCachedRelease();
 
-    // Load persisted chat data
-    await _loadChatData();
+    // Only initialize chat data if settings already existed (not fresh install).
+    // For fresh installs, chat will be initialized after identity is established
+    // via reinitializeChatForCurrentIdentity().
+    if (settingsExisted) {
+      // Load persisted chat data
+      await _loadChatData();
 
-    // Create default chat room if it doesn't exist
-    if (!_chatRooms.containsKey('general')) {
-      _chatRooms['general'] = ChatRoom(
-        id: 'general',
-        name: 'General',
-        description: 'General discussion',
-        creatorCallsign: _settings.callsign,
-      );
-      await _saveChatData();
+      // Create default chat room if it doesn't exist
+      if (!_chatRooms.containsKey('general')) {
+        _chatRooms['general'] = ChatRoom(
+          id: 'general',
+          name: 'General',
+          description: 'General discussion',
+          creatorCallsign: _settings.callsign,
+        );
+        await _saveChatData();
+      }
     }
 
     _log('INFO', 'Pure Station Server initialized');
     _log('INFO', 'Data directory: $_dataDir');
   }
 
-  Future<void> _loadSettings() async {
+  /// Load settings from file. Returns true if settings file existed, false if fresh install.
+  Future<bool> _loadSettings() async {
     try {
       final configFile = File(_configPath!);
       if (await configFile.exists()) {
@@ -661,9 +692,12 @@ class PureStationServer {
           await saveSettings();
           _log('INFO', 'Generated and saved new station identity keys: npub=${_settings.npub.substring(0, 20)}...');
         }
+        return true; // Settings existed
       }
+      return false; // Fresh install
     } catch (e) {
       _log('ERROR', 'Failed to load settings: $e');
+      return false;
     }
   }
 
@@ -1200,6 +1234,30 @@ class PureStationServer {
       await stop();
       await start();
     }
+  }
+
+  /// Reinitialize chat data for the current callsign.
+  /// Call this after changing the station identity to ensure chat is stored
+  /// under the correct callsign folder.
+  Future<void> reinitializeChatForCurrentIdentity() async {
+    // Clear existing chat rooms (they were created with the old callsign)
+    _chatRooms.clear();
+
+    // Load/create chat data with the new callsign
+    await _loadChatData();
+
+    // Create default chat room if it doesn't exist
+    if (!_chatRooms.containsKey('general')) {
+      _chatRooms['general'] = ChatRoom(
+        id: 'general',
+        name: 'General',
+        description: 'General discussion',
+        creatorCallsign: _settings.callsign,
+      );
+      await _saveChatData();
+    }
+
+    _log('INFO', 'Chat reinitialized for callsign: ${_settings.callsign}');
   }
 
   void setSetting(String key, dynamic value) {
@@ -1762,6 +1820,9 @@ class PureStationServer {
       } else if (_isAlertFileUploadPath(path) && method == 'GET') {
         // /{callsign}/api/alerts/{alertId}/files/{filename} - serve alert photo
         await _handleAlertFileServe(request);
+      } else if (_isAlertDetailsPath(path) && method == 'GET') {
+        // /{callsign}/api/alerts/{alertId} - serve local alert details with photos list
+        await _handleAlertDetails(request);
       } else if (_isCallsignApiPath(path)) {
         // /{callsign}/api/* - proxy to connected device
         await _handleCallsignApiProxy(request);
@@ -3059,9 +3120,11 @@ class PureStationServer {
       changed = true;
     }
 
+    final lastModified = DateTime.now().toUtc().toIso8601String();
+
     if (changed) {
-      // Update file content
-      final newContent = _updateAlertFeedback(content, pointedBy: pointedBy);
+      // Update file content with LAST_MODIFIED timestamp
+      final newContent = _updateAlertFeedback(content, pointedBy: pointedBy, lastModified: lastModified);
       await reportFile.writeAsString(newContent, flush: true);
       _log('INFO', 'Alert ${isPoint ? "pointed" : "unpointed"} by $npub');
     }
@@ -3072,7 +3135,7 @@ class PureStationServer {
       'success': true,
       'pointed': isPoint ? pointedBy.contains(npub) : !pointedBy.contains(npub),
       'point_count': pointedBy.length,
-      'last_modified': DateTime.now().toUtc().toIso8601String(),
+      'last_modified': lastModified,
     }));
   }
 
@@ -3112,8 +3175,11 @@ class PureStationServer {
       changed = true;
     }
 
+    final lastModified = DateTime.now().toUtc().toIso8601String();
+
     if (changed) {
-      final newContent = _updateAlertFeedback(content, verifiedBy: verifiedBy);
+      // Update file content with LAST_MODIFIED timestamp
+      final newContent = _updateAlertFeedback(content, verifiedBy: verifiedBy, lastModified: lastModified);
       await reportFile.writeAsString(newContent, flush: true);
       _log('INFO', 'Alert verified by $npub');
     }
@@ -3124,7 +3190,7 @@ class PureStationServer {
       'success': true,
       'verified': true,
       'verification_count': verifiedBy.length,
-      'last_modified': DateTime.now().toUtc().toIso8601String(),
+      'last_modified': lastModified,
     }));
   }
 
@@ -3433,7 +3499,13 @@ class PureStationServer {
 
   /// Send NOSTR OK response
   void _sendOkResponse(PureConnectedClient client, String? eventId, bool success, String message) {
-    final response = jsonEncode(['OK', eventId ?? '', success, message]);
+    // Send in object format to match what the desktop/mobile client expects
+    final response = jsonEncode({
+      'type': 'OK',
+      'event_id': eventId ?? '',
+      'success': success,
+      'message': message,
+    });
     try {
       client.socket.add(response);
     } catch (e) {
@@ -3657,6 +3729,60 @@ class PureStationServer {
     // Pattern: /{callsign}/api/alerts/{alertId}/files/{filename}
     final regex = RegExp(r'^/([A-Za-z0-9]+)/api/alerts/([^/]+)/files/([^/]+)$');
     return regex.hasMatch(path);
+  }
+
+  /// Check if path matches /{callsign}/api/alerts/{alertId} pattern for alert details
+  /// This should NOT match paths with /files/ (those are handled by _isAlertFileUploadPath)
+  bool _isAlertDetailsPath(String path) {
+    // Pattern: /{callsign}/api/alerts/{alertId} (but NOT with /files/ at the end)
+    final regex = RegExp(r'^/([A-Za-z0-9]+)/api/alerts/([^/]+)$');
+    return regex.hasMatch(path);
+  }
+
+  /// Handle GET /{callsign}/api/alerts/{alertId} - serve local alert details with photos list
+  /// Uses the shared alertApi.getAlertDetails() which includes comments
+  Future<void> _handleAlertDetails(HttpRequest request) async {
+    try {
+      final path = request.uri.path;
+
+      // Parse path: /{callsign}/api/alerts/{alertId}
+      final regex = RegExp(r'^/([A-Za-z0-9]+)/api/alerts/([^/]+)$');
+      final match = regex.firstMatch(path);
+
+      if (match == null) {
+        request.response.statusCode = 400;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'Invalid path format'}));
+        return;
+      }
+
+      final callsign = match.group(1)!.toUpperCase();
+      final alertId = match.group(2)!;
+
+      _log('INFO', 'Alert details request: callsign=$callsign, alertId=$alertId');
+
+      // Use shared alert API handler (includes photos and comments)
+      final result = await alertApi.getAlertDetails(callsign, alertId);
+
+      // Handle HTTP status code (stored in 'http_status' to avoid conflict with alert 'status' field)
+      final httpStatus = result.remove('http_status') as int?;
+      if (httpStatus != null) {
+        request.response.statusCode = httpStatus;
+      } else if (result.containsKey('error')) {
+        // If there's an error but no http_status, default to 404
+        request.response.statusCode = 404;
+      } else {
+        request.response.statusCode = 200;
+      }
+
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode(result));
+    } catch (e) {
+      _log('ERROR', 'Error handling alert details: $e');
+      request.response.statusCode = 500;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({'error': 'Internal server error', 'message': e.toString()}));
+    }
   }
 
   /// Handle POST /{callsign}/api/alerts/{alertId}/files/{filename} - upload alert photo

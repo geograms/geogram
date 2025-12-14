@@ -184,8 +184,8 @@ class StationAlertService {
       // Merge new alerts with existing cache (avoid duplicates)
       _mergeAlerts(newAlerts);
 
-      // Store alerts locally
-      await _storeAlertsLocally(newAlerts);
+      // Store alerts locally and download photos
+      await _storeAlertsLocally(newAlerts, baseUrl);
 
       // Save last fetch timestamp
       _saveLastFetchTimestamp();
@@ -338,8 +338,10 @@ class StationAlertService {
     _cachedAlerts.sort((a, b) => b.dateTime.compareTo(a.dateTime));
   }
 
-  /// Store alerts locally in devices/{callsign}/alerts/
-  Future<void> _storeAlertsLocally(List<Report> alerts) async {
+  /// Store alerts locally in devices/{callsign}/alerts/ and download photos
+  /// Only updates report.txt if station version is newer (based on LAST_MODIFIED)
+  /// Searches for existing alerts by folder name to avoid creating duplicates
+  Future<void> _storeAlertsLocally(List<Report> alerts, String baseUrl) async {
     final storageConfig = StorageConfig();
     if (!storageConfig.isInitialized) return;
 
@@ -348,20 +350,240 @@ class StationAlertService {
     for (final alert in alerts) {
       try {
         final callsign = alert.metadata['station_callsign'] ?? 'unknown';
-        final alertDir = Directory('$devicesDir/$callsign/alerts/${alert.folderName}');
 
-        if (!await alertDir.exists()) {
-          await alertDir.create(recursive: true);
+        // Search for existing alert folder (may be in active/{region}/ subfolder)
+        String? existingAlertPath = await _findExistingAlertPath(devicesDir, callsign, alert.folderName);
+
+        final String alertPath;
+        if (existingAlertPath != null) {
+          alertPath = existingAlertPath;
+          LogService().log('StationAlertService: Found existing alert at $alertPath');
+        } else {
+          // Create new alert directory
+          alertPath = '$devicesDir/$callsign/alerts/${alert.folderName}';
+          final alertDir = Directory(alertPath);
+          if (!await alertDir.exists()) {
+            await alertDir.create(recursive: true);
+          }
+          LogService().log('StationAlertService: Creating new alert at $alertPath');
         }
 
-        // Write report.txt
-        final reportFile = File('${alertDir.path}/report.txt');
-        await reportFile.writeAsString(alert.exportAsText());
+        final reportFile = File('$alertPath/report.txt');
+        bool shouldUpdate = true;
 
-        LogService().log('StationAlertService: Stored alert ${alert.folderName}');
+        // Check if local file exists and compare LAST_MODIFIED timestamps
+        if (await reportFile.exists()) {
+          final localContent = await reportFile.readAsString();
+          final localLastModified = _extractLastModified(localContent);
+          final stationLastModified = alert.lastModifiedDateTime;
+
+          if (localLastModified != null && stationLastModified != null) {
+            // Only update if station version is newer
+            if (!stationLastModified.isAfter(localLastModified)) {
+              LogService().log('StationAlertService: Local version is current for ${alert.folderName}, skipping update');
+              shouldUpdate = false;
+            } else {
+              LogService().log('StationAlertService: Station has newer version for ${alert.folderName}');
+            }
+          } else if (localLastModified != null && stationLastModified == null) {
+            // Local has LAST_MODIFIED but station doesn't - keep local
+            LogService().log('StationAlertService: Keeping local version (has LAST_MODIFIED) for ${alert.folderName}');
+            shouldUpdate = false;
+          }
+          // If neither has LAST_MODIFIED, or only station has it, update from station
+        }
+
+        if (shouldUpdate) {
+          // Fetch full alert details from station (includes report content and comments)
+          final alertDetails = await _fetchAlertDetails(alert.folderName, baseUrl, callsign);
+          if (alertDetails != null) {
+            final reportContent = alertDetails['report_content'] as String?;
+            if (reportContent != null && reportContent.isNotEmpty) {
+              await reportFile.writeAsString(reportContent);
+              LogService().log('StationAlertService: Updated report.txt for ${alert.folderName}');
+            }
+
+            // Download comments from station
+            final comments = alertDetails['comments'] as List<dynamic>?;
+            if (comments != null && comments.isNotEmpty) {
+              await _downloadAlertComments(comments, alertPath);
+            }
+          } else {
+            // Fallback to creating from alert data
+            await reportFile.writeAsString(alert.exportAsText());
+            LogService().log('StationAlertService: Created report.txt for ${alert.folderName} (from alert data)');
+          }
+        }
+
+        // Download photos for this alert (skips existing photos)
+        await _downloadAlertPhotos(alert, alertPath, baseUrl, callsign);
       } catch (e) {
         LogService().log('StationAlertService: Error storing alert ${alert.folderName}: $e');
       }
+    }
+  }
+
+  /// Search for an existing alert folder by name under the callsign's alerts directory
+  /// This handles the case where alerts may be stored in active/{region}/ subfolders
+  Future<String?> _findExistingAlertPath(String devicesDir, String callsign, String folderName) async {
+    final alertsDir = Directory('$devicesDir/$callsign/alerts');
+    if (!await alertsDir.exists()) return null;
+
+    await for (final entity in alertsDir.list(recursive: true)) {
+      if (entity is Directory && entity.path.endsWith('/$folderName')) {
+        // Verify it has a report.txt
+        final reportFile = File('${entity.path}/report.txt');
+        if (await reportFile.exists()) {
+          return entity.path;
+        }
+      }
+    }
+    return null;
+  }
+
+  /// Extract LAST_MODIFIED timestamp from report.txt content
+  DateTime? _extractLastModified(String content) {
+    final regex = RegExp(r'^LAST_MODIFIED: (.+)$', multiLine: true);
+    final match = regex.firstMatch(content);
+    if (match != null) {
+      try {
+        return DateTime.parse(match.group(1)!.trim());
+      } catch (e) {
+        LogService().log('StationAlertService: Error parsing LAST_MODIFIED: $e');
+      }
+    }
+    return null;
+  }
+
+  /// Fetch full alert details from station (includes report_content, comments, etc.)
+  Future<Map<String, dynamic>?> _fetchAlertDetails(String alertId, String baseUrl, String callsign) async {
+    try {
+      final uri = Uri.parse('$baseUrl/$callsign/api/alerts/$alertId');
+      final response = await http.get(uri).timeout(const Duration(seconds: 10));
+
+      if (response.statusCode == 200) {
+        return jsonDecode(response.body) as Map<String, dynamic>;
+      }
+    } catch (e) {
+      LogService().log('StationAlertService: Error fetching alert details: $e');
+    }
+    return null;
+  }
+
+  /// Download and save comments from station to local comments/ folder
+  Future<void> _downloadAlertComments(List<dynamic> comments, String alertPath) async {
+    final commentsDir = Directory('$alertPath/comments');
+    if (!await commentsDir.exists()) {
+      await commentsDir.create(recursive: true);
+    }
+
+    for (final commentData in comments) {
+      try {
+        final comment = commentData as Map<String, dynamic>;
+        final filename = comment['filename'] as String?;
+        if (filename == null) continue;
+
+        final commentFile = File('${commentsDir.path}/$filename');
+
+        // Skip if comment already exists locally
+        if (await commentFile.exists()) {
+          continue;
+        }
+
+        // Reconstruct comment file content
+        final buffer = StringBuffer();
+        buffer.writeln('AUTHOR: ${comment['author'] ?? 'UNKNOWN'}');
+        buffer.writeln('CREATED: ${comment['created'] ?? ''}');
+        buffer.writeln();
+        buffer.writeln(comment['content'] ?? '');
+
+        final npub = comment['npub'] as String?;
+        if (npub != null && npub.isNotEmpty) {
+          buffer.writeln();
+          buffer.writeln('--> npub: $npub');
+        }
+
+        final signature = comment['signature'] as String?;
+        if (signature != null && signature.isNotEmpty) {
+          buffer.writeln('--> signature: $signature');
+        }
+
+        await commentFile.writeAsString(buffer.toString());
+        LogService().log('StationAlertService: Downloaded comment: $filename');
+      } catch (e) {
+        LogService().log('StationAlertService: Error saving comment: $e');
+      }
+    }
+  }
+
+  /// Fetch alert details including photos list from station
+  Future<List<String>> _getAlertPhotosFromStation(
+    String alertId,
+    String baseUrl,
+    String callsign,
+  ) async {
+    try {
+      // Fetch detailed alert info which includes photos list
+      final uri = Uri.parse('$baseUrl/$callsign/api/alerts/$alertId');
+      final response = await http.get(uri).timeout(const Duration(seconds: 10));
+
+      if (response.statusCode == 200) {
+        final json = jsonDecode(response.body) as Map<String, dynamic>;
+        final photos = json['photos'] as List<dynamic>?;
+        if (photos != null) {
+          return photos.map((p) => p as String).toList();
+        }
+      }
+    } catch (e) {
+      LogService().log('StationAlertService: Error getting alert photos: $e');
+    }
+    return [];
+  }
+
+  /// Download photos for an alert from station
+  Future<void> _downloadAlertPhotos(
+    Report alert,
+    String alertPath,
+    String baseUrl,
+    String callsign,
+  ) async {
+    try {
+      // Get list of photos from station
+      final photos = await _getAlertPhotosFromStation(alert.folderName, baseUrl, callsign);
+
+      if (photos.isEmpty) {
+        LogService().log('StationAlertService: No photos to download for ${alert.folderName}');
+        return;
+      }
+
+      LogService().log('StationAlertService: Downloading ${photos.length} photos for ${alert.folderName}');
+
+      for (final photoName in photos) {
+        try {
+          final photoFile = File('$alertPath/$photoName');
+
+          // Skip if already exists
+          if (await photoFile.exists()) {
+            LogService().log('StationAlertService: Photo $photoName already exists, skipping');
+            continue;
+          }
+
+          // Download photo
+          final photoUrl = Uri.parse('$baseUrl/$callsign/api/alerts/${alert.folderName}/files/$photoName');
+          final response = await http.get(photoUrl).timeout(const Duration(seconds: 30));
+
+          if (response.statusCode == 200 && response.bodyBytes.isNotEmpty) {
+            await photoFile.writeAsBytes(response.bodyBytes);
+            LogService().log('StationAlertService: Downloaded photo $photoName (${response.bodyBytes.length} bytes)');
+          } else {
+            LogService().log('StationAlertService: Failed to download photo $photoName: ${response.statusCode}');
+          }
+        } catch (e) {
+          LogService().log('StationAlertService: Error downloading photo $photoName: $e');
+        }
+      }
+    } catch (e) {
+      LogService().log('StationAlertService: Error downloading photos for ${alert.folderName}: $e');
     }
   }
 

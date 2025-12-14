@@ -1,10 +1,43 @@
 # Geogram Desktop Changelog
 
+## 2025-12-14 - v1.6.35
+
+### Alert Comments
+- Add comment sync between clients and station
+- Comments submitted to station are now downloaded by other clients during sync
+- Alert details API now includes full comment list with author, timestamp, and content
+
+### Station API Improvements
+- Merge CLI and GUI station API handlers into shared `StationAlertApi` class
+- Both CLI (`pure_station.dart`) and GUI (`station_server_service.dart`) now use identical handlers
+- Add POST `/{callsign}/api/alerts/{folderName}/comment` endpoint for adding comments
+- Alert details endpoint now includes `comments`, `comment_count`, `pointed_by`, `verified_by`, `last_modified`, and `report_content` fields
+- Fix HTTP status handling - use `http_status` field to avoid conflict with alert `status` field
+- Handle report parsing failures gracefully - still return raw `report_content` for client sync
+
+### Testing
+- Add comment flow tests to `tests/app_alert_test.dart`
+- Test Client B adding comment, station sync, and Client A receiving comment
+
+### Documentation
+- Update API.md with comment endpoint and expanded alert details response
+- Document comment object structure and all new response fields
+
 ## 2025-12-14 - v1.6.34
 
 ### Bug Fixes
 - Fix photo upload path for station alerts - use coordinate-based folder name instead of date-based ID
 - Photo files are now correctly uploaded alongside alert data when sharing to stations
+- Fix NOSTR event format for alert sharing - use `{type: 'EVENT', event: {...}}` instead of array format
+
+### Station Server Improvements
+- StationServerService now uses `AppArgs().port + 1` as default port instead of hardcoded 8080
+  - Prevents port conflicts when running multiple instances
+  - Station API port is always API port + 1 (e.g., API on 3456 means station on 3457)
+- Added `runningPort` getter to get the actual port the station server is running on
+- Added alert file upload handler - POST `/{callsign}/api/alerts/{folderName}/files/{filename}`
+- Added alert file download handler - GET `/{callsign}/api/alerts/{folderName}/files/{filename}`
+- Station now stores uploaded photos locally instead of proxying to connected clients
 
 ### UI Improvements
 - Increase default zoom level from 10 to 16 when selecting alert location on map
@@ -14,6 +47,10 @@
 - Add `alert_share` action to share alerts via NOSTR and upload photos to station
 - Add `photo` parameter to `alert_create` action for creating test alerts with photos
 - Add recursive search for alerts in nested directory structure
+- Add `station_server_start` action to start the station server programmatically
+- Add `station_server_stop` action to stop the station server
+- Add `station_server_status` action to get station server status including running port
+- Add `alert_upload_photos` action for direct HTTP photo upload to station
 
 ### Testing
 - Add comprehensive Dart test for alert photo functionality (`tests/alert_photo_test.dart`)
