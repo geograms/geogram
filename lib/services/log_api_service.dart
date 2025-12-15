@@ -27,9 +27,17 @@ import 'audio_service.dart';
 import 'backup_service.dart';
 import '../models/backup_models.dart';
 import 'event_service.dart';
+import 'blog_service.dart';
+import '../models/blog_post.dart';
 import '../models/report.dart';
 import 'alert_feedback_service.dart';
 import 'alert_sharing_service.dart';
+import 'station_alert_service.dart';
+import 'station_service.dart';
+import 'station_server_service.dart';
+import 'websocket_service.dart';
+import '../models/station.dart';
+import '../util/alert_folder_utils.dart';
 
 class LogApiService {
   static final LogApiService _instance = LogApiService._internal();
@@ -1118,6 +1126,16 @@ class LogApiService {
       // Handle alert actions separately (they are async)
       if (action.toLowerCase().startsWith('alert_')) {
         return await _handleAlertAction(action.toLowerCase(), params, headers);
+      }
+
+      // Handle blog actions separately (they are async)
+      if (action.toLowerCase().startsWith('blog_')) {
+        return await _handleBlogAction(action.toLowerCase(), params, headers);
+      }
+
+      // Handle station actions separately (they are async)
+      if (action.toLowerCase().startsWith('station_')) {
+        return await _handleStationAction(action.toLowerCase(), params, headers);
       }
 
       final debugController = DebugController();
@@ -5005,27 +5023,58 @@ class LogApiService {
         );
       }
 
-      var alert = result.$1;
+      final alert = result.$1;
       final alertPath = result.$2;
 
-      // Add point if not already pointed
-      if (!alert.pointedBy.contains(npub)) {
-        final updatedPointedBy = List<String>.from(alert.pointedBy)..add(npub);
-        alert = alert.copyWith(
-          pointedBy: updatedPointedBy,
-          pointCount: updatedPointedBy.length,
-          lastModified: DateTime.now().toUtc().toIso8601String(),
-        );
+      // Read current points from points.txt
+      final pointedBy = await AlertFolderUtils.readPointsFile(alertPath);
 
-        // Save the updated alert
+      // Add point if not already pointed
+      if (!pointedBy.contains(npub)) {
+        pointedBy.add(npub);
+
+        // Write updated points to points.txt
+        await AlertFolderUtils.writePointsFile(alertPath, pointedBy);
+
+        // Update lastModified on report.txt
+        final lastModified = DateTime.now().toUtc().toIso8601String();
         final reportFile = io.File('$alertPath/report.txt');
-        await reportFile.writeAsString(alert.exportAsText(), flush: true);
+        if (await reportFile.exists()) {
+          var content = await reportFile.readAsString();
+          if (content.contains('LAST_MODIFIED: ')) {
+            content = content.replaceFirst(
+              RegExp(r'LAST_MODIFIED: [^\n]*'),
+              'LAST_MODIFIED: $lastModified',
+            );
+          } else {
+            final lines = content.split('\n');
+            var insertIdx = lines.length;
+            for (var i = 0; i < lines.length; i++) {
+              if (lines[i].trim().isEmpty) {
+                insertIdx = i;
+                break;
+              }
+            }
+            lines.insert(insertIdx, 'LAST_MODIFIED: $lastModified');
+            content = lines.join('\n');
+          }
+          await reportFile.writeAsString(content, flush: true);
+        }
+
+        return shelf.Response.ok(
+          jsonEncode({
+            'success': true,
+            'point_count': pointedBy.length,
+            'last_modified': lastModified,
+          }),
+          headers: headers,
+        );
       }
 
       return shelf.Response.ok(
         jsonEncode({
           'success': true,
-          'point_count': alert.pointCount,
+          'point_count': pointedBy.length,
           'last_modified': alert.lastModified,
         }),
         headers: headers,
@@ -5065,27 +5114,58 @@ class LogApiService {
         );
       }
 
-      var alert = result.$1;
+      final alert = result.$1;
       final alertPath = result.$2;
 
-      // Remove point if present
-      if (alert.pointedBy.contains(npub)) {
-        final updatedPointedBy = List<String>.from(alert.pointedBy)..remove(npub);
-        alert = alert.copyWith(
-          pointedBy: updatedPointedBy,
-          pointCount: updatedPointedBy.length,
-          lastModified: DateTime.now().toUtc().toIso8601String(),
-        );
+      // Read current points from points.txt
+      final pointedBy = await AlertFolderUtils.readPointsFile(alertPath);
 
-        // Save the updated alert
+      // Remove point if present
+      if (pointedBy.contains(npub)) {
+        pointedBy.remove(npub);
+
+        // Write updated points to points.txt
+        await AlertFolderUtils.writePointsFile(alertPath, pointedBy);
+
+        // Update lastModified on report.txt
+        final lastModified = DateTime.now().toUtc().toIso8601String();
         final reportFile = io.File('$alertPath/report.txt');
-        await reportFile.writeAsString(alert.exportAsText(), flush: true);
+        if (await reportFile.exists()) {
+          var content = await reportFile.readAsString();
+          if (content.contains('LAST_MODIFIED: ')) {
+            content = content.replaceFirst(
+              RegExp(r'LAST_MODIFIED: [^\n]*'),
+              'LAST_MODIFIED: $lastModified',
+            );
+          } else {
+            final lines = content.split('\n');
+            var insertIdx = lines.length;
+            for (var i = 0; i < lines.length; i++) {
+              if (lines[i].trim().isEmpty) {
+                insertIdx = i;
+                break;
+              }
+            }
+            lines.insert(insertIdx, 'LAST_MODIFIED: $lastModified');
+            content = lines.join('\n');
+          }
+          await reportFile.writeAsString(content, flush: true);
+        }
+
+        return shelf.Response.ok(
+          jsonEncode({
+            'success': true,
+            'point_count': pointedBy.length,
+            'last_modified': lastModified,
+          }),
+          headers: headers,
+        );
       }
 
       return shelf.Response.ok(
         jsonEncode({
           'success': true,
-          'point_count': alert.pointCount,
+          'point_count': pointedBy.length,
           'last_modified': alert.lastModified,
         }),
         headers: headers,
@@ -5200,7 +5280,10 @@ class LogApiService {
       // Create comment
       final now = DateTime.now();
       final created = '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')} ${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}_${now.second.toString().padLeft(2, '0')}';
-      final id = '${now.millisecondsSinceEpoch}';
+      // Generate comment ID: YYYY-MM-DD_HH-MM-SS_XXXXXX
+      final randomId = _generateRandomId(6);
+      final id = '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}_'
+          '${now.hour.toString().padLeft(2, '0')}-${now.minute.toString().padLeft(2, '0')}-${now.second.toString().padLeft(2, '0')}_$randomId';
 
       // Build comment content
       final commentBuffer = StringBuffer();
@@ -5261,18 +5344,32 @@ class LogApiService {
     final alerts = <(Report, String)>[];
     final devicesDir = io.Directory('$dataDir/devices');
 
-    if (!await devicesDir.exists()) return alerts;
+    io.stderr.writeln('DEBUG _getAllAlertsGlobal: dataDir=$dataDir, devicesDir=${devicesDir.path}');
+
+    if (!await devicesDir.exists()) {
+      io.stderr.writeln('DEBUG _getAllAlertsGlobal: devicesDir does not exist!');
+      return alerts;
+    }
 
     // Scan all devices/{callsign}/alerts/
     await for (final deviceEntity in devicesDir.list()) {
       if (deviceEntity is! io.Directory) continue;
 
+      io.stderr.writeln('DEBUG _getAllAlertsGlobal: Checking device ${deviceEntity.path}');
+
       final alertsDir = io.Directory('${deviceEntity.path}/alerts');
-      if (!await alertsDir.exists()) continue;
+      if (!await alertsDir.exists()) {
+        io.stderr.writeln('DEBUG _getAllAlertsGlobal: No alerts dir at ${alertsDir.path}');
+        continue;
+      }
+
+      io.stderr.writeln('DEBUG _getAllAlertsGlobal: Scanning alerts at ${alertsDir.path}');
 
       // Search recursively through alerts directory (handles both flat and nested structures)
       await _collectAlertsRecursively(alertsDir, alerts, status: status, lat: lat, lon: lon, radius: radius);
     }
+
+    io.stderr.writeln('DEBUG _getAllAlertsGlobal: Found ${alerts.length} total alerts');
 
     // Sort by date (newest first)
     alerts.sort((a, b) => b.$1.dateTime.compareTo(a.$1.dateTime));
@@ -5288,15 +5385,22 @@ class LogApiService {
     double? lon,
     double? radius,
   }) async {
+    io.stderr.writeln('DEBUG _collectAlertsRecursively: Scanning ${dir.path}');
+
     await for (final entity in dir.list()) {
       if (entity is! io.Directory) continue;
+
+      io.stderr.writeln('DEBUG _collectAlertsRecursively: Found dir ${entity.path}');
 
       // Check if this directory contains a report.txt
       final alertFile = io.File('${entity.path}/report.txt');
       if (await alertFile.exists()) {
+        io.stderr.writeln('DEBUG _collectAlertsRecursively: Found report.txt at ${alertFile.path}');
         try {
           final content = await alertFile.readAsString();
+          io.stderr.writeln('DEBUG _collectAlertsRecursively: Content length=${content.length}, first 200 chars: ${content.substring(0, content.length > 200 ? 200 : content.length).replaceAll('\n', '\\n')}');
           final alert = Report.fromText(content, entity.path.split('/').last);
+          io.stderr.writeln('DEBUG _collectAlertsRecursively: Parsed alert apiId=${alert.apiId}');
 
           // Apply status filter
           if (status != null && alert.status.toFileString() != status) continue;
@@ -5310,9 +5414,10 @@ class LogApiService {
           }
 
           alerts.add((alert, entity.path));
-        } catch (e) {
+        } catch (e, stack) {
           // Skip malformed alerts
-          LogService().log('LogApiService: Error parsing alert ${entity.path}: $e');
+          io.stderr.writeln('DEBUG _collectAlertsRecursively: ERROR parsing ${entity.path}: $e');
+          io.stderr.writeln('DEBUG Stack: $stack');
         }
       } else {
         // No report.txt, recurse into subdirectory (e.g., active/, region folders)
@@ -5368,15 +5473,31 @@ class LogApiService {
     return null;
   }
 
-  /// Check if an alert has photos
+  /// Check if an alert has photos (checks both root and images/ subfolder)
   Future<bool> _alertHasPhotos(String alertPath) async {
+    final photoExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp'];
+
+    // Check images/ subfolder first (new structure)
+    final imagesDir = io.Directory('$alertPath/images');
+    if (await imagesDir.exists()) {
+      await for (final entity in imagesDir.list()) {
+        if (entity is io.File) {
+          final ext = path.extension(entity.path).toLowerCase();
+          if (photoExtensions.contains(ext)) {
+            return true;
+          }
+        }
+      }
+    }
+
+    // Also check root folder for backwards compatibility
     final dir = io.Directory(alertPath);
     if (!await dir.exists()) return false;
 
     await for (final entity in dir.list()) {
       if (entity is io.File) {
         final ext = path.extension(entity.path).toLowerCase();
-        if (['.jpg', '.jpeg', '.png', '.gif', '.webp'].contains(ext)) {
+        if (photoExtensions.contains(ext)) {
           return true;
         }
       }
@@ -5384,23 +5505,59 @@ class LogApiService {
     return false;
   }
 
-  /// Get list of photo filenames in an alert directory
+  /// Get list of photo filenames in an alert directory (checks both root and images/ subfolder)
+  /// Returns filenames prefixed with 'images/' for photos in the images subfolder
   Future<List<String>> _getAlertPhotos(String alertPath) async {
     final photos = <String>[];
-    final dir = io.Directory(alertPath);
-    if (!await dir.exists()) return photos;
+    final photoExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp'];
 
-    await for (final entity in dir.list()) {
-      if (entity is io.File) {
-        final ext = path.extension(entity.path).toLowerCase();
-        if (['.jpg', '.jpeg', '.png', '.gif', '.webp'].contains(ext)) {
-          photos.add(path.basename(entity.path));
+    // Check images/ subfolder first (new structure)
+    final imagesDir = io.Directory('$alertPath/images');
+    if (await imagesDir.exists()) {
+      await for (final entity in imagesDir.list()) {
+        if (entity is io.File) {
+          final ext = path.extension(entity.path).toLowerCase();
+          if (photoExtensions.contains(ext)) {
+            photos.add('images/${path.basename(entity.path)}');
+          }
+        }
+      }
+    }
+
+    // Also check root folder for backwards compatibility
+    final dir = io.Directory(alertPath);
+    if (await dir.exists()) {
+      await for (final entity in dir.list()) {
+        if (entity is io.File) {
+          final ext = path.extension(entity.path).toLowerCase();
+          if (photoExtensions.contains(ext)) {
+            photos.add(path.basename(entity.path));
+          }
         }
       }
     }
 
     photos.sort();
     return photos;
+  }
+
+  /// Get the next sequential photo number in an alert's images folder
+  Future<int> _getNextPhotoNumber(String alertPath) async {
+    int maxNumber = 0;
+    final imagesDir = io.Directory('$alertPath/images');
+    if (await imagesDir.exists()) {
+      await for (final entity in imagesDir.list()) {
+        if (entity is io.File) {
+          final filename = path.basenameWithoutExtension(entity.path);
+          final match = RegExp(r'^photo(\d+)$').firstMatch(filename);
+          if (match != null) {
+            final num = int.tryParse(match.group(1)!) ?? 0;
+            if (num > maxNumber) maxNumber = num;
+          }
+        }
+      }
+    }
+    return maxNumber + 1;
   }
 
   /// Calculate haversine distance between two points in kilometers
@@ -5421,6 +5578,15 @@ class LogApiService {
   }
 
   double _toRadians(double degrees) => degrees * pi / 180;
+
+  /// Generate a random alphanumeric ID
+  String _generateRandomId(int length) {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    final random = Random();
+    return String.fromCharCodes(
+      Iterable.generate(length, (_) => chars.codeUnitAt(random.nextInt(chars.length))),
+    );
+  }
 
   // ============================================================
   // Debug API - Event Actions (for testing Events API)
@@ -5593,6 +5759,491 @@ class LogApiService {
   }
 
   // ============================================================
+  // Debug API - Blog Actions (for testing Blog API)
+  // ============================================================
+
+  /// Handle blog debug actions asynchronously
+  Future<shelf.Response> _handleBlogAction(
+    String action,
+    Map<String, dynamic> params,
+    Map<String, String> headers,
+  ) async {
+    try {
+      // Get data directory from storage config
+      String? dataDir;
+      try {
+        dataDir = StorageConfig().baseDir;
+      } catch (e) {
+        return shelf.Response.internalServerError(
+          body: jsonEncode({
+            'success': false,
+            'error': 'Storage not initialized',
+          }),
+          headers: headers,
+        );
+      }
+
+      // Get callsign and nickname from profile service
+      String callsign = 'TEST';
+      String nickname = 'TEST';
+      String? npub;
+      try {
+        final profile = ProfileService().getProfile();
+        callsign = profile.callsign;
+        nickname = profile.nickname ?? profile.callsign;
+        npub = profile.npub;
+      } catch (e) {
+        // Profile service not initialized, use TEST callsign
+      }
+
+      switch (action) {
+        case 'blog_create':
+          // Create a test blog post
+          final title = params['title'] as String? ?? 'Test Blog Post ${DateTime.now().millisecondsSinceEpoch}';
+          final content = params['content'] as String? ?? 'This is a test blog post created via debug API.';
+          final description = params['description'] as String?;
+          final tagsStr = params['tags'] as String?;
+          final tags = tagsStr != null ? tagsStr.split(',').map((t) => t.trim()).where((t) => t.isNotEmpty).toList() : <String>[];
+          final statusStr = params['status'] as String? ?? 'published';
+          final status = statusStr == 'draft' ? BlogStatus.draft : BlogStatus.published;
+          final appName = params['app_name'] as String? ?? 'blog';
+
+          // Initialize BlogService for this app
+          final blogService = BlogService();
+          final collectionPath = '$dataDir/devices/$callsign/$appName';
+
+          // Initialize the blog directory
+          await blogService.initializeCollection(collectionPath, creatorNpub: npub);
+
+          // Create the blog post
+          final post = await blogService.createPost(
+            author: callsign,
+            title: title,
+            description: description,
+            content: content,
+            tags: tags,
+            status: status,
+            npub: npub,
+          );
+
+          if (post == null) {
+            return shelf.Response.internalServerError(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Failed to create blog post',
+              }),
+              headers: headers,
+            );
+          }
+
+          // Generate p2p.radio URL
+          final url = 'https://p2p.radio/${nickname.toLowerCase()}/blog/${post.id}.html';
+
+          LogService().log('LogApiService: Created test blog post: ${post.id}');
+
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'message': 'Blog post created',
+              'blog_id': post.id,
+              'filename': '${post.id}.md',
+              'url': url,
+              'blog': {
+                'id': post.id,
+                'title': post.title,
+                'author': post.author,
+                'description': post.description,
+                'status': post.isPublished ? 'published' : 'draft',
+                'tags': post.tags,
+                'timestamp': post.timestamp,
+              },
+            }),
+            headers: headers,
+          );
+
+        case 'blog_list':
+          // List all blog posts
+          final year = params['year'] as int?;
+          final appName = params['app_name'] as String? ?? 'blog';
+
+          final blogService = BlogService();
+          final collectionPath = '$dataDir/devices/$callsign/$appName';
+
+          // Check if blog directory exists
+          final blogDir = io.Directory('$collectionPath/blog');
+          if (!await blogDir.exists()) {
+            return shelf.Response.ok(
+              jsonEncode({
+                'success': true,
+                'blogs': [],
+                'total': 0,
+              }),
+              headers: headers,
+            );
+          }
+
+          await blogService.initializeCollection(collectionPath);
+
+          // Load posts
+          final posts = await blogService.loadPosts(year: year);
+
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'blogs': posts.map((p) => <String, dynamic>{
+                'id': p.id,
+                'title': p.title,
+                'author': p.author,
+                'description': p.description,
+                'status': p.isPublished ? 'published' : 'draft',
+                'tags': p.tags,
+                'timestamp': p.timestamp,
+                'url': 'https://p2p.radio/${nickname.toLowerCase()}/blog/${p.id}.html',
+              }).toList(),
+              'total': posts.length,
+            }),
+            headers: headers,
+          );
+
+        case 'blog_delete':
+          // Delete a blog post by ID
+          final blogId = params['blog_id'] as String?;
+          if (blogId == null || blogId.isEmpty) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Missing blog_id parameter',
+              }),
+              headers: headers,
+            );
+          }
+
+          final appName = params['app_name'] as String? ?? 'blog';
+          final blogService = BlogService();
+          final collectionPath = '$dataDir/devices/$callsign/$appName';
+
+          await blogService.initializeCollection(collectionPath);
+
+          // Delete the post (pass null for userNpub to allow deletion in debug mode)
+          final success = await blogService.deletePost(blogId, npub);
+
+          if (!success) {
+            return shelf.Response.notFound(
+              jsonEncode({
+                'success': false,
+                'error': 'Blog post not found or permission denied',
+                'blog_id': blogId,
+              }),
+              headers: headers,
+            );
+          }
+
+          LogService().log('LogApiService: Deleted blog post: $blogId');
+
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'message': 'Blog post deleted',
+              'blog_id': blogId,
+            }),
+            headers: headers,
+          );
+
+        case 'blog_get_url':
+          // Get the public URL for a blog post
+          final blogId = params['blog_id'] as String?;
+          if (blogId == null || blogId.isEmpty) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Missing blog_id parameter',
+              }),
+              headers: headers,
+            );
+          }
+
+          final appName = params['app_name'] as String? ?? 'blog';
+          final blogService = BlogService();
+          final collectionPath = '$dataDir/devices/$callsign/$appName';
+
+          // Check if the blog post exists
+          final blogDir = io.Directory('$collectionPath/blog');
+          if (!await blogDir.exists()) {
+            return shelf.Response.notFound(
+              jsonEncode({
+                'success': false,
+                'error': 'Blog not found',
+                'blog_id': blogId,
+              }),
+              headers: headers,
+            );
+          }
+
+          await blogService.initializeCollection(collectionPath);
+          final post = await blogService.loadFullPost(blogId);
+
+          if (post == null) {
+            return shelf.Response.notFound(
+              jsonEncode({
+                'success': false,
+                'error': 'Blog post not found',
+                'blog_id': blogId,
+              }),
+              headers: headers,
+            );
+          }
+
+          final url = 'https://p2p.radio/${nickname.toLowerCase()}/blog/${post.id}.html';
+
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'blog_id': blogId,
+              'url': url,
+              'blog': {
+                'id': post.id,
+                'title': post.title,
+                'author': post.author,
+                'status': post.isPublished ? 'published' : 'draft',
+              },
+            }),
+            headers: headers,
+          );
+
+        default:
+          return shelf.Response.badRequest(
+            body: jsonEncode({
+              'success': false,
+              'error': 'Unknown blog action: $action',
+              'available': ['blog_create', 'blog_list', 'blog_delete', 'blog_get_url'],
+            }),
+            headers: headers,
+          );
+      }
+    } catch (e, stack) {
+      LogService().log('LogApiService: Blog action error: $e');
+      LogService().log('LogApiService: Stack: $stack');
+      return shelf.Response.internalServerError(
+        body: jsonEncode({
+          'success': false,
+          'error': e.toString(),
+        }),
+        headers: headers,
+      );
+    }
+  }
+
+  // ============================================================
+  // Debug API - Station Actions (for testing station connectivity)
+  // ============================================================
+
+  /// Handle station debug actions asynchronously
+  Future<shelf.Response> _handleStationAction(
+    String action,
+    Map<String, dynamic> params,
+    Map<String, String> headers,
+  ) async {
+    try {
+      final stationService = StationService();
+      final webSocketService = WebSocketService();
+
+      switch (action) {
+        case 'station_set':
+          // Set preferred station URL
+          final url = params['url'] as String?;
+          if (url == null || url.isEmpty) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Missing url parameter',
+              }),
+              headers: headers,
+            );
+          }
+
+          // Create station object
+          final station = Station(
+            url: url,
+            name: params['name'] as String? ?? 'Test Station',
+            callsign: params['callsign'] as String?,
+            status: 'preferred',
+            lastChecked: DateTime.now(),
+          );
+
+          // Add and set as preferred
+          await stationService.addStation(station);
+          await stationService.setPreferred(url);
+
+          LogService().log('LogApiService: Set preferred station: $url');
+
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'message': 'Station set as preferred',
+              'url': url,
+            }),
+            headers: headers,
+          );
+
+        case 'station_connect':
+          // Connect to preferred station via WebSocket
+          final url = params['url'] as String?;
+          if (url != null && url.isNotEmpty) {
+            // Set as preferred first
+            final station = Station(
+              url: url,
+              name: params['name'] as String? ?? 'Test Station',
+              status: 'preferred',
+              lastChecked: DateTime.now(),
+            );
+            await stationService.addStation(station);
+            await stationService.setPreferred(url);
+          }
+
+          final preferred = stationService.getPreferredStation();
+          if (preferred == null) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'No preferred station configured',
+              }),
+              headers: headers,
+            );
+          }
+
+          // Connect via WebSocket
+          final connected = await webSocketService.connectAndHello(preferred.url);
+
+          final isConnected = connected && webSocketService.isConnected;
+
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': isConnected,
+              'message': isConnected ? 'Connected to station' : 'Connection failed',
+              'url': preferred.url,
+              'connected': isConnected,
+            }),
+            headers: headers,
+          );
+
+        case 'station_list':
+          // List all known stations
+          final stations = stationService.getAllStations();
+          final preferred = stationService.getPreferredStation();
+
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'stations': stations.map((s) => {
+                'url': s.url,
+                'name': s.name,
+                'callsign': s.callsign,
+                'status': s.status,
+                'is_preferred': s.url == preferred?.url,
+              }).toList(),
+              'preferred_url': preferred?.url,
+              'count': stations.length,
+            }),
+            headers: headers,
+          );
+
+        case 'station_status':
+          // Get current station connection status
+          final preferred = stationService.getPreferredStation();
+          final isConnected = webSocketService.isConnected;
+
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'connected': isConnected,
+              'preferred_url': preferred?.url,
+              'preferred_name': preferred?.name,
+            }),
+            headers: headers,
+          );
+
+        case 'station_server_start':
+          // Start the local StationServerService (for station mode)
+          final stationServer = StationServerService();
+
+          // Initialize if needed
+          await stationServer.initialize();
+
+          // Start the server
+          final success = await stationServer.start();
+          final runningPort = stationServer.runningPort;
+
+          LogService().log('LogApiService: Station server start result: $success, port: $runningPort');
+
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': success,
+              'message': success ? 'Station server started' : 'Failed to start station server',
+              'port': runningPort,
+              'running': stationServer.isRunning,
+            }),
+            headers: headers,
+          );
+
+        case 'station_server_stop':
+          // Stop the local StationServerService
+          final stationServer = StationServerService();
+          await stationServer.stop();
+
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'message': 'Station server stopped',
+              'running': false,
+            }),
+            headers: headers,
+          );
+
+        case 'station_server_status':
+          // Get status of the local station server
+          final stationServer = StationServerService();
+          final status = stationServer.getStatus();
+
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              ...status,
+            }),
+            headers: headers,
+          );
+
+        default:
+          return shelf.Response.badRequest(
+            body: jsonEncode({
+              'success': false,
+              'error': 'Unknown station action: $action',
+              'available': [
+                'station_set',
+                'station_connect',
+                'station_list',
+                'station_status',
+                'station_server_start',
+                'station_server_stop',
+                'station_server_status',
+              ],
+            }),
+            headers: headers,
+          );
+      }
+    } catch (e, stack) {
+      LogService().log('LogApiService: Station action error: $e');
+      LogService().log('LogApiService: Stack: $stack');
+      return shelf.Response.internalServerError(
+        body: jsonEncode({
+          'success': false,
+          'error': e.toString(),
+        }),
+        headers: headers,
+      );
+    }
+  }
+
+  // ============================================================
   // Debug API - Alert Actions (for testing Alerts API)
   // ============================================================
 
@@ -5676,11 +6327,14 @@ class LogApiService {
               reportStatus = ReportStatus.open;
           }
 
-          // Create alert folder name (lat_lon_title format for backwards compatibility)
-          final latStr = latitude.toStringAsFixed(4).replaceAll('.', '_').replaceAll('-', 'n');
-          final lonStr = longitude.toStringAsFixed(4).replaceAll('.', '_').replaceAll('-', 'n');
-          final titleSlug = title.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), '-').replaceAll(RegExp(r'^-+|-+$'), '');
-          final folderName = '${latStr}_${lonStr}_$titleSlug';
+          // Create alert folder name using timestamp format: YYYY-MM-DD_HH-MM_title-slug
+          var titleSlug = title.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), '-').replaceAll(RegExp(r'^-+|-+$'), '');
+          // Limit title to 100 characters
+          if (titleSlug.length > 100) {
+            titleSlug = titleSlug.substring(0, 100).replaceAll(RegExp(r'-+$'), '');
+          }
+          final folderName = '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}_'
+              '${now.hour.toString().padLeft(2, '0')}-${now.minute.toString().padLeft(2, '0')}_$titleSlug';
 
           // Calculate region folder (rounded to 1 decimal) to match uploadPhotosToStation path
           final roundedLat = (latitude * 10).round() / 10;
@@ -5696,9 +6350,13 @@ class LogApiService {
           String? createdPhotoPath;
 
           if (includePhoto) {
-            // Create a simple test image (1x1 red pixel PNG)
-            final testPhotoName = 'test_photo.png';
-            createdPhotoPath = '${alertDir.path}/$testPhotoName';
+            // Create images subfolder
+            final imagesDir = io.Directory('${alertDir.path}/images');
+            await imagesDir.create(recursive: true);
+
+            // Use sequential naming: photo1.png
+            final testPhotoName = 'photo1.png';
+            createdPhotoPath = '${imagesDir.path}/$testPhotoName';
 
             // Create a minimal valid PNG (1x1 red pixel)
             final pngBytes = Uint8List.fromList([
@@ -5750,6 +6408,8 @@ class LogApiService {
             jsonEncode({
               'success': true,
               'message': 'Alert created${includePhoto ? " with photo" : ""}',
+              'alert_id': alert.apiId,
+              'folder_name': folderName,
               'alert': alert.toApiJson(),
               'photo_created': includePhoto,
               'photo_path': createdPhotoPath,
@@ -5765,6 +6425,8 @@ class LogApiService {
           final lon = (params['lon'] as num?)?.toDouble();
           final radius = (params['radius'] as num?)?.toDouble();
 
+          io.stderr.writeln('DEBUG alert_list: dataDir=$dataDir');
+
           final alertsWithPaths = await _getAllAlertsGlobal(
             dataDir,
             status: status,
@@ -5772,6 +6434,8 @@ class LogApiService {
             lon: lon,
             radius: radius,
           );
+
+          io.stderr.writeln('DEBUG alert_list: found ${alertsWithPaths.length} alerts');
 
           final alertsJson = <Map<String, dynamic>>[];
           for (final tuple in alertsWithPaths) {
@@ -5892,25 +6556,53 @@ class LogApiService {
             );
           }
 
-          // Toggle point
-          final pointedBy = List<String>.from(alertToPoint.pointedBy);
+          // Read points from points.txt
+          var pointedBy = await AlertFolderUtils.readPointsFile(alertPathForPoint);
           final wasPointed = pointedBy.contains(npub);
 
+          // Toggle point
           if (wasPointed) {
             pointedBy.remove(npub);
           } else {
             pointedBy.add(npub);
           }
 
-          // Create updated report using copyWith
-          final updatedAlert = alertToPoint.copyWith(
-            pointedBy: pointedBy,
-            pointCount: pointedBy.length,
-          );
+          // Write updated points to points.txt
+          await AlertFolderUtils.writePointsFile(alertPathForPoint, pointedBy);
 
-          // Save to disk
+          // Update lastModified on report.txt
           final reportFileForPoint = io.File('$alertPathForPoint/report.txt');
-          await reportFileForPoint.writeAsString(updatedAlert.exportAsText());
+          if (await reportFileForPoint.exists()) {
+            var content = await reportFileForPoint.readAsString();
+            final now = DateTime.now().toUtc().toIso8601String();
+            // Update LAST_MODIFIED if exists, or add it
+            if (content.contains('LAST_MODIFIED: ')) {
+              content = content.replaceFirst(
+                RegExp(r'LAST_MODIFIED: [^\n]*'),
+                'LAST_MODIFIED: $now',
+              );
+            } else {
+              // Find insertion point - should be after header fields, before description
+              // Report format: Title, empty line, header fields, empty line, description
+              // We want to insert just before the SECOND empty line (before description)
+              final lines = content.split('\n');
+              var insertIdx = lines.length;
+              var emptyLineCount = 0;
+              for (var i = 0; i < lines.length; i++) {
+                if (lines[i].trim().isEmpty && i > 0 && !lines[i - 1].startsWith('-->')) {
+                  emptyLineCount++;
+                  if (emptyLineCount == 2) {
+                    // Found the empty line before description - insert before it
+                    insertIdx = i;
+                    break;
+                  }
+                }
+              }
+              lines.insert(insertIdx, 'LAST_MODIFIED: $now');
+              content = lines.join('\n');
+            }
+            await reportFileForPoint.writeAsString(content);
+          }
 
           LogService().log('LogApiService: ${wasPointed ? "Unpointed" : "Pointed"} alert: $alertId by $npub');
 
@@ -5927,8 +6619,8 @@ class LogApiService {
               'message': wasPointed ? 'Alert unpointed' : 'Alert pointed',
               'alert_id': alertId,
               'pointed': !wasPointed,
-              'point_count': updatedAlert.pointCount,
-              'pointed_by': updatedAlert.pointedBy,
+              'point_count': pointedBy.length,
+              'pointed_by': pointedBy,
             }),
             headers: headers,
           );
@@ -6082,11 +6774,11 @@ class LogApiService {
             await commentsDir.create(recursive: true);
           }
 
-          // Generate comment filename
+          // Generate comment filename: YYYY-MM-DD_HH-MM-SS_XXXXXX.txt
           final now = DateTime.now();
-          final timestamp = '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}_'
-              '${now.hour.toString().padLeft(2, '0')}-${now.minute.toString().padLeft(2, '0')}-${now.second.toString().padLeft(2, '0')}';
-          final fileName = '${timestamp}_$author.txt';
+          final randomId = _generateRandomId(6);
+          final fileName = '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}_'
+              '${now.hour.toString().padLeft(2, '0')}-${now.minute.toString().padLeft(2, '0')}-${now.second.toString().padLeft(2, '0')}_$randomId.txt';
 
           final commentFile = io.File('${commentsDir.path}/$fileName');
 
@@ -6157,6 +6849,7 @@ class LogApiService {
           }
 
           // Find the alert folder by searching for matching alert_id
+          // Alerts are stored at: alerts/active/{regionFolder}/{folderName}
           final alertsDir = io.Directory('$dataDir/devices/$callsignForPhoto/alerts');
           if (!await alertsDir.exists()) {
             return shelf.Response.notFound(
@@ -6168,22 +6861,21 @@ class LogApiService {
             );
           }
 
-          // Search for matching alert folder
+          // Search recursively for matching alert folder
           io.Directory? foundAlertDir;
-          await for (final entity in alertsDir.list()) {
-            if (entity is io.Directory) {
-              final reportFile = io.File('${entity.path}/report.txt');
-              if (await reportFile.exists()) {
-                try {
-                  final content = await reportFile.readAsString();
-                  final report = Report.fromText(content, entity.path.split('/').last);
-                  if (report.apiId == alertIdForPhoto) {
-                    foundAlertDir = entity;
-                    break;
-                  }
-                } catch (e) {
-                  // Skip malformed reports
+          await for (final entity in alertsDir.list(recursive: true)) {
+            if (entity is io.File && entity.path.endsWith('/report.txt')) {
+              try {
+                final content = await entity.readAsString();
+                final folderPath = entity.parent.path;
+                final folderName = folderPath.split('/').last;
+                final report = Report.fromText(content, folderName);
+                if (report.apiId == alertIdForPhoto) {
+                  foundAlertDir = entity.parent;
+                  break;
                 }
+              } catch (e) {
+                // Skip malformed reports
               }
             }
           }
@@ -6198,8 +6890,29 @@ class LogApiService {
             );
           }
 
-          // Determine photo path
-          final photoPath = '${foundAlertDir.path}/$photoName';
+          // Create images subfolder if it doesn't exist
+          final imagesDir = io.Directory('${foundAlertDir.path}/images');
+          if (!await imagesDir.exists()) {
+            await imagesDir.create(recursive: true);
+          }
+
+          // Get next sequential photo number
+          final nextPhotoNum = await _getNextPhotoNumber(foundAlertDir.path);
+
+          // Determine file extension from provided name or URL
+          String photoExt = '.png';
+          if (photoName.contains('.')) {
+            photoExt = path.extension(photoName).toLowerCase();
+          } else if (imageUrl != null && imageUrl.contains('.')) {
+            final urlExt = path.extension(Uri.parse(imageUrl).path).toLowerCase();
+            if (['.jpg', '.jpeg', '.png', '.gif', '.webp'].contains(urlExt)) {
+              photoExt = urlExt;
+            }
+          }
+
+          // Use sequential naming: photo{number}.{ext}
+          final sequentialPhotoName = 'photo$nextPhotoNum$photoExt';
+          final photoPath = '${imagesDir.path}/$sequentialPhotoName';
 
           if (imageUrl != null && imageUrl.isNotEmpty) {
             // Download image from URL
@@ -6266,7 +6979,7 @@ class LogApiService {
               'message': 'Photo added to alert',
               'alert_id': alertIdForPhoto,
               'photo_path': photoPath,
-              'photo_name': photoName,
+              'photo_name': 'images/$sequentialPhotoName',
             }),
             headers: headers,
           );
@@ -6303,27 +7016,272 @@ class LogApiService {
           LogService().log('LogApiService: Sharing alert ${alertToShare.apiId} from $alertPath');
 
           // Share to station
-          final alertSharingService = AlertSharingService();
-          final summary = await alertSharingService.shareAlert(alertToShare);
+          try {
+            final alertSharingService = AlertSharingService();
+            final summary = await alertSharingService.shareAlert(alertToShare);
 
-          LogService().log('LogApiService: Share result - confirmed: ${summary.confirmed}, failed: ${summary.failed}');
+            LogService().log('LogApiService: Share result - confirmed: ${summary.confirmed}, failed: ${summary.failed}');
+
+            return shelf.Response.ok(
+              jsonEncode({
+                'success': summary.anySuccess,
+                'message': summary.anySuccess
+                    ? 'Alert shared to ${summary.confirmed} station(s)'
+                    : 'Failed to share alert',
+                'alert_id': alertIdToShare,
+                'confirmed': summary.confirmed,
+                'failed': summary.failed,
+                'skipped': summary.skipped,
+                'event_id': summary.eventId,
+                'results': summary.results.map((r) => {
+                  'station': r.stationUrl,
+                  'success': r.success,
+                  'message': r.message,
+                }).toList(),
+              }),
+              headers: headers,
+            );
+          } catch (e, stack) {
+            LogService().log('LogApiService: alert_share error: $e');
+            LogService().log('LogApiService: Stack: $stack');
+            return shelf.Response.internalServerError(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Share failed: $e',
+                'alert_id': alertIdToShare,
+              }),
+              headers: headers,
+            );
+          }
+
+        case 'alert_upload_photos':
+          // Upload alert photos directly to station via HTTP (bypasses NOSTR)
+          final uploadAlertId = params['alert_id'] as String?;
+          final stationUrl = params['station_url'] as String?;
+          if (uploadAlertId == null || uploadAlertId.isEmpty) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Missing alert_id parameter',
+              }),
+              headers: headers,
+            );
+          }
+          if (stationUrl == null || stationUrl.isEmpty) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Missing station_url parameter',
+              }),
+              headers: headers,
+            );
+          }
+
+          // Find the alert
+          final uploadResult = await _getAlertByApiId(uploadAlertId, dataDir);
+          if (uploadResult == null) {
+            return shelf.Response.notFound(
+              jsonEncode({
+                'success': false,
+                'error': 'Alert not found',
+                'alert_id': uploadAlertId,
+              }),
+              headers: headers,
+            );
+          }
+
+          final uploadAlert = uploadResult.$1;
+          final uploadAlertPath = uploadResult.$2;
+
+          LogService().log('LogApiService: Uploading photos for alert ${uploadAlert.apiId} to $stationUrl');
+
+          try {
+            final alertSharingService = AlertSharingService();
+            final photosUploaded = await alertSharingService.uploadPhotosToStation(uploadAlert, stationUrl);
+
+            LogService().log('LogApiService: Uploaded $photosUploaded photos');
+
+            return shelf.Response.ok(
+              jsonEncode({
+                'success': true,
+                'message': 'Uploaded $photosUploaded photo(s) to station',
+                'alert_id': uploadAlertId,
+                'photos_uploaded': photosUploaded,
+                'station_url': stationUrl,
+              }),
+              headers: headers,
+            );
+          } catch (e, stack) {
+            LogService().log('LogApiService: Photo upload error: $e');
+            LogService().log('LogApiService: Stack: $stack');
+            return shelf.Response.internalServerError(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Upload failed: $e',
+                'alert_id': uploadAlertId,
+              }),
+              headers: headers,
+            );
+          }
+
+        case 'alert_sync':
+          // Sync alerts from station (fetches alerts and downloads photos)
+          final stationAlertService = StationAlertService();
+          final lat = (params['lat'] as num?)?.toDouble();
+          final lon = (params['lon'] as num?)?.toDouble();
+          final radiusKm = (params['radius'] as num?)?.toDouble();
+          final useSince = params['use_since'] as bool? ?? false;
+
+          LogService().log('LogApiService: Syncing alerts from station...');
+
+          final syncResult = await stationAlertService.fetchAlerts(
+            lat: lat,
+            lon: lon,
+            radiusKm: radiusKm,
+            useSince: useSince,
+          );
 
           return shelf.Response.ok(
             jsonEncode({
-              'success': summary.anySuccess,
-              'message': summary.anySuccess
-                  ? 'Alert shared to ${summary.confirmed} station(s)'
-                  : 'Failed to share alert',
-              'alert_id': alertIdToShare,
-              'confirmed': summary.confirmed,
-              'failed': summary.failed,
-              'skipped': summary.skipped,
-              'event_id': summary.eventId,
-              'results': summary.results.map((r) => {
-                'station': r.stationUrl,
-                'success': r.success,
-                'message': r.message,
+              'success': syncResult.success,
+              'message': syncResult.success
+                  ? 'Synced ${syncResult.alerts.length} alerts from station'
+                  : (syncResult.error ?? 'Failed to sync alerts'),
+              'alert_count': syncResult.alerts.length,
+              'station_name': syncResult.stationName,
+              'station_callsign': syncResult.stationCallsign,
+              'timestamp': syncResult.timestamp,
+              'alerts': syncResult.alerts.map((a) => {
+                'folder_name': a.folderName,
+                'title': a.titles['EN'] ?? a.folderName,
+                'latitude': a.latitude,
+                'longitude': a.longitude,
+                'severity': a.severity.name,
+                'status': a.status.name,
+                'point_count': a.pointCount,
+                'verification_count': a.verificationCount,
               }).toList(),
+            }),
+            headers: headers,
+          );
+
+        case 'alert_ui_debug':
+          // Debug action to show location state and alerts with distances
+          // This helps diagnose why alerts may not be showing in the UI
+
+          // Get profile location (Settings location)
+          double? profileLat;
+          double? profileLon;
+          String? profileLocationName;
+          String profileCallsign = 'UNKNOWN';
+          try {
+            final profile = ProfileService().getProfile();
+            profileLat = profile.latitude;
+            profileLon = profile.longitude;
+            profileLocationName = profile.locationName;
+            profileCallsign = profile.callsign;
+          } catch (e) {
+            LogService().log('LogApiService: Error getting profile: $e');
+          }
+
+          // Get UserLocationService location
+          double? userLocationLat;
+          double? userLocationLon;
+          String? userLocationSource;
+          bool userLocationValid = false;
+          try {
+            final userLocationService = UserLocationService();
+            final userLocation = userLocationService.currentLocation;
+            if (userLocation != null) {
+              userLocationLat = userLocation.latitude;
+              userLocationLon = userLocation.longitude;
+              userLocationSource = userLocation.source;
+              userLocationValid = userLocation.isValid;
+            }
+          } catch (e) {
+            LogService().log('LogApiService: Error getting user location: $e');
+          }
+
+          // Determine which location would be used (profile first, then UserLocationService)
+          double? effectiveLat = profileLat;
+          double? effectiveLon = profileLon;
+          String effectiveSource = 'profile';
+          if (effectiveLat == null || effectiveLon == null) {
+            if (userLocationLat != null && userLocationLon != null && userLocationValid) {
+              effectiveLat = userLocationLat;
+              effectiveLon = userLocationLon;
+              effectiveSource = 'user_location_service ($userLocationSource)';
+            } else {
+              effectiveSource = 'none';
+            }
+          }
+
+          // Get cached station alerts
+          final debugStationAlertService = StationAlertService();
+          final cachedAlerts = debugStationAlertService.cachedAlerts;
+
+          // Calculate distances for each alert using Haversine formula
+          double calcDistance(double lat1, double lon1, double lat2, double lon2) {
+            const earthRadius = 6371.0;
+            final dLat = (lat2 - lat1) * 3.14159265359 / 180;
+            final dLon = (lon2 - lon1) * 3.14159265359 / 180;
+            final a = sin(dLat / 2) * sin(dLat / 2) +
+                cos(lat1 * 3.14159265359 / 180) *
+                    cos(lat2 * 3.14159265359 / 180) *
+                    sin(dLon / 2) *
+                    sin(dLon / 2);
+            final c = 2 * atan2(sqrt(a), sqrt(1 - a));
+            return earthRadius * c;
+          }
+
+          final alertsWithDistances = cachedAlerts.map((alert) {
+            double? distance;
+            if (effectiveLat != null && effectiveLon != null) {
+              distance = calcDistance(
+                effectiveLat, effectiveLon,
+                alert.latitude, alert.longitude,
+              );
+            }
+            return {
+              'folder_name': alert.folderName,
+              'title': alert.titles['EN'] ?? alert.folderName,
+              'latitude': alert.latitude,
+              'longitude': alert.longitude,
+              'distance_km': distance?.toStringAsFixed(2),
+              'author': alert.author,
+              'severity': alert.severity.name,
+            };
+          }).toList();
+
+          // Sort by distance
+          alertsWithDistances.sort((a, b) {
+            final distA = double.tryParse(a['distance_km']?.toString() ?? '') ?? double.infinity;
+            final distB = double.tryParse(b['distance_km']?.toString() ?? '') ?? double.infinity;
+            return distA.compareTo(distB);
+          });
+
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'profile_location': {
+                'latitude': profileLat,
+                'longitude': profileLon,
+                'location_name': profileLocationName,
+                'callsign': profileCallsign,
+              },
+              'user_location_service': {
+                'latitude': userLocationLat,
+                'longitude': userLocationLon,
+                'source': userLocationSource,
+                'is_valid': userLocationValid,
+              },
+              'effective_location': {
+                'latitude': effectiveLat,
+                'longitude': effectiveLon,
+                'source': effectiveSource,
+              },
+              'cached_alerts_count': cachedAlerts.length,
+              'alerts_with_distances': alertsWithDistances,
             }),
             headers: headers,
           );
@@ -6333,7 +7291,7 @@ class LogApiService {
             body: jsonEncode({
               'success': false,
               'error': 'Unknown alert action: $action',
-              'available': ['alert_create', 'alert_list', 'alert_delete', 'alert_point', 'alert_verify', 'alert_comment', 'alert_add_photo', 'alert_share'],
+              'available': ['alert_create', 'alert_list', 'alert_delete', 'alert_point', 'alert_verify', 'alert_comment', 'alert_add_photo', 'alert_share', 'alert_sync', 'alert_ui_debug'],
             }),
             headers: headers,
           );

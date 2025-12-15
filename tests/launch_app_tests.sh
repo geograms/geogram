@@ -1,7 +1,7 @@
 #!/bin/bash
-# Geogram Alert App Test Launcher
+# Geogram App Test Launcher
 #
-# This script launches the app_alert_test.dart test suite.
+# This script launches the app test suites (Alert, IRC Bridge, Blog).
 #
 # Usage:
 #   ./tests/launch_app_tests.sh
@@ -23,7 +23,7 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 echo -e "${BLUE}=============================================="
-echo "  Geogram Alert App Test Suite"
+echo "  Geogram App Test Suite"
 echo -e "==============================================${NC}"
 echo ""
 
@@ -97,13 +97,46 @@ echo ""
 echo -e "${GREEN}Starting test suite...${NC}"
 echo ""
 
-# Run the test
-$DART_CMD run tests/app_alert_test.dart
+# Track overall exit code
+OVERALL_EXIT_CODE=0
 
-# Capture exit code
-EXIT_CODE=$?
+# Run app alert test
+echo -e "${CYAN}Running app alert tests...${NC}"
+$DART_CMD run tests/app_alert_test.dart
+APP_ALERT_EXIT=$?
+if [ $APP_ALERT_EXIT -ne 0 ]; then
+    OVERALL_EXIT_CODE=1
+fi
+
+# Run IRC bridge test
+echo ""
+echo -e "${CYAN}Running IRC bridge tests...${NC}"
+$DART_CMD run tests/bridge-irc_test.dart
+IRC_BRIDGE_EXIT=$?
+if [ $IRC_BRIDGE_EXIT -ne 0 ]; then
+    OVERALL_EXIT_CODE=1
+fi
+
+# Run blog app test
+echo ""
+echo -e "${CYAN}Running blog app tests...${NC}"
+echo -e "${YELLOW}Note: This test requires internet connection (p2p.radio)${NC}"
+$DART_CMD run tests/app_blog_test.dart
+APP_BLOG_EXIT=$?
+if [ $APP_BLOG_EXIT -ne 0 ]; then
+    OVERALL_EXIT_CODE=1
+fi
+
+# Set final exit code
+EXIT_CODE=$OVERALL_EXIT_CODE
 
 echo ""
+echo -e "${CYAN}Test Suite Summary:${NC}"
+echo "  App Alert Tests:    $([ $APP_ALERT_EXIT -eq 0 ] && echo -e "${GREEN}PASSED${NC}" || echo -e "${RED}FAILED${NC}")"
+echo "  IRC Bridge Tests:   $([ $IRC_BRIDGE_EXIT -eq 0 ] && echo -e "${GREEN}PASSED${NC}" || echo -e "${RED}FAILED${NC}")"
+echo "  App Blog Tests:     $([ $APP_BLOG_EXIT -eq 0 ] && echo -e "${GREEN}PASSED${NC}" || echo -e "${RED}FAILED${NC}")"
+echo ""
+
 if [ $EXIT_CODE -eq 0 ]; then
     echo -e "${GREEN}=============================================="
     echo "  All tests passed!"
@@ -116,6 +149,7 @@ else
     echo "Data directories preserved for inspection:"
     echo "  Station (CLI): /tmp/geogram-alert-station"
     echo "  Client A:      /tmp/geogram-alert-clientA"
+    echo "  Blog Client:   /tmp/geogram-blog-client"
 fi
 
 exit $EXIT_CODE

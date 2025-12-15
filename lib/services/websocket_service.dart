@@ -658,6 +658,13 @@ class WebSocketService {
     try {
       LogService().log('Station proxy HTTP request: $method $path');
 
+      // Handle blog requests - render markdown to HTML
+      // Path format: /api/blog/{filename}.html
+      if (path.startsWith('/api/blog/') && path.endsWith('.html')) {
+        await _handleBlogApiRequest(requestId, path);
+        return;
+      }
+
       // Forward ALL /api/* requests to local LogApiService HTTP server
       // This enables DM, chat, status, and other API calls to work through station proxy
       if (path.startsWith('/api/')) {

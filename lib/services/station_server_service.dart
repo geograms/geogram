@@ -1636,6 +1636,11 @@ class StationServerService {
       // Find the callsign for this identifier (could be nickname or callsign)
       final callsign = await _findCallsignByIdentifier(identifier);
       if (callsign == null) {
+        // No local user found - try to proxy to connected client
+        final proxyResult = await _proxyBlogRequest(request, identifier, filename);
+        if (proxyResult) {
+          return; // Proxy handled the response
+        }
         request.response.statusCode = 404;
         request.response.write('User not found');
         return;
@@ -1678,6 +1683,11 @@ class StationServerService {
       }
 
       if (foundPost == null) {
+        // Blog not found locally - try to proxy to connected client
+        final proxyResult = await _proxyBlogRequest(request, identifier, filename);
+        if (proxyResult) {
+          return; // Proxy handled the response
+        }
         request.response.statusCode = 404;
         request.response.write('Blog post not found');
         return;
@@ -1757,6 +1767,93 @@ class StationServerService {
     }
 
     return null;
+  }
+
+  /// Proxy blog request to a connected client
+  /// Returns true if the request was handled (success or error), false if no client found
+  Future<bool> _proxyBlogRequest(HttpRequest request, String identifier, String filename) async {
+    // Find connected client by callsign or nickname
+    ConnectedClient? targetClient;
+
+    for (final client in _clients.values) {
+      // Check callsign match (case-insensitive)
+      if (client.callsign != null &&
+          client.callsign!.toLowerCase() == identifier.toLowerCase()) {
+        targetClient = client;
+        break;
+      }
+      // Check nickname match (case-insensitive)
+      if (client.nickname != null &&
+          client.nickname!.toLowerCase() == identifier.toLowerCase()) {
+        targetClient = client;
+        break;
+      }
+    }
+
+    if (targetClient == null) {
+      LogService().log('Blog proxy: No connected client found for identifier: $identifier');
+      return false;
+    }
+
+    final targetCallsign = targetClient.callsign ?? identifier;
+    LogService().log('Blog proxy: Forwarding request to $targetCallsign for $filename');
+
+    // Generate unique request ID
+    final requestId = '${DateTime.now().millisecondsSinceEpoch}-blog-${targetCallsign.hashCode}';
+
+    // Create completer for the response
+    final completer = Completer<Map<String, dynamic>>();
+    _pendingHttpRequests[requestId] = completer;
+
+    try {
+      // Send HTTP_REQUEST to the target client via WebSocket
+      // Request the blog as HTML from the client's local API
+      // The client expects path format: /api/blog/{filename}.html
+      final blogApiPath = '/api/blog/$filename.html';
+      final httpRequestMessage = {
+        'type': 'HTTP_REQUEST',
+        'requestId': requestId,
+        'method': 'GET',
+        'path': blogApiPath,
+        'headers': jsonEncode({}),
+        'body': null,
+      };
+
+      targetClient.socket.add(jsonEncode(httpRequestMessage));
+      LogService().log('Blog proxy: Sent HTTP_REQUEST to $targetCallsign (requestId: $requestId)');
+
+      // Wait for response with timeout
+      final response = await completer.future.timeout(
+        const Duration(seconds: 30),
+        onTimeout: () {
+          LogService().log('Blog proxy: Timeout for $targetCallsign $filename');
+          return {
+            'statusCode': 504,
+            'responseHeaders': '{"Content-Type": "text/plain"}',
+            'responseBody': 'Gateway Timeout - Device did not respond',
+            'isBase64': false,
+          };
+        },
+      );
+
+      // Forward the response to the HTTP caller
+      final statusCode = response['statusCode'] as int? ?? 500;
+      final responseBody = response['responseBody'] as String? ?? '';
+
+      request.response.statusCode = statusCode;
+      request.response.headers.contentType = ContentType.html;
+      request.response.write(responseBody);
+
+      LogService().log('Blog proxy: Response from $targetCallsign: $statusCode');
+      return true;
+    } catch (e) {
+      LogService().log('Blog proxy error: $e');
+      request.response.statusCode = 500;
+      request.response.write('Proxy error: $e');
+      return true;
+    } finally {
+      _pendingHttpRequests.remove(requestId);
+    }
   }
 
   /// Build HTML page for blog post
