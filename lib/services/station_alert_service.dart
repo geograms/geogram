@@ -339,9 +339,9 @@ class StationAlertService {
     _cachedAlerts.sort((a, b) => b.dateTime.compareTo(a.dateTime));
   }
 
-  /// Store alerts locally in devices/{callsign}/alerts/ and download photos
-  /// Only updates report.txt if station version is newer (based on LAST_MODIFIED)
-  /// Searches for existing alerts by folder name to avoid creating duplicates
+  /// Store alerts locally in devices/{callsign}/alerts/ using file tree sync.
+  /// Uses mtime comparison to download only files that have changed.
+  /// Searches for existing alerts by folder name to avoid creating duplicates.
   Future<void> _storeAlertsLocally(List<Report> alerts, String baseUrl) async {
     final storageConfig = StorageConfig();
     if (!storageConfig.isInitialized) return;
@@ -378,76 +378,55 @@ class StationAlertService {
           LogService().log('StationAlertService: Creating new alert at $alertPath');
         }
 
-        final reportFile = File('$alertPath/report.txt');
-        bool shouldUpdate = true;
+        // Load cached alert details to compare with server
+        final cachedDetails = await _loadCachedAlertDetails(alertPath);
 
-        // Check if local file exists and compare LAST_MODIFIED timestamps
-        if (await reportFile.exists()) {
-          final localContent = await reportFile.readAsString();
-          final localLastModified = _extractLastModified(localContent);
-          final stationLastModified = alert.lastModifiedDateTime;
+        // Fetch alert details from station and sync files
+        final alertDetails = await _fetchAlertDetails(alert.folderName, baseUrl, callsign);
 
-          if (localLastModified != null && stationLastModified != null) {
-            // Only update if station version is newer
-            if (!stationLastModified.isAfter(localLastModified)) {
-              LogService().log('StationAlertService: Local version is current for ${alert.folderName}, skipping update');
-              shouldUpdate = false;
-            } else {
-              LogService().log('StationAlertService: Station has newer version for ${alert.folderName}');
-            }
-          } else if (localLastModified != null && stationLastModified == null) {
-            // Local has LAST_MODIFIED but station doesn't - keep local
-            LogService().log('StationAlertService: Keeping local version (has LAST_MODIFIED) for ${alert.folderName}');
-            shouldUpdate = false;
+        if (alertDetails != null) {
+          // Compare last_modified to detect changes
+          final serverLastModified = alertDetails['last_modified'] as String?;
+          final cachedLastModified = cachedDetails?['last_modified'] as String?;
+
+          if (serverLastModified != null &&
+              cachedLastModified != null &&
+              serverLastModified == cachedLastModified) {
+            // Alert hasn't changed, skip sync
+            LogService().log('StationAlertService: Alert ${alert.folderName} unchanged, skipping sync');
+            continue;
           }
-          // If neither has LAST_MODIFIED, or only station has it, update from station
-        }
 
-        if (shouldUpdate) {
-          // Fetch full alert details from station (includes report content and comments)
-          final alertDetails = await _fetchAlertDetails(alert.folderName, baseUrl, callsign);
-          if (alertDetails != null) {
-            final reportContent = alertDetails['report_content'] as String?;
-            if (reportContent != null && reportContent.isNotEmpty) {
-              await reportFile.writeAsString(reportContent);
-              LogService().log('StationAlertService: Updated report.txt for ${alert.folderName}');
-            }
+          // Cache server response for future comparison
+          await _cacheAlertDetails(alertPath, alertDetails);
 
-            // Download comments from station
-            final comments = alertDetails['comments'] as List<dynamic>?;
-            if (comments != null && comments.isNotEmpty) {
-              await _downloadAlertComments(comments, alertPath);
-            }
-          } else {
-            // Fallback to creating from alert data
+          // Sync all files from server using file tree and mtime comparison
+          final serverFiles = alertDetails['files'] as Map<String, dynamic>?;
+          if (serverFiles != null) {
+            await _syncAlertFiles(
+              alertId: alert.folderName,
+              alertPath: alertPath,
+              serverFiles: serverFiles,
+              baseUrl: baseUrl,
+              callsign: callsign,
+            );
+          }
+        } else {
+          // Unable to fetch details - create report.txt from alert data
+          final reportFile = File('$alertPath/report.txt');
+          if (!await reportFile.exists()) {
             await reportFile.writeAsString(alert.exportAsText());
             LogService().log('StationAlertService: Created report.txt for ${alert.folderName} (from alert data)');
           }
+          await _downloadAlertPoints(alert.pointedBy, alertPath);
         }
-
-        // Download photos for this alert (skips existing photos)
-        await _downloadAlertPhotos(alert, alertPath, baseUrl, callsign);
       } catch (e) {
         LogService().log('StationAlertService: Error storing alert ${alert.folderName}: $e');
       }
     }
   }
 
-  /// Extract LAST_MODIFIED timestamp from report.txt content
-  DateTime? _extractLastModified(String content) {
-    final regex = RegExp(r'^LAST_MODIFIED: (.+)$', multiLine: true);
-    final match = regex.firstMatch(content);
-    if (match != null) {
-      try {
-        return DateTime.parse(match.group(1)!.trim());
-      } catch (e) {
-        LogService().log('StationAlertService: Error parsing LAST_MODIFIED: $e');
-      }
-    }
-    return null;
-  }
-
-  /// Fetch full alert details from station (includes report_content, comments, etc.)
+  /// Fetch full alert details from station (includes report_content, comments, files tree, etc.)
   Future<Map<String, dynamic>?> _fetchAlertDetails(String alertId, String baseUrl, String callsign) async {
     try {
       final uri = Uri.parse('$baseUrl/$callsign/api/alerts/$alertId');
@@ -462,131 +441,140 @@ class StationAlertService {
     return null;
   }
 
-  /// Download and save comments from station to local comments/ folder
-  Future<void> _downloadAlertComments(List<dynamic> comments, String alertPath) async {
-    final commentsDir = Directory('$alertPath/comments');
-    if (!await commentsDir.exists()) {
-      await commentsDir.create(recursive: true);
+  /// Cache alert details from server to local file for future comparison.
+  /// Saves the full server response including file tree to .cache.json
+  Future<void> _cacheAlertDetails(String alertPath, Map<String, dynamic> details) async {
+    try {
+      final cacheFile = File('$alertPath/.cache.json');
+      final cacheData = {
+        'cached_at': DateTime.now().millisecondsSinceEpoch ~/ 1000,
+        ...details,
+      };
+      await cacheFile.writeAsString(jsonEncode(cacheData));
+    } catch (e) {
+      LogService().log('StationAlertService: Error caching alert details: $e');
     }
+  }
 
-    for (final commentData in comments) {
-      try {
-        final comment = commentData as Map<String, dynamic>;
-        final filename = comment['filename'] as String?;
-        if (filename == null) continue;
+  /// Load cached alert details from local file.
+  /// Returns null if cache doesn't exist or is invalid.
+  Future<Map<String, dynamic>?> _loadCachedAlertDetails(String alertPath) async {
+    try {
+      final cacheFile = File('$alertPath/.cache.json');
+      if (await cacheFile.exists()) {
+        final content = await cacheFile.readAsString();
+        return jsonDecode(content) as Map<String, dynamic>;
+      }
+    } catch (e) {
+      LogService().log('StationAlertService: Error loading cached alert details: $e');
+    }
+    return null;
+  }
 
-        final commentFile = File('${commentsDir.path}/$filename');
+  /// Sync alert files using the file tree from server.
+  /// Compares mtime to determine which files need downloading.
+  Future<void> _syncAlertFiles({
+    required String alertId,
+    required String alertPath,
+    required Map<String, dynamic> serverFiles,
+    required String baseUrl,
+    required String callsign,
+    String relativePath = '',
+  }) async {
+    for (final entry in serverFiles.entries) {
+      final name = entry.key;
+      final meta = entry.value;
 
-        // Skip if comment already exists locally
-        if (await commentFile.exists()) {
-          continue;
+      if (name.endsWith('/')) {
+        // Directory - create and recurse
+        final dirName = name.substring(0, name.length - 1);
+        final localDirPath = relativePath.isEmpty
+            ? '$alertPath/$dirName'
+            : '$alertPath/$relativePath/$dirName';
+        await Directory(localDirPath).create(recursive: true);
+
+        if (meta is Map<String, dynamic>) {
+          await _syncAlertFiles(
+            alertId: alertId,
+            alertPath: alertPath,
+            serverFiles: meta,
+            baseUrl: baseUrl,
+            callsign: callsign,
+            relativePath: relativePath.isEmpty ? dirName : '$relativePath/$dirName',
+          );
+        }
+      } else {
+        // File - check if we need to download based on mtime
+        if (meta is! Map<String, dynamic>) continue;
+        final serverMtime = meta['mtime'] as int? ?? 0;
+        if (serverMtime == 0) continue; // Skip non-existent files
+
+        final localFilePath = relativePath.isEmpty
+            ? '$alertPath/$name'
+            : '$alertPath/$relativePath/$name';
+        final fileRelPath = relativePath.isEmpty ? name : '$relativePath/$name';
+
+        // Check local file mtime
+        final localFile = File(localFilePath);
+        int localMtime = 0;
+        if (await localFile.exists()) {
+          localMtime = (await localFile.stat()).modified.millisecondsSinceEpoch ~/ 1000;
         }
 
-        // Reconstruct comment file content
-        final buffer = StringBuffer();
-        buffer.writeln('AUTHOR: ${comment['author'] ?? 'UNKNOWN'}');
-        buffer.writeln('CREATED: ${comment['created'] ?? ''}');
-        buffer.writeln();
-        buffer.writeln(comment['content'] ?? '');
-
-        final npub = comment['npub'] as String?;
-        if (npub != null && npub.isNotEmpty) {
-          buffer.writeln();
-          buffer.writeln('--> npub: $npub');
+        // Only download if server version is newer
+        if (serverMtime > localMtime) {
+          await _downloadFile(
+            alertId: alertId,
+            filePath: fileRelPath,
+            localFile: localFile,
+            baseUrl: baseUrl,
+            callsign: callsign,
+          );
         }
-
-        final signature = comment['signature'] as String?;
-        if (signature != null && signature.isNotEmpty) {
-          buffer.writeln('--> signature: $signature');
-        }
-
-        await commentFile.writeAsString(buffer.toString());
-        LogService().log('StationAlertService: Downloaded comment: $filename');
-      } catch (e) {
-        LogService().log('StationAlertService: Error saving comment: $e');
       }
     }
   }
 
-  /// Fetch alert details including photos list from station
-  Future<List<String>> _getAlertPhotosFromStation(
-    String alertId,
-    String baseUrl,
-    String callsign,
-  ) async {
+  /// Download a single file from the station
+  Future<bool> _downloadFile({
+    required String alertId,
+    required String filePath,
+    required File localFile,
+    required String baseUrl,
+    required String callsign,
+  }) async {
     try {
-      // Fetch detailed alert info which includes photos list
-      final uri = Uri.parse('$baseUrl/$callsign/api/alerts/$alertId');
-      final response = await http.get(uri).timeout(const Duration(seconds: 10));
+      final uri = Uri.parse('$baseUrl/$callsign/api/alerts/$alertId/files/$filePath');
+      final response = await http.get(uri).timeout(const Duration(seconds: 30));
 
       if (response.statusCode == 200) {
-        final json = jsonDecode(response.body) as Map<String, dynamic>;
-        final photos = json['photos'] as List<dynamic>?;
-        if (photos != null) {
-          return photos.map((p) => p as String).toList();
+        // Ensure parent directory exists
+        final parent = localFile.parent;
+        if (!await parent.exists()) {
+          await parent.create(recursive: true);
         }
+
+        await localFile.writeAsBytes(response.bodyBytes);
+        LogService().log('StationAlertService: Downloaded $filePath (${response.bodyBytes.length} bytes)');
+        return true;
+      } else {
+        LogService().log('StationAlertService: Failed to download $filePath: HTTP ${response.statusCode}');
       }
     } catch (e) {
-      LogService().log('StationAlertService: Error getting alert photos: $e');
+      LogService().log('StationAlertService: Error downloading $filePath: $e');
     }
-    return [];
+    return false;
   }
 
-  /// Download photos for an alert from station
-  Future<void> _downloadAlertPhotos(
-    Report alert,
-    String alertPath,
-    String baseUrl,
-    String callsign,
-  ) async {
+  /// Download and save points from station to local points.txt file
+  Future<void> _downloadAlertPoints(List<String> pointedBy, String alertPath) async {
     try {
-      // Get list of photos from station
-      final photos = await _getAlertPhotosFromStation(alert.folderName, baseUrl, callsign);
-
-      if (photos.isEmpty) {
-        LogService().log('StationAlertService: No photos to download for ${alert.folderName}');
-        return;
-      }
-
-      LogService().log('StationAlertService: Downloading ${photos.length} photos for ${alert.folderName}');
-
-      // Create images subfolder if needed
-      final imagesDir = Directory('$alertPath/images');
-      if (!await imagesDir.exists()) {
-        await imagesDir.create(recursive: true);
-      }
-
-      for (final photoName in photos) {
-        try {
-          // Handle photos that may have images/ prefix or not
-          final isInImagesFolder = photoName.startsWith('images/');
-          final cleanPhotoName = isInImagesFolder ? photoName.substring(7) : photoName;
-
-          // Store all photos in images subfolder (new structure)
-          final photoFile = File('${imagesDir.path}/$cleanPhotoName');
-
-          // Skip if already exists
-          if (await photoFile.exists()) {
-            LogService().log('StationAlertService: Photo $cleanPhotoName already exists, skipping');
-            continue;
-          }
-
-          // Download photo (URL uses the full path from station)
-          final photoUrl = Uri.parse('$baseUrl/$callsign/api/alerts/${alert.folderName}/files/$photoName');
-          final response = await http.get(photoUrl).timeout(const Duration(seconds: 30));
-
-          if (response.statusCode == 200 && response.bodyBytes.isNotEmpty) {
-            await photoFile.writeAsBytes(response.bodyBytes);
-            LogService().log('StationAlertService: Downloaded photo $cleanPhotoName (${response.bodyBytes.length} bytes)');
-          } else {
-            LogService().log('StationAlertService: Failed to download photo $cleanPhotoName: ${response.statusCode}');
-          }
-        } catch (e) {
-          LogService().log('StationAlertService: Error downloading photo $photoName: $e');
-        }
+      await AlertFolderUtils.writePointsFile(alertPath, pointedBy);
+      if (pointedBy.isNotEmpty) {
+        LogService().log('StationAlertService: Saved ${pointedBy.length} points to points.txt');
       }
     } catch (e) {
-      LogService().log('StationAlertService: Error downloading photos for ${alert.folderName}: $e');
+      LogService().log('StationAlertService: Error saving points: $e');
     }
   }
 
@@ -629,12 +617,19 @@ class StationAlertService {
             final content = await reportFile.readAsString();
             final report = Report.fromText(content, folderName);
 
+            // Read points from points.txt
+            final pointedBy = await AlertFolderUtils.readPointsFile(alertEntity.path);
+
             // Mark as from station
             final metadata = Map<String, String>.from(report.metadata);
             metadata['station_callsign'] = callsign;
             metadata['from_station'] = 'true';
 
-            _cachedAlerts.add(report.copyWith(metadata: metadata));
+            _cachedAlerts.add(report.copyWith(
+              metadata: metadata,
+              pointedBy: pointedBy,
+              pointCount: pointedBy.length,
+            ));
           } catch (e) {
             LogService().log('StationAlertService: Error loading alert: $e');
           }
@@ -695,7 +690,7 @@ class StationAlertService {
     return '${diff.inDays}d ago';
   }
 
-  /// Download fresh alert from station and update cache
+  /// Download fresh alert from station and update cache using file tree sync.
   Future<void> refreshAlert(String folderName, String stationCallsign) async {
     try {
       final station = _stationService.getPreferredStation();
@@ -718,11 +713,38 @@ class StationAlertService {
       final alertDetails = await _fetchAlertDetails(folderName, baseUrl, stationCallsign);
 
       if (alertDetails != null) {
-        final reportContent = alertDetails['report_content'] as String?;
-        if (reportContent != null && reportContent.isNotEmpty) {
-          await File('$alertPath/report.txt').writeAsString(reportContent);
-          await loadCachedAlerts();  // Refresh the in-memory cache
+        // Use file tree sync if available (new approach)
+        final serverFiles = alertDetails['files'] as Map<String, dynamic>?;
+        if (serverFiles != null && serverFiles.isNotEmpty) {
+          LogService().log('StationAlertService: Refreshing $folderName using file tree sync');
+          await _syncAlertFiles(
+            alertId: folderName,
+            alertPath: alertPath,
+            serverFiles: serverFiles,
+            baseUrl: baseUrl,
+            callsign: stationCallsign,
+          );
+
+          // Also update points.txt from the pointed_by list
+          final pointedBy = (alertDetails['pointed_by'] as List<dynamic>?)
+              ?.map((e) => e as String)
+              .toList() ?? [];
+          await _downloadAlertPoints(pointedBy, alertPath);
+        } else {
+          // Fallback: no file tree, download report.txt directly
+          final reportContent = alertDetails['report_content'] as String?;
+          if (reportContent != null && reportContent.isNotEmpty) {
+            await File('$alertPath/report.txt').writeAsString(reportContent);
+
+            // Also update points.txt
+            final pointedBy = (alertDetails['pointed_by'] as List<dynamic>?)
+                ?.map((e) => e as String)
+                .toList() ?? [];
+            await _downloadAlertPoints(pointedBy, alertPath);
+          }
         }
+
+        await loadCachedAlerts();  // Refresh the in-memory cache
       }
     } catch (e) {
       LogService().log('StationAlertService: Error refreshing alert: $e');

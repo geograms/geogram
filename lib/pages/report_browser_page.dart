@@ -750,9 +750,11 @@ class _ReportBrowserPageState extends State<ReportBrowserPage> {
       );
     }
 
-    return ListView(
-      padding: const EdgeInsets.only(bottom: 80), // Space for FAB
-      children: [
+    return RefreshIndicator(
+      onRefresh: _loadRelayAlerts,
+      child: ListView(
+        padding: const EdgeInsets.only(bottom: 80), // Space for FAB
+        children: [
         // My Alerts section
         if (myAlerts.isNotEmpty) ...[
           _buildSectionHeader(
@@ -794,7 +796,8 @@ class _ReportBrowserPageState extends State<ReportBrowserPage> {
               ),
             ),
           ),
-      ],
+        ],
+      ),
     );
   }
 
