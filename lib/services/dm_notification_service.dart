@@ -112,8 +112,8 @@ class DMNotificationService {
     }
 
     // Don't notify for messages we sent
-    final myCallsign = ProfileService().getActiveProfile()?.callsign;
-    if (myCallsign == null || event.fromCallsign == myCallsign) {
+    final myCallsign = ProfileService().getProfile().callsign;
+    if (myCallsign.isEmpty || event.fromCallsign == myCallsign) {
       return;
     }
 
