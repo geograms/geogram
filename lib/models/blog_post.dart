@@ -23,8 +23,10 @@ class BlogPost {
   final String id; // Filename without extension
   final String author;
   final String timestamp; // Format: YYYY-MM-DD HH:MM_ss
+  final String? edited; // Format: YYYY-MM-DD HH:MM (when post was last edited)
   final String title;
   final String? description;
+  final String? location; // Format: "lat, lon" (e.g., "38.736946, -9.142685")
   final BlogStatus status;
   final List<String> tags;
   final String content;
@@ -35,8 +37,10 @@ class BlogPost {
     required this.id,
     required this.author,
     required this.timestamp,
+    this.edited,
     required this.title,
     this.description,
+    this.location,
     this.status = BlogStatus.draft,
     this.tags = const [],
     required this.content,
@@ -89,6 +93,25 @@ class BlogPost {
   /// Check if post has URLs
   bool get hasUrl => metadata.containsKey('url');
 
+  /// Check if post has a location
+  bool get hasLocation => location != null && location!.isNotEmpty;
+
+  /// Get latitude from location string
+  double? get latitude {
+    if (!hasLocation) return null;
+    final parts = location!.split(',');
+    if (parts.length != 2) return null;
+    return double.tryParse(parts[0].trim());
+  }
+
+  /// Get longitude from location string
+  double? get longitude {
+    if (!hasLocation) return null;
+    final parts = location!.split(',');
+    if (parts.length != 2) return null;
+    return double.tryParse(parts[1].trim());
+  }
+
   /// Check if post is signed with NOSTR
   bool get isSigned => metadata.containsKey('signature');
 
@@ -140,13 +163,19 @@ class BlogPost {
   String exportAsText() {
     final buffer = StringBuffer();
 
-    // Header (7 lines)
+    // Header
     buffer.writeln('# BLOG: $title');
     buffer.writeln();
     buffer.writeln('AUTHOR: $author');
     buffer.writeln('CREATED: $timestamp');
+    if (edited != null && edited!.isNotEmpty) {
+      buffer.writeln('EDITED: $edited');
+    }
     if (description != null && description!.isNotEmpty) {
       buffer.writeln('DESCRIPTION: $description');
+    }
+    if (location != null && location!.isNotEmpty) {
+      buffer.writeln('LOCATION: $location');
     }
     buffer.writeln('STATUS: ${status.name}');
 
@@ -155,23 +184,24 @@ class BlogPost {
       buffer.writeln('--> tags: ${tags.join(',')}');
     }
 
-    // npub if present
-    if (npub != null) {
-      buffer.writeln('--> npub: $npub');
-    }
-
     buffer.writeln();
 
     // Content
     buffer.writeln(content);
 
-    // Metadata (excluding signature and tags, which go last or were already written)
+    // Metadata (excluding signature, tags, and npub which goes before signature)
     final regularMetadata = Map<String, String>.from(metadata);
     regularMetadata.remove('tags');
     final sig = regularMetadata.remove('signature');
+    final npubValue = regularMetadata.remove('npub');
 
     for (var entry in regularMetadata.entries) {
       buffer.writeln('--> ${entry.key}: ${entry.value}');
+    }
+
+    // npub must be before signature
+    if (npubValue != null) {
+      buffer.writeln('--> npub: $npubValue');
     }
 
     // Signature must be last if present
@@ -179,13 +209,8 @@ class BlogPost {
       buffer.writeln('--> signature: $sig');
     }
 
-    // Comments
-    if (comments.isNotEmpty) {
-      buffer.writeln();
-      for (var comment in comments) {
-        buffer.writeln(comment.exportAsText());
-      }
-    }
+    // Note: Comments are stored in separate files in the comments/ directory,
+    // not inline in the post file
 
     return buffer.toString();
   }
@@ -224,13 +249,27 @@ class BlogPost {
     }
     final timestamp = createdLine.substring(9).trim();
 
-    // Line 5: DESCRIPTION: text (optional) or STATUS:
+    // Line 5: EDITED: timestamp (optional) or DESCRIPTION: or LOCATION: or STATUS:
+    String? edited;
     String? description;
+    String? location;
     BlogStatus status = BlogStatus.draft;
     int currentLine = 4;
 
-    if (lines[currentLine].startsWith('DESCRIPTION: ')) {
+    // Check for EDITED field
+    if (currentLine < lines.length && lines[currentLine].startsWith('EDITED: ')) {
+      edited = lines[currentLine].substring(8).trim();
+      currentLine++;
+    }
+
+    if (currentLine < lines.length && lines[currentLine].startsWith('DESCRIPTION: ')) {
       description = lines[currentLine].substring(13).trim();
+      currentLine++;
+    }
+
+    // Check for LOCATION field
+    if (currentLine < lines.length && lines[currentLine].startsWith('LOCATION: ')) {
+      location = lines[currentLine].substring(10).trim();
       currentLine++;
     }
 
@@ -268,25 +307,13 @@ class BlogPost {
       currentLine++;
     }
 
-    // Parse content and comments
+    // Parse content (comments are stored in separate files, not inline)
     final contentLines = <String>[];
-    final comments = <BlogComment>[];
 
     while (currentLine < lines.length) {
       final line = lines[currentLine];
 
-      // Check if this is a comment (starts with "> 2" for year 2xxx)
-      if (line.startsWith('> 2')) {
-        // Parse comment
-        final comment = _parseComment(lines, currentLine);
-        comments.add(comment);
-
-        // Skip to next comment or end
-        currentLine++;
-        while (currentLine < lines.length && !lines[currentLine].startsWith('> 2')) {
-          currentLine++;
-        }
-      } else if (line.startsWith('-->')) {
+      if (line.startsWith('-->')) {
         // Metadata for post content
         final metaLine = line.substring(3).trim();
         final colonIndex = metaLine.indexOf(':');
@@ -314,65 +341,14 @@ class BlogPost {
       id: postId,
       author: author,
       timestamp: timestamp,
+      edited: edited,
       title: title,
       description: description,
+      location: location,
       status: status,
       tags: tags,
       content: content,
-      comments: comments,
-      metadata: metadata,
-    );
-  }
-
-  /// Parse a single comment from lines starting at index
-  static BlogComment _parseComment(List<String> lines, int startIndex) {
-    // Line format: > YYYY-MM-DD HH:MM_ss -- AUTHOR
-    final headerLine = lines[startIndex];
-    final parts = headerLine.substring(2).split(' -- ');
-    if (parts.length < 2) {
-      throw Exception('Invalid comment header');
-    }
-
-    final timestamp = parts[0].trim();
-    final author = parts[1].trim();
-
-    // Parse comment content and metadata
-    final contentLines = <String>[];
-    final Map<String, String> metadata = {};
-    int i = startIndex + 1;
-
-    while (i < lines.length && !lines[i].startsWith('> 2')) {
-      final line = lines[i];
-
-      if (line.startsWith('-->')) {
-        // Metadata
-        final metaLine = line.substring(3).trim();
-        final colonIndex = metaLine.indexOf(':');
-        if (colonIndex > 0) {
-          final key = metaLine.substring(0, colonIndex).trim();
-          final value = metaLine.substring(colonIndex + 1).trim();
-          metadata[key] = value;
-        }
-      } else if (line.trim().isEmpty && contentLines.isEmpty) {
-        // Skip leading blank lines
-      } else {
-        contentLines.add(line);
-      }
-      i++;
-    }
-
-    // Remove trailing empty lines and metadata lines from content
-    while (contentLines.isNotEmpty &&
-           (contentLines.last.trim().isEmpty || contentLines.last.startsWith('-->'))) {
-      contentLines.removeLast();
-    }
-
-    final content = contentLines.join('\n').trim();
-
-    return BlogComment(
-      author: author,
-      timestamp: timestamp,
-      content: content,
+      comments: const [], // Comments are loaded separately from comments/ directory
       metadata: metadata,
     );
   }
@@ -382,8 +358,10 @@ class BlogPost {
     String? id,
     String? author,
     String? timestamp,
+    String? edited,
     String? title,
     String? description,
+    String? location,
     BlogStatus? status,
     List<String>? tags,
     String? content,
@@ -394,8 +372,10 @@ class BlogPost {
       id: id ?? this.id,
       author: author ?? this.author,
       timestamp: timestamp ?? this.timestamp,
+      edited: edited ?? this.edited,
       title: title ?? this.title,
       description: description ?? this.description,
+      location: location ?? this.location,
       status: status ?? this.status,
       tags: tags ?? this.tags,
       content: content ?? this.content,

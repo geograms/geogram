@@ -1165,18 +1165,48 @@ Future<bool> testPointAlertFromClientB() async {
   info('Client B report path: $clientBReportPath');
   info('Station report path: $stationReportPath');
 
-  // Step 5: Parse POINTED_BY, POINT_COUNT, and LAST_MODIFIED from both reports
-  final clientBPointedBy = _extractField(clientBReport, 'POINTED_BY');
-  final stationPointedBy = _extractField(stationReport, 'POINTED_BY');
-  final clientBPointCount = _extractField(clientBReport, 'POINT_COUNT');
-  final stationPointCount = _extractField(stationReport, 'POINT_COUNT');
+  // Step 5: Read points from points.txt files and LAST_MODIFIED from report.txt
+  final clientBAlertPath = clientBReportPath.replaceAll('/report.txt', '');
+  final stationAlertPath = stationReportPath.replaceAll('/report.txt', '');
+
+  // Verify points.txt files exist
+  final clientBPointsFile = File('$clientBAlertPath/points.txt');
+  final stationPointsFile = File('$stationAlertPath/points.txt');
+
+  if (!await clientBPointsFile.exists()) {
+    fail('Verify points.txt', 'Client B points.txt file does not exist at: ${clientBPointsFile.path}');
+    return false;
+  }
+  pass('Client B points.txt file exists');
+
+  if (!await stationPointsFile.exists()) {
+    fail('Verify points.txt', 'Station points.txt file does not exist at: ${stationPointsFile.path}');
+    return false;
+  }
+  pass('Station points.txt file exists');
+
+  final clientBPointedByList = await _readPointsFile(clientBAlertPath);
+  final stationPointedByList = await _readPointsFile(stationAlertPath);
   final stationLastModified = _extractField(stationReport, 'LAST_MODIFIED');
 
-  info('Client B POINTED_BY: $clientBPointedBy');
-  info('Station POINTED_BY: $stationPointedBy');
-  info('Client B POINT_COUNT: $clientBPointCount');
-  info('Station POINT_COUNT: $stationPointCount');
+  info('Client B points.txt: $clientBPointedByList');
+  info('Station points.txt: $stationPointedByList');
   info('Station LAST_MODIFIED: $stationLastModified');
+
+  // Verify we have exactly 1 point (the one we just added)
+  if (clientBPointedByList.length != 1) {
+    fail('Verify point count', 'Expected 1 point in Client B points.txt, got: ${clientBPointedByList.length}');
+    return false;
+  }
+  pass('Client B has exactly 1 point');
+
+  // Verify the npub is valid format
+  final npubInFile = clientBPointedByList.first;
+  if (!npubInFile.startsWith('npub1')) {
+    fail('Verify npub format', 'Invalid npub format in points.txt: $npubInFile');
+    return false;
+  }
+  pass('Point npub has valid format: ${npubInFile.substring(0, 15)}...');
 
   // Step 6: Verify LAST_MODIFIED is present on station after receiving point
   if (stationLastModified.isEmpty) {
@@ -1193,18 +1223,9 @@ Future<bool> testPointAlertFromClientB() async {
     return false;
   }
 
-  // Step 7: Verify the point values match
-  if (clientBPointCount != stationPointCount) {
-    fail('Compare reports', 'POINT_COUNT mismatch: Client B=$clientBPointCount, Station=$stationPointCount');
-    return false;
-  }
-
-  // Parse pointed_by as lists and compare (order may differ)
-  final clientBPointedByList = _parsePointedBy(clientBPointedBy);
-  final stationPointedByList = _parsePointedBy(stationPointedBy);
-
+  // Step 7: Verify the point counts match
   if (clientBPointedByList.length != stationPointedByList.length) {
-    fail('Compare reports', 'POINTED_BY length mismatch: Client B=${clientBPointedByList.length}, Station=${stationPointedByList.length}');
+    fail('Compare points.txt', 'Point count mismatch: Client B=${clientBPointedByList.length}, Station=${stationPointedByList.length}');
     return false;
   }
 
@@ -1213,13 +1234,13 @@ Future<bool> testPointAlertFromClientB() async {
   final stationSet = stationPointedByList.toSet();
 
   if (!clientBSet.containsAll(stationSet) || !stationSet.containsAll(clientBSet)) {
-    fail('Compare reports', 'POINTED_BY entries mismatch: Client B=$clientBPointedByList, Station=$stationPointedByList');
+    fail('Compare points.txt', 'Points entries mismatch: Client B=$clientBPointedByList, Station=$stationPointedByList');
     return false;
   }
 
-  pass('POINT_COUNT matches: $clientBPointCount');
-  pass('POINTED_BY matches: $clientBPointedByList');
-  pass('Report.txt files are synchronized');
+  pass('Point count matches: ${clientBPointedByList.length}');
+  pass('Points.txt matches: $clientBPointedByList');
+  pass('Points are synchronized');
 
   return true;
 }
@@ -1247,11 +1268,20 @@ Future<String?> _findAlertPath(String dataDir, String callsign, String folderNam
   return null;
 }
 
-/// Parse POINTED_BY field value as a list of npubs
+/// Parse POINTED_BY field value as a list of npubs (legacy format)
 List<String> _parsePointedBy(String value) {
   if (value.isEmpty) return [];
   // Format is typically: npub1..., npub2..., ...
   return value.split(',').map((s) => s.trim()).where((s) => s.isNotEmpty).toList();
+}
+
+/// Read points from points.txt file (one npub per line)
+Future<List<String>> _readPointsFile(String alertPath) async {
+  final pointsFile = File('$alertPath/points.txt');
+  if (!await pointsFile.exists()) return [];
+
+  final content = await pointsFile.readAsString();
+  return content.split('\n').map((line) => line.trim()).where((line) => line.isNotEmpty).toList();
 }
 
 /// Test Client A syncing alerts from station and receiving the updated report.txt
@@ -1284,11 +1314,13 @@ Future<bool> testSyncAlertsToClientA() async {
     return false;
   }
 
+  // Read state before sync
+  final clientAAlertPathBefore = clientAReportPathBefore.replaceAll('/report.txt', '');
+  final pointsBeforeSync = await _readPointsFile(clientAAlertPathBefore);
   final reportBeforeSync = await File(clientAReportPathBefore).readAsString();
-  final pointCountBefore = _extractField(reportBeforeSync, 'POINT_COUNT');
   final lastModifiedBefore = _extractField(reportBeforeSync, 'LAST_MODIFIED');
 
-  info('Before sync - POINT_COUNT: $pointCountBefore, LAST_MODIFIED: $lastModifiedBefore');
+  info('Before sync - Point count: ${pointsBeforeSync.length}, LAST_MODIFIED: $lastModifiedBefore');
 
   // Step 2: Trigger alert sync on Client A using debug API
   info('Syncing alerts to Client A...');
@@ -1314,22 +1346,37 @@ Future<bool> testSyncAlertsToClientA() async {
   // Wait for sync to complete
   await Future.delayed(const Duration(seconds: 2));
 
-  // Step 3: Read Client A's report.txt after sync
+  // Step 3: Verify points.txt file was created/synced on Client A
+  final clientAPointsFile = File('$clientAAlertPathBefore/points.txt');
+  if (!await clientAPointsFile.exists()) {
+    fail('Verify sync', 'Client A points.txt file does not exist after sync at: ${clientAPointsFile.path}');
+    return false;
+  }
+  pass('Client A points.txt file exists after sync');
+
+  // Read Client A's points.txt after sync
+  final clientAPointedByList = await _readPointsFile(clientAAlertPathBefore);
   final reportAfterSync = await File(clientAReportPathBefore).readAsString();
-  final pointCountAfter = _extractField(reportAfterSync, 'POINT_COUNT');
-  final pointedByAfter = _extractField(reportAfterSync, 'POINTED_BY');
   final lastModifiedAfter = _extractField(reportAfterSync, 'LAST_MODIFIED');
 
-  info('After sync - POINT_COUNT: $pointCountAfter, LAST_MODIFIED: $lastModifiedAfter');
-  info('After sync - POINTED_BY: $pointedByAfter');
+  info('After sync - Point count: ${clientAPointedByList.length}, LAST_MODIFIED: $lastModifiedAfter');
+  info('After sync - Points: $clientAPointedByList');
 
-  // Step 4: Verify Client A now has the updated point count
-  if (pointCountAfter != '1') {
-    fail('Verify sync', 'Expected POINT_COUNT=1 after sync, got: $pointCountAfter');
+  // Step 4: Verify Client A now has the updated point count (1 point)
+  if (clientAPointedByList.length != 1) {
+    fail('Verify sync', 'Expected 1 point after sync, got: ${clientAPointedByList.length}');
     return false;
   }
 
-  pass('Client A received updated POINT_COUNT: $pointCountAfter');
+  pass('Client A received updated point count: ${clientAPointedByList.length}');
+
+  // Verify the npub is valid format
+  final syncedNpub = clientAPointedByList.first;
+  if (!syncedNpub.startsWith('npub1')) {
+    fail('Verify npub format', 'Invalid npub format in synced points.txt: $syncedNpub');
+    return false;
+  }
+  pass('Synced npub has valid format: ${syncedNpub.substring(0, 15)}...');
 
   // Step 5: Verify LAST_MODIFIED is present
   if (lastModifiedAfter.isEmpty) {
@@ -1339,55 +1386,46 @@ Future<bool> testSyncAlertsToClientA() async {
 
   pass('Client A received LAST_MODIFIED: $lastModifiedAfter');
 
-  // Step 6: Compare Client A's report.txt with Station's report.txt
+  // Step 6: Compare Client A's points.txt with Station's points.txt
   final stationAlertsDir = Directory('$stationDataDir/devices');
-  String? stationReportPath;
+  String? stationAlertPath;
 
   await for (final entity in stationAlertsDir.list(recursive: true)) {
     if (entity is Directory && entity.path.endsWith(folderName)) {
       final reportFile = File('${entity.path}/report.txt');
       if (await reportFile.exists()) {
-        stationReportPath = reportFile.path;
+        stationAlertPath = entity.path;
         break;
       }
     }
   }
 
-  if (stationReportPath == null) {
-    fail('Verify sync', 'Station report.txt not found');
+  if (stationAlertPath == null) {
+    fail('Verify sync', 'Station alert folder not found');
     return false;
   }
 
-  final stationReport = await File(stationReportPath).readAsString();
-  final stationPointCount = _extractField(stationReport, 'POINT_COUNT');
-  final stationPointedBy = _extractField(stationReport, 'POINTED_BY');
+  final stationPointedByList = await _readPointsFile(stationAlertPath);
+  final stationReport = await File('$stationAlertPath/report.txt').readAsString();
   final stationLastModified = _extractField(stationReport, 'LAST_MODIFIED');
 
   // Verify point counts match
-  if (pointCountAfter != stationPointCount) {
-    fail('Verify sync', 'POINT_COUNT mismatch: Client A=$pointCountAfter, Station=$stationPointCount');
-    return false;
-  }
-
-  // Verify POINTED_BY matches
-  final clientAPointedByList = _parsePointedBy(pointedByAfter);
-  final stationPointedByList = _parsePointedBy(stationPointedBy);
-
   if (clientAPointedByList.length != stationPointedByList.length) {
-    fail('Verify sync', 'POINTED_BY length mismatch: Client A=${clientAPointedByList.length}, Station=${stationPointedByList.length}');
+    fail('Verify sync', 'Point count mismatch: Client A=${clientAPointedByList.length}, Station=${stationPointedByList.length}');
     return false;
   }
 
+  // Verify points.txt entries match (order-independent)
   final clientASet = clientAPointedByList.toSet();
   final stationSet = stationPointedByList.toSet();
 
   if (!clientASet.containsAll(stationSet) || !stationSet.containsAll(clientASet)) {
-    fail('Verify sync', 'POINTED_BY entries mismatch');
+    fail('Verify sync', 'Points entries mismatch: Client A=$clientAPointedByList, Station=$stationPointedByList');
     return false;
   }
 
-  pass('Client A POINT_COUNT matches Station: $pointCountAfter');
-  pass('Client A POINTED_BY matches Station: $clientAPointedByList');
+  pass('Client A point count matches Station: ${clientAPointedByList.length}');
+  pass('Client A points.txt matches Station: $clientAPointedByList');
 
   // Verify LAST_MODIFIED matches
   if (lastModifiedAfter != stationLastModified) {
@@ -1396,7 +1434,7 @@ Future<bool> testSyncAlertsToClientA() async {
   }
 
   pass('Client A LAST_MODIFIED matches Station: $lastModifiedAfter');
-  pass('Client A report.txt synchronized with Station');
+  pass('Client A synchronized with Station');
 
   return true;
 }
@@ -1411,6 +1449,24 @@ Future<bool> testCommentAlertFromClientB() async {
   }
 
   final commentContent = 'This is a test comment from Client B confirming the issue.';
+
+  // Debug: List alerts on Client B before commenting
+  info('Debug: Listing alerts on Client B before comment...');
+  final listResult = await debugAction(clientBPort, {
+    'action': 'alert_list',
+  });
+  if (listResult != null && listResult['success'] == true) {
+    final alerts = listResult['alerts'] as List? ?? [];
+    info('Client B has ${alerts.length} alert(s)');
+    for (final alert in alerts) {
+      info('  - Alert ID: ${alert['id']}, Folder: ${alert['folder_name']}, Title: ${alert['title']}');
+    }
+  } else {
+    info('Failed to list alerts: ${listResult?['error'] ?? 'unknown'}');
+  }
+
+  info('Using alert_id: $_createdAlertId');
+  info('Using folder_name: $_createdAlertFolderName');
 
   // Step 1: Add comment from Client B using debug API
   info('Adding comment from Client B...');
@@ -1764,8 +1820,8 @@ Future<bool> testVerifyFolderStructureConsistency() async {
   info('Station contents: $stationContents');
   info('Client B contents: $clientBContents');
 
-  // All should have these essential items
-  final requiredItems = ['report.txt', 'images/', 'images/photo1.png', 'images/photo2.png', 'comments/'];
+  // All should have these essential items (points.txt is created after pointing test)
+  final requiredItems = ['report.txt', 'points.txt', 'images/', 'images/photo1.png', 'images/photo2.png', 'comments/'];
 
   for (final item in requiredItems) {
     if (!clientAContents.contains(item)) {
@@ -1783,6 +1839,33 @@ Future<bool> testVerifyFolderStructureConsistency() async {
   }
 
   pass('All instances have required items: ${requiredItems.join(', ')}');
+
+  // Verify points.txt content matches across all instances
+  final clientAPoints = await _readPointsFile(clientAAlertPath);
+  final stationPoints = await _readPointsFile(stationAlertPath);
+  final clientBPoints = await _readPointsFile(clientBAlertPath);
+
+  info('Client A points: $clientAPoints');
+  info('Station points: $stationPoints');
+  info('Client B points: $clientBPoints');
+
+  // All should have the same points
+  final clientAPointSet = clientAPoints.toSet();
+  final stationPointSet = stationPoints.toSet();
+  final clientBPointSet = clientBPoints.toSet();
+
+  if (clientAPointSet.length != stationPointSet.length ||
+      stationPointSet.length != clientBPointSet.length) {
+    fail('Verify points.txt consistency', 'Point count mismatch: ClientA=${clientAPoints.length}, Station=${stationPoints.length}, ClientB=${clientBPoints.length}');
+    return false;
+  }
+
+  if (!clientAPointSet.containsAll(stationPointSet) || !stationPointSet.containsAll(clientBPointSet)) {
+    fail('Verify points.txt consistency', 'Points content mismatch across instances');
+    return false;
+  }
+
+  pass('Points.txt content consistent across all instances: ${clientAPoints.length} point(s)');
 
   // Verify comments directory has at least one comment with correct naming format
   final commentPattern = RegExp(r'comments/\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}_[A-Z0-9]{6}\.txt');

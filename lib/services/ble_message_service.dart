@@ -131,6 +131,10 @@ class BLEMessageService {
         LogService().log('BLEMessageService: Platform cannot be server - client mode only');
       }
 
+      // Start periodic scanning for peer discovery (every 45 seconds, 8 second duration)
+      await _discoveryService.startPeriodicScanning();
+      LogService().log('BLEMessageService: Periodic peer scanning started');
+
       _isInitialized = true;
       LogService().log('BLEMessageService: Initialized successfully '
           '(identity: ${_identityService.fullIdentity}, server: $canBeServer, client: $canBeClient)');

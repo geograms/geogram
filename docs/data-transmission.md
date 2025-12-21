@@ -512,6 +512,21 @@ Bluetooth Low Energy for offline, short-range communication. Works without any n
 3. **Communication**: Messages sent via GATT characteristics
 4. **Parceling**: Large messages split into 280-byte parcels
 
+**Android-Android Peer Discovery:**
+
+Since both Android devices can act as GATT servers simultaneously, peer discovery requires active scanning. Geogram implements automatic periodic background scanning:
+
+1. **Advertising**: Each device advertises every 30 seconds (existing behavior)
+2. **Scanning**: Each device scans for 8 seconds every 45 seconds (new behavior)
+3. **Discovery Window**: Devices typically discover each other within 45 seconds of coming into range
+4. **Stale Cleanup**: Devices not seen for 90 seconds are removed from discovered list
+
+**Battery Impact:**
+- Scanning duty cycle: ~18% (8 seconds per 45 seconds)
+- Combined with advertising: ~35-40% total BLE activity
+- Comparable to other background services
+- Automatically pauses when Bluetooth is disabled
+
 **Capabilities:**
 - ✅ Works completely offline
 - ✅ No internet required
@@ -521,6 +536,8 @@ Bluetooth Low Energy for offline, short-range communication. Works without any n
 - Short range (~10-100 meters)
 - Slow (BLE bandwidth limits)
 - Platform restrictions (GATT server only on Android/iOS)
+- **Android peer discovery**: Requires up to 45 seconds for first discovery (periodic scan interval)
+- **Battery consideration**: Background scanning uses ~18% duty cycle
 
 **Platform Support:**
 
@@ -531,6 +548,8 @@ Bluetooth Low Energy for offline, short-range communication. Works without any n
 | Linux    | ✅ Yes      | ❌ No       | ✅ Yes       | ❌ No             |
 | macOS    | ✅ Yes      | ❌ No       | ✅ Yes       | ❌ No             |
 | Windows  | ✅ Yes      | ❌ No       | ✅ Yes       | ❌ No             |
+
+**Note**: On Android-Android communication, automatic peer discovery via periodic background scanning ensures devices find each other without manual intervention. Discovery typically completes within 45 seconds of devices coming into range.
 
 See [BLE.md](BLE.md) for detailed BLE implementation documentation.
 

@@ -7,11 +7,13 @@ import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:file_picker/file_picker.dart';
 import '../services/security_service.dart';
 import '../services/log_api_service.dart';
 import '../services/i18n_service.dart';
 import '../services/log_service.dart';
 import '../services/app_args.dart';
+import '../services/storage_config.dart';
 
 /// Page for managing security and privacy settings
 class SecuritySettingsPage extends StatefulWidget {
@@ -124,6 +126,14 @@ class _SecuritySettingsPageState extends State<SecuritySettingsPage> {
 
           // Location Granularity
           _buildLocationGranularityTile(theme),
+          const SizedBox(height: 24),
+
+          // Section: Storage (only on desktop/mobile, not web)
+          if (!kIsWeb) ...[
+            _buildSectionHeader(theme, _i18n.t('storage'), Icons.folder),
+            const SizedBox(height: 8),
+            _buildWorkingFolderTile(theme),
+          ],
         ],
       ),
     );
@@ -391,5 +401,207 @@ class _SecuritySettingsPageState extends State<SecuritySettingsPage> {
         ),
       ],
     );
+  }
+
+  Widget _buildWorkingFolderTile(ThemeData theme) {
+    final storageConfig = StorageConfig();
+    final currentPath = storageConfig.isInitialized ? storageConfig.baseDir : 'Not initialized';
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              _i18n.t('working_folder'),
+              style: theme.textTheme.titleSmall,
+            ),
+            const SizedBox(height: 4),
+            Text(
+              _i18n.t('working_folder_description'),
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Icon(Icons.folder_open, size: 16, color: theme.colorScheme.secondary),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    currentPath,
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      fontFamily: 'monospace',
+                      color: theme.colorScheme.secondary,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                IconButton(
+                  icon: const Icon(Icons.copy, size: 20),
+                  onPressed: () {
+                    Clipboard.setData(ClipboardData(text: currentPath));
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(_i18n.t('url_copied')),
+                        duration: const Duration(seconds: 2),
+                      ),
+                    );
+                  },
+                  tooltip: _i18n.t('copy'),
+                ),
+                TextButton.icon(
+                  icon: const Icon(Icons.folder, size: 18),
+                  label: Text(_i18n.t('change_folder')),
+                  onPressed: _changeWorkingFolder,
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _changeWorkingFolder() async {
+    try {
+      final result = await FilePicker.platform.getDirectoryPath(
+        dialogTitle: _i18n.t('working_folder'),
+      );
+
+      if (result != null) {
+        final storageConfig = StorageConfig();
+        final currentPath = storageConfig.baseDir;
+
+        // Don't do anything if same folder selected
+        if (result == currentPath) return;
+
+        if (!mounted) return;
+
+        // Show progress dialog
+        showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (context) => AlertDialog(
+            content: Row(
+              children: [
+                const CircularProgressIndicator(),
+                const SizedBox(width: 16),
+                Expanded(child: Text(_i18n.t('moving_files'))),
+              ],
+            ),
+          ),
+        );
+
+        // Move files from current location to new location
+        final moveSuccess = await _moveWorkingFolder(currentPath, result);
+
+        if (!mounted) return;
+
+        // Close progress dialog
+        Navigator.pop(context);
+
+        if (moveSuccess) {
+          // Save the new path to preferences file
+          final saveSuccess = await storageConfig.saveCustomDataDir(result);
+
+          if (!mounted) return;
+
+          if (saveSuccess) {
+            // Show dialog with option to exit app
+            showDialog(
+              context: context,
+              barrierDismissible: false,
+              builder: (context) => AlertDialog(
+                title: Text(_i18n.t('restart_required')),
+                content: Text(_i18n.t('folder_changed')),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(context),
+                    child: Text(_i18n.t('later')),
+                  ),
+                  FilledButton(
+                    onPressed: () => exit(0),
+                    child: Text(_i18n.t('exit_now')),
+                  ),
+                ],
+              ),
+            );
+          }
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(_i18n.t('folder_change_failed')),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+
+        setState(() {});
+      }
+    } catch (e) {
+      LogService().log('SecuritySettingsPage: Error changing folder: $e');
+      if (mounted) {
+        // Close any open dialogs
+        Navigator.of(context).popUntil((route) => route.isFirst || route.settings.name != null);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(_i18n.t('folder_change_failed')),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  /// Move all files and folders from source to destination
+  Future<bool> _moveWorkingFolder(String sourcePath, String destPath) async {
+    try {
+      final sourceDir = Directory(sourcePath);
+      final destDir = Directory(destPath);
+
+      // Create destination if it doesn't exist
+      if (!await destDir.exists()) {
+        await destDir.create(recursive: true);
+      }
+
+      // Copy all contents recursively
+      await _copyDirectory(sourceDir, destDir);
+
+      LogService().log('SecuritySettingsPage: Successfully moved folder from $sourcePath to $destPath');
+      return true;
+    } catch (e) {
+      LogService().log('SecuritySettingsPage: Error moving folder: $e');
+      return false;
+    }
+  }
+
+  /// Recursively copy a directory
+  Future<void> _copyDirectory(Directory source, Directory destination) async {
+    await for (final entity in source.list(recursive: false)) {
+      final newPath = '${destination.path}/${entity.path.split('/').last}';
+
+      if (entity is File) {
+        final destFile = File(newPath);
+        // Skip if destination file already exists and is same size
+        if (await destFile.exists()) {
+          final sourceSize = await entity.length();
+          final destSize = await destFile.length();
+          if (sourceSize == destSize) {
+            continue;
+          }
+        }
+        await entity.copy(newPath);
+      } else if (entity is Directory) {
+        final newDir = Directory(newPath);
+        if (!await newDir.exists()) {
+          await newDir.create(recursive: true);
+        }
+        await _copyDirectory(entity, newDir);
+      }
+    }
   }
 }

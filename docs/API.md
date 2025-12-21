@@ -642,7 +642,18 @@ Returns detailed information about a specific alert, including list of photos.
   "pointed_by": ["npub1abc...", "npub1def..."],
   "verified_by": ["npub1ghi..."],
   "last_modified": "2025-12-14T10:30:00Z",
-  "photos": ["photo1.jpg", "photo2.png", "test_photo.png"],
+  "files": {
+    "report.txt": { "size": 597, "mtime": 1734215746 },
+    "points.txt": { "size": 0, "mtime": 0 },
+    "images/": {
+      "photo1.jpg": { "size": 160337, "mtime": 1734212897 },
+      "photo2.png": { "size": 40135, "mtime": 1734212897 }
+    },
+    "comments/": {
+      "2025-12-14_10-35-00_X1ABCD.txt": { "size": 155, "mtime": 1734215746 }
+    }
+  },
+  "photos": ["images/photo1.jpg", "images/photo2.png"],
   "comments": [
     {
       "filename": "2025-12-14_10-35-00_X1ABCD.txt",
@@ -675,11 +686,26 @@ Returns detailed information about a specific alert, including list of photos.
 | `pointed_by` | array | List of NPUBs who pointed the alert |
 | `verified_by` | array | List of NPUBs who verified the alert |
 | `last_modified` | string | ISO 8601 timestamp of last modification |
+| `files` | object | File tree for synchronization (see below) |
 | `photos` | array | List of photo filenames in the alert folder |
 | `comments` | array | List of comment objects (see below) |
 | `comment_count` | int | Number of comments |
 | `callsign` | string | Alert owner's callsign |
 | `report_content` | string | Raw report.txt content for sync |
+
+**Files Object:**
+
+The `files` field contains a recursive tree structure of all files in the alert folder, enabling efficient synchronization. Clients compare server `mtime` (Unix timestamp) with local file modification times to download only changed files.
+
+| Key Format | Value | Description |
+|------------|-------|-------------|
+| `filename` | `{size, mtime}` | File with size in bytes and Unix timestamp |
+| `dirname/` | `{nested files}` | Directory (trailing slash) containing nested file objects |
+
+**Sync Algorithm:**
+1. For each file in `files`, compare server `mtime` with local file `mtime`
+2. If `server_mtime > local_mtime`, download the file via `GET /{callsign}/api/alerts/{alertId}/files/{path}`
+3. Files with `mtime: 0` and `size: 0` are placeholders (non-existent files)
 
 **Comment Object:**
 | Field | Type | Description |
@@ -1162,6 +1188,10 @@ Receives and merges messages from a remote device during sync.
 
 ### Blog
 
+The Blog API provides access to blog posts stored on a device. Posts are stored in a folder-based structure with comments in separate files.
+
+For detailed specifications, see [Blog Format Specification](apps/blog-format-specification.md).
+
 #### GET /{identifier}/blog/{filename}.html
 
 Serves a user's blog post as HTML.
@@ -1180,6 +1210,129 @@ Serves a user's blog post as HTML.
 ```bash
 curl http://192.168.1.100:8080/alice/blog/my-first-post.html
 ```
+
+#### GET /api/blog
+
+Returns list of all published blog posts.
+
+**Query Parameters:**
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `year` | (all) | Filter by year (e.g., `2025`) |
+| `tag` | (all) | Filter by tag |
+| `limit` | (all) | Max posts to return |
+| `offset` | 0 | Pagination offset |
+
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "timestamp": 1734344400,
+  "total": 5,
+  "count": 5,
+  "posts": [
+    {
+      "id": "2025-12-04_hello-everyone",
+      "title": "Hello Everyone",
+      "author": "CR7BBQ",
+      "timestamp": "2025-12-04 10:00_00",
+      "status": "published",
+      "tags": ["welcome"],
+      "comment_count": 2
+    }
+  ]
+}
+```
+
+#### GET /api/blog/{postId}
+
+Returns full details for a specific blog post including comments.
+
+**Parameters:**
+| Parameter | Description |
+|-----------|-------------|
+| `postId` | Post ID in format `YYYY-MM-DD_title-slug` |
+
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "id": "2025-12-04_hello-everyone",
+  "title": "Hello Everyone",
+  "author": "CR7BBQ",
+  "timestamp": "2025-12-04 10:00_00",
+  "status": "published",
+  "tags": ["welcome"],
+  "content": "Welcome to my blog...",
+  "comments": [
+    {
+      "id": "2025-12-04_11-30-45_X13K0G",
+      "author": "X13K0G",
+      "timestamp": "2025-12-04 11:30_45",
+      "content": "Great post!"
+    }
+  ],
+  "comment_count": 1
+}
+```
+
+#### POST /api/blog/{postId}/comment
+
+Add a comment to a published blog post.
+
+**Request Body:**
+```json
+{
+  "author": "X13K0G",
+  "content": "Great post!",
+  "npub": "npub1abc...",
+  "signature": "hex_signature"
+}
+```
+
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "comment_id": "2025-12-04_11-30-45_X13K0G",
+  "timestamp": "2025-12-04T11:30:45Z"
+}
+```
+
+**Error Responses:**
+- `400` - Missing required field (author or content)
+- `403` - Cannot comment on unpublished post
+- `404` - Post not found
+
+#### DELETE /api/blog/{postId}/comment/{commentId}
+
+Delete a comment from a blog post. Requires authorization via X-Npub header.
+
+**Headers:**
+| Header | Description |
+|--------|-------------|
+| `X-Npub` | Requester's NOSTR public key |
+
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "deleted": true
+}
+```
+
+**Error Responses:**
+- `401` - Missing X-Npub header
+- `403` - Unauthorized (not post author or comment author)
+- `404` - Post or comment not found
+
+#### GET /api/blog/{postId}/files/{filename}
+
+Get an attached file from a blog post.
+
+**Response (200 OK):** File content with appropriate Content-Type header.
+
+**Response (404 Not Found):** File not found.
 
 ---
 

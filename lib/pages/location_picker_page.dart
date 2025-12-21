@@ -3,19 +3,14 @@
  * License: Apache-2.0
  */
 
-import 'dart:io' if (dart.library.html) '../platform/io_stub.dart' show Platform;
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
-import 'package:http/http.dart' as http;
-import 'package:geolocator/geolocator.dart';
-import 'dart:convert';
 import '../services/log_service.dart';
 import '../services/i18n_service.dart';
-import '../services/profile_service.dart';
 import '../services/config_service.dart';
 import '../services/map_tile_service.dart' show MapTileService, TileLoadingStatus, MapLayerType;
+import '../util/geolocation_utils.dart';
 
 /// Full-page reusable location picker
 /// Can be used throughout the app for selecting coordinates
@@ -33,7 +28,6 @@ class LocationPickerPage extends StatefulWidget {
 
 class _LocationPickerPageState extends State<LocationPickerPage> {
   final I18nService _i18n = I18nService();
-  final ProfileService _profileService = ProfileService();
   final ConfigService _configService = ConfigService();
   final MapTileService _mapTileService = MapTileService();
   final MapController _mapController = MapController();
@@ -46,7 +40,6 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
 
   // Default to central Europe (Munich/Vienna area)
   static const LatLng _defaultPosition = LatLng(48.0, 10.0);
-  static const double _defaultZoom = 17.0;
 
   @override
   void initState() {
@@ -74,49 +67,30 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
   }
 
   /// Automatically detect location when the picker opens
-  /// Falls back to last saved position, then GeoIP if detection fails
+  /// Uses GeolocationUtils for unified location detection
   Future<void> _autoDetectLocationOnStart() async {
     setState(() {
       _isDetectingLocation = true;
     });
 
     try {
-      if (kIsWeb) {
-        // On web, try browser geolocation first
-        await _tryBrowserGeolocation();
-      } else if (Platform.isAndroid || Platform.isIOS) {
-        // On mobile, try GPS
-        await _tryGPSLocation();
-      } else {
-        // On desktop, use IP-based geolocation
-        await _detectLocationViaIP();
-      }
-    } catch (e) {
-      LogService().log('Auto-detect failed, trying fallbacks: $e');
+      final result = await GeolocationUtils.getCurrentLocation(useProfile: true);
 
-      // Fallback 1: Try last saved position
-      final lastLat = _configService.get('lastLocationPickerLat');
-      final lastLon = _configService.get('lastLocationPickerLon');
-
-      if (lastLat != null && lastLon != null && mounted) {
-        final lat = lastLat as double;
-        final lon = lastLon as double;
-        setState(() {
-          _selectedPosition = LatLng(lat, lon);
-          _latController.text = lat.toStringAsFixed(6);
-          _lonController.text = lon.toStringAsFixed(6);
-        });
-        _mapController.move(_selectedPosition, _currentZoom);
-        LogService().log('Using last saved position');
+      if (result != null && result.isValid && mounted) {
+        _setLocation(result.latitude, result.longitude);
+        LogService().log('Auto-detected location via ${result.source}: ${result.latitude}, ${result.longitude}');
       } else {
-        // Fallback 2: Try GeoIP
-        try {
-          await _fetchGeoIPLocation();
-        } catch (e2) {
-          LogService().log('GeoIP also failed: $e2');
-          // Stay at default position
+        // Fallback: Try last saved position
+        final lastLat = _configService.get('lastLocationPickerLat');
+        final lastLon = _configService.get('lastLocationPickerLon');
+
+        if (lastLat != null && lastLon != null && mounted) {
+          _setLocation(lastLat as double, lastLon as double);
+          LogService().log('Fallback: Using last saved position');
         }
       }
+    } catch (e) {
+      LogService().log('Auto-detect failed: $e');
     } finally {
       if (mounted) {
         setState(() {
@@ -126,75 +100,14 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
     }
   }
 
-  /// Try to get browser geolocation without showing error messages
-  Future<void> _tryBrowserGeolocation() async {
-    LocationPermission permission = await Geolocator.checkPermission();
-    if (permission == LocationPermission.denied) {
-      permission = await Geolocator.requestPermission();
-    }
-
-    if (permission == LocationPermission.denied ||
-        permission == LocationPermission.deniedForever) {
-      // Fall back to IP-based
-      await _detectLocationViaIP();
-      return;
-    }
-
-    final position = await Geolocator.getCurrentPosition(
-      locationSettings: const LocationSettings(
-        accuracy: LocationAccuracy.high,
-        timeLimit: Duration(seconds: 10),
-      ),
-    );
-
-    if (mounted) {
-      setState(() {
-        _selectedPosition = LatLng(position.latitude, position.longitude);
-        _latController.text = position.latitude.toStringAsFixed(6);
-        _lonController.text = position.longitude.toStringAsFixed(6);
-      });
-      _mapController.move(_selectedPosition, _currentZoom);
-      LogService().log('Browser geolocation on start: ${position.latitude}, ${position.longitude}');
-    }
-  }
-
-  /// Try to get GPS location without showing error messages
-  Future<void> _tryGPSLocation() async {
-    bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
-    if (!serviceEnabled) {
-      // Fall back to IP-based
-      await _detectLocationViaIP();
-      return;
-    }
-
-    LocationPermission permission = await Geolocator.checkPermission();
-    if (permission == LocationPermission.denied) {
-      permission = await Geolocator.requestPermission();
-    }
-
-    if (permission == LocationPermission.denied ||
-        permission == LocationPermission.deniedForever) {
-      // Fall back to IP-based
-      await _detectLocationViaIP();
-      return;
-    }
-
-    final position = await Geolocator.getCurrentPosition(
-      locationSettings: const LocationSettings(
-        accuracy: LocationAccuracy.high,
-        timeLimit: Duration(seconds: 10),
-      ),
-    );
-
-    if (mounted) {
-      setState(() {
-        _selectedPosition = LatLng(position.latitude, position.longitude);
-        _latController.text = position.latitude.toStringAsFixed(6);
-        _lonController.text = position.longitude.toStringAsFixed(6);
-      });
-      _mapController.move(_selectedPosition, _currentZoom);
-      LogService().log('GPS location on start: ${position.latitude}, ${position.longitude}');
-    }
+  /// Set location and update UI
+  void _setLocation(double lat, double lon) {
+    setState(() {
+      _selectedPosition = LatLng(lat, lon);
+      _latController.text = lat.toStringAsFixed(6);
+      _lonController.text = lon.toStringAsFixed(6);
+    });
+    _mapController.move(_selectedPosition, _currentZoom);
   }
 
   Future<void> _initializeMap() async {
@@ -220,39 +133,8 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
     });
   }
 
-  Future<void> _fetchGeoIPLocation() async {
-    try {
-      // Use ip-api.com free GeoIP service (no API key required)
-      final response = await http.get(
-        Uri.parse('http://ip-api.com/json/?fields=lat,lon'),
-      ).timeout(const Duration(seconds: 5));
-
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body);
-        final lat = data['lat'] as double?;
-        final lon = data['lon'] as double?;
-
-        if (lat != null && lon != null && mounted) {
-          setState(() {
-            _selectedPosition = LatLng(lat, lon);
-            _latController.text = lat.toStringAsFixed(6);
-            _lonController.text = lon.toStringAsFixed(6);
-          });
-
-          // Smoothly move map to GeoIP location
-          _mapController.move(_selectedPosition, _currentZoom);
-
-          LogService().log('GeoIP location: $lat, $lon');
-        }
-      }
-    } catch (e) {
-      // Silently fail - already defaulted to Europe
-      LogService().log('Could not fetch GeoIP location: $e');
-    }
-  }
-
-  /// Auto-detect current location
-  /// Uses browser Geolocation API on web, GPS on Android, IP-based geolocation on desktop
+  /// Auto-detect current location (triggered by manual button press)
+  /// Uses GeolocationUtils for unified location detection
   Future<void> _autoDetectLocation() async {
     if (_isDetectingLocation) return;
 
@@ -261,15 +143,15 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
     });
 
     try {
-      if (kIsWeb) {
-        // Use browser Geolocation API on web (requests permission automatically)
-        await _detectLocationViaBrowser();
-      } else if (Platform.isAndroid) {
-        // Use GPS on Android
-        await _detectLocationViaGPS();
-      } else {
-        // Use IP-based geolocation on desktop (Windows, Linux, macOS)
-        await _detectLocationViaIP();
+      final result = await GeolocationUtils.getCurrentLocation(useProfile: true);
+
+      if (result != null && result.isValid && mounted) {
+        _setLocation(result.latitude, result.longitude);
+        LogService().log('Manual detect: location via ${result.source}: ${result.latitude}, ${result.longitude}');
+      } else if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(_i18n.t('location_detection_failed'))),
+        );
       }
     } catch (e) {
       LogService().log('Error auto-detecting location: $e');
@@ -284,143 +166,6 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
           _isDetectingLocation = false;
         });
       }
-    }
-  }
-
-  /// Detect location using GPS (Android)
-  Future<void> _detectLocationViaGPS() async {
-    // Check if location services are enabled
-    bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
-    if (!serviceEnabled) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(_i18n.t('location_services_disabled'))),
-        );
-      }
-      return;
-    }
-
-    // Check and request permission
-    LocationPermission permission = await Geolocator.checkPermission();
-    if (permission == LocationPermission.denied) {
-      permission = await Geolocator.requestPermission();
-      if (permission == LocationPermission.denied) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text(_i18n.t('location_permission_denied'))),
-          );
-        }
-        return;
-      }
-    }
-
-    if (permission == LocationPermission.deniedForever) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(_i18n.t('location_permission_permanent_denied'))),
-        );
-      }
-      return;
-    }
-
-    // Get current position
-    final position = await Geolocator.getCurrentPosition(
-      locationSettings: const LocationSettings(
-        accuracy: LocationAccuracy.high,
-        timeLimit: Duration(seconds: 10),
-      ),
-    );
-
-    if (mounted) {
-      setState(() {
-        _selectedPosition = LatLng(position.latitude, position.longitude);
-        _latController.text = position.latitude.toStringAsFixed(6);
-        _lonController.text = position.longitude.toStringAsFixed(6);
-      });
-
-      _mapController.move(_selectedPosition, _currentZoom);
-
-      LogService().log('GPS location: ${position.latitude}, ${position.longitude}');
-    }
-  }
-
-  /// Detect location using Browser Geolocation API (Web)
-  /// This will prompt the user for permission if not already granted
-  Future<void> _detectLocationViaBrowser() async {
-    // Check and request permission - geolocator handles browser permission dialog
-    LocationPermission permission = await Geolocator.checkPermission();
-    if (permission == LocationPermission.denied) {
-      permission = await Geolocator.requestPermission();
-      if (permission == LocationPermission.denied) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text(_i18n.t('location_permission_denied'))),
-          );
-        }
-        // Fall back to IP-based geolocation
-        await _detectLocationViaIP();
-        return;
-      }
-    }
-
-    if (permission == LocationPermission.deniedForever) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(_i18n.t('location_permission_permanent_denied'))),
-        );
-      }
-      // Fall back to IP-based geolocation
-      await _detectLocationViaIP();
-      return;
-    }
-
-    // Get current position using browser's Geolocation API
-    final position = await Geolocator.getCurrentPosition(
-      locationSettings: const LocationSettings(
-        accuracy: LocationAccuracy.high,
-        timeLimit: Duration(seconds: 15),
-      ),
-    );
-
-    if (mounted) {
-      setState(() {
-        _selectedPosition = LatLng(position.latitude, position.longitude);
-        _latController.text = position.latitude.toStringAsFixed(6);
-        _lonController.text = position.longitude.toStringAsFixed(6);
-      });
-
-      _mapController.move(_selectedPosition, _currentZoom);
-
-      LogService().log('Browser geolocation: ${position.latitude}, ${position.longitude}');
-    }
-  }
-
-  /// Detect location using IP address (Desktop)
-  Future<void> _detectLocationViaIP() async {
-    final response = await http.get(
-      Uri.parse('http://ip-api.com/json/?fields=lat,lon,city,country'),
-    ).timeout(const Duration(seconds: 10));
-
-    if (response.statusCode == 200) {
-      final data = json.decode(response.body);
-      final lat = data['lat'] as double?;
-      final lon = data['lon'] as double?;
-      final city = data['city'] as String? ?? '';
-      final country = data['country'] as String? ?? '';
-
-      if (lat != null && lon != null && mounted) {
-        setState(() {
-          _selectedPosition = LatLng(lat, lon);
-          _latController.text = lat.toStringAsFixed(6);
-          _lonController.text = lon.toStringAsFixed(6);
-        });
-
-        _mapController.move(_selectedPosition, _currentZoom);
-
-        LogService().log('IP-based location: $lat, $lon ($city, $country)');
-      }
-    } else {
-      throw Exception('Failed to fetch IP location: ${response.statusCode}');
     }
   }
 

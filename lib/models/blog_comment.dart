@@ -5,12 +5,14 @@
 
 /// Model representing a comment on a blog post
 class BlogComment {
+  final String? id; // Comment ID (filename without .txt) for file-based storage
   final String author;
   final String timestamp; // Format: YYYY-MM-DD HH:MM_ss
   final String content;
   final Map<String, String> metadata;
 
   BlogComment({
+    this.id,
     required this.author,
     required this.timestamp,
     required this.content,

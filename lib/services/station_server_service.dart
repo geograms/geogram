@@ -1815,7 +1815,9 @@ class StationServerService {
         'requestId': requestId,
         'method': 'GET',
         'path': blogApiPath,
-        'headers': jsonEncode({}),
+        'headers': jsonEncode({
+          'X-Device-Callsign': targetCallsign,
+        }),
         'body': null,
       };
 

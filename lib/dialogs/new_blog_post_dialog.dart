@@ -60,6 +60,15 @@ class _NewBlogPostDialogState extends State<NewBlogPostDialog> {
     );
     _tagsController.addListener(_onTagsChanged);
     _tagsFocusNode.addListener(_onTagsFocusChanged);
+
+    // Initialize location from existing post if editing
+    if (widget.post != null && widget.post!.hasLocation) {
+      final lat = widget.post!.latitude;
+      final lon = widget.post!.longitude;
+      if (lat != null && lon != null) {
+        _location = LatLng(lat, lon);
+      }
+    }
   }
 
   @override
@@ -177,12 +186,12 @@ class _NewBlogPostDialogState extends State<NewBlogPostDialog> {
   }
 
   Future<void> _pickLocation() async {
+    // Don't pass initial position - let the picker auto-detect current location
+    // using GPS on mobile, browser geolocation on web, or IP-based on desktop
     final result = await Navigator.push<LatLng>(
       context,
       MaterialPageRoute(
-        builder: (context) => LocationPickerPage(
-          initialPosition: _location,
-        ),
+        builder: (context) => const LocationPickerPage(),
       ),
     );
 

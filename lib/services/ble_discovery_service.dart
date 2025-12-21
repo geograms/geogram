@@ -91,6 +91,17 @@ class BLEDiscoveryService {
   bool _isAdvertising = false;
   bool get isAdvertising => _isAdvertising;
 
+  /// Periodic scanning state
+  bool _isPeriodicScanningActive = false;
+  bool get isPeriodicScanning => _isPeriodicScanningActive;
+
+  /// Periodic scan timer
+  Timer? _periodicScanTimer;
+
+  /// Scan configuration
+  static const Duration _periodicScanInterval = Duration(seconds: 45);
+  static const Duration _periodicScanDuration = Duration(seconds: 8);
+
   /// Scan results subscription
   StreamSubscription<List<ScanResult>>? _scanSubscription;
 
@@ -259,6 +270,82 @@ class BLEDiscoveryService {
       ));
     } catch (e) {
       LogService().log('BLEDiscovery: Error stopping scan: $e');
+    }
+  }
+
+  /// Start periodic background scanning for peer devices
+  /// Scans for 8 seconds every 45 seconds to balance discovery vs battery
+  Future<void> startPeriodicScanning() async {
+    // Refuse in internet-only mode
+    if (AppArgs().internetOnly) {
+      LogService().log('BLEDiscovery: Periodic scanning disabled in internet-only mode');
+      return;
+    }
+
+    if (_isPeriodicScanningActive) {
+      LogService().log('BLEDiscovery: Periodic scanning already active');
+      return;
+    }
+
+    // Check if BLE is available
+    if (!await isAvailable()) {
+      LogService().log('BLEDiscovery: BLE not available, cannot start periodic scanning');
+      return;
+    }
+
+    _isPeriodicScanningActive = true;
+    LogService().log('BLEDiscovery: Starting periodic scanning (45s interval, 8s duration)');
+
+    // Run first scan immediately
+    _runPeriodicScan();
+
+    // Then schedule periodic scans
+    _periodicScanTimer = Timer.periodic(_periodicScanInterval, (_) {
+      _runPeriodicScan();
+    });
+  }
+
+  /// Stop periodic scanning
+  Future<void> stopPeriodicScanning() async {
+    if (!_isPeriodicScanningActive) return;
+
+    _periodicScanTimer?.cancel();
+    _periodicScanTimer = null;
+    _isPeriodicScanningActive = false;
+
+    // Stop any active scan
+    if (_isScanning) {
+      await stopScanning();
+    }
+
+    LogService().log('BLEDiscovery: Stopped periodic scanning');
+  }
+
+  /// Run a single periodic scan cycle
+  Future<void> _runPeriodicScan() async {
+    // Skip if already scanning (manual scan in progress)
+    if (_isScanning) {
+      LogService().log('BLEDiscovery: Skipping periodic scan (manual scan active)');
+      return;
+    }
+
+    // Check if BLE is still available
+    if (!await isAvailable()) {
+      LogService().log('BLEDiscovery: BLE not available, skipping periodic scan');
+      return;
+    }
+
+    try {
+      LogService().log('BLEDiscovery: Running periodic scan cycle...');
+      await startScanning(timeout: _periodicScanDuration);
+
+      // Clean up devices not seen in 90 seconds (2 scan cycles)
+      removeStaleDevices(maxAge: const Duration(seconds: 90));
+
+      LogService().log('BLEDiscovery: Periodic scan complete - ${_discoveredDevices.length} devices known');
+    } catch (e) {
+      LogService().log('BLEDiscovery: Periodic scan error: $e');
+      // Continue scanning on next cycle despite error
     }
   }
 
@@ -931,6 +1018,8 @@ class BLEDiscoveryService {
   /// Dispose resources
   void dispose() {
     _adapterStateSubscription?.cancel();
+    _periodicScanTimer?.cancel();
+    _periodicScanTimer = null;
     stopScanning();
     stopAdvertising();
     closeAllConnections();

@@ -178,9 +178,13 @@ class BLEPermissionService {
       };
     }
 
-    final bluetoothSupported = await FlutterBluePlus.isSupported;
+    // NOTE: Do NOT call FlutterBluePlus.isSupported here as it triggers Bluetooth
+    // platform initialization which can show permission dialogs on Android 12+.
+    // We assume Bluetooth is supported on Android devices - actual support check
+    // happens in requestAllPermissions() when permissions are requested.
 
     // Check actual permission status using permission_handler
+    // These .status calls do NOT trigger permission dialogs
     final scanStatus = await Permission.bluetoothScan.status;
     final connectStatus = await Permission.bluetoothConnect.status;
     final advertiseStatus = await Permission.bluetoothAdvertise.status;
@@ -190,7 +194,7 @@ class BLEPermissionService {
     _advertisePermissionGranted = advertiseStatus.isGranted;
 
     return {
-      'bluetooth_supported': bluetoothSupported,
+      'bluetooth_supported': true, // Assume supported - verified in requestAllPermissions()
       'scan': _scanPermissionGranted,
       'connect': _connectPermissionGranted,
       'advertise': _advertisePermissionGranted,

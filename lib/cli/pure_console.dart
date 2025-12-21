@@ -8,6 +8,7 @@ import 'pure_station.dart';
 import 'cli_profile_service.dart';
 import 'cli_location_service.dart';
 import 'cli_station_cache_service.dart';
+import 'cli_args.dart';
 import '../models/profile.dart';
 import '../models/chat_message.dart' as chat;
 import '../util/event_bus.dart';
@@ -311,36 +312,132 @@ class PureConsole {
   /// Game engine config
   final GameConfig _gameConfig = GameConfig();
 
+  /// Parsed CLI arguments
+  late CliArgs _cliArgs;
+
   /// Run CLI mode
   Future<void> run(List<String> args) async {
-    // Check for --setup flag
-    final forceSetup = args.contains('--setup') || args.contains('-s');
+    // Parse command-line arguments
+    _cliArgs = CliArgs.parse(args);
 
-    // Parse --data-dir argument for custom storage location
-    final customDataDir = parseDataDirFromArgs(args);
+    // Handle --help
+    if (_cliArgs.showHelp) {
+      CliArgs.printHelp();
+      exit(0);
+    }
+
+    // Handle --version
+    if (_cliArgs.showVersion) {
+      CliArgs.printVersion();
+      exit(0);
+    }
 
     // Initialize storage configuration first
-    await PureStorageConfig().init(customBaseDir: customDataDir);
+    await PureStorageConfig().init(customBaseDir: _cliArgs.dataDir);
 
     await _initializeServices();
+
+    // Apply port setting from CLI args if specified
+    if (_cliArgs.port != null) {
+      final updatedSettings = _station.settings.copyWith(
+        httpPort: _cliArgs.port,
+      );
+      await _station.updateSettings(updatedSettings);
+    }
+
+    // Enable verbose mode if specified
+    if (_cliArgs.verbose) {
+      _station.quietMode = false;
+    }
+
     _printBanner();
 
-    // Check if setup is needed (no profiles exist)
-    if (forceSetup || _profileService.needsSetup()) {
-      if (_profileService.needsSetup()) {
+    // Handle --new-identity: create a new profile automatically
+    if (_cliArgs.newIdentity) {
+      await _createNewIdentity();
+    }
+    // Check if setup is needed (no profiles exist) and not skipping intro
+    else if (_profileService.needsSetup()) {
+      if (_cliArgs.skipIntro) {
+        // Skip intro but still need a profile - create default one
+        stdout.writeln('\x1B[33mNo profile found. Creating default profile...\x1B[0m');
+        await _createNewIdentity();
+      } else if (_cliArgs.forceSetup) {
         stdout.writeln('\x1B[33mInitial setup required.\x1B[0m');
         stdout.writeln();
+        await _handleSetup();
+      } else {
+        stdout.writeln('\x1B[33mInitial setup required.\x1B[0m');
+        stdout.writeln();
+        await _handleSetup();
       }
+    } else if (_cliArgs.forceSetup) {
       await _handleSetup();
     }
 
     // Check for daemon mode: ./geogram-cli station (runs station server without interactive prompt)
-    if (args.isNotEmpty && args[0] == 'station') {
+    if (_cliArgs.daemonMode) {
       await _runDaemonMode();
       return;
     }
 
     await _commandLoop();
+  }
+
+  /// Create a new identity based on CLI arguments
+  Future<void> _createNewIdentity() async {
+    final profileType = _cliArgs.isStation ? ProfileType.station : ProfileType.client;
+    final typeStr = _cliArgs.isStation ? 'station' : 'client';
+
+    stdout.writeln('Creating new $typeStr identity...');
+
+    final profile = await _profileService.createProfile(
+      type: profileType,
+      nickname: _cliArgs.nickname,
+    );
+
+    stdout.writeln('\x1B[32mProfile created successfully!\x1B[0m');
+    stdout.writeln('  Callsign: \x1B[36m${profile.callsign}\x1B[0m');
+    stdout.writeln('  Type:     \x1B[36m$typeStr\x1B[0m');
+    if (_cliArgs.nickname != null && _cliArgs.nickname!.isNotEmpty) {
+      stdout.writeln('  Nickname: \x1B[36m${_cliArgs.nickname}\x1B[0m');
+    }
+    stdout.writeln();
+
+    // Sync profile to station settings - for station profiles, sync the identity
+    // so the station server uses the same npub/nsec as the profile
+    var updatedSettings = _station.settings;
+
+    if (_cliArgs.isStation && profile.npub.isNotEmpty && profile.nsec.isNotEmpty) {
+      // Sync station identity from profile to station server
+      updatedSettings = updatedSettings.copyWith(
+        npub: profile.npub,
+        nsec: profile.nsec,
+      );
+    }
+
+    // Sync location if available
+    if (profile.latitude != null && profile.longitude != null) {
+      updatedSettings = updatedSettings.copyWith(
+        latitude: profile.latitude,
+        longitude: profile.longitude,
+        location: profile.locationName,
+      );
+    }
+
+    // Update settings and reinitialize chat if identity changed
+    if (updatedSettings != _station.settings) {
+      final identityChanged = _cliArgs.isStation &&
+          (updatedSettings.npub != _station.settings.npub ||
+           updatedSettings.nsec != _station.settings.nsec);
+
+      await _station.updateSettings(updatedSettings);
+
+      // If station identity changed, reinitialize chat for the new callsign
+      if (identityChanged) {
+        await _station.reinitializeChatForCurrentIdentity();
+      }
+    }
   }
 
   Future<void> _initializeServices() async {
@@ -599,6 +696,7 @@ class PureConsole {
   final _stdinQueue = <int>[];
   StreamSubscription<List<int>>? _stdinSubscription;
   Completer<int>? _byteCompleter;
+  bool _stdinListenedTo = false; // Track if we've ever listened to stdin
 
   /// Current input line state (for async message display)
   String _currentInputBuffer = '';
@@ -607,7 +705,8 @@ class PureConsole {
 
   /// Initialize async stdin reading
   void _initAsyncStdin() {
-    if (_stdinSubscription != null) return;
+    // stdin is a single-subscription stream - can only listen once
+    if (_stdinListenedTo) return;
     try {
       stdin.echoMode = false;
       stdin.lineMode = false;
@@ -615,6 +714,7 @@ class PureConsole {
       // Ignore terminal mode errors when running non-interactively (e.g., nohup, screen detached)
       // The station will still work, just without fancy input handling
     }
+    _stdinListenedTo = true;
     _stdinSubscription = stdin.listen((data) {
       _stdinQueue.addAll(data);
       // Complete any pending read
@@ -663,12 +763,49 @@ class PureConsole {
     _byteCompleter = null;
   }
 
+  /// Read a line asynchronously for non-terminal input
+  /// This allows the HTTP server to process requests while waiting for input
+  Future<String?> _readLineAsync() async {
+    _initAsyncStdin();
+    final buffer = StringBuffer();
+
+    while (true) {
+      final byte = await _readByteAsync();
+      if (byte == -1) continue; // EOF marker, keep reading
+
+      // Enter (CR or LF)
+      if (byte == 13 || byte == 10) {
+        return buffer.toString().trim();
+      }
+
+      // CTRL+C
+      if (byte == 3) {
+        return '__EXIT__';
+      }
+
+      // CTRL+D (EOF)
+      if (byte == 4) {
+        if (buffer.isEmpty) {
+          return 'quit';
+        }
+        continue;
+      }
+
+      // Regular character
+      if (byte >= 32 && byte <= 126) {
+        buffer.writeCharCode(byte);
+      }
+    }
+  }
+
   /// Read a line with TAB completion and history support
   Future<String?> _readLineWithCompletion(String prompt) async {
     // Check if stdin is a terminal
     if (!stdin.hasTerminal) {
       stdout.write(prompt);
-      return stdin.readLineSync()?.trim();
+      // Use async reading for non-terminal input to not block the event loop
+      // This allows HTTP server to process requests while waiting for input
+      return await _readLineAsync();
     }
 
     stdout.write(prompt);

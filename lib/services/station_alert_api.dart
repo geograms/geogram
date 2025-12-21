@@ -215,7 +215,13 @@ class StationAlertApi {
         comments.sort((a, b) => (a['created'] as String).compareTo(b['created'] as String));
       }
 
-      _log('INFO', 'Alert details: found ${photos.length} photos, ${comments.length} comments');
+      // Read points from points.txt
+      final pointedBy = await AlertFolderUtils.readPointsFile(alertDir.path);
+
+      // Build file tree for sync
+      final fileTree = await _buildFileTree(alertDir.path);
+
+      _log('INFO', 'Alert details: found ${photos.length} photos, ${comments.length} comments, ${pointedBy.length} points');
 
       return {
         'id': alertId,
@@ -227,11 +233,12 @@ class StationAlertApi {
         'severity': report?.severity.name ?? 'info',
         'status': report?.status.name ?? 'open',
         'type': report?.type ?? 'other',
-        'point_count': report?.pointCount ?? 0,
+        'point_count': pointedBy.length,
         'verification_count': report?.verificationCount ?? 0,
-        'pointed_by': report?.pointedBy ?? [],
+        'pointed_by': pointedBy,
         'verified_by': report?.verifiedBy ?? [],
         'last_modified': report?.lastModified,
+        'files': fileTree,
         'photos': photos,
         'comments': comments,
         'comment_count': comments.length,
@@ -266,19 +273,8 @@ class StationAlertApi {
         return {'error': 'Alert report not found', 'http_status': 404};
       }
 
-      // Read current content
-      final content = await reportFile.readAsString();
-      final lines = content.split('\n');
-
-      // Parse current pointedBy
-      var pointedBy = <String>[];
-      for (final line in lines) {
-        if (line.startsWith('POINTED_BY: ')) {
-          final pointedByStr = line.substring(12).trim();
-          pointedBy = pointedByStr.isEmpty ? [] : pointedByStr.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
-          break;
-        }
-      }
+      // Read points from points.txt
+      var pointedBy = await AlertFolderUtils.readPointsFile(alertPath);
 
       // Update pointedBy
       bool changed = false;
@@ -293,7 +289,12 @@ class StationAlertApi {
       final lastModified = DateTime.now().toUtc().toIso8601String();
 
       if (changed) {
-        final newContent = _updateAlertFeedback(content, pointedBy: pointedBy, lastModified: lastModified);
+        // Write points to points.txt
+        await AlertFolderUtils.writePointsFile(alertPath, pointedBy);
+
+        // Update LAST_MODIFIED in report.txt
+        final content = await reportFile.readAsString();
+        final newContent = _updateAlertFeedback(content, lastModified: lastModified);
         await reportFile.writeAsString(newContent, flush: true);
         _log('INFO', 'Alert ${isPoint ? "pointed" : "unpointed"} by $npub');
       }
@@ -730,12 +731,7 @@ class StationAlertApi {
         alert['type'] = line.substring(6).trim();
       } else if (line.startsWith('ADDRESS: ')) {
         alert['address'] = line.substring(9).trim();
-      } else if (line.startsWith('POINTED_BY: ')) {
-        final pointedByStr = line.substring(12).trim();
-        alert['pointed_by'] = pointedByStr.isEmpty ? <String>[] : pointedByStr.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
-        alert['point_count'] = (alert['pointed_by'] as List).length;
-      } else if (line.startsWith('POINT_COUNT: ')) {
-        alert['point_count'] = int.tryParse(line.substring(13).trim()) ?? 0;
+      // Note: POINTED_BY and POINT_COUNT are now stored in points.txt file
       } else if (line.startsWith('VERIFIED_BY: ')) {
         final verifiedByStr = line.substring(13).trim();
         alert['verified_by'] = verifiedByStr.isEmpty ? <String>[] : verifiedByStr.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
@@ -762,28 +758,23 @@ class StationAlertApi {
   }
 
   /// Update alert feedback fields in report.txt content
+  /// Note: pointedBy is now stored in points.txt, not in report.txt
   String _updateAlertFeedback(
     String content, {
-    List<String>? pointedBy,
     List<String>? verifiedBy,
     String? lastModified,
   }) {
     final lines = content.split('\n');
     final newLines = <String>[];
 
-    bool hasPointedBy = false;
-    bool hasPointCount = false;
     bool hasVerifiedBy = false;
     bool hasVerificationCount = false;
     bool hasLastModified = false;
 
     for (final line in lines) {
-      if (pointedBy != null && line.startsWith('POINTED_BY: ')) {
-        newLines.add('POINTED_BY: ${pointedBy.join(', ')}');
-        hasPointedBy = true;
-      } else if (pointedBy != null && line.startsWith('POINT_COUNT: ')) {
-        newLines.add('POINT_COUNT: ${pointedBy.length}');
-        hasPointCount = true;
+      // Skip old POINTED_BY and POINT_COUNT fields (now in points.txt)
+      if (line.startsWith('POINTED_BY: ') || line.startsWith('POINT_COUNT: ')) {
+        continue;
       } else if (verifiedBy != null && line.startsWith('VERIFIED_BY: ')) {
         newLines.add('VERIFIED_BY: ${verifiedBy.join(', ')}');
         hasVerifiedBy = true;
@@ -798,23 +789,24 @@ class StationAlertApi {
       }
     }
 
-    // Find insertion point
+    // Find insertion point - should be after header fields, before description
+    // Report format: Title, empty line, header fields, empty line, description
+    // We want to insert just before the SECOND empty line (the one before description)
     int insertIndex = newLines.length;
+    int emptyLineCount = 0;
     for (int i = 0; i < newLines.length; i++) {
       if (newLines[i].trim().isEmpty && i > 0 && !newLines[i - 1].startsWith('-->')) {
-        insertIndex = i;
-        break;
+        emptyLineCount++;
+        if (emptyLineCount == 2) {
+          // Found the empty line before description - insert before it
+          insertIndex = i;
+          break;
+        }
       }
     }
 
     // Add missing fields
     final toInsert = <String>[];
-    if (pointedBy != null && !hasPointedBy && pointedBy.isNotEmpty) {
-      toInsert.add('POINTED_BY: ${pointedBy.join(', ')}');
-    }
-    if (pointedBy != null && !hasPointCount && pointedBy.isNotEmpty) {
-      toInsert.add('POINT_COUNT: ${pointedBy.length}');
-    }
     if (verifiedBy != null && !hasVerifiedBy && verifiedBy.isNotEmpty) {
       toInsert.add('VERIFIED_BY: ${verifiedBy.join(', ')}');
     }
@@ -926,5 +918,33 @@ class StationAlertApi {
       if (npub != null) 'npub': npub,
       if (signature != null) 'signature': signature,
     };
+  }
+
+  /// Build a file tree structure for an alert folder.
+  /// Returns a nested map with file/directory names as keys.
+  /// Files have {size: int, mtime: int} values.
+  /// Directories end with '/' and contain nested file maps.
+  Future<Map<String, dynamic>> _buildFileTree(String alertPath) async {
+    final tree = <String, dynamic>{};
+    final alertDir = Directory(alertPath);
+
+    if (!await alertDir.exists()) return tree;
+
+    await for (final entity in alertDir.list(recursive: false)) {
+      final name = entity.path.split('/').last;
+
+      if (entity is File) {
+        final stat = await entity.stat();
+        tree[name] = {
+          'size': stat.size,
+          'mtime': stat.modified.millisecondsSinceEpoch ~/ 1000,
+        };
+      } else if (entity is Directory) {
+        // Recurse into subdirectory
+        tree['$name/'] = await _buildFileTree(entity.path);
+      }
+    }
+
+    return tree;
   }
 }

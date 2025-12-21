@@ -33,6 +33,7 @@ import '../models/report.dart';
 import 'alert_feedback_service.dart';
 import 'alert_sharing_service.dart';
 import 'station_alert_service.dart';
+import 'station_blog_api.dart';
 import 'station_service.dart';
 import 'station_server_service.dart';
 import 'websocket_service.dart';
@@ -367,6 +368,19 @@ class LogApiService {
     // Alerts API endpoints (public read-only access to alerts)
     if (urlPath == 'api/alerts' || urlPath == 'api/alerts/' || urlPath.startsWith('api/alerts/')) {
       return await _handleAlertsRequest(request, urlPath, headers);
+    }
+
+    // Blog API endpoints (public read access, authenticated comment posting)
+    // Exclude .html files - those are handled by the HTML renderer below
+    if ((urlPath == 'api/blog' || urlPath == 'api/blog/' || urlPath.startsWith('api/blog/'))
+        && !urlPath.endsWith('.html')) {
+      return await _handleBlogRequest(request, urlPath, headers);
+    }
+
+    // Blog HTML rendering endpoint: /{identifier}/blog/{filename}.html
+    // This is used by p2p.radio to serve blog posts as HTML
+    if (urlPath.contains('/blog/') && urlPath.endsWith('.html')) {
+      return await _handleBlogHtmlRequest(request, urlPath, headers);
     }
 
     // Devices API endpoint (for debug - list discovered devices)
@@ -5870,7 +5884,7 @@ class LogApiService {
           final collectionPath = '$dataDir/devices/$callsign/$appName';
 
           // Check if blog directory exists
-          final blogDir = io.Directory('$collectionPath/blog');
+          final blogDir = io.Directory(collectionPath);
           if (!await blogDir.exists()) {
             return shelf.Response.ok(
               jsonEncode({
@@ -5967,7 +5981,7 @@ class LogApiService {
           final collectionPath = '$dataDir/devices/$callsign/$appName';
 
           // Check if the blog post exists
-          final blogDir = io.Directory('$collectionPath/blog');
+          final blogDir = io.Directory(collectionPath);
           if (!await blogDir.exists()) {
             return shelf.Response.notFound(
               jsonEncode({
@@ -7307,5 +7321,534 @@ class LogApiService {
         headers: headers,
       );
     }
+  }
+
+  // ============================================================
+  // Blog API Endpoints
+  // ============================================================
+
+  /// Main handler for all /api/blog/* endpoints
+  Future<shelf.Response> _handleBlogRequest(
+    shelf.Request request,
+    String urlPath,
+    Map<String, String> headers,
+  ) async {
+    try {
+      String? dataDir;
+      try {
+        dataDir = StorageConfig().baseDir;
+      } catch (e) {
+        return shelf.Response.internalServerError(
+          body: jsonEncode({'error': 'Storage not initialized'}),
+          headers: headers,
+        );
+      }
+
+      String? callsign;
+      try {
+        final profile = ProfileService().getProfile();
+        callsign = profile.callsign;
+      } catch (e) {
+        return shelf.Response.internalServerError(
+          body: jsonEncode({'error': 'Profile not initialized'}),
+          headers: headers,
+        );
+      }
+
+      final blogApi = StationBlogApi(
+        dataDir: dataDir,
+        callsign: callsign,
+        log: (level, message) => LogService().log('StationBlogApi [$level]: $message'),
+      );
+
+      // Remove 'api/blog' prefix for easier parsing
+      String subPath = '';
+      if (urlPath.startsWith('api/blog/')) {
+        subPath = urlPath.substring('api/blog/'.length);
+      } else if (urlPath == 'api/blog' || urlPath == 'api/blog/') {
+        subPath = '';
+      }
+
+      // Remove trailing slash
+      if (subPath.endsWith('/')) {
+        subPath = subPath.substring(0, subPath.length - 1);
+      }
+
+      // Parse the sub-path to determine the operation
+      final pathParts = subPath.isEmpty ? <String>[] : subPath.split('/');
+
+      // Handle POST methods for comments
+      if (request.method == 'POST') {
+        if (pathParts.length == 2 && pathParts[1] == 'comment') {
+          // POST /api/blog/{postId}/comment
+          final postId = pathParts[0];
+          return await _handleBlogAddComment(request, postId, blogApi, headers);
+        }
+        return shelf.Response(
+          405,
+          body: jsonEncode({'error': 'Method not allowed for this endpoint'}),
+          headers: headers,
+        );
+      }
+
+      // Handle DELETE methods for comment deletion
+      if (request.method == 'DELETE') {
+        if (pathParts.length == 3 && pathParts[1] == 'comment') {
+          // DELETE /api/blog/{postId}/comment/{commentId}
+          final postId = pathParts[0];
+          final commentId = pathParts[2];
+          return await _handleBlogDeleteComment(request, postId, commentId, blogApi, headers);
+        }
+        return shelf.Response(
+          405,
+          body: jsonEncode({'error': 'Method not allowed for this endpoint'}),
+          headers: headers,
+        );
+      }
+
+      // Handle GET methods
+      if (request.method != 'GET') {
+        return shelf.Response(
+          405,
+          body: jsonEncode({'error': 'Method not allowed'}),
+          headers: headers,
+        );
+      }
+
+      // GET /api/blog - List all posts
+      if (subPath.isEmpty) {
+        return await _handleBlogListPosts(request, blogApi, headers);
+      }
+
+      if (pathParts.length == 1) {
+        // GET /api/blog/{postId} - Get single post with comments
+        final postId = pathParts[0];
+        return await _handleBlogGetPost(postId, blogApi, headers);
+      }
+
+      if (pathParts.length >= 3 && pathParts[1] == 'files') {
+        // GET /api/blog/{postId}/files/{filename} - Get attached file
+        final postId = pathParts[0];
+        final filename = pathParts.sublist(2).join('/');
+        return await _handleBlogGetFile(postId, filename, blogApi, headers);
+      }
+
+      return shelf.Response.notFound(
+        jsonEncode({'error': 'Blog endpoint not found', 'path': urlPath}),
+        headers: headers,
+      );
+    } catch (e) {
+      LogService().log('LogApiService: Error handling blog request: $e');
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'error': e.toString()}),
+        headers: headers,
+      );
+    }
+  }
+
+  /// GET /api/blog - List all published blog posts
+  Future<shelf.Response> _handleBlogListPosts(
+    shelf.Request request,
+    StationBlogApi blogApi,
+    Map<String, String> headers,
+  ) async {
+    final queryParams = request.url.queryParameters;
+
+    final year = queryParams['year'] != null ? int.tryParse(queryParams['year']!) : null;
+    final tag = queryParams['tag'];
+    final limit = queryParams['limit'] != null ? int.tryParse(queryParams['limit']!) : null;
+    final offset = queryParams['offset'] != null ? int.tryParse(queryParams['offset']!) : null;
+
+    final result = await blogApi.getBlogPosts(
+      year: year,
+      tag: tag,
+      limit: limit,
+      offset: offset,
+    );
+
+    if (result['success'] == true) {
+      return shelf.Response.ok(
+        jsonEncode(result),
+        headers: headers,
+      );
+    } else {
+      final httpStatus = result['http_status'] as int? ?? 500;
+      return shelf.Response(
+        httpStatus,
+        body: jsonEncode(result),
+        headers: headers,
+      );
+    }
+  }
+
+  /// GET /api/blog/{postId} - Get single post with comments
+  Future<shelf.Response> _handleBlogGetPost(
+    String postId,
+    StationBlogApi blogApi,
+    Map<String, String> headers,
+  ) async {
+    final result = await blogApi.getPostDetails(postId);
+
+    if (result['error'] != null) {
+      final httpStatus = result['http_status'] as int? ?? 404;
+      return shelf.Response(
+        httpStatus,
+        body: jsonEncode(result),
+        headers: headers,
+      );
+    }
+
+    return shelf.Response.ok(
+      jsonEncode(result),
+      headers: headers,
+    );
+  }
+
+  /// GET /api/blog/{postId}/files/{filename} - Get attached file
+  Future<shelf.Response> _handleBlogGetFile(
+    String postId,
+    String filename,
+    StationBlogApi blogApi,
+    Map<String, String> headers,
+  ) async {
+    final filePath = await blogApi.getFilePath(postId, filename);
+
+    if (filePath == null) {
+      return shelf.Response.notFound(
+        jsonEncode({'error': 'File not found'}),
+        headers: headers,
+      );
+    }
+
+    try {
+      final file = io.File(filePath);
+      final bytes = await file.readAsBytes();
+
+      // Determine content type
+      final ext = path.extension(filename).toLowerCase();
+      String contentType = 'application/octet-stream';
+      if (ext == '.jpg' || ext == '.jpeg') {
+        contentType = 'image/jpeg';
+      } else if (ext == '.png') {
+        contentType = 'image/png';
+      } else if (ext == '.gif') {
+        contentType = 'image/gif';
+      } else if (ext == '.webp') {
+        contentType = 'image/webp';
+      } else if (ext == '.pdf') {
+        contentType = 'application/pdf';
+      } else if (ext == '.txt') {
+        contentType = 'text/plain';
+      }
+
+      return shelf.Response.ok(
+        bytes,
+        headers: {
+          ...headers,
+          'Content-Type': contentType,
+          'Content-Length': bytes.length.toString(),
+        },
+      );
+    } catch (e) {
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'error': 'Failed to read file: $e'}),
+        headers: headers,
+      );
+    }
+  }
+
+  /// POST /api/blog/{postId}/comment - Add comment to a post
+  Future<shelf.Response> _handleBlogAddComment(
+    shelf.Request request,
+    String postId,
+    StationBlogApi blogApi,
+    Map<String, String> headers,
+  ) async {
+    try {
+      final body = await request.readAsString();
+      final json = jsonDecode(body) as Map<String, dynamic>;
+
+      final author = json['author'] as String?;
+      final content = json['content'] as String?;
+      final npub = json['npub'] as String?;
+      final signature = json['signature'] as String?;
+
+      if (author == null || author.isEmpty) {
+        return shelf.Response(
+          400,
+          body: jsonEncode({'error': 'Missing required field: author'}),
+          headers: headers,
+        );
+      }
+
+      if (content == null || content.isEmpty) {
+        return shelf.Response(
+          400,
+          body: jsonEncode({'error': 'Missing required field: content'}),
+          headers: headers,
+        );
+      }
+
+      final result = await blogApi.addComment(
+        postId,
+        author,
+        content,
+        npub: npub,
+        signature: signature,
+      );
+
+      if (result['success'] == true) {
+        return shelf.Response.ok(
+          jsonEncode(result),
+          headers: headers,
+        );
+      } else {
+        final httpStatus = result['http_status'] as int? ?? 500;
+        return shelf.Response(
+          httpStatus,
+          body: jsonEncode(result),
+          headers: headers,
+        );
+      }
+    } catch (e) {
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'error': 'Invalid request body: $e'}),
+        headers: headers,
+      );
+    }
+  }
+
+  /// DELETE /api/blog/{postId}/comment/{commentId} - Delete comment
+  Future<shelf.Response> _handleBlogDeleteComment(
+    shelf.Request request,
+    String postId,
+    String commentId,
+    StationBlogApi blogApi,
+    Map<String, String> headers,
+  ) async {
+    try {
+      // Get requester's npub from header
+      final npub = request.headers['x-npub'] ?? request.headers['X-Npub'];
+
+      if (npub == null || npub.isEmpty) {
+        return shelf.Response(
+          401,
+          body: jsonEncode({'error': 'Missing X-Npub header for authorization'}),
+          headers: headers,
+        );
+      }
+
+      final result = await blogApi.deleteComment(postId, commentId, npub);
+
+      if (result['success'] == true) {
+        return shelf.Response.ok(
+          jsonEncode(result),
+          headers: headers,
+        );
+      } else {
+        final httpStatus = result['http_status'] as int? ?? 500;
+        return shelf.Response(
+          httpStatus,
+          body: jsonEncode(result),
+          headers: headers,
+        );
+      }
+    } catch (e) {
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'error': 'Error deleting comment: $e'}),
+        headers: headers,
+      );
+    }
+  }
+
+  // ============================================================
+  // Blog HTML Rendering
+  // ============================================================
+
+  /// Handle GET /{identifier}/blog/{filename}.html - Serve blog post as HTML
+  Future<shelf.Response> _handleBlogHtmlRequest(
+    shelf.Request request,
+    String urlPath,
+    Map<String, String> headers,
+  ) async {
+    try {
+      // Parse path: {identifier}/blog/{filename}.html
+      final parts = urlPath.split('/');
+      if (parts.length < 3 || !parts.contains('blog')) {
+        return shelf.Response.notFound(
+          'Blog post not found',
+          headers: {'Content-Type': 'text/html'},
+        );
+      }
+
+      // Extract filename (without .html extension)
+      final filename = parts.last.replaceAll('.html', '');
+
+      // Get current user's callsign and dataDir
+      String? callsign;
+      String? dataDir;
+      String? nickname;
+
+      try {
+        final profile = ProfileService().getProfile();
+        callsign = profile.callsign;
+        nickname = profile.nickname ?? callsign;
+      } catch (e) {
+        // Profile not initialized
+      }
+
+      try {
+        dataDir = StorageConfig().baseDir;
+      } catch (e) {
+        return shelf.Response.internalServerError(
+          body: '<html><body><h1>500 Internal Server Error</h1><p>Storage not initialized</p></body></html>',
+          headers: {'Content-Type': 'text/html'},
+        );
+      }
+
+      if (callsign == null) {
+        return shelf.Response.internalServerError(
+          body: '<html><body><h1>500 Internal Server Error</h1><p>Profile not initialized</p></body></html>',
+          headers: {'Content-Type': 'text/html'},
+        );
+      }
+
+      // Check for X-Device-Callsign header (used by proxy)
+      // If present, serve that device's blog instead of current user's blog
+      final deviceCallsign = request.headers['x-device-callsign'];
+      if (deviceCallsign != null && deviceCallsign.isNotEmpty) {
+        callsign = deviceCallsign;
+        LogService().log('Blog HTML: Serving blog for device $deviceCallsign (from proxy header)');
+      }
+
+      // Initialize blog service
+      final blogService = BlogService();
+      final collectionPath = '$dataDir/devices/$callsign/blog';
+      await blogService.initializeCollection(collectionPath);
+
+      // Load the blog post
+      final post = await blogService.loadFullPost(filename);
+
+      if (post == null) {
+        return shelf.Response.notFound(
+          '<html><body><h1>404 Not Found</h1><p>Blog post not found: $filename</p></body></html>',
+          headers: {'Content-Type': 'text/html'},
+        );
+      }
+
+      // Only serve published posts
+      if (!post.isPublished) {
+        return shelf.Response.notFound(
+          '<html><body><h1>404 Not Found</h1><p>Blog post not available</p></body></html>',
+          headers: {'Content-Type': 'text/html'},
+        );
+      }
+
+      // Render HTML
+      final html = _renderBlogPostHtml(post, nickname ?? callsign);
+
+      return shelf.Response.ok(
+        html,
+        headers: {'Content-Type': 'text/html; charset=utf-8'},
+      );
+    } catch (e, stack) {
+      LogService().log('LogApiService: Error rendering blog HTML: $e');
+      LogService().log('LogApiService: Stack: $stack');
+      return shelf.Response.internalServerError(
+        body: '<html><body><h1>500 Internal Server Error</h1><p>$e</p></body></html>',
+        headers: {'Content-Type': 'text/html'},
+      );
+    }
+  }
+
+  /// Render blog post as HTML
+  String _renderBlogPostHtml(BlogPost post, String authorIdentifier) {
+    final buffer = StringBuffer();
+
+    // Basic HTML structure with inline CSS
+    buffer.writeln('<!DOCTYPE html>');
+    buffer.writeln('<html lang="en">');
+    buffer.writeln('<head>');
+    buffer.writeln('  <meta charset="UTF-8">');
+    buffer.writeln('  <meta name="viewport" content="width=device-width, initial-scale=1.0">');
+    buffer.writeln('  <title>${_escapeHtml(post.title)} - ${_escapeHtml(authorIdentifier)}</title>');
+    buffer.writeln('  <style>');
+    buffer.writeln('    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; line-height: 1.6; max-width: 800px; margin: 0 auto; padding: 20px; color: #333; }');
+    buffer.writeln('    h1 { border-bottom: 2px solid #007bff; padding-bottom: 10px; }');
+    buffer.writeln('    .meta { color: #666; font-size: 0.9em; margin-bottom: 20px; }');
+    buffer.writeln('    .tag { background: #e3f2fd; padding: 3px 8px; border-radius: 3px; margin-right: 5px; font-size: 0.85em; }');
+    buffer.writeln('    .content { margin: 30px 0; white-space: pre-wrap; }');
+    buffer.writeln('    .comments { margin-top: 40px; border-top: 1px solid #ddd; padding-top: 20px; }');
+    buffer.writeln('    .comment { margin: 15px 0; padding: 10px; background: #f9f9f9; border-left: 3px solid #007bff; }');
+    buffer.writeln('    .comment-meta { font-size: 0.85em; color: #666; margin-bottom: 5px; }');
+    buffer.writeln('    .footer { margin-top: 40px; padding-top: 20px; border-top: 1px solid #ddd; font-size: 0.85em; color: #666; }');
+    buffer.writeln('  </style>');
+    buffer.writeln('</head>');
+    buffer.writeln('<body>');
+
+    // Header
+    buffer.writeln('  <h1>${_escapeHtml(post.title)}</h1>');
+
+    // Metadata
+    buffer.writeln('  <div class="meta">');
+    buffer.writeln('    <strong>Author:</strong> ${_escapeHtml(post.author)} | ');
+    buffer.writeln('    <strong>Published:</strong> ${post.displayDate} at ${post.displayTime}');
+    if (post.edited != null) {
+      buffer.writeln('    | <strong>Edited:</strong> ${_escapeHtml(post.edited!)}');
+    }
+    buffer.writeln('  </div>');
+
+    // Description
+    if (post.description != null && post.description!.isNotEmpty) {
+      buffer.writeln('  <div class="meta"><em>${_escapeHtml(post.description!)}</em></div>');
+    }
+
+    // Tags
+    if (post.tags.isNotEmpty) {
+      buffer.writeln('  <div class="meta">');
+      for (final tag in post.tags) {
+        buffer.writeln('    <span class="tag">${_escapeHtml(tag)}</span>');
+      }
+      buffer.writeln('  </div>');
+    }
+
+    // Content
+    buffer.writeln('  <div class="content">${_escapeHtml(post.content)}</div>');
+
+    // Comments
+    if (post.comments.isNotEmpty) {
+      buffer.writeln('  <div class="comments">');
+      buffer.writeln('    <h2>Comments (${post.comments.length})</h2>');
+      for (final comment in post.comments) {
+        buffer.writeln('    <div class="comment">');
+        buffer.writeln('      <div class="comment-meta">');
+        buffer.writeln('        <strong>${_escapeHtml(comment.author)}</strong> - ${comment.displayDate} at ${comment.displayTime}');
+        buffer.writeln('      </div>');
+        buffer.writeln('      <div>${_escapeHtml(comment.content)}</div>');
+        buffer.writeln('    </div>');
+      }
+      buffer.writeln('  </div>');
+    }
+
+    // Footer
+    buffer.writeln('  <div class="footer">');
+    buffer.writeln('    <p>Posted via <a href="https://geogram.app">Geogram</a> | ');
+    buffer.writeln('    <a href="https://p2p.radio">p2p.radio</a></p>');
+    buffer.writeln('  </div>');
+
+    buffer.writeln('</body>');
+    buffer.writeln('</html>');
+
+    return buffer.toString();
+  }
+
+  /// Escape HTML special characters
+  String _escapeHtml(String text) {
+    return text
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
   }
 }

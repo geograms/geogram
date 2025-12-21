@@ -1,4 +1,0 @@
-Test completed at Wed Dec 10 10:15:42 PM CET 2025
-Device A: TANK2 (TANK200000007933) - 192.168.178.28 - X1FTPL
-Device B: WP53 S (WP53S0000006829) - 192.168.178.49 - X18M95
-Passed: 2, Failed: 3, Skipped: 0

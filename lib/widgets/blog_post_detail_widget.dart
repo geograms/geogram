@@ -8,8 +8,10 @@ import 'package:flutter/services.dart';
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
+import 'package:latlong2/latlong.dart';
 import '../models/blog_post.dart';
 import '../services/i18n_service.dart';
+import '../pages/location_picker_page.dart';
 
 /// Widget for displaying blog post detail
 class BlogPostDetailWidget extends StatelessWidget {
@@ -21,6 +23,7 @@ class BlogPostDetailWidget extends StatelessWidget {
   final VoidCallback? onPublish;
   final String? stationUrl;
   final String? profileIdentifier; // nickname or callsign for URL
+  final void Function(String tag)? onTagTap; // Callback when a tag is tapped
 
   const BlogPostDetailWidget({
     Key? key,
@@ -32,6 +35,7 @@ class BlogPostDetailWidget extends StatelessWidget {
     this.onPublish,
     this.stationUrl,
     this.profileIdentifier,
+    this.onTagTap,
   }) : super(key: key);
 
   /// Get shareable URL for this blog post
@@ -108,6 +112,33 @@ class BlogPostDetailWidget extends StatelessWidget {
                           ),
                         ],
                       ),
+                      // Location (clickable to view on map)
+                      if (post.hasLocation)
+                        InkWell(
+                          onTap: () => _openLocationOnMap(context),
+                          borderRadius: BorderRadius.circular(4),
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 2),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  Icons.location_on,
+                                  size: 16,
+                                  color: theme.colorScheme.primary,
+                                ),
+                                const SizedBox(width: 4),
+                                Text(
+                                  post.location!,
+                                  style: theme.textTheme.bodyMedium?.copyWith(
+                                    color: theme.colorScheme.primary,
+                                    decoration: TextDecoration.underline,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
                       // Status badge
                       Container(
                         padding: const EdgeInsets.symmetric(
@@ -188,11 +219,12 @@ class BlogPostDetailWidget extends StatelessWidget {
             spacing: 6,
             runSpacing: 6,
             children: post.tags.map((tag) {
-              return Chip(
+              return ActionChip(
                 label: Text('#$tag'),
                 padding: const EdgeInsets.symmetric(horizontal: 8),
                 materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
                 backgroundColor: theme.colorScheme.surfaceVariant,
+                onPressed: onTagTap != null ? () => onTagTap!(tag) : null,
               );
             }).toList(),
           ),
@@ -457,5 +489,22 @@ class BlogPostDetailWidget extends StatelessWidget {
         );
       }
     }
+  }
+
+  /// Open the location on the map viewer
+  void _openLocationOnMap(BuildContext context) {
+    final lat = post.latitude;
+    final lon = post.longitude;
+
+    if (lat == null || lon == null) return;
+
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => LocationPickerPage(
+          initialPosition: LatLng(lat, lon),
+        ),
+      ),
+    );
   }
 }

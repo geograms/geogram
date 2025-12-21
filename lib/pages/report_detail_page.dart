@@ -245,6 +245,11 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
       _loadUpdates();
       _loadComments();
       _loadExistingImages();
+
+      // For station alerts, fetch latest data (including new comments) from station
+      if (_isFromStation && !kIsWeb) {
+        _refreshFromStation();
+      }
     }
   }
 
@@ -287,6 +292,40 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
       setState(() {});
     } catch (e) {
       LogService().log('ReportDetailPage: Error loading comments: $e');
+    }
+  }
+
+  /// Refresh alert data from station (downloads new comments, points, etc.)
+  Future<void> _refreshFromStation() async {
+    if (_report == null || !_isFromStation || kIsWeb) return;
+
+    final stationCallsign = _report!.metadata['station_callsign'] ?? '';
+    if (stationCallsign.isEmpty) return;
+
+    try {
+      LogService().log('ReportDetailPage: Refreshing alert from station...');
+
+      // Fetch latest data from station (this downloads new comments)
+      await StationAlertService().refreshAlert(_report!.folderName, stationCallsign);
+
+      // Reload comments from local disk (now includes any new ones downloaded)
+      await _loadComments();
+
+      // Also reload points for the report
+      final alertPath = path.join(widget.collectionPath, _report!.folderName);
+      final points = await AlertFolderUtils.readPointsFile(alertPath);
+      if (points.isNotEmpty && mounted) {
+        setState(() {
+          _report = _report!.copyWith(
+            pointedBy: points,
+            pointCount: points.length,
+          );
+        });
+      }
+
+      LogService().log('ReportDetailPage: Alert refreshed from station');
+    } catch (e) {
+      LogService().log('ReportDetailPage: Error refreshing from station: $e');
     }
   }
 
@@ -344,14 +383,17 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
         await _loadComments();
         _showSuccess(_i18n.t('comment_added'));
 
-        // Sync to station and refresh on success
+        // Sync to station and refresh on success (fetch any new comments from other users)
         _alertFeedbackService.commentOnStation(
           alertId,
           profile.callsign,
           commentContent,
           npub: _currentUserNpub,
-        ).then((_) {
-          StationAlertService().refreshAlert(_report!.folderName, _report!.metadata['station_callsign'] ?? '');
+        ).then((_) async {
+          await StationAlertService().refreshAlert(_report!.folderName, _report!.metadata['station_callsign'] ?? '');
+          if (mounted) {
+            await _loadComments();
+          }
         }).catchError((_) {});
       } else {
         // For local alerts: use ReportService
@@ -965,6 +1007,17 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
       appBar: AppBar(
         title: Text(_isNew ? _i18n.t('new_alert') : _i18n.t('alert_details')),
         actions: [
+          // Refresh button for station alerts
+          if (!_isNew && _isFromStation && !kIsWeb)
+            IconButton(
+              icon: Icon(Icons.refresh),
+              tooltip: 'Refresh from station',
+              onPressed: _isLoading ? null : () async {
+                setState(() => _isLoading = true);
+                await _refreshFromStation();
+                setState(() => _isLoading = false);
+              },
+            ),
           if (!_isNew && !_isEditing && canEdit)
             IconButton(
               icon: Icon(Icons.edit),

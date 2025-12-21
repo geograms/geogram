@@ -1,6 +1,6 @@
 # Report Format Specification
 
-**Version**: 1.2
+**Version**: 1.3
 **Last Updated**: 2025-12-14
 **Status**: Draft
 
@@ -81,11 +81,16 @@ Reports are designed for documenting things that need attention, repair, or awar
 collection_name/
 ├── active/                             # Active reports
 │   ├── 38.7_-9.1/                      # Region folder (1° precision)
-│   │   ├── 38.7223_-9.1393_broken-sidewalk/
+│   │   ├── 2025-12-14_15-32_broken-sidewalk/
 │   │   │   ├── report.txt
+│   │   │   ├── points.txt              # Users who pointed this alert (one npub per line)
 │   │   │   ├── news.txt                # News/log timeline
-│   │   │   ├── photo1.jpg
-│   │   │   ├── photo2.jpg
+│   │   │   ├── images/                 # Photos subfolder
+│   │   │   │   ├── photo1.jpg
+│   │   │   │   └── photo2.jpg
+│   │   │   ├── comments/               # User comments
+│   │   │   │   ├── 2025-12-14_15-45-23_X13K0G.txt
+│   │   │   │   └── 2025-12-14_16-20-05_A7BN2P.txt
 │   │   │   ├── contributed-photos/     # Community contributed photos
 │   │   │   │   ├── user1_evidence.jpg
 │   │   │   │   └── user2_angle.jpg
@@ -95,27 +100,33 @@ collection_name/
 │   │   │   └── .reactions/
 │   │   │       ├── report.txt
 │   │   │       └── photo1.jpg.txt
-│   │   └── 38.7169_-9.1399_vandalized-sign/
+│   │   └── 2025-12-13_09-15_vandalized-sign/
 │   │       ├── report.txt
-│   │       ├── vandalism-photo.jpg
+│   │       ├── points.txt
+│   │       ├── images/
+│   │       │   └── photo1.jpg
 │   │       └── .reactions/
 │   │           └── report.txt
 │   ├── 40.7_-74.0/                     # Another region
-│   │   └── 40.7128_-74.0060_dangerous-pothole/
+│   │   └── 2025-12-10_14-22_dangerous-pothole/
 │   │       ├── report.txt
-│   │       └── pothole.jpg
+│   │       ├── points.txt
+│   │       └── images/
+│   │           └── photo1.jpg
 │   └── 35.6_139.6/                     # Dense region with subfolders
 │       ├── 001/
-│       │   └── 35.6762_139.6503_fire-hazard/
+│       │   └── 2025-12-01_10-00_fire-hazard/
 │       │       └── report.txt
 │       └── 002/
-│           └── 35.6812_139.7671_broken-railing/
+│           └── 2025-12-05_08-30_broken-railing/
 │               └── report.txt
 └── expired/                            # Expired or deactivated reports
     └── 38.7_-9.1/
-        └── 38.7100_-9.1350_old-pothole/
+        └── 2025-10-15_12-00_old-pothole/
             ├── report.txt              # STATUS: closed or expired
-            └── photo.jpg
+            ├── points.txt
+            └── images/
+                └── photo1.jpg
 ```
 
 ### Active vs Expired Organization
@@ -182,38 +193,51 @@ expired/35.6_139.6/         # Tokyo region (expired)
 
 ### Report Folder Naming
 
-**Pattern**: `{LAT}_{LON}_{sanitized-description}/`
+**Pattern**: `{YYYY-MM-DD}_{HH-MM}_{sanitized-title}/`
 
-**Full Precision Coordinates**:
-- Use full precision (6 decimal places recommended)
-- Latitude: -90.0 to +90.0
-- Longitude: -180.0 to +180.0
+**Timestamp Format**:
+- Date: `YYYY-MM-DD` (ISO 8601 date format)
+- Time: `HH-MM` (24-hour format, using hyphens instead of colons for filesystem compatibility)
+- Based on report creation time
 
 **Sanitization Rules**:
-1. Convert description to lowercase
+1. Convert title to lowercase
 2. Replace spaces and underscores with single hyphens
 3. Remove all non-alphanumeric characters (except hyphens)
 4. Collapse multiple consecutive hyphens
 5. Remove leading/trailing hyphens
-6. Truncate to 50 characters
-7. Prepend full coordinates
+6. Truncate to 100 characters
 
 **Examples**:
 ```
-Description: "Broken Sidewalk on Main Street"
-Coordinates: 38.7223, -9.1393
-→ 38.7223_-9.1393_broken-sidewalk-on-main-street/
+Title: "Broken Sidewalk on Main Street"
+Created: 2025-12-14 15:32:45
+→ 2025-12-14_15-32_broken-sidewalk-on-main-street/
 
-Description: "Dangerous Pothole @ Highway Exit"
-Coordinates: 40.7128, -74.0060
-→ 40.7128_-74.0060_dangerous-pothole-highway-exit/
+Title: "Dangerous Pothole @ Highway Exit"
+Created: 2025-12-10 14:22:00
+→ 2025-12-10_14-22_dangerous-pothole-highway-exit/
 
-Description: "Vandalized Public Sign"
-Coordinates: 51.5055, -0.0754
-→ 51.5055_-0.0754_vandalized-public-sign/
+Title: "Vandalized Public Sign"
+Created: 2025-12-13 09:15:30
+→ 2025-12-13_09-15_vandalized-public-sign/
 ```
 
 ### Special Directories
+
+**`images/` Directory**:
+- Contains all photos attached to the report
+- Photos are named sequentially: `photo1.jpg`, `photo2.png`, etc.
+- Supported formats: JPG, JPEG, PNG, GIF, WebP
+- Created automatically when first photo is added
+
+**`comments/` Directory**:
+- Contains user comments on the report
+- One file per comment
+- Filename format: `YYYY-MM-DD_HH-MM-SS_XXXXXX.txt`
+  - Date and time of comment creation
+  - 6-character random alphanumeric ID (uppercase letters and digits)
+- Example: `2025-12-14_15-45-23_X13K0G.txt`
 
 **`.reactions/` Directory**:
 - Hidden directory (starts with dot)
@@ -1127,17 +1151,25 @@ This section provides a comprehensive list of 260+ predefined report types organ
 
 Photos can be stored in multiple locations within a report:
 
-1. **Report root folder** - Initial evidence photos by report author
+1. **images/** folder - Initial evidence photos by report author (sequential naming)
 2. **contributed-photos/** folder - Community contributed photos (anyone can add)
 3. **updates/** folder - Progress photos attached to updates
 
+### Photo Naming Convention
+
+**Author's Photos** (in `images/` folder):
+- Format: `photo{N}.{ext}` where N is a sequential number starting from 1
+- Examples: `photo1.jpg`, `photo2.png`, `photo3.jpg`
+- Extension preserved from original file
+
 **Example**:
 ```
-38.7223_-9.1393_broken-sidewalk/
+2025-12-14_15-32_broken-sidewalk/
 ├── report.txt
-├── photo1.jpg                      # Author's initial evidence
-├── photo2.jpg                      # Author's different angle
-├── close-up.jpg                    # Author's detail shot
+├── images/                         # Author's photos (sequential naming)
+│   ├── photo1.jpg                  # First photo uploaded
+│   ├── photo2.jpg                  # Second photo uploaded
+│   └── photo3.png                  # Third photo (PNG format)
 ├── contributed-photos/             # Community contributions
 │   ├── CR7BBQ_2025-11-23_photo.jpg
 │   ├── X135AS_2025-11-24_angle.jpg
@@ -1338,12 +1370,12 @@ When a client shares an alert to a station:
 - `.webp` (Content-Type: image/webp)
 
 **Photo Locations Scanned**:
-- Alert root folder (author's initial photos)
-- `images/` subdirectory (if exists)
+- `images/` subdirectory (new standard)
+- Alert root folder (legacy, for backwards compatibility)
 
 **Example Upload**:
 ```
-POST /X1ABC2/api/alerts/38.7223_-9.1393_broken-sidewalk/files/photo1.jpg
+POST /X1ABC2/api/alerts/2025-12-14_15-32_broken-sidewalk/files/photo1.jpg
 Content-Type: image/jpeg
 X-Callsign: X1ABC2
 
@@ -1352,18 +1384,20 @@ X-Callsign: X1ABC2
 
 ### Station Photo Storage
 
-The station stores received photos alongside the report:
+The station stores received photos in the `images/` subdirectory with sequential naming:
 
 ```
 station_storage/
-└── X1ABC2/
-    └── alerts/
-        └── active/
-            └── 38.7_-9.1/
-                └── 38.7223_-9.1393_broken-sidewalk/
-                    ├── report.txt
-                    ├── photo1.jpg      # Uploaded by author
-                    └── photo2.jpg      # Uploaded by author
+└── devices/
+    └── X1ABC2/
+        └── alerts/
+            └── active/
+                └── 38.7_-9.1/
+                    └── 2025-12-14_15-32_broken-sidewalk/
+                        ├── report.txt
+                        └── images/
+                            ├── photo1.jpg      # Sequential naming
+                            └── photo2.jpg
 ```
 
 ### On-Demand Photo Fetching
@@ -1379,8 +1413,8 @@ To conserve bandwidth, the station uses **lazy loading** for photos:
 ```json
 {
   "type": "fetch_file",
-  "alertId": "38.7223_-9.1393_broken-sidewalk",
-  "filename": "photo1.jpg"
+  "alertId": "2025-12-14_15-32_broken-sidewalk",
+  "filename": "images/photo1.jpg"
 }
 ```
 
@@ -1388,8 +1422,8 @@ To conserve bandwidth, the station uses **lazy loading** for photos:
 ```json
 {
   "type": "file_response",
-  "alertId": "38.7223_-9.1393_broken-sidewalk",
-  "filename": "photo1.jpg",
+  "alertId": "2025-12-14_15-32_broken-sidewalk",
+  "filename": "images/photo1.jpg",
   "contentType": "image/jpeg",
   "data": "<base64-encoded-data>"
 }
@@ -1437,6 +1471,7 @@ The photo sync system is designed to minimize bandwidth usage:
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
+| GET | `/{callsign}/api/alerts/{alertId}` | Get alert details with photos list |
 | POST | `/{callsign}/api/alerts/{alertId}/files/{filename}` | Upload photo to station |
 | GET | `/{callsign}/api/alerts/{alertId}/files/{filename}` | Download photo from station |
 
@@ -2545,33 +2580,121 @@ I've contacted the city about this issue.
 
 ## Comments
 
-### Comment Format
+### Comment File Storage
+
+Comments are stored as individual files in the `comments/` directory.
+
+**Filename Format**: `YYYY-MM-DD_HH-MM-SS_XXXXXX.txt`
+
+- `YYYY-MM-DD`: Date of comment creation
+- `HH-MM-SS`: Time of comment creation (24-hour format)
+- `XXXXXX`: 6-character random alphanumeric ID (uppercase letters A-Z and digits 0-9)
+
+**Example Filenames**:
+```
+comments/2025-12-14_15-45-23_X13K0G.txt
+comments/2025-12-14_16-20-05_A7BN2P.txt
+comments/2025-12-15_09-00-00_9Z3MK1.txt
+```
+
+### Comment File Format
 
 ```
-> YYYY-MM-DD HH:MM_ss -- CALLSIGN
+AUTHOR: CALLSIGN
+CREATED: YYYY-MM-DD HH:MM_ss
+
 Comment content here.
 Can span multiple lines.
+
 --> npub: npub1...
 --> signature: hex_signature
 ```
 
 ### Comment Structure
 
-1. **Header Line** (required)
-   - Format: `> YYYY-MM-DD HH:MM_ss -- CALLSIGN`
-   - Starts with `>` followed by space
+1. **AUTHOR** (required)
+   - Format: `AUTHOR: CALLSIGN`
+   - The callsign of the comment author
 
-2. **Content** (required)
+2. **CREATED** (required)
+   - Format: `CREATED: YYYY-MM-DD HH:MM_ss`
+   - Timestamp when comment was created
+
+3. **Content** (required)
    - Plain text, multiple lines allowed
+   - Separated from header by blank line
 
-3. **Metadata** (optional)
-   - npub and signature
+4. **Metadata** (optional)
+   - `npub`: NOSTR public key for verification
+   - `signature`: Cryptographic signature
 
-### Comment Locations
+### Legacy Comment Locations (Deprecated)
+
+For backwards compatibility, comments may also exist in:
 
 - **Report comments**: `.reactions/report.txt`
 - **Photo comments**: `.reactions/photo.jpg.txt`
 - **Update comments**: `.reactions/updates/update-file.txt`
+
+These inline formats use the legacy format:
+```
+> YYYY-MM-DD HH:MM_ss -- CALLSIGN
+Comment content here.
+--> npub: npub1...
+--> signature: hex_signature
+```
+
+## Points (Attention Calls)
+
+### Points File Storage
+
+Points (user attention calls) are stored in a dedicated `points.txt` file in the alert folder.
+
+**File Location**: `{alert_folder}/points.txt`
+
+**File Format**: One npub per line (plain text, UTF-8)
+
+```
+npub1abc123def456...
+npub1xyz789ghi012...
+npub1mno345pqr678...
+```
+
+### Benefits of Separate Points File
+
+1. **Readability**: report.txt stays readable regardless of point count
+2. **Easy lookup**: Simple grep/search for npub in points.txt
+3. **Efficient counting**: Line count equals point count
+4. **Clean separation**: Points are user feedback, not report content
+
+### Point Operations
+
+**Add Point**:
+- Read points.txt (or create if doesn't exist)
+- Check if npub already exists (prevent duplicates)
+- Append npub on new line
+- Update LAST_MODIFIED in report.txt
+
+**Remove Point**:
+- Read points.txt
+- Remove line containing the npub
+- If empty, delete the file
+- Update LAST_MODIFIED in report.txt
+
+**Count Points**:
+- Count non-empty lines in points.txt
+- Return 0 if file doesn't exist
+
+### API Response Format
+
+The API still returns points in JSON format for client consumption:
+
+```json
+{
+  "pointed_by": ["npub1abc...", "npub1xyz..."],
+  "point_count": 2
+}
+```
 
 ## Permissions and Roles
 
@@ -3364,6 +3487,22 @@ apariencia y valor histórico del área.
 - [NOSTR Protocol](https://github.com/nostr-protocol/nostr)
 
 ## Change Log
+
+### Version 1.3 (2025-12-14)
+
+**Folder Structure Improvements**:
+- **Timestamp-Based Folder Naming**: Changed from coordinate-based to timestamp-based folder names
+  - New format: `YYYY-MM-DD_HH-MM_sanitized-title`
+  - Example: `2025-12-14_15-32_broken-sidewalk`
+  - Title truncated to 100 characters maximum
+- **Images Subfolder**: Photos now stored in `images/` subdirectory
+  - Sequential naming: `photo1.jpg`, `photo2.png`, etc.
+  - Backwards compatible: legacy photos in root folder still supported
+- **Comments Folder**: Dedicated `comments/` directory for user comments
+  - Filename format: `YYYY-MM-DD_HH-MM-SS_XXXXXX.txt`
+  - 6-character alphanumeric random ID for uniqueness
+  - Example: `2025-12-14_15-45-23_X13K0G.txt`
+- **Consistent Structure**: Station, Client A, and Client B now use identical folder organization
 
 ### Version 1.2 (2025-12-14)
 

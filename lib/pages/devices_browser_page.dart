@@ -1310,12 +1310,13 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
             spacing: 4,
             runSpacing: 4,
             children: [
-              // Connection method tags (filtered by current availability, deduplicated by label)
-              ..._getDeduplicatedConnectionTags(device.connectionMethods).map((method) => _buildConnectionTag(
-                theme,
-                RemoteDevice.getConnectionMethodLabel(method),
-                _getConnectionMethodColor(method),
-              )),
+              // Connection method tags (only show when device is online)
+              if (device.isOnline)
+                ..._getDeduplicatedConnectionTags(device.connectionMethods).map((method) => _buildConnectionTag(
+                  theme,
+                  RemoteDevice.getConnectionMethodLabel(method),
+                  _getConnectionMethodColor(method),
+                )),
               // Cached indicator
               if (device.hasCachedData && !device.isOnline)
                 _buildConnectionTag(

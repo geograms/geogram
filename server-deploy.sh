@@ -85,9 +85,9 @@ if [ "$NEEDS_SETUP" = "yes" ]; then
     read RELAY_NAME
     RELAY_NAME=${RELAY_NAME:-"p2p.radio"}
 
-    printf "Description [${CYAN}Geogram Relay Server${NC}]: "
+    printf "Description [${CYAN}Geogram Station${NC}]: "
     read RELAY_DESC
-    RELAY_DESC=${RELAY_DESC:-"Geogram Relay Server"}
+    RELAY_DESC=${RELAY_DESC:-"Geogram Station"}
     echo ""
 
     # Ask for location

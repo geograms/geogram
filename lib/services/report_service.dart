@@ -12,6 +12,7 @@ import '../models/report_update.dart';
 import '../models/report_comment.dart';
 import '../models/report_settings.dart';
 import '../platform/file_system_service.dart';
+import '../util/alert_folder_utils.dart';
 import 'log_service.dart';
 import 'alert_sharing_service.dart';
 
@@ -214,7 +215,17 @@ class ReportService {
             if (await reportFile.exists()) {
               try {
                 final content = await reportFile.readAsString();
-                final report = Report.fromText(content, folderName);
+                var report = Report.fromText(content, folderName);
+
+                // Read points from points.txt
+                final pointedBy = await AlertFolderUtils.readPointsFile(entity.path);
+                if (pointedBy.isNotEmpty) {
+                  report = report.copyWith(
+                    pointedBy: pointedBy,
+                    pointCount: pointedBy.length,
+                  );
+                }
+
                 reports.add(report);
               } catch (e) {
                 LogService().log('ReportService: Error loading report from ${entity.path}: $e');
@@ -288,7 +299,18 @@ class ReportService {
           if (await reportFile.exists()) {
             try {
               final content = await reportFile.readAsString();
-              return Report.fromText(content, folderName);
+              var report = Report.fromText(content, folderName);
+
+              // Read points from points.txt
+              final pointedBy = await AlertFolderUtils.readPointsFile(entity.path);
+              if (pointedBy.isNotEmpty) {
+                report = report.copyWith(
+                  pointedBy: pointedBy,
+                  pointCount: pointedBy.length,
+                );
+              }
+
+              return report;
             } catch (e) {
               LogService().log('ReportService: Error loading report: $e');
             }
@@ -627,36 +649,72 @@ class ReportService {
   }
 
   /// Point a report (call attention to it)
+  /// Points are stored in points.txt file (one npub per line)
   Future<void> pointReport(String folderName, String npub) async {
-    if (npub.isEmpty) return;
+    if (npub.isEmpty || _collectionPath == null) return;
 
     final report = await loadReport(folderName);
     if (report == null) return;
 
-    if (!report.pointedBy.contains(npub)) {
+    // Already pointed by this user
+    if (report.pointedBy.contains(npub)) return;
+
+    final isExpired = await _isReportExpired(folderName);
+    final baseDir = isExpired ? 'expired' : 'active';
+    final regionFolder = report.regionFolder;
+    final alertPath = '$_collectionPath/$baseDir/$regionFolder/$folderName';
+
+    if (kIsWeb) {
+      // Web: Update report object and save (points stored in memory only)
       final updatedPointedBy = List<String>.from(report.pointedBy)..add(npub);
       final updated = report.copyWith(
         pointedBy: updatedPointedBy,
         pointCount: updatedPointedBy.length,
       );
-      await saveReport(updated, isExpired: await _isReportExpired(folderName));
+      await saveReport(updated, isExpired: isExpired);
+    } else {
+      // Native: Write to points.txt
+      final added = await AlertFolderUtils.addPointToFile(alertPath, npub);
+      if (added) {
+        // Update lastModified on the report
+        await saveReport(report, isExpired: isExpired, notifyRelays: false);
+        LogService().log('ReportService: Added point to $folderName');
+      }
     }
   }
 
   /// Unpoint a report (remove attention call)
+  /// Points are stored in points.txt file (one npub per line)
   Future<void> unpointReport(String folderName, String npub) async {
-    if (npub.isEmpty) return;
+    if (npub.isEmpty || _collectionPath == null) return;
 
     final report = await loadReport(folderName);
     if (report == null) return;
 
-    if (report.pointedBy.contains(npub)) {
+    // Not pointed by this user
+    if (!report.pointedBy.contains(npub)) return;
+
+    final isExpired = await _isReportExpired(folderName);
+    final baseDir = isExpired ? 'expired' : 'active';
+    final regionFolder = report.regionFolder;
+    final alertPath = '$_collectionPath/$baseDir/$regionFolder/$folderName';
+
+    if (kIsWeb) {
+      // Web: Update report object and save (points stored in memory only)
       final updatedPointedBy = List<String>.from(report.pointedBy)..remove(npub);
       final updated = report.copyWith(
         pointedBy: updatedPointedBy,
         pointCount: updatedPointedBy.length,
       );
-      await saveReport(updated, isExpired: await _isReportExpired(folderName));
+      await saveReport(updated, isExpired: isExpired);
+    } else {
+      // Native: Remove from points.txt
+      final removed = await AlertFolderUtils.removePointFromFile(alertPath, npub);
+      if (removed) {
+        // Update lastModified on the report
+        await saveReport(report, isExpired: isExpired, notifyRelays: false);
+        LogService().log('ReportService: Removed point from $folderName');
+      }
     }
   }
 

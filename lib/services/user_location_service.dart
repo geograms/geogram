@@ -179,11 +179,9 @@ class UserLocationService extends ChangeNotifier {
       return;
     }
 
-    // Check and request permission
+    // Check permission status - do NOT auto-request for returning users
+    // First-time users will be prompted during onboarding
     LocationPermission permission = await Geolocator.checkPermission();
-    if (permission == LocationPermission.denied) {
-      permission = await Geolocator.requestPermission();
-    }
 
     if (permission == LocationPermission.denied ||
         permission == LocationPermission.deniedForever) {
@@ -284,6 +282,13 @@ class UserLocationService extends ChangeNotifier {
   void _updateLocation(double lat, double lon, String source, {String? locationName}) {
     // Skip if coordinates are invalid
     if (lat == 0.0 && lon == 0.0) return;
+
+    // Don't allow IP geolocation to overwrite a profile location
+    // Profile location is explicitly set by the user and should have highest priority
+    if (_currentLocation != null && _currentLocation!.source == 'profile' && source == 'ip') {
+      LogService().log('UserLocationService: Skipping IP location update - profile location has priority');
+      return;
+    }
 
     // Check if location has changed significantly (> 100m)
     if (_currentLocation != null) {

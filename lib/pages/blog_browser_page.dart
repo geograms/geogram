@@ -129,6 +129,12 @@ class _BlogBrowserPageState extends State<BlogBrowserPage> {
     });
   }
 
+  /// Search for posts with the given tag
+  void _searchByTag(String tag) {
+    _searchController.text = tag;
+    _filterPosts();
+  }
+
   Future<void> _selectPost(BlogPost post) async {
     // Load full post with comments
     final fullPost = await _blogService.loadFullPost(post.id);
@@ -144,7 +150,7 @@ class _BlogBrowserPageState extends State<BlogBrowserPage> {
     if (!mounted || fullPost == null) return;
 
     // Navigate to full-screen detail view
-    final result = await Navigator.of(context).push<bool>(
+    final result = await Navigator.of(context).push<dynamic>(
       MaterialPageRoute(
         builder: (context) => _BlogPostDetailPage(
           post: fullPost,
@@ -155,12 +161,21 @@ class _BlogBrowserPageState extends State<BlogBrowserPage> {
           currentUserNpub: _currentUserNpub,
           stationUrl: _stationUrl,
           profileIdentifier: _profileIdentifier,
+          onTagTap: _searchByTag,
         ),
       ),
     );
 
+    if (!mounted) return;
+
+    // Handle tag search result
+    if (result is Map && result['searchTag'] != null) {
+      _searchByTag(result['searchTag'] as String);
+      return;
+    }
+
     // Reload posts if changes were made
-    if (result == true && mounted) {
+    if (result == true) {
       await _loadPosts();
     }
   }
@@ -245,6 +260,8 @@ class _BlogBrowserPageState extends State<BlogBrowserPage> {
         content: result['content'] as String,
         tags: result['tags'] as List<String>?,
         status: result['status'] as BlogStatus?,
+        latitude: result['latitude'] as double?,
+        longitude: result['longitude'] as double?,
         userNpub: _currentUserNpub,
       );
 
@@ -340,14 +357,14 @@ class _BlogBrowserPageState extends State<BlogBrowserPage> {
     if (_selectedPost == null || _commentController.text.trim().isEmpty) return;
 
     final profile = _profileService.getProfile();
-    final success = await _blogService.addComment(
+    final commentId = await _blogService.addComment(
       postId: _selectedPost!.id,
       author: profile.callsign,
       content: _commentController.text.trim(),
       npub: profile.npub,
     );
 
-    if (success && mounted) {
+    if (commentId != null && mounted) {
       _commentController.clear();
 
       // Reload post with new comment
@@ -369,12 +386,12 @@ class _BlogBrowserPageState extends State<BlogBrowserPage> {
     }
   }
 
-  Future<void> _deleteComment(int commentIndex) async {
+  Future<void> _deleteComment(String commentId) async {
     if (_selectedPost == null) return;
 
     final success = await _blogService.deleteComment(
       postId: _selectedPost!.id,
-      commentIndex: commentIndex,
+      commentId: commentId,
       userNpub: _currentUserNpub,
     );
 
@@ -638,6 +655,7 @@ class _BlogBrowserPageState extends State<BlogBrowserPage> {
                 onPublish: _selectedPost!.isDraft ? _publishDraft : null,
                 stationUrl: _stationUrl,
                 profileIdentifier: _profileIdentifier,
+                onTagTap: _searchByTag,
               ),
               const SizedBox(height: 24),
               // Comments section
@@ -688,16 +706,14 @@ class _BlogBrowserPageState extends State<BlogBrowserPage> {
           ),
         ),
         const SizedBox(height: 16),
-        ..._selectedPost!.comments.asMap().entries.map((entry) {
-          final index = entry.key;
-          final comment = entry.value;
+        ..._selectedPost!.comments.map((comment) {
           final canDelete = _blogService.isAdmin(_currentUserNpub) ||
               comment.npub == _currentUserNpub;
 
           return BlogCommentWidget(
             comment: comment,
             canDelete: canDelete,
-            onDelete: canDelete ? () => _deleteComment(index) : null,
+            onDelete: (canDelete && comment.id != null) ? () => _deleteComment(comment.id!) : null,
           );
         }),
       ],
@@ -762,6 +778,7 @@ class _BlogPostDetailPage extends StatefulWidget {
   final String? currentUserNpub;
   final String? stationUrl;
   final String? profileIdentifier;
+  final void Function(String tag)? onTagTap;
 
   const _BlogPostDetailPage({
     Key? key,
@@ -773,6 +790,7 @@ class _BlogPostDetailPage extends StatefulWidget {
     required this.currentUserNpub,
     this.stationUrl,
     this.profileIdentifier,
+    this.onTagTap,
   }) : super(key: key);
 
   @override
@@ -821,6 +839,8 @@ class _BlogPostDetailPageState extends State<_BlogPostDetailPage> {
         content: result['content'] as String,
         tags: result['tags'] as List<String>?,
         status: result['status'] as BlogStatus?,
+        latitude: result['latitude'] as double?,
+        longitude: result['longitude'] as double?,
         userNpub: widget.currentUserNpub,
       );
 
@@ -917,14 +937,14 @@ class _BlogPostDetailPageState extends State<_BlogPostDetailPage> {
     if (_commentController.text.trim().isEmpty) return;
 
     final profile = widget.profileService.getProfile();
-    final success = await widget.blogService.addComment(
+    final commentId = await widget.blogService.addComment(
       postId: _post.id,
       author: profile.callsign,
       content: _commentController.text.trim(),
       npub: profile.npub,
     );
 
-    if (success && mounted) {
+    if (commentId != null && mounted) {
       _commentController.clear();
       _hasChanges = true;
 
@@ -950,10 +970,10 @@ class _BlogPostDetailPageState extends State<_BlogPostDetailPage> {
     }
   }
 
-  Future<void> _deleteComment(int commentIndex) async {
+  Future<void> _deleteComment(String commentId) async {
     final success = await widget.blogService.deleteComment(
       postId: _post.id,
-      commentIndex: commentIndex,
+      commentId: commentId,
       userNpub: widget.currentUserNpub,
     );
 
@@ -1011,6 +1031,10 @@ class _BlogPostDetailPageState extends State<_BlogPostDetailPage> {
                     onPublish: _post.isDraft ? _publishDraft : null,
                     stationUrl: widget.stationUrl,
                     profileIdentifier: widget.profileIdentifier,
+                    onTagTap: widget.onTagTap != null ? (tag) {
+                      // Pop back to the list and trigger tag search
+                      Navigator.pop(context, {'searchTag': tag});
+                    } : null,
                   ),
                   const SizedBox(height: 24),
                   _buildCommentsSection(theme),
@@ -1061,16 +1085,14 @@ class _BlogPostDetailPageState extends State<_BlogPostDetailPage> {
           ),
         ),
         const SizedBox(height: 16),
-        ..._post.comments.asMap().entries.map((entry) {
-          final index = entry.key;
-          final comment = entry.value;
+        ..._post.comments.map((comment) {
           final canDelete = widget.blogService.isAdmin(widget.currentUserNpub) ||
               comment.npub == widget.currentUserNpub;
 
           return BlogCommentWidget(
             comment: comment,
             canDelete: canDelete,
-            onDelete: canDelete ? () => _deleteComment(index) : null,
+            onDelete: (canDelete && comment.id != null) ? () => _deleteComment(comment.id!) : null,
           );
         }),
       ],

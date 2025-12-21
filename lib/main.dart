@@ -22,6 +22,7 @@ import 'services/update_service.dart';
 import 'services/devices_service.dart';
 import 'services/ble_permission_service.dart';
 import 'services/storage_config.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'services/web_theme_service.dart';
 import 'services/app_args.dart';
 import 'services/security_service.dart';
@@ -267,17 +268,37 @@ void main() async {
         await DevicesService().initialize(skipBLE: true);
         LogService().log('DevicesService initialized (deferred, BLE skipped for onboarding)');
       } else {
-        // For returning users on Android, request any missing permissions first
+        // For returning users on Android, check permissions without requesting
         // Skip BLE permissions in internet-only mode
         if (!kIsWeb && Platform.isAndroid && firstLaunchComplete && !AppArgs().internetOnly) {
-          LogService().log('Requesting BLE permissions on Android (returning user)...');
-          final granted = await BLEPermissionService().requestAllPermissions();
-          LogService().log('BLE permissions request completed: granted=$granted');
-        }
+          LogService().log('Checking BLE permissions on Android (returning user)...');
 
-        // Initialize DevicesService with BLE for all platforms / returning users
-        await DevicesService().initialize();
-        LogService().log('DevicesService initialized (deferred)');
+          // Check permissions using permission_handler directly (doesn't trigger Bluetooth initialization)
+          final scanStatus = await Permission.bluetoothScan.status;
+          final connectStatus = await Permission.bluetoothConnect.status;
+          final advertiseStatus = await Permission.bluetoothAdvertise.status;
+
+          final hasAllPermissions = scanStatus.isGranted &&
+                                   connectStatus.isGranted &&
+                                   advertiseStatus.isGranted;
+
+          LogService().log('BLE permissions check: hasAllPermissions=$hasAllPermissions');
+
+          if (!hasAllPermissions) {
+            LogService().log('BLE permissions not granted - skipping BLE initialization (user can enable in settings)');
+            // Initialize DevicesService but skip BLE
+            await DevicesService().initialize(skipBLE: true);
+            LogService().log('DevicesService initialized (deferred, BLE skipped - permissions not granted)');
+          } else {
+            // Initialize DevicesService with BLE for returning users with permissions
+            await DevicesService().initialize();
+            LogService().log('DevicesService initialized (deferred)');
+          }
+        } else {
+          // Initialize DevicesService with BLE for all non-Android platforms
+          await DevicesService().initialize();
+          LogService().log('DevicesService initialized (deferred)');
+        }
       }
 
       // Initialize NetworkMonitorService to track LAN/Internet connectivity
@@ -498,8 +519,9 @@ class _HomePageState extends State<HomePage> {
     showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (dialogContext) => StatefulBuilder(
-        builder: (context, setDialogState) {
+      builder: (dialogContext) => ValueListenableBuilder<int>(
+        valueListenable: _profileService.profileNotifier,
+        builder: (context, _, __) {
           final profile = _profileService.getProfile();
 
           return PopScope(
@@ -555,7 +577,7 @@ class _HomePageState extends State<HomePage> {
                 TextButton(
                   onPressed: () async {
                     await _profileService.regenerateActiveProfileIdentity();
-                    setDialogState(() {}); // Refresh dialog to show new callsign
+                    // ValueListenableBuilder will auto-rebuild when profileNotifier changes
                   },
                   child: Text(_i18n.t('generate_new')),
                 ),

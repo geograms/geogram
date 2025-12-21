@@ -80,8 +80,9 @@ class StorageConfig {
   ///
   /// Priority order for base directory:
   /// 1. Explicit [customBaseDir] parameter (if provided)
-  /// 2. Environment variable GEOGRAM_DATA_DIR
-  /// 3. Current working directory (where binary is running)
+  /// 2. Saved custom path from user preferences file
+  /// 3. Environment variable GEOGRAM_DATA_DIR
+  /// 4. Platform default location
   ///
   /// Set [createDirectories] to false to skip directory creation (useful for testing)
   Future<void> init({
@@ -112,22 +113,29 @@ class StorageConfig {
     if (customBaseDir != null && customBaseDir.isNotEmpty) {
       _baseDir = _normalizePath(customBaseDir);
     } else {
-      // Check environment variable
-      final envDir = Platform.environment[envVarName];
-      if (envDir != null && envDir.isNotEmpty) {
-        _baseDir = _normalizePath(envDir);
-      } else if (Platform.isAndroid || Platform.isIOS) {
-        // On mobile platforms, use app documents directory
-        final appDir = await getApplicationDocumentsDirectory();
-        _baseDir = path.join(appDir.path, 'geogram');
+      // Check for saved custom path from user preferences
+      final savedPath = await _readSavedDataDir();
+      if (savedPath != null && savedPath.isNotEmpty) {
+        _baseDir = _normalizePath(savedPath);
+        stderr.writeln('StorageConfig: Using saved custom path: $_baseDir');
       } else {
-        // On desktop, use ~/.local/share/geogram-desktop for consistent location
-        final home = Platform.environment['HOME'] ?? Platform.environment['USERPROFILE'];
-        if (home != null) {
-          _baseDir = path.join(home, '.local', 'share', 'geogram-desktop');
+        // Check environment variable
+        final envDir = Platform.environment[envVarName];
+        if (envDir != null && envDir.isNotEmpty) {
+          _baseDir = _normalizePath(envDir);
+        } else if (Platform.isAndroid || Platform.isIOS) {
+          // On mobile platforms, use app documents directory
+          final appDir = await getApplicationDocumentsDirectory();
+          _baseDir = path.join(appDir.path, 'geogram');
         } else {
-          // Fallback to current working directory if HOME not set
-          _baseDir = Directory.current.path;
+          // On desktop, use ~/.local/share/geogram-desktop for consistent location
+          final home = Platform.environment['HOME'] ?? Platform.environment['USERPROFILE'];
+          if (home != null) {
+            _baseDir = path.join(home, '.local', 'share', 'geogram-desktop');
+          } else {
+            // Fallback to current working directory if HOME not set
+            _baseDir = Directory.current.path;
+          }
         }
       }
     }
@@ -139,6 +147,64 @@ class StorageConfig {
     }
 
     _initialized = true;
+  }
+
+  /// Get the path to the user preferences file for storing custom data dir
+  String _getPreferencesFilePath() {
+    final home = Platform.environment['HOME'] ?? Platform.environment['USERPROFILE'] ?? '/tmp';
+    if (Platform.isWindows) {
+      return path.join(home, 'AppData', 'Local', 'geogram-desktop', 'data_dir.txt');
+    } else if (Platform.isMacOS) {
+      return path.join(home, 'Library', 'Application Support', 'geogram-desktop', 'data_dir.txt');
+    } else {
+      // Linux and others
+      return path.join(home, '.config', 'geogram-desktop', 'data_dir.txt');
+    }
+  }
+
+  /// Read saved data directory from preferences file
+  Future<String?> _readSavedDataDir() async {
+    try {
+      final prefsFile = File(_getPreferencesFilePath());
+      if (await prefsFile.exists()) {
+        final content = await prefsFile.readAsString();
+        return content.trim();
+      }
+    } catch (e) {
+      stderr.writeln('StorageConfig: Error reading preferences file: $e');
+    }
+    return null;
+  }
+
+  /// Save custom data directory to preferences file
+  Future<bool> saveCustomDataDir(String dirPath) async {
+    try {
+      final prefsFile = File(_getPreferencesFilePath());
+      final parentDir = prefsFile.parent;
+      if (!await parentDir.exists()) {
+        await parentDir.create(recursive: true);
+      }
+      await prefsFile.writeAsString(dirPath);
+      stderr.writeln('StorageConfig: Saved custom data dir: $dirPath');
+      return true;
+    } catch (e) {
+      stderr.writeln('StorageConfig: Error saving preferences file: $e');
+      return false;
+    }
+  }
+
+  /// Clear saved custom data directory (revert to default)
+  Future<bool> clearCustomDataDir() async {
+    try {
+      final prefsFile = File(_getPreferencesFilePath());
+      if (await prefsFile.exists()) {
+        await prefsFile.delete();
+      }
+      return true;
+    } catch (e) {
+      stderr.writeln('StorageConfig: Error clearing preferences file: $e');
+      return false;
+    }
   }
 
   /// Reset the storage config (mainly for testing)

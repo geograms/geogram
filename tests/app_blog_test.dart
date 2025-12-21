@@ -5,6 +5,8 @@
 ///   - Blog creation via debug API
 ///   - URL generation for p2p.radio access
 ///   - Fetching blog content from p2p.radio
+///   - Blog API endpoints (GET /api/blog, GET /api/blog/{postId})
+///   - Comment API endpoints (POST, DELETE)
 ///
 /// The test connects to the real p2p.radio server, so internet is required.
 ///
@@ -61,6 +63,7 @@ String? _clientCallsign;
 String? _clientNickname;
 String? _createdBlogId;
 String? _createdBlogUrl;
+String? _createdCommentId;
 
 // ============================================================
 // Output Helpers
@@ -560,6 +563,424 @@ Future<void> testGetBlogUrl() async {
 }
 
 // ============================================================
+// Blog API Endpoint Tests
+// ============================================================
+
+/// Test GET /api/blog - List all published blog posts
+Future<void> testBlogApiList() async {
+  section('Blog API - List Posts (GET /api/blog)');
+
+  try {
+    final response = await http
+        .get(Uri.parse('http://localhost:$clientPort/api/blog'))
+        .timeout(const Duration(seconds: 10));
+
+    if (response.statusCode != 200) {
+      fail('GET /api/blog', 'HTTP ${response.statusCode}: ${response.body}');
+      return;
+    }
+
+    final data = jsonDecode(response.body) as Map<String, dynamic>;
+
+    if (data['success'] != true) {
+      fail('GET /api/blog', 'Response success != true');
+      return;
+    }
+
+    pass('GET /api/blog returns success');
+
+    final posts = data['posts'] as List?;
+    if (posts == null) {
+      fail('GET /api/blog', 'No posts array in response');
+      return;
+    }
+
+    info('Total posts: ${data['total']}');
+    info('Returned posts: ${posts.length}');
+
+    // Check if our created blog is in the list
+    if (_createdBlogId != null) {
+      final ourPost = posts.firstWhere(
+        (p) => p['id'] == _createdBlogId,
+        orElse: () => null,
+      );
+
+      if (ourPost != null) {
+        pass('Created blog found in /api/blog list');
+        info('Post title: ${ourPost['title']}');
+        info('Post author: ${ourPost['author']}');
+        info('Comment count: ${ourPost['comment_count']}');
+      } else {
+        fail('GET /api/blog', 'Created blog not found in list');
+      }
+    }
+
+    // Test filtering by year
+    final year = DateTime.now().year;
+    final filteredResponse = await http
+        .get(Uri.parse('http://localhost:$clientPort/api/blog?year=$year'))
+        .timeout(const Duration(seconds: 10));
+
+    if (filteredResponse.statusCode == 200) {
+      final filteredData = jsonDecode(filteredResponse.body) as Map<String, dynamic>;
+      if (filteredData['success'] == true) {
+        pass('GET /api/blog?year=$year works');
+        info('Posts for $year: ${filteredData['count']}');
+      }
+    }
+  } catch (e) {
+    fail('GET /api/blog', 'Exception: $e');
+  }
+}
+
+/// Test GET /api/blog/{postId} - Get single post with comments
+Future<void> testBlogApiGetPost() async {
+  section('Blog API - Get Post (GET /api/blog/{postId})');
+
+  if (_createdBlogId == null) {
+    fail('GET /api/blog/{postId}', 'No blog ID available');
+    return;
+  }
+
+  try {
+    final response = await http
+        .get(Uri.parse('http://localhost:$clientPort/api/blog/$_createdBlogId'))
+        .timeout(const Duration(seconds: 10));
+
+    if (response.statusCode != 200) {
+      fail('GET /api/blog/$_createdBlogId', 'HTTP ${response.statusCode}: ${response.body}');
+      return;
+    }
+
+    final data = jsonDecode(response.body) as Map<String, dynamic>;
+
+    if (data['success'] != true) {
+      fail('GET /api/blog/{postId}', 'Response success != true');
+      return;
+    }
+
+    pass('GET /api/blog/{postId} returns success');
+
+    // Verify required fields
+    final requiredFields = ['id', 'title', 'author', 'timestamp', 'content', 'comments'];
+    for (final field in requiredFields) {
+      if (!data.containsKey(field)) {
+        fail('GET /api/blog/{postId}', 'Missing field: $field');
+        return;
+      }
+    }
+    pass('Response contains all required fields');
+
+    info('Post ID: ${data['id']}');
+    info('Post title: ${data['title']}');
+    info('Post author: ${data['author']}');
+    info('Comments: ${(data['comments'] as List).length}');
+
+    // Verify content contains our unique marker
+    final content = data['content'] as String?;
+    if (content != null && content.contains(uniqueMarker)) {
+      pass('Post content contains unique marker');
+    } else {
+      warn('Post content does not contain unique marker');
+    }
+  } catch (e) {
+    fail('GET /api/blog/{postId}', 'Exception: $e');
+  }
+}
+
+/// Test POST /api/blog/{postId}/comment - Add comment
+Future<void> testBlogApiAddComment() async {
+  section('Blog API - Add Comment (POST /api/blog/{postId}/comment)');
+
+  if (_createdBlogId == null) {
+    fail('POST comment', 'No blog ID available');
+    return;
+  }
+
+  final commentContent = 'Test comment from app_blog_test.dart - $uniqueMarker';
+
+  try {
+    // Test adding a comment
+    final response = await http
+        .post(
+          Uri.parse('http://localhost:$clientPort/api/blog/$_createdBlogId/comment'),
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode({
+            'author': _clientCallsign ?? 'TESTCALL',
+            'content': commentContent,
+            'npub': 'npub1testpubkey123456789',
+          }),
+        )
+        .timeout(const Duration(seconds: 10));
+
+    if (response.statusCode != 200) {
+      fail('POST comment', 'HTTP ${response.statusCode}: ${response.body}');
+      return;
+    }
+
+    final data = jsonDecode(response.body) as Map<String, dynamic>;
+
+    if (data['success'] != true) {
+      fail('POST comment', 'Response success != true: ${data['error']}');
+      return;
+    }
+
+    pass('POST /api/blog/{postId}/comment returns success');
+
+    _createdCommentId = data['comment_id'] as String?;
+    if (_createdCommentId != null) {
+      pass('Got comment ID: $_createdCommentId');
+    } else {
+      fail('POST comment', 'No comment_id in response');
+      return;
+    }
+
+    // Verify comment appears in post
+    await Future.delayed(const Duration(milliseconds: 500));
+
+    final getResponse = await http
+        .get(Uri.parse('http://localhost:$clientPort/api/blog/$_createdBlogId'))
+        .timeout(const Duration(seconds: 10));
+
+    if (getResponse.statusCode == 200) {
+      final postData = jsonDecode(getResponse.body) as Map<String, dynamic>;
+      final comments = postData['comments'] as List? ?? [];
+
+      final ourComment = comments.firstWhere(
+        (c) => c['id'] == _createdCommentId,
+        orElse: () => null,
+      );
+
+      if (ourComment != null) {
+        pass('Comment appears in post comments list');
+        info('Comment author: ${ourComment['author']}');
+        info('Comment content: ${ourComment['content']}');
+      } else {
+        fail('Verify comment', 'Comment not found in post');
+        info('Comments in post: ${comments.length}');
+        for (final c in comments) {
+          info('  - ${c['id']}: ${c['author']}');
+        }
+      }
+    }
+  } catch (e) {
+    fail('POST comment', 'Exception: $e');
+  }
+}
+
+/// Test error cases for comment API
+Future<void> testBlogApiCommentErrors() async {
+  section('Blog API - Comment Error Cases');
+
+  if (_createdBlogId == null) {
+    fail('Comment errors', 'No blog ID available');
+    return;
+  }
+
+  // Test missing author
+  try {
+    final response = await http
+        .post(
+          Uri.parse('http://localhost:$clientPort/api/blog/$_createdBlogId/comment'),
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode({
+            'content': 'Test comment without author',
+          }),
+        )
+        .timeout(const Duration(seconds: 10));
+
+    if (response.statusCode == 400) {
+      pass('Missing author returns 400');
+    } else {
+      warn('Missing author returned ${response.statusCode} instead of 400');
+    }
+  } catch (e) {
+    fail('Missing author test', 'Exception: $e');
+  }
+
+  // Test missing content
+  try {
+    final response = await http
+        .post(
+          Uri.parse('http://localhost:$clientPort/api/blog/$_createdBlogId/comment'),
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode({
+            'author': 'TESTCALL',
+          }),
+        )
+        .timeout(const Duration(seconds: 10));
+
+    if (response.statusCode == 400) {
+      pass('Missing content returns 400');
+    } else {
+      warn('Missing content returned ${response.statusCode} instead of 400');
+    }
+  } catch (e) {
+    fail('Missing content test', 'Exception: $e');
+  }
+
+  // Test non-existent post
+  try {
+    final response = await http
+        .post(
+          Uri.parse('http://localhost:$clientPort/api/blog/9999-99-99_nonexistent-post/comment'),
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode({
+            'author': 'TESTCALL',
+            'content': 'Test comment',
+          }),
+        )
+        .timeout(const Duration(seconds: 10));
+
+    if (response.statusCode == 404) {
+      pass('Non-existent post returns 404');
+    } else {
+      warn('Non-existent post returned ${response.statusCode} instead of 404');
+    }
+  } catch (e) {
+    fail('Non-existent post test', 'Exception: $e');
+  }
+}
+
+/// Test DELETE /api/blog/{postId}/comment/{commentId} - Delete comment
+Future<void> testBlogApiDeleteComment() async {
+  section('Blog API - Delete Comment (DELETE /api/blog/{postId}/comment/{commentId})');
+
+  if (_createdBlogId == null || _createdCommentId == null) {
+    fail('DELETE comment', 'No blog ID or comment ID available');
+    return;
+  }
+
+  // Test delete without X-Npub header
+  try {
+    final noAuthResponse = await http
+        .delete(
+          Uri.parse('http://localhost:$clientPort/api/blog/$_createdBlogId/comment/$_createdCommentId'),
+        )
+        .timeout(const Duration(seconds: 10));
+
+    if (noAuthResponse.statusCode == 401) {
+      pass('DELETE without X-Npub returns 401');
+    } else {
+      warn('DELETE without X-Npub returned ${noAuthResponse.statusCode} instead of 401');
+    }
+  } catch (e) {
+    fail('DELETE without auth', 'Exception: $e');
+  }
+
+  // Test delete with wrong npub (should fail with 403)
+  try {
+    final wrongNpubResponse = await http
+        .delete(
+          Uri.parse('http://localhost:$clientPort/api/blog/$_createdBlogId/comment/$_createdCommentId'),
+          headers: {'X-Npub': 'npub1wrongkey999999'},
+        )
+        .timeout(const Duration(seconds: 10));
+
+    if (wrongNpubResponse.statusCode == 403) {
+      pass('DELETE with wrong npub returns 403');
+    } else {
+      // Could be 200 if the user is the post author
+      info('DELETE with wrong npub returned ${wrongNpubResponse.statusCode}');
+    }
+  } catch (e) {
+    fail('DELETE with wrong npub', 'Exception: $e');
+  }
+
+  // Test delete with correct npub (same as the one used when creating comment)
+  try {
+    final response = await http
+        .delete(
+          Uri.parse('http://localhost:$clientPort/api/blog/$_createdBlogId/comment/$_createdCommentId'),
+          headers: {'X-Npub': 'npub1testpubkey123456789'},
+        )
+        .timeout(const Duration(seconds: 10));
+
+    if (response.statusCode != 200) {
+      fail('DELETE comment', 'HTTP ${response.statusCode}: ${response.body}');
+      return;
+    }
+
+    final data = jsonDecode(response.body) as Map<String, dynamic>;
+
+    if (data['success'] == true && data['deleted'] == true) {
+      pass('DELETE /api/blog/{postId}/comment/{commentId} returns success');
+    } else {
+      fail('DELETE comment', 'Response: $data');
+      return;
+    }
+
+    // Verify comment no longer appears in post
+    await Future.delayed(const Duration(milliseconds: 500));
+
+    final getResponse = await http
+        .get(Uri.parse('http://localhost:$clientPort/api/blog/$_createdBlogId'))
+        .timeout(const Duration(seconds: 10));
+
+    if (getResponse.statusCode == 200) {
+      final postData = jsonDecode(getResponse.body) as Map<String, dynamic>;
+      final comments = postData['comments'] as List? ?? [];
+
+      final ourComment = comments.firstWhere(
+        (c) => c['id'] == _createdCommentId,
+        orElse: () => null,
+      );
+
+      if (ourComment == null) {
+        pass('Comment no longer appears in post');
+      } else {
+        fail('Verify deletion', 'Comment still exists in post');
+      }
+    }
+
+    // Clear the comment ID since it's deleted
+    _createdCommentId = null;
+  } catch (e) {
+    fail('DELETE comment', 'Exception: $e');
+  }
+}
+
+/// Test non-existent endpoints return proper errors
+Future<void> testBlogApiNotFound() async {
+  section('Blog API - Not Found Cases');
+
+  // Test non-existent post
+  try {
+    final response = await http
+        .get(Uri.parse('http://localhost:$clientPort/api/blog/9999-99-99_nonexistent-post'))
+        .timeout(const Duration(seconds: 10));
+
+    if (response.statusCode == 404) {
+      pass('Non-existent post returns 404');
+    } else {
+      warn('Non-existent post returned ${response.statusCode} instead of 404');
+    }
+  } catch (e) {
+    fail('Non-existent post', 'Exception: $e');
+  }
+
+  // Test delete non-existent comment
+  if (_createdBlogId != null) {
+    try {
+      final response = await http
+          .delete(
+            Uri.parse('http://localhost:$clientPort/api/blog/$_createdBlogId/comment/9999-99-99_99-99-99_NOUSER'),
+            headers: {'X-Npub': 'npub1testkey'},
+          )
+          .timeout(const Duration(seconds: 10));
+
+      if (response.statusCode == 404) {
+        pass('Non-existent comment returns 404');
+      } else {
+        warn('Non-existent comment returned ${response.statusCode} instead of 404');
+      }
+    } catch (e) {
+      fail('Non-existent comment', 'Exception: $e');
+    }
+  }
+}
+
+// ============================================================
 // Main
 // ============================================================
 
@@ -581,6 +1002,16 @@ Future<void> main() async {
     await testCreateBlog();
     await testListBlogs();
     await testGetBlogUrl();
+
+    // Blog API endpoint tests
+    await testBlogApiList();
+    await testBlogApiGetPost();
+    await testBlogApiAddComment();
+    await testBlogApiCommentErrors();
+    await testBlogApiDeleteComment();
+    await testBlogApiNotFound();
+
+    // p2p.radio tests (last, as they require external connectivity)
     await testFetchFromP2PRadio();
   } catch (e) {
     print('\n\x1B[31mTest aborted: $e\x1B[0m');

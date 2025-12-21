@@ -1,7 +1,7 @@
 # Blog Format Specification
 
-**Version**: 1.1
-**Last Updated**: 2025-12-05
+**Version**: 1.3
+**Last Updated**: 2025-12-16
 **Status**: Active
 
 ## Table of Contents
@@ -44,20 +44,32 @@ Blog posts use a human-readable plain text format with structured metadata suppo
 
 ### Directory Structure
 
+Blog posts are stored in a folder-based structure where each post has its own directory containing the post content, comments, and attached files.
+
 ```
-collection_name/
-├── blog/
-│   ├── 2024/
-│   │   ├── 2024-03-15_my-first-post.md
-│   │   ├── 2024-12-20_year-end-review.md
-│   │   └── files/
-│   │       ├── {sha1}_{image.jpg}
-│   │       └── {sha1}_{document.pdf}
-│   └── 2025/
-│       ├── 2025-01-10_new-year-goals.md
-│       ├── 2025-01-15_tech-tutorial.md
-│       └── files/
-│           └── {sha1}_{attachment.pdf}
+blog/                          # Blog collection root
+├── 2024/
+│   ├── 2024-03-15_my-first-post/
+│   │   ├── post.md                    # Blog post content
+│   │   ├── files/                     # Attached files
+│   │   │   ├── {sha1}_{image.jpg}
+│   │   │   └── {sha1}_{document.pdf}
+│   │   └── comments/                  # Comment files
+│   │       ├── 2024-03-15_10-30-45_X13K0G.txt
+│   │       └── 2024-03-15_11-15-22_A7BN2P.txt
+│   └── 2024-12-20_year-end-review/
+│       ├── post.md
+│       └── comments/
+├── 2025/
+│   ├── 2025-01-10_new-year-goals/
+│   │   ├── post.md
+│   │   └── comments/
+│   └── 2025-01-15_tech-tutorial/
+│       ├── post.md
+│       ├── files/
+│       │   └── {sha1}_{attachment.pdf}
+│       └── comments/
+├── collection.js              # Collection metadata
 └── extra/
     ├── security.json          # Admin/moderator settings
     └── blog_config.json       # Blog-specific configuration (optional)
@@ -118,10 +130,11 @@ The collection admin is identified in `/extra/security.json`:
 
 AUTHOR: CALLSIGN
 CREATED: YYYY-MM-DD HH:MM_ss
+EDITED: YYYY-MM-DD HH:MM (optional, only if edited)
 DESCRIPTION: Short description (optional)
+LOCATION: lat, lon (optional, e.g., 38.736946, -9.142685)
 STATUS: draft|published
 --> tags: tag1,tag2,tag3
---> npub: npub1...
 
 Post content goes here.
 Can span multiple paragraphs.
@@ -132,6 +145,7 @@ More paragraphs...
 --> file: {sha1}_{attachment.pdf}
 --> image: {sha1}_{photo.jpg}
 --> url: https://example.com/resource
+--> npub: npub1...
 --> signature: hex_signature
 
 > YYYY-MM-DD HH:MM_ss -- COMMENTER
@@ -165,32 +179,40 @@ The header consists of **at least 7 lines**:
    - **Example**: `CREATED: 2025-01-15 10:30_00`
    - **Note**: Underscore before seconds (consistent with chat/forum)
 
-5. **Description Line** (optional)
+5. **Edited Timestamp** (optional)
+   - **Format**: `EDITED: YYYY-MM-DD HH:MM`
+   - **Example**: `EDITED: 2025-01-16 14:30`
+   - **Purpose**: Records when the post was last edited
+   - **Note**: Only added/updated when post content is modified after creation
+
+6. **Description Line** (optional)
    - **Format**: `DESCRIPTION: <text>`
    - **Example**: `DESCRIPTION: A beginner's guide to using Geogram`
    - **Constraints**: Recommended 500 characters or less
    - **Purpose**: Summary shown in post lists
 
-6. **Status Line** (required)
+7. **Location Line** (optional)
+   - **Format**: `LOCATION: <latitude>, <longitude>`
+   - **Example**: `LOCATION: 38.736946, -9.142685`
+   - **Constraints**: Decimal degrees format, 6 decimal places recommended
+   - **Purpose**: Geo-location of the post, displayed as clickable link to map viewer
+   - **Note**: Shown in post detail header, click to view location on map
+
+8. **Status Line** (required)
    - **Format**: `STATUS: <draft|published>`
    - **Values**:
      - `draft` - Only visible to author and admin
      - `published` - Visible to all users, accepts comments
    - **Example**: `STATUS: published`
 
-7. **Tags Metadata** (optional)
+9. **Tags Metadata** (optional)
    - **Format**: `--> tags: <tag1>,<tag2>,<tag3>`
    - **Example**: `--> tags: tutorial,beginner,guide`
    - **Constraints**: Comma-separated, no limit on count
    - **Note**: Must appear before content blank line
 
-8. **NOSTR Public Key** (optional)
-   - **Format**: `--> npub: <npub1...>`
-   - **Example**: `--> npub: npub1abc123def456...`
-   - **Purpose**: Links post to NOSTR identity
-
-9. **Blank Line** (required)
-   - Separates header from content
+10. **Blank Line** (required)
+    - Separates header from content
 
 ### Content Section
 
@@ -286,41 +308,59 @@ Metadata appears after content, using the `--> key: value` format.
 
 ## Comments
 
-### Comment Format
+### Comment Storage
 
-Comments follow the blog post content and use the same format as forum replies:
+Comments are stored as separate files in the `comments/` subdirectory of each blog post folder. This allows for remote commenting via API where devices can post comments to blog posts hosted on other devices.
+
+**File Location**: `blog/{year}/{postId}/comments/`
+
+**Filename Pattern**: `YYYY-MM-DD_HH-MM-SS_AUTHOR.txt`
+
+**Example**: `2025-01-15_14-30-45_X13K0G.txt`
+
+### Comment File Format
 
 ```
-> YYYY-MM-DD HH:MM_ss -- CALLSIGN
+AUTHOR: CALLSIGN
+CREATED: YYYY-MM-DD HH:MM_ss
+
 Comment content here.
 Can span multiple lines.
+
 --> npub: npub1...
 --> signature: hex_signature
 ```
 
 ### Comment Structure
 
-1. **Header Line** (required)
-   - **Format**: `> YYYY-MM-DD HH:MM_ss -- CALLSIGN`
-   - **Example**: `> 2025-01-15 14:30_45 -- X135AS`
-   - **Note**: Starts with `>` followed by space
+1. **Author Line** (required)
+   - **Format**: `AUTHOR: CALLSIGN`
+   - **Example**: `AUTHOR: X135AS`
 
-2. **Content** (required)
+2. **Created Timestamp** (required)
+   - **Format**: `CREATED: YYYY-MM-DD HH:MM_ss`
+   - **Example**: `CREATED: 2025-01-15 14:30_45`
+
+3. **Blank Line** (required)
+   - Separates header from content
+
+4. **Content** (required)
    - Plain text, multiple lines allowed
    - No markdown rendering in comments
    - No file attachments in comments
 
-3. **Metadata** (optional)
+5. **Metadata** (optional)
    - NOSTR npub and signature
+   - Blank line before metadata recommended
    - Signature must be last if present
 
 ### Comment Characteristics
 
 - **Threading**: Flat (not threaded/nested)
-- **Ordering**: Chronological by timestamp
+- **Ordering**: Chronological by filename (timestamp)
 - **Visibility**: Only on published posts
 - **Permissions**: Anyone can comment on published posts
-- **Deletion**: Author or admin can delete their own comments
+- **Deletion**: Post author, comment author, or admin can delete comments
 
 ### Comment Restrictions
 
@@ -328,6 +368,12 @@ Can span multiple lines.
 - No file attachments in comments
 - No metadata except npub/signature
 - No nested replies (flat structure only)
+
+### Remote Commenting
+
+Blog posts can receive comments from remote devices via the Blog API. Remote devices use the ConnectionManager to post comments through whatever transport is available (LAN, WebRTC, Station relay, or BLE).
+
+See [API Documentation](#local-api-endpoints) for comment endpoints.
 
 ## File Attachments
 
@@ -458,17 +504,17 @@ I'm excited to share my thoughts here.
 --> signature: 0123456789abcdef...
 ```
 
-### Example 2: Post with Description and Tags
+### Example 2: Post with Description, Tags, and Edit History
 
 ```
 # BLOG: Getting Started with Geogram
 
 AUTHOR: CR7BBQ
 CREATED: 2025-01-15 10:30_00
+EDITED: 2025-01-16 14:45
 DESCRIPTION: A beginner's guide to using Geogram for offline communication
 STATUS: published
 --> tags: tutorial,beginner,guide
---> npub: npub1abc123...
 
 Welcome to Geogram! This post will guide you through the basics.
 
@@ -479,6 +525,7 @@ resilience and privacy. Here's what you need to know:
 2. NOSTR keys prove your identity
 3. Everything is stored locally
 
+--> npub: npub1abc123...
 --> signature: fedcba9876543210...
 ```
 
@@ -507,7 +554,33 @@ See also this external resource for more details.
 --> signature: abcd1234efgh5678...
 ```
 
-### Example 4: Post with Comments
+**Note**: The npub and signature MUST appear after all content metadata (file, image, url) and the signature MUST be the last metadata line.
+
+### Example 4: Post with Location
+
+```
+# BLOG: Trip Report from Lisbon
+
+AUTHOR: CR7BBQ
+CREATED: 2025-02-10 16:30_00
+DESCRIPTION: My visit to the beautiful city of Lisbon
+LOCATION: 38.736946, -9.142685
+STATUS: published
+--> tags: travel,portugal,lisbon
+
+Just arrived in Lisbon! The city is amazing.
+
+The weather is great and the food is incredible.
+I'll be sharing more updates during my stay.
+
+--> image: a1b2c3d4e_lisbon-view.jpg
+--> npub: npub1abc123...
+--> signature: 5555eeee6666ffff...
+```
+
+**Note**: The LOCATION field displays as a clickable link in the post detail view. Clicking it opens the internal map viewer centered on the specified coordinates.
+
+### Example 5: Post with Comments
 
 ```
 # BLOG: Monthly Update
@@ -570,11 +643,11 @@ TODO:
 2. Split into lines by \n
 3. Verify first line starts with "# BLOG: "
 4. Extract title from first line
-5. Parse header lines (AUTHOR, CREATED, DESCRIPTION, STATUS)
+5. Parse header lines (AUTHOR, CREATED, EDITED, DESCRIPTION, STATUS)
 6. Extract tags from "--> tags:" before content
 7. Find content start (after header blank line)
 8. Parse content until metadata or comments
-9. Extract metadata lines (file, image, url)
+9. Extract metadata lines (file, image, url, npub)
 10. Parse comments (lines starting with "> ")
 11. Associate metadata with comments
 12. Validate signatures if present
@@ -587,10 +660,11 @@ Line 1: # BLOG: <title>
 Line 2: (blank)
 Line 3: AUTHOR: <callsign>
 Line 4: CREATED: <timestamp>
-Line 5: DESCRIPTION: <text> (optional)
-Line 6: STATUS: <draft|published>
-Line 7+: --> tags: <tags> (optional)
-Line 7+: --> npub: <npub> (optional)
+Line 5: EDITED: <timestamp> (optional, only if edited)
+Line 5/6: DESCRIPTION: <text> (optional)
+Line 6/7: LOCATION: <lat>, <lon> (optional)
+Line 7/8: STATUS: <draft|published>
+Line 8+: --> tags: <tags> (optional)
 Line N: (blank) - marks end of header
 ```
 
@@ -989,48 +1063,154 @@ To fetch a specific blog post from another device:
 
 ## Local API Endpoints
 
-When a device runs its local HTTP server, these endpoints provide blog access:
+When a device runs its local HTTP server, these endpoints provide blog access and comment management:
 
 ### GET /api/blog
-List all published blog posts from all collections.
 
-**Response:**
+List all published blog posts.
+
+**Query Parameters:**
+| Parameter | Description |
+|-----------|-------------|
+| `year` | Filter by year (e.g., `2025`) |
+| `tag` | Filter by tag |
+| `limit` | Max posts to return |
+| `offset` | Pagination offset |
+
+**Response (200 OK):**
 ```json
 {
+  "success": true,
+  "timestamp": 1734344400,
+  "filters": { "year": 2025 },
+  "total": 5,
+  "count": 5,
   "posts": [
     {
-      "collection": "default",
-      "filename": "2025-12-04_hello-everyone.md",
+      "id": "2025-12-04_hello-everyone",
       "title": "Hello Everyone",
       "author": "CR7BBQ",
-      "date": "2025-12-04",
+      "timestamp": "2025-12-04 10:00_00",
       "status": "published",
-      "tags": ["welcome"]
+      "tags": ["welcome"],
+      "comment_count": 2
     }
   ]
 }
 ```
 
-### GET /api/blog/{collection}
-List blog posts from a specific collection.
+### GET /api/blog/{postId}
 
-### GET /api/blog/{collection}/{filename}
-Get a specific blog post.
+Get a specific blog post with comments.
 
-**Query Parameters:**
-- `format` - Response format: `json` (default), `html`, `markdown`
-
-**Response (JSON):**
+**Response (200 OK):**
 ```json
 {
-  "filename": "2025-12-04_hello-everyone.md",
+  "success": true,
+  "id": "2025-12-04_hello-everyone",
   "title": "Hello Everyone",
   "author": "CR7BBQ",
-  "date": "2025-12-04",
+  "timestamp": "2025-12-04 10:00_00",
+  "edited": null,
+  "description": "Welcome post",
+  "location": null,
   "status": "published",
   "tags": ["welcome"],
-  "content": "# Hello Everyone\n\nWelcome to my blog...",
-  "comments": []
+  "content": "Welcome to my blog...",
+  "files": [],
+  "comments": [
+    {
+      "id": "2025-12-04_11-30-45_X13K0G",
+      "author": "X13K0G",
+      "timestamp": "2025-12-04 11:30_45",
+      "content": "Great post!",
+      "npub": "npub1abc...",
+      "signature": "hex..."
+    }
+  ],
+  "comment_count": 1,
+  "npub": "npub1xyz...",
+  "signature": "hex..."
+}
+```
+
+### POST /api/blog/{postId}/comment
+
+Add a comment to a published blog post.
+
+**Request Body:**
+```json
+{
+  "author": "X13K0G",
+  "content": "Great post!",
+  "npub": "npub1abc...",
+  "signature": "hex_signature"
+}
+```
+
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "comment_id": "2025-12-04_11-30-45_X13K0G",
+  "timestamp": "2025-12-04T11:30:45Z"
+}
+```
+
+**Error Responses:**
+- `400` - Missing required field (author or content)
+- `403` - Cannot comment on unpublished post
+- `404` - Post not found
+
+### DELETE /api/blog/{postId}/comment/{commentId}
+
+Delete a comment from a blog post.
+
+**Headers:**
+| Header | Description |
+|--------|-------------|
+| `X-Npub` | Requester's NOSTR public key for authorization |
+
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "deleted": true
+}
+```
+
+**Error Responses:**
+- `401` - Missing X-Npub header
+- `403` - Unauthorized (not post author or comment author)
+- `404` - Post or comment not found
+
+### GET /api/blog/{postId}/files/{filename}
+
+Get an attached file from a blog post.
+
+**Response (200 OK):** File content with appropriate Content-Type header.
+
+**Response (404 Not Found):** File not found.
+
+### Remote Comment Service
+
+To post comments to blog posts on other devices, use the `BlogCommentService`:
+
+```dart
+final service = BlogCommentService();
+
+// Post a comment to remote device
+final result = await service.postRemoteComment(
+  targetCallsign: 'X1TARGET',
+  postId: '2025-12-04_hello-everyone',
+  author: 'MYCALL',
+  content: 'Great post!',
+  npub: myNpub,
+  signature: mySignature,
+);
+
+if (result.success) {
+  print('Comment posted via ${result.transportUsed}');
 }
 ```
 
@@ -1045,6 +1225,21 @@ See [API Documentation](../../api/API.md#blog-api) for complete technical detail
 - [NOSTR Protocol](https://github.com/nostr-protocol/nostr)
 
 ## Change Log
+
+### Version 1.3 (2025-12-16)
+
+- Migrated to folder-based storage structure: each post in its own directory
+- Comments now stored as separate files in `comments/` subdirectory
+- Added Blog API endpoints for remote commenting
+- Added `BlogCommentService` for transport-agnostic remote comment operations
+- Updated API documentation with new endpoints
+
+### Version 1.2 (2025-12-15)
+
+- Added EDITED field for tracking when posts are modified
+- Clarified npub placement: must be at end before signature, not in header
+- Updated examples to reflect correct npub placement
+- Renumbered header fields section
 
 ### Version 1.1 (2025-12-05)
 
