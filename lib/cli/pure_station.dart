@@ -4561,8 +4561,10 @@ class PureStationServer {
         // Proxy the blog request to the connected client via WebSocket
         _log('INFO', 'Proxying blog request to connected client: ${client.callsign} (${client.nickname ?? "no nickname"})');
 
-        // Build the internal blog API path for the client
-        final blogApiPath = '/api/blog/$filename.html';
+        // Build the blog path that routes to LogApiService _handleBlogHtmlRequest
+        // Use format: /{callsign}/blog/{filename}.html
+        final targetCallsign = client.callsign ?? identifier;
+        final blogApiPath = '/$targetCallsign/blog/$filename.html';
 
         final requestId = DateTime.now().millisecondsSinceEpoch.toString();
         final proxyRequest = {
@@ -4570,7 +4572,9 @@ class PureStationServer {
           'requestId': requestId,
           'method': 'GET',
           'path': blogApiPath,
-          'headers': request.headers.toString(),
+          'headers': jsonEncode({
+            'X-Device-Callsign': targetCallsign,
+          }),
           'body': '',
         };
 
