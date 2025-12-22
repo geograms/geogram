@@ -69,11 +69,8 @@ class _RemoteBlogBrowserPageState extends State<RemoteBlogBrowserPage> {
   }
 
   Future<void> _openPost(BlogPost post) async {
-    // Get station URL for this device
-    final stationUrl = widget.device.stationUrl ?? 'https://p2p.radio';
-
-    // Build URL to the blog HTML page
-    final url = '$stationUrl/${widget.device.callsign}/blog/${post.id}.html';
+    // Build URL to the blog HTML page via p2p.radio station
+    final url = 'https://p2p.radio/${widget.device.callsign}/blog/${post.id}.html';
 
     LogService().log('RemoteBlogBrowserPage: Opening blog post: $url');
 
