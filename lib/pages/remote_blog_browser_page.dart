@@ -6,7 +6,6 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
-import '../services/connection_manager_service.dart';
 import '../services/devices_service.dart';
 import '../services/i18n_service.dart';
 import '../services/log_service.dart';
@@ -25,7 +24,7 @@ class RemoteBlogBrowserPage extends StatefulWidget {
 }
 
 class _RemoteBlogBrowserPageState extends State<RemoteBlogBrowserPage> {
-  final ConnectionManagerService _connectionManager = ConnectionManagerService();
+  final DevicesService _devicesService = DevicesService();
   final I18nService _i18n = I18nService();
 
   List<BlogPost> _posts = [];
@@ -45,21 +44,20 @@ class _RemoteBlogBrowserPageState extends State<RemoteBlogBrowserPage> {
     });
 
     try {
-      final response = await _connectionManager.sendHttpRequest(
-        deviceCallsign: widget.device.callsign,
+      final response = await _devicesService.makeDeviceApiRequest(
+        callsign: widget.device.callsign,
         method: 'GET',
         path: '/api/blog',
-        timeout: const Duration(seconds: 30),
       );
 
-      if (response.statusCode == 200) {
+      if (response != null && response.statusCode == 200) {
         final List<dynamic> data = json.decode(response.body);
         setState(() {
           _posts = data.map((json) => BlogPost.fromJson(json)).toList();
           _isLoading = false;
         });
       } else {
-        throw Exception('HTTP ${response.statusCode}: ${response.body}');
+        throw Exception('HTTP ${response?.statusCode ?? "null"}: ${response?.body ?? "no response"}');
       }
     } catch (e) {
       LogService().log('RemoteBlogBrowserPage: Error loading posts: $e');

@@ -6,7 +6,6 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import '../services/connection_manager_service.dart';
 import '../services/devices_service.dart';
 import '../services/i18n_service.dart';
 import '../services/log_service.dart';
@@ -28,7 +27,7 @@ class RemoteChatRoomPage extends StatefulWidget {
 }
 
 class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
-  final ConnectionManagerService _connectionManager = ConnectionManagerService();
+  final DevicesService _devicesService = DevicesService();
   final I18nService _i18n = I18nService();
   final ScrollController _scrollController = ScrollController();
 
@@ -55,14 +54,13 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
     });
 
     try {
-      final response = await _connectionManager.sendHttpRequest(
-        deviceCallsign: widget.device.callsign,
+      final response = await _devicesService.makeDeviceApiRequest(
+        callsign: widget.device.callsign,
         method: 'GET',
         path: '/api/chat/rooms/${widget.room.id}/messages?limit=100',
-        timeout: const Duration(seconds: 30),
       );
 
-      if (response.statusCode == 200) {
+      if (response != null && response.statusCode == 200) {
         final List<dynamic> data = json.decode(response.body);
         setState(() {
           _messages = data.map((json) => ChatMessage.fromJson(json)).toList();
@@ -76,7 +74,7 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
           }
         });
       } else {
-        throw Exception('HTTP ${response.statusCode}: ${response.body}');
+        throw Exception('HTTP ${response?.statusCode ?? "null"}: ${response?.body ?? "no response"}');
       }
     } catch (e) {
       LogService().log('RemoteChatRoomPage: Error loading messages: $e');

@@ -6,7 +6,7 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import '../services/log_service.dart';
-import '../services/connection_manager_service.dart';
+import '../services/devices_service.dart';
 
 /// Service for discovering what apps are available on a remote device
 class DeviceAppsService {
@@ -14,7 +14,7 @@ class DeviceAppsService {
   factory DeviceAppsService() => _instance;
   DeviceAppsService._internal();
 
-  final ConnectionManagerService _connectionManager = ConnectionManagerService();
+  final DevicesService _devicesService = DevicesService();
 
   /// Discover what apps are available on a device
   /// Returns map of app types to availability status
@@ -42,14 +42,13 @@ class DeviceAppsService {
   /// Check if blog app is available
   Future<DeviceAppInfo> _checkBlogAvailable(String callsign) async {
     try {
-      final response = await _connectionManager.sendHttpRequest(
-        deviceCallsign: callsign,
+      final response = await _devicesService.makeDeviceApiRequest(
+        callsign: callsign,
         method: 'GET',
         path: '/api/blog',
-        timeout: const Duration(seconds: 10),
       );
 
-      if (response.statusCode == 200) {
+      if (response != null && response.statusCode == 200) {
         final List<dynamic> posts = json.decode(response.body);
         return DeviceAppInfo(
           type: 'blog',
@@ -67,14 +66,13 @@ class DeviceAppsService {
   /// Check if chat app is available
   Future<DeviceAppInfo> _checkChatAvailable(String callsign) async {
     try {
-      final response = await _connectionManager.sendHttpRequest(
-        deviceCallsign: callsign,
+      final response = await _devicesService.makeDeviceApiRequest(
+        callsign: callsign,
         method: 'GET',
         path: '/api/chat/rooms',
-        timeout: const Duration(seconds: 10),
       );
 
-      if (response.statusCode == 200) {
+      if (response != null && response.statusCode == 200) {
         final List<dynamic> rooms = json.decode(response.body);
         return DeviceAppInfo(
           type: 'chat',
@@ -92,14 +90,13 @@ class DeviceAppsService {
   /// Check if events app is available
   Future<DeviceAppInfo> _checkEventsAvailable(String callsign) async {
     try {
-      final response = await _connectionManager.sendHttpRequest(
-        deviceCallsign: callsign,
+      final response = await _devicesService.makeDeviceApiRequest(
+        callsign: callsign,
         method: 'GET',
         path: '/api/events',
-        timeout: const Duration(seconds: 10),
       );
 
-      if (response.statusCode == 200) {
+      if (response != null && response.statusCode == 200) {
         final List<dynamic> events = json.decode(response.body);
         return DeviceAppInfo(
           type: 'events',
@@ -117,14 +114,13 @@ class DeviceAppsService {
   /// Check if alerts/reports app is available
   Future<DeviceAppInfo> _checkAlertsAvailable(String callsign) async {
     try {
-      final response = await _connectionManager.sendHttpRequest(
-        deviceCallsign: callsign,
+      final response = await _devicesService.makeDeviceApiRequest(
+        callsign: callsign,
         method: 'GET',
         path: '/api/alerts',
-        timeout: const Duration(seconds: 10),
       );
 
-      if (response.statusCode == 200) {
+      if (response != null && response.statusCode == 200) {
         final List<dynamic> alerts = json.decode(response.body);
         return DeviceAppInfo(
           type: 'alerts',

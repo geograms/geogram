@@ -5,7 +5,6 @@
 
 import 'dart:convert';
 import 'package:flutter/material.dart';
-import '../services/connection_manager_service.dart';
 import '../services/devices_service.dart';
 import '../services/i18n_service.dart';
 import '../services/log_service.dart';
@@ -25,7 +24,7 @@ class RemoteChatBrowserPage extends StatefulWidget {
 }
 
 class _RemoteChatBrowserPageState extends State<RemoteChatBrowserPage> {
-  final ConnectionManagerService _connectionManager = ConnectionManagerService();
+  final DevicesService _devicesService = DevicesService();
   final I18nService _i18n = I18nService();
 
   List<ChatRoom> _rooms = [];
@@ -45,21 +44,20 @@ class _RemoteChatBrowserPageState extends State<RemoteChatBrowserPage> {
     });
 
     try {
-      final response = await _connectionManager.sendHttpRequest(
-        deviceCallsign: widget.device.callsign,
+      final response = await _devicesService.makeDeviceApiRequest(
+        callsign: widget.device.callsign,
         method: 'GET',
         path: '/api/chat/rooms',
-        timeout: const Duration(seconds: 30),
       );
 
-      if (response.statusCode == 200) {
+      if (response != null && response.statusCode == 200) {
         final List<dynamic> data = json.decode(response.body);
         setState(() {
           _rooms = data.map((json) => ChatRoom.fromJson(json)).toList();
           _isLoading = false;
         });
       } else {
-        throw Exception('HTTP ${response.statusCode}: ${response.body}');
+        throw Exception('HTTP ${response?.statusCode ?? "null"}: ${response?.body ?? "no response"}');
       }
     } catch (e) {
       LogService().log('RemoteChatBrowserPage: Error loading rooms: $e');
