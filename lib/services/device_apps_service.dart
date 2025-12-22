@@ -4,9 +4,11 @@
  */
 
 import 'dart:convert';
+import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'package:http/http.dart' as http;
 import '../services/log_service.dart';
 import '../services/devices_service.dart';
+import '../services/storage_config.dart';
 
 /// Service for discovering what apps are available on a remote device
 class DeviceAppsService {
@@ -17,8 +19,100 @@ class DeviceAppsService {
   final DevicesService _devicesService = DevicesService();
 
   /// Discover what apps are available on a device
-  /// Returns map of app types to availability status
-  Future<Map<String, DeviceAppInfo>> discoverApps(String callsign) async {
+  /// First checks cached data from disk, returns immediately if found
+  /// Then optionally fetches fresh data from API in background
+  ///
+  /// Set [useCache] to false to skip cache and only use API
+  /// Set [refreshInBackground] to false to skip background refresh after cache
+  Future<Map<String, DeviceAppInfo>> discoverApps(
+    String callsign, {
+    bool useCache = true,
+    bool refreshInBackground = true,
+  }) async {
+    // Try to load from cache first for instant response
+    if (useCache) {
+      final cachedApps = await _loadFromCache(callsign);
+      if (cachedApps.values.any((app) => app.isAvailable)) {
+        LogService().log('DeviceAppsService: Loaded cached apps for $callsign');
+
+        // If refresh is enabled, fetch fresh data in background (don't wait)
+        if (refreshInBackground) {
+          _refreshApps(callsign);
+        }
+
+        return cachedApps;
+      }
+    }
+
+    // No cache or cache disabled - fetch from API
+    return await _fetchFromApi(callsign);
+  }
+
+  /// Load apps from cached data on disk
+  Future<Map<String, DeviceAppInfo>> _loadFromCache(String callsign) async {
+    final Map<String, DeviceAppInfo> apps = {};
+
+    try {
+      final dataDir = StorageConfig().baseDir;
+      final devicePath = '$dataDir/devices/$callsign';
+      final deviceDir = Directory(devicePath);
+
+      if (!await deviceDir.exists()) {
+        return {
+          'blog': DeviceAppInfo(type: 'blog', isAvailable: false),
+          'chat': DeviceAppInfo(type: 'chat', isAvailable: false),
+          'events': DeviceAppInfo(type: 'events', isAvailable: false),
+          'alerts': DeviceAppInfo(type: 'alerts', isAvailable: false),
+        };
+      }
+
+      // Check blog cache
+      final blogDir = Directory('$devicePath/blog');
+      if (await blogDir.exists()) {
+        int blogCount = 0;
+        await for (final entity in blogDir.list()) {
+          if (entity is File && entity.path.endsWith('.json')) {
+            blogCount++;
+          }
+        }
+        apps['blog'] = DeviceAppInfo(type: 'blog', isAvailable: blogCount > 0, itemCount: blogCount);
+      } else {
+        apps['blog'] = DeviceAppInfo(type: 'blog', isAvailable: false);
+      }
+
+      // Check chat cache
+      final chatDir = Directory('$devicePath/chat');
+      if (await chatDir.exists()) {
+        int roomCount = 0;
+        await for (final entity in chatDir.list()) {
+          if (entity is Directory) {
+            roomCount++;
+          }
+        }
+        apps['chat'] = DeviceAppInfo(type: 'chat', isAvailable: roomCount > 0, itemCount: roomCount);
+      } else {
+        apps['chat'] = DeviceAppInfo(type: 'chat', isAvailable: false);
+      }
+
+      // Events and alerts not commonly cached yet
+      apps['events'] = DeviceAppInfo(type: 'events', isAvailable: false);
+      apps['alerts'] = DeviceAppInfo(type: 'alerts', isAvailable: false);
+
+    } catch (e) {
+      LogService().log('DeviceAppsService: Error loading cache for $callsign: $e');
+      return {
+        'blog': DeviceAppInfo(type: 'blog', isAvailable: false),
+        'chat': DeviceAppInfo(type: 'chat', isAvailable: false),
+        'events': DeviceAppInfo(type: 'events', isAvailable: false),
+        'alerts': DeviceAppInfo(type: 'alerts', isAvailable: false),
+      };
+    }
+
+    return apps;
+  }
+
+  /// Fetch fresh data from API
+  Future<Map<String, DeviceAppInfo>> _fetchFromApi(String callsign) async {
     final Map<String, DeviceAppInfo> apps = {};
 
     // Check each app type in parallel
@@ -34,9 +128,19 @@ class DeviceAppsService {
     apps['events'] = futures[2];
     apps['alerts'] = futures[3];
 
-    LogService().log('DeviceAppsService: Discovered apps for $callsign: ${apps.entries.where((e) => e.value.isAvailable).map((e) => e.key).toList()}');
+    LogService().log('DeviceAppsService: Fetched apps from API for $callsign: ${apps.entries.where((e) => e.value.isAvailable).map((e) => e.key).toList()}');
 
     return apps;
+  }
+
+  /// Refresh apps in background (fire and forget)
+  void _refreshApps(String callsign) {
+    _fetchFromApi(callsign).then((apps) {
+      LogService().log('DeviceAppsService: Background refresh complete for $callsign');
+      // Apps are now cached by the API responses, next load will be faster
+    }).catchError((e) {
+      LogService().log('DeviceAppsService: Background refresh failed for $callsign: $e');
+    });
   }
 
   /// Check if blog app is available

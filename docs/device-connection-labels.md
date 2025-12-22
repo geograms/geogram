@@ -98,8 +98,9 @@ Defined in `lib/models/device_source.dart`:
 - Device seen within last 60 seconds
 
 **Remove Label When:**
-- Device not seen in BLE scans for 2 minutes
-- Connection lost and device not re-discovered
+- Device not present in current BLE scan results (immediate removal)
+- BLE cleanup runs on every scan completion (event-driven, typically every 10 seconds)
+- BLE tags are session-based and not persisted from cache
 - BLE disabled on local device
 
 **Proximity Levels (based on RSSI):**
@@ -133,6 +134,19 @@ Defined in `lib/models/device_source.dart`:
 - IEEE 802.11ah sub-GHz WiFi
 - Range: 1 km+
 - Scan interval: 30 seconds
+
+#### 2.3.5 Connection Method Lifecycle
+
+Each connection type is managed independently by its discovery method:
+
+| Type | Added When | Removed When | Cached? |
+|------|-----------|--------------|---------|
+| **BLE** | Device in current BLE scan | Device not in current BLE scan | No (session-based) |
+| **Internet** | Device connected to station | Device disconnected from station OR station offline | No (connection-based) |
+| **LAN** | Device responds on local network | 3 consecutive failed checks (90s) | Yes |
+
+**Key Principle:** Connection methods reflect **current reachability**, not historical discovery.
+BLE and Internet tags are never loaded from cache - they come only from active discovery/connections.
 
 ### 2.4 Background Scanning Architecture
 

@@ -508,9 +508,16 @@ class DevicesService {
   void _handleBLEDevices(List<BLEDevice> bleDevices) {
     final pairingService = BluetoothClassicPairingService();
 
+    // Track which callsigns are currently visible via BLE
+    final bleCallsigns = <String>{};
+
+    // First pass: Update devices that ARE in the BLE scan
     for (final bleDevice in bleDevices) {
       // Use callsign if available, otherwise use BLE device ID
       final callsign = bleDevice.callsign?.toUpperCase() ?? 'BLE-${bleDevice.deviceId}';
+
+      // Track this device as visible via BLE
+      bleCallsigns.add(callsign);
 
       // Check if this device is BLE+ paired
       final isBLEPlus = pairingService.isBLEPlus(callsign);
@@ -566,6 +573,36 @@ class DevicesService {
       }
     }
 
+    // Second pass: Remove BLE tags from devices NOT in current scan
+    for (final device in _devices.values) {
+      // Skip if device IS in current BLE scan
+      if (bleCallsigns.contains(device.callsign)) {
+        continue;
+      }
+
+      // Skip if device doesn't have BLE tags
+      if (!device.connectionMethods.contains('bluetooth') &&
+          !device.connectionMethods.contains('bluetooth_plus')) {
+        continue;
+      }
+
+      // Remove BLE tags (device no longer visible via BLE)
+      final hadBLE = device.connectionMethods.contains('bluetooth');
+      final hadBLEPlus = device.connectionMethods.contains('bluetooth_plus');
+
+      device.connectionMethods = device.connectionMethods
+          .where((m) => m != 'bluetooth' && m != 'bluetooth_plus')
+          .toList();
+
+      // Clear BLE-specific fields
+      device.bleProximity = null;
+      device.bleRssi = null;
+
+      if (hadBLE || hadBLEPlus) {
+        LogService().log('DevicesService: Removed BLE tags from ${device.callsign} (not in current scan)');
+      }
+    }
+
     _notifyListeners();
   }
 
@@ -615,10 +652,11 @@ class DevicesService {
           longitude: statusCache?['longitude'] as double? ?? matchingRelay?.longitude,
           preferredColor: statusCache?['color'] as String?,
           platform: statusCache?['platform'] as String?,
-          // When loading from cache, device is offline - exclude 'internet' tag
+          // When loading from cache, device is offline - exclude 'internet' and BLE tags
+          // BLE tags are session-based and should only come from active discovery
           connectionMethods: statusCache?['connectionMethods'] != null
               ? List<String>.from(statusCache!['connectionMethods'] as List)
-                  .where((m) => m != 'internet')
+                  .where((m) => m != 'internet' && m != 'bluetooth' && m != 'bluetooth_plus')
                   .toList()
               : [],
           bleProximity: statusCache?['bleProximity'] as String?,

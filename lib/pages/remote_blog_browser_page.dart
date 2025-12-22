@@ -4,12 +4,14 @@
  */
 
 import 'dart:convert';
+import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../services/devices_service.dart';
 import '../services/i18n_service.dart';
 import '../services/log_service.dart';
 import '../services/station_service.dart';
+import '../services/storage_config.dart';
 
 /// Page for browsing blog posts from a remote device
 class RemoteBlogBrowserPage extends StatefulWidget {
@@ -45,21 +47,21 @@ class _RemoteBlogBrowserPageState extends State<RemoteBlogBrowserPage> {
     });
 
     try {
-      final response = await _devicesService.makeDeviceApiRequest(
-        callsign: widget.device.callsign,
-        method: 'GET',
-        path: '/api/blog',
-      );
-
-      if (response != null && response.statusCode == 200) {
-        final List<dynamic> data = json.decode(response.body);
+      // Try to load from cache first for instant response
+      final cachedPosts = await _loadFromCache();
+      if (cachedPosts.isNotEmpty) {
         setState(() {
-          _posts = data.map((json) => BlogPost.fromJson(json)).toList();
+          _posts = cachedPosts;
           _isLoading = false;
         });
-      } else {
-        throw Exception('HTTP ${response?.statusCode ?? "null"}: ${response?.body ?? "no response"}');
+
+        // Silently refresh from API in background
+        _refreshFromApi();
+        return;
       }
+
+      // No cache - fetch from API
+      await _fetchFromApi();
     } catch (e) {
       LogService().log('RemoteBlogBrowserPage: Error loading posts: $e');
       setState(() {
@@ -67,6 +69,74 @@ class _RemoteBlogBrowserPageState extends State<RemoteBlogBrowserPage> {
         _isLoading = false;
       });
     }
+  }
+
+  /// Load posts from cached data on disk
+  Future<List<BlogPost>> _loadFromCache() async {
+    try {
+      final dataDir = StorageConfig().baseDir;
+      final blogPath = '$dataDir/devices/${widget.device.callsign}/blog';
+      final blogDir = Directory(blogPath);
+
+      if (!await blogDir.exists()) {
+        return [];
+      }
+
+      final posts = <BlogPost>[];
+      await for (final entity in blogDir.list()) {
+        if (entity is File && entity.path.endsWith('.json')) {
+          try {
+            final content = await entity.readAsString();
+            final data = json.decode(content) as Map<String, dynamic>;
+            posts.add(BlogPost.fromJson(data));
+          } catch (e) {
+            LogService().log('Error reading blog post ${entity.path}: $e');
+          }
+        }
+      }
+
+      // Sort by timestamp descending
+      posts.sort((a, b) => b.timestamp.compareTo(a.timestamp));
+      LogService().log('RemoteBlogBrowserPage: Loaded ${posts.length} cached posts');
+      return posts;
+    } catch (e) {
+      LogService().log('RemoteBlogBrowserPage: Error loading cache: $e');
+      return [];
+    }
+  }
+
+  /// Fetch fresh posts from API
+  Future<void> _fetchFromApi() async {
+    try {
+      final response = await _devicesService.makeDeviceApiRequest(
+        callsign: widget.device.callsign,
+        method: 'GET',
+        path: '/api/blog',
+      );
+
+      if (response != null && response.statusCode == 200) {
+        final data = json.decode(response.body);
+        final List<dynamic> postsData = data is Map ? (data['posts'] ?? data) : data;
+
+        setState(() {
+          _posts = postsData.map((json) => BlogPost.fromJson(json)).toList();
+          _isLoading = false;
+        });
+        LogService().log('RemoteBlogBrowserPage: Fetched ${_posts.length} posts from API');
+      } else {
+        throw Exception('HTTP ${response?.statusCode ?? "null"}: ${response?.body ?? "no response"}');
+      }
+    } catch (e) {
+      throw e;
+    }
+  }
+
+  /// Silently refresh from API in background
+  void _refreshFromApi() {
+    _fetchFromApi().catchError((e) {
+      LogService().log('RemoteBlogBrowserPage: Background refresh failed: $e');
+      // Don't update UI with error, keep showing cached data
+    });
   }
 
   Future<void> _openPost(BlogPost post) async {

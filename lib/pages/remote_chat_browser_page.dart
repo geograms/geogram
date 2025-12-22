@@ -4,10 +4,12 @@
  */
 
 import 'dart:convert';
+import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'package:flutter/material.dart';
 import '../services/devices_service.dart';
 import '../services/i18n_service.dart';
 import '../services/log_service.dart';
+import '../services/storage_config.dart';
 import 'remote_chat_room_page.dart';
 
 /// Page for browsing chat rooms from a remote device
@@ -44,21 +46,21 @@ class _RemoteChatBrowserPageState extends State<RemoteChatBrowserPage> {
     });
 
     try {
-      final response = await _devicesService.makeDeviceApiRequest(
-        callsign: widget.device.callsign,
-        method: 'GET',
-        path: '/api/chat/rooms',
-      );
-
-      if (response != null && response.statusCode == 200) {
-        final List<dynamic> data = json.decode(response.body);
+      // Try to load from cache first for instant response
+      final cachedRooms = await _loadFromCache();
+      if (cachedRooms.isNotEmpty) {
         setState(() {
-          _rooms = data.map((json) => ChatRoom.fromJson(json)).toList();
+          _rooms = cachedRooms;
           _isLoading = false;
         });
-      } else {
-        throw Exception('HTTP ${response?.statusCode ?? "null"}: ${response?.body ?? "no response"}');
+
+        // Silently refresh from API in background
+        _refreshFromApi();
+        return;
       }
+
+      // No cache - fetch from API
+      await _fetchFromApi();
     } catch (e) {
       LogService().log('RemoteChatBrowserPage: Error loading rooms: $e');
       setState(() {
@@ -66,6 +68,97 @@ class _RemoteChatBrowserPageState extends State<RemoteChatBrowserPage> {
         _isLoading = false;
       });
     }
+  }
+
+  /// Load rooms from cached data on disk
+  Future<List<ChatRoom>> _loadFromCache() async {
+    try {
+      final dataDir = StorageConfig().baseDir;
+      final chatPath = '$dataDir/devices/${widget.device.callsign}/chat';
+      final chatDir = Directory(chatPath);
+
+      if (!await chatDir.exists()) {
+        return [];
+      }
+
+      final rooms = <ChatRoom>[];
+      await for (final entity in chatDir.list()) {
+        if (entity is Directory) {
+          final roomName = entity.uri.pathSegments[entity.uri.pathSegments.length - 2];
+
+          // Read room config if it exists
+          final configFile = File('${entity.path}/config.json');
+          if (await configFile.exists()) {
+            try {
+              final configContent = await configFile.readAsString();
+              final config = json.decode(configContent) as Map<String, dynamic>;
+
+              // Only include public rooms
+              final visibility = config['visibility'] as String? ?? 'PUBLIC';
+              if (visibility == 'PUBLIC') {
+                rooms.add(ChatRoom(
+                  id: roomName,
+                  name: config['name'] as String? ?? roomName,
+                  description: config['description'] as String?,
+                  memberCount: (config['members'] as List?)?.length ?? 0,
+                  visibility: visibility,
+                ));
+              }
+            } catch (e) {
+              LogService().log('Error reading room config for $roomName: $e');
+            }
+          } else {
+            // No config file - treat as public room
+            rooms.add(ChatRoom(
+              id: roomName,
+              name: roomName,
+              memberCount: 0,
+              visibility: 'PUBLIC',
+            ));
+          }
+        }
+      }
+
+      LogService().log('RemoteChatBrowserPage: Loaded ${rooms.length} cached rooms');
+      return rooms;
+    } catch (e) {
+      LogService().log('RemoteChatBrowserPage: Error loading cache: $e');
+      return [];
+    }
+  }
+
+  /// Fetch fresh rooms from API
+  Future<void> _fetchFromApi() async {
+    try {
+      final response = await _devicesService.makeDeviceApiRequest(
+        callsign: widget.device.callsign,
+        method: 'GET',
+        path: '/api/chat/rooms',
+      );
+
+      if (response != null && response.statusCode == 200) {
+        final data = json.decode(response.body);
+        final List<dynamic> roomsData = data is Map ? (data['rooms'] ?? data) : data;
+
+        setState(() {
+          _rooms = roomsData.map((json) => ChatRoom.fromJson(json)).toList();
+          _isLoading = false;
+        });
+        LogService().log('RemoteChatBrowserPage: Fetched ${_rooms.length} rooms from API');
+      } else {
+        throw Exception('HTTP ${response?.statusCode ?? "null"}: ${response?.body ?? "no response"}');
+      }
+    } catch (e) {
+      throw e;
+    }
+  }
+
+  /// Silently refresh from API in background
+  void _refreshFromApi() {
+    _fetchFromApi().catchError((e) {
+      LogService().log('RemoteChatBrowserPage: Background refresh failed: $e');
+      // Don't update UI with error, keep showing cached data
+    });
   }
 
   void _openRoom(ChatRoom room) {

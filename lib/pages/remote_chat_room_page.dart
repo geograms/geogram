@@ -4,11 +4,13 @@
  */
 
 import 'dart:convert';
+import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../services/devices_service.dart';
 import '../services/i18n_service.dart';
 import '../services/log_service.dart';
+import '../services/storage_config.dart';
 import 'remote_chat_browser_page.dart';
 
 /// Page for viewing messages in a chat room from a remote device
@@ -54,6 +56,74 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
     });
 
     try {
+      // Try to load from cache first for instant response
+      final cachedMessages = await _loadFromCache();
+      if (cachedMessages.isNotEmpty) {
+        setState(() {
+          _messages = cachedMessages;
+          _isLoading = false;
+        });
+
+        // Scroll to bottom after messages load
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (_scrollController.hasClients) {
+            _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
+          }
+        });
+
+        // Silently refresh from API in background
+        _refreshFromApi();
+        return;
+      }
+
+      // No cache - fetch from API
+      await _fetchFromApi();
+    } catch (e) {
+      LogService().log('RemoteChatRoomPage: Error loading messages: $e');
+      setState(() {
+        _error = e.toString();
+        _isLoading = false;
+      });
+    }
+  }
+
+  /// Load messages from cached data on disk
+  Future<List<ChatMessage>> _loadFromCache() async {
+    try {
+      final dataDir = StorageConfig().baseDir;
+      final roomPath = '$dataDir/devices/${widget.device.callsign}/chat/${widget.room.id}';
+      final roomDir = Directory(roomPath);
+
+      if (!await roomDir.exists()) {
+        return [];
+      }
+
+      final messages = <ChatMessage>[];
+      await for (final entity in roomDir.list()) {
+        if (entity is File && entity.path.endsWith('.json') && !entity.path.endsWith('config.json')) {
+          try {
+            final content = await entity.readAsString();
+            final data = json.decode(content) as Map<String, dynamic>;
+            messages.add(ChatMessage.fromJson(data));
+          } catch (e) {
+            LogService().log('Error reading message ${entity.path}: $e');
+          }
+        }
+      }
+
+      // Sort by timestamp
+      messages.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+      LogService().log('RemoteChatRoomPage: Loaded ${messages.length} cached messages');
+      return messages;
+    } catch (e) {
+      LogService().log('RemoteChatRoomPage: Error loading cache: $e');
+      return [];
+    }
+  }
+
+  /// Fetch fresh messages from API
+  Future<void> _fetchFromApi() async {
+    try {
       final response = await _devicesService.makeDeviceApiRequest(
         callsign: widget.device.callsign,
         method: 'GET',
@@ -73,16 +143,22 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
             _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
           }
         });
+
+        LogService().log('RemoteChatRoomPage: Fetched ${_messages.length} messages from API');
       } else {
         throw Exception('HTTP ${response?.statusCode ?? "null"}: ${response?.body ?? "no response"}');
       }
     } catch (e) {
-      LogService().log('RemoteChatRoomPage: Error loading messages: $e');
-      setState(() {
-        _error = e.toString();
-        _isLoading = false;
-      });
+      throw e;
     }
+  }
+
+  /// Silently refresh from API in background
+  void _refreshFromApi() {
+    _fetchFromApi().catchError((e) {
+      LogService().log('RemoteChatRoomPage: Background refresh failed: $e');
+      // Don't update UI with error, keep showing cached data
+    });
   }
 
   void _copyMessage(ChatMessage message) {
