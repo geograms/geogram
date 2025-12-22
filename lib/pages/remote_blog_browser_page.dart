@@ -9,6 +9,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../services/devices_service.dart';
 import '../services/i18n_service.dart';
 import '../services/log_service.dart';
+import '../services/station_service.dart';
 
 /// Page for browsing blog posts from a remote device
 class RemoteBlogBrowserPage extends StatefulWidget {
@@ -69,8 +70,31 @@ class _RemoteBlogBrowserPageState extends State<RemoteBlogBrowserPage> {
   }
 
   Future<void> _openPost(BlogPost post) async {
-    // Build URL to the blog HTML page via p2p.radio station
-    final url = 'https://p2p.radio/${widget.device.callsign}/blog/${post.id}.html';
+    // Get station URL - use device's station if available, otherwise use preferred station
+    String? stationUrl = widget.device.url;
+
+    if (stationUrl == null || stationUrl.isEmpty) {
+      // Fall back to preferred station
+      final preferredStation = StationService().getPreferredStation();
+      stationUrl = preferredStation?.url;
+    }
+
+    if (stationUrl == null || stationUrl.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('No station available to access blog')),
+        );
+      }
+      return;
+    }
+
+    // Convert WebSocket URL to HTTP URL (wss:// -> https://, ws:// -> http://)
+    final httpUrl = stationUrl
+        .replaceFirst('wss://', 'https://')
+        .replaceFirst('ws://', 'http://');
+
+    // Build URL to the blog HTML page via station proxy
+    final url = '$httpUrl/${widget.device.callsign}/blog/${post.id}.html';
 
     LogService().log('RemoteBlogBrowserPage: Opening blog post: $url');
 
