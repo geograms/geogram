@@ -263,7 +263,7 @@ class LogApiService {
     }
 
     // Chat API endpoints
-    if ((urlPath == 'api/chat' || urlPath == 'api/chat/') && request.method == 'GET') {
+    if ((urlPath == 'api/chat' || urlPath == 'api/chat/' || urlPath == 'api/chat/rooms' || urlPath == 'api/chat/rooms/') && request.method == 'GET') {
       return await _handleChatRoomsRequest(request, headers);
     }
 
@@ -1948,6 +1948,14 @@ class LogApiService {
     Map<String, String> headers,
   ) async {
     try {
+      // Check for X-Device-Callsign header (used by proxy)
+      // If present, serve that device's chat rooms instead of current user's
+      final deviceCallsign = request.headers['x-device-callsign'];
+      if (deviceCallsign != null && deviceCallsign.isNotEmpty) {
+        LogService().log('Chat API: Serving chat rooms for device $deviceCallsign (from proxy header)');
+        return await _handleRemoteDeviceChatRooms(deviceCallsign, headers);
+      }
+
       // Try to lazily initialize ChatService if not already done
       await _initializeChatServiceIfNeeded();
 
@@ -2034,6 +2042,92 @@ class LogApiService {
       );
     } catch (e) {
       LogService().log('LogApiService: Error handling chat rooms request: $e');
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'error': e.toString()}),
+        headers: headers,
+      );
+    }
+  }
+
+  /// Handle chat rooms request for a remote device (via X-Device-Callsign header)
+  Future<shelf.Response> _handleRemoteDeviceChatRooms(
+    String deviceCallsign,
+    Map<String, String> headers,
+  ) async {
+    try {
+      String? dataDir;
+      try {
+        dataDir = StorageConfig().baseDir;
+      } catch (e) {
+        return shelf.Response.internalServerError(
+          body: jsonEncode({'error': 'Storage not initialized'}),
+          headers: headers,
+        );
+      }
+
+      // Path to remote device's chat directory
+      final chatPath = '$dataDir/devices/$deviceCallsign/chat';
+      final chatDir = io.Directory(chatPath);
+
+      if (!await chatDir.exists()) {
+        return shelf.Response.ok(
+          jsonEncode({
+            'rooms': [],
+            'total': 0,
+            'message': 'No chat collection for device $deviceCallsign',
+          }),
+          headers: headers,
+        );
+      }
+
+      // Read chat rooms from disk
+      final rooms = <Map<String, dynamic>>[];
+
+      await for (final entity in chatDir.list()) {
+        if (entity is io.Directory) {
+          final roomName = entity.uri.pathSegments[entity.uri.pathSegments.length - 2];
+
+          // Read room config if it exists
+          final configFile = io.File('${entity.path}/config.json');
+          if (await configFile.exists()) {
+            try {
+              final configContent = await configFile.readAsString();
+              final config = json.decode(configContent) as Map<String, dynamic>;
+
+              // Only include public rooms for remote browsing
+              final visibility = config['visibility'] as String? ?? 'PUBLIC';
+              if (visibility == 'PUBLIC') {
+                rooms.add({
+                  'id': roomName,
+                  'name': config['name'] as String? ?? roomName,
+                  'description': config['description'] as String?,
+                  'visibility': visibility,
+                  'memberCount': (config['members'] as List?)?.length ?? 0,
+                });
+              }
+            } catch (e) {
+              LogService().log('Error reading room config for $roomName: $e');
+            }
+          } else {
+            // No config file - treat as public room
+            rooms.add({
+              'id': roomName,
+              'name': roomName,
+              'visibility': 'PUBLIC',
+            });
+          }
+        }
+      }
+
+      return shelf.Response.ok(
+        jsonEncode({
+          'rooms': rooms,
+          'total': rooms.length,
+        }),
+        headers: headers,
+      );
+    } catch (e) {
+      LogService().log('LogApiService: Error handling remote device chat rooms: $e');
       return shelf.Response.internalServerError(
         body: jsonEncode({'error': e.toString()}),
         headers: headers,
@@ -7353,6 +7447,14 @@ class LogApiService {
           body: jsonEncode({'error': 'Profile not initialized'}),
           headers: headers,
         );
+      }
+
+      // Check for X-Device-Callsign header (used by proxy)
+      // If present, serve that device's blog instead of current user's blog
+      final deviceCallsign = request.headers['x-device-callsign'];
+      if (deviceCallsign != null && deviceCallsign.isNotEmpty) {
+        callsign = deviceCallsign;
+        LogService().log('Blog API: Serving blog for device $deviceCallsign (from proxy header)');
       }
 
       final blogApi = StationBlogApi(
