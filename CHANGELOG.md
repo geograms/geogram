@@ -1,5 +1,34 @@
 # Geogram Desktop Changelog
 
+## 2025-12-24 - v1.6.42
+
+### Changes
+- Add repository guidelines documentation
+- Defer notification permission request to onboarding flow
+- Fix crash when starting foreground service without Bluetooth permissions
+- Prepare repository rename: geogram-desktop → geogram
+- Release v1.6.51 - Places App Improvements and Feedback System
+- Fix remote chat messaging with proper NOSTR signing
+- Release v1.6.49 - Remote Device Browsing Fixes and Optimizations
+- Optimize: Cache-first loading for remote device browsing
+- Fix: Add X-Device-Callsign support for chat messages endpoint
+- Fix: Add X-Device-Callsign header support for blog and chat APIs
+- Release v1.6.48 - Bug Fixes for Station URL and Blog Proxy
+- Fix: Use device station URL with fallback to preferred station
+- Fix: Remove non-existent stationUrl property from RemoteDevice
+- Release v1.6.47 - Device Apps Browser and Notifications
+- Fix compilation error: use DevicesService instead of ConnectionManagerService
+- Add device apps browser for viewing public data
+- Remove broken link from blog footer
+- Enable core library desugaring for Android
+- Fix ProfileService method call in dm_notification_service
+- Add push notifications for direct messages on Android/iOS
+- Release v1.6.43
+- Fix blog HTML proxy path in CLI station mode
+- Fix blog HTML proxy path format
+- Release v1.6.42 - BLE peer discovery and blog improvements
+
+
 ## 2025-12-15 - v1.6.41
 
 ### Connection Stability Improvements
