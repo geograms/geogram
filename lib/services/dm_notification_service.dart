@@ -20,9 +20,11 @@ class DMNotificationService {
   final FlutterLocalNotificationsPlugin _notificationsPlugin = FlutterLocalNotificationsPlugin();
   EventSubscription<DirectMessageReceivedEvent>? _dmEventSubscription;
   bool _initialized = false;
+  bool _permissionRequested = false;
 
   /// Initialize the notification service
-  Future<void> initialize() async {
+  /// Set [skipPermissionRequest] to true to defer permission request (e.g., for first launch onboarding)
+  Future<void> initialize({bool skipPermissionRequest = false}) async {
     if (_initialized) return;
 
     // Only initialize on mobile platforms (Android/iOS)
@@ -33,7 +35,7 @@ class DMNotificationService {
     }
 
     try {
-      await _initializeNotifications();
+      await _initializeNotifications(skipPermissionRequest: skipPermissionRequest);
       _subscribeToEvents();
       _initialized = true;
       LogService().log('DMNotificationService initialized');
@@ -49,18 +51,18 @@ class DMNotificationService {
   }
 
   /// Initialize flutter_local_notifications
-  Future<void> _initializeNotifications() async {
+  Future<void> _initializeNotifications({bool skipPermissionRequest = false}) async {
     // Android initialization settings
     const androidSettings = AndroidInitializationSettings('@mipmap/ic_launcher');
 
-    // iOS initialization settings
-    const iosSettings = DarwinInitializationSettings(
-      requestAlertPermission: true,
-      requestBadgePermission: true,
-      requestSoundPermission: true,
+    // iOS initialization settings - don't request permission here if skipping
+    final iosSettings = DarwinInitializationSettings(
+      requestAlertPermission: !skipPermissionRequest,
+      requestBadgePermission: !skipPermissionRequest,
+      requestSoundPermission: !skipPermissionRequest,
     );
 
-    const initSettings = InitializationSettings(
+    final initSettings = InitializationSettings(
       android: androidSettings,
       iOS: iosSettings,
     );
@@ -71,8 +73,8 @@ class DMNotificationService {
       onDidReceiveNotificationResponse: _onNotificationTapped,
     );
 
-    // Request permissions for iOS
-    if (defaultTargetPlatform == TargetPlatform.iOS) {
+    // Request permissions for iOS (unless skipping for onboarding)
+    if (!skipPermissionRequest && defaultTargetPlatform == TargetPlatform.iOS) {
       await _notificationsPlugin
           .resolvePlatformSpecificImplementation<IOSFlutterLocalNotificationsPlugin>()
           ?.requestPermissions(
@@ -80,16 +82,61 @@ class DMNotificationService {
             badge: true,
             sound: true,
           );
+      _permissionRequested = true;
     }
 
-    // Request permissions for Android 13+
-    if (defaultTargetPlatform == TargetPlatform.android) {
+    // Request permissions for Android 13+ (unless skipping for onboarding)
+    if (!skipPermissionRequest && defaultTargetPlatform == TargetPlatform.android) {
       await _notificationsPlugin
           .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
           ?.requestNotificationsPermission();
+      _permissionRequested = true;
     }
 
-    LogService().log('DMNotificationService: Notifications initialized');
+    LogService().log('DMNotificationService: Notifications initialized (skipPermissionRequest: $skipPermissionRequest)');
+  }
+
+  /// Request notification permission (call this after onboarding)
+  Future<bool> requestNotificationPermission() async {
+    if (_permissionRequested) {
+      LogService().log('DMNotificationService: Permission already requested');
+      return true;
+    }
+
+    // Ensure service is initialized before requesting permission
+    if (!_initialized) {
+      LogService().log('DMNotificationService: Service not initialized, cannot request permission');
+      return false;
+    }
+
+    try {
+      if (defaultTargetPlatform == TargetPlatform.iOS) {
+        final result = await _notificationsPlugin
+            .resolvePlatformSpecificImplementation<IOSFlutterLocalNotificationsPlugin>()
+            ?.requestPermissions(
+              alert: true,
+              badge: true,
+              sound: true,
+            );
+        _permissionRequested = true;
+        LogService().log('DMNotificationService: iOS permission result: $result');
+        return result ?? false;
+      }
+
+      if (defaultTargetPlatform == TargetPlatform.android) {
+        final result = await _notificationsPlugin
+            .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
+            ?.requestNotificationsPermission();
+        _permissionRequested = true;
+        LogService().log('DMNotificationService: Android permission result: $result');
+        return result ?? false;
+      }
+
+      return false;
+    } catch (e) {
+      LogService().log('DMNotificationService: Error requesting permission: $e');
+      return false;
+    }
   }
 
   /// Subscribe to DirectMessageReceivedEvent

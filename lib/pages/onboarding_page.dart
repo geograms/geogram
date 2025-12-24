@@ -5,6 +5,7 @@ import 'package:geolocator/geolocator.dart';
 
 import '../services/ble_permission_service.dart';
 import '../services/devices_service.dart';
+import '../services/dm_notification_service.dart';
 import '../services/i18n_service.dart';
 import '../services/log_service.dart';
 
@@ -58,6 +59,18 @@ class _OnboardingPageState extends State<OnboardingPage> {
     } catch (e) {
       LogService().log('Onboarding: Error during BLE setup: $e');
       // Continue even if Bluetooth permission request fails
+    }
+
+    // Request notification permission (Android 13+)
+    try {
+      if (!kIsWeb && Platform.isAndroid) {
+        LogService().log('Onboarding: Requesting notification permission...');
+        final granted = await DMNotificationService().requestNotificationPermission();
+        LogService().log('Onboarding: Notification permission granted: $granted');
+      }
+    } catch (e) {
+      LogService().log('Onboarding: Error requesting notification permission: $e');
+      // Continue even if notification permission request fails
     }
 
     // Complete onboarding regardless of permission result
@@ -171,6 +184,15 @@ class _OnboardingPageState extends State<OnboardingPage> {
                   Icons.battery_saver,
                   'Battery Optimization',
                   'Run in background for device discovery',
+                ),
+
+              // Notification permission (Android only)
+              if (!kIsWeb && Platform.isAndroid)
+                _buildPermissionItem(
+                  theme,
+                  Icons.notifications_outlined,
+                  'Notifications',
+                  'Receive alerts for new messages',
                 ),
 
               // Install permission

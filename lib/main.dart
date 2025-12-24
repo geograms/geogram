@@ -196,8 +196,14 @@ void main() async {
     LogService().log('ChatNotificationService initialized');
 
     // Initialize DM notification service (for push notifications on mobile)
-    await DMNotificationService().initialize();
-    LogService().log('DMNotificationService initialized');
+    // Skip permission request on first launch - onboarding will handle it
+    bool firstLaunch = false;
+    if (!kIsWeb && Platform.isAndroid) {
+      final firstLaunchComplete = ConfigService().getNestedValue('firstLaunchComplete', false);
+      firstLaunch = firstLaunchComplete != true;
+    }
+    await DMNotificationService().initialize(skipPermissionRequest: firstLaunch);
+    LogService().log('DMNotificationService initialized (skipPermission: $firstLaunch)');
 
   } catch (e, stackTrace) {
     LogService().log('ERROR during critical initialization: $e');
