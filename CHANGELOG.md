@@ -1,5 +1,15 @@
 # Geogram Desktop Changelog
 
+## 2025-12-25 - v1.6.55
+
+### Changes
+- maps: load station places and refresh collections
+- app: add Places to default collections
+- places: sync local uploads and station init
+- maps: fetch station alerts on initial load
+- ci: fix macOS archive app name
+
+
 ## 2025-12-25 - v1.6.54
 
 ### Changes
