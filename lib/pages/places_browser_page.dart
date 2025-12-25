@@ -12,6 +12,8 @@ import '../models/place.dart';
 import '../services/place_service.dart';
 import '../services/i18n_service.dart';
 import '../services/log_service.dart';
+import '../services/place_sharing_service.dart';
+import '../services/profile_service.dart';
 import '../services/station_place_service.dart';
 import '../platform/file_image_helper.dart' as file_helper;
 import 'add_edit_place_page.dart';
@@ -49,6 +51,7 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
   bool _isLoading = true;
   bool _isLoadingStationPlaces = false;
   bool _selectedPlaceIsStation = false;
+  bool _didSyncLocalPlaces = false;
 
   @override
   void initState() {
@@ -66,6 +69,7 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
   Future<void> _initialize() async {
     await _loadPlaces();
     await _loadStationPlaces();
+    await _syncLocalPlacesToStation();
   }
 
   Future<void> _loadPlaces() async {
@@ -164,6 +168,42 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
 
     if (selectedEntry != null) {
       await _loadPlacePhotos(selectedEntry.place);
+    }
+  }
+
+  Future<void> _syncLocalPlacesToStation() async {
+    if (_didSyncLocalPlaces || kIsWeb) {
+      return;
+    }
+    _didSyncLocalPlaces = true;
+
+    try {
+      final profile = ProfileService().getProfile();
+      final callsign = profile.callsign.toUpperCase();
+      final knownPaths = <String>{};
+
+      if (callsign.isNotEmpty) {
+        for (final entry in _stationPlaces) {
+          final relativePath = entry.relativePath;
+          if (entry.callsign == callsign && relativePath != null && relativePath.isNotEmpty) {
+            knownPaths.add(relativePath);
+          }
+        }
+      }
+
+      final sharingService = PlaceSharingService();
+      final uploadedCount = await sharingService.uploadLocalPlacesToStations(
+        widget.collectionPath,
+        knownStationRelativePaths: knownPaths,
+      );
+
+      if (uploadedCount > 0) {
+        LogService().log(
+          'PlacesBrowserPage: Uploaded $uploadedCount local place file(s) to stations',
+        );
+      }
+    } catch (e) {
+      LogService().log('PlacesBrowserPage: Error syncing local places: $e');
     }
   }
 

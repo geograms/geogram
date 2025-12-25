@@ -99,6 +99,10 @@ class StationAlertService {
   }) async {
     LogService().log('StationAlertService: Starting fetch, useSince=$useSince');
     try {
+      if (!_stationService.isInitialized) {
+        await _stationService.initialize();
+      }
+
       final station = _stationService.getPreferredStation();
       if (station == null || station.url.isEmpty) {
         LogService().log('StationAlertService: No preferred station configured');
@@ -121,7 +125,10 @@ class StationAlertService {
       // Build query parameters
       final queryParams = <String, String>{};
 
-      if (useSince && _lastFetchTimestamp > 0) {
+      final shouldUseSince = useSince &&
+          _lastFetchTimestamp > 0 &&
+          _cachedAlerts.isNotEmpty;
+      if (shouldUseSince) {
         queryParams['since'] = _lastFetchTimestamp.toString();
       }
 

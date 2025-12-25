@@ -67,15 +67,13 @@ class PlaceSharingService {
         return 0;
       }
 
-      final placeFolderPath = await _placeService.getPlaceFolderPath(place);
+      final placeFolderPath = await _resolvePlaceFolderPath(place);
       if (placeFolderPath == null) {
         LogService().log('PlaceSharingService: Failed to resolve place folder path');
         return 0;
       }
 
-      final placesBasePath = path.basename(collectionPath) == 'places'
-          ? collectionPath
-          : path.join(collectionPath, 'places');
+      final placesBasePath = _resolvePlacesBasePath(collectionPath);
       final relativePlacePath = path.relative(placeFolderPath, from: placesBasePath);
       if (relativePlacePath.startsWith('..')) {
         LogService().log('PlaceSharingService: Invalid relative place path: $relativePlacePath');
@@ -210,5 +208,69 @@ class PlaceSharingService {
         .split('/')
         .where((segment) => segment.isNotEmpty)
         .toList();
+  }
+
+  String _resolvePlacesBasePath(String collectionPath) {
+    return path.basename(collectionPath) == 'places'
+        ? collectionPath
+        : path.join(collectionPath, 'places');
+  }
+
+  Future<String?> _resolvePlaceFolderPath(Place place) async {
+    final folderPath = place.folderPath;
+    if (folderPath != null && folderPath.isNotEmpty) {
+      return folderPath;
+    }
+    return _placeService.getPlaceFolderPath(place);
+  }
+
+  /// Upload all local places to stations, skipping ones already known by the station.
+  Future<int> uploadLocalPlacesToStations(
+    String collectionPath, {
+    Set<String>? knownStationRelativePaths,
+  }) async {
+    if (kIsWeb) return 0;
+
+    int uploadedTotal = 0;
+    final existingPaths = knownStationRelativePaths ?? <String>{};
+
+    final profile = _profileService.getProfile();
+    final callsign = profile.callsign;
+    if (callsign.isEmpty) {
+      LogService().log('PlaceSharingService: No callsign, cannot upload');
+      return 0;
+    }
+
+    await _placeService.initializeCollection(collectionPath);
+    final places = await _placeService.loadAllPlaces();
+
+    for (final place in places) {
+      final relativePlacePath = await _resolveRelativePlacePath(
+        place,
+        collectionPath,
+      );
+
+      if (relativePlacePath != null && existingPaths.contains(relativePlacePath)) {
+        continue;
+      }
+
+      uploadedTotal += await uploadPlaceToStations(place, collectionPath);
+    }
+
+    return uploadedTotal;
+  }
+
+  Future<String?> _resolveRelativePlacePath(Place place, String collectionPath) async {
+    final placeFolderPath = await _resolvePlaceFolderPath(place);
+    if (placeFolderPath == null) {
+      return null;
+    }
+
+    final placesBasePath = _resolvePlacesBasePath(collectionPath);
+    final relativePlacePath = path.relative(placeFolderPath, from: placesBasePath);
+    if (relativePlacePath.startsWith('..')) {
+      return null;
+    }
+    return relativePlacePath;
   }
 }

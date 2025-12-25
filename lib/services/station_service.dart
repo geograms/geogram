@@ -53,6 +53,9 @@ class StationService {
     }
   }
 
+  /// Check if the station service is initialized.
+  bool get isInitialized => _initialized;
+
   /// Ensure connection to preferred station
   Future<void> _ensureConnected() async {
     // Check if WebSocket is actually connected
