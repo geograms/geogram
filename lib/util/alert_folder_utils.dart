@@ -1,26 +1,31 @@
 import 'dart:io';
 
+import '../util/feedback_folder_utils.dart';
+
 /// Centralized utilities for alert folder structure and naming conventions.
 ///
 /// Alert folder structure:
 /// ```
 /// devices/{callsign}/alerts/active/{regionFolder}/{folderName}/
 ///   ├── report.txt
-///   ├── points.txt        # One npub per line (users who pointed the alert)
+///   ├── feedback/
+///   │   ├── points.txt    # Signed NOSTR events (one JSON event per line)
+///   │   ├── verifications.txt
+///   │   └── comments/
+///   │       ├── 2025-12-14_22-15-23_CALLSIGN.txt
+///   │       └── ...
 ///   ├── images/
 ///   │   ├── photo1.png
 ///   │   ├── photo2.png
 ///   │   └── ...
-///   └── comments/
-///       ├── 2025-12-14_22-15-23_CALLSIGN.txt
-///       └── ...
+///   └── updates/
 /// ```
 ///
 /// - regionFolder: `{lat}_{lon}` rounded to 1 decimal place (e.g., `38.7_-9.1`)
 /// - folderName: `YYYY-MM-DD_HH-MM_sanitized-title`
 /// - Comment files: `YYYY-MM-DD_HH-MM-SS_AUTHOR.txt`
 /// - Photos: `images/photo{N}.{ext}` with sequential numbering
-/// - Points: One npub per line in `points.txt`
+/// - Points: Signed NOSTR events in `feedback/points.txt`
 class AlertFolderUtils {
   AlertFolderUtils._();
 
@@ -75,9 +80,9 @@ class AlertFolderUtils {
     return '$alertPath/images';
   }
 
-  /// Build path to the comments subfolder for an alert.
+  /// Build path to the comments subfolder for an alert (feedback/comments).
   static String buildCommentsPath(String alertPath) {
-    return '$alertPath/comments';
+    return FeedbackFolderUtils.buildCommentsPath(alertPath);
   }
 
   /// Build path to the report.txt file for an alert.
@@ -85,65 +90,40 @@ class AlertFolderUtils {
     return '$alertPath/report.txt';
   }
 
-  /// Build path to the points.txt file for an alert.
-  /// Points file stores one npub per line (users who pointed the alert).
+  /// Build path to the feedback points file for an alert.
   static String buildPointsPath(String alertPath) {
-    return '$alertPath/points.txt';
+    return FeedbackFolderUtils.buildFeedbackFilePath(
+      alertPath,
+      FeedbackFolderUtils.feedbackTypePoints,
+    );
   }
 
-  /// Read points from points.txt file.
-  /// Returns list of npub strings, empty list if file doesn't exist.
+  /// Build path to feedback verifications file for an alert.
+  static String buildVerificationsPath(String alertPath) {
+    return FeedbackFolderUtils.buildFeedbackFilePath(
+      alertPath,
+      FeedbackFolderUtils.feedbackTypeVerifications,
+    );
+  }
+
+  /// Read points from feedback/points.txt.
+  /// Returns list of verified npub strings, empty list if file doesn't exist.
   static Future<List<String>> readPointsFile(String alertPath) async {
-    final pointsFile = File(buildPointsPath(alertPath));
-    if (!await pointsFile.exists()) return [];
-
-    final content = await pointsFile.readAsString();
-    return content
-        .split('\n')
-        .map((line) => line.trim())
-        .where((line) => line.isNotEmpty)
-        .toList();
+    return FeedbackFolderUtils.readFeedbackFile(
+      alertPath,
+      FeedbackFolderUtils.feedbackTypePoints,
+    );
   }
 
-  /// Write points to points.txt file.
-  /// Each npub is written on a separate line.
-  static Future<void> writePointsFile(String alertPath, List<String> npubs) async {
-    final pointsFile = File(buildPointsPath(alertPath));
-
-    if (npubs.isEmpty) {
-      // Delete the file if no points
-      if (await pointsFile.exists()) {
-        await pointsFile.delete();
-      }
-      return;
-    }
-
-    await pointsFile.writeAsString(npubs.join('\n'), flush: true);
+  /// Read verifications from feedback/verifications.txt.
+  static Future<List<String>> readVerificationsFile(String alertPath) async {
+    return FeedbackFolderUtils.readFeedbackFile(
+      alertPath,
+      FeedbackFolderUtils.feedbackTypeVerifications,
+    );
   }
 
-  /// Add a point (npub) to points.txt if not already present.
-  /// Returns true if the point was added, false if already exists.
-  static Future<bool> addPointToFile(String alertPath, String npub) async {
-    final points = await readPointsFile(alertPath);
-    if (points.contains(npub)) return false;
-
-    points.add(npub);
-    await writePointsFile(alertPath, points);
-    return true;
-  }
-
-  /// Remove a point (npub) from points.txt.
-  /// Returns true if the point was removed, false if not found.
-  static Future<bool> removePointFromFile(String alertPath, String npub) async {
-    final points = await readPointsFile(alertPath);
-    if (!points.contains(npub)) return false;
-
-    points.remove(npub);
-    await writePointsFile(alertPath, points);
-    return true;
-  }
-
-  /// Get the point count for an alert by counting lines in points.txt.
+  /// Get the point count for an alert from feedback/points.txt.
   static Future<int> getPointCount(String alertPath) async {
     final points = await readPointsFile(alertPath);
     return points.length;

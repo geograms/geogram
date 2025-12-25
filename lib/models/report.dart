@@ -413,7 +413,7 @@ class Report {
         subscribers = line.substring(13).split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
       } else if (line.startsWith('SUBSCRIBER_COUNT: ')) {
         subscriberCount = int.tryParse(line.substring(18).trim()) ?? 0;
-      // Note: POINTED_BY and POINT_COUNT are now stored in points.txt file
+      // Note: POINTED_BY and POINT_COUNT are derived from feedback/points.txt
       } else if (line.startsWith('LAST_MODIFIED: ')) {
         lastModified = line.substring(15).trim();
       } else if (line.startsWith('-->')) {
@@ -610,7 +610,7 @@ class Report {
     if (subscriberCount > 0) {
       buffer.writeln('SUBSCRIBER_COUNT: $subscriberCount');
     }
-    // Note: POINTED_BY and POINT_COUNT are now stored in points.txt file
+    // Note: POINTED_BY and POINT_COUNT are derived from feedback/points.txt
     if (lastModified != null && lastModified!.isNotEmpty) {
       buffer.writeln('LAST_MODIFIED: $lastModified');
     }

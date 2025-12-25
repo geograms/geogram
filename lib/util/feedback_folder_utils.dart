@@ -53,19 +53,19 @@ class _FileLock {
 /// ```
 /// {contentPath}/
 /// └── feedback/
-///     ├── likes.txt                  # One npub per line (toggle)
-///     ├── points.txt                 # One npub per line (toggle)
-///     ├── dislikes.txt               # One npub per line (toggle)
-///     ├── subscribe.txt              # One npub per line (toggle)
-///     ├── verifications.txt          # One npub per line (toggle)
-///     ├── views.txt                  # Multiple entries allowed (metric)
-///     ├── heart.txt                  # Emoji reaction: one npub per line (toggle)
-///     ├── thumbs-up.txt              # Emoji reaction: one npub per line (toggle)
-///     ├── fire.txt                   # Emoji reaction: one npub per line (toggle)
-///     ├── celebrate.txt              # Emoji reaction: one npub per line (toggle)
-///     ├── laugh.txt                  # Emoji reaction: one npub per line (toggle)
-///     ├── sad.txt                    # Emoji reaction: one npub per line (toggle)
-///     ├── surprise.txt               # Emoji reaction: one npub per line (toggle)
+///     ├── likes.txt                  # Signed NOSTR events (JSON), one per line (toggle)
+///     ├── points.txt                 # Signed NOSTR events (JSON), one per line (toggle)
+///     ├── dislikes.txt               # Signed NOSTR events (JSON), one per line (toggle)
+///     ├── subscribe.txt              # Signed NOSTR events (JSON), one per line (toggle)
+///     ├── verifications.txt          # Signed NOSTR events (JSON), one per line (add-only)
+///     ├── views.txt                  # Signed NOSTR events (JSON), multiple entries (metric)
+///     ├── heart.txt                  # Emoji reaction: signed events, one per line (toggle)
+///     ├── thumbs-up.txt              # Emoji reaction: signed events, one per line (toggle)
+///     ├── fire.txt                   # Emoji reaction: signed events, one per line (toggle)
+///     ├── celebrate.txt              # Emoji reaction: signed events, one per line (toggle)
+///     ├── laugh.txt                  # Emoji reaction: signed events, one per line (toggle)
+///     ├── sad.txt                    # Emoji reaction: signed events, one per line (toggle)
+///     ├── surprise.txt               # Emoji reaction: signed events, one per line (toggle)
 ///     └── comments/
 ///         └── YYYY-MM-DD_HH-MM-SS_XXXXXX.txt
 /// ```
@@ -79,7 +79,7 @@ class _FileLock {
 class FeedbackFolderUtils {
   FeedbackFolderUtils._();
 
-  /// Standard feedback types (toggles - one per user)
+  /// Standard feedback types (toggles - one signed event per user)
   static const String feedbackTypeLikes = 'likes';
   static const String feedbackTypePoints = 'points';
   static const String feedbackTypeDislikes = 'dislikes';
@@ -142,9 +142,8 @@ class FeedbackFolderUtils {
   /// Returns list of verified npub strings, empty list if file doesn't exist.
   /// Only includes feedback with valid NOSTR signatures.
   ///
-  /// File format: Each line is either:
-  /// - A JSON signed NOSTR event (new format, verified)
-  /// - A plain npub string (legacy format, unverified, ignored)
+  /// File format: Each line is a JSON signed NOSTR event (verified).
+  /// Plain npub lines are not supported and are ignored.
   ///
   /// Example:
   /// ```dart
@@ -305,6 +304,8 @@ class FeedbackFolderUtils {
       return false;
     }
 
+    await ensureFeedbackFolder(contentPath);
+
     // Acquire lock to prevent race conditions
     final feedbackFilePath = buildFeedbackFilePath(contentPath, feedbackType);
     final lock = _FileLock(feedbackFilePath);
@@ -366,6 +367,8 @@ class FeedbackFolderUtils {
     String feedbackType,
     String npub,
   ) async {
+    await ensureFeedbackFolder(contentPath);
+
     // Acquire lock to prevent race conditions
     final feedbackFilePath = buildFeedbackFilePath(contentPath, feedbackType);
     final lock = _FileLock(feedbackFilePath);
@@ -410,6 +413,8 @@ class FeedbackFolderUtils {
     if (!event.verify()) {
       return null; // Invalid signature
     }
+
+    await ensureFeedbackFolder(contentPath);
 
     // Acquire lock to prevent race conditions
     final feedbackFilePath = buildFeedbackFilePath(contentPath, feedbackType);

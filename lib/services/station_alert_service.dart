@@ -418,7 +418,6 @@ class StationAlertService {
             await reportFile.writeAsString(alert.exportAsText());
             LogService().log('StationAlertService: Created report.txt for ${alert.folderName} (from alert data)');
           }
-          await _downloadAlertPoints(alert.pointedBy, alertPath);
         }
       } catch (e) {
         LogService().log('StationAlertService: Error storing alert ${alert.folderName}: $e');
@@ -566,18 +565,6 @@ class StationAlertService {
     return false;
   }
 
-  /// Download and save points from station to local points.txt file
-  Future<void> _downloadAlertPoints(List<String> pointedBy, String alertPath) async {
-    try {
-      await AlertFolderUtils.writePointsFile(alertPath, pointedBy);
-      if (pointedBy.isNotEmpty) {
-        LogService().log('StationAlertService: Saved ${pointedBy.length} points to points.txt');
-      }
-    } catch (e) {
-      LogService().log('StationAlertService: Error saving points: $e');
-    }
-  }
-
   /// Load cached alerts from disk
   Future<void> loadCachedAlerts() async {
     try {
@@ -617,7 +604,7 @@ class StationAlertService {
             final content = await reportFile.readAsString();
             final report = Report.fromText(content, folderName);
 
-            // Read points from points.txt
+            // Read points from feedback/points.txt
             final pointedBy = await AlertFolderUtils.readPointsFile(alertEntity.path);
 
             // Mark as from station
@@ -725,22 +712,11 @@ class StationAlertService {
             callsign: stationCallsign,
           );
 
-          // Also update points.txt from the pointed_by list
-          final pointedBy = (alertDetails['pointed_by'] as List<dynamic>?)
-              ?.map((e) => e as String)
-              .toList() ?? [];
-          await _downloadAlertPoints(pointedBy, alertPath);
         } else {
           // Fallback: no file tree, download report.txt directly
           final reportContent = alertDetails['report_content'] as String?;
           if (reportContent != null && reportContent.isNotEmpty) {
             await File('$alertPath/report.txt').writeAsString(reportContent);
-
-            // Also update points.txt
-            final pointedBy = (alertDetails['pointed_by'] as List<dynamic>?)
-                ?.map((e) => e as String)
-                .toList() ?? [];
-            await _downloadAlertPoints(pointedBy, alertPath);
           }
         }
 

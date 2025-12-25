@@ -7,7 +7,11 @@
  */
 
 import '../connection/connection_manager.dart';
+import '../util/nostr_crypto.dart';
+import '../util/nostr_event.dart';
 import 'log_service.dart';
+import 'profile_service.dart';
+import 'signing_service.dart';
 
 /// Result of a remote comment operation
 class CommentResult {
@@ -30,6 +34,10 @@ class BlogCommentService {
   factory BlogCommentService() => _instance;
   BlogCommentService._internal();
 
+  final ProfileService _profileService = ProfileService();
+  final SigningService _signingService = SigningService();
+  bool _signingInitialized = false;
+
   /// Post a comment to a remote device's blog post
   ///
   /// [targetCallsign] - The callsign of the device hosting the blog post
@@ -51,19 +59,27 @@ class BlogCommentService {
         'BlogCommentService: Posting comment to $targetCallsign post $postId',
       );
 
-      final body = {
-        'author': author,
-        'content': content,
-        if (npub != null) 'npub': npub,
-        if (signature != null) 'signature': signature,
-      };
+    final body = {
+      'author': author,
+      'content': content,
+      if (npub != null) 'npub': npub,
+      if (signature != null) 'signature': signature,
+    };
 
-      final result = await ConnectionManager().apiRequest(
-        callsign: targetCallsign,
-        method: 'POST',
-        path: '/api/blog/$postId/comment',
-        body: body,
-      );
+    final payload = await _buildCommentPayload(
+      author,
+      content,
+      postId,
+      npub: npub,
+      signature: signature,
+    );
+
+    final result = await ConnectionManager().apiRequest(
+      callsign: targetCallsign,
+      method: 'POST',
+      path: '/api/feedback/blog/$postId/comment',
+      body: payload,
+    );
 
       if (result.success && result.statusCode == 200) {
         final responseData = result.responseData;
@@ -239,6 +255,77 @@ class BlogCommentService {
     } catch (e) {
       LogService().log('BlogCommentService: Error listing posts: $e');
       return null;
+    }
+  }
+
+  Future<Map<String, dynamic>> _buildCommentPayload(
+    String author,
+    String content,
+    String postId, {
+    String? npub,
+    String? signature,
+  }) async {
+    final payload = {
+      'author': author,
+      'content': content,
+    };
+
+    final profile = _profileService.getProfile();
+
+    if (npub != null && npub.isNotEmpty) {
+      payload['npub'] = npub;
+    } else if (profile.npub.isNotEmpty) {
+      payload['npub'] = profile.npub;
+    }
+
+    if (signature != null && signature.isNotEmpty) {
+      payload['signature'] = signature;
+    } else {
+      final computedSig = await _signCommentEvent(profile, postId, content);
+      if (computedSig != null && computedSig.isNotEmpty) {
+        payload['signature'] = computedSig;
+      }
+    }
+
+    return payload;
+  }
+
+  Future<String?> _signCommentEvent(Profile profile, String postId, String content) async {
+    if (profile.npub.isEmpty || !_signingService.canSign(profile)) {
+      return null;
+    }
+
+    if (!await _ensureSigningInitialized()) {
+      return null;
+    }
+
+    final pubkeyHex = NostrCrypto.decodeNpub(profile.npub);
+    final event = NostrEvent(
+      pubkey: pubkeyHex,
+      createdAt: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      kind: NostrEventKind.textNote,
+      tags: [
+        ['content_type', 'blog'],
+        ['content_id', postId],
+        ['action', 'comment'],
+        ['owner', profile.callsign],
+      ],
+      content: content,
+    );
+
+    final signed = await _signingService.signEvent(event, profile);
+    return signed?.sig;
+  }
+
+  Future<bool> _ensureSigningInitialized() async {
+    if (_signingInitialized) return true;
+    try {
+      await _signingService.initialize();
+      _signingInitialized = true;
+      return true;
+    } catch (e) {
+      LogService().log('BlogCommentService: Signing init failed: $e');
+      return false;
     }
   }
 }

@@ -68,7 +68,7 @@ class _ReportBrowserPageState extends State<ReportBrowserPage> {
   bool _isUploading = false;
   bool _isLoadingRelayAlerts = false;
   int _sortMode = 0; // 0: date desc, 1: severity, 2: distance
-  double _radiusKm = 50.0; // Default 50km radius
+  double _radiusKm = 100.0; // Default 100km radius
   String _lastFetchTime = 'Never';
 
   @override

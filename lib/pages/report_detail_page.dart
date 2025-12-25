@@ -28,6 +28,8 @@ import '../services/station_service.dart';
 import '../services/station_alert_service.dart';
 import '../services/alert_sharing_service.dart';
 import '../util/alert_folder_utils.dart';
+import '../util/feedback_comment_utils.dart';
+import '../util/feedback_folder_utils.dart';
 import 'location_picker_page.dart';
 import 'photo_viewer_page.dart';
 
@@ -63,6 +65,15 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
   /// Check if this report is from a remote station (not local)
   bool get _isFromStation => _report?.metadata['from_station'] == 'true';
 
+  Future<String?> _resolveStationAlertPath() async {
+    if (_report == null || widget.collectionPath.isEmpty) return null;
+    final existing = await AlertFolderUtils.findAlertPath(
+      widget.collectionPath,
+      _report!.folderName,
+    );
+    return existing ?? path.join(widget.collectionPath, _report!.folderName);
+  }
+
   /// Save station alert to disk (for persisting likes, verifications, comments)
   Future<void> _saveStationAlert() async {
     if (_report == null || !_isFromStation || kIsWeb) return;
@@ -70,7 +81,9 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
     try {
       // Station alerts are stored in the collection path passed to this widget
       // which is: {devicesDir}/{callsign}/alerts
-      final alertDir = Directory(path.join(widget.collectionPath, _report!.folderName));
+      final alertPath = await _resolveStationAlertPath();
+      if (alertPath == null) return;
+      final alertDir = Directory(alertPath);
       final reportFilePath = path.join(alertDir.path, 'report.txt');
 
       LogService().log('ReportDetailPage: _saveStationAlert() - collectionPath: ${widget.collectionPath}');
@@ -105,37 +118,17 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
     if (_report == null || !_isFromStation || kIsWeb) return;
 
     try {
-      final commentsDir = Directory(path.join(widget.collectionPath, _report!.folderName, 'comments'));
+      final alertPath = await _resolveStationAlertPath();
+      if (alertPath == null) return;
 
-      if (!await commentsDir.exists()) {
-        await commentsDir.create(recursive: true);
-      }
-
-      // Generate comment filename
-      final now = DateTime.now();
-      final timestamp = '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}_'
-          '${now.hour.toString().padLeft(2, '0')}-${now.minute.toString().padLeft(2, '0')}-${now.second.toString().padLeft(2, '0')}';
-      final fileName = '${timestamp}_$author.txt';
-
-      final commentFile = File(path.join(commentsDir.path, fileName));
-
-      // Build comment content - format must match ReportComment.fromText() expectations
-      // Format: AUTHOR, CREATED (YYYY-MM-DD HH:MM_ss), empty line, content, empty line, --> npub
-      final createdStr = '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')} '
-          '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}_${now.second.toString().padLeft(2, '0')}';
-
-      final buffer = StringBuffer();
-      buffer.writeln('AUTHOR: $author');
-      buffer.writeln('CREATED: $createdStr');
-      buffer.writeln();
-      buffer.writeln(content);
-
-      if (npub != null && npub.isNotEmpty) {
-        buffer.writeln();
-        buffer.writeln('--> npub: $npub');
-      }
-
-      await commentFile.writeAsString(buffer.toString());
+      final signature = await _alertFeedbackService.signComment(_report!.apiId, content);
+      await FeedbackCommentUtils.writeComment(
+        contentPath: alertPath,
+        author: author,
+        content: content,
+        npub: npub,
+        signature: signature,
+      );
 
       LogService().log('ReportDetailPage: Saved comment for station alert ${_report!.folderName}');
     } catch (e) {
@@ -312,15 +305,17 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
       await _loadComments();
 
       // Also reload points for the report
-      final alertPath = path.join(widget.collectionPath, _report!.folderName);
-      final points = await AlertFolderUtils.readPointsFile(alertPath);
-      if (points.isNotEmpty && mounted) {
-        setState(() {
-          _report = _report!.copyWith(
-            pointedBy: points,
-            pointCount: points.length,
-          );
-        });
+      final alertPath = await _resolveStationAlertPath();
+      if (alertPath != null) {
+        final points = await AlertFolderUtils.readPointsFile(alertPath);
+        if (mounted) {
+          setState(() {
+            _report = _report!.copyWith(
+              pointedBy: points,
+              pointCount: points.length,
+            );
+          });
+        }
       }
 
       LogService().log('ReportDetailPage: Alert refreshed from station');
@@ -334,23 +329,19 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
     final comments = <ReportComment>[];
 
     try {
-      final commentsDir = Directory(path.join(widget.collectionPath, _report!.folderName, 'comments'));
+      final alertPath = await _resolveStationAlertPath();
+      if (alertPath == null) return comments;
 
-      if (!await commentsDir.exists()) return comments;
-
-      await for (final entity in commentsDir.list()) {
-        if (entity is! File) continue;
-        if (!entity.path.endsWith('.txt')) continue;
-
-        try {
-          final content = await entity.readAsString();
-          final fileName = entity.path.split('/').last;
-          final comment = ReportComment.fromText(content, fileName.replaceAll('.txt', ''));
-          comments.add(comment);
-        } catch (e) {
-          LogService().log('ReportDetailPage: Error loading comment: $e');
-        }
-      }
+      final feedbackComments = await FeedbackCommentUtils.loadComments(alertPath);
+      comments.addAll(feedbackComments.map((comment) {
+        return ReportComment(
+          id: comment.id,
+          author: comment.author,
+          content: comment.content,
+          created: comment.created,
+          npub: comment.npub,
+        );
+      }));
 
       // Sort by date (newest first)
       comments.sort((a, b) => b.dateTime.compareTo(a.dateTime));
@@ -432,12 +423,38 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
       final alertId = _report!.apiId;
 
       if (_isFromStation) {
-        // For station alerts: update in-memory immediately, save to disk, then sync to station
+        // For station alerts: update feedback locally, save to disk, then sync to station
+        bool nextPointed = !wasPointed;
+        final alertPath = await _resolveStationAlertPath();
+        if (alertPath == null) {
+          throw Exception('Unable to resolve alert path');
+        }
+
+        final event = await _alertFeedbackService.buildReactionEvent(
+          alertId,
+          wasPointed ? 'unpoint' : 'point',
+          FeedbackFolderUtils.feedbackTypePoints,
+        );
+        if (event == null) {
+          throw Exception('Unable to sign point feedback');
+        }
+        final isNowActive = await FeedbackFolderUtils.toggleFeedbackEvent(
+          alertPath,
+          FeedbackFolderUtils.feedbackTypePoints,
+          event,
+        );
+        if (isNowActive == null) {
+          throw Exception('Failed to apply point feedback');
+        }
+        nextPointed = isNowActive;
+
         final updatedPointedBy = List<String>.from(_report!.pointedBy);
-        if (wasPointed) {
-          updatedPointedBy.remove(_currentUserNpub!);
+        if (nextPointed) {
+          if (!updatedPointedBy.contains(_currentUserNpub!)) {
+            updatedPointedBy.add(_currentUserNpub!);
+          }
         } else {
-          updatedPointedBy.add(_currentUserNpub!);
+          updatedPointedBy.remove(_currentUserNpub!);
         }
         _report = _report!.copyWith(
           pointedBy: updatedPointedBy,
@@ -445,16 +462,15 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
           lastModified: DateTime.now().toUtc().toIso8601String(),
         );
 
-        // Save to disk for persistence
         await _saveStationAlert();
 
         setState(() {});
-        _showSuccess(wasPointed ? _i18n.t('unpointed') : _i18n.t('pointed'));
+        _showSuccess(nextPointed ? _i18n.t('pointed') : _i18n.t('unpointed'));
 
         // Sync to station and refresh on success
-        final stationCall = wasPointed
-            ? _alertFeedbackService.unpointAlertOnStation(alertId, _currentUserNpub!)
-            : _alertFeedbackService.pointAlertOnStation(alertId, _currentUserNpub!);
+        final stationCall = nextPointed
+            ? _alertFeedbackService.pointAlertOnStation(alertId)
+            : _alertFeedbackService.unpointAlertOnStation(alertId);
 
         stationCall.then((_) {
           StationAlertService().refreshAlert(_report!.folderName, _report!.metadata['station_callsign'] ?? '');
@@ -475,9 +491,9 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
         // Sync to station (best-effort, fire-and-forget)
         if (_report != null) {
           if (wasPointed) {
-            _alertFeedbackService.unpointAlertOnStation(alertId, _currentUserNpub!).ignore();
+            _alertFeedbackService.unpointAlertOnStation(alertId).ignore();
           } else {
-            _alertFeedbackService.pointAlertOnStation(alertId, _currentUserNpub!).ignore();
+            _alertFeedbackService.pointAlertOnStation(alertId).ignore();
           }
         }
       }
@@ -563,9 +579,101 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
     } catch (e) {
       LogService().log('ReportDetailPage: Geocoding error: $e');
       _showError(_i18n.t('geocoding_failed'));
+    } finally {
+      setState(() => _isGeocodingAddress = false);
     }
+  }
 
-    setState(() => _isGeocodingAddress = false);
+  Future<void> _pickReportType() async {
+    final result = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(_i18n.t('select_report_type')),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: ListView.builder(
+            shrinkWrap: true,
+            itemCount: _reportTypes.length,
+            itemBuilder: (context, index) {
+              final type = _reportTypes[index];
+              return ListTile(
+                title: Text(type['label']!),
+                onTap: () => Navigator.pop(context, type['value']!),
+              );
+            },
+          ),
+        ),
+      ),
+    );
+
+    if (result != null) {
+      setState(() {
+        _selectedType = result;
+      });
+    }
+  }
+
+  void _showTypeInfo() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(_i18n.t('report_type_info_title')),
+        content: Text(_i18n.t('report_type_info_body')),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text(_i18n.t('ok')),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showSeverityInfo() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(_i18n.t('severity_levels')),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _buildSeverityInfo('emergency', _i18n.t('severity_emergency_desc')),
+            _buildSeverityInfo('urgent', _i18n.t('severity_urgent_desc')),
+            _buildSeverityInfo('attention', _i18n.t('severity_attention_desc')),
+            _buildSeverityInfo('info', _i18n.t('severity_info_desc')),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text(_i18n.t('ok')),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSeverityInfo(String level, String description) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            flex: 1,
+            child: Text(
+              level.toUpperCase(),
+              style: const TextStyle(fontWeight: FontWeight.bold),
+            ),
+          ),
+          Expanded(
+            flex: 3,
+            child: Text(description),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _pickImages() async {

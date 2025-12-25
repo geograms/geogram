@@ -6,11 +6,15 @@ import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 import 'package:markdown/markdown.dart' as md;
+import 'package:path/path.dart' as path;
 import 'pure_storage_config.dart';
 import '../models/blog_post.dart';
 import '../models/report.dart';
 import '../services/station_alert_api.dart';
+import '../services/station_place_api.dart';
+import '../services/station_feedback_api.dart';
 import '../util/alert_folder_utils.dart';
+import '../util/feedback_folder_utils.dart';
 import '../util/nostr_key_generator.dart';
 import '../util/nostr_event.dart';
 import '../util/nostr_crypto.dart';
@@ -584,6 +588,8 @@ class PureStationServer {
 
   // Shared alert API handlers
   StationAlertApi? _alertApi;
+  StationPlaceApi? _placeApi;
+  StationFeedbackApi? _feedbackApi;
 
   /// Get the shared alert API handlers (lazy initialization)
   /// Must only be called after init() has been called (when _dataDir is set)
@@ -603,6 +609,37 @@ class PureStationServer {
       );
     }
     return _alertApi!;
+  }
+
+  /// Get the shared places API handlers (lazy initialization)
+  StationPlaceApi get placeApi {
+    if (_placeApi == null) {
+      if (_dataDir == null) {
+        throw StateError('placeApi accessed before init() - _dataDir is null');
+      }
+      _placeApi = StationPlaceApi(
+        dataDir: _dataDir!,
+        stationName: _settings.name ?? 'Geogram Station',
+        stationCallsign: _settings.callsign,
+        stationNpub: _settings.npub,
+        log: (level, message) => _log(level, message),
+      );
+    }
+    return _placeApi!;
+  }
+
+  /// Get the shared feedback API handlers (lazy initialization)
+  StationFeedbackApi get feedbackApi {
+    if (_feedbackApi == null) {
+      if (_dataDir == null) {
+        throw StateError('feedbackApi accessed before init() - _dataDir is null');
+      }
+      _feedbackApi = StationFeedbackApi(
+        dataDir: _dataDir!,
+        log: (level, message) => _log(level, message),
+      );
+    }
+    return _feedbackApi!;
   }
 
   static const int maxLogEntries = 1000;
@@ -1945,6 +1982,10 @@ class PureStationServer {
         await _handleAlertsPage(request);
       } else if (path == '/api/alerts' || path == '/api/alerts/list') {
         await _handleAlertsApi(request);
+      } else if (path == '/api/places' || path == '/api/places/list') {
+        await _handlePlacesApi(request);
+      } else if (path.startsWith('/api/feedback/')) {
+        await _handleFeedbackApi(request);
       } else if (path.startsWith('/api/alerts/') && method == 'POST') {
         // Handle alert feedback: /api/alerts/{alertId}/{action}
         await _handleAlertFeedback(request);
@@ -1956,9 +1997,18 @@ class PureStationServer {
       } else if (_isAlertFileUploadPath(path) && method == 'GET') {
         // /{callsign}/api/alerts/{alertId}/files/{filename} - serve alert photo
         await _handleAlertFileServe(request);
+      } else if (_isPlaceFileUploadPath(path) && method == 'POST') {
+        // /{callsign}/api/places/files/{path} - upload place file
+        await _handlePlaceFileUpload(request);
+      } else if (_isPlaceFileUploadPath(path) && method == 'GET') {
+        // /{callsign}/api/places/files/{path} - serve place file
+        await _handlePlaceFileServe(request);
       } else if (_isAlertDetailsPath(path) && method == 'GET') {
         // /{callsign}/api/alerts/{alertId} - serve local alert details with photos list
         await _handleAlertDetails(request);
+      } else if (_isPlaceDetailsPath(path) && method == 'GET') {
+        // /api/places/{callsign}/{folderName} - place details
+        await _handlePlaceDetails(request);
       } else if (_isCallsignApiPath(path)) {
         // /{callsign}/api/* - proxy to connected device
         await _handleCallsignApiProxy(request);
@@ -2975,6 +3025,50 @@ class PureStationServer {
     }
   }
 
+  /// Handle GET /api/places - JSON API for fetching places
+  /// Query parameters:
+  ///   - since: Unix timestamp (seconds) - only return places updated after this time
+  ///   - lat: latitude for distance filtering
+  ///   - lon: longitude for distance filtering
+  ///   - radius: radius in km for distance filtering (default: unlimited)
+  Future<void> _handlePlacesApi(HttpRequest request) async {
+    try {
+      final params = request.uri.queryParameters;
+
+      final sinceTimestamp = params['since'] != null
+          ? int.tryParse(params['since']!)
+          : null;
+      final lat = params['lat'] != null
+          ? double.tryParse(params['lat']!)
+          : null;
+      final lon = params['lon'] != null
+          ? double.tryParse(params['lon']!)
+          : null;
+      final radiusKm = params['radius'] != null
+          ? double.tryParse(params['radius']!)
+          : null;
+
+      final result = await placeApi.getPlaces(
+        sinceTimestamp: sinceTimestamp,
+        lat: lat,
+        lon: lon,
+        radiusKm: radiusKm,
+      );
+
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode(result));
+    } catch (e) {
+      _log('ERROR', 'Error in places API: $e');
+      request.response.statusCode = 500;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({
+        'success': false,
+        'error': 'Internal server error',
+        'timestamp': DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      }));
+    }
+  }
+
   /// Parse alert datetime from format "YYYY-MM-DD HH:MM_ss"
   DateTime _parseAlertDateTime(String dateStr) {
     // Format: "2025-12-07 10:30_45" -> DateTime
@@ -3144,7 +3238,7 @@ class PureStationServer {
         alert['type'] = line.substring(6).trim();
       } else if (line.startsWith('ADDRESS: ')) {
         alert['address'] = line.substring(9).trim();
-      // Note: POINTED_BY and POINT_COUNT are now stored in points.txt file
+      // Note: POINTED_BY and POINT_COUNT are now derived from feedback/points.txt
       } else if (line.startsWith('VERIFIED_BY: ')) {
         final verifiedByStr = line.substring(13).trim();
         alert['verified_by'] = verifiedByStr.isEmpty ? <String>[] : verifiedByStr.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
@@ -3172,12 +3266,12 @@ class PureStationServer {
     return alert;
   }
 
-  /// Handle POST /api/alerts/{alertId}/{action} - Alert feedback (like, unlike, verify, comment)
+  /// Handle POST /api/alerts/{alertId}/{action} - legacy alert feedback (deprecated)
   Future<void> _handleAlertFeedback(HttpRequest request) async {
     try {
-      final path = request.uri.path;
+      final requestPath = request.uri.path;
       // Parse: /api/alerts/{alertId}/{action}
-      final pathParts = path.substring('/api/alerts/'.length).split('/');
+      final pathParts = requestPath.substring('/api/alerts/'.length).split('/');
       if (pathParts.length != 2) {
         request.response.statusCode = 400;
         request.response.headers.contentType = ContentType.json;
@@ -3185,53 +3279,225 @@ class PureStationServer {
         return;
       }
 
-      final alertId = pathParts[0];
-      final action = pathParts[1];
-
-      // Parse body
-      final body = await utf8.decoder.bind(request).join();
-      Map<String, dynamic> json = {};
-      if (body.isNotEmpty) {
-        try {
-          json = jsonDecode(body) as Map<String, dynamic>;
-        } catch (_) {}
-      }
-
-      // Find alert by ID
-      final alertInfo = await _findAlertById(alertId);
-      if (alertInfo == null) {
-        request.response.statusCode = 404;
-        request.response.headers.contentType = ContentType.json;
-        request.response.write(jsonEncode({'error': 'Alert not found', 'alert_id': alertId}));
-        return;
-      }
-
-      final alertPath = alertInfo['path'] as String;
-      final reportFile = File('$alertPath/report.txt');
-
-      switch (action) {
-        case 'point':
-          await _handleAlertPoint(request, alertPath, reportFile, json, isPoint: true);
-          break;
-        case 'unpoint':
-          await _handleAlertPoint(request, alertPath, reportFile, json, isPoint: false);
-          break;
-        case 'verify':
-          await _handleAlertVerify(request, alertPath, reportFile, json);
-          break;
-        case 'comment':
-          await _handleAlertComment(request, alertPath, json);
-          break;
-        default:
-          request.response.statusCode = 400;
-          request.response.headers.contentType = ContentType.json;
-          request.response.write(jsonEncode({'error': 'Unknown action', 'action': action}));
-      }
+      final action = pathParts[1].toLowerCase();
+      request.response.statusCode = 410;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({
+        'error': 'Legacy alert feedback endpoint is deprecated',
+        'message': 'Use /api/feedback/alert/{alertId}/{action}',
+        'action': action,
+      }));
     } catch (e) {
       _log('ERROR', 'Error handling alert feedback: $e');
       request.response.statusCode = 500;
       request.response.headers.contentType = ContentType.json;
       request.response.write(jsonEncode({'error': 'Internal error', 'message': e.toString()}));
+    }
+  }
+
+  /// Handle /api/feedback/{contentType}/{contentId}/... using shared handler
+  Future<void> _handleFeedbackApi(HttpRequest request) async {
+    try {
+      final segments = request.uri.pathSegments;
+      if (segments.length < 4) {
+        request.response.statusCode = 400;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'Invalid feedback path'}));
+        return;
+      }
+
+      final contentType = segments[2];
+      final contentId = segments[3];
+      final callsign = request.uri.queryParameters['callsign'];
+
+      Map<String, dynamic> result;
+
+      if (request.method == 'GET') {
+        if (segments.length == 4) {
+          final params = request.uri.queryParameters;
+          final includeComments = params['include_comments'] == 'true';
+          final commentLimit = int.tryParse(params['comment_limit'] ?? '') ?? 20;
+          final commentOffset = int.tryParse(params['comment_offset'] ?? '') ?? 0;
+          result = await feedbackApi.getFeedback(
+            contentType: contentType,
+            contentId: contentId,
+            npub: params['npub'],
+            callsign: callsign,
+            includeComments: includeComments,
+            commentLimit: commentLimit,
+            commentOffset: commentOffset,
+          );
+        } else if (segments.length == 5 && segments[4] == 'stats') {
+          result = await feedbackApi.getStats(
+            contentType: contentType,
+            contentId: contentId,
+            callsign: callsign,
+          );
+        } else {
+          request.response.statusCode = 400;
+          request.response.headers.contentType = ContentType.json;
+          request.response.write(jsonEncode({'error': 'Invalid feedback path'}));
+          return;
+        }
+      } else if (request.method == 'POST') {
+        if (segments.length < 5) {
+          request.response.statusCode = 400;
+          request.response.headers.contentType = ContentType.json;
+          request.response.write(jsonEncode({'error': 'Missing feedback action'}));
+          return;
+        }
+
+        final action = segments[4];
+        final body = await utf8.decoder.bind(request).join();
+        Map<String, dynamic> jsonBody = <String, dynamic>{};
+        if (body.isNotEmpty) {
+          try {
+            jsonBody = jsonDecode(body) as Map<String, dynamic>;
+          } catch (_) {
+            request.response.statusCode = 400;
+            request.response.headers.contentType = ContentType.json;
+            request.response.write(jsonEncode({'error': 'Invalid JSON body'}));
+            return;
+          }
+        }
+
+        switch (action) {
+          case 'like':
+            result = await feedbackApi.toggleFeedback(
+              contentType: contentType,
+              contentId: contentId,
+              feedbackType: FeedbackFolderUtils.feedbackTypeLikes,
+              actionName: 'like',
+              eventJson: jsonBody,
+              callsign: callsign,
+            );
+            break;
+          case 'point':
+            result = await feedbackApi.toggleFeedback(
+              contentType: contentType,
+              contentId: contentId,
+              feedbackType: FeedbackFolderUtils.feedbackTypePoints,
+              actionName: 'point',
+              eventJson: jsonBody,
+              callsign: callsign,
+            );
+            break;
+          case 'dislike':
+            result = await feedbackApi.toggleFeedback(
+              contentType: contentType,
+              contentId: contentId,
+              feedbackType: FeedbackFolderUtils.feedbackTypeDislikes,
+              actionName: 'dislike',
+              eventJson: jsonBody,
+              callsign: callsign,
+            );
+            break;
+          case 'subscribe':
+            result = await feedbackApi.toggleFeedback(
+              contentType: contentType,
+              contentId: contentId,
+              feedbackType: FeedbackFolderUtils.feedbackTypeSubscribe,
+              actionName: 'subscribe',
+              eventJson: jsonBody,
+              callsign: callsign,
+            );
+            break;
+          case 'verify':
+            result = await feedbackApi.verifyContent(
+              contentType: contentType,
+              contentId: contentId,
+              eventJson: jsonBody,
+              callsign: callsign,
+            );
+            break;
+          case 'view':
+            result = await feedbackApi.recordView(
+              contentType: contentType,
+              contentId: contentId,
+              eventJson: jsonBody,
+              callsign: callsign,
+            );
+            break;
+          case 'comment':
+            final author = jsonBody['author'] as String?;
+            final content = jsonBody['content'] as String?;
+            if (author == null || author.isEmpty || content == null || content.isEmpty) {
+              request.response.statusCode = 400;
+              request.response.headers.contentType = ContentType.json;
+              request.response.write(jsonEncode({'error': 'Missing author or content'}));
+              return;
+            }
+            result = await feedbackApi.addComment(
+              contentType: contentType,
+              contentId: contentId,
+              author: author,
+              content: content,
+              npub: jsonBody['npub'] as String?,
+              signature: jsonBody['signature'] as String?,
+              callsign: callsign,
+            );
+            break;
+          case 'react':
+            if (segments.length < 6) {
+              request.response.statusCode = 400;
+              request.response.headers.contentType = ContentType.json;
+              request.response.write(jsonEncode({'error': 'Missing reaction emoji'}));
+              return;
+            }
+            final emoji = segments[5];
+            if (!FeedbackFolderUtils.supportedReactions.contains(emoji)) {
+              request.response.statusCode = 400;
+              request.response.headers.contentType = ContentType.json;
+              request.response.write(jsonEncode({
+                'error': 'Unsupported reaction',
+                'supported_reactions': FeedbackFolderUtils.supportedReactions,
+              }));
+              return;
+            }
+            result = await feedbackApi.toggleFeedback(
+              contentType: contentType,
+              contentId: contentId,
+              feedbackType: emoji,
+              actionName: 'react',
+              eventJson: jsonBody,
+              callsign: callsign,
+            );
+            if (result['success'] == true) {
+              result['reaction'] = emoji;
+            }
+            break;
+          default:
+            request.response.statusCode = 400;
+            request.response.headers.contentType = ContentType.json;
+            request.response.write(jsonEncode({'error': 'Unknown feedback action'}));
+            return;
+        }
+      } else {
+        request.response.statusCode = 405;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'Method not allowed'}));
+        return;
+      }
+
+      final httpStatus = result.remove('http_status') as int?;
+      if (httpStatus != null) {
+        request.response.statusCode = httpStatus;
+      } else if (result.containsKey('error')) {
+        request.response.statusCode = 404;
+      } else {
+        request.response.statusCode = 200;
+      }
+
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode(result));
+    } catch (e) {
+      _log('ERROR', 'Error in feedback API: $e');
+      request.response.statusCode = 500;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({
+        'error': 'Internal server error',
+        'message': e.toString(),
+      }));
     }
   }
 
@@ -3295,47 +3561,11 @@ class PureStationServer {
     Map<String, dynamic> json, {
     required bool isPoint,
   }) async {
-    final npub = json['npub'] as String?;
-    if (npub == null || npub.isEmpty) {
-      request.response.statusCode = 400;
-      request.response.headers.contentType = ContentType.json;
-      request.response.write(jsonEncode({'error': 'Missing npub'}));
-      return;
-    }
-
-    // Read points from points.txt
-    var pointedBy = await AlertFolderUtils.readPointsFile(alertPath);
-
-    // Update pointedBy
-    bool changed = false;
-    if (isPoint && !pointedBy.contains(npub)) {
-      pointedBy.add(npub);
-      changed = true;
-    } else if (!isPoint && pointedBy.contains(npub)) {
-      pointedBy.remove(npub);
-      changed = true;
-    }
-
-    final lastModified = DateTime.now().toUtc().toIso8601String();
-
-    if (changed) {
-      // Write points to points.txt
-      await AlertFolderUtils.writePointsFile(alertPath, pointedBy);
-
-      // Update LAST_MODIFIED in report.txt
-      final content = await reportFile.readAsString();
-      final newContent = _updateAlertFeedback(content, lastModified: lastModified);
-      await reportFile.writeAsString(newContent, flush: true);
-      _log('INFO', 'Alert ${isPoint ? "pointed" : "unpointed"} by $npub');
-    }
-
-    request.response.statusCode = 200;
+    request.response.statusCode = 410;
     request.response.headers.contentType = ContentType.json;
     request.response.write(jsonEncode({
-      'success': true,
-      'pointed': isPoint ? pointedBy.contains(npub) : !pointedBy.contains(npub),
-      'point_count': pointedBy.length,
-      'last_modified': lastModified,
+      'error': 'Legacy alert feedback endpoint is deprecated',
+      'message': 'Use /api/feedback/alert/{alertId}/point',
     }));
   }
 
@@ -3346,51 +3576,11 @@ class PureStationServer {
     File reportFile,
     Map<String, dynamic> json,
   ) async {
-    final npub = json['npub'] as String?;
-    if (npub == null || npub.isEmpty) {
-      request.response.statusCode = 400;
-      request.response.headers.contentType = ContentType.json;
-      request.response.write(jsonEncode({'error': 'Missing npub'}));
-      return;
-    }
-
-    // Read current content
-    final content = await reportFile.readAsString();
-    final lines = content.split('\n');
-
-    // Parse current verifiedBy
-    var verifiedBy = <String>[];
-    for (final line in lines) {
-      if (line.startsWith('VERIFIED_BY: ')) {
-        final verifiedByStr = line.substring(13).trim();
-        verifiedBy = verifiedByStr.isEmpty ? [] : verifiedByStr.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
-        break;
-      }
-    }
-
-    // Add to verifiedBy if not already present
-    bool changed = false;
-    if (!verifiedBy.contains(npub)) {
-      verifiedBy.add(npub);
-      changed = true;
-    }
-
-    final lastModified = DateTime.now().toUtc().toIso8601String();
-
-    if (changed) {
-      // Update file content with LAST_MODIFIED timestamp
-      final newContent = _updateAlertFeedback(content, verifiedBy: verifiedBy, lastModified: lastModified);
-      await reportFile.writeAsString(newContent, flush: true);
-      _log('INFO', 'Alert verified by $npub');
-    }
-
-    request.response.statusCode = 200;
+    request.response.statusCode = 410;
     request.response.headers.contentType = ContentType.json;
     request.response.write(jsonEncode({
-      'success': true,
-      'verified': true,
-      'verification_count': verifiedBy.length,
-      'last_modified': lastModified,
+      'error': 'Legacy alert feedback endpoint is deprecated',
+      'message': 'Use /api/feedback/alert/{alertId}/verify',
     }));
   }
 
@@ -3400,67 +3590,16 @@ class PureStationServer {
     String alertPath,
     Map<String, dynamic> json,
   ) async {
-    final author = json['author'] as String?;
-    final content = json['content'] as String?;
-    final npub = json['npub'] as String?;
-    final signature = json['signature'] as String?;
-
-    if (author == null || author.isEmpty || content == null || content.isEmpty) {
-      request.response.statusCode = 400;
-      request.response.headers.contentType = ContentType.json;
-      request.response.write(jsonEncode({'error': 'Missing author or content'}));
-      return;
-    }
-
-    // Create comments directory
-    final commentsDir = Directory(AlertFolderUtils.buildCommentsPath(alertPath));
-    if (!await commentsDir.exists()) {
-      await commentsDir.create(recursive: true);
-    }
-
-    // Generate comment ID and filename using centralized utility
-    final now = DateTime.now();
-    final id = AlertFolderUtils.generateCommentId(now, author);
-    final createdStr = '${now.year.toString().padLeft(4, '0')}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')} ${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}_${now.second.toString().padLeft(2, '0')}';
-
-    // Build comment content
-    final buffer = StringBuffer();
-    buffer.writeln('AUTHOR: $author');
-    buffer.writeln('CREATED: $createdStr');
-    buffer.writeln();
-    buffer.writeln(content);
-    if (npub != null && npub.isNotEmpty) {
-      buffer.writeln('--> npub: $npub');
-    }
-    if (signature != null && signature.isNotEmpty) {
-      buffer.writeln('--> signature: $signature');
-    }
-
-    // Save comment file
-    final commentFile = File('${commentsDir.path}/$id.txt');
-    await commentFile.writeAsString(buffer.toString(), flush: true);
-
-    // Update alert's lastModified
-    final reportFile = File('$alertPath/report.txt');
-    if (await reportFile.exists()) {
-      final alertContent = await reportFile.readAsString();
-      final newContent = _updateAlertFeedback(alertContent, lastModified: DateTime.now().toUtc().toIso8601String());
-      await reportFile.writeAsString(newContent, flush: true);
-    }
-
-    _log('INFO', 'Comment added to alert by $author');
-
-    request.response.statusCode = 200;
+    request.response.statusCode = 410;
     request.response.headers.contentType = ContentType.json;
     request.response.write(jsonEncode({
-      'success': true,
-      'comment_id': id,
-      'last_modified': DateTime.now().toUtc().toIso8601String(),
+      'error': 'Legacy alert feedback endpoint is deprecated',
+      'message': 'Use /api/feedback/alert/{alertId}/comment',
     }));
   }
 
   /// Update alert file with new feedback data.
-  /// Note: POINTED_BY and POINT_COUNT are now stored in points.txt file.
+  /// Note: POINTED_BY and POINT_COUNT are derived from feedback/points.txt.
   String _updateAlertFeedback(
     String content, {
     List<String>? verifiedBy,
@@ -3474,7 +3613,7 @@ class PureStationServer {
     bool hasLastModified = false;
 
     for (final line in lines) {
-      // Skip old POINTED_BY and POINT_COUNT lines (now stored in points.txt)
+      // Skip old POINTED_BY and POINT_COUNT lines (derived from feedback/points.txt)
       if (line.startsWith('POINTED_BY: ') || line.startsWith('POINT_COUNT: ')) {
         continue;
       } else if (verifiedBy != null && line.startsWith('VERIFIED_BY: ')) {
@@ -3929,6 +4068,14 @@ class PureStationServer {
     return regex.hasMatch(path);
   }
 
+  /// Check if path matches place file upload/download patterns.
+  /// Patterns:
+  /// - /{callsign}/api/places/files/{path}
+  /// - /{callsign}/api/places/{placePath}/files/{path}
+  bool _isPlaceFileUploadPath(String path) {
+    return _parsePlaceFileRequest(path) != null;
+  }
+
   /// Check if path matches /{callsign}/api/alerts/{alertId} pattern for alert details
   /// This should NOT match paths with /files/ (those are handled by _isAlertFileUploadPath)
   bool _isAlertDetailsPath(String path) {
@@ -3937,15 +4084,20 @@ class PureStationServer {
     return regex.hasMatch(path);
   }
 
+  /// Check if path matches /api/places/{callsign}/{folderName}
+  bool _isPlaceDetailsPath(String path) {
+    return _parsePlaceDetailsRequest(path) != null;
+  }
+
   /// Handle GET /{callsign}/api/alerts/{alertId} - serve local alert details with photos list
   /// Uses the shared alertApi.getAlertDetails() which includes comments
   Future<void> _handleAlertDetails(HttpRequest request) async {
     try {
-      final path = request.uri.path;
+      final requestPath = request.uri.path;
 
       // Parse path: /{callsign}/api/alerts/{alertId}
       final regex = RegExp(r'^/([A-Za-z0-9]+)/api/alerts/([^/]+)$');
-      final match = regex.firstMatch(path);
+      final match = regex.firstMatch(requestPath);
 
       if (match == null) {
         request.response.statusCode = 400;
@@ -3977,6 +4129,41 @@ class PureStationServer {
       request.response.write(jsonEncode(result));
     } catch (e) {
       _log('ERROR', 'Error handling alert details: $e');
+      request.response.statusCode = 500;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({'error': 'Internal server error', 'message': e.toString()}));
+    }
+  }
+
+  /// Handle GET /api/places/{callsign}/{folderName} - place details
+  Future<void> _handlePlaceDetails(HttpRequest request) async {
+    try {
+      final pathValue = request.uri.path;
+      final parsed = _parsePlaceDetailsRequest(pathValue);
+      if (parsed == null) {
+        request.response.statusCode = 400;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'Invalid path format'}));
+        return;
+      }
+      final callsign = parsed.callsign;
+      final folderName = parsed.folderName;
+
+      final result = await placeApi.getPlaceDetails(callsign, folderName);
+      final httpStatus = result.remove('http_status') as int?;
+
+      if (httpStatus != null) {
+        request.response.statusCode = httpStatus;
+      } else if (result.containsKey('error')) {
+        request.response.statusCode = 404;
+      } else {
+        request.response.statusCode = 200;
+      }
+
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode(result));
+    } catch (e) {
+      _log('ERROR', 'Error handling place details: $e');
       request.response.statusCode = 500;
       request.response.headers.contentType = ContentType.json;
       request.response.write(jsonEncode({'error': 'Internal server error', 'message': e.toString()}));
@@ -4096,16 +4283,75 @@ class PureStationServer {
     }
   }
 
+  /// Handle POST /{callsign}/api/places/files/{path} - upload place file
+  Future<void> _handlePlaceFileUpload(HttpRequest request) async {
+    try {
+      final pathValue = request.uri.path;
+      final parsed = _parsePlaceFileRequest(pathValue);
+      if (parsed == null) {
+        request.response.statusCode = 400;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'Invalid path format'}));
+        return;
+      }
+
+      final callsign = parsed.callsign;
+      final relativePath = parsed.relativePath;
+
+      if (_isInvalidRelativePath(relativePath)) {
+        request.response.statusCode = 400;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'Invalid path'}));
+        return;
+      }
+
+      final bytes = await request.fold<List<int>>(
+        <int>[],
+        (previous, element) => previous..addAll(element),
+      );
+
+      if (bytes.isEmpty) {
+        request.response.statusCode = 400;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'Empty file'}));
+        return;
+      }
+
+      final placesRoot = path.join(_dataDir!, 'devices', callsign, 'places');
+      final filePath = path.join(placesRoot, relativePath);
+      final parentDir = Directory(path.dirname(filePath));
+      if (!await parentDir.exists()) {
+        await parentDir.create(recursive: true);
+      }
+
+      final file = File(filePath);
+      await file.writeAsBytes(bytes, flush: true);
+
+      request.response.statusCode = 201;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({
+        'success': true,
+        'path': '/$callsign/places/$relativePath',
+        'size': bytes.length,
+      }));
+    } catch (e) {
+      _log('ERROR', 'Error handling place file upload: $e');
+      request.response.statusCode = 500;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({'error': 'Internal server error', 'message': e.toString()}));
+    }
+  }
+
   /// Handle GET /{callsign}/api/alerts/{alertId}/files/{filename} - serve alert photo
   /// Also handles: /{callsign}/api/alerts/{alertId}/files/images/{filename}
   Future<void> _handleAlertFileServe(HttpRequest request) async {
     try {
-      final path = request.uri.path;
+      final requestPath = request.uri.path;
 
       // Parse path: /{callsign}/api/alerts/{alertId}/files/{filename}
       // Also supports: /{callsign}/api/alerts/{alertId}/files/images/{filename}
       final regex = RegExp(r'^/([A-Za-z0-9]+)/api/alerts/([^/]+)/files/(.+)$');
-      final match = regex.firstMatch(path);
+      final match = regex.firstMatch(requestPath);
 
       if (match == null) {
         request.response.statusCode = 400;
@@ -4116,17 +4362,13 @@ class PureStationServer {
 
       final callsign = match.group(1)!.toUpperCase();
       final alertId = match.group(2)!;
-      final filename = match.group(3)!;
+      final relativePath = match.group(3)!;
 
-      // Handle filename that may have images/ prefix
-      final isInImagesFolder = filename.startsWith('images/');
-      final cleanFilename = isInImagesFolder ? filename.substring(7) : filename;
-
-      // Validate filename (prevent directory traversal)
-      if (cleanFilename.contains('..') || cleanFilename.contains('/') || cleanFilename.contains('\\')) {
+      // Validate path (prevent directory traversal)
+      if (relativePath.contains('..') || relativePath.contains('\\') || relativePath.startsWith('/')) {
         request.response.statusCode = 400;
         request.response.headers.contentType = ContentType.json;
-        request.response.write(jsonEncode({'error': 'Invalid filename'}));
+        request.response.write(jsonEncode({'error': 'Invalid path'}));
         return;
       }
 
@@ -4134,23 +4376,41 @@ class PureStationServer {
       final alertPath = await _findAlertPath(callsign, alertId);
 
       File? file;
+      final normalizedAlertPath = alertPath != null ? path.normalize(alertPath) : null;
 
-      if (alertPath != null) {
-        // Try images/ subfolder first (new structure)
-        final imagesFilePath = '$alertPath/images/$cleanFilename';
-        if (await File(imagesFilePath).exists()) {
-          file = File(imagesFilePath);
-        } else {
-          // Fall back to root folder (legacy structure)
-          final rootFilePath = '$alertPath/$cleanFilename';
-          if (await File(rootFilePath).exists()) {
-            file = File(rootFilePath);
-          }
+      if (normalizedAlertPath != null) {
+        final resolvedPath = path.normalize(path.join(normalizedAlertPath, relativePath));
+        if (!resolvedPath.startsWith(normalizedAlertPath)) {
+          request.response.statusCode = 400;
+          request.response.headers.contentType = ContentType.json;
+          request.response.write(jsonEncode({'error': 'Invalid path'}));
+          return;
+        }
+
+        final resolvedFile = File(resolvedPath);
+        if (await resolvedFile.exists()) {
+          file = resolvedFile;
         }
       }
 
+      final ext = path.extension(relativePath).toLowerCase();
+      final isImageRequest = ext == '.jpg' || ext == '.jpeg' || ext == '.png' || ext == '.gif' || ext == '.webp';
+      final cleanFilename = path.basename(relativePath);
+
       if (file == null || !await file.exists()) {
-        // File not found on station - try to fetch from the author if they're online
+        if (!isImageRequest) {
+          request.response.statusCode = 404;
+          request.response.headers.contentType = ContentType.json;
+          request.response.write(jsonEncode({
+            'error': 'File not found',
+            'callsign': callsign,
+            'alert_id': alertId,
+            'filename': cleanFilename,
+          }));
+          return;
+        }
+
+        // Image not found on station - try to fetch from the author if they're online
         _log('INFO', 'ALERT PHOTO: $cleanFilename not found locally, checking if author $callsign is online');
 
         // Find the client by callsign
@@ -4194,16 +4454,19 @@ class PureStationServer {
       }
 
       // Determine content type
-      final ext = filename.toLowerCase().split('.').last;
       String contentType = 'application/octet-stream';
-      if (ext == 'jpg' || ext == 'jpeg') {
+      if (ext == '.jpg' || ext == '.jpeg') {
         contentType = 'image/jpeg';
-      } else if (ext == 'png') {
+      } else if (ext == '.png') {
         contentType = 'image/png';
-      } else if (ext == 'gif') {
+      } else if (ext == '.gif') {
         contentType = 'image/gif';
-      } else if (ext == 'webp') {
+      } else if (ext == '.webp') {
         contentType = 'image/webp';
+      } else if (ext == '.txt') {
+        contentType = 'text/plain';
+      } else if (ext == '.json') {
+        contentType = 'application/json';
       }
 
       // Read and serve the file
@@ -4215,13 +4478,120 @@ class PureStationServer {
       request.response.headers.set('Cache-Control', 'public, max-age=86400');
       request.response.add(bytes);
 
-      _log('INFO', 'ALERT PHOTO SERVE: Served $filename for alert $alertId (${bytes.length} bytes)');
+      _log('INFO', 'ALERT FILE SERVE: Served $relativePath for alert $alertId (${bytes.length} bytes)');
     } catch (e) {
       _log('ERROR', 'Error serving alert file: $e');
       request.response.statusCode = 500;
       request.response.headers.contentType = ContentType.json;
       request.response.write(jsonEncode({'error': 'Internal server error', 'message': e.toString()}));
     }
+  }
+
+  /// Handle GET /{callsign}/api/places/files/{path} - serve place file
+  Future<void> _handlePlaceFileServe(HttpRequest request) async {
+    try {
+      final pathValue = request.uri.path;
+      final parsed = _parsePlaceFileRequest(pathValue);
+      if (parsed == null) {
+        request.response.statusCode = 400;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'Invalid path format'}));
+        return;
+      }
+
+      final callsign = parsed.callsign;
+      final relativePath = parsed.relativePath;
+
+      if (_isInvalidRelativePath(relativePath)) {
+        request.response.statusCode = 400;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'Invalid path'}));
+        return;
+      }
+
+      final placesRoot = path.join(_dataDir!, 'devices', callsign, 'places');
+      final filePath = path.join(placesRoot, relativePath);
+      final file = File(filePath);
+
+      if (!await file.exists()) {
+        request.response.statusCode = 404;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'File not found'}));
+        return;
+      }
+
+      final ext = path.extension(filePath).toLowerCase();
+      String contentType = 'application/octet-stream';
+      if (ext == '.jpg' || ext == '.jpeg') {
+        contentType = 'image/jpeg';
+      } else if (ext == '.png') {
+        contentType = 'image/png';
+      } else if (ext == '.gif') {
+        contentType = 'image/gif';
+      } else if (ext == '.webp') {
+        contentType = 'image/webp';
+      } else if (ext == '.txt') {
+        contentType = 'text/plain';
+      }
+
+      final bytes = await file.readAsBytes();
+      request.response.headers.set('Content-Type', contentType);
+      request.response.headers.set('Content-Length', bytes.length.toString());
+      request.response.add(bytes);
+    } catch (e) {
+      _log('ERROR', 'Error serving place file: $e');
+      request.response.statusCode = 500;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({'error': 'Internal server error', 'message': e.toString()}));
+    }
+  }
+
+  ({String callsign, String relativePath})? _parsePlaceFileRequest(String path) {
+    final parts = path.split('/').where((p) => p.isNotEmpty).toList();
+    if (parts.length < 5) return null;
+    if (parts[1] != 'api' || parts[2] != 'places') return null;
+
+    final callsign = parts[0].toUpperCase();
+
+    if (parts[3] == 'files') {
+      if (parts.length < 5) return null;
+      return (callsign: callsign, relativePath: parts.sublist(4).join('/'));
+    }
+
+    final filesIndex = parts.indexOf('files');
+    if (filesIndex <= 3 || filesIndex == parts.length - 1) return null;
+
+    final placePath = parts.sublist(3, filesIndex).join('/');
+    final filePath = parts.sublist(filesIndex + 1).join('/');
+    if (placePath.isEmpty || filePath.isEmpty) return null;
+
+    return (callsign: callsign, relativePath: '$placePath/$filePath');
+  }
+
+  ({String callsign, String folderName})? _parsePlaceDetailsRequest(String path) {
+    final parts = path.split('/').where((p) => p.isNotEmpty).toList();
+    if (parts.length < 3) return null;
+
+    // /api/places/{callsign}/{folderName}
+    if (parts.length == 4 && parts[0] == 'api' && parts[1] == 'places') {
+      return (callsign: parts[2].toUpperCase(), folderName: parts[3]);
+    }
+
+    // /{callsign}/api/places/{folderName}
+    if (parts.length == 4 && parts[1] == 'api' && parts[2] == 'places') {
+      return (callsign: parts[0].toUpperCase(), folderName: parts[3]);
+    }
+
+    return null;
+  }
+
+  bool _isInvalidRelativePath(String relativePath) {
+    if (relativePath.isEmpty) return true;
+    if (relativePath.contains('\\')) return true;
+    final normalized = path.normalize(relativePath);
+    if (path.isAbsolute(normalized)) return true;
+    final segments = normalized.split(path.separator);
+    return segments.any((segment) => segment == '..');
   }
 
   /// Check if path matches /{callsign}/api/* pattern

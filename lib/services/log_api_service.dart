@@ -42,6 +42,8 @@ import 'station_server_service.dart';
 import 'websocket_service.dart';
 import '../models/station.dart';
 import '../util/alert_folder_utils.dart';
+import '../util/feedback_comment_utils.dart';
+import '../util/feedback_folder_utils.dart';
 
 class LogApiService {
   static final LogApiService _instance = LogApiService._internal();
@@ -5219,88 +5221,14 @@ class LogApiService {
     String dataDir,
     Map<String, String> headers,
   ) async {
-    try {
-      final body = await request.readAsString();
-      final json = jsonDecode(body) as Map<String, dynamic>;
-      final npub = json['npub'] as String?;
-
-      if (npub == null || npub.isEmpty) {
-        return shelf.Response.badRequest(
-          body: jsonEncode({'error': 'npub is required'}),
-          headers: headers,
-        );
-      }
-
-      final result = await _getAlertByApiId(alertId, dataDir);
-      if (result == null) {
-        return shelf.Response.notFound(
-          jsonEncode({'error': 'Alert not found', 'alertId': alertId}),
-          headers: headers,
-        );
-      }
-
-      final alert = result.$1;
-      final alertPath = result.$2;
-
-      // Read current points from points.txt
-      final pointedBy = await AlertFolderUtils.readPointsFile(alertPath);
-
-      // Add point if not already pointed
-      if (!pointedBy.contains(npub)) {
-        pointedBy.add(npub);
-
-        // Write updated points to points.txt
-        await AlertFolderUtils.writePointsFile(alertPath, pointedBy);
-
-        // Update lastModified on report.txt
-        final lastModified = DateTime.now().toUtc().toIso8601String();
-        final reportFile = io.File('$alertPath/report.txt');
-        if (await reportFile.exists()) {
-          var content = await reportFile.readAsString();
-          if (content.contains('LAST_MODIFIED: ')) {
-            content = content.replaceFirst(
-              RegExp(r'LAST_MODIFIED: [^\n]*'),
-              'LAST_MODIFIED: $lastModified',
-            );
-          } else {
-            final lines = content.split('\n');
-            var insertIdx = lines.length;
-            for (var i = 0; i < lines.length; i++) {
-              if (lines[i].trim().isEmpty) {
-                insertIdx = i;
-                break;
-              }
-            }
-            lines.insert(insertIdx, 'LAST_MODIFIED: $lastModified');
-            content = lines.join('\n');
-          }
-          await reportFile.writeAsString(content, flush: true);
-        }
-
-        return shelf.Response.ok(
-          jsonEncode({
-            'success': true,
-            'point_count': pointedBy.length,
-            'last_modified': lastModified,
-          }),
-          headers: headers,
-        );
-      }
-
-      return shelf.Response.ok(
-        jsonEncode({
-          'success': true,
-          'point_count': pointedBy.length,
-          'last_modified': alert.lastModified,
-        }),
-        headers: headers,
-      );
-    } catch (e) {
-      return shelf.Response.internalServerError(
-        body: jsonEncode({'error': e.toString()}),
-        headers: headers,
-      );
-    }
+    return shelf.Response(
+      410,
+      body: jsonEncode({
+        'error': 'Legacy alert feedback endpoint is deprecated',
+        'message': 'Use /api/feedback/alert/{alertId}/point',
+      }),
+      headers: headers,
+    );
   }
 
   /// POST /api/alerts/{alertId}/unpoint - Unpoint an alert (remove attention call)
@@ -5310,88 +5238,14 @@ class LogApiService {
     String dataDir,
     Map<String, String> headers,
   ) async {
-    try {
-      final body = await request.readAsString();
-      final json = jsonDecode(body) as Map<String, dynamic>;
-      final npub = json['npub'] as String?;
-
-      if (npub == null || npub.isEmpty) {
-        return shelf.Response.badRequest(
-          body: jsonEncode({'error': 'npub is required'}),
-          headers: headers,
-        );
-      }
-
-      final result = await _getAlertByApiId(alertId, dataDir);
-      if (result == null) {
-        return shelf.Response.notFound(
-          jsonEncode({'error': 'Alert not found', 'alertId': alertId}),
-          headers: headers,
-        );
-      }
-
-      final alert = result.$1;
-      final alertPath = result.$2;
-
-      // Read current points from points.txt
-      final pointedBy = await AlertFolderUtils.readPointsFile(alertPath);
-
-      // Remove point if present
-      if (pointedBy.contains(npub)) {
-        pointedBy.remove(npub);
-
-        // Write updated points to points.txt
-        await AlertFolderUtils.writePointsFile(alertPath, pointedBy);
-
-        // Update lastModified on report.txt
-        final lastModified = DateTime.now().toUtc().toIso8601String();
-        final reportFile = io.File('$alertPath/report.txt');
-        if (await reportFile.exists()) {
-          var content = await reportFile.readAsString();
-          if (content.contains('LAST_MODIFIED: ')) {
-            content = content.replaceFirst(
-              RegExp(r'LAST_MODIFIED: [^\n]*'),
-              'LAST_MODIFIED: $lastModified',
-            );
-          } else {
-            final lines = content.split('\n');
-            var insertIdx = lines.length;
-            for (var i = 0; i < lines.length; i++) {
-              if (lines[i].trim().isEmpty) {
-                insertIdx = i;
-                break;
-              }
-            }
-            lines.insert(insertIdx, 'LAST_MODIFIED: $lastModified');
-            content = lines.join('\n');
-          }
-          await reportFile.writeAsString(content, flush: true);
-        }
-
-        return shelf.Response.ok(
-          jsonEncode({
-            'success': true,
-            'point_count': pointedBy.length,
-            'last_modified': lastModified,
-          }),
-          headers: headers,
-        );
-      }
-
-      return shelf.Response.ok(
-        jsonEncode({
-          'success': true,
-          'point_count': pointedBy.length,
-          'last_modified': alert.lastModified,
-        }),
-        headers: headers,
-      );
-    } catch (e) {
-      return shelf.Response.internalServerError(
-        body: jsonEncode({'error': e.toString()}),
-        headers: headers,
-      );
-    }
+    return shelf.Response(
+      410,
+      body: jsonEncode({
+        'error': 'Legacy alert feedback endpoint is deprecated',
+        'message': 'Use /api/feedback/alert/{alertId}/point',
+      }),
+      headers: headers,
+    );
   }
 
   /// POST /api/alerts/{alertId}/verify - Verify an alert
@@ -5401,57 +5255,14 @@ class LogApiService {
     String dataDir,
     Map<String, String> headers,
   ) async {
-    try {
-      final body = await request.readAsString();
-      final json = jsonDecode(body) as Map<String, dynamic>;
-      final npub = json['npub'] as String?;
-
-      if (npub == null || npub.isEmpty) {
-        return shelf.Response.badRequest(
-          body: jsonEncode({'error': 'npub is required'}),
-          headers: headers,
-        );
-      }
-
-      final result = await _getAlertByApiId(alertId, dataDir);
-      if (result == null) {
-        return shelf.Response.notFound(
-          jsonEncode({'error': 'Alert not found', 'alertId': alertId}),
-          headers: headers,
-        );
-      }
-
-      var alert = result.$1;
-      final alertPath = result.$2;
-
-      // Add verification if not already verified
-      if (!alert.verifiedBy.contains(npub)) {
-        final updatedVerifiedBy = List<String>.from(alert.verifiedBy)..add(npub);
-        alert = alert.copyWith(
-          verifiedBy: updatedVerifiedBy,
-          verificationCount: updatedVerifiedBy.length,
-          lastModified: DateTime.now().toUtc().toIso8601String(),
-        );
-
-        // Save the updated alert
-        final reportFile = io.File('$alertPath/report.txt');
-        await reportFile.writeAsString(alert.exportAsText(), flush: true);
-      }
-
-      return shelf.Response.ok(
-        jsonEncode({
-          'success': true,
-          'verification_count': alert.verificationCount,
-          'last_modified': alert.lastModified,
-        }),
-        headers: headers,
-      );
-    } catch (e) {
-      return shelf.Response.internalServerError(
-        body: jsonEncode({'error': e.toString()}),
-        headers: headers,
-      );
-    }
+    return shelf.Response(
+      410,
+      body: jsonEncode({
+        'error': 'Legacy alert feedback endpoint is deprecated',
+        'message': 'Use /api/feedback/alert/{alertId}/verify',
+      }),
+      headers: headers,
+    );
   }
 
   /// POST /api/alerts/{alertId}/comment - Add a comment to an alert
@@ -5461,91 +5272,14 @@ class LogApiService {
     String dataDir,
     Map<String, String> headers,
   ) async {
-    try {
-      final body = await request.readAsString();
-      final json = jsonDecode(body) as Map<String, dynamic>;
-      final author = json['author'] as String?;
-      final content = json['content'] as String?;
-      final npub = json['npub'] as String?;
-      final signature = json['signature'] as String?;
-
-      if (author == null || author.isEmpty) {
-        return shelf.Response.badRequest(
-          body: jsonEncode({'error': 'author is required'}),
-          headers: headers,
-        );
-      }
-      if (content == null || content.isEmpty) {
-        return shelf.Response.badRequest(
-          body: jsonEncode({'error': 'content is required'}),
-          headers: headers,
-        );
-      }
-
-      final result = await _getAlertByApiId(alertId, dataDir);
-      if (result == null) {
-        return shelf.Response.notFound(
-          jsonEncode({'error': 'Alert not found', 'alertId': alertId}),
-          headers: headers,
-        );
-      }
-
-      var alert = result.$1;
-      final alertPath = result.$2;
-
-      // Create comment
-      final now = DateTime.now();
-      final created = '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')} ${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}_${now.second.toString().padLeft(2, '0')}';
-      // Generate comment ID: YYYY-MM-DD_HH-MM-SS_XXXXXX
-      final randomId = _generateRandomId(6);
-      final id = '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}_'
-          '${now.hour.toString().padLeft(2, '0')}-${now.minute.toString().padLeft(2, '0')}-${now.second.toString().padLeft(2, '0')}_$randomId';
-
-      // Build comment content
-      final commentBuffer = StringBuffer();
-      commentBuffer.writeln('AUTHOR: $author');
-      commentBuffer.writeln('CREATED: $created');
-      commentBuffer.writeln();
-      commentBuffer.writeln(content);
-      if (npub != null && npub.isNotEmpty) {
-        commentBuffer.writeln();
-        commentBuffer.writeln('--> npub: $npub');
-      }
-      if (signature != null && signature.isNotEmpty) {
-        commentBuffer.writeln('--> signature: $signature');
-      }
-
-      // Create comments directory if needed
-      final commentsDir = io.Directory('$alertPath/comments');
-      if (!await commentsDir.exists()) {
-        await commentsDir.create(recursive: true);
-      }
-
-      // Save comment file
-      final commentFile = io.File('${commentsDir.path}/$id.txt');
-      await commentFile.writeAsString(commentBuffer.toString(), flush: true);
-
-      // Update alert's lastModified
-      alert = alert.copyWith(
-        lastModified: DateTime.now().toUtc().toIso8601String(),
-      );
-      final reportFile = io.File('$alertPath/report.txt');
-      await reportFile.writeAsString(alert.exportAsText(), flush: true);
-
-      return shelf.Response.ok(
-        jsonEncode({
-          'success': true,
-          'comment_id': id,
-          'last_modified': alert.lastModified,
-        }),
-        headers: headers,
-      );
-    } catch (e) {
-      return shelf.Response.internalServerError(
-        body: jsonEncode({'error': e.toString()}),
-        headers: headers,
-      );
-    }
+    return shelf.Response(
+      410,
+      body: jsonEncode({
+        'error': 'Legacy alert feedback endpoint is deprecated',
+        'message': 'Use /api/feedback/alert/{alertId}/comment',
+      }),
+      headers: headers,
+    );
   }
 
   /// Get all alerts from devices directory
@@ -5794,15 +5528,6 @@ class LogApiService {
   }
 
   double _toRadians(double degrees) => degrees * pi / 180;
-
-  /// Generate a random alphanumeric ID
-  String _generateRandomId(int length) {
-    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-    final random = Random();
-    return String.fromCharCodes(
-      Iterable.generate(length, (_) => chars.codeUnitAt(random.nextInt(chars.length))),
-    );
-  }
 
   // ============================================================
   // Debug API - Event Actions (for testing Events API)
@@ -7133,19 +6858,38 @@ class LogApiService {
             );
           }
 
-          // Read points from points.txt
-          var pointedBy = await AlertFolderUtils.readPointsFile(alertPathForPoint);
+          final pointedBy = await AlertFolderUtils.readPointsFile(alertPathForPoint);
           final wasPointed = pointedBy.contains(npub);
+          final event = await AlertFeedbackService().buildReactionEvent(
+            alertToPoint.apiId,
+            wasPointed ? 'unpoint' : 'point',
+            FeedbackFolderUtils.feedbackTypePoints,
+          );
 
-          // Toggle point
-          if (wasPointed) {
-            pointedBy.remove(npub);
-          } else {
-            pointedBy.add(npub);
+          if (event == null) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Unable to sign point feedback',
+              }),
+              headers: headers,
+            );
           }
 
-          // Write updated points to points.txt
-          await AlertFolderUtils.writePointsFile(alertPathForPoint, pointedBy);
+          final isNowActive = await FeedbackFolderUtils.toggleFeedbackEvent(
+            alertPathForPoint,
+            FeedbackFolderUtils.feedbackTypePoints,
+            event,
+          );
+          if (isNowActive == null) {
+            return shelf.Response.internalServerError(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Failed to apply point feedback',
+              }),
+              headers: headers,
+            );
+          }
 
           // Update lastModified on report.txt
           final reportFileForPoint = io.File('$alertPathForPoint/report.txt');
@@ -7181,13 +6925,14 @@ class LogApiService {
             await reportFileForPoint.writeAsString(content);
           }
 
-          LogService().log('LogApiService: ${wasPointed ? "Unpointed" : "Pointed"} alert: $alertId by $npub');
+          final updatedPointedBy = await AlertFolderUtils.readPointsFile(alertPathForPoint);
+          LogService().log('LogApiService: ${isNowActive ? "Pointed" : "Unpointed"} alert: $alertId by $npub');
 
           // Sync to station (best-effort, fire-and-forget)
           if (wasPointed) {
-            AlertFeedbackService().unpointAlertOnStation(alertId, npub).ignore();
+            AlertFeedbackService().unpointAlertOnStation(alertId).ignore();
           } else {
-            AlertFeedbackService().pointAlertOnStation(alertId, npub).ignore();
+            AlertFeedbackService().pointAlertOnStation(alertId).ignore();
           }
 
           return shelf.Response.ok(
@@ -7195,9 +6940,9 @@ class LogApiService {
               'success': true,
               'message': wasPointed ? 'Alert unpointed' : 'Alert pointed',
               'alert_id': alertId,
-              'pointed': !wasPointed,
-              'point_count': pointedBy.length,
-              'pointed_by': pointedBy,
+              'pointed': isNowActive,
+              'point_count': updatedPointedBy.length,
+              'pointed_by': updatedPointedBy,
             }),
             headers: headers,
           );
@@ -7252,29 +6997,41 @@ class LogApiService {
             );
           }
 
-          // Add to verifiedBy (verification can only be added, not toggled)
-          final verifiedBy = List<String>.from(alertToVerify.verifiedBy);
-          final wasVerified = verifiedBy.contains(verifyNpub);
-
-          if (!wasVerified) {
-            verifiedBy.add(verifyNpub);
+          final event = await AlertFeedbackService().buildVerificationEvent(alertToVerify.apiId);
+          if (event == null) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Unable to sign verification feedback',
+              }),
+              headers: headers,
+            );
           }
 
-          // Create updated report using copyWith
+          final added = await FeedbackFolderUtils.addFeedbackEvent(
+            alertPathForVerify,
+            FeedbackFolderUtils.feedbackTypeVerifications,
+            event,
+          );
+
+          final verifiedBy = List<String>.from(alertToVerify.verifiedBy);
+          if (added && !verifiedBy.contains(event.npub)) {
+            verifiedBy.add(event.npub);
+          }
+
           final updatedVerifyAlert = alertToVerify.copyWith(
             verifiedBy: verifiedBy,
             verificationCount: verifiedBy.length,
+            lastModified: added ? DateTime.now().toUtc().toIso8601String() : null,
           );
 
-          // Save to disk
           final reportFileForVerify = io.File('$alertPathForVerify/report.txt');
           await reportFileForVerify.writeAsString(updatedVerifyAlert.exportAsText());
 
-          LogService().log('LogApiService: ${wasVerified ? "Already verified" : "Verified"} alert: $verifyAlertId by $verifyNpub');
+          LogService().log('LogApiService: ${added ? "Verified" : "Already verified"} alert: $verifyAlertId by $verifyNpub');
 
-          // Sync to station (best-effort, fire-and-forget)
-          if (!wasVerified) {
-            AlertFeedbackService().verifyAlertOnStation(verifyAlertId, verifyNpub).catchError((e) {
+          if (added) {
+            AlertFeedbackService().verifyAlertOnStation(verifyAlertId).catchError((e) {
               LogService().log('Failed to sync verify to station: $e');
             });
           }
@@ -7282,7 +7039,7 @@ class LogApiService {
           return shelf.Response.ok(
             jsonEncode({
               'success': true,
-              'message': wasVerified ? 'Alert already verified' : 'Alert verified',
+              'message': added ? 'Alert verified' : 'Alert already verified',
               'alert_id': verifyAlertId,
               'verified': true,
               'verification_count': updatedVerifyAlert.verificationCount,
@@ -7345,36 +7102,54 @@ class LogApiService {
             }
           }
 
-          // Create comments directory
-          final commentsDir = io.Directory('$alertPathForComment/comments');
-          if (!await commentsDir.exists()) {
-            await commentsDir.create(recursive: true);
+          final signature = await AlertFeedbackService().signComment(alertIdForComment, content);
+          final commentId = await FeedbackCommentUtils.writeComment(
+            contentPath: alertPathForComment,
+            author: author,
+            content: content,
+            npub: commentNpub,
+            signature: signature,
+          );
+
+          final commentFilePath = '${FeedbackFolderUtils.buildCommentsPath(alertPathForComment)}/$commentId.txt';
+          String createdStr = '';
+          try {
+            final commentContent = await io.File(commentFilePath).readAsString();
+            final parsed = FeedbackCommentUtils.parseCommentFile(commentContent, commentId);
+            createdStr = parsed.created;
+          } catch (_) {
+            final now = DateTime.now();
+            createdStr = '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')} '
+                '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}_${now.second.toString().padLeft(2, '0')}';
           }
 
-          // Generate comment filename: YYYY-MM-DD_HH-MM-SS_XXXXXX.txt
-          final now = DateTime.now();
-          final randomId = _generateRandomId(6);
-          final fileName = '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}_'
-              '${now.hour.toString().padLeft(2, '0')}-${now.minute.toString().padLeft(2, '0')}-${now.second.toString().padLeft(2, '0')}_$randomId.txt';
-
-          final commentFile = io.File('${commentsDir.path}/$fileName');
-
-          // Build comment content - format must match ReportComment.fromText() expectations
-          final createdStr = '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')} '
-              '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}_${now.second.toString().padLeft(2, '0')}';
-
-          final buffer = StringBuffer();
-          buffer.writeln('AUTHOR: $author');
-          buffer.writeln('CREATED: $createdStr');
-          buffer.writeln();
-          buffer.writeln(content);
-
-          if (commentNpub != null && commentNpub.isNotEmpty) {
-            buffer.writeln();
-            buffer.writeln('--> npub: $commentNpub');
+          final reportFileForComment = io.File('$alertPathForComment/report.txt');
+          if (await reportFileForComment.exists()) {
+            var reportContent = await reportFileForComment.readAsString();
+            final now = DateTime.now().toUtc().toIso8601String();
+            if (reportContent.contains('LAST_MODIFIED: ')) {
+              reportContent = reportContent.replaceFirst(
+                RegExp(r'LAST_MODIFIED: [^\n]*'),
+                'LAST_MODIFIED: $now',
+              );
+            } else {
+              final lines = reportContent.split('\n');
+              var insertIdx = lines.length;
+              var emptyLineCount = 0;
+              for (var i = 0; i < lines.length; i++) {
+                if (lines[i].trim().isEmpty && i > 0 && !lines[i - 1].startsWith('-->')) {
+                  emptyLineCount++;
+                  if (emptyLineCount == 2) {
+                    insertIdx = i;
+                    break;
+                  }
+                }
+              }
+              lines.insert(insertIdx, 'LAST_MODIFIED: $now');
+              reportContent = lines.join('\n');
+            }
+            await reportFileForComment.writeAsString(reportContent);
           }
-
-          await commentFile.writeAsString(buffer.toString());
 
           LogService().log('LogApiService: Added comment to alert: $alertIdForComment by $author');
 
@@ -7393,7 +7168,7 @@ class LogApiService {
               'success': true,
               'message': 'Comment added',
               'alert_id': alertIdForComment,
-              'comment_file': fileName,
+              'comment_file': '$commentId.txt',
               'author': author,
               'created': createdStr,
             }),

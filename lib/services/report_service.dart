@@ -13,7 +13,13 @@ import '../models/report_comment.dart';
 import '../models/report_settings.dart';
 import '../platform/file_system_service.dart';
 import '../util/alert_folder_utils.dart';
+import '../util/feedback_comment_utils.dart';
+import '../util/feedback_folder_utils.dart';
+import '../util/nostr_crypto.dart';
+import '../util/nostr_event.dart';
 import 'log_service.dart';
+import 'profile_service.dart';
+import 'signing_service.dart';
 import 'alert_sharing_service.dart';
 
 /// Service for managing reports
@@ -24,6 +30,9 @@ class ReportService {
 
   String? _collectionPath;
   ReportSettings _settings = ReportSettings();
+  final ProfileService _profileService = ProfileService();
+  final SigningService _signingService = SigningService();
+  bool _signingInitialized = false;
 
   /// Initialize report service for a collection
   Future<void> initializeCollection(String collectionPath) async {
@@ -217,14 +226,19 @@ class ReportService {
                 final content = await reportFile.readAsString();
                 var report = Report.fromText(content, folderName);
 
-                // Read points from points.txt
                 final pointedBy = await AlertFolderUtils.readPointsFile(entity.path);
-                if (pointedBy.isNotEmpty) {
-                  report = report.copyWith(
-                    pointedBy: pointedBy,
-                    pointCount: pointedBy.length,
-                  );
-                }
+                final verifiedByFeedback = await AlertFolderUtils.readVerificationsFile(entity.path);
+                final mergedVerifiedBy = {
+                  ...report.verifiedBy,
+                  ...verifiedByFeedback,
+                }.toList();
+
+                report = report.copyWith(
+                  pointedBy: pointedBy,
+                  pointCount: pointedBy.length,
+                  verifiedBy: mergedVerifiedBy,
+                  verificationCount: mergedVerifiedBy.length,
+                );
 
                 reports.add(report);
               } catch (e) {
@@ -301,14 +315,19 @@ class ReportService {
               final content = await reportFile.readAsString();
               var report = Report.fromText(content, folderName);
 
-              // Read points from points.txt
               final pointedBy = await AlertFolderUtils.readPointsFile(entity.path);
-              if (pointedBy.isNotEmpty) {
-                report = report.copyWith(
-                  pointedBy: pointedBy,
-                  pointCount: pointedBy.length,
-                );
-              }
+              final verifiedByFeedback = await AlertFolderUtils.readVerificationsFile(entity.path);
+              final mergedVerifiedBy = {
+                ...report.verifiedBy,
+                ...verifiedByFeedback,
+              }.toList();
+
+              report = report.copyWith(
+                pointedBy: pointedBy,
+                pointCount: pointedBy.length,
+                verifiedBy: mergedVerifiedBy,
+                verificationCount: mergedVerifiedBy.length,
+              );
 
               return report;
             } catch (e) {
@@ -633,23 +652,57 @@ class ReportService {
 
   /// Verify a report
   Future<void> verify(String folderName, String npub) async {
-    if (npub.isEmpty) return;
+    if (npub.isEmpty || _collectionPath == null) return;
 
     final report = await loadReport(folderName);
     if (report == null) return;
 
-    if (!report.verifiedBy.contains(npub)) {
+    if (report.verifiedBy.contains(npub)) return;
+
+    final isExpired = await _isReportExpired(folderName);
+    final baseDir = isExpired ? 'expired' : 'active';
+    final regionFolder = report.regionFolder;
+    final alertPath = '$_collectionPath/$baseDir/$regionFolder/$folderName';
+
+    if (kIsWeb) {
       final updatedVerifiedBy = List<String>.from(report.verifiedBy)..add(npub);
       final updated = report.copyWith(
         verifiedBy: updatedVerifiedBy,
         verificationCount: updatedVerifiedBy.length,
       );
-      await saveReport(updated, isExpired: await _isReportExpired(folderName));
+      await saveReport(updated, isExpired: isExpired);
+      return;
+    }
+
+    final event = await _buildVerificationEvent(report.apiId);
+    if (event == null) {
+      throw Exception('ReportService: Unable to sign verification');
+    }
+
+    final added = await FeedbackFolderUtils.addFeedbackEvent(
+      alertPath,
+      FeedbackFolderUtils.feedbackTypeVerifications,
+      event,
+    );
+
+    if (added) {
+      final updatedVerifiedBy = List<String>.from(report.verifiedBy);
+      if (!updatedVerifiedBy.contains(event.npub)) {
+        updatedVerifiedBy.add(event.npub);
+      }
+      final updated = report.copyWith(
+        verifiedBy: updatedVerifiedBy,
+        verificationCount: updatedVerifiedBy.length,
+      );
+      await saveReport(updated, isExpired: isExpired, notifyRelays: false);
+      LogService().log('ReportService: Added verification to $folderName');
+    } else {
+      LogService().log('ReportService: Verification not applied for $folderName');
     }
   }
 
   /// Point a report (call attention to it)
-  /// Points are stored in points.txt file (one npub per line)
+  /// Points are stored under feedback/points.txt (signed events).
   Future<void> pointReport(String folderName, String npub) async {
     if (npub.isEmpty || _collectionPath == null) return;
 
@@ -672,19 +725,43 @@ class ReportService {
         pointCount: updatedPointedBy.length,
       );
       await saveReport(updated, isExpired: isExpired);
-    } else {
-      // Native: Write to points.txt
-      final added = await AlertFolderUtils.addPointToFile(alertPath, npub);
-      if (added) {
-        // Update lastModified on the report
-        await saveReport(report, isExpired: isExpired, notifyRelays: false);
-        LogService().log('ReportService: Added point to $folderName');
+      return;
+    }
+
+    final event = await _buildReactionEvent(
+      report.apiId,
+      'point',
+      FeedbackFolderUtils.feedbackTypePoints,
+    );
+
+    if (event == null) {
+      throw Exception('ReportService: Unable to sign point feedback');
+    }
+
+    final added = await FeedbackFolderUtils.addFeedbackEvent(
+      alertPath,
+      FeedbackFolderUtils.feedbackTypePoints,
+      event,
+    );
+
+    if (added) {
+      final updatedPointedBy = List<String>.from(report.pointedBy);
+      if (!updatedPointedBy.contains(event.npub)) {
+        updatedPointedBy.add(event.npub);
       }
+      final updated = report.copyWith(
+        pointedBy: updatedPointedBy,
+        pointCount: updatedPointedBy.length,
+      );
+      await saveReport(updated, isExpired: isExpired, notifyRelays: false);
+      LogService().log('ReportService: Added point to $folderName');
+    } else {
+      LogService().log('ReportService: Point not applied for $folderName');
     }
   }
 
   /// Unpoint a report (remove attention call)
-  /// Points are stored in points.txt file (one npub per line)
+  /// Points are stored under feedback/points.txt (signed events).
   Future<void> unpointReport(String folderName, String npub) async {
     if (npub.isEmpty || _collectionPath == null) return;
 
@@ -707,14 +784,25 @@ class ReportService {
         pointCount: updatedPointedBy.length,
       );
       await saveReport(updated, isExpired: isExpired);
+      return;
+    }
+
+    final removed = await FeedbackFolderUtils.removeFeedbackEvent(
+      alertPath,
+      FeedbackFolderUtils.feedbackTypePoints,
+      npub,
+    );
+
+    if (removed) {
+      final updatedPointedBy = List<String>.from(report.pointedBy)..remove(npub);
+      final updated = report.copyWith(
+        pointedBy: updatedPointedBy,
+        pointCount: updatedPointedBy.length,
+      );
+      await saveReport(updated, isExpired: isExpired, notifyRelays: false);
+      LogService().log('ReportService: Removed point from $folderName');
     } else {
-      // Native: Remove from points.txt
-      final removed = await AlertFolderUtils.removePointFromFile(alertPath, npub);
-      if (removed) {
-        // Update lastModified on the report
-        await saveReport(report, isExpired: isExpired, notifyRelays: false);
-        LogService().log('ReportService: Removed point from $folderName');
-      }
+      LogService().log('ReportService: Point removal not applied for $folderName');
     }
   }
 
@@ -728,44 +816,39 @@ class ReportService {
     final regionFolder = report.regionFolder;
     final isExpired = await _isReportExpired(folderName);
     final baseDir = isExpired ? 'expired' : 'active';
-    final commentsPath = '$_collectionPath/$baseDir/$regionFolder/$folderName/comments';
+    final alertPath = '$_collectionPath/$baseDir/$regionFolder/$folderName';
+    final commentsPath = FeedbackFolderUtils.buildCommentsPath(alertPath);
 
     final comments = <ReportComment>[];
 
     if (kIsWeb) {
       final fs = FileSystemService.instance;
-      if (!await fs.exists(commentsPath)) return [];
-
-      final entities = await fs.list(commentsPath);
-      for (var entity in entities) {
-        if (entity.isFile && entity.path.endsWith('.txt')) {
-          try {
-            final content = await fs.readAsString(entity.path);
-            final fileName = entity.path.split('/').last;
-            final comment = ReportComment.fromText(content, fileName);
-            comments.add(comment);
-          } catch (e) {
-            LogService().log('ReportService: Error loading comment from ${entity.path}: $e');
+      if (await fs.exists(commentsPath)) {
+        final entities = await fs.list(commentsPath);
+        for (var entity in entities) {
+          if (entity.isFile && entity.path.endsWith('.txt')) {
+            try {
+              final content = await fs.readAsString(entity.path);
+              final fileName = entity.path.split('/').last;
+              final comment = ReportComment.fromText(content, fileName);
+              comments.add(comment);
+            } catch (e) {
+              LogService().log('ReportService: Error loading comment from ${entity.path}: $e');
+            }
           }
         }
       }
     } else {
-      final commentsDir = Directory(commentsPath);
-      if (!await commentsDir.exists()) return [];
-
-      final entities = await commentsDir.list().toList();
-      for (var entity in entities) {
-        if (entity is File && entity.path.endsWith('.txt')) {
-          try {
-            final content = await entity.readAsString();
-            final fileName = entity.path.split('/').last;
-            final comment = ReportComment.fromText(content, fileName);
-            comments.add(comment);
-          } catch (e) {
-            LogService().log('ReportService: Error loading comment from ${entity.path}: $e');
-          }
-        }
-      }
+      final feedbackComments = await FeedbackCommentUtils.loadComments(alertPath);
+      comments.addAll(feedbackComments.map((comment) {
+        return ReportComment(
+          id: comment.id,
+          author: comment.author,
+          content: comment.content,
+          created: comment.created,
+          npub: comment.npub,
+        );
+      }));
     }
 
     // Sort by timestamp (oldest first for comments)
@@ -785,38 +868,56 @@ class ReportService {
       throw Exception('Report not found');
     }
 
-    final now = DateTime.now();
-    final created = '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')} ${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}_${now.second.toString().padLeft(2, '0')}';
-    final id = '${now.millisecondsSinceEpoch}';
-
-    final comment = ReportComment(
-      id: id,
-      author: author,
-      content: commentContent,
-      created: created,
-      npub: npub,
-    );
-
     final regionFolder = report.regionFolder;
     final isExpired = await _isReportExpired(folderName);
     final baseDir = isExpired ? 'expired' : 'active';
-    final commentsPath = '$_collectionPath/$baseDir/$regionFolder/$folderName/comments';
-    final commentFilePath = '$commentsPath/$id.txt';
-    final fileContent = comment.exportAsText();
+    final alertPath = '$_collectionPath/$baseDir/$regionFolder/$folderName';
+    final profile = _profileService.getProfile();
+    final resolvedNpub = (npub != null && npub.isNotEmpty) ? npub : profile.npub;
+    final signature = await _signComment(report.apiId, commentContent);
+
+    ReportComment comment;
 
     if (kIsWeb) {
+      final now = DateTime.now();
+      final created = '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')} '
+          '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}_${now.second.toString().padLeft(2, '0')}';
+      final fileName = FeedbackCommentUtils.generateCommentFilename(now, author);
+      final commentContentText = FeedbackCommentUtils.formatCommentFile(
+        author: author,
+        timestamp: created,
+        content: commentContent,
+        npub: resolvedNpub,
+        signature: signature,
+      );
+
+      final commentsPath = FeedbackFolderUtils.buildCommentsPath(alertPath);
+      final commentFilePath = '$commentsPath/$fileName';
       final fs = FileSystemService.instance;
       if (!await fs.exists(commentsPath)) {
         await fs.createDirectory(commentsPath, recursive: true);
       }
-      await fs.writeAsString(commentFilePath, fileContent);
+      await fs.writeAsString(commentFilePath, commentContentText);
+
+      comment = ReportComment(
+        id: fileName.replaceAll('.txt', ''),
+        author: author,
+        content: commentContent,
+        created: created,
+        npub: resolvedNpub,
+      );
     } else {
-      final commentsDir = Directory(commentsPath);
-      if (!await commentsDir.exists()) {
-        await commentsDir.create(recursive: true);
-      }
-      final commentFile = File(commentFilePath);
-      await commentFile.writeAsString(fileContent, flush: true);
+      final commentId = await FeedbackCommentUtils.writeComment(
+        contentPath: alertPath,
+        author: author,
+        content: commentContent,
+        npub: resolvedNpub,
+        signature: signature,
+      );
+
+      final commentFilePath = '${FeedbackFolderUtils.buildCommentsPath(alertPath)}/$commentId.txt';
+      final fileContent = await File(commentFilePath).readAsString();
+      comment = ReportComment.fromText(fileContent, '$commentId.txt');
     }
 
     // Update the report's lastModified timestamp
@@ -898,6 +999,96 @@ class ReportService {
       }
       return false;
     }
+  }
+
+  Future<bool> _ensureSigningInitialized() async {
+    if (_signingInitialized) return true;
+    try {
+      await _signingService.initialize();
+      _signingInitialized = true;
+      return true;
+    } catch (e) {
+      LogService().log('ReportService: Signing initialization failed: $e');
+      return false;
+    }
+  }
+
+  Future<NostrEvent?> _buildReactionEvent(
+    String alertId,
+    String actionName,
+    String feedbackType,
+  ) async {
+    final profile = _profileService.getProfile();
+    if (profile.callsign.isEmpty) return null;
+
+    if (!await _ensureSigningInitialized()) return null;
+    if (!_signingService.canSign(profile)) return null;
+
+    final pubkeyHex = NostrCrypto.decodeNpub(profile.npub);
+    final event = NostrEvent(
+      pubkey: pubkeyHex,
+      createdAt: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      kind: NostrEventKind.reaction,
+      tags: [
+        ['content_type', 'alert'],
+        ['content_id', alertId],
+        ['action', actionName],
+        ['owner', profile.callsign],
+        ['type', feedbackType],
+      ],
+      content: actionName,
+    );
+
+    return _signingService.signEvent(event, profile);
+  }
+
+  Future<NostrEvent?> _buildVerificationEvent(String alertId) async {
+    final profile = _profileService.getProfile();
+    if (profile.callsign.isEmpty) return null;
+
+    if (!await _ensureSigningInitialized()) return null;
+    if (!_signingService.canSign(profile)) return null;
+
+    final pubkeyHex = NostrCrypto.decodeNpub(profile.npub);
+    final event = NostrEvent(
+      pubkey: pubkeyHex,
+      createdAt: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      kind: NostrEventKind.applicationSpecificData,
+      tags: [
+        ['content_type', 'alert'],
+        ['content_id', alertId],
+        ['action', 'verify'],
+        ['owner', profile.callsign],
+      ],
+      content: 'verify',
+    );
+
+    return _signingService.signEvent(event, profile);
+  }
+
+  Future<String?> _signComment(String alertId, String comment) async {
+    final profile = _profileService.getProfile();
+    if (profile.callsign.isEmpty) return null;
+
+    if (!await _ensureSigningInitialized()) return null;
+    if (!_signingService.canSign(profile)) return null;
+
+    final pubkeyHex = NostrCrypto.decodeNpub(profile.npub);
+    final event = NostrEvent(
+      pubkey: pubkeyHex,
+      createdAt: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      kind: NostrEventKind.textNote,
+      tags: [
+        ['content_type', 'alert'],
+        ['content_id', alertId],
+        ['action', 'comment'],
+        ['owner', profile.callsign],
+      ],
+      content: comment,
+    );
+
+    final signed = await _signingService.signEvent(event, profile);
+    return signed?.sig;
   }
 
   /// Calculate distance between two coordinates (Haversine formula)

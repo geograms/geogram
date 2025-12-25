@@ -12,6 +12,7 @@ import 'dart:math' as math;
 
 import '../models/report.dart';
 import '../util/alert_folder_utils.dart';
+import '../util/feedback_comment_utils.dart';
 
 /// Station info for API responses
 class StationInfo {
@@ -193,30 +194,30 @@ class StationAlertApi {
         }
       }
 
-      // Find all comments
+      // Find all comments (feedback/comments)
       final comments = <Map<String, dynamic>>[];
-      final commentsDir = Directory('${alertDir.path}/comments');
-      if (await commentsDir.exists()) {
-        await for (final entity in commentsDir.list()) {
-          if (entity is File && entity.path.endsWith('.txt')) {
-            try {
-              final content = await entity.readAsString();
-              final filename = entity.path.split('/').last;
-              final comment = _parseComment(content, filename);
-              if (comment != null) {
-                comments.add(comment);
-              }
-            } catch (e) {
-              _log('WARN', 'Failed to parse comment: ${entity.path}');
-            }
-          }
-        }
-        // Sort comments by created time (oldest first)
-        comments.sort((a, b) => (a['created'] as String).compareTo(b['created'] as String));
+      final feedbackComments = await FeedbackCommentUtils.loadComments(alertDir.path);
+      for (final comment in feedbackComments) {
+        comments.add({
+          'filename': '${comment.id}.txt',
+          'author': comment.author,
+          'created': comment.created,
+          'content': comment.content,
+          if (comment.npub != null && comment.npub!.isNotEmpty) 'npub': comment.npub,
+          if (comment.signature != null && comment.signature!.isNotEmpty) 'signature': comment.signature,
+        });
       }
 
-      // Read points from points.txt
+      // Sort comments by created time (oldest first)
+      comments.sort((a, b) => (a['created'] as String).compareTo(b['created'] as String));
+
+      // Read points from feedback/points.txt
       final pointedBy = await AlertFolderUtils.readPointsFile(alertDir.path);
+      final verifiedByFeedback = await AlertFolderUtils.readVerificationsFile(alertDir.path);
+      final mergedVerifiedBy = {
+        ...?report?.verifiedBy,
+        ...verifiedByFeedback,
+      }.toList();
 
       // Build file tree for sync
       final fileTree = await _buildFileTree(alertDir.path);
@@ -234,9 +235,9 @@ class StationAlertApi {
         'status': report?.status.name ?? 'open',
         'type': report?.type ?? 'other',
         'point_count': pointedBy.length,
-        'verification_count': report?.verificationCount ?? 0,
+        'verification_count': mergedVerifiedBy.length,
         'pointed_by': pointedBy,
-        'verified_by': report?.verifiedBy ?? [],
+        'verified_by': mergedVerifiedBy,
         'last_modified': report?.lastModified,
         'files': fileTree,
         'photos': photos,
@@ -261,58 +262,11 @@ class StationAlertApi {
 
   /// Handle POST /api/alerts/{alertId}/point
   Future<Map<String, dynamic>> pointAlert(String alertId, String npub, {bool isPoint = true}) async {
-    try {
-      // Find the alert
-      final alertPath = await _findAlertById(alertId);
-      if (alertPath == null) {
-        return {'error': 'Alert not found', 'http_status': 404};
-      }
-
-      final reportFile = File('$alertPath/report.txt');
-      if (!await reportFile.exists()) {
-        return {'error': 'Alert report not found', 'http_status': 404};
-      }
-
-      // Read points from points.txt
-      var pointedBy = await AlertFolderUtils.readPointsFile(alertPath);
-
-      // Update pointedBy
-      bool changed = false;
-      if (isPoint && !pointedBy.contains(npub)) {
-        pointedBy.add(npub);
-        changed = true;
-      } else if (!isPoint && pointedBy.contains(npub)) {
-        pointedBy.remove(npub);
-        changed = true;
-      }
-
-      final lastModified = DateTime.now().toUtc().toIso8601String();
-
-      if (changed) {
-        // Write points to points.txt
-        await AlertFolderUtils.writePointsFile(alertPath, pointedBy);
-
-        // Update LAST_MODIFIED in report.txt
-        final content = await reportFile.readAsString();
-        final newContent = _updateAlertFeedback(content, lastModified: lastModified);
-        await reportFile.writeAsString(newContent, flush: true);
-        _log('INFO', 'Alert ${isPoint ? "pointed" : "unpointed"} by $npub');
-      }
-
-      return {
-        'success': true,
-        'pointed': isPoint ? pointedBy.contains(npub) : !pointedBy.contains(npub),
-        'point_count': pointedBy.length,
-        'last_modified': lastModified,
-      };
-    } catch (e) {
-      _log('ERROR', 'Error handling point: $e');
-      return {
-        'error': 'Internal server error',
-        'message': e.toString(),
-        'http_status': 500,
-      };
-    }
+    return {
+      'error': 'Legacy alert feedback endpoint is deprecated',
+      'message': 'Use /api/feedback/alert/{alertId}/{action}',
+      'http_status': 410,
+    };
   }
 
   // ============================================================
@@ -321,58 +275,11 @@ class StationAlertApi {
 
   /// Handle POST /api/alerts/{alertId}/verify
   Future<Map<String, dynamic>> verifyAlert(String alertId, String npub) async {
-    try {
-      final alertPath = await _findAlertById(alertId);
-      if (alertPath == null) {
-        return {'error': 'Alert not found', 'http_status': 404};
-      }
-
-      final reportFile = File('$alertPath/report.txt');
-      if (!await reportFile.exists()) {
-        return {'error': 'Alert report not found', 'http_status': 404};
-      }
-
-      final content = await reportFile.readAsString();
-      final lines = content.split('\n');
-
-      // Parse current verifiedBy
-      var verifiedBy = <String>[];
-      for (final line in lines) {
-        if (line.startsWith('VERIFIED_BY: ')) {
-          final verifiedByStr = line.substring(13).trim();
-          verifiedBy = verifiedByStr.isEmpty ? [] : verifiedByStr.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
-          break;
-        }
-      }
-
-      bool changed = false;
-      if (!verifiedBy.contains(npub)) {
-        verifiedBy.add(npub);
-        changed = true;
-      }
-
-      final lastModified = DateTime.now().toUtc().toIso8601String();
-
-      if (changed) {
-        final newContent = _updateAlertFeedback(content, verifiedBy: verifiedBy, lastModified: lastModified);
-        await reportFile.writeAsString(newContent, flush: true);
-        _log('INFO', 'Alert verified by $npub');
-      }
-
-      return {
-        'success': true,
-        'verified': true,
-        'verification_count': verifiedBy.length,
-        'last_modified': lastModified,
-      };
-    } catch (e) {
-      _log('ERROR', 'Error handling verify: $e');
-      return {
-        'error': 'Internal server error',
-        'message': e.toString(),
-        'http_status': 500,
-      };
-    }
+    return {
+      'error': 'Legacy alert feedback endpoint is deprecated',
+      'message': 'Use /api/feedback/alert/{alertId}/{action}',
+      'http_status': 410,
+    };
   }
 
   // ============================================================
@@ -387,65 +294,11 @@ class StationAlertApi {
     String? npub,
     String? signature,
   }) async {
-    try {
-      final alertPath = await _findAlertById(alertId);
-      if (alertPath == null) {
-        return {'error': 'Alert not found', 'http_status': 404};
-      }
-
-      // Create comments directory
-      final commentsDir = Directory('$alertPath/comments');
-      if (!await commentsDir.exists()) {
-        await commentsDir.create(recursive: true);
-      }
-
-      // Generate comment ID and filename: YYYY-MM-DD_HH-MM-SS_XXXXXX.txt
-      final now = DateTime.now();
-      final randomId = _generateRandomId(6);
-      final id = '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}_'
-          '${now.hour.toString().padLeft(2, '0')}-${now.minute.toString().padLeft(2, '0')}-${now.second.toString().padLeft(2, '0')}_$randomId';
-      final createdStr = '${now.year.toString().padLeft(4, '0')}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')} ${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}_${now.second.toString().padLeft(2, '0')}';
-
-      // Build comment content
-      final buffer = StringBuffer();
-      buffer.writeln('AUTHOR: $author');
-      buffer.writeln('CREATED: $createdStr');
-      buffer.writeln();
-      buffer.writeln(content);
-      if (npub != null && npub.isNotEmpty) {
-        buffer.writeln('--> npub: $npub');
-      }
-      if (signature != null && signature.isNotEmpty) {
-        buffer.writeln('--> signature: $signature');
-      }
-
-      // Save comment file
-      final commentFile = File('${commentsDir.path}/$id.txt');
-      await commentFile.writeAsString(buffer.toString(), flush: true);
-
-      // Update report last_modified
-      final reportFile = File('$alertPath/report.txt');
-      if (await reportFile.exists()) {
-        final alertContent = await reportFile.readAsString();
-        final newContent = _updateAlertFeedback(alertContent, lastModified: DateTime.now().toUtc().toIso8601String());
-        await reportFile.writeAsString(newContent, flush: true);
-      }
-
-      _log('INFO', 'Comment added to alert by $author');
-
-      return {
-        'success': true,
-        'comment_id': id,
-        'last_modified': DateTime.now().toUtc().toIso8601String(),
-      };
-    } catch (e) {
-      _log('ERROR', 'Error handling comment: $e');
-      return {
-        'error': 'Internal server error',
-        'message': e.toString(),
-        'http_status': 500,
-      };
-    }
+    return {
+      'error': 'Legacy alert feedback endpoint is deprecated',
+      'message': 'Use /api/feedback/alert/{alertId}/comment',
+      'http_status': 410,
+    };
   }
 
   // ============================================================
@@ -592,15 +445,6 @@ class StationAlertApi {
   // Internal helper methods
   // ============================================================
 
-  /// Generate a random alphanumeric ID
-  String _generateRandomId(int length) {
-    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-    final random = math.Random();
-    return String.fromCharCodes(
-      Iterable.generate(length, (_) => chars.codeUnitAt(random.nextInt(chars.length))),
-    );
-  }
-
   /// Load all alerts from devices directory
   Future<List<Map<String, dynamic>>> _loadAllAlerts({bool includeAllStatuses = false}) async {
     final alerts = <Map<String, dynamic>>[];
@@ -731,7 +575,7 @@ class StationAlertApi {
         alert['type'] = line.substring(6).trim();
       } else if (line.startsWith('ADDRESS: ')) {
         alert['address'] = line.substring(9).trim();
-      // Note: POINTED_BY and POINT_COUNT are now stored in points.txt file
+      // Note: POINTED_BY and POINT_COUNT are derived from feedback/points.txt
       } else if (line.startsWith('VERIFIED_BY: ')) {
         final verifiedByStr = line.substring(13).trim();
         alert['verified_by'] = verifiedByStr.isEmpty ? <String>[] : verifiedByStr.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
@@ -758,7 +602,7 @@ class StationAlertApi {
   }
 
   /// Update alert feedback fields in report.txt content
-  /// Note: pointedBy is now stored in points.txt, not in report.txt
+  /// Note: pointedBy is derived from feedback/points.txt, not from report.txt
   String _updateAlertFeedback(
     String content, {
     List<String>? verifiedBy,
@@ -772,7 +616,7 @@ class StationAlertApi {
     bool hasLastModified = false;
 
     for (final line in lines) {
-      // Skip old POINTED_BY and POINT_COUNT fields (now in points.txt)
+      // Skip old POINTED_BY and POINT_COUNT fields (derived from feedback/points.txt)
       if (line.startsWith('POINTED_BY: ') || line.startsWith('POINT_COUNT: ')) {
         continue;
       } else if (verifiedBy != null && line.startsWith('VERIFIED_BY: ')) {
@@ -864,60 +708,6 @@ class StationAlertApi {
 
   double _degreesToRadians(double degrees) {
     return degrees * math.pi / 180;
-  }
-
-  /// Parse comment file content
-  /// Format:
-  /// AUTHOR: callsign
-  /// CREATED: YYYY-MM-DD HH:MM_ss
-  ///
-  /// Comment content here
-  /// --> npub: npub1...
-  /// --> signature: hex_sig
-  Map<String, dynamic>? _parseComment(String content, String filename) {
-    final lines = content.split('\n');
-    String? author;
-    String? created;
-    String? npub;
-    String? signature;
-    final contentLines = <String>[];
-    bool inContent = false;
-
-    for (final line in lines) {
-      if (line.startsWith('AUTHOR: ')) {
-        author = line.substring(8).trim();
-      } else if (line.startsWith('CREATED: ')) {
-        created = line.substring(9).trim();
-      } else if (line.startsWith('--> npub: ')) {
-        npub = line.substring(10).trim();
-      } else if (line.startsWith('--> signature: ')) {
-        signature = line.substring(15).trim();
-      } else if (line.startsWith('-->')) {
-        // Other metadata, skip
-      } else if (line.trim().isEmpty && author != null && created != null && !inContent) {
-        inContent = true;
-      } else if (inContent) {
-        contentLines.add(line);
-      }
-    }
-
-    if (author == null || created == null) {
-      return null;
-    }
-
-    // Remove trailing empty lines from content
-    while (contentLines.isNotEmpty && contentLines.last.trim().isEmpty) {
-      contentLines.removeLast();
-    }
-
-    return {
-      'filename': filename,
-      'author': author,
-      'created': created,
-      'content': contentLines.join('\n').trim(),
-      if (npub != null) 'npub': npub,
-      if (signature != null) 'signature': signature,
-    };
   }
 
   /// Build a file tree structure for an alert folder.

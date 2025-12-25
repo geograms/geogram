@@ -6,6 +6,7 @@ import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:markdown/markdown.dart' as md;
+import 'package:path/path.dart' as path;
 
 import '../services/log_service.dart';
 import '../services/config_service.dart';
@@ -15,11 +16,15 @@ import '../services/storage_config.dart';
 import '../services/direct_message_service.dart';
 import '../services/app_args.dart';
 import '../services/station_alert_api.dart';
+import '../services/station_place_api.dart';
+import '../services/station_feedback_api.dart';
 import '../models/blog_post.dart';
 import '../models/chat_message.dart';
 import '../models/update_settings.dart';
 import '../util/nostr_event.dart';
 import '../util/nostr_crypto.dart';
+import '../util/alert_folder_utils.dart';
+import '../util/feedback_folder_utils.dart';
 import '../util/event_bus.dart';
 import '../version.dart';
 
@@ -354,6 +359,8 @@ class StationServerService {
 
   // Shared alert API handlers
   StationAlertApi? _alertApi;
+  StationPlaceApi? _placeApi;
+  StationFeedbackApi? _feedbackApi;
 
   /// Get the shared alert API handlers (lazy initialization)
   StationAlertApi get alertApi {
@@ -370,6 +377,32 @@ class StationServerService {
       );
     }
     return _alertApi!;
+  }
+
+  /// Get the shared places API handlers (lazy initialization)
+  StationPlaceApi get placeApi {
+    if (_placeApi == null) {
+      final profile = ProfileService().getProfile();
+      _placeApi = StationPlaceApi(
+        dataDir: StorageConfig().baseDir,
+        stationName: _settings.description ?? 'Geogram Station',
+        stationCallsign: profile.callsign,
+        stationNpub: profile.npub,
+        log: (level, message) => LogService().log('StationPlaceApi: [$level] $message'),
+      );
+    }
+    return _placeApi!;
+  }
+
+  /// Get the shared feedback API handlers (lazy initialization)
+  StationFeedbackApi get feedbackApi {
+    if (_feedbackApi == null) {
+      _feedbackApi = StationFeedbackApi(
+        dataDir: StorageConfig().baseDir,
+        log: (level, message) => LogService().log('StationFeedbackApi: [$level] $message'),
+      );
+    }
+    return _feedbackApi!;
   }
 
   bool get isRunning => _running;
@@ -533,6 +566,12 @@ class StationServerService {
       } else if (path == '/api/alerts' || path == '/api/alerts/list') {
         // GET /api/alerts - list alerts (using shared handler)
         await _handleAlertsApi(request);
+      } else if (path == '/api/places' || path == '/api/places/list') {
+        // GET /api/places - list places (using shared handler)
+        await _handlePlacesApi(request);
+      } else if (path.startsWith('/api/feedback/')) {
+        // /api/feedback/{contentType}/{contentId}/...
+        await _handleFeedbackApi(request);
       } else if (path.startsWith('/api/alerts/') && method == 'POST') {
         // POST /api/alerts/{alertId}/{action} - alert feedback (using shared handler)
         await _handleAlertFeedback(request);
@@ -556,9 +595,18 @@ class StationServerService {
       } else if (_isAlertFileFetchPath(path, request.method)) {
         // Handle alert file downloads - serve from local storage
         await _handleAlertFileFetch(request);
+      } else if (_isPlaceFileUploadPath(path, request.method)) {
+        // Handle place file uploads - store locally instead of proxying
+        await _handlePlaceFileUpload(request);
+      } else if (_isPlaceFileFetchPath(path, request.method)) {
+        // Handle place file downloads - serve from local storage
+        await _handlePlaceFileFetch(request);
       } else if (_isAlertDetailsPath(path) && method == 'GET') {
         // GET /{callsign}/api/alerts/{alertId} - alert details (using shared handler)
         await _handleAlertDetails(request);
+      } else if (_isPlaceDetailsPath(path) && method == 'GET') {
+        // GET /api/places/{callsign}/{folderName} - place details (using shared handler)
+        await _handlePlaceDetails(request);
       } else if (_isDeviceProxyPath(path)) {
         // Proxy API requests to connected devices: /{callsign}/api/*
         await _handleDeviceProxyRequest(request);
@@ -1164,8 +1212,8 @@ class StationServerService {
 
   /// Handle alert file upload - store file locally on station
   Future<void> _handleAlertFileUpload(HttpRequest request) async {
-    final path = request.uri.path;
-    final parts = path.split('/').where((p) => p.isNotEmpty).toList();
+    final requestPath = request.uri.path;
+    final parts = requestPath.split('/').where((p) => p.isNotEmpty).toList();
 
     // Parse: /{callsign}/api/alerts/{folderName}/files/{filename}
     if (parts.length < 6) {
@@ -1235,8 +1283,8 @@ class StationServerService {
 
   /// Handle alert file fetch - serve file from local storage
   Future<void> _handleAlertFileFetch(HttpRequest request) async {
-    final path = request.uri.path;
-    final parts = path.split('/').where((p) => p.isNotEmpty).toList();
+    final requestPath = request.uri.path;
+    final parts = requestPath.split('/').where((p) => p.isNotEmpty).toList();
 
     // Parse: /{callsign}/api/alerts/{folderName}/files/{filename}
     if (parts.length < 6) {
@@ -1247,17 +1295,204 @@ class StationServerService {
 
     final callsign = parts[0].toUpperCase();
     final folderName = parts[3];
-    final filename = parts.sublist(5).join('/');
+    final relativePath = parts.sublist(5).join('/');
 
-    LogService().log('Alert file fetch: $callsign / $folderName / $filename');
+    if (relativePath.contains('..') || relativePath.contains('\\') || relativePath.startsWith('/')) {
+      request.response.statusCode = 400;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({
+        'error': 'Invalid path',
+      }));
+      return;
+    }
+
+    LogService().log('Alert file fetch: $callsign / $folderName / $relativePath');
 
     try {
       // Get the alert storage directory
       final storageConfig = StorageConfig();
       final devicesDir = storageConfig.devicesDir;
-      final filePath = '$devicesDir/$callsign/alerts/$folderName/$filename';
+      final alertsRoot = '$devicesDir/$callsign/alerts';
+      final alertPath = await AlertFolderUtils.findAlertPath(alertsRoot, folderName);
+      if (alertPath == null) {
+        request.response.statusCode = 404;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({
+          'error': 'Alert not found',
+          'path': '$alertsRoot/$folderName',
+        }));
+        return;
+      }
+
+      final normalizedAlertPath = path.normalize(alertPath);
+      final resolvedPath = path.normalize(path.join(normalizedAlertPath, relativePath));
+      if (!resolvedPath.startsWith(normalizedAlertPath)) {
+        request.response.statusCode = 400;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'Invalid path'}));
+        return;
+      }
+
+      final file = File(resolvedPath);
+      if (!await file.exists()) {
+        request.response.statusCode = 404;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({
+          'error': 'File not found',
+          'path': resolvedPath,
+        }));
+        return;
+      }
+
+      // Determine content type
+      final ext = path.extension(relativePath).toLowerCase();
+      String contentType = 'application/octet-stream';
+      if (ext == '.jpg' || ext == '.jpeg') {
+        contentType = 'image/jpeg';
+      } else if (ext == '.png') {
+        contentType = 'image/png';
+      } else if (ext == '.gif') {
+        contentType = 'image/gif';
+      } else if (ext == '.webp') {
+        contentType = 'image/webp';
+      } else if (ext == '.txt') {
+        contentType = 'text/plain';
+      } else if (ext == '.json') {
+        contentType = 'application/json';
+      }
+
+      final bytes = await file.readAsBytes();
+      request.response.headers.set('Content-Type', contentType);
+      request.response.headers.set('Content-Length', bytes.length.toString());
+      request.response.add(bytes);
+
+      LogService().log('Alert file served: $resolvedPath (${bytes.length} bytes)');
+    } catch (e) {
+      LogService().log('Error serving alert file: $e');
+      request.response.statusCode = 500;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({
+        'error': e.toString(),
+      }));
+    }
+  }
+
+  /// Check if path is a place file upload path
+  /// Patterns:
+  /// - POST /{callsign}/api/places/files/{path}
+  /// - POST /{callsign}/api/places/{placePath}/files/{path}
+  bool _isPlaceFileUploadPath(String path, String method) {
+    if (method != 'POST') return false;
+    return _parsePlaceFileRequest(path) != null;
+  }
+
+  /// Check if path is a place file fetch path
+  /// Patterns:
+  /// - GET /{callsign}/api/places/files/{path}
+  /// - GET /{callsign}/api/places/{placePath}/files/{path}
+  bool _isPlaceFileFetchPath(String path, String method) {
+    if (method != 'GET') return false;
+    return _parsePlaceFileRequest(path) != null;
+  }
+
+  /// Handle place file upload - store file locally on station
+  Future<void> _handlePlaceFileUpload(HttpRequest request) async {
+    final pathValue = request.uri.path;
+    final parsed = _parsePlaceFileRequest(pathValue);
+    if (parsed == null) {
+      request.response.statusCode = 400;
+      request.response.write('Invalid path');
+      return;
+    }
+
+    final callsign = parsed.callsign;
+    final relativePath = parsed.relativePath;
+
+    if (_isInvalidRelativePath(relativePath)) {
+      request.response.statusCode = 400;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({
+        'success': false,
+        'error': 'Invalid path',
+      }));
+      return;
+    }
+
+    LogService().log('Place file upload: $callsign / $relativePath');
+
+    try {
+      final storageConfig = StorageConfig();
+      final placesRoot = path.join(storageConfig.devicesDir, callsign, 'places');
+      final filePath = path.join(placesRoot, relativePath);
+      final parentDir = Directory(path.dirname(filePath));
+      if (!await parentDir.exists()) {
+        await parentDir.create(recursive: true);
+      }
+
+      final bytes = await request.fold<List<int>>(
+        <int>[],
+        (previous, element) => previous..addAll(element),
+      );
+
+      if (bytes.isEmpty) {
+        request.response.statusCode = 400;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({
+          'success': false,
+          'error': 'Empty file',
+        }));
+        return;
+      }
 
       final file = File(filePath);
+      await file.writeAsBytes(bytes, flush: true);
+
+      request.response.statusCode = 201;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({
+        'success': true,
+        'path': '/$callsign/places/$relativePath',
+        'size': bytes.length,
+      }));
+    } catch (e) {
+      LogService().log('Error saving place file: $e');
+      request.response.statusCode = 500;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({
+        'success': false,
+        'error': e.toString(),
+      }));
+    }
+  }
+
+  /// Handle place file fetch - serve file from local storage
+  Future<void> _handlePlaceFileFetch(HttpRequest request) async {
+    final pathValue = request.uri.path;
+    final parsed = _parsePlaceFileRequest(pathValue);
+    if (parsed == null) {
+      request.response.statusCode = 400;
+      request.response.write('Invalid path');
+      return;
+    }
+
+    final callsign = parsed.callsign;
+    final relativePath = parsed.relativePath;
+
+    if (_isInvalidRelativePath(relativePath)) {
+      request.response.statusCode = 400;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({
+        'error': 'Invalid path',
+      }));
+      return;
+    }
+
+    try {
+      final storageConfig = StorageConfig();
+      final placesRoot = path.join(storageConfig.devicesDir, callsign, 'places');
+      final filePath = path.join(placesRoot, relativePath);
+      final file = File(filePath);
+
       if (!await file.exists()) {
         request.response.statusCode = 404;
         request.response.headers.contentType = ContentType.json;
@@ -1268,18 +1503,17 @@ class StationServerService {
         return;
       }
 
-      // Determine content type
-      final ext = filename.toLowerCase().split('.').last;
+      final ext = path.extension(filePath).toLowerCase();
       String contentType = 'application/octet-stream';
-      if (ext == 'jpg' || ext == 'jpeg') {
+      if (ext == '.jpg' || ext == '.jpeg') {
         contentType = 'image/jpeg';
-      } else if (ext == 'png') {
+      } else if (ext == '.png') {
         contentType = 'image/png';
-      } else if (ext == 'gif') {
+      } else if (ext == '.gif') {
         contentType = 'image/gif';
-      } else if (ext == 'webp') {
+      } else if (ext == '.webp') {
         contentType = 'image/webp';
-      } else if (ext == 'txt') {
+      } else if (ext == '.txt') {
         contentType = 'text/plain';
       }
 
@@ -1287,10 +1521,8 @@ class StationServerService {
       request.response.headers.set('Content-Type', contentType);
       request.response.headers.set('Content-Length', bytes.length.toString());
       request.response.add(bytes);
-
-      LogService().log('Alert file served: $filePath (${bytes.length} bytes)');
     } catch (e) {
-      LogService().log('Error serving alert file: $e');
+      LogService().log('Error serving place file: $e');
       request.response.statusCode = 500;
       request.response.headers.contentType = ContentType.json;
       request.response.write(jsonEncode({
@@ -1304,6 +1536,117 @@ class StationServerService {
     // Pattern: /{callsign}/api/alerts/{alertId} (but NOT with /files/ at the end)
     final regex = RegExp(r'^/([A-Za-z0-9]+)/api/alerts/([^/]+)$');
     return regex.hasMatch(path);
+  }
+
+  /// Check if path matches /api/places/{callsign}/{folderName} for place details
+  bool _isPlaceDetailsPath(String path) {
+    return _parsePlaceDetailsRequest(path) != null;
+  }
+
+  ({String callsign, String relativePath})? _parsePlaceFileRequest(String path) {
+    final parts = path.split('/').where((p) => p.isNotEmpty).toList();
+    if (parts.length < 5) return null;
+    if (parts[1] != 'api' || parts[2] != 'places') return null;
+
+    final callsign = parts[0].toUpperCase();
+
+    // Legacy: /{callsign}/api/places/files/{path}
+    if (parts[3] == 'files') {
+      if (parts.length < 5) return null;
+      return (callsign: callsign, relativePath: parts.sublist(4).join('/'));
+    }
+
+    // New: /{callsign}/api/places/{placePath}/files/{path}
+    final filesIndex = parts.indexOf('files');
+    if (filesIndex <= 3 || filesIndex == parts.length - 1) return null;
+    final placePath = parts.sublist(3, filesIndex).join('/');
+    final filePath = parts.sublist(filesIndex + 1).join('/');
+    if (placePath.isEmpty || filePath.isEmpty) return null;
+
+    return (callsign: callsign, relativePath: '$placePath/$filePath');
+  }
+
+  ({String callsign, String folderName})? _parsePlaceDetailsRequest(String path) {
+    final parts = path.split('/').where((p) => p.isNotEmpty).toList();
+    if (parts.length < 3) return null;
+
+    // /api/places/{callsign}/{folderName}
+    if (parts.length == 4 && parts[0] == 'api' && parts[1] == 'places') {
+      return (callsign: parts[2].toUpperCase(), folderName: parts[3]);
+    }
+
+    // /{callsign}/api/places/{folderName}
+    if (parts.length == 4 && parts[1] == 'api' && parts[2] == 'places') {
+      return (callsign: parts[0].toUpperCase(), folderName: parts[3]);
+    }
+
+    return null;
+  }
+
+  /// Handle GET /api/places - list places using shared handler
+  Future<void> _handlePlacesApi(HttpRequest request) async {
+    final params = request.uri.queryParameters;
+
+    final sinceTimestamp = params['since'] != null
+        ? int.tryParse(params['since']!)
+        : null;
+    final lat = params['lat'] != null
+        ? double.tryParse(params['lat']!)
+        : null;
+    final lon = params['lon'] != null
+        ? double.tryParse(params['lon']!)
+        : null;
+    final radiusKm = params['radius'] != null
+        ? double.tryParse(params['radius']!)
+        : null;
+
+    final result = await placeApi.getPlaces(
+      sinceTimestamp: sinceTimestamp,
+      lat: lat,
+      lon: lon,
+      radiusKm: radiusKm,
+    );
+
+    request.response.headers.contentType = ContentType.json;
+    request.response.write(jsonEncode(result));
+  }
+
+  /// Handle GET /api/places/{callsign}/{folderName} - place details
+  Future<void> _handlePlaceDetails(HttpRequest request) async {
+    final pathValue = request.uri.path;
+    final parsed = _parsePlaceDetailsRequest(pathValue);
+    if (parsed == null) {
+      request.response.statusCode = 400;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({'error': 'Invalid path format'}));
+      return;
+    }
+
+    final callsign = parsed.callsign;
+    final folderName = parsed.folderName;
+
+    final result = await placeApi.getPlaceDetails(callsign, folderName);
+    final httpStatus = result.remove('http_status') as int?;
+
+    if (httpStatus != null) {
+      request.response.statusCode = httpStatus;
+    } else if (result.containsKey('error')) {
+      request.response.statusCode = 404;
+    } else {
+      request.response.statusCode = 200;
+    }
+
+    request.response.headers.contentType = ContentType.json;
+    request.response.write(jsonEncode(result));
+  }
+
+  bool _isInvalidRelativePath(String relativePath) {
+    if (relativePath.isEmpty) return true;
+    if (relativePath.contains('\\')) return true;
+    final normalized = path.normalize(relativePath);
+    if (path.isAbsolute(normalized)) return true;
+    final segments = normalized.split(path.separator);
+    return segments.any((segment) => segment == '..');
   }
 
   /// Handle GET /api/alerts - list alerts using shared handler
@@ -1336,7 +1679,7 @@ class StationServerService {
     }
   }
 
-  /// Handle POST /api/alerts/{alertId}/{action} - alert feedback using shared handler
+  /// Handle POST /api/alerts/{alertId}/{action} - legacy alert feedback (deprecated)
   Future<void> _handleAlertFeedback(HttpRequest request) async {
     try {
       final path = request.uri.path;
@@ -1350,78 +1693,209 @@ class StationServerService {
         return;
       }
 
-      final alertId = pathParts[0];
       final action = pathParts[1].toLowerCase();
+      request.response.statusCode = 410;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({
+        'error': 'Legacy alert feedback endpoint is deprecated',
+        'message': 'Use /api/feedback/alert/{alertId}/{action}',
+        'action': action,
+      }));
+    } catch (e) {
+      LogService().log('Error in alert feedback: $e');
+      request.response.statusCode = 500;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({
+        'error': 'Internal server error',
+        'message': e.toString(),
+      }));
+    }
+  }
 
-      // Read request body
-      final body = await utf8.decodeStream(request);
-      final json = body.isNotEmpty ? jsonDecode(body) as Map<String, dynamic> : <String, dynamic>{};
+  /// Handle /api/feedback/{contentType}/{contentId}/... using shared handler
+  Future<void> _handleFeedbackApi(HttpRequest request) async {
+    try {
+      final segments = request.uri.pathSegments;
+      if (segments.length < 4) {
+        request.response.statusCode = 400;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'Invalid feedback path'}));
+        return;
+      }
+
+      final contentType = segments[2];
+      final contentId = segments[3];
+      final callsign = request.uri.queryParameters['callsign'];
 
       Map<String, dynamic> result;
 
-      switch (action) {
-        case 'point':
-          final npub = json['npub'] as String?;
-          if (npub == null || npub.isEmpty) {
-            request.response.statusCode = 400;
-            request.response.headers.contentType = ContentType.json;
-            request.response.write(jsonEncode({'error': 'Missing npub'}));
-            return;
-          }
-          result = await alertApi.pointAlert(alertId, npub, isPoint: true);
-          break;
-
-        case 'unpoint':
-          final npub = json['npub'] as String?;
-          if (npub == null || npub.isEmpty) {
-            request.response.statusCode = 400;
-            request.response.headers.contentType = ContentType.json;
-            request.response.write(jsonEncode({'error': 'Missing npub'}));
-            return;
-          }
-          result = await alertApi.pointAlert(alertId, npub, isPoint: false);
-          break;
-
-        case 'verify':
-          final npub = json['npub'] as String?;
-          if (npub == null || npub.isEmpty) {
-            request.response.statusCode = 400;
-            request.response.headers.contentType = ContentType.json;
-            request.response.write(jsonEncode({'error': 'Missing npub'}));
-            return;
-          }
-          result = await alertApi.verifyAlert(alertId, npub);
-          break;
-
-        case 'comment':
-          final author = json['author'] as String?;
-          final content = json['content'] as String?;
-          if (author == null || author.isEmpty || content == null || content.isEmpty) {
-            request.response.statusCode = 400;
-            request.response.headers.contentType = ContentType.json;
-            request.response.write(jsonEncode({'error': 'Missing author or content'}));
-            return;
-          }
-          result = await alertApi.addComment(
-            alertId,
-            author,
-            content,
-            npub: json['npub'] as String?,
-            signature: json['signature'] as String?,
+      if (request.method == 'GET') {
+        if (segments.length == 4) {
+          final params = request.uri.queryParameters;
+          final includeComments = params['include_comments'] == 'true';
+          final commentLimit = int.tryParse(params['comment_limit'] ?? '') ?? 20;
+          final commentOffset = int.tryParse(params['comment_offset'] ?? '') ?? 0;
+          result = await feedbackApi.getFeedback(
+            contentType: contentType,
+            contentId: contentId,
+            npub: params['npub'],
+            callsign: callsign,
+            includeComments: includeComments,
+            commentLimit: commentLimit,
+            commentOffset: commentOffset,
           );
-          break;
-
-        default:
+        } else if (segments.length == 5 && segments[4] == 'stats') {
+          result = await feedbackApi.getStats(
+            contentType: contentType,
+            contentId: contentId,
+            callsign: callsign,
+          );
+        } else {
           request.response.statusCode = 400;
           request.response.headers.contentType = ContentType.json;
-          request.response.write(jsonEncode({
-            'error': 'Unknown action: $action',
-            'supported': ['point', 'unpoint', 'verify', 'comment'],
-          }));
+          request.response.write(jsonEncode({'error': 'Invalid feedback path'}));
           return;
+        }
+      } else if (request.method == 'POST') {
+        if (segments.length < 5) {
+          request.response.statusCode = 400;
+          request.response.headers.contentType = ContentType.json;
+          request.response.write(jsonEncode({'error': 'Missing feedback action'}));
+          return;
+        }
+
+        final action = segments[4];
+        final body = await utf8.decodeStream(request);
+        Map<String, dynamic> jsonBody = <String, dynamic>{};
+        if (body.isNotEmpty) {
+          try {
+            jsonBody = jsonDecode(body) as Map<String, dynamic>;
+          } catch (_) {
+            request.response.statusCode = 400;
+            request.response.headers.contentType = ContentType.json;
+            request.response.write(jsonEncode({'error': 'Invalid JSON body'}));
+            return;
+          }
+        }
+
+        switch (action) {
+          case 'like':
+            result = await feedbackApi.toggleFeedback(
+              contentType: contentType,
+              contentId: contentId,
+              feedbackType: FeedbackFolderUtils.feedbackTypeLikes,
+              actionName: 'like',
+              eventJson: jsonBody,
+              callsign: callsign,
+            );
+            break;
+          case 'point':
+            result = await feedbackApi.toggleFeedback(
+              contentType: contentType,
+              contentId: contentId,
+              feedbackType: FeedbackFolderUtils.feedbackTypePoints,
+              actionName: 'point',
+              eventJson: jsonBody,
+              callsign: callsign,
+            );
+            break;
+          case 'dislike':
+            result = await feedbackApi.toggleFeedback(
+              contentType: contentType,
+              contentId: contentId,
+              feedbackType: FeedbackFolderUtils.feedbackTypeDislikes,
+              actionName: 'dislike',
+              eventJson: jsonBody,
+              callsign: callsign,
+            );
+            break;
+          case 'subscribe':
+            result = await feedbackApi.toggleFeedback(
+              contentType: contentType,
+              contentId: contentId,
+              feedbackType: FeedbackFolderUtils.feedbackTypeSubscribe,
+              actionName: 'subscribe',
+              eventJson: jsonBody,
+              callsign: callsign,
+            );
+            break;
+          case 'verify':
+            result = await feedbackApi.verifyContent(
+              contentType: contentType,
+              contentId: contentId,
+              eventJson: jsonBody,
+              callsign: callsign,
+            );
+            break;
+          case 'view':
+            result = await feedbackApi.recordView(
+              contentType: contentType,
+              contentId: contentId,
+              eventJson: jsonBody,
+              callsign: callsign,
+            );
+            break;
+          case 'comment':
+            final author = jsonBody['author'] as String?;
+            final content = jsonBody['content'] as String?;
+            if (author == null || author.isEmpty || content == null || content.isEmpty) {
+              request.response.statusCode = 400;
+              request.response.headers.contentType = ContentType.json;
+              request.response.write(jsonEncode({'error': 'Missing author or content'}));
+              return;
+            }
+            result = await feedbackApi.addComment(
+              contentType: contentType,
+              contentId: contentId,
+              author: author,
+              content: content,
+              npub: jsonBody['npub'] as String?,
+              signature: jsonBody['signature'] as String?,
+              callsign: callsign,
+            );
+            break;
+          case 'react':
+            if (segments.length < 6) {
+              request.response.statusCode = 400;
+              request.response.headers.contentType = ContentType.json;
+              request.response.write(jsonEncode({'error': 'Missing reaction emoji'}));
+              return;
+            }
+            final emoji = segments[5];
+            if (!FeedbackFolderUtils.supportedReactions.contains(emoji)) {
+              request.response.statusCode = 400;
+              request.response.headers.contentType = ContentType.json;
+              request.response.write(jsonEncode({
+                'error': 'Unsupported reaction',
+                'supported_reactions': FeedbackFolderUtils.supportedReactions,
+              }));
+              return;
+            }
+            result = await feedbackApi.toggleFeedback(
+              contentType: contentType,
+              contentId: contentId,
+              feedbackType: emoji,
+              actionName: 'react',
+              eventJson: jsonBody,
+              callsign: callsign,
+            );
+            if (result['success'] == true) {
+              result['reaction'] = emoji;
+            }
+            break;
+          default:
+            request.response.statusCode = 400;
+            request.response.headers.contentType = ContentType.json;
+            request.response.write(jsonEncode({'error': 'Unknown feedback action'}));
+            return;
+        }
+      } else {
+        request.response.statusCode = 405;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'Method not allowed'}));
+        return;
       }
 
-      // Handle HTTP status code (stored in 'http_status' to avoid conflict with alert 'status' field)
       final httpStatus = result.remove('http_status') as int?;
       if (httpStatus != null) {
         request.response.statusCode = httpStatus;
@@ -1434,7 +1908,7 @@ class StationServerService {
       request.response.headers.contentType = ContentType.json;
       request.response.write(jsonEncode(result));
     } catch (e) {
-      LogService().log('Error in alert feedback: $e');
+      LogService().log('Error in feedback API: $e');
       request.response.statusCode = 500;
       request.response.headers.contentType = ContentType.json;
       request.response.write(jsonEncode({
