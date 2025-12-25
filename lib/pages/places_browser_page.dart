@@ -3,7 +3,7 @@
  * License: Apache-2.0
  */
 
-import 'dart:io' show Platform;
+import 'dart:io' show Directory, File, Platform;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -12,7 +12,10 @@ import '../models/place.dart';
 import '../services/place_service.dart';
 import '../services/i18n_service.dart';
 import '../services/log_service.dart';
+import '../services/station_place_service.dart';
+import '../platform/file_image_helper.dart' as file_helper;
 import 'add_edit_place_page.dart';
+import 'photo_viewer_page.dart';
 
 /// Places browser page
 class PlacesBrowserPage extends StatefulWidget {
@@ -33,13 +36,19 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
   final PlaceService _placeService = PlaceService();
   final I18nService _i18n = I18nService();
   final TextEditingController _searchController = TextEditingController();
+  final StationPlaceService _stationPlaceService = StationPlaceService();
 
   List<Place> _allPlaces = [];
   List<Place> _filteredPlaces = [];
+  List<StationPlaceEntry> _stationPlaces = [];
+  List<StationPlaceEntry> _filteredStationPlaces = [];
   Place? _selectedPlace;
+  List<String> _selectedPlacePhotos = [];
   String? _selectedType;
   Set<String> _types = {};
   bool _isLoading = true;
+  bool _isLoadingStationPlaces = false;
+  bool _selectedPlaceIsStation = false;
 
   @override
   void initState() {
@@ -56,6 +65,7 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
 
   Future<void> _initialize() async {
     await _loadPlaces();
+    await _loadStationPlaces();
   }
 
   Future<void> _loadPlaces() async {
@@ -68,14 +78,30 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
       // Sort by name
       places.sort((a, b) => a.name.compareTo(b.name));
 
-      final types = _placeService.getTypes(places);
+      Place? selectedPlace = _selectedPlace;
+      if (!_selectedPlaceIsStation && _selectedPlace != null) {
+        selectedPlace = places.firstWhere(
+          (place) => place.folderPath == _selectedPlace?.folderPath,
+          orElse: () => _selectedPlace!,
+        );
+      }
+
+      if (!mounted) return;
 
       setState(() {
         _allPlaces = places;
-        _filteredPlaces = places;
-        _types = types;
+        _selectedPlace = selectedPlace;
+        _types = _computeTypes();
         _isLoading = false;
       });
+
+      _filterPlaces();
+
+      if (selectedPlace != null) {
+        await _loadPlacePhotos(selectedPlace);
+      } else if (mounted) {
+        setState(() => _selectedPlacePhotos = []);
+      }
     } catch (e) {
       setState(() => _isLoading = false);
       if (mounted) {
@@ -86,28 +112,122 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
     }
   }
 
-  void _filterPlaces() {
+  Future<void> _loadStationPlaces() async {
+    setState(() => _isLoadingStationPlaces = true);
+
+    final result = await _stationPlaceService.fetchPlaces();
+    if (!mounted) return;
+
+    if (!result.success) {
+      setState(() => _isLoadingStationPlaces = false);
+      if (result.error != null && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error loading station places: ${result.error}')),
+        );
+      }
+      return;
+    }
+
+    final entries = result.places;
+    entries.sort((a, b) => a.place.name.compareTo(b.place.name));
+
+    StationPlaceEntry? selectedEntry;
+    Place? selectedPlace = _selectedPlace;
+    var selectedIsStation = _selectedPlaceIsStation;
+    if (selectedIsStation && _selectedPlace?.folderPath != null) {
+      for (final entry in entries) {
+        if (entry.place.folderPath == _selectedPlace?.folderPath) {
+          selectedEntry = entry;
+          break;
+        }
+      }
+      if (selectedEntry != null) {
+        selectedPlace = selectedEntry.place;
+      } else {
+        selectedPlace = null;
+        selectedIsStation = false;
+      }
+    }
+
     setState(() {
-      var filtered = _allPlaces;
-
-      // Apply type filter
-      if (_selectedType != null) {
-        filtered = _placeService.filterByType(filtered, _selectedType);
+      _stationPlaces = entries;
+      _selectedPlace = selectedPlace;
+      _selectedPlaceIsStation = selectedIsStation;
+      _types = _computeTypes();
+      _isLoadingStationPlaces = false;
+      if (selectedPlace == null) {
+        _selectedPlacePhotos = [];
       }
+    });
 
-      // Apply search filter
-      if (_searchController.text.isNotEmpty) {
-        filtered = _placeService.searchPlaces(filtered, _searchController.text);
+    _filterPlaces();
+
+    if (selectedEntry != null) {
+      await _loadPlacePhotos(selectedEntry.place);
+    }
+  }
+
+  Set<String> _computeTypes() {
+    final types = <String>{};
+    types.addAll(_placeService.getTypes(_allPlaces));
+    types.addAll(
+      _placeService.getTypes(
+        _stationPlaces.map((entry) => entry.place).toList(),
+      ),
+    );
+    return types;
+  }
+
+  void _filterPlaces() {
+    final query = _searchController.text;
+    var filteredLocal = _allPlaces;
+    var filteredStation = _stationPlaces;
+
+    // Apply type filter
+    if (_selectedType != null) {
+      filteredLocal = _placeService.filterByType(filteredLocal, _selectedType);
+      filteredStation = filteredStation
+          .where((entry) => entry.place.type == _selectedType)
+          .toList();
+    }
+
+    // Apply search filter
+    if (query.isNotEmpty) {
+      filteredLocal = _placeService.searchPlaces(filteredLocal, query);
+      if (filteredStation.isNotEmpty) {
+        final filteredStationPlaces = _placeService.searchPlaces(
+          filteredStation.map((entry) => entry.place).toList(),
+          query,
+        );
+        final allowed = filteredStationPlaces.toSet();
+        filteredStation = filteredStation
+            .where((entry) => allowed.contains(entry.place))
+            .toList();
       }
+    }
 
-      _filteredPlaces = filtered;
+    setState(() {
+      _filteredPlaces = filteredLocal;
+      _filteredStationPlaces = filteredStation;
     });
   }
 
   void _selectPlace(Place place) {
     setState(() {
       _selectedPlace = place;
+      _selectedPlaceIsStation = false;
+      _selectedPlacePhotos = [];
     });
+    _loadPlacePhotos(place);
+  }
+
+  void _selectStationPlace(StationPlaceEntry entry) {
+    setState(() {
+      _selectedPlace = entry.place;
+      _selectedPlaceIsStation = true;
+      _selectedPlacePhotos = [];
+    });
+    _loadPlacePhotos(entry.place);
   }
 
   void _selectType(String? type) {
@@ -115,6 +235,13 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
       _selectedType = type;
     });
     _filterPlaces();
+  }
+
+  Future<void> _refreshAllPlaces() async {
+    await Future.wait([
+      _loadPlaces(),
+      _loadStationPlaces(),
+    ]);
   }
 
   Future<void> _editPlace(Place place) async {
@@ -129,7 +256,7 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
     );
 
     if (result == true && mounted) {
-      await _loadPlaces();
+      await _refreshAllPlaces();
     }
   }
 
@@ -161,11 +288,48 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
           SnackBar(content: Text(_i18n.t('place_deleted', params: [place.name]))),
         );
         if (_selectedPlace?.folderPath == place.folderPath) {
-          setState(() => _selectedPlace = null);
+          setState(() {
+            _selectedPlace = null;
+            _selectedPlacePhotos = [];
+          });
         }
         await _loadPlaces();
       }
     }
+  }
+
+  Future<void> _loadPlacePhotos(Place place) async {
+    if (kIsWeb || place.folderPath == null) {
+      if (mounted) {
+        setState(() => _selectedPlacePhotos = []);
+      }
+      return;
+    }
+
+    final folderPath = place.folderPath!;
+    try {
+      final photos = await _listPlacePhotos(folderPath);
+
+      if (!mounted || _selectedPlace?.folderPath != folderPath) {
+        return;
+      }
+
+      setState(() => _selectedPlacePhotos = photos);
+    } catch (e) {
+      LogService().log('PlacesBrowserPage: Error loading photos: $e');
+    }
+  }
+
+  void _openPhotoViewer(int index) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => PhotoViewerPage(
+          imagePaths: _selectedPlacePhotos,
+          initialIndex: index,
+        ),
+      ),
+    );
   }
 
   @override
@@ -187,14 +351,14 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
               );
 
               if (result == true) {
-                await _loadPlaces();
+                await _refreshAllPlaces();
               }
             },
             tooltip: _i18n.t('new_place'),
           ),
           IconButton(
             icon: const Icon(Icons.refresh),
-            onPressed: _loadPlaces,
+            onPressed: _refreshAllPlaces,
             tooltip: _i18n.t('refresh'),
           ),
         ],
@@ -233,93 +397,151 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
   }
 
   Widget _buildPlaceList(BuildContext context, {bool isMobileView = false}) {
-    return Column(
-              children: [
-                // Search bar
-                Padding(
-                  padding: const EdgeInsets.all(8.0),
-                  child: TextField(
-                    controller: _searchController,
-                    decoration: InputDecoration(
-                      hintText: _i18n.t('search_places'),
-                      prefixIcon: const Icon(Icons.search),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      suffixIcon: _searchController.text.isNotEmpty
-                          ? IconButton(
-                              icon: const Icon(Icons.clear),
-                              onPressed: () => _searchController.clear(),
-                            )
-                          : null,
-                    ),
-                  ),
-                ),
+    final theme = Theme.of(context);
+    final myPlaces = _filteredPlaces;
+    final stationPlaces = _filteredStationPlaces;
+    final hasFilters = _searchController.text.isNotEmpty || _selectedType != null;
+    final totalPlaces = _allPlaces.length + _stationPlaces.length;
 
-                // Type filter
-                if (_types.isNotEmpty)
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 8.0),
-                    child: SingleChildScrollView(
-                      scrollDirection: Axis.horizontal,
-                      child: Row(
+    return Column(
+      children: [
+        // Search bar
+        Padding(
+          padding: const EdgeInsets.all(8.0),
+          child: TextField(
+            controller: _searchController,
+            decoration: InputDecoration(
+              hintText: _i18n.t('search_places'),
+              prefixIcon: const Icon(Icons.search),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
+              suffixIcon: _searchController.text.isNotEmpty
+                  ? IconButton(
+                      icon: const Icon(Icons.clear),
+                      onPressed: () => _searchController.clear(),
+                    )
+                  : null,
+            ),
+          ),
+        ),
+
+        // Type filter
+        if (_types.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8.0),
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: [
+                  ChoiceChip(
+                    label: Text('${_i18n.t('all')} ($totalPlaces)'),
+                    selected: _selectedType == null,
+                    onSelected: (_) => _selectType(null),
+                  ),
+                  const SizedBox(width: 8),
+                  ..._types.map((type) {
+                    final count = _allPlaces.where((p) => p.type == type).length +
+                        _stationPlaces.where((entry) => entry.place.type == type).length;
+                    return Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: ChoiceChip(
+                        label: Text('$type ($count)'),
+                        selected: _selectedType == type,
+                        onSelected: (_) => _selectType(type),
+                      ),
+                    );
+                  }),
+                ],
+              ),
+            ),
+          ),
+
+        const Divider(height: 1),
+
+        // Place list
+        Expanded(
+          child: _isLoading && myPlaces.isEmpty && stationPlaces.isEmpty && _isLoadingStationPlaces
+              ? const Center(child: CircularProgressIndicator())
+              : (myPlaces.isEmpty && stationPlaces.isEmpty && !_isLoading && !_isLoadingStationPlaces)
+                  ? Center(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          ChoiceChip(
-                            label: Text('${_i18n.t('all')} (${_allPlaces.length})'),
-                            selected: _selectedType == null,
-                            onSelected: (_) => _selectType(null),
+                          const Icon(Icons.place, size: 64, color: Colors.grey),
+                          const SizedBox(height: 16),
+                          Text(
+                            hasFilters ? _i18n.t('no_places_found') : _i18n.t('no_places_yet'),
+                            style: theme.textTheme.titleMedium?.copyWith(
+                              color: Colors.grey,
+                            ),
                           ),
-                          const SizedBox(width: 8),
-                          ..._types.map((type) {
-                            final count = _allPlaces.where((p) => p.type == type).length;
-                            return Padding(
-                              padding: const EdgeInsets.only(right: 8),
-                              child: ChoiceChip(
-                                label: Text('$type ($count)'),
-                                selected: _selectedType == type,
-                                onSelected: (_) => _selectType(type),
+                        ],
+                      ),
+                    )
+                  : RefreshIndicator(
+                      onRefresh: _refreshAllPlaces,
+                      child: ListView(
+                        padding: const EdgeInsets.only(bottom: 12),
+                        children: [
+                          if (myPlaces.isNotEmpty) ...[
+                            _buildSectionHeader(
+                              theme,
+                              icon: Icons.person,
+                              title: _i18n.t('my_places'),
+                              count: myPlaces.length,
+                            ),
+                            ...myPlaces.map(
+                              (place) => _buildPlaceListTile(
+                                place,
+                                isMobileView: isMobileView,
                               ),
-                            );
-                          }),
+                            ),
+                          ],
+                          _buildSectionHeader(
+                            theme,
+                            icon: Icons.cloud,
+                            title: _i18n.t('station_places'),
+                            count: stationPlaces.length,
+                            isLoading: _isLoadingStationPlaces,
+                            onRefresh: _loadStationPlaces,
+                          ),
+                          if (stationPlaces.isNotEmpty)
+                            ...stationPlaces.map(
+                              (entry) => _buildPlaceListTile(
+                                entry.place,
+                                isMobileView: isMobileView,
+                                isReadOnly: true,
+                                subtitleSuffix: entry.callsign,
+                                onTap: () => isMobileView
+                                    ? _selectPlaceMobile(entry.place, isReadOnly: true)
+                                    : _selectStationPlace(entry),
+                              ),
+                            )
+                          else if (!_isLoadingStationPlaces)
+                            Padding(
+                              padding: const EdgeInsets.all(16),
+                              child: Center(
+                                child: Column(
+                                  children: [
+                                    Icon(Icons.cloud_off, size: 32, color: theme.colorScheme.onSurfaceVariant),
+                                    const SizedBox(height: 8),
+                                    Text(
+                                      _i18n.t('no_station_places'),
+                                      style: theme.textTheme.bodyMedium?.copyWith(
+                                        color: theme.colorScheme.onSurfaceVariant,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
                         ],
                       ),
                     ),
-                  ),
-
-                const Divider(height: 1),
-
-                // Place list
-                Expanded(
-                  child: _isLoading
-                      ? const Center(child: CircularProgressIndicator())
-                      : _filteredPlaces.isEmpty
-                          ? Center(
-                              child: Column(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  const Icon(Icons.place, size: 64, color: Colors.grey),
-                                  const SizedBox(height: 16),
-                                  Text(
-                                    _searchController.text.isNotEmpty || _selectedType != null
-                                        ? _i18n.t('no_places_found')
-                                        : _i18n.t('no_places_yet'),
-                                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                                          color: Colors.grey,
-                                        ),
-                                  ),
-                                ],
-                              ),
-                            )
-                          : ListView.builder(
-                              itemCount: _filteredPlaces.length,
-                              itemBuilder: (context, index) {
-                                final place = _filteredPlaces[index];
-                                return _buildPlaceListTile(place, isMobileView: isMobileView);
-                              },
-                            ),
-                ),
-              ],
-            );
+        ),
+      ],
+    );
   }
 
   Widget _buildPlaceDetailPanel() {
@@ -329,40 +551,117 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
           )
         : Align(
             alignment: Alignment.topCenter,
-            child: _buildPlaceDetail(_selectedPlace!),
+            child: _buildPlaceDetail(
+              _selectedPlace!,
+              isReadOnly: _selectedPlaceIsStation,
+            ),
           );
   }
 
-  Widget _buildPlaceListTile(Place place, {bool isMobileView = false}) {
+  Widget _buildSectionHeader(
+    ThemeData theme, {
+    required IconData icon,
+    required String title,
+    required int count,
+    bool isLoading = false,
+    VoidCallback? onRefresh,
+  }) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.3),
+      child: Row(
+        children: [
+          Icon(icon, size: 18, color: theme.colorScheme.primary),
+          const SizedBox(width: 8),
+          Row(
+            children: [
+              Text(
+                title,
+                style: theme.textTheme.titleSmall?.copyWith(
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                decoration: BoxDecoration(
+                  color: theme.colorScheme.primary.withValues(alpha: 0.2),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Text(
+                  '$count',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    fontWeight: FontWeight.bold,
+                    color: theme.colorScheme.primary,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const Spacer(),
+          if (isLoading)
+            const SizedBox(
+              width: 16,
+              height: 16,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            )
+          else if (onRefresh != null)
+            IconButton(
+              icon: const Icon(Icons.refresh, size: 18),
+              onPressed: onRefresh,
+              visualDensity: VisualDensity.compact,
+              tooltip: _i18n.t('refresh'),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPlaceListTile(
+    Place place, {
+    bool isMobileView = false,
+    bool isReadOnly = false,
+    String? subtitleSuffix,
+    VoidCallback? onTap,
+  }) {
+    final subtitleParts = [
+      if (place.type != null) place.type,
+      if (place.address != null) place.address,
+      if (subtitleSuffix != null && subtitleSuffix.isNotEmpty) subtitleSuffix,
+    ];
+
     return ListTile(
       leading: CircleAvatar(
         child: Icon(_getTypeIcon(place.type)),
       ),
       title: Text(place.name),
       subtitle: Text(
-        [
-          if (place.type != null) place.type,
-          if (place.address != null) place.address,
-        ].join(' • '),
+        subtitleParts.join(' • '),
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
       ),
-      selected: _selectedPlace?.folderPath == place.folderPath,
-      onTap: () => isMobileView ? _selectPlaceMobile(place) : _selectPlace(place),
-      trailing: PopupMenuButton(
-        itemBuilder: (context) => [
-          PopupMenuItem(value: 'edit', child: Text(_i18n.t('edit'))),
-          PopupMenuItem(value: 'delete', child: Text(_i18n.t('delete'))),
-        ],
-        onSelected: (value) {
-          if (value == 'edit') _editPlace(place);
-          if (value == 'delete') _deletePlace(place);
-        },
-      ),
+      selected: _selectedPlace?.folderPath == place.folderPath &&
+          _selectedPlaceIsStation == isReadOnly,
+      onTap: onTap ??
+          () => isMobileView
+              ? _selectPlaceMobile(place, isReadOnly: isReadOnly)
+              : _selectPlace(place),
+      trailing: isReadOnly
+          ? const Icon(Icons.cloud)
+          : PopupMenuButton(
+              itemBuilder: (context) => [
+                PopupMenuItem(value: 'edit', child: Text(_i18n.t('edit'))),
+                PopupMenuItem(value: 'delete', child: Text(_i18n.t('delete'))),
+              ],
+              onSelected: (value) {
+                if (value == 'edit') _editPlace(place);
+                if (value == 'delete') _deletePlace(place);
+              },
+            ),
     );
   }
 
-  Future<void> _selectPlaceMobile(Place place) async {
+  Future<void> _selectPlaceMobile(Place place, {bool isReadOnly = false}) async {
     if (!mounted) return;
 
     // Navigate to full-screen detail view
@@ -372,12 +671,13 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
           place: place,
           placeService: _placeService,
           i18n: _i18n,
+          isReadOnly: isReadOnly,
         ),
       ),
     );
 
     // Reload places if changes were made
-    if (result == true && mounted) {
+    if (result == true && mounted && !isReadOnly) {
       await _loadPlaces();
     }
   }
@@ -412,7 +712,11 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
     }
   }
 
-  Widget _buildPlaceDetail(Place place) {
+  Widget _buildPlaceDetail(Place place, {bool isReadOnly = false}) {
+    final currentLang = _i18n.currentLanguage.toUpperCase().split('_').first;
+    final description = place.getDescription(currentLang);
+    final history = place.getHistory(currentLang);
+
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
       child: Column(
@@ -449,6 +753,35 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
 
           const SizedBox(height: 24),
 
+          if (_selectedPlacePhotos.isNotEmpty) ...[
+            Text(
+              _i18n.t('photos'),
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: _selectedPlacePhotos.asMap().entries.map((entry) {
+                final imageWidget = file_helper.buildFileImage(
+                  entry.value,
+                  width: 120,
+                  height: 120,
+                  fit: BoxFit.cover,
+                );
+                if (imageWidget == null) return const SizedBox.shrink();
+                return GestureDetector(
+                  onTap: () => _openPhotoViewer(entry.key),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: imageWidget,
+                  ),
+                );
+              }).toList(),
+            ),
+            const SizedBox(height: 16),
+          ],
+
           // Basic info
           _buildInfoSection(_i18n.t('basic_information'), [
             _buildLocationRow(place),
@@ -464,7 +797,7 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
           ]),
 
           // Description
-          if (place.description.isNotEmpty) ...[
+          if (description.isNotEmpty) ...[
             const SizedBox(height: 16),
             Text(
               _i18n.t('description'),
@@ -474,13 +807,13 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
             Card(
               child: Padding(
                 padding: const EdgeInsets.all(16),
-                child: Text(place.description),
+                child: Text(description),
               ),
             ),
           ],
 
           // History
-          if (place.history != null && place.history!.isNotEmpty) ...[
+          if (history != null && history.isNotEmpty) ...[
             const SizedBox(height: 16),
             Text(
               _i18n.t('history'),
@@ -490,33 +823,33 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
             Card(
               child: Padding(
                 padding: const EdgeInsets.all(16),
-                child: Text(place.history!),
+                child: Text(history),
               ),
             ),
           ],
 
           const SizedBox(height: 24),
 
-          // Actions
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              FilledButton.icon(
-                icon: const Icon(Icons.edit),
-                label: Text(_i18n.t('edit')),
-                onPressed: () => _editPlace(place),
-              ),
-              OutlinedButton.icon(
-                icon: const Icon(Icons.delete),
-                label: Text(_i18n.t('delete')),
-                onPressed: () => _deletePlace(place),
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: Colors.red,
+          if (!isReadOnly)
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                FilledButton.icon(
+                  icon: const Icon(Icons.edit),
+                  label: Text(_i18n.t('edit')),
+                  onPressed: () => _editPlace(place),
                 ),
-              ),
-            ],
-          ),
+                OutlinedButton.icon(
+                  icon: const Icon(Icons.delete),
+                  label: Text(_i18n.t('delete')),
+                  onPressed: () => _deletePlace(place),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.red,
+                  ),
+                ),
+              ],
+            ),
         ],
       ),
     );
@@ -651,12 +984,14 @@ class _PlaceDetailPage extends StatefulWidget {
   final Place place;
   final PlaceService placeService;
   final I18nService i18n;
+  final bool isReadOnly;
 
   const _PlaceDetailPage({
     Key? key,
     required this.place,
     required this.placeService,
     required this.i18n,
+    this.isReadOnly = false,
   }) : super(key: key);
 
   @override
@@ -665,6 +1000,40 @@ class _PlaceDetailPage extends StatefulWidget {
 
 class _PlaceDetailPageState extends State<_PlaceDetailPage> {
   bool _hasChanges = false;
+  List<String> _photos = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadPhotos();
+  }
+
+  Future<void> _loadPhotos() async {
+    if (kIsWeb || widget.place.folderPath == null) {
+      return;
+    }
+
+    try {
+      final photos = await _listPlacePhotos(widget.place.folderPath!);
+
+      if (!mounted) return;
+      setState(() => _photos = photos);
+    } catch (e) {
+      LogService().log('PlaceDetailPage: Error loading photos: $e');
+    }
+  }
+
+  void _openPhotoViewer(int index) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => PhotoViewerPage(
+          imagePaths: _photos,
+          initialIndex: index,
+        ),
+      ),
+    );
+  }
 
   IconData _getTypeIcon(String? type) {
     switch (type?.toLowerCase()) {
@@ -697,6 +1066,8 @@ class _PlaceDetailPageState extends State<_PlaceDetailPage> {
   }
 
   Future<void> _deletePlace() async {
+    if (widget.isReadOnly) return;
+
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -855,6 +1226,10 @@ class _PlaceDetailPageState extends State<_PlaceDetailPage> {
 
   @override
   Widget build(BuildContext context) {
+    final currentLang = widget.i18n.currentLanguage.toUpperCase().split('_').first;
+    final description = widget.place.getDescription(currentLang);
+    final history = widget.place.getHistory(currentLang);
+
     return PopScope(
       canPop: true,
       onPopInvoked: (didPop) {
@@ -902,6 +1277,35 @@ class _PlaceDetailPageState extends State<_PlaceDetailPage> {
 
               const SizedBox(height: 24),
 
+              if (_photos.isNotEmpty) ...[
+                Text(
+                  widget.i18n.t('photos'),
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: _photos.asMap().entries.map((entry) {
+                    final imageWidget = file_helper.buildFileImage(
+                      entry.value,
+                      width: 120,
+                      height: 120,
+                      fit: BoxFit.cover,
+                    );
+                    if (imageWidget == null) return const SizedBox.shrink();
+                    return GestureDetector(
+                      onTap: () => _openPhotoViewer(entry.key),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(8),
+                        child: imageWidget,
+                      ),
+                    );
+                  }).toList(),
+                ),
+                const SizedBox(height: 16),
+              ],
+
               // Basic info
               _buildInfoSection(widget.i18n.t('basic_information'), [
                 _buildLocationRow(),
@@ -917,7 +1321,7 @@ class _PlaceDetailPageState extends State<_PlaceDetailPage> {
               ]),
 
               // Description
-              if (widget.place.description.isNotEmpty) ...[
+              if (description.isNotEmpty) ...[
                 const SizedBox(height: 16),
                 Text(
                   widget.i18n.t('description'),
@@ -927,13 +1331,13 @@ class _PlaceDetailPageState extends State<_PlaceDetailPage> {
                 Card(
                   child: Padding(
                     padding: const EdgeInsets.all(16),
-                    child: Text(widget.place.description),
+                    child: Text(description),
                   ),
                 ),
               ],
 
               // History
-              if (widget.place.history != null && widget.place.history!.isNotEmpty) ...[
+              if (history != null && history.isNotEmpty) ...[
                 const SizedBox(height: 16),
                 Text(
                   widget.i18n.t('history'),
@@ -943,26 +1347,69 @@ class _PlaceDetailPageState extends State<_PlaceDetailPage> {
                 Card(
                   child: Padding(
                     padding: const EdgeInsets.all(16),
-                    child: Text(widget.place.history!),
+                    child: Text(history),
                   ),
                 ),
               ],
 
               const SizedBox(height: 24),
 
-              // Actions
-              FilledButton.icon(
-                icon: const Icon(Icons.delete),
-                label: Text(widget.i18n.t('delete')),
-                onPressed: _deletePlace,
-                style: FilledButton.styleFrom(
-                  backgroundColor: Colors.red,
+              if (!widget.isReadOnly)
+                FilledButton.icon(
+                  icon: const Icon(Icons.delete),
+                  label: Text(widget.i18n.t('delete')),
+                  onPressed: _deletePlace,
+                  style: FilledButton.styleFrom(
+                    backgroundColor: Colors.red,
+                  ),
                 ),
-              ),
             ],
           ),
         ),
       ),
     );
   }
+}
+
+Future<List<String>> _listPlacePhotos(String folderPath) async {
+  final photos = <String>[];
+
+  try {
+    final imagesDir = Directory('$folderPath/images');
+    if (await imagesDir.exists()) {
+      final entities = await imagesDir.list().toList();
+      photos.addAll(
+        entities
+            .whereType<File>()
+            .where((file) => _isImagePath(file.path))
+            .map((file) => file.path),
+      );
+    }
+
+    final rootDir = Directory(folderPath);
+    if (await rootDir.exists()) {
+      final entities = await rootDir.list().toList();
+      for (final entity in entities) {
+        if (entity is! File) continue;
+        if (entity.path.toLowerCase().endsWith('place.txt')) continue;
+        if (_isImagePath(entity.path)) {
+          photos.add(entity.path);
+        }
+      }
+    }
+  } catch (e) {
+    LogService().log('PlacesBrowserPage: Error listing photos: $e');
+  }
+
+  photos.sort();
+  return photos;
+}
+
+bool _isImagePath(String path) {
+  final ext = path.toLowerCase();
+  return ext.endsWith('.jpg') ||
+      ext.endsWith('.jpeg') ||
+      ext.endsWith('.png') ||
+      ext.endsWith('.gif') ||
+      ext.endsWith('.webp');
 }

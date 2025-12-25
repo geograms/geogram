@@ -11,6 +11,7 @@ import 'package:latlong2/latlong.dart';
 import 'package:path/path.dart' as path;
 import '../models/place.dart';
 import '../services/place_service.dart';
+import '../services/place_sharing_service.dart';
 import '../services/profile_service.dart';
 import '../services/i18n_service.dart';
 import '../services/log_service.dart';
@@ -128,10 +129,22 @@ class _AddEditPlacePageState extends State<AddEditPlacePage> {
       _histories = Map<String, String>.from(place.histories);
 
       // If no translations exist, use primary description/history
-      if (_descriptions.isEmpty && place.description.isNotEmpty) {
+      if (_descriptions.isNotEmpty) {
+        if (!_descriptions.containsKey(_descriptionLanguage)) {
+          _descriptionLanguage = _descriptions.containsKey('EN')
+              ? 'EN'
+              : _descriptions.keys.first;
+        }
+      } else if (place.description.isNotEmpty) {
         _descriptions[_descriptionLanguage] = place.description;
       }
-      if (_histories.isEmpty && place.history != null && place.history!.isNotEmpty) {
+      if (_histories.isNotEmpty) {
+        if (!_histories.containsKey(_historyLanguage)) {
+          _historyLanguage = _histories.containsKey('EN')
+              ? 'EN'
+              : _histories.keys.first;
+        }
+      } else if (place.history != null && place.history!.isNotEmpty) {
         _histories[_historyLanguage] = place.history!;
       }
     }
@@ -388,6 +401,12 @@ class _AddEditPlacePageState extends State<AddEditPlacePage> {
         // Save images after place is saved
         await _saveImages(place);
 
+        // Upload place to preferred station (place.txt + photos)
+        if (!kIsWeb) {
+          final sharingService = PlaceSharingService();
+          await sharingService.uploadPlaceToStations(place, widget.collectionPath);
+        }
+
         if (mounted) {
           Navigator.pop(context, true);
         }
@@ -478,6 +497,137 @@ class _AddEditPlacePageState extends State<AddEditPlacePage> {
   @override
   Widget build(BuildContext context) {
     final isEdit = widget.place != null;
+    final currentType = _typeController.text.trim();
+    final typeOptions = List<String>.from(_commonTypes);
+    if (currentType.isNotEmpty && !typeOptions.contains(currentType)) {
+      typeOptions.insert(0, currentType);
+    }
+
+    String formatTypeLabel(String type) {
+      final key = 'place_type_$type';
+      final translation = _i18n.t(key);
+      return translation == key ? type : translation;
+    }
+    final placeNameSection = <Widget>[
+      TextFormField(
+        controller: _nameController,
+        decoration: InputDecoration(
+          labelText: '${_i18n.t('place_name')} *',
+          border: const OutlineInputBorder(),
+          hintText: 'Historic Café Landmark',
+        ),
+        validator: (value) {
+          if (value == null || value.trim().isEmpty) {
+            return _i18n.t('field_required');
+          }
+          return null;
+        },
+      ),
+      const SizedBox(height: 16),
+    ];
+    final locationSection = <Widget>[
+      Text(
+        '${_i18n.t('location')} *',
+        style: Theme.of(context).textTheme.titleMedium?.copyWith(
+              fontWeight: FontWeight.bold,
+            ),
+      ),
+      const SizedBox(height: 8),
+      SizedBox(
+        width: double.infinity,
+        child: FilledButton.icon(
+          onPressed: _openMapPicker,
+          icon: const Icon(Icons.map),
+          label: Text(_i18n.t('pick_location_on_map')),
+          style: FilledButton.styleFrom(
+            padding: const EdgeInsets.symmetric(vertical: 16),
+          ),
+        ),
+      ),
+      const SizedBox(height: 12),
+      if (_latitudeController.text.isNotEmpty && _longitudeController.text.isNotEmpty)
+        Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: Theme.of(context).colorScheme.surfaceContainerHighest,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(
+              color: Theme.of(context).colorScheme.outline.withOpacity(0.3),
+            ),
+          ),
+          child: Row(
+            children: [
+              Icon(
+                Icons.location_on,
+                color: Theme.of(context).colorScheme.primary,
+                size: 20,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  '${_latitudeController.text}, ${_longitudeController.text}',
+                  style: TextStyle(
+                    fontFamily: 'monospace',
+                    fontSize: 13,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
+              IconButton(
+                icon: const Icon(Icons.clear, size: 18),
+                onPressed: () {
+                  setState(() {
+                    _latitudeController.clear();
+                    _longitudeController.clear();
+                  });
+                },
+                tooltip: _i18n.t('clear'),
+                visualDensity: VisualDensity.compact,
+              ),
+            ],
+          ),
+        )
+      else
+        Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: Theme.of(context).colorScheme.errorContainer.withOpacity(0.3),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(
+              color: Theme.of(context).colorScheme.error.withOpacity(0.3),
+            ),
+          ),
+          child: Row(
+            children: [
+              Icon(
+                Icons.warning_amber,
+                color: Theme.of(context).colorScheme.error,
+                size: 20,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  _i18n.t('location_required_hint'),
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: Theme.of(context).colorScheme.error,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      const SizedBox(height: 16),
+    ];
+    final requiredFields = isEdit
+        ? <Widget>[
+            ...placeNameSection,
+            ...locationSection,
+          ]
+        : <Widget>[
+            ...locationSection,
+            ...placeNameSection,
+          ];
 
     return Scaffold(
       appBar: AppBar(
@@ -517,121 +667,7 @@ class _AddEditPlacePageState extends State<AddEditPlacePage> {
             ),
             const SizedBox(height: 16),
 
-            // Place Name
-            TextFormField(
-              controller: _nameController,
-              decoration: InputDecoration(
-                labelText: '${_i18n.t('place_name')} *',
-                border: const OutlineInputBorder(),
-                hintText: 'Historic Café Landmark',
-              ),
-              validator: (value) {
-                if (value == null || value.trim().isEmpty) {
-                  return _i18n.t('field_required');
-                }
-                return null;
-              },
-            ),
-            const SizedBox(height: 16),
-
-            // Location Section
-            Text(
-              '${_i18n.t('location')} *',
-              style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-            const SizedBox(height: 8),
-
-            // Pick Location on Map Button
-            SizedBox(
-              width: double.infinity,
-              child: FilledButton.icon(
-                onPressed: _openMapPicker,
-                icon: const Icon(Icons.map),
-                label: Text(_i18n.t('pick_location_on_map')),
-                style: FilledButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(vertical: 16),
-                ),
-              ),
-            ),
-            const SizedBox(height: 12),
-
-            // Show selected coordinates if available
-            if (_latitudeController.text.isNotEmpty && _longitudeController.text.isNotEmpty)
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(
-                    color: Theme.of(context).colorScheme.outline.withOpacity(0.3),
-                  ),
-                ),
-                child: Row(
-                  children: [
-                    Icon(
-                      Icons.location_on,
-                      color: Theme.of(context).colorScheme.primary,
-                      size: 20,
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        '${_latitudeController.text}, ${_longitudeController.text}',
-                        style: TextStyle(
-                          fontFamily: 'monospace',
-                          fontSize: 13,
-                          color: Theme.of(context).colorScheme.onSurfaceVariant,
-                        ),
-                      ),
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.clear, size: 18),
-                      onPressed: () {
-                        setState(() {
-                          _latitudeController.clear();
-                          _longitudeController.clear();
-                        });
-                      },
-                      tooltip: _i18n.t('clear'),
-                      visualDensity: VisualDensity.compact,
-                    ),
-                  ],
-                ),
-              )
-            else
-              // Show hint when no location selected
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: Theme.of(context).colorScheme.errorContainer.withOpacity(0.3),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(
-                    color: Theme.of(context).colorScheme.error.withOpacity(0.3),
-                  ),
-                ),
-                child: Row(
-                  children: [
-                    Icon(
-                      Icons.warning_amber,
-                      color: Theme.of(context).colorScheme.error,
-                      size: 20,
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        _i18n.t('location_required_hint'),
-                        style: TextStyle(
-                          fontSize: 13,
-                          color: Theme.of(context).colorScheme.error,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            const SizedBox(height: 16),
+            ...requiredFields,
 
             // Radius and Type on same row
             Row(
@@ -643,7 +679,7 @@ class _AddEditPlacePageState extends State<AddEditPlacePage> {
                   child: TextFormField(
                     controller: _radiusController,
                     decoration: InputDecoration(
-                      labelText: '${_i18n.t('radius')} (m) *',
+                      labelText: '${_i18n.t('radius_meters')} *',
                       border: const OutlineInputBorder(),
                       hintText: '5',
                     ),
@@ -664,40 +700,31 @@ class _AddEditPlacePageState extends State<AddEditPlacePage> {
                 // Type (with suggestions)
                 Expanded(
                   flex: 2,
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: TextFormField(
-                          controller: _typeController,
-                          decoration: InputDecoration(
-                            labelText: '${_i18n.t('place_type')} *',
-                            border: const OutlineInputBorder(),
-                            hintText: 'restaurant, monument...',
-                          ),
-                          validator: (value) {
-                            if (value == null || value.trim().isEmpty) {
-                              return _i18n.t('field_required');
-                            }
-                            return null;
-                          },
-                        ),
-                      ),
-                      PopupMenuButton<String>(
-                        icon: const Icon(Icons.arrow_drop_down),
-                        tooltip: _i18n.t('select_type'),
-                        onSelected: (type) {
-                          setState(() {
-                            _typeController.text = type;
-                          });
-                        },
-                        itemBuilder: (context) => _commonTypes.map((type) {
-                          return PopupMenuItem<String>(
-                            value: type,
-                            child: Text(_i18n.t('place_type_$type')),
-                          );
-                        }).toList(),
-                      ),
-                    ],
+                  child: DropdownButtonFormField<String>(
+                    value: currentType.isNotEmpty ? currentType : null,
+                    decoration: InputDecoration(
+                      labelText: '${_i18n.t('place_type')} *',
+                      border: const OutlineInputBorder(),
+                      hintText: _i18n.t('select_type'),
+                    ),
+                    items: typeOptions.map((type) {
+                      return DropdownMenuItem<String>(
+                        value: type,
+                        child: Text(formatTypeLabel(type)),
+                      );
+                    }).toList(),
+                    onChanged: (value) {
+                      setState(() {
+                        _typeController.text = value ?? '';
+                      });
+                    },
+                    validator: (value) {
+                      if (value == null || value.trim().isEmpty) {
+                        return _i18n.t('field_required');
+                      }
+                      return null;
+                    },
+                    isExpanded: true,
                   ),
                 ),
               ],
