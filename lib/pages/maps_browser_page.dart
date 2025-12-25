@@ -68,10 +68,13 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
   bool _isDetectingLocation = false;
   bool _rotationEnabled = true;
   double _currentRotation = 0.0;
+  bool _awaitingProfileLocation = false;
+  bool _hasUserMoved = false;
 
   // Auto-refresh timer (every 5 minutes)
   Timer? _autoRefreshTimer;
   static const Duration _autoRefreshInterval = Duration(minutes: 5);
+  late final VoidCallback _profileListener;
 
   // Radius slider range (logarithmic scale for fine control at lower values)
   static const double _minRadius = 1.0;
@@ -100,6 +103,11 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
       _loadItems(forceRefresh: true);
     };
     _collectionService.collectionsNotifier.addListener(_collectionsListener);
+    _profileListener = () {
+      if (!mounted) return;
+      _handleProfileLocationUpdate();
+    };
+    _profileService.profileNotifier.addListener(_profileListener);
     _initialize();
     _startAutoRefresh();
   }
@@ -107,6 +115,7 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
   @override
   void dispose() {
     _collectionService.collectionsNotifier.removeListener(_collectionsListener);
+    _profileService.profileNotifier.removeListener(_profileListener);
     _autoRefreshTimer?.cancel();
     _tabController.dispose();
     super.dispose();
@@ -158,6 +167,7 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
         _currentZoom = savedZoom ?? _getZoomForRadius(_radiusKm);
         _radiusKm = savedRadius ?? 30.0;
       });
+      _awaitingProfileLocation = false;
       LogService().log('MapsBrowserPage: Restored saved map state');
     } else {
       // Get user's saved location from profile
@@ -167,12 +177,14 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
           _centerPosition = LatLng(userLocation.$1, userLocation.$2);
           _currentZoom = _getZoomForRadius(_radiusKm);
         });
+        _awaitingProfileLocation = false;
       } else {
         // First time - set temporary default and auto-detect location
         setState(() {
           _centerPosition = const LatLng(20, 0);
           _currentZoom = 3.0;
         });
+        _awaitingProfileLocation = true;
 
         // Auto-detect location in background (GPS on Android, IP on Desktop/Web)
         _autoDetectLocationSilently();
@@ -253,6 +265,16 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
         setState(() => _isLoading = false);
       }
     }
+  }
+
+  void _handleProfileLocationUpdate() {
+    if (!_awaitingProfileLocation || _hasUserMoved) return;
+    final profile = _profileService.getProfile();
+    final lat = profile.latitude;
+    final lon = profile.longitude;
+    if (lat == null || lon == null) return;
+
+    _updateLocationAndReload(lat, lon, 'location_detected');
   }
 
   /// Check if the new items differ from current items
@@ -635,6 +657,7 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
     setState(() {
       _centerPosition = LatLng(lat, lon);
       _currentZoom = _getZoomForRadius(_radiusKm);
+      _awaitingProfileLocation = false;
     });
 
     // Move map to new position
@@ -865,6 +888,7 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
                   _currentZoom = newZoom;
                   _radiusKm = newRadius;
                   _currentRotation = position.rotation;
+                  _hasUserMoved = true;
                 });
                 // Save state (debounced by the config service)
                 _saveMapState();
