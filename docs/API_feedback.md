@@ -1,8 +1,8 @@
 # Centralized Feedback API
 
-**Version**: 1.0
-**Status**: Proposal
-**Last Updated**: 2025-12-22
+**Version**: 1.2
+**Status**: Active (implemented)
+**Last Updated**: 2025-12-24
 
 ## Table of Contents
 
@@ -27,7 +27,7 @@
 
 Currently, multiple Geogram apps implement feedback features independently:
 
-- **Alerts**: Has points/likes (`points.txt`), comments, verifications, and subscriptions
+- **Alerts**: Points, comments, verifications, and subscriptions under `feedback/`
 - **Blog**: Has only comments, no likes or reactions
 - **Forum**: Needs comments, likes, and reactions (not yet implemented)
 - **Events**: Will need RSVPs, comments, and reactions (future)
@@ -112,28 +112,29 @@ All content types use the same feedback folder structure:
 ├── {content-file}                 # Main content (report.txt, post.md, etc.)
 ├── files/                          # Attachments (optional)
 └── feedback/                       # NEW: Centralized feedback folder
-    ├── likes.txt                   # One npub per line
-    ├── points.txt                  # One npub per line
-    ├── dislikes.txt                # One npub per line
-    ├── subscribe.txt               # One npub per line
-    ├── verifications.txt           # One npub per line (for verifiable content)
-    ├── heart.txt                   # Emoji reaction: one npub per line
-    ├── thumbs-up.txt               # Emoji reaction: one npub per line
-    ├── fire.txt                    # Emoji reaction: one npub per line
-    ├── celebrate.txt               # Emoji reaction: one npub per line
-    ├── laugh.txt                   # Emoji reaction: one npub per line
-    ├── sad.txt                     # Emoji reaction: one npub per line
-    ├── surprise.txt                # Emoji reaction: one npub per line
+    ├── likes.txt                   # Signed NOSTR events (JSON), one per line
+    ├── points.txt                  # Signed NOSTR events (JSON), one per line
+    ├── dislikes.txt                # Signed NOSTR events (JSON), one per line
+    ├── subscribe.txt               # Signed NOSTR events (JSON), one per line
+    ├── verifications.txt           # Signed NOSTR events (JSON), one per line (add-only)
+    ├── views.txt                   # Signed NOSTR events (JSON), multiple entries
+    ├── heart.txt                   # Emoji reaction: signed events, one per line
+    ├── thumbs-up.txt               # Emoji reaction: signed events, one per line
+    ├── fire.txt                    # Emoji reaction: signed events, one per line
+    ├── celebrate.txt               # Emoji reaction: signed events, one per line
+    ├── laugh.txt                   # Emoji reaction: signed events, one per line
+    ├── sad.txt                     # Emoji reaction: signed events, one per line
+    ├── surprise.txt                # Emoji reaction: signed events, one per line
     └── comments/
-        └── YYYY-MM-DD_HH-MM-SS_XXXXXX.txt
+        └── YYYY-MM-DD_HH-MM-SS_CALLSIGN.txt
 ```
 
 ### Key Principles
 
 1. **Flat Structure**: All feedback files stored directly in `feedback/` folder (no nested subfolders except comments)
-2. **One npub per line**: All feedback files (except comments) use the same simple format
+2. **Signed events per line**: All feedback files (except comments) store signed NOSTR event JSON lines
 3. **Auto-cleanup**: Empty feedback files are automatically deleted
-4. **Backwards Compatible**: Existing alert and blog structures can migrate gradually
+4. **Signature enforcement**: Only verified events are counted; unsigned lines are ignored
 
 ### Example: Blog Post with Feedback
 
@@ -143,22 +144,22 @@ devices/X1ABCD/blog/2025/2025-12-04_hello-everyone/
 ├── files/                          # Optional attachments
 │   └── abc123_document.pdf
 └── feedback/
-    ├── likes.txt                   # 15 npubs (15 likes)
-    ├── heart.txt                   # 8 npubs (8 heart reactions)
-    ├── thumbs-up.txt               # 12 npubs (12 thumbs up)
-    ├── subscribe.txt               # 5 npubs (5 subscribers)
+    ├── likes.txt                   # 15 events (15 likes)
+    ├── heart.txt                   # 8 events (8 heart reactions)
+    ├── thumbs-up.txt               # 12 events (12 thumbs up)
+    ├── subscribe.txt               # 5 events (5 subscribers)
     ├── views.txt                   # 342 view events (87 unique viewers)
     └── comments/
-        ├── 2025-12-04_15-30-45_A1B2C3.txt
-        ├── 2025-12-04_16-20-12_X9Y8Z7.txt
-        └── 2025-12-05_09-15-00_K5L6M7.txt
+        ├── 2025-12-04_15-30-45_X1ABCD.txt
+        ├── 2025-12-04_16-20-12_X1EFGH.txt
+        └── 2025-12-05_09-15-00_X1JKLM.txt
 ```
 
 ---
 
 ## Feedback Types
 
-All feedback files (except comments) use the same format: **one npub per line**.
+All feedback files (except comments) use the same format: **one signed NOSTR event JSON per line**.
 
 ### Standard Feedback Types
 
@@ -238,7 +239,7 @@ Average Views per Viewer: 3.93
 
 ### Emoji Reactions
 
-All emoji reactions follow the same pattern: one npub per line in `{emoji-name}.txt`
+All emoji reactions follow the same pattern: one signed NOSTR event JSON per line in `{emoji-name}.txt`
 
 | Emoji | File | Purpose | Icon |
 |-------|------|---------|------|
@@ -258,16 +259,16 @@ All emoji reactions follow the same pattern: one npub per line in `{emoji-name}.
 ### Comments
 
 **Storage**: `feedback/comments/` subdirectory
-**Filename Format**: `YYYY-MM-DD_HH-MM-SS_XXXXXX.txt`
+**Filename Format**: `YYYY-MM-DD_HH-MM-SS_CALLSIGN.txt`
 - `YYYY-MM-DD`: Date of comment creation
 - `HH-MM-SS`: Time of comment creation (24-hour format)
-- `XXXXXX`: 6-character random alphanumeric ID (uppercase A-Z, 0-9)
+- `CALLSIGN`: Author callsign (e.g., `X1ABCD`)
 
 **Example Filenames**:
 ```
-comments/2025-12-14_15-30-45_A1B2C3.txt
-comments/2025-12-14_16-20-12_X9Y8Z7.txt
-comments/2025-12-15_09-15-00_K5L6M7.txt
+comments/2025-12-14_15-30-45_X1ABCD.txt
+comments/2025-12-14_16-20-12_X1EFGH.txt
+comments/2025-12-15_09-15-00_X1JKLM.txt
 ```
 
 **Purpose**: Detailed text feedback with NOSTR signatures
@@ -281,25 +282,23 @@ comments/2025-12-15_09-15-00_K5L6M7.txt
 
 **Encoding**: UTF-8
 **Line Ending**: Unix (`\n`)
-**Format**: One npub per line
+**Format**: One signed NOSTR event JSON per line
 
 **Example** (`likes.txt`):
 ```
-npub1abc123def456ghi789jkl012mno345pqr678stu901vwx234yz567890
-npub1xyz987wvu654tsr321qpo098nml765kji432hgf210edc098ba765
-npub1qwe456rty789uio012asd345fgh678jkl901zxc234vbn567mnb890
+{"id":"e8c4...","pubkey":"3bf0c63f...","created_at":1734937020,"kind":7,"tags":[["content_type","alert"],["content_id","2025-12-10_broken-sidewalk"],["action","like"],["owner","X1ABCD"],["type","likes"]],"content":"like","sig":"abc123..."}
+{"id":"a9d1...","pubkey":"7aa1e5d9...","created_at":1734937099,"kind":7,"tags":[["content_type","alert"],["content_id","2025-12-10_broken-sidewalk"],["action","like"],["owner","X1EFGH"],["type","likes"]],"content":"like","sig":"def456..."}
 ```
 
 **Rules**:
 - No blank lines
-- No comments or metadata
-- Each line is a complete npub (63 characters: `npub1` + 58 bech32 characters)
+- Each line is a complete NOSTR event JSON object (id, pubkey, created_at, kind, tags, content, sig)
+- Invalid JSON or invalid signatures are ignored
 - File is deleted automatically if it becomes empty
-- Maximum file size: 1 MB (~15,000 npubs)
 
 ### Comment File Format
 
-**File**: `feedback/comments/YYYY-MM-DD_HH-MM-SS_XXXXXX.txt`
+**File**: `feedback/comments/YYYY-MM-DD_HH-MM-SS_CALLSIGN.txt`
 
 **Structure**:
 ```
@@ -339,14 +338,26 @@ This is a great blog post! I really enjoyed reading about your experience.
 **Signature Format**: 128-character hex string (64-byte Schnorr signature)
 
 **Content to Sign** (for comments):
-```
-SHA256(AUTHOR + "\n" + CREATED + "\n" + content_text)
-```
 
-**Verification**:
+Comments use a standard NOSTR text note (kind 1). Clients should sign the full event (pubkey, created_at, kind, tags, content) and store the resulting `sig` alongside the comment.
+
+**Recommended Verification**:
 ```dart
-final contentToSign = SHA256(author + "\n" + created + "\n" + content);
-final isValid = NostrCrypto.schnorrVerify(contentToSign, signature, npub);
+final event = NostrEvent(
+  pubkey: pubkeyHex,
+  createdAt: createdAt,
+  kind: NostrEventKind.textNote,
+  tags: [
+    ['content_type', contentType],
+    ['content_id', contentId],
+    ['action', 'comment'],
+    ['owner', author],
+  ],
+  content: content,
+  sig: signature,
+);
+event.calculateId();
+final isValid = event.verify();
 ```
 
 ---
@@ -366,7 +377,7 @@ GET  /api/feedback/{contentType}/{contentId}
 
 **Pattern**: `POST /api/feedback/{contentType}/{contentId}/{feedbackType}`
 
-Supported feedback types: `like`, `point`, `dislike`, `subscribe`, `verify`, `react/{emoji}`
+Supported feedback types: `like`, `point`, `dislike`, `subscribe`, `react/{emoji}` (toggle) and `verify` (add-only)
 
 #### Like Content
 
@@ -375,8 +386,19 @@ Supported feedback types: `like`, `point`, `dislike`, `subscribe`, `verify`, `re
 **Request Body**:
 ```json
 {
-  "npub": "npub1abc123...",
-  "action": "toggle"
+  "id": "e8c4...",
+  "pubkey": "3bf0c63f...",
+  "created_at": 1734864600,
+  "kind": 7,
+  "tags": [
+    ["content_type", "blog"],
+    ["content_id", "2025-12-04_hello-everyone"],
+    ["action", "like"],
+    ["owner", "X1ABCD"],
+    ["type", "likes"]
+  ],
+  "content": "like",
+  "sig": "abc123..."
 }
 ```
 
@@ -421,8 +443,18 @@ Same format as `/like`, returns `disliked` and `dislike_count`.
 **Request Body**:
 ```json
 {
-  "npub": "npub1abc123...",
-  "action": "subscribe"
+  "id": "a9d1...",
+  "pubkey": "7aa1e5d9...",
+  "created_at": 1734864800,
+  "kind": 30078,
+  "tags": [
+    ["content_type", "forum"],
+    ["content_id", "2025-12-01_discussion-thread"],
+    ["action", "subscribe"],
+    ["owner", "X1ABCD"]
+  ],
+  "content": "subscribe",
+  "sig": "def456..."
 }
 ```
 
@@ -445,8 +477,19 @@ Supported emojis: `heart`, `thumbs-up`, `fire`, `celebrate`, `laugh`, `sad`, `su
 **Request Body**:
 ```json
 {
-  "npub": "npub1abc123...",
-  "action": "toggle"
+  "id": "f2b7...",
+  "pubkey": "3bf0c63f...",
+  "created_at": 1734865000,
+  "kind": 7,
+  "tags": [
+    ["content_type", "alert"],
+    ["content_id", "2025-12-14_broken-sidewalk"],
+    ["action", "react"],
+    ["owner", "X1ABCD"],
+    ["type", "heart"]
+  ],
+  "content": "heart",
+  "sig": "789xyz..."
 }
 ```
 
@@ -597,7 +640,7 @@ final response = await http.post(
 ```json
 {
   "success": true,
-  "comment_id": "2025-12-22_10-30-45_A1B2C3",
+  "comment_id": "2025-12-22_10-30-45_X1ABCD",
   "timestamp": "2025-12-22T10:30:45Z"
 }
 ```
@@ -649,7 +692,7 @@ final response = await http.post(
   },
   "comments": [
     {
-      "id": "2025-12-22_10-30-45_A1B2C3",
+      "id": "2025-12-22_10-30-45_X1ABCD",
       "author": "X1ABCD",
       "created": "2025-12-22 10:30_45",
       "content": "Great post!",
@@ -665,14 +708,14 @@ final response = await http.post(
 
 ## NOSTR Message Format
 
-Feedback actions can optionally be wrapped in NOSTR events for cryptographic verification and relay propagation.
+Feedback actions are signed NOSTR events for cryptographic verification and relay propagation.
 
 ### Event Kinds
 
 | Action | NOSTR Kind | Description |
 |--------|------------|-------------|
-| Like, Point, Dislike | 7 | Reaction event (NIP-25) |
-| Comment | 1 | Text note (NIP-01) |
+| Like, Point, Dislike, React | 7 | Reaction event (NIP-25) |
+| Comment, View | 1 | Text note (NIP-01) |
 | Subscribe, Verify | 30078 | Application-specific data (NIP-78) |
 
 ### Event Structure for Reactions
@@ -685,13 +728,13 @@ Feedback actions can optionally be wrapped in NOSTR events for cryptographic ver
   "pubkey": "{hex_pubkey}",
   "created_at": 1734864600,
   "tags": [
-    ["e", "{content_event_id}", "", "root"],
     ["content_type", "blog"],
     ["content_id", "2025-12-04_hello-everyone"],
     ["action", "like"],
-    ["owner", "X1ABCD"]
+    ["owner", "X1ABCD"],
+    ["type", "likes"]
   ],
-  "content": "+",
+  "content": "like",
   "sig": "{hex_signature}"
 }
 ```
@@ -708,6 +751,7 @@ Feedback actions can optionally be wrapped in NOSTR events for cryptographic ver
   "tags": [
     ["content_type", "blog"],
     ["content_id", "2025-12-04_hello-everyone"],
+    ["action", "comment"],
     ["owner", "X1ABCD"]
   ],
   "content": "This is my comment...",
@@ -725,13 +769,12 @@ Feedback actions can optionally be wrapped in NOSTR events for cryptographic ver
   "pubkey": "{hex_pubkey}",
   "created_at": 1734864600,
   "tags": [
-    ["d", "feedback:blog:2025-12-04_hello-everyone"],
     ["content_type", "blog"],
     ["content_id", "2025-12-04_hello-everyone"],
     ["action", "subscribe"],
     ["owner", "X1ABCD"]
   ],
-  "content": "",
+  "content": "subscribe",
   "sig": "{hex_signature}"
 }
 ```
@@ -742,10 +785,11 @@ All feedback events MUST include these tags:
 
 - `["content_type", "{type}"]` - The content type (blog, alert, etc.)
 - `["content_id", "{id}"]` - The content identifier
-- `["owner", "{callsign}"]` - The content owner's callsign
+- `["action", "{action}"]` - The feedback action (like, comment, view, verify, etc.)
+- `["owner", "{callsign}"]` - The feedback author's callsign
 
 Optional tags:
-- `["action", "{action}"]` - The feedback action (like, subscribe, etc.)
+- `["type", "{feedbackType}"]` - The feedback file target (likes, points, heart, etc.)
 - `["e", "{event_id}"]` - Reference to original content event (if available)
 
 ---
@@ -763,7 +807,7 @@ Optional tags:
 
 ### NOSTR Signature Verification
 
-**All feedback operations SHOULD include NOSTR signatures** for:
+**All feedback actions except comments MUST include NOSTR signatures** for:
 - Audit trail and accountability
 - Spam prevention
 - Future relay synchronization
@@ -775,6 +819,8 @@ Optional tags:
 3. Convert npub to hex public key
 4. Verify using BIP-340 Schnorr signature verification
 5. Accept if valid, reject with 422 if invalid
+
+Comments SHOULD include signatures as well, but the server stores unsigned comments if provided.
 
 ### Rate Limiting
 
@@ -806,8 +852,19 @@ POST /api/feedback/blog/2025-12-04_hello-everyone/like
 Content-Type: application/json
 
 {
-  "npub": "npub1abc123def456ghi789jkl012mno345pqr678stu901vwx234yz567890",
-  "action": "toggle"
+  "id": "e8c4...",
+  "pubkey": "3bf0c63fcb93463407af97a5e5ee64fa883d107ef9e558472c4eb9aaaefa459d",
+  "created_at": 1734864600,
+  "kind": 7,
+  "tags": [
+    ["content_type", "blog"],
+    ["content_id", "2025-12-04_hello-everyone"],
+    ["action", "like"],
+    ["owner", "X1ABCD"],
+    ["type", "likes"]
+  ],
+  "content": "like",
+  "sig": "abc123..."
 }
 ```
 
@@ -830,8 +887,19 @@ POST /api/feedback/alert/2025-12-14_broken-sidewalk/react/heart
 Content-Type: application/json
 
 {
-  "npub": "npub1xyz987wvu654tsr321qpo098nml765kji432hgf210edc098ba765",
-  "action": "toggle"
+  "id": "f2b7...",
+  "pubkey": "7aa1e5d9b9cbfd4a8b2e1d5b0c8f2a3c9b8b0d3a1c2d4e5f6a7b8c9d0e1f2a3b",
+  "created_at": 1734864700,
+  "kind": 7,
+  "tags": [
+    ["content_type", "alert"],
+    ["content_id", "2025-12-14_broken-sidewalk"],
+    ["action", "react"],
+    ["owner", "X1EFGH"],
+    ["type", "heart"]
+  ],
+  "content": "heart",
+  "sig": "789xyz..."
 }
 ```
 
@@ -866,7 +934,7 @@ Content-Type: application/json
 ```json
 {
   "success": true,
-  "comment_id": "2025-12-22_10-32-15_K9M2N5",
+  "comment_id": "2025-12-22_10-32-15_X1ABCD",
   "timestamp": "2025-12-22T10:32:15Z"
 }
 ```
@@ -879,8 +947,18 @@ POST /api/feedback/forum/2025-12-01_discussion-thread/subscribe
 Content-Type: application/json
 
 {
-  "npub": "npub1qwe456rty789uio012asd345fgh678jkl901zxc234vbn567mnb890",
-  "action": "subscribe"
+  "id": "a9d1...",
+  "pubkey": "9f1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c",
+  "created_at": 1734864800,
+  "kind": 30078,
+  "tags": [
+    ["content_type", "forum"],
+    ["content_id", "2025-12-01_discussion-thread"],
+    ["action", "subscribe"],
+    ["owner", "X1JKLM"]
+  ],
+  "content": "subscribe",
+  "sig": "def456..."
 }
 ```
 
@@ -977,7 +1055,7 @@ GET /api/feedback/blog/2025-12-04_hello-everyone?npub=npub1abc123...&include_com
   },
   "comments": [
     {
-      "id": "2025-12-22_10-32-15_K9M2N5",
+      "id": "2025-12-22_10-32-15_X1ABCD",
       "author": "X1ABCD",
       "created": "2025-12-22 10:32_15",
       "content": "Great insights! I especially liked the part about mesh networking.",
@@ -985,7 +1063,7 @@ GET /api/feedback/blog/2025-12-04_hello-everyone?npub=npub1abc123...&include_com
       "has_signature": true
     },
     {
-      "id": "2025-12-21_14-20-30_A5B6C7",
+      "id": "2025-12-21_14-20-30_Y2EFGH",
       "author": "Y2EFGH",
       "created": "2025-12-21 14:20_30",
       "content": "Thanks for sharing!",
@@ -1038,10 +1116,10 @@ All errors return this structure:
 {
   "success": false,
   "error": "missing_field",
-  "message": "Required field 'npub' is missing",
+  "message": "Required field 'author' is missing",
   "details": {
-    "field": "npub",
-    "suggestion": "Include 'npub' field in request body"
+    "field": "author",
+    "suggestion": "Include 'author' field in request body"
   },
   "timestamp": "2025-12-22T10:30:00Z"
 }
@@ -1097,157 +1175,19 @@ All errors return this structure:
 
 ## Migration Guide
 
-### Overview
-
-Existing apps can migrate incrementally without breaking changes:
-
-**Phase 1** (Months 1-3): Dual-read support, write to new structure
-**Phase 2** (Months 3-6): Run migration scripts, continue dual-read
-**Phase 3** (Month 6+): New structure only, remove dual-read code
-
-### Migration from Alert System
-
-Current alert structure:
-```
-alerts/active/38.7_-9.1/2025-12-14_broken-sidewalk/
-├── report.txt
-├── points.txt                    # Old location
-├── comments/                     # Old location
-│   └── 2025-12-14_22-15-23_CALLSIGN.txt
-└── .reactions/
-    └── report.txt
-```
-
-New structure:
-```
-alerts/active/38.7_-9.1/2025-12-14_broken-sidewalk/
-├── report.txt
-└── feedback/                     # NEW
-    ├── points.txt                # Moved from root
-    ├── verifications.txt         # Extracted from report.txt VERIFIED_BY field
-    ├── subscribe.txt             # Extracted from report.txt SUBSCRIBERS field
-    └── comments/                 # Moved from root
-        └── 2025-12-14_22-15-23_CALLSIGN.txt
-```
-
-**Migration Script**:
-```bash
-#!/bin/bash
-# migrate-alert-feedback.sh
-
-ALERT_PATH="$1"
-
-# Create feedback folder
-mkdir -p "$ALERT_PATH/feedback"
-
-# Move points.txt
-if [ -f "$ALERT_PATH/points.txt" ]; then
-  mv "$ALERT_PATH/points.txt" "$ALERT_PATH/feedback/points.txt"
-fi
-
-# Move comments folder
-if [ -d "$ALERT_PATH/comments" ]; then
-  mv "$ALERT_PATH/comments" "$ALERT_PATH/feedback/comments"
-fi
-
-# Extract VERIFIED_BY from report.txt to verifications.txt
-if [ -f "$ALERT_PATH/report.txt" ]; then
-  grep "^VERIFIED_BY:" "$ALERT_PATH/report.txt" | \
-    sed 's/^VERIFIED_BY: //' | \
-    tr ',' '\n' | \
-    tr -d ' ' | \
-    grep -v '^$' > "$ALERT_PATH/feedback/verifications.txt"
-fi
-
-# Extract SUBSCRIBERS from report.txt to subscribe.txt
-if [ -f "$ALERT_PATH/report.txt" ]; then
-  grep "^SUBSCRIBERS:" "$ALERT_PATH/report.txt" | \
-    sed 's/^SUBSCRIBERS: //' | \
-    tr ',' '\n' | \
-    tr -d ' ' | \
-    grep -v '^$' > "$ALERT_PATH/feedback/subscribe.txt"
-fi
-
-echo "Migration complete for $ALERT_PATH"
-```
-
-### Migration from Blog System
-
-Current blog structure:
-```
-blog/2025/2025-12-04_hello-everyone/
-├── post.md
-└── comments/                     # Old location
-    └── 2025-12-04_15-30-45_CALLSIGN.txt
-```
-
-New structure:
-```
-blog/2025/2025-12-04_hello-everyone/
-├── post.md
-└── feedback/                     # NEW
-    ├── likes.txt                 # NEW (not in old structure)
-    ├── heart.txt                 # NEW
-    └── comments/                 # Moved from root
-        └── 2025-12-04_15-30-45_CALLSIGN.txt
-```
-
-**Migration Script**:
-```bash
-#!/bin/bash
-# migrate-blog-feedback.sh
-
-BLOG_PATH="$1"
-
-# Create feedback folder
-mkdir -p "$BLOG_PATH/feedback"
-
-# Move comments folder
-if [ -d "$BLOG_PATH/comments" ]; then
-  mv "$BLOG_PATH/comments" "$BLOG_PATH/feedback/comments"
-fi
-
-echo "Migration complete for $BLOG_PATH"
-```
-
-### Dual-Read Implementation
-
-During migration, implement dual-read to support both old and new structures:
-
-```dart
-// Example: Read points with backwards compatibility
-Future<List<String>> readPoints(String contentPath) async {
-  // Try new location first
-  final newPath = '$contentPath/feedback/points.txt';
-  if (await File(newPath).exists()) {
-    return FeedbackFolderUtils.readFeedbackFile(contentPath, 'points');
-  }
-
-  // Fall back to old location (alerts only)
-  final oldPath = '$contentPath/points.txt';
-  if (await File(oldPath).exists()) {
-    final content = await File(oldPath).readAsString();
-    return content.split('\n')
-        .map((line) => line.trim())
-        .where((line) => line.isNotEmpty)
-        .toList();
-  }
-
-  return [];
-}
-```
-
-### Migration Timeline
-
-| Phase | Duration | Actions |
-|-------|----------|---------|
-| **Phase 1** | Months 1-3 | - Deploy dual-read code<br>- Write new feedback to `feedback/` folder<br>- Continue reading from old locations |
-| **Phase 2** | Months 3-6 | - Run migration scripts on all content<br>- Continue dual-read for safety<br>- Monitor for issues |
-| **Phase 3** | Month 6+ | - Remove dual-read code<br>- Read only from `feedback/` folder<br>- Delete old feedback files after verification |
+The centralized feedback API assumes data lives under `{contentPath}/feedback/` and uses signed NOSTR event files. Legacy feedback locations are out of scope for this specification; new apps should not implement dual-read logic.
 
 ---
 
 ## Implementation Notes
+
+### Repository Implementation
+
+The centralized feedback system is implemented in the shared libraries and API handlers:
+
+- **Server endpoints**: `lib/services/station_feedback_api.dart` (wired in `lib/services/station_server_service.dart` and `lib/cli/pure_station.dart`)
+- **Storage utilities**: `lib/util/feedback_folder_utils.dart` and `lib/util/feedback_comment_utils.dart`
+- **Client usage**: `lib/services/alert_feedback_service.dart` and `lib/services/blog_comment_service.dart` post signed events to `/api/feedback/...`
 
 ### Concurrency & Race Condition Prevention
 
@@ -1671,370 +1611,43 @@ Future<void> generateViewAnalytics(String postId) async {
 
 ---
 
-## Comment Signing and Verification
+## Comment Handling
 
 ### Overview
 
-All comments in the Geogram system **MUST** be cryptographically signed using NOSTR (NIP-01) to prevent forgery and ensure authenticity. A generic `CommentUtils` library (`lib/util/comment_utils.dart`) provides reusable methods for creating, signing, and verifying comments across all apps (blog, alerts, forum, events, etc.).
+Comments are stored under `{contentPath}/feedback/comments` and written via `FeedbackCommentUtils` (`lib/util/feedback_comment_utils.dart`). Signatures are optional but recommended; the station stores `npub` and `signature` without enforcing verification.
 
-### Why NOSTR Signatures are Required
+### Recommended Signing Workflow
 
-1. **Authentication**: Cryptographically proves the comment author's identity
-2. **Non-Repudiation**: Author cannot deny writing the comment
-3. **Tamper Detection**: Any modification invalidates the signature
-4. **Spam Prevention**: Requires valid NOSTR keys to comment
-5. **Future Interoperability**: Enables relay synchronization and federation
+1. Build a NOSTR text note (kind 1) with tags:
+   - `content_type` (e.g., `blog`, `alert`)
+   - `content_id` (content identifier)
+   - `action` = `comment`
+   - `owner` = author callsign
+2. Sign the event with `SigningService.signEvent(...)`.
+3. Send `author`, `content`, and optional `npub` + `signature` to `/api/feedback/{contentType}/{contentId}/comment`.
 
-### CommentUtils Library
-
-#### Location
-
-```
-lib/util/comment_utils.dart
-```
-
-#### Core Methods
-
-##### 1. Create and Sign a Comment
+### FeedbackCommentUtils Usage
 
 ```dart
-import 'package:geogram_desktop/util/comment_utils.dart';
-import 'package:geogram_desktop/util/nostr_event.dart';
+import 'package:geogram/util/feedback_comment_utils.dart';
 
-// Create a signed comment event
-final event = CommentUtils.createSignedCommentEvent(
-  content: "This is my comment text",
-  author: "X1ABCD",
-  npub: "npub1abc123...",
-  nsec: "nsec1xyz789...",
-  contentType: "blog",  // or "alert", "forum", "event", etc.
-  contentId: "2025-12-04_hello-everyone",
+final commentId = await FeedbackCommentUtils.writeComment(
+  contentPath: '/path/to/blog/2025/2025-12-04_hello-everyone',
+  author: profile.callsign,
+  content: 'This is my comment text',
+  npub: profile.npub,
+  signature: signedSig,
 );
 
-if (event == null) {
-  // Invalid keys or signing failed
-  return;
-}
-
-// Event is now signed and ready to be stored
-```
-
-##### 2. Write Comment to Disk
-
-```dart
-// Write the signed comment
-final commentId = await CommentUtils.writeSignedComment(
-  contentPath: "/path/to/blog/2025/2025-12-04_hello-everyone",
-  signedEvent: event,
-  author: "X1ABCD",
+final comments = await FeedbackCommentUtils.loadComments(
+  '/path/to/blog/2025/2025-12-04_hello-everyone',
 );
-
-if (commentId == null) {
-  // Write failed
-  return;
-}
-
-// Comment stored at:
-// /path/to/blog/2025/2025-12-04_hello-everyone/comments/2025-12-23_10-30-45_A1B2C3.txt
 ```
 
-##### 3. Load and Verify Comments
+### Comment File Layout
 
-```dart
-// Load all comments (automatically verifies signatures)
-final comments = await CommentUtils.loadComments(contentPath);
-
-for (final comment in comments) {
-  print('Author: ${comment.author}');
-  print('Content: ${comment.content}');
-  print('Verified: ${comment.verified}');  // true if signature valid
-  print('Has Signature: ${comment.signature != null}');
-}
-```
-
-##### 4. Get Specific Comment
-
-```dart
-final comment = await CommentUtils.getComment(contentPath, commentId);
-
-if (comment != null && comment.verified) {
-  // Comment exists and signature is valid
-  print(comment.content);
-}
-```
-
-##### 5. Delete Comment
-
-```dart
-final deleted = await CommentUtils.deleteComment(contentPath, commentId);
-
-if (deleted) {
-  print('Comment deleted successfully');
-}
-```
-
-### File Format
-
-Comments are stored as individual text files with this structure:
-
-```
-AUTHOR: X1ABCD
-CREATED: 2025-12-23 10:30_45
-CREATED_AT: 1734954645
-
-This is the comment content.
-It can span multiple lines.
-
----> npub: npub1abc123def456ghi789jkl012mno345pqr678stu901vwx234yz567890
----> signature: 1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef
-```
-
-**Fields**:
-- `AUTHOR`: Commenter's callsign (required)
-- `CREATED`: Human-readable timestamp in format `YYYY-MM-DD HH:MM_ss` (required)
-- `CREATED_AT`: Unix timestamp in seconds - used for exact signature verification (optional but recommended)
-- `npub`: NOSTR public key (bech32 encoded, 63 characters) (required)
-- `signature`: BIP-340 Schnorr signature (128-character hex string) (required)
-
-**Signature Metadata MUST be last** in the file.
-
-### NOSTR Event Structure for Comments
-
-Comments use **NIP-01 text notes** (kind 1):
-
-```json
-{
-  "kind": 1,
-  "pubkey": "abc123...",
-  "created_at": 1734954645,
-  "tags": [
-    ["e", "2025-12-04_hello-everyone"],
-    ["t", "blog-comment"],
-    ["callsign", "X1ABCD"],
-    ["content_type", "blog"]
-  ],
-  "content": "This is my comment text",
-  "id": "def456...",
-  "sig": "789abc..."
-}
-```
-
-**Tags Explained**:
-- `["e", contentId]`: References the content being commented on
-- `["t", "{contentType}-comment"]`: Tags it as a comment for this content type
-- `["callsign", author]`: Associates comment with callsign
-- `["content_type", type]`: Specifies the content type (blog, alert, etc.)
-
-### API Integration
-
-#### Server-Side Verification
-
-When receiving a comment via API, verify the signature:
-
-```dart
-import 'package:geogram_desktop/util/nostr_event.dart';
-import 'package:geogram_desktop/util/nostr_crypto.dart';
-
-Future<bool> verifyCommentSignature({
-  required String content,
-  required String npub,
-  required String signature,
-  required String author,
-  required String contentId,
-  required String contentType,
-  int? createdAt,
-}) async {
-  try {
-    final pubkeyHex = NostrCrypto.decodeNpub(npub);
-
-    // Reconstruct the NOSTR event
-    final event = NostrEvent(
-      pubkey: pubkeyHex,
-      createdAt: createdAt ?? (DateTime.now().millisecondsSinceEpoch ~/ 1000),
-      kind: 1,  // Text note
-      tags: [
-        ['e', contentId],
-        ['t', '$contentType-comment'],
-        ['callsign', author],
-        ['content_type', contentType],
-      ],
-      content: content,
-      sig: signature,
-    );
-
-    event.calculateId();
-
-    // Verify signature
-    return event.verify();
-  } catch (e) {
-    return false;
-  }
-}
-```
-
-#### API Endpoint Pattern
-
-```dart
-// POST /api/blog/{postId}/comment
-Future<Map<String, dynamic>> addComment(
-  String postId,
-  String author,
-  String content, {
-  required String npub,
-  required String signature,
-  int? createdAt,
-}) async {
-  // Verify signature
-  final isValid = await verifyCommentSignature(
-    content: content,
-    npub: npub,
-    signature: signature,
-    author: author,
-    contentId: postId,
-    contentType: 'blog',
-    createdAt: createdAt,
-  );
-
-  if (!isValid) {
-    return {
-      'error': 'Invalid signature',
-      'message': 'Comment signature verification failed',
-      'http_status': 401,
-    };
-  }
-
-  // Create signed event and store
-  final event = NostrEvent(
-    pubkey: NostrCrypto.decodeNpub(npub),
-    createdAt: createdAt ?? (DateTime.now().millisecondsSinceEpoch ~/ 1000),
-    kind: 1,
-    tags: [
-      ['e', postId],
-      ['t', 'blog-comment'],
-      ['callsign', author],
-      ['content_type', 'blog'],
-    ],
-    content: content,
-    sig: signature,
-  );
-
-  event.calculateId();
-
-  final commentId = await CommentUtils.writeSignedComment(
-    contentPath: blogPostPath,
-    signedEvent: event,
-    author: author,
-  );
-
-  return {
-    'success': true,
-    'comment_id': commentId,
-  };
-}
-```
-
-### Client-Side Integration
-
-#### UI Example
-
-```dart
-Future<void> _addComment() async {
-  final profile = _profileService.getProfile();
-
-  // Require NOSTR keys
-  if (profile.npub.isEmpty || profile.nsec.isEmpty) {
-    showError('NOSTR key required to add comments');
-    return;
-  }
-
-  // Create signed comment event
-  final event = CommentUtils.createSignedCommentEvent(
-    content: _commentController.text.trim(),
-    author: profile.callsign,
-    npub: profile.npub,
-    nsec: profile.nsec,
-    contentType: 'blog',
-    contentId: postId,
-  );
-
-  if (event == null) {
-    showError('Failed to sign comment');
-    return;
-  }
-
-  // Send to service layer
-  final commentId = await _blogService.addComment(
-    postId: postId,
-    signedEvent: event,
-  );
-
-  if (commentId != null) {
-    showSuccess('Comment added');
-    _reloadComments();
-  }
-}
-```
-
-### Service Layer Pattern
-
-```dart
-// BlogService, AlertService, ForumService, etc.
-class BlogService {
-  Future<String?> addComment({
-    required String postId,
-    required NostrEvent signedEvent,
-  }) async {
-    // Verify the event is signed
-    if (signedEvent.sig == null || !signedEvent.verify()) {
-      return null;
-    }
-
-    // Write using generic CommentUtils
-    return await CommentUtils.writeSignedComment(
-      contentPath: getPostPath(postId),
-      signedEvent: signedEvent,
-      author: extractAuthorFromEvent(signedEvent),
-    );
-  }
-}
-```
-
-### Security Guarantees
-
-✅ **Prevents Forgery**: Cannot create a comment from another user without their private key
-✅ **Detects Tampering**: Any modification to content invalidates the signature
-✅ **Audit Trail**: All comments have cryptographic proof of authorship
-✅ **Future-Proof**: Compatible with NOSTR relays for federation
-
-### Migration from Unsigned Comments
-
-Legacy comments without signatures:
-1. Are still loaded and displayed
-2. Show as "unverified" in the UI
-3. Should be re-signed if edited
-4. New comments MUST be signed
-
-```dart
-final comment = await CommentUtils.getComment(contentPath, commentId);
-
-if (!comment.verified) {
-  // Display warning: "This comment is not cryptographically verified"
-  showWarningBadge();
-}
-```
-
-### Content Type Support
-
-The same `CommentUtils` library works across all content types:
-
-| Content Type | Example Path | Comment Path |
-|--------------|--------------|--------------|
-| Blog | `blog/2025/post-id/` | `blog/2025/post-id/comments/` |
-| Alert | `alerts/active/38.7_-9.1/alert-id/` | `alerts/active/38.7_-9.1/alert-id/comments/` |
-| Forum | `forum/general/thread-id/` | `forum/general/thread-id/comments/` |
-| Event | `events/2025/event-id/` | `events/2025/event-id/comments/` |
-
-**Same API, same verification, different content types.**
+See "Comment File Format" above. Files are named `YYYY-MM-DD_HH-MM-SS_CALLSIGN.txt`.
 
 ---
 
@@ -2049,12 +1662,13 @@ The same `CommentUtils` library works across all content types:
 
 ## Changelog
 
+### Version 1.2 (2025-12-24)
+- Feedback files store signed NOSTR event JSON per line
+- Documented FeedbackCommentUtils usage and comment flow
+- Removed legacy migration guidance in favor of clean feedback/ usage
+
 ### Version 1.1 (2025-12-23)
-- Added Comment Signing and Verification section
-- Documented CommentUtils library (`lib/util/comment_utils.dart`)
-- Specified NOSTR signature requirements for comments
-- Provided integration examples for all content types
-- Added security guarantees and migration path from unsigned comments
+- Added feedback endpoint examples and stats
 
 ### Version 1.0 (2025-12-22)
 - Initial specification

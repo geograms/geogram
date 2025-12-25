@@ -1,7 +1,7 @@
 # Blog Format Specification
 
-**Version**: 1.3
-**Last Updated**: 2025-12-16
+**Version**: 1.4
+**Last Updated**: 2025-12-24
 **Status**: Active
 
 ## Table of Contents
@@ -35,7 +35,7 @@ Blog posts use a human-readable plain text format with structured metadata suppo
 - **Draft/Published Workflow**: Two-state publishing workflow for content control
 - **Markdown Content**: Rich text formatting using standard markdown syntax
 - **Tagging System**: Flexible categorization using comma-separated tags
-- **Flat Comments**: Reader engagement through chronological comments
+- **Flat Comments**: Centralized feedback comments under `feedback/comments`
 - **File Attachments**: SHA1-based file storage with deduplication
 - **NOSTR Integration**: Cryptographic identity and signature support
 - **Permission System**: Role-based access control (admin, author, reader)
@@ -54,21 +54,24 @@ blog/                          # Blog collection root
 │   │   ├── files/                     # Attached files
 │   │   │   ├── {sha1}_{image.jpg}
 │   │   │   └── {sha1}_{document.pdf}
-│   │   └── comments/                  # Comment files
-│   │       ├── 2024-03-15_10-30-45_X13K0G.txt
-│   │       └── 2024-03-15_11-15-22_A7BN2P.txt
+│   │   └── feedback/
+│   │       ├── likes.txt              # Signed events (one per line)
+│   │       ├── points.txt             # Signed events (one per line)
+│   │       └── comments/              # Comment files
+│   │           ├── 2024-03-15_10-30-45_X13K0G.txt
+│   │           └── 2024-03-15_11-15-22_A7BN2P.txt
 │   └── 2024-12-20_year-end-review/
 │       ├── post.md
-│       └── comments/
+│       └── feedback/
 ├── 2025/
 │   ├── 2025-01-10_new-year-goals/
 │   │   ├── post.md
-│   │   └── comments/
+│   │   └── feedback/
 │   └── 2025-01-15_tech-tutorial/
 │       ├── post.md
 │       ├── files/
 │       │   └── {sha1}_{attachment.pdf}
-│       └── comments/
+│       └── feedback/
 ├── collection.js              # Collection metadata
 └── extra/
     ├── security.json          # Admin/moderator settings
@@ -147,15 +150,9 @@ More paragraphs...
 --> url: https://example.com/resource
 --> npub: npub1...
 --> signature: hex_signature
-
-> YYYY-MM-DD HH:MM_ss -- COMMENTER
-First comment text
---> npub: npub1...
---> signature: hex_sig
-
-> YYYY-MM-DD HH:MM_ss -- ANOTHER_USER
-Second comment text
 ```
+
+Comments are stored separately under `feedback/comments/` (see [Comments](#comments)). Inline comment blocks in post content are legacy and should not be written by new clients.
 
 ### Header Section
 
@@ -310,13 +307,15 @@ Metadata appears after content, using the `--> key: value` format.
 
 ### Comment Storage
 
-Comments are stored as separate files in the `comments/` subdirectory of each blog post folder. This allows for remote commenting via API where devices can post comments to blog posts hosted on other devices.
+Comments are stored as separate files in the centralized feedback folder (`feedback/comments/`). This enables shared feedback behavior across apps and is accessed via `/api/feedback/blog/{postId}/comment`.
 
-**File Location**: `blog/{year}/{postId}/comments/`
+**File Location**: `blog/{year}/{postId}/feedback/comments/`
 
 **Filename Pattern**: `YYYY-MM-DD_HH-MM-SS_AUTHOR.txt`
 
 **Example**: `2025-01-15_14-30-45_X13K0G.txt`
+
+Use `FeedbackCommentUtils` for consistent read/write behavior.
 
 ### Comment File Format
 
@@ -596,20 +595,9 @@ Lots of progress on various fronts!
 
 --> npub: npub1abc123...
 --> signature: 0000aaaa1111bbbb...
-
-> 2025-01-25 10:15_30 -- X135AS
-Great update! Looking forward to next month.
---> npub: npub1xyz789...
---> signature: 2222cccc3333dddd...
-
-> 2025-01-25 11:20_45 -- CR7BBQ
-Thanks! Stay tuned for more updates.
---> npub: npub1abc123...
---> signature: 4444eeee5555ffff...
-
-> 2025-01-26 08:00_00 -- BRAVO2
-Excellent work on the project!
 ```
+
+Comments for this post live in `feedback/comments/` as separate files.
 
 ### Example 5: Draft Post
 
@@ -671,20 +659,20 @@ Line N: (blank) - marks end of header
 ### Content Extraction
 
 - Content starts after header's trailing blank line
-- Continues until first metadata line (`--> `) or comment line (`> `)
+- Continues until first metadata line (`--> `)
 - Preserve all whitespace and formatting
 - Empty lines within content are preserved
 
-### Comment Parsing
+### Legacy Inline Comment Parsing (Deprecated)
 
 ```
-1. Comments start with "> "
+1. Inline comments start with "> "
 2. Extract timestamp and author from first line
 3. Read content lines until next comment or EOF
 4. Parse metadata for each comment (npub, signature)
-5. Validate signature placement (must be last)
-6. Associate metadata with parent comment
 ```
+
+New clients should read/write comments via `feedback/comments/` using `FeedbackCommentUtils`.
 
 ## File Operations
 
@@ -1221,15 +1209,21 @@ See [API Documentation](../../api/API.md#blog-api) for complete technical detail
 - [Chat Format Specification](../chat/chat-format-specification.md)
 - [Forum Format Specification](../forum/forum-format-specification.md)
 - [Events Format Specification](../events/events-format-specification.md)
+- [Centralized Feedback API](../API_feedback.md)
 - [Collection File Formats](../others/file-formats.md)
 - [NOSTR Protocol](https://github.com/nostr-protocol/nostr)
 
 ## Change Log
 
+### Version 1.4 (2025-12-24)
+
+- Standardized feedback storage under `feedback/`
+- Deprecated inline comments in post content
+
 ### Version 1.3 (2025-12-16)
 
 - Migrated to folder-based storage structure: each post in its own directory
-- Comments now stored as separate files in `comments/` subdirectory
+- Comments now stored as separate files in `feedback/comments/`
 - Added Blog API endpoints for remote commenting
 - Added `BlogCommentService` for transport-agnostic remote comment operations
 - Updated API documentation with new endpoints

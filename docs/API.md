@@ -19,6 +19,7 @@ This document describes the HTTP API endpoints available on Geogram radio statio
   - [Blog](#blog)
   - [Events](#events)
   - [Alerts](#alerts)
+  - [Feedback](#feedback)
   - [Logs](#logs)
   - [Debug API](#debug-api)
   - [Backup](#backup)
@@ -644,13 +645,15 @@ Returns detailed information about a specific alert, including list of photos.
   "last_modified": "2025-12-14T10:30:00Z",
   "files": {
     "report.txt": { "size": 597, "mtime": 1734215746 },
-    "points.txt": { "size": 0, "mtime": 0 },
     "images/": {
       "photo1.jpg": { "size": 160337, "mtime": 1734212897 },
       "photo2.png": { "size": 40135, "mtime": 1734212897 }
     },
-    "comments/": {
-      "2025-12-14_10-35-00_X1ABCD.txt": { "size": 155, "mtime": 1734215746 }
+    "feedback/": {
+      "points.txt": { "size": 0, "mtime": 0 },
+      "comments/": {
+        "2025-12-14_10-35-00_X1ABCD.txt": { "size": 155, "mtime": 1734215746 }
+      }
     }
   },
   "photos": ["images/photo1.jpg", "images/photo2.png"],
@@ -724,56 +727,11 @@ The `files` field contains a recursive tree structure of all files in the alert 
 }
 ```
 
-#### POST /{callsign}/api/alerts/{folderName}/comment
+**Feedback Note:** Feedback (points, verifications, reactions, comments) is centralized under `feedback/` and must be accessed via `/api/feedback/...` (see `docs/API_feedback.md`). Legacy `/api/alerts/{id}/{action}` feedback endpoints are deprecated and return `410 Gone`.
 
-Adds a comment to an alert on the station.
+#### POST /{callsign}/api/alerts/{folderName}/comment (Deprecated)
 
-**Parameters:**
-| Parameter | Description |
-|-----------|-------------|
-| `callsign` | Callsign of the alert owner (uppercase) |
-| `folderName` | Alert folder name (e.g., `38_7223_n9_1393_broken-sidewalk`) |
-
-**Request Body:**
-```json
-{
-  "content": "I can confirm this issue is still present.",
-  "author": "X1ABCD",
-  "npub": "npub1xyz...",
-  "signature": "sig123..."
-}
-```
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `content` | string | Yes | Comment text |
-| `author` | string | No | Author's callsign (defaults to sender) |
-| `npub` | string | No | Author's NOSTR public key |
-| `signature` | string | No | NOSTR signature for verification |
-
-**Response (200 OK):**
-```json
-{
-  "success": true,
-  "filename": "1702000000000.txt",
-  "message": "Comment added successfully"
-}
-```
-
-**Response (404 Not Found):**
-```json
-{
-  "error": "Alert not found"
-}
-```
-
-**Example Usage:**
-```bash
-# Add a comment to an alert
-curl -X POST http://localhost:3457/X1ABCD/api/alerts/38_7222_n9_1393_broken-sidewalk/comment \
-  -H "Content-Type: application/json" \
-  -d '{"content": "I can confirm this issue!", "author": "X2BCDE"}'
-```
+This endpoint is no longer supported. Use `/api/feedback/alert/{alertId}/comment`.
 
 #### GET /{callsign}/api/alerts/{folderName}/files/{filename}
 
@@ -812,6 +770,101 @@ curl -o photo1.jpg http://localhost:3457/X1ABCD/api/alerts/38_7222_n9_1393_broke
 ```
 
 **Note:** The station port is typically API port + 1 (e.g., if API is on 3456, station is on 3457).
+
+---
+
+### Feedback
+
+Centralized feedback endpoints for alerts, blog posts, and places. Feedback is stored under each content item's `feedback/` folder (see `docs/API_feedback.md`) and uses signed NOSTR events for verification.
+
+#### GET /api/feedback/{contentType}/{contentId}
+
+Returns feedback counts and optional user state/comments.
+
+**Query Parameters:**
+| Parameter | Description |
+|-----------|-------------|
+| `callsign` | Optional owner callsign to disambiguate content |
+| `npub` | Optional; include user_state for this npub |
+| `include_comments` | `true` to include comments |
+| `comment_limit` | Max comments to return (default 20) |
+| `comment_offset` | Offset for pagination (default 0) |
+
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "content_type": "alert",
+  "content_id": "2025-12-10_broken-sidewalk",
+  "owner": "X1ABCD",
+  "counts": {
+    "likes": 3,
+    "points": 2,
+    "dislikes": 0,
+    "subscribe": 1,
+    "verifications": 1,
+    "views": 12,
+    "heart": 0,
+    "thumbs-up": 1,
+    "fire": 0,
+    "celebrate": 0,
+    "laugh": 0,
+    "sad": 0,
+    "surprise": 0,
+    "comments": 4
+  },
+  "user_state": {
+    "liked": true,
+    "pointed": false,
+    "disliked": false,
+    "subscribed": true,
+    "verified": false,
+    "heart": false,
+    "thumbs-up": false,
+    "fire": false,
+    "celebrate": false,
+    "laugh": false,
+    "sad": false,
+    "surprise": false
+  }
+}
+```
+
+#### GET /api/feedback/{contentType}/{contentId}/stats
+
+Returns aggregated view stats and counts.
+
+#### POST /api/feedback/{contentType}/{contentId}/{action}
+
+Posts feedback actions. Actions and payloads:
+
+- `like|point|dislike|subscribe|react/{emoji}`: signed NOSTR event JSON (toggle)
+- `verify`: signed NOSTR event JSON (add-only)
+- `view`: signed NOSTR event JSON (append-only)
+- `comment`: JSON body with `author`, `content`, optional `npub`, `signature`
+
+**Example (comment):**
+```json
+{
+  "author": "X1ABCD",
+  "content": "I can confirm this issue is still present.",
+  "npub": "npub1xyz...",
+  "signature": "sig123..."
+}
+```
+
+**Example (toggle with signed event):**
+```json
+{
+  "id": "eventid...",
+  "pubkey": "hexpub...",
+  "created_at": 1734937020,
+  "kind": 7,
+  "tags": [["content_type","alert"],["content_id","2025-12-10_broken-sidewalk"],["action","point"]],
+  "content": "point",
+  "sig": "hexsig..."
+}
+```
 
 ---
 

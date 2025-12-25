@@ -1,7 +1,7 @@
 # Places Format Specification
 
-**Version**: 1.3
-**Last Updated**: 2025-12-23
+**Version**: 1.4
+**Last Updated**: 2025-12-24
 **Status**: Active
 
 ## Table of Contents
@@ -47,7 +47,7 @@ Places combine geographic organization with features similar to events, but focu
 - **Radius Range**: 10 meters to 1 kilometer coverage area
 - **Unlimited Media**: Any number of photos, videos, and files
 - **Photo Reactions**: Individual likes and comments on each photo
-- **Place Reactions**: Likes and comments on the place itself
+- **Place Reactions**: Place-level feedback stored under `feedback/` (centralized API)
 - **Contributor System**: Users can submit photos with attribution
 - **Admin Moderation**: Admins can approve/reject/move contributor content
 - **Subfolder Structure**: Optional subfolders for organizing content
@@ -78,6 +78,9 @@ collection_name/
     │   │   │   └── X135AS/
     │   │   │       ├── contributor.txt
     │   │   │       └── drone-view.jpg
+    │   │   ├── feedback/               # Place-level feedback (centralized)
+    │   │   │   ├── likes.txt
+    │   │   │   └── comments/
     │   │   └── .reactions/
     │   │       ├── place.txt
     │   │       ├── photo1.jpg.txt
@@ -103,6 +106,10 @@ collection_name/
             └── 35.6812_139.7671_tokyo-skytree/
                 └── place.txt
 ```
+
+### Centralized Feedback (Place-Level)
+
+Place-level likes/comments are stored under `feedback/` and should use the common feedback API (`/api/feedback/place/{placeId}/...`). Per-photo or per-subfolder reactions remain in `.reactions/` until those structures are migrated.
 
 ### Region Folder Naming
 
@@ -1303,6 +1310,8 @@ Comment content.
 - Example: `.reactions/contributors/CR7BBQ.txt`
 
 ## Comments
+
+Place-level comments now live under `feedback/comments/` using the centralized feedback API. The `.reactions/` comment format below remains for per-photo or per-subfolder legacy reactions.
 
 ### Comment Format
 
@@ -2716,10 +2725,15 @@ After 10,000th place added:
 - [Blog Format Specification](blog-format-specification.md)
 - [Chat Format Specification](chat-format-specification.md)
 - [Forum Format Specification](forum-format-specification.md)
+- [Centralized Feedback API](../API_feedback.md)
 - [Collection File Formats](../others/file-formats.md)
 - [NOSTR Protocol](https://github.com/nostr-protocol/nostr)
 
 ## Change Log
+
+### Version 1.4 (2025-12-24)
+
+- Added place-level feedback folder (`feedback/`) for centralized likes/comments
 
 ### Version 1.3 (2025-12-23)
 

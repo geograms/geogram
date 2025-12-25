@@ -1,7 +1,7 @@
 # Report Format Specification
 
-**Version**: 1.3
-**Last Updated**: 2025-12-14
+**Version**: 1.4
+**Last Updated**: 2025-12-24
 **Status**: Draft
 
 ## Table of Contents
@@ -70,7 +70,7 @@ Reports are designed for documenting things that need attention, repair, or awar
 - **Multilanguage Support**: Title and description in multiple languages
 - **Simple Text Format**: Plain text descriptions (no markdown)
 - **NOSTR Integration**: Cryptographic signatures for authenticity
-- **Community Engagement**: Likes and comments on reports
+- **Community Engagement**: Centralized feedback (points, comments, verifications) under `feedback/`
 - **Export/Import**: GeoJSON, API integration for third-party systems
 
 ## File Organization
@@ -83,14 +83,16 @@ collection_name/
 │   ├── 38.7_-9.1/                      # Region folder (1° precision)
 │   │   ├── 2025-12-14_15-32_broken-sidewalk/
 │   │   │   ├── report.txt
-│   │   │   ├── points.txt              # Users who pointed this alert (one npub per line)
 │   │   │   ├── news.txt                # News/log timeline
 │   │   │   ├── images/                 # Photos subfolder
 │   │   │   │   ├── photo1.jpg
 │   │   │   │   └── photo2.jpg
-│   │   │   ├── comments/               # User comments
-│   │   │   │   ├── 2025-12-14_15-45-23_X13K0G.txt
-│   │   │   │   └── 2025-12-14_16-20-05_A7BN2P.txt
+│   │   │   ├── feedback/
+│   │   │   │   ├── points.txt          # Users who pointed this alert (one signed event per line)
+│   │   │   │   ├── verifications.txt   # Users who verified (one signed event per line)
+│   │   │   │   └── comments/           # User comments
+│   │   │   │       ├── 2025-12-14_15-45-23_X13K0G.txt
+│   │   │   │       └── 2025-12-14_16-20-05_A7BN2P.txt
 │   │   │   ├── contributed-photos/     # Community contributed photos
 │   │   │   │   ├── user1_evidence.jpg
 │   │   │   │   └── user2_angle.jpg
@@ -102,7 +104,8 @@ collection_name/
 │   │   │       └── photo1.jpg.txt
 │   │   └── 2025-12-13_09-15_vandalized-sign/
 │   │       ├── report.txt
-│   │       ├── points.txt
+│   │       ├── feedback/
+│   │       │   └── points.txt
 │   │       ├── images/
 │   │       │   └── photo1.jpg
 │   │       └── .reactions/
@@ -110,7 +113,8 @@ collection_name/
 │   ├── 40.7_-74.0/                     # Another region
 │   │   └── 2025-12-10_14-22_dangerous-pothole/
 │   │       ├── report.txt
-│   │       ├── points.txt
+│   │       ├── feedback/
+│   │       │   └── points.txt
 │   │       └── images/
 │   │           └── photo1.jpg
 │   └── 35.6_139.6/                     # Dense region with subfolders
@@ -124,7 +128,8 @@ collection_name/
     └── 38.7_-9.1/
         └── 2025-10-15_12-00_old-pothole/
             ├── report.txt              # STATUS: closed or expired
-            ├── points.txt
+            ├── feedback/
+            │   └── points.txt
             └── images/
                 └── photo1.jpg
 ```
@@ -231,13 +236,13 @@ Created: 2025-12-13 09:15:30
 - Supported formats: JPG, JPEG, PNG, GIF, WebP
 - Created automatically when first photo is added
 
-**`comments/` Directory**:
+**`feedback/comments/` Directory**:
 - Contains user comments on the report
 - One file per comment
-- Filename format: `YYYY-MM-DD_HH-MM-SS_XXXXXX.txt`
+- Filename format: `YYYY-MM-DD_HH-MM-SS_CALLSIGN.txt`
   - Date and time of comment creation
-  - 6-character random alphanumeric ID (uppercase letters and digits)
-- Example: `2025-12-14_15-45-23_X13K0G.txt`
+  - Author callsign (e.g., `X1ABCD`)
+- Example: `2025-12-14_15-45-23_X1ABCD.txt`
 
 **`.reactions/` Directory**:
 - Hidden directory (starts with dot)
@@ -2582,20 +2587,22 @@ I've contacted the city about this issue.
 
 ### Comment File Storage
 
-Comments are stored as individual files in the `comments/` directory.
+Comments are stored as individual files in the centralized feedback folder: `feedback/comments/`.
 
-**Filename Format**: `YYYY-MM-DD_HH-MM-SS_XXXXXX.txt`
+**Filename Format**: `YYYY-MM-DD_HH-MM-SS_CALLSIGN.txt`
 
 - `YYYY-MM-DD`: Date of comment creation
 - `HH-MM-SS`: Time of comment creation (24-hour format)
-- `XXXXXX`: 6-character random alphanumeric ID (uppercase letters A-Z and digits 0-9)
+- `CALLSIGN`: Author callsign (e.g., `X1ABCD`)
 
 **Example Filenames**:
 ```
-comments/2025-12-14_15-45-23_X13K0G.txt
-comments/2025-12-14_16-20-05_A7BN2P.txt
-comments/2025-12-15_09-00-00_9Z3MK1.txt
+feedback/comments/2025-12-14_15-45-23_X1ABCD.txt
+feedback/comments/2025-12-14_16-20-05_X1EFGH.txt
+feedback/comments/2025-12-15_09-00-00_X1JKLM.txt
 ```
+
+Use `FeedbackCommentUtils` for consistent read/write behavior across apps.
 
 ### Comment File Format
 
@@ -2628,61 +2635,40 @@ Can span multiple lines.
    - `npub`: NOSTR public key for verification
    - `signature`: Cryptographic signature
 
-### Legacy Comment Locations (Deprecated)
-
-For backwards compatibility, comments may also exist in:
-
-- **Report comments**: `.reactions/report.txt`
-- **Photo comments**: `.reactions/photo.jpg.txt`
-- **Update comments**: `.reactions/updates/update-file.txt`
-
-These inline formats use the legacy format:
-```
-> YYYY-MM-DD HH:MM_ss -- CALLSIGN
-Comment content here.
---> npub: npub1...
---> signature: hex_signature
-```
-
 ## Points (Attention Calls)
 
 ### Points File Storage
 
-Points (user attention calls) are stored in a dedicated `points.txt` file in the alert folder.
+Points (user attention calls) are stored in the centralized feedback folder.
 
-**File Location**: `{alert_folder}/points.txt`
+**File Location**: `{alert_folder}/feedback/points.txt`
 
-**File Format**: One npub per line (plain text, UTF-8)
+**File Format**: One signed NOSTR event JSON per line (verified before counting).
 
 ```
-npub1abc123def456...
-npub1xyz789ghi012...
-npub1mno345pqr678...
+{"id":"...","pubkey":"...","created_at":1734937020,"kind":7,"tags":[["content_type","alert"],["content_id","..."],["action","point"]],"content":"point","sig":"..."}
 ```
 
 ### Benefits of Separate Points File
 
 1. **Readability**: report.txt stays readable regardless of point count
-2. **Easy lookup**: Simple grep/search for npub in points.txt
+2. **Easy lookup**: Simple grep/search for events in feedback/points.txt
 3. **Efficient counting**: Line count equals point count
 4. **Clean separation**: Points are user feedback, not report content
 
 ### Point Operations
 
 **Add Point**:
-- Read points.txt (or create if doesn't exist)
-- Check if npub already exists (prevent duplicates)
-- Append npub on new line
+- Use `FeedbackFolderUtils.toggleFeedbackEvent(...)` with a signed event
 - Update LAST_MODIFIED in report.txt
 
 **Remove Point**:
-- Read points.txt
-- Remove line containing the npub
-- If empty, delete the file
+- Toggle the same npub off via `FeedbackFolderUtils.toggleFeedbackEvent(...)`
+- If the file becomes empty, it is deleted automatically
 - Update LAST_MODIFIED in report.txt
 
 **Count Points**:
-- Count non-empty lines in points.txt
+- Use `FeedbackFolderUtils.getFeedbackCount(...)`
 - Return 0 if file doesn't exist
 
 ### API Response Format
@@ -3483,10 +3469,16 @@ apariencia y valor histórico del área.
 
 - [Places Format Specification](places-format-specification.md)
 - [Events Format Specification](events-format-specification.md)
+- [Centralized Feedback API](../API_feedback.md)
 - [Collection File Formats](../others/file-formats.md)
 - [NOSTR Protocol](https://github.com/nostr-protocol/nostr)
 
 ## Change Log
+
+### Version 1.4 (2025-12-24)
+
+- **Centralized Feedback**: Points, verifications, and comments stored under `feedback/`
+- **Signed Events**: Feedback files now contain signed NOSTR events
 
 ### Version 1.3 (2025-12-14)
 
@@ -3498,10 +3490,10 @@ apariencia y valor histórico del área.
 - **Images Subfolder**: Photos now stored in `images/` subdirectory
   - Sequential naming: `photo1.jpg`, `photo2.png`, etc.
   - Backwards compatible: legacy photos in root folder still supported
-- **Comments Folder**: Dedicated `comments/` directory for user comments
-  - Filename format: `YYYY-MM-DD_HH-MM-SS_XXXXXX.txt`
-  - 6-character alphanumeric random ID for uniqueness
-  - Example: `2025-12-14_15-45-23_X13K0G.txt`
+- **Comments Folder**: Dedicated `feedback/comments/` directory for user comments
+  - Filename format: `YYYY-MM-DD_HH-MM-SS_CALLSIGN.txt`
+  - Author callsign used as identifier
+  - Example: `2025-12-14_15-45-23_X1ABCD.txt`
 - **Consistent Structure**: Station, Client A, and Client B now use identical folder organization
 
 ### Version 1.2 (2025-12-14)
@@ -3533,11 +3525,8 @@ apariencia y valor histórico del área.
 - **LAST_MODIFIED Field**: Added `LAST_MODIFIED` field (ISO 8601 format) for tracking modifications
   - Automatically updated when report content, likes, verifications, or comments change
   - Used by station sync to determine which version is newer
-- **Station Feedback API**: Added POST endpoints for feedback synchronization
-  - `POST /api/alerts/{alertId}/like` - Like an alert
-  - `POST /api/alerts/{alertId}/unlike` - Unlike an alert
-  - `POST /api/alerts/{alertId}/verify` - Verify an alert
-  - `POST /api/alerts/{alertId}/comment` - Add a comment to an alert
+- **Centralized Feedback API**: Use `POST /api/feedback/alert/{alertId}/{action}` for feedback synchronization
+  - `point` (toggle), `verify` (add-only), `comment` (text), `like` (toggle), `react/{emoji}` (toggle)
 - **Best-Effort Sync**: Feedback is saved locally first, then synced to station asynchronously
 
 ### Version 1.0 (2025-11-23)
