@@ -1,5 +1,14 @@
 # Geogram Desktop Changelog
 
+## 2025-12-25 - v1.6.54
+
+### Changes
+- tests: refresh alert tests and archive legacy suites
+- docs: update feedback API and app format specs
+- places: improve editor, browser, and station sync
+- alerts: adopt shared feedback utils and update station APIs
+
+
 ## 2025-12-24 - v1.6.53
 
 ### Changes
