@@ -452,8 +452,30 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
     );
   }
 
+  void _openProfileImageViewer(Place place) {
+    final imagePath = _resolveProfileImagePath(place);
+    if (imagePath == null) return;
+
+    final photos = _selectedPlacePhotos;
+    final index = photos.indexOf(imagePath);
+    final imagePaths = index >= 0 ? photos : [imagePath];
+    final initialIndex = index >= 0 ? index : 0;
+
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => PhotoViewerPage(
+          imagePaths: imagePaths,
+          initialIndex: initialIndex,
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    final isMobilePlatform = !kIsWeb && (Platform.isAndroid || Platform.isIOS);
+
     return Scaffold(
       appBar: AppBar(
         title: Text(_i18n.t('places')),
@@ -476,11 +498,12 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
             },
             tooltip: _i18n.t('new_place'),
           ),
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: _refreshAllPlaces,
-            tooltip: _i18n.t('refresh'),
-          ),
+          if (!isMobilePlatform)
+            IconButton(
+              icon: const Icon(Icons.refresh),
+              onPressed: _refreshAllPlaces,
+              tooltip: _i18n.t('refresh'),
+            ),
         ],
       ),
       body: LayoutBuilder(
@@ -496,7 +519,10 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
                 // Left panel: Place list
                 Expanded(
                   flex: 1,
-                  child: _buildPlaceList(context),
+                  child: _buildPlaceList(
+                    context,
+                    isMobilePlatform: isMobilePlatform,
+                  ),
                 ),
                 const VerticalDivider(width: 1),
                 // Right panel: Place detail
@@ -509,14 +535,22 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
           } else {
             // Mobile/portrait: Single panel
             // Show place list, detail opens in full screen
-            return _buildPlaceList(context, isMobileView: true);
+            return _buildPlaceList(
+              context,
+              isMobileView: true,
+              isMobilePlatform: isMobilePlatform,
+            );
           }
         },
       ),
     );
   }
 
-  Widget _buildPlaceList(BuildContext context, {bool isMobileView = false}) {
+  Widget _buildPlaceList(
+    BuildContext context, {
+    bool isMobileView = false,
+    bool isMobilePlatform = false,
+  }) {
     final theme = Theme.of(context);
     final myPlaces = _filteredPlaces;
     final stationPlaces = _filteredStationPlaces;
@@ -624,7 +658,7 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
                             title: _i18n.t('station_places'),
                             count: stationPlaces.length,
                             isLoading: _isLoadingStationPlaces,
-                            onRefresh: _loadStationPlaces,
+                            onRefresh: isMobilePlatform ? null : _loadStationPlaces,
                           ),
                           if (stationPlaces.isNotEmpty)
                             ...stationPlaces.map(
@@ -850,7 +884,15 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
           // Header
           Row(
             children: [
-              _buildPlaceAvatar(place, radius: 30),
+              (() {
+                final imagePath = _resolveProfileImagePath(place);
+                final avatar = _buildPlaceAvatar(place, radius: 30);
+                if (imagePath == null) return avatar;
+                return GestureDetector(
+                  onTap: () => _openProfileImageViewer(place),
+                  child: avatar,
+                );
+              })(),
               const SizedBox(width: 16),
               Expanded(
                 child: Column(
@@ -1155,6 +1197,25 @@ class _PlaceDetailPageState extends State<_PlaceDetailPage> {
     );
   }
 
+  void _openProfileImageViewer() {
+    final imagePath = _resolveProfileImagePath(widget.place);
+    if (imagePath == null) return;
+
+    final index = _photos.indexOf(imagePath);
+    final imagePaths = index >= 0 ? _photos : [imagePath];
+    final initialIndex = index >= 0 ? index : 0;
+
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => PhotoViewerPage(
+          imagePaths: imagePaths,
+          initialIndex: initialIndex,
+        ),
+      ),
+    );
+  }
+
   IconData _getTypeIcon(String? type) {
     switch (type?.toLowerCase()) {
       case 'restaurant':
@@ -1398,7 +1459,15 @@ class _PlaceDetailPageState extends State<_PlaceDetailPage> {
               // Header
               Row(
                 children: [
-                  _buildPlaceAvatar(widget.place, radius: 30),
+                  (() {
+                    final imagePath = _resolveProfileImagePath(widget.place);
+                    final avatar = _buildPlaceAvatar(widget.place, radius: 30);
+                    if (imagePath == null) return avatar;
+                    return GestureDetector(
+                      onTap: _openProfileImageViewer,
+                      child: avatar,
+                    );
+                  })(),
                   const SizedBox(width: 16),
                   Expanded(
                     child: Column(

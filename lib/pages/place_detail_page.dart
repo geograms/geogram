@@ -291,6 +291,25 @@ class _PlaceDetailPageState extends State<PlaceDetailPage> {
     );
   }
 
+  void _openProfileImageViewer() {
+    final imagePath = _resolveProfileImagePath(_place);
+    if (imagePath == null) return;
+
+    final index = _photos.indexOf(imagePath);
+    final imagePaths = index >= 0 ? _photos : [imagePath];
+    final initialIndex = index >= 0 ? index : 0;
+
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => PhotoViewerPage(
+          imagePaths: imagePaths,
+          initialIndex: initialIndex,
+        ),
+      ),
+    );
+  }
+
   /// Get the display language based on user's current language
   String get _currentLangCode {
     final lang = _i18n.currentLanguage.toUpperCase().split('_').first;
@@ -349,13 +368,21 @@ class _PlaceDetailPageState extends State<PlaceDetailPage> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // Header
-                    Row(
-                      children: [
-                        _buildPlaceAvatar(_place, radius: 30),
-                        const SizedBox(width: 16),
-                        Expanded(
-                          child: Column(
+              // Header
+              Row(
+                children: [
+                  (() {
+                    final imagePath = _resolveProfileImagePath(_place);
+                    final avatar = _buildPlaceAvatar(_place, radius: 30);
+                    if (imagePath == null) return avatar;
+                    return GestureDetector(
+                      onTap: _openProfileImageViewer,
+                      child: avatar,
+                    );
+                  })(),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
