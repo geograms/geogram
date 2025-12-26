@@ -74,9 +74,14 @@ class PlaceSharingService {
       }
 
       final placesBasePath = _resolvePlacesBasePath(collectionPath);
-      final relativePlacePath = path.relative(placeFolderPath, from: placesBasePath);
+      var relativePlacePath = path.relative(placeFolderPath, from: placesBasePath);
       if (relativePlacePath.startsWith('..')) {
         LogService().log('PlaceSharingService: Invalid relative place path: $relativePlacePath');
+        return 0;
+      }
+      relativePlacePath = _normalizeRelativePlacePath(relativePlacePath);
+      if (relativePlacePath.isEmpty) {
+        LogService().log('PlaceSharingService: Empty relative place path after normalization');
         return 0;
       }
 
@@ -232,7 +237,15 @@ class PlaceSharingService {
     if (kIsWeb) return 0;
 
     int uploadedTotal = 0;
-    final existingPaths = knownStationRelativePaths ?? <String>{};
+    final existingPaths = <String>{};
+    if (knownStationRelativePaths != null) {
+      for (final pathValue in knownStationRelativePaths) {
+        final normalized = _normalizeRelativePlacePath(pathValue);
+        if (normalized.isNotEmpty) {
+          existingPaths.add(normalized);
+        }
+      }
+    }
 
     final profile = _profileService.getProfile();
     final callsign = profile.callsign;
@@ -267,10 +280,26 @@ class PlaceSharingService {
     }
 
     final placesBasePath = _resolvePlacesBasePath(collectionPath);
-    final relativePlacePath = path.relative(placeFolderPath, from: placesBasePath);
+    var relativePlacePath = path.relative(placeFolderPath, from: placesBasePath);
     if (relativePlacePath.startsWith('..')) {
       return null;
     }
+    relativePlacePath = _normalizeRelativePlacePath(relativePlacePath);
+    if (relativePlacePath.isEmpty) {
+      return null;
+    }
     return relativePlacePath;
+  }
+
+  String _normalizeRelativePlacePath(String relativePath) {
+    final segments = relativePath
+        .replaceAll('\\', '/')
+        .split('/')
+        .where((segment) => segment.isNotEmpty)
+        .toList();
+    if (segments.length > 1 && segments.first == 'places') {
+      return segments.sublist(1).join('/');
+    }
+    return relativePath;
   }
 }

@@ -4296,7 +4296,7 @@ class PureStationServer {
       }
 
       final callsign = parsed.callsign;
-      final relativePath = parsed.relativePath;
+      final relativePath = _normalizePlaceRelativePath(parsed.relativePath);
 
       if (_isInvalidRelativePath(relativePath)) {
         request.response.statusCode = 400;
@@ -4566,6 +4566,17 @@ class PureStationServer {
     if (placePath.isEmpty || filePath.isEmpty) return null;
 
     return (callsign: callsign, relativePath: '$placePath/$filePath');
+  }
+
+  String _normalizePlaceRelativePath(String relativePath) {
+    final segments = relativePath
+        .split('/')
+        .where((segment) => segment.isNotEmpty)
+        .toList();
+    if (segments.length > 1 && segments.first == 'places') {
+      return segments.sublist(1).join('/');
+    }
+    return relativePath;
   }
 
   ({String callsign, String folderName})? _parsePlaceDetailsRequest(String path) {
