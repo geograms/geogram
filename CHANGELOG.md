@@ -1,5 +1,14 @@
 # Geogram Desktop Changelog
 
+## 2025-12-27 - v1.6.58
+
+### Changes
+- Improve events workflow and group sync
+- Fix async return in alert comment save
+- Deduplicate feedback comments locally
+- Open place profile pics and hide mobile refresh
+
+
 ## 2025-12-26 - v1.6.57
 
 ### Changes
