@@ -1,5 +1,11 @@
 # Geogram Desktop Changelog
 
+## 2025-12-28 - v1.6.62
+
+### Changes
+- Fix web focus detection for title attention
+
+
 ## 2025-12-28 - v1.6.61
 
 ### Changes
