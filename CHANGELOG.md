@@ -1,5 +1,11 @@
 # Geogram Desktop Changelog
 
+## 2025-12-28 - v1.6.60
+
+### Changes
+- Improve notifications, identity refresh, and feedback/service docs
+
+
 ## 2025-12-28 - v1.6.59
 
 ### Changes
