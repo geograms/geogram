@@ -1,5 +1,11 @@
 # Geogram Desktop Changelog
 
+## 2025-12-28 - v1.6.59
+
+### Changes
+- Events: media contributions, visibility, maps, station sync
+
+
 ## 2025-12-27 - v1.6.58
 
 ### Changes
