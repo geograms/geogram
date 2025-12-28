@@ -11,6 +11,7 @@ import '../services/config_service.dart';
 import '../services/collection_service.dart';
 import '../services/signing_service.dart';
 import '../services/app_args.dart';
+import '../util/event_bus.dart';
 import '../util/nostr_key_generator.dart';
 import '../util/nostr_crypto.dart';
 
@@ -180,6 +181,7 @@ class ProfileService {
     final profile = getProfile();
     await _generateIdentityForProfile(profile, type: profile.type);
     _saveAllProfiles();
+    await _applyActiveIdentityChanges(profile);
     LogService().log('Regenerated identity for active profile: ${profile.callsign}');
   }
 
@@ -480,6 +482,24 @@ class ProfileService {
     final profile = getProfile();
     await _generateIdentityForProfile(profile);
     await saveProfile(profile);
+    await _applyActiveIdentityChanges(profile);
+  }
+
+  Future<void> _applyActiveIdentityChanges(Profile profile) async {
+    try {
+      await CollectionService().setActiveCallsign(profile.callsign);
+    } catch (e) {
+      LogService().log('ProfileService: Failed to update callsign path: $e');
+    }
+
+    activeProfileNotifier.notifyListeners();
+
+    if (EventBus().hasSubscribers<ProfileChangedEvent>()) {
+      EventBus().fire(ProfileChangedEvent(
+        callsign: profile.callsign,
+        npub: profile.npub,
+      ));
+    }
   }
 
   /// Set profile picture from file

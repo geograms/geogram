@@ -19,6 +19,7 @@ class DMNotificationService {
 
   final FlutterLocalNotificationsPlugin _notificationsPlugin = FlutterLocalNotificationsPlugin();
   EventSubscription<DirectMessageReceivedEvent>? _dmEventSubscription;
+  EventSubscription<ChatMessageEvent>? _chatEventSubscription;
   bool _initialized = false;
   bool _permissionRequested = false;
 
@@ -144,6 +145,9 @@ class DMNotificationService {
     _dmEventSubscription = EventBus().on<DirectMessageReceivedEvent>((event) {
       _handleIncomingDM(event);
     });
+    _chatEventSubscription = EventBus().on<ChatMessageEvent>((event) {
+      _handleIncomingChatMessage(event);
+    });
     LogService().log('DMNotificationService: Subscribed to DirectMessageReceivedEvent');
   }
 
@@ -179,6 +183,29 @@ class DMNotificationService {
     );
 
     LogService().log('DMNotificationService: Showed notification for message from ${event.fromCallsign}');
+  }
+
+  /// Handle incoming chat message (group/room)
+  Future<void> _handleIncomingChatMessage(ChatMessageEvent event) async {
+    if (!_initialized) return;
+
+    final settings = NotificationService().getSettings();
+    if (!settings.enableNotifications || !settings.notifyNewMessages) {
+      LogService().log('DMNotificationService: Notifications disabled in settings');
+      return;
+    }
+
+    final myCallsign = ProfileService().getProfile().callsign;
+    if (myCallsign.isEmpty || event.callsign == myCallsign) {
+      return;
+    }
+
+    await _showChatNotification(
+      roomId: event.roomId,
+      fromCallsign: event.callsign,
+      content: event.content,
+      verified: event.verified,
+    );
   }
 
   /// Show a notification for a direct message
@@ -238,6 +265,58 @@ class DMNotificationService {
     );
   }
 
+  /// Show a notification for a chat room message
+  Future<void> _showChatNotification({
+    required String roomId,
+    required String fromCallsign,
+    required String content,
+    required bool verified,
+  }) async {
+    final settings = NotificationService().getSettings();
+
+    final displayContent = content.length > 100
+        ? '${content.substring(0, 100)}...'
+        : content;
+
+    final verifiedBadge = verified ? '✓ ' : '';
+    final title = '$verifiedBadge$fromCallsign • $roomId';
+
+    final androidDetails = AndroidNotificationDetails(
+      'chat_channel',
+      'Chat Rooms',
+      channelDescription: 'Notifications for chat rooms',
+      importance: Importance.high,
+      priority: Priority.high,
+      enableVibration: settings.vibrationEnabled,
+      playSound: settings.soundEnabled,
+      sound: settings.soundEnabled
+          ? const RawResourceAndroidNotificationSound('notification_sound')
+          : null,
+    );
+
+    final iosDetails = DarwinNotificationDetails(
+      presentAlert: true,
+      presentBadge: true,
+      presentSound: settings.soundEnabled,
+      sound: settings.soundEnabled ? 'notification_sound.aiff' : null,
+    );
+
+    final notificationDetails = NotificationDetails(
+      android: androidDetails,
+      iOS: iosDetails,
+    );
+
+    final notificationId = '$roomId:$fromCallsign'.hashCode.abs();
+
+    await _notificationsPlugin.show(
+      notificationId,
+      title,
+      displayContent,
+      notificationDetails,
+      payload: 'chat:$roomId',
+    );
+  }
+
   /// Handle notification tap
   void _onNotificationTapped(NotificationResponse response) {
     final payload = response.payload;
@@ -259,5 +338,6 @@ class DMNotificationService {
   /// Dispose resources
   void dispose() {
     _dmEventSubscription?.cancel();
+    _chatEventSubscription?.cancel();
   }
 }

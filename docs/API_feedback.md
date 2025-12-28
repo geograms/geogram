@@ -1,8 +1,8 @@
 # Centralized Feedback API
 
-**Version**: 1.3
+**Version**: 1.4
 **Status**: Active (implemented)
-**Last Updated**: 2025-12-25
+**Last Updated**: 2025-12-28
 
 ## Table of Contents
 
@@ -71,6 +71,7 @@ The feedback system is content-type agnostic. It works with:
 | `forum` | Forum threads and discussions | `2025-12-01_thread-title` |
 | `event` | Community events and meetups | `2025-01-15_community-meetup` |
 | `place` | Points of interest | `38.7223_-9.1393_cafe-central` |
+| `service` | Service provider listings | `38.7223_-9.1393_john-repairs` |
 | `market` | Marketplace listings | `2025-12-10_laptop-for-sale` |
 | `custom:{appName}` | Custom app-specific content | `custom:myapp_{id}` |
 
@@ -109,6 +110,9 @@ devices/X1ABCD/forum/general/2025-12-01_thread-title/feedback/
 
 Event:
 devices/X1ABCD/events/2025/2025-01-15_community-meetup/feedback/
+
+Service:
+devices/X1ABCD/services/38.7_-9.1/38.7223_-9.1393_john-repairs/feedback/
 ```
 
 ---
@@ -137,8 +141,10 @@ All content types use the same feedback folder structure:
     ├── laugh.txt                   # Emoji reaction: npub per line
     ├── sad.txt                     # Emoji reaction: npub per line
     ├── surprise.txt                # Emoji reaction: npub per line
-    └── comments/
-        └── YYYY-MM-DD_HH-MM-SS_CALLSIGN.txt
+    ├── comments/
+    │   └── YYYY-MM-DD_HH-MM-SS_CALLSIGN.txt
+    └── ratings/
+        └── YYYY-MM-DD_HH-MM-SS_CALLSIGN.txt  # Rating with required comment
 ```
 
 ### Key Principles
@@ -287,6 +293,35 @@ comments/2025-12-15_09-15-00_X1JKLM.txt
 **Purpose**: Detailed text feedback with NOSTR signatures
 **Properties**: Flat structure (no threading), chronologically ordered
 
+### Ratings
+
+**Storage**: `feedback/ratings/` subdirectory
+**Filename Format**: `YYYY-MM-DD_HH-MM-SS_CALLSIGN.txt`
+- `YYYY-MM-DD`: Date of rating creation
+- `HH-MM-SS`: Time of rating creation (24-hour format)
+- `CALLSIGN`: Author callsign (e.g., `X1ABCD`)
+
+**Example Filenames**:
+```
+ratings/2025-12-14_15-30-45_X1ABCD.txt
+ratings/2025-12-20_10-15-30_Y2EFGH.txt
+```
+
+**Purpose**: Numeric rating (1-5 stars) with **required** comment
+**Properties**:
+- Rating value: 1 to 5 (integer)
+- Comment is mandatory - ratings without comments are rejected
+- One rating per user per content (replaces previous rating if exists)
+- Content owner can delete any rating on their content
+- Flat structure (no threading), chronologically ordered
+- Used primarily for service providers, places, and review-based content
+
+**Key Differences from Comments**:
+- **Required**: Comment text is mandatory (cannot submit rating without comment)
+- **One Per User**: Only one rating per user per content item (updates replace)
+- **Numeric Value**: Includes 1-5 star rating value
+- **Owner Deletable**: Content owner can delete any rating on their content
+
 ---
 
 ## File Format Specifications
@@ -345,6 +380,54 @@ This is a great blog post! I really enjoyed reading about your experience.
 --> npub: npub1abc123def456ghi789jkl012mno345pqr678stu901vwx234yz567890
 --> signature: 1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef
 ```
+
+### Rating File Format
+
+**File**: `feedback/ratings/YYYY-MM-DD_HH-MM-SS_CALLSIGN.txt`
+
+**Structure**:
+```
+AUTHOR: {CALLSIGN}
+CREATED: YYYY-MM-DD HH:MM_ss
+RATING: {1-5}
+
+{Comment content here - REQUIRED.
+Can span multiple lines.
+Must explain the rating.}
+
+--> npub: npub1...
+--> signature: {hex_signature}
+```
+
+**Fields**:
+1. **AUTHOR** (required): Callsign of rating author
+2. **CREATED** (required): Timestamp in format `YYYY-MM-DD HH:MM_ss`
+3. **RATING** (required): Numeric value 1-5 (stars)
+4. **Blank line** (required): Separates header from content
+5. **Content** (required): Plain text comment explaining the rating
+6. **Blank line** (optional): Separates content from signature
+7. **npub** (optional): NOSTR public key for verification
+8. **signature** (optional): Hex-encoded Schnorr signature
+
+**Example**:
+```
+AUTHOR: X1ABCD
+CREATED: 2025-12-14 15:30_45
+RATING: 5
+
+Excellent service! John fixed my plumbing issue quickly and professionally.
+Very reasonable prices and he cleaned up after the work was done.
+Highly recommend for any plumbing needs.
+
+--> npub: npub1abc123def456ghi789jkl012mno345pqr678stu901vwx234yz567890
+--> signature: 1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef
+```
+
+**Validation Rules**:
+- RATING must be integer 1-5
+- Content must not be empty (minimum 10 characters recommended)
+- If user submits new rating, previous rating file is deleted and replaced
+- Content owner can delete rating file directly
 
 ### NOSTR Signature Format
 
@@ -659,6 +742,163 @@ final response = await http.post(
 }
 ```
 
+### Endpoint: Add/Update Rating
+
+**Endpoint**: `POST /api/feedback/{contentType}/{contentId}/rating`
+
+**Purpose**: Submit a rating with required comment. Replaces any existing rating from the same user.
+
+**Request Body**:
+```json
+{
+  "author": "X1ABCD",
+  "rating": 5,
+  "content": "Excellent service! John fixed my plumbing issue quickly and professionally.",
+  "npub": "npub1abc123...",
+  "signature": "1234567890abcdef..."
+}
+```
+
+**Required Fields**:
+- `author`: Callsign of the rating author
+- `rating`: Integer 1-5 (stars)
+- `content`: Comment text explaining the rating (minimum 10 characters)
+
+**Optional Fields**:
+- `npub`: NOSTR public key for verification
+- `signature`: Hex-encoded Schnorr signature
+
+**Response** (Success - 200):
+```json
+{
+  "success": true,
+  "rating_id": "2025-12-22_10-30-45_X1ABCD",
+  "action": "created",
+  "average_rating": 4.5,
+  "rating_count": 12,
+  "timestamp": "2025-12-22T10:30:45Z"
+}
+```
+
+**Response** (Updated existing - 200):
+```json
+{
+  "success": true,
+  "rating_id": "2025-12-22_10-30-45_X1ABCD",
+  "action": "updated",
+  "previous_rating": 3,
+  "new_rating": 5,
+  "average_rating": 4.6,
+  "rating_count": 12,
+  "timestamp": "2025-12-22T10:30:45Z"
+}
+```
+
+**Response** (Missing comment - 400):
+```json
+{
+  "success": false,
+  "error": "missing_comment",
+  "message": "Rating must include a comment explaining the rating",
+  "details": {
+    "field": "content",
+    "suggestion": "Provide a comment with at least 10 characters"
+  }
+}
+```
+
+### Endpoint: Get Ratings
+
+**Endpoint**: `GET /api/feedback/{contentType}/{contentId}/ratings`
+
+**Query Parameters**:
+- `limit` (optional): Max ratings to return (default: 20)
+- `offset` (optional): Pagination offset (default: 0)
+- `sort` (optional): Sort order - `newest`, `oldest`, `highest`, `lowest` (default: `newest`)
+
+**Response**:
+```json
+{
+  "success": true,
+  "content_id": "38.7223_-9.1393_john-repairs",
+  "content_type": "service",
+  "average_rating": 4.5,
+  "rating_count": 12,
+  "rating_distribution": {
+    "5": 7,
+    "4": 3,
+    "3": 1,
+    "2": 0,
+    "1": 1
+  },
+  "ratings": [
+    {
+      "id": "2025-12-22_10-30-45_X1ABCD",
+      "author": "X1ABCD",
+      "rating": 5,
+      "created": "2025-12-22 10:30_45",
+      "content": "Excellent service! John fixed my plumbing issue quickly.",
+      "npub": "npub1abc123...",
+      "has_signature": true
+    },
+    {
+      "id": "2025-12-20_14-15-30_Y2EFGH",
+      "author": "Y2EFGH",
+      "rating": 4,
+      "created": "2025-12-20 14:15_30",
+      "content": "Good work, slightly delayed but quality was great.",
+      "npub": "npub1xyz987...",
+      "has_signature": true
+    }
+  ],
+  "timestamp": "2025-12-22T10:35:00Z"
+}
+```
+
+### Endpoint: Delete Rating
+
+**Endpoint**: `DELETE /api/feedback/{contentType}/{contentId}/rating/{ratingId}`
+
+**Purpose**: Delete a rating. Can be done by the rating author OR the content owner.
+
+**Request Body** (for authentication):
+```json
+{
+  "npub": "npub1abc123...",
+  "signature": "1234567890abcdef..."
+}
+```
+
+**Authorization**:
+- **Rating author**: Can delete their own rating
+- **Content owner**: Can delete ANY rating on their content (for moderation)
+
+**Response** (Success - 200):
+```json
+{
+  "success": true,
+  "action": "deleted",
+  "rating_id": "2025-12-22_10-30-45_X1ABCD",
+  "deleted_by": "owner",
+  "average_rating": 4.3,
+  "rating_count": 11,
+  "timestamp": "2025-12-22T11:00:00Z"
+}
+```
+
+**Response** (Forbidden - 403):
+```json
+{
+  "success": false,
+  "error": "forbidden",
+  "message": "Only the rating author or content owner can delete this rating",
+  "details": {
+    "rating_author": "X1ABCD",
+    "content_owner": "Y2EFGH"
+  }
+}
+```
+
 ---
 
 ### Subscription Notifications
@@ -757,7 +997,9 @@ when the user opens the item.
     "laugh": 3,
     "sad": 0,
     "surprise": 1,
-    "comments": 27
+    "comments": 27,
+    "ratings": 12,
+    "average_rating": 4.5
   },
   "user_state": {
     "liked": true,
@@ -771,7 +1013,9 @@ when the user opens the item.
     "celebrate": false,
     "laugh": false,
     "sad": false,
-    "surprise": false
+    "surprise": false,
+    "has_rated": true,
+    "user_rating": 5
   },
   "comments": [
     {
@@ -798,7 +1042,7 @@ Feedback actions are signed NOSTR events for cryptographic verification and rela
 | Action | NOSTR Kind | Description |
 |--------|------------|-------------|
 | Like, Point, Dislike, React | 7 | Reaction event (NIP-25) |
-| Comment, View, Notify | 1 | Text note (NIP-01) |
+| Comment, View, Notify, Rating | 1 | Text note (NIP-01) |
 | Subscribe, Verify | 30078 | Application-specific data (NIP-78) |
 
 ### Event Structure for Reactions
@@ -842,6 +1086,29 @@ Feedback actions are signed NOSTR events for cryptographic verification and rela
 }
 ```
 
+### Event Structure for Ratings
+
+**Kind 1** (Text Note with rating tag):
+
+```json
+{
+  "kind": 1,
+  "pubkey": "{hex_pubkey}",
+  "created_at": 1734864600,
+  "tags": [
+    ["content_type", "service"],
+    ["content_id", "38.7223_-9.1393_john-repairs"],
+    ["action", "rating"],
+    ["owner", "X1ABCD"],
+    ["rating", "5"]
+  ],
+  "content": "Excellent service! John fixed my plumbing issue quickly and professionally.",
+  "sig": "{hex_signature}"
+}
+```
+
+**Note**: The `["rating", "{1-5}"]` tag is required and contains the numeric rating value as a string.
+
 ### Event Structure for Subscribe/Verify
 
 **Kind 30078** (Application Data):
@@ -883,9 +1150,9 @@ Optional tags:
 
 | Permission Level | Can Do |
 |------------------|--------|
-| **Public** (any authenticated user) | Add likes, points, dislikes, emoji reactions, comments, subscriptions |
-| **Author** (comment author) | Delete own comments |
-| **Content Owner** (content creator) | Delete any comment on their content, notify subscribers |
+| **Public** (any authenticated user) | Add likes, points, dislikes, emoji reactions, comments, ratings, subscriptions |
+| **Author** (comment/rating author) | Delete own comments, delete own ratings |
+| **Content Owner** (content creator) | Delete any comment on their content, delete any rating on their content, notify subscribers |
 | **Admin** (system admin) | All permissions, bulk operations |
 
 ### NOSTR Signature Verification
@@ -910,6 +1177,7 @@ Comments SHOULD include signatures as well, but the server stores unsigned comme
 | Action | Limit |
 |--------|-------|
 | **Comments** | 10 per hour, 100 per day per user |
+| **Ratings** | 1 per content per user (updates replace previous) |
 | **Likes/Reactions** | Unlimited toggles |
 | **Points** | Unlimited toggles |
 | **Subscriptions** | Unlimited toggles |
@@ -919,10 +1187,14 @@ Comments SHOULD include signatures as well, but the server stores unsigned comme
 
 1. **Anyone** can add feedback to published content
 2. **Only the author** can delete their own comments
-3. **Only the content owner** can delete comments on their content
-4. **Verifications are immutable** - cannot be removed once added
-5. **Only content owners** can send subscriber notifications
-6. **Rate limits apply** to prevent spam
+3. **Only the author** can delete their own ratings
+4. **Only the content owner** can delete comments on their content
+5. **Only the content owner** can delete ratings on their content (for moderation)
+6. **Ratings require comments** - a rating without a comment is rejected
+7. **One rating per user** - submitting a new rating replaces the previous one
+8. **Verifications are immutable** - cannot be removed once added
+9. **Only content owners** can send subscriber notifications
+10. **Rate limits apply** to prevent spam
 
 ---
 
@@ -1746,6 +2018,15 @@ See "Comment File Format" above. Files are named `YYYY-MM-DD_HH-MM-SS_CALLSIGN.t
 ---
 
 ## Changelog
+
+### Version 1.4 (2025-12-28)
+- Added Ratings feedback type with required comments
+- New `feedback/ratings/` folder structure
+- Rating file format with RATING field (1-5)
+- API endpoints: POST/GET/DELETE ratings
+- Content owner can delete any rating on their content
+- One rating per user per content (updates replace)
+- Updated permission levels and authorization rules for ratings
 
 ### Version 1.3 (2025-12-25)
 - Toggle feedback files store one npub per line; views remain JSON events

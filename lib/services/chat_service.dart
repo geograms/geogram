@@ -12,6 +12,7 @@ import '../models/chat_message.dart';
 import '../models/chat_channel.dart';
 import '../models/chat_security.dart';
 import '../platform/file_system_service.dart';
+import '../util/event_bus.dart';
 import 'profile_service.dart';
 
 /// Notification when chat files change
@@ -832,6 +833,17 @@ class ChatService {
     // Update channel last message time
     channel.lastMessageTime = message.dateTime;
     await _saveChannels();
+
+    if (EventBus().hasSubscribers<ChatMessageEvent>()) {
+      EventBus().fire(ChatMessageEvent(
+        roomId: channelId,
+        callsign: message.author,
+        content: message.content,
+        npub: message.npub,
+        signature: message.signature,
+        verified: message.isVerified,
+      ));
+    }
   }
 
   /// Get daily message file path for main channel (web)

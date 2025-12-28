@@ -55,6 +55,7 @@ class DevicesService {
 
   /// Station connection event subscription
   EventSubscription<ConnectionStateChangedEvent>? _stationConnectionSubscription;
+  EventSubscription<ProfileChangedEvent>? _profileChangedSubscription;
 
   /// Cache of known devices with their status
   final Map<String, RemoteDevice> _devices = {};
@@ -101,6 +102,7 @@ class DevicesService {
     }
     _subscribeToDebugActions();
     _subscribeToStationConnection();
+    _subscribeToProfileChanges();
 
     _isInitialized = true;
   }
@@ -116,6 +118,44 @@ class DevicesService {
         );
       }
     });
+  }
+
+  /// Subscribe to profile identity changes so BLE uses the latest callsign/keys
+  void _subscribeToProfileChanges() {
+    _profileChangedSubscription?.cancel();
+    _profileChangedSubscription = EventBus().on<ProfileChangedEvent>(_handleProfileChanged);
+  }
+
+  Future<void> _handleProfileChanged(ProfileChangedEvent event) async {
+    LogService().log('DevicesService: Profile changed to ${event.callsign}, refreshing BLE identity');
+
+    if (AppArgs().internetOnly) {
+      LogService().log('DevicesService: Internet-only mode - skipping BLE refresh');
+      return;
+    }
+
+    // Only refresh if BLE was initialized (skip when permissions were denied or BLE is off)
+    if (_bleService == null) {
+      return;
+    }
+
+    try {
+      if (_bleMessageService != null) {
+        _bleChatSubscription?.cancel();
+        _bleMessageService!.dispose();
+        _bleMessageService = null;
+      }
+
+      await _initializeBLEMessaging();
+
+      // For non-server platforms, restart advertising with the new callsign
+      if (!BLEMessageService.canBeServer) {
+        await _bleService!.stopAdvertising();
+        await _startBLEAdvertisingWithCallsign(event.callsign);
+      }
+    } catch (e) {
+      LogService().log('DevicesService: Failed to refresh BLE identity: $e');
+    }
   }
 
   /// Initialize BLE after onboarding (for first-time Android users)
@@ -2140,6 +2180,8 @@ class DevicesService {
     _bleSubscription?.cancel();
     _bleChatSubscription?.cancel();
     _debugSubscription?.cancel();
+    _stationConnectionSubscription?.cancel();
+    _profileChangedSubscription?.cancel();
     _bleService?.dispose();
     _bleMessageService?.dispose();
     _devicesController.close();

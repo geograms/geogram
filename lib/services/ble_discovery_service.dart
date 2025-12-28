@@ -413,7 +413,7 @@ class BLEDiscoveryService {
       // Start advertising with our service UUID and data
       await BlePeripheral.startAdvertising(
         services: [serviceUUID],
-        localName: 'Geogram',
+        localName: Platform.isAndroid ? null : 'Geogram',
         manufacturerData: ManufacturerData(
           manufacturerId: 0xFFFF, // Test manufacturer ID
           data: advertisingData,

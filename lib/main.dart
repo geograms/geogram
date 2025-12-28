@@ -19,6 +19,7 @@ import 'services/notification_service.dart';
 import 'services/i18n_service.dart';
 import 'services/chat_notification_service.dart';
 import 'services/dm_notification_service.dart';
+import 'services/message_attention_service.dart';
 import 'services/update_service.dart';
 import 'services/devices_service.dart';
 import 'services/ble_permission_service.dart';
@@ -204,6 +205,9 @@ void main() async {
     }
     await DMNotificationService().initialize(skipPermissionRequest: firstLaunch);
     LogService().log('DMNotificationService initialized (skipPermission: $firstLaunch)');
+
+    await MessageAttentionService().initialize();
+    LogService().log('MessageAttentionService initialized');
 
   } catch (e, stackTrace) {
     LogService().log('ERROR during critical initialization: $e');

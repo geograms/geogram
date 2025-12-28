@@ -213,7 +213,7 @@ class BLEGattServerService {
       // Start advertising
       await BlePeripheral.startAdvertising(
         services: [serviceUUID],
-        localName: 'Geogram',
+        localName: Platform.isAndroid ? null : 'Geogram',
         manufacturerData: ManufacturerData(
           manufacturerId: 0xFFFF,
           data: serviceData,

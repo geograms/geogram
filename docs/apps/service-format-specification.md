@@ -1,6 +1,6 @@
 # Service Format Specification
 
-**Version**: 1.0
+**Version**: 1.1
 **Last Updated**: 2025-12-28
 **Status**: Draft
 
@@ -8,9 +8,10 @@
 
 - [Overview](#overview)
 - [File Organization](#file-organization)
-- [Coordinate-Based Organization](#coordinate-based-organization)
+- [Geographic Organization](#geographic-organization)
 - [Service Format](#service-format)
 - [Service Offerings](#service-offerings)
+- [Pricing Information](#pricing-information)
 - [Service Types Reference](#service-types-reference)
 - [Contact Information](#contact-information)
 - [Service Radius](#service-radius)
@@ -33,15 +34,16 @@ This document specifies the text-based format used for storing service provider 
 ### Key Features
 
 - **Multiple Services per Provider**: Each provider can list several expertises with individual descriptions
-- **Coordinate-Based Organization**: Services organized by geographic regions
+- **Geographic Organization**: Services organized by country and city (matched from internal database)
 - **Service Radius**: Define geographic coverage area (1-200 km, default 30 km)
+- **Pricing Information**: Cost per hour/day/service with currency
 - **Multilingual Content**: Names and descriptions switch based on client language
-- **Contact Information**: Phone, email, and social media links
+- **Contact Information**: Phone, email, website, and direct messaging
 - **Operating Hours**: Optional schedule field
 - **Profile Picture**: Select one photo as the provider's profile image
-- **Feedback Integration**: Uses centralized feedback API (likes, comments)
+- **Feedback Integration**: Uses centralized feedback API (likes, ratings, comments)
 - **NOSTR Integration**: Cryptographic signatures for authenticity
-- **~50 Predefined Service Types**: Categorized professions for easy filtering
+- **~68 Predefined Service Types**: Categorized professions for easy filtering
 
 ### Use Cases
 
@@ -50,57 +52,87 @@ This document specifies the text-based format used for storing service provider 
 - Home service providers (plumbers, electricians, cleaners)
 - Personal care services (hairdressers, massage therapists)
 - Professional services (lawyers, accountants, notaries)
+- Creative professionals (artists, musicians, writers)
+- Tech professionals (programmers, software developers, IT consultants)
 
 ## File Organization
 
 ### Directory Structure
 
+Services are organized by **country** and **city**, with the city determined by matching coordinates to the nearest city/village in the internal city database.
+
 ```
 devices/{callsign}/services/
-├── 38.7_-9.1/                              # Region folder (1 decimal precision)
-│   └── 38.7223_-9.1393_john-repairs/
-│       ├── service.txt                      # Main service file
-│       ├── images/                          # Photo storage
-│       │   ├── photo1.jpg
-│       │   └── photo2.jpg
-│       └── feedback/                        # Centralized feedback
-│           ├── likes.txt
-│           ├── subscribe.txt
-│           └── comments/
-│               └── 2025-12-28_10-30-00_Y2EFGH.txt
-└── 40.7_-74.0/                             # Another region
-    └── 40.7128_-74.0060_maria-tutoring/
-        ├── service.txt
-        └── images/
+├── portugal/                               # Country folder (lowercase)
+│   └── coimbra/                            # City folder (lowercase)
+│       └── X1ABCD_mechanics-silva/         # Service folder
+│           ├── service.txt                 # Main service file
+│           ├── media/                      # Media storage
+│           │   ├── media1.jpg
+│           │   └── media2.jpg
+│           └── feedback/                   # Centralized feedback
+│               ├── likes.txt
+│               ├── ratings.txt             # Ratings with comments
+│               ├── subscribe.txt
+│               └── comments/
+│                   └── 2025-12-28_10-30-00_Y2EFGH.txt
+├── united-states/                          # Another country
+│   └── new-york/                           # City
+│       └── Y2EFGH_maria-tutoring/
+│           ├── service.txt
+│           └── media/
+└── united-kingdom/
+    └── london/
+        └── Z3IJKL_techfix-pro/
+            ├── service.txt
+            └── media/
 ```
 
-### Region Folder Naming
+### Country Folder Naming
 
-**Pattern**: `{LAT}_{LON}/`
+**Pattern**: `{country-name}/`
 
-**Coordinate Rounding**:
-- Round latitude to 1 decimal place (e.g., 38.7223 → 38.7)
-- Round longitude to 1 decimal place (e.g., -9.1393 → -9.1)
-- Creates ~30,000 possible regions globally
-- Each region covers approximately 130 km x 130 km at the equator
+**Rules**:
+- Lowercase
+- Replace spaces with hyphens
+- Use English name of country
+- Derived from coordinates via city database lookup
 
 **Examples**:
 ```
-38.7_-9.1/          # Lisbon area, Portugal
-40.7_-74.0/         # New York City area, USA
-51.5_-0.1/          # London area, UK
--33.8_151.2/        # Sydney area, Australia
-35.6_139.6/         # Tokyo area, Japan
+portugal/           # Portugal
+united-states/      # United States
+united-kingdom/     # United Kingdom
+germany/            # Germany
+brazil/             # Brazil
+```
+
+### City Folder Naming
+
+**Pattern**: `{city-name}/`
+
+**Rules**:
+- Lowercase
+- Replace spaces with hyphens
+- City/village name from internal database
+- Matched to nearest city based on coordinates
+
+**Examples**:
+```
+lisbon/             # Lisboa, Portugal
+coimbra/            # Coimbra, Portugal
+new-york/           # New York, USA
+london/             # London, UK
+sao-paulo/          # São Paulo, Brazil
 ```
 
 ### Service Folder Naming
 
-**Pattern**: `{LAT}_{LON}_{sanitized-name}/`
+**Pattern**: `{CALLSIGN}_{sanitized-name}/`
 
-**Full Precision Coordinates**:
-- Use full precision (6 decimal places recommended)
-- Latitude: -90.0 to +90.0
-- Longitude: -180.0 to +180.0
+**Components**:
+- **CALLSIGN**: Author's callsign (e.g., X1ABCD)
+- **sanitized-name**: Cleaned service name
 
 **Sanitization Rules**:
 1. Convert name to lowercase
@@ -109,44 +141,64 @@ devices/{callsign}/services/
 4. Collapse multiple consecutive hyphens
 5. Remove leading/trailing hyphens
 6. Truncate to 50 characters
-7. Prepend full coordinates
 
 **Examples**:
 ```
-Name: "John's Repair Services"
-Coordinates: 38.7223, -9.1393
-→ 38.7223_-9.1393_johns-repair-services/
+Name: "Mechanics Silva"
+Author: X1ABCD
+→ X1ABCD_mechanics-silva/
 
 Name: "Maria's Tutoring & Teaching"
-Coordinates: 40.7128, -74.0060
-→ 40.7128_-74.0060_marias-tutoring-teaching/
+Author: Y2EFGH
+→ Y2EFGH_marias-tutoring-teaching/
+
+Name: "TechFix Pro - Repairs"
+Author: Z3IJKL
+→ Z3IJKL_techfix-pro-repairs/
 ```
 
-## Coordinate-Based Organization
+## Geographic Organization
 
-### Grid System Overview
+### City Database Lookup
 
-The services collection uses a two-level coordinate-based organization:
+When creating a service, the system:
 
-1. **Region Level**: Rounded coordinates (1 decimal place)
-   - Purpose: Group nearby services into manageable folders
-   - Limit: ~30,000 regions globally
-   - Size: ~130 km x 130 km per region
+1. Takes the coordinates from the COORDINATES field (mandatory)
+2. Queries the internal city database for the nearest city/village
+3. Retrieves the city name and country
+4. Creates the folder structure: `{country}/{city}/{callsign}_{name}/`
 
-2. **Service Level**: Full precision coordinates (6 decimals)
-   - Purpose: Exact location identification (office/base location)
-   - Precision: ~0.1 meters (at equator)
+### Internal City Database
 
-### Finding a Service's Region
+The system maintains a database of cities and villages with:
+- City/village name (localized and English)
+- Country
+- Coordinates (latitude, longitude)
+- Population (for ranking)
+
+### Location Resolution
 
 ```
-Given coordinates: 38.7223, -9.1393
+Given coordinates: 40.2033, -8.4103
 
-1. Round latitude to 1 decimal: 38.7223 → 38.7
-2. Round longitude to 1 decimal: -9.1393 → -9.1
-3. Format region folder: 38.7_-9.1/
-4. Service created in: 38.7_-9.1/38.7223_-9.1393_service-name/
+1. Query city database for nearest city
+2. Result: Coimbra, Portugal
+3. Create folder path: portugal/coimbra/
+4. Service created in: portugal/coimbra/X1ABCD_service-name/
 ```
+
+### Fallback Behavior
+
+If no city is found within reasonable distance:
+- Use the nearest known location
+- Or create a region folder based on coordinates: `{LAT}_{LON}/`
+
+### Benefits of City-Based Organization
+
+1. **Human Readable**: Easy to browse by location
+2. **Intuitive**: Users can find services by city name
+3. **Scalable**: Works well with any number of services
+4. **SEO Friendly**: Meaningful URLs for web interfaces
 
 ## Service Format
 
@@ -164,15 +216,16 @@ COORDINATES: lat,lon
 RADIUS: kilometers
 ADDRESS: Full Address (optional)
 HOURS: Operating hours (optional)
-PROFILE_PIC: images/photo1.jpg (optional)
+PROFILE_PIC: media/media1.jpg (optional)
 ADMINS: npub1abc123... (optional)
 
 PHONE: +351-912-345-678 (optional)
 EMAIL: contact@example.com (optional)
-WHATSAPP: +351-912-345-678 (optional)
-INSTAGRAM: @username (optional)
-FACEBOOK: /pagename (optional)
 WEBSITE: https://example.com (optional)
+
+PRICE: 25 (optional)
+CURRENCY: EUR (optional)
+PRICE_UNIT: hour (optional - hour/day/service)
 
 ## ABOUT
 About the provider - general introduction, experience, certifications.
@@ -200,15 +253,16 @@ COORDINATES: lat,lon
 RADIUS: kilometers
 ADDRESS: Full Address (optional)
 HOURS: Mon-Fri 9:00-18:00, Sat 10:00-14:00 (optional)
-PROFILE_PIC: images/photo1.jpg (optional)
+PROFILE_PIC: media/media1.jpg (optional)
 ADMINS: npub1abc123... (optional)
 
 PHONE: +351-912-345-678
 EMAIL: contact@example.com
-WHATSAPP: +351-912-345-678
-INSTAGRAM: @username
-FACEBOOK: /pagename
 WEBSITE: https://example.com
+
+PRICE: 50
+CURRENCY: EUR
+PRICE_UNIT: hour
 
 ## ABOUT
 [EN]
@@ -292,7 +346,7 @@ Trabalhos elétricos para casas e pequenos negócios. Eletricista certificado.
 
 9. **Profile Picture** (optional)
    - **Format**: `PROFILE_PIC: <relative-path>`
-   - **Example**: `PROFILE_PIC: images/photo1.jpg`
+   - **Example**: `PROFILE_PIC: media/media1.jpg`
    - **Purpose**: Main profile image for the service provider
 
 10. **Admins** (optional)
@@ -312,22 +366,67 @@ Contact fields appear after the header metadata:
     - **Format**: `EMAIL: <email address>`
     - **Example**: `EMAIL: contact@example.com`
 
-13. **WhatsApp** (optional)
-    - **Format**: `WHATSAPP: <phone number>`
-    - **Example**: `WHATSAPP: +351-912-345-678`
-    - **Note**: Can be same as PHONE or different
-
-14. **Instagram** (optional)
-    - **Format**: `INSTAGRAM: <handle>`
-    - **Example**: `INSTAGRAM: @johnrepairs`
-
-15. **Facebook** (optional)
-    - **Format**: `FACEBOOK: <page path>`
-    - **Example**: `FACEBOOK: /johnrepairs`
-
-16. **Website** (optional)
+13. **Website** (optional)
     - **Format**: `WEBSITE: <url>`
     - **Example**: `WEBSITE: https://johnrepairs.pt`
+
+### Direct Messaging
+
+Users can send 1:1 messages directly to the service provider through the Geogram messaging system. This is built-in and doesn't require additional configuration.
+
+**How it works**:
+- The service author's callsign (AUTHOR field) is used for direct messaging
+- UI shows a "Send Message" button that opens the chat interface
+- Messages are sent via Geogram's encrypted chat system
+- No external apps (WhatsApp, Instagram, etc.) required
+
+**UI Display**:
+- **Send Message** button: Opens direct chat with provider
+- **Call** button: Dials phone number (if PHONE provided)
+- **Email** button: Opens email client (if EMAIL provided)
+- **Website** link: Opens external browser (if WEBSITE provided)
+
+### Pricing Section
+
+Pricing fields appear after contact information:
+
+14. **Price** (optional)
+    - **Format**: `PRICE: <number>`
+    - **Example**: `PRICE: 50`
+    - **Purpose**: Base price for services
+
+15. **Currency** (optional, required if PRICE set)
+    - **Format**: `CURRENCY: <ISO 4217 code>`
+    - **Examples**: `EUR`, `USD`, `GBP`, `BRL`
+    - **Purpose**: Currency for the price
+
+16. **Price Unit** (optional, required if PRICE set)
+    - **Format**: `PRICE_UNIT: <hour|day|service>`
+    - **Values**:
+      - `hour`: Price per hour of work
+      - `day`: Price per day of work
+      - `service`: Price per service/job (fixed rate)
+    - **Example**: `PRICE_UNIT: hour`
+
+**Pricing Examples**:
+```
+# €50 per hour (common for professionals)
+PRICE: 50
+CURRENCY: EUR
+PRICE_UNIT: hour
+
+# $500 per day (for full-day jobs)
+PRICE: 500
+CURRENCY: USD
+PRICE_UNIT: day
+
+# €200 fixed price per service
+PRICE: 200
+CURRENCY: EUR
+PRICE_UNIT: service
+```
+
+**Note**: Pricing is a general indication. Actual prices may vary based on job complexity. Detailed pricing can be described in the ABOUT or OFFERING sections.
 
 ### About Section
 
@@ -434,7 +533,7 @@ Reparações gerais e manutenção. Nenhum trabalho é pequeno demais!
 
 ### Overview
 
-The service type field allows categorization for filtering and searching. Types are lowercase with hyphens separating words. Approximately 50 predefined types organized by category.
+The service type field allows categorization for filtering and searching. Types are lowercase with hyphens separating words. Approximately 68 predefined types organized by 10 categories.
 
 ### Home & Property (12 types)
 
@@ -507,6 +606,33 @@ The service type field allows categorization for filtering and searching. Types 
 - **pet-sitter**: Pet sitting
 - **dog-walker**: Dog walking
 
+### Creative & Arts (6 types)
+
+- **artist**: Visual arts (painting, sculpture, drawing)
+- **writer**: Writing services (copywriting, content, ghostwriting)
+- **illustrator**: Illustration and digital art
+- **animator**: Animation and motion graphics
+- **voice-actor**: Voice acting and narration
+- **art-teacher**: Art instruction and workshops
+
+### Technology & Software (6 types)
+
+- **programmer**: Software development and coding
+- **mobile-developer**: Mobile app development (iOS, Android)
+- **data-analyst**: Data analysis and visualization
+- **ai-specialist**: AI/ML development and consulting
+- **cybersecurity**: Cybersecurity consulting and auditing
+- **devops**: DevOps and cloud infrastructure
+
+### Security & Protection (6 types)
+
+- **security-guard**: Security guard services
+- **night-guard**: Night watchman and overnight security
+- **bodyguard**: Personal protection and escort services
+- **private-investigator**: Private investigation services
+- **alarm-monitoring**: Alarm system monitoring services
+- **access-control**: Access control and entry management
+
 ### Usage Guidelines
 
 **Choosing Types**:
@@ -529,20 +655,61 @@ The service type field allows categorization for filtering and searching. Types 
 |-------|--------|---------|
 | PHONE | International format recommended | `+351-912-345-678` |
 | EMAIL | Standard email format | `contact@example.com` |
-| WHATSAPP | Phone number with country code | `+351-912-345-678` |
-| INSTAGRAM | Handle with @ | `@johnrepairs` |
-| FACEBOOK | Page path with / | `/johnrepairs` |
 | WEBSITE | Full URL with https:// | `https://johnrepairs.pt` |
+
+### Direct Messaging
+
+All service providers can be contacted directly through Geogram's built-in messaging system:
+- No external apps or accounts required
+- Uses the provider's callsign (AUTHOR field)
+- Encrypted 1:1 messaging
 
 ### Contact Display
 
 UI should display contact options as actionable buttons:
-- **Phone**: Opens phone dialer
-- **Email**: Opens email client
-- **WhatsApp**: Opens WhatsApp with pre-filled number
-- **Instagram**: Opens Instagram profile
-- **Facebook**: Opens Facebook page
-- **Website**: Opens web browser
+- **Send Message**: Opens Geogram chat with provider (always available)
+- **Call**: Opens phone dialer (if PHONE provided)
+- **Email**: Opens email client (if EMAIL provided)
+- **Website**: Opens web browser (if WEBSITE provided)
+
+## Pricing Information
+
+### Pricing Fields Summary
+
+| Field | Format | Example | Description |
+|-------|--------|---------|-------------|
+| PRICE | Numeric value | `50` | Base price amount |
+| CURRENCY | ISO 4217 code | `EUR`, `USD`, `GBP` | Currency code |
+| PRICE_UNIT | `hour`, `day`, or `service` | `hour` | Billing unit |
+
+### Price Unit Explained
+
+- **hour**: Price per hour of work (common for consulting, repairs)
+- **day**: Price per full day of work (common for contractors)
+- **service**: Fixed price per job/service (common for specific tasks)
+
+### Common Currency Codes
+
+| Code | Currency | Symbol |
+|------|----------|--------|
+| EUR | Euro | € |
+| USD | US Dollar | $ |
+| GBP | British Pound | £ |
+| BRL | Brazilian Real | R$ |
+| CHF | Swiss Franc | CHF |
+| JPY | Japanese Yen | ¥ |
+| CNY | Chinese Yuan | ¥ |
+| AUD | Australian Dollar | A$ |
+| CAD | Canadian Dollar | C$ |
+
+### Pricing Display
+
+UI should format pricing as:
+- `€50/hour` - Price per hour
+- `$500/day` - Price per day
+- `€200/service` - Fixed price per job
+
+**Note**: Detailed or variable pricing can be explained in the ABOUT or OFFERING description sections.
 
 ## Service Radius
 
@@ -607,18 +774,18 @@ RADIUS: 200      # Maximum
 
 ## Photos and Media
 
-### Photo Organization
+### Media Organization
 
-Photos are stored in the `images/` subfolder:
+Media files are stored in the `media/` subfolder:
 
 ```
-38.7223_-9.1393_john-repairs/
+X1ABCD_johns-plumbing-services/
 ├── service.txt
-└── images/
-    ├── photo1.jpg          # Profile picture (if selected)
-    ├── photo2.jpg
-    ├── photo3.png
-    └── photo4.webp
+└── media/
+    ├── media1.jpg          # Profile picture (if selected)
+    ├── media2.jpg
+    ├── media3.png
+    └── media4.webp
 ```
 
 ### Supported Media Types
@@ -628,41 +795,52 @@ Photos are stored in the `images/` subfolder:
 - Recommended: JPG for photos, PNG for graphics
 - Any resolution (high resolution recommended)
 
+**Videos** (optional):
+- MP4, WebM, MOV
+- Short clips recommended
+
 ### Profile Picture
 
 **Selection**:
-- User selects one photo from `images/` as profile picture
+- User selects one media file from `media/` as profile picture
 - Stored as relative path in `PROFILE_PIC` field
-- Example: `PROFILE_PIC: images/photo1.jpg`
+- Example: `PROFILE_PIC: media/media1.jpg`
 
 **Display**:
 - Shown prominently in service listings
 - Used in search results
 - Displayed in service detail header
 
-### Photo Naming
+### Media Naming
 
-**Convention**: Sequential naming (photo1.jpg, photo2.jpg, etc.)
+**Convention**: Sequential naming (media1.jpg, media2.jpg, etc.)
 
 **Best Practices**:
 - Use sequential numbering for simplicity
 - Preserve original file extensions
-- Keep photos in `images/` folder
+- Keep all media in `media/` folder
 
 ## Feedback System
 
 ### Overview
 
-Services use the centralized feedback API for likes and comments. Feedback is stored in the `feedback/` subdirectory.
+Services use the **Centralized Feedback API** for likes, ratings, and comments.
+
+**IMPORTANT**: For complete implementation details, file formats, API endpoints, NOSTR signing, and error handling, refer to the authoritative documentation:
+
+> **[Centralized Feedback API Documentation](../API_feedback.md)**
+
+This is the primary reference for implementing feedback functionality.
 
 ### Folder Structure
 
 ```
-38.7223_-9.1393_john-repairs/
+X1ABCD_johns-plumbing-services/
 ├── service.txt
-├── images/
+├── media/
 └── feedback/
     ├── likes.txt               # One npub per line
+    ├── ratings.txt             # Ratings with required comments (JSON events)
     ├── subscribe.txt           # Subscribers
     └── comments/
         ├── 2025-12-28_10-30-00_X1ABCD.txt
@@ -671,18 +849,58 @@ Services use the centralized feedback API for likes and comments. Feedback is st
 
 ### API Endpoints
 
-Following the centralized feedback API pattern:
+Following the centralized feedback API pattern (see [API_feedback.md](../API_feedback.md)):
 
 ```
 POST /api/feedback/service/{serviceId}/like
+POST /api/feedback/service/{serviceId}/rating      # Rating with required comment
+GET  /api/feedback/service/{serviceId}/rating      # Get all ratings
+DELETE /api/feedback/service/{serviceId}/rating/{ratingId}  # Owner can delete
 POST /api/feedback/service/{serviceId}/comment
 GET  /api/feedback/service/{serviceId}
 POST /api/feedback/service/{serviceId}/subscribe
 ```
 
-### Comment Format
+### Ratings System
 
-Comments follow the standard feedback format:
+Ratings are a special feedback type that **require an associated comment**. Unlike simple likes, ratings provide detailed feedback with a 1-5 score.
+
+**Key Features**:
+- Rating must include a comment (cannot rate without explanation)
+- Service provider can delete ratings they receive
+- Ratings are stored in `feedback/ratings.txt` as signed NOSTR events
+- Average rating calculated from all ratings
+
+**Rating Scale**:
+- **5**: Excellent, highly recommended
+- **4**: Very good
+- **3**: Good, average
+- **2**: Below average
+- **1**: Poor
+
+**Example Rating Request** (see [API_feedback.md](../API_feedback.md) for full format):
+```json
+{
+  "rating": 5,
+  "comment": "Excellent electrician! Fixed all my issues in one visit.",
+  "npub": "npub1xyz789...",
+  "signature": "hex_signature"
+}
+```
+
+### Rating Management
+
+Service providers have special permissions to manage ratings on their services:
+
+- **View all ratings**: See who rated and what they said
+- **Delete ratings**: Remove inappropriate or unfair ratings
+- **Respond to ratings**: Add comments in response (via regular comments)
+
+When a provider deletes a rating, it is removed from `feedback/ratings.txt`. The deletion is logged for audit purposes.
+
+### Comments (Without Rating)
+
+Regular comments without ratings follow the standard format:
 
 ```
 AUTHOR: X1ABCD
@@ -694,27 +912,6 @@ Very reasonable pricing and excellent communication.
 --> npub: npub1abc123...
 --> signature: hex_signature
 ```
-
-### Ratings in Comments
-
-Comments can include optional ratings:
-
-```
-AUTHOR: Y2EFGH
-CREATED: 2025-12-28 14:15_30
-
-Excellent electrician! Fixed all my issues in one visit.
---> rating: 5
---> npub: npub1xyz789...
---> signature: hex_signature
-```
-
-**Rating Scale**:
-- **5**: Excellent, highly recommended
-- **4**: Very good
-- **3**: Good, average
-- **2**: Below average
-- **1**: Poor
 
 ## NOSTR Integration
 
@@ -749,6 +946,8 @@ Excellent electrician! Fixed all my issues in one visit.
 
 ### Example 1: Simple Service (Single Language, Single Offering)
 
+**Folder**: `portugal/lisbon/X1ABCD_johns-plumbing-services/`
+
 ```
 # SERVICE: John's Plumbing Services
 
@@ -758,11 +957,14 @@ COORDINATES: 38.7223,-9.1393
 RADIUS: 30
 ADDRESS: Rua da Paz 123, Lisboa, Portugal
 HOURS: Mon-Fri 8:00-18:00, Sat 9:00-13:00
-PROFILE_PIC: images/photo1.jpg
+PROFILE_PIC: media/media1.jpg
 
 PHONE: +351-912-345-678
 EMAIL: john.plumber@email.com
-WHATSAPP: +351-912-345-678
+
+PRICE: 35
+CURRENCY: EUR
+PRICE_UNIT: hour
 
 ## ABOUT
 Licensed plumber with 15 years of experience in the Lisbon area.
@@ -786,6 +988,8 @@ Emergency services available 24/7.
 
 ### Example 2: Multiple Services Provider (Multilanguage)
 
+**Folder**: `united-states/new-york/Y2EFGH_marias-home-services/`
+
 ```
 # SERVICE_EN: Maria's Home Services
 # SERVICE_PT: Serviços Domésticos da Maria
@@ -796,15 +1000,16 @@ COORDINATES: 40.7128,-74.0060
 RADIUS: 50
 ADDRESS: 123 Main Street, Queens, NY
 HOURS: Mon-Sat 7:00-19:00
-PROFILE_PIC: images/photo1.jpg
+PROFILE_PIC: media/media1.jpg
 ADMINS: npub1admin123...
 
 PHONE: +1-555-123-4567
 EMAIL: maria.homeservices@email.com
-WHATSAPP: +1-555-123-4567
-INSTAGRAM: @mariahomeservices
-FACEBOOK: /mariahomeservices
 WEBSITE: https://mariahomeservices.com
+
+PRICE: 45
+CURRENCY: USD
+PRICE_UNIT: hour
 
 ## ABOUT
 [EN]
@@ -876,6 +1081,8 @@ Nenhum trabalho é pequeno demais! De pendurar quadros a arranjar portas.
 
 ### Example 3: Professional Services
 
+**Folder**: `portugal/lisbon/Z3IJKL_ana-silva-legal-services/`
+
 ```
 # SERVICE_EN: Ana Silva - Legal Services
 # SERVICE_PT: Ana Silva - Serviços Jurídicos
@@ -887,11 +1094,15 @@ COORDINATES: 38.7169,-9.1399
 RADIUS: 100
 ADDRESS: Av. da Liberdade 200, 1250-147 Lisboa
 HOURS: Mon-Fri 9:00-18:00 (by appointment)
-PROFILE_PIC: images/photo1.jpg
+PROFILE_PIC: media/media1.jpg
 
 PHONE: +351-213-456-789
 EMAIL: ana.silva@lawfirm.pt
 WEBSITE: https://anasilva-advogada.pt
+
+PRICE: 100
+CURRENCY: EUR
+PRICE_UNIT: hour
 
 ## ABOUT
 [EN]
@@ -982,6 +1193,8 @@ Traduções juramentadas disponíveis para documentos legais.
 
 ### Example 4: Technical Services
 
+**Folder**: `united-kingdom/london/A4MNOP_techfix-pro-mobile-computer-repair/`
+
 ```
 # SERVICE: TechFix Pro - Mobile & Computer Repair
 
@@ -991,13 +1204,15 @@ COORDINATES: 51.5074,-0.1278
 RADIUS: 25
 ADDRESS: 45 Oxford Street, London W1D 2DZ
 HOURS: Mon-Sat 10:00-19:00, Sun 12:00-17:00
-PROFILE_PIC: images/photo1.jpg
+PROFILE_PIC: media/media1.jpg
 
 PHONE: +44-20-1234-5678
 EMAIL: info@techfixpro.co.uk
-WHATSAPP: +44-7700-900123
-INSTAGRAM: @techfixpro_london
 WEBSITE: https://techfixpro.co.uk
+
+PRICE: 50
+CURRENCY: GBP
+PRICE_UNIT: service
 
 ## ABOUT
 Your one-stop shop for all mobile and computer repairs in Central London.
@@ -1062,33 +1277,38 @@ Monthly support packages available starting at £50/month.
 4. Parse header lines:
    - CREATED: timestamp
    - AUTHOR: callsign
-   - COORDINATES: lat,lon
+   - COORDINATES: lat,lon (mandatory)
    - RADIUS: kilometers (1-200, default 30)
    - ADDRESS: (optional)
    - HOURS: (optional)
    - PROFILE_PIC: (optional)
    - ADMINS: (optional)
 5. Parse contact lines:
-   - PHONE, EMAIL, WHATSAPP, INSTAGRAM, FACEBOOK, WEBSITE
-6. Parse ABOUT section:
+   - PHONE, EMAIL, WEBSITE
+6. Parse pricing lines:
+   - PRICE: numeric value
+   - CURRENCY: ISO 4217 code
+   - PRICE_UNIT: hour/day/service
+7. Parse ABOUT section:
    - Single language: Read after "## ABOUT"
    - Multilanguage: Look for [XX] markers
-7. Parse OFFERING sections:
+8. Parse OFFERING sections:
    - Look for "## OFFERING: <type>" headers
    - Extract type and description for each
    - Support multilanguage descriptions
-8. Extract metadata (npub, signature)
-9. Validate signature placement (must be last)
+9. Extract metadata (npub, signature)
+10. Validate signature placement (must be last)
 ```
 
-### Region Calculation
+### City Lookup
 
 ```
 1. Extract coordinates from COORDINATES field
-2. Round latitude to 1 decimal place
-3. Round longitude to 1 decimal place
-4. Format region folder: {LAT}_{LON}/
-5. Verify service folder is in correct region
+2. Query internal city database for nearest city
+3. Retrieve city name and country
+4. Sanitize names (lowercase, hyphens)
+5. Format folder path: {country}/{city}/
+6. Verify service folder is in correct location
 ```
 
 ### Offering Parsing
@@ -1110,23 +1330,28 @@ Monthly support packages available starting at £50/month.
 ### Creating a Service
 
 ```
-1. Sanitize service name
-2. Generate folder name: {lat}_{lon}_{sanitized-name}/
-3. Calculate region from coordinates (round to 1 decimal)
-4. Create region directory if needed: {LAT}_{LON}/
-5. Create service folder
-6. Create images/ subdirectory
-7. Create service.txt with header, about, and offerings
-8. Create feedback/ subdirectory
-9. Set folder permissions (755)
+1. Verify coordinates are provided (mandatory)
+2. Query city database for nearest city/village
+3. Get country and city names
+4. Sanitize country name: lowercase, spaces to hyphens
+5. Sanitize city name: lowercase, spaces to hyphens
+6. Sanitize service name
+7. Generate folder name: {CALLSIGN}_{sanitized-name}/
+8. Create country directory if needed
+9. Create city directory if needed
+10. Create service folder
+11. Create media/ subdirectory
+12. Create service.txt with header, about, and offerings
+13. Create feedback/ subdirectory
+14. Set folder permissions (755)
 ```
 
-### Adding Photos
+### Adding Media
 
 ```
 1. Verify service exists
-2. Copy photo(s) to images/ folder
-3. Use sequential naming (photo1.jpg, photo2.jpg, etc.)
+2. Copy file(s) to media/ folder
+3. Use sequential naming (media1.jpg, media2.jpg, etc.)
 4. Set file permissions (644)
 5. Optionally update PROFILE_PIC field
 ```
@@ -1134,9 +1359,9 @@ Monthly support packages available starting at £50/month.
 ### Setting Profile Picture
 
 ```
-1. Verify photo exists in images/ folder
+1. Verify media file exists in media/ folder
 2. Update PROFILE_PIC field in service.txt
-3. Use relative path (e.g., "images/photo1.jpg")
+3. Use relative path (e.g., "media/media1.jpg")
 ```
 
 ### Deleting a Service
@@ -1145,10 +1370,12 @@ Monthly support packages available starting at £50/month.
 1. Verify user has permission (creator or admin)
 2. Recursively delete service folder:
    - service.txt
-   - images/ directory
+   - media/ directory
    - feedback/ directory
-3. Check if region folder is empty:
-   - If empty, optionally delete region
+3. Check if city folder is empty:
+   - If empty, optionally delete city folder
+4. Check if country folder is empty:
+   - If empty, optionally delete country folder
 ```
 
 ## Validation Rules
@@ -1161,22 +1388,26 @@ Monthly support packages available starting at £50/month.
 - [x] Name must not be empty
 - [x] CREATED line must have valid timestamp
 - [x] AUTHOR line must have non-empty callsign
-- [x] COORDINATES must be valid lat,lon
+- [x] COORDINATES must be valid lat,lon (mandatory)
 - [x] RADIUS must be integer 1-200 (default 30)
 - [x] At least one offering required
 - [x] Each offering type must be from predefined list
 - [x] Signature must be last metadata if present
-- [x] Folder name must match {lat}_{lon}_* pattern
-- [x] Service folder must be in correct region folder
+- [x] Folder name must match {CALLSIGN}_{name} pattern
+- [x] Service folder must be in correct country/city folder
 
 ### Contact Validation
 
 - [ ] PHONE: Any format (international recommended)
 - [ ] EMAIL: Valid email format
-- [ ] WHATSAPP: Phone number format
-- [ ] INSTAGRAM: Handle format (with or without @)
-- [ ] FACEBOOK: Page path (with or without /)
 - [ ] WEBSITE: Valid URL (https:// recommended)
+
+### Pricing Validation
+
+- [ ] PRICE: Numeric value > 0
+- [ ] CURRENCY: Valid ISO 4217 code (EUR, USD, GBP, etc.)
+- [ ] PRICE_UNIT: Must be "hour", "day", or "service"
+- [ ] If PRICE set, CURRENCY and PRICE_UNIT required
 
 ### Offering Validation
 
@@ -1187,40 +1418,39 @@ Monthly support packages available starting at £50/month.
 
 ### Coordinate Validation
 
-**Full Precision (Service)**:
+**Coordinates (Mandatory)**:
 - Latitude: -90.0 to +90.0
 - Longitude: -180.0 to +180.0
 - Format: `lat,lon` (no spaces)
-
-**Rounded (Region)**:
-- Latitude: 1 decimal place
-- Longitude: 1 decimal place
+- Used to determine city/country placement
 
 ## Best Practices
 
 ### For Service Providers
 
-1. **Complete Profile**: Fill in all contact methods you use
-2. **Clear Descriptions**: Write detailed, professional descriptions
-3. **Quality Photos**: Upload clear, professional images
-4. **Set Profile Picture**: Choose your best photo as profile
-5. **Accurate Location**: Use precise coordinates for your base
+1. **Accurate Location**: Use precise coordinates for your base (mandatory)
+2. **Set Pricing**: Add clear pricing information
+3. **Clear Descriptions**: Write detailed, professional descriptions
+4. **Quality Photos**: Upload clear, professional images
+5. **Set Profile Picture**: Choose your best photo as profile
 6. **Realistic Radius**: Set radius to actual service area
 7. **Multiple Offerings**: List all services you provide
 8. **Multilingual**: Add translations to reach more clients
 9. **Update Hours**: Keep operating hours current
 10. **Sign Your Profile**: Use NOSTR signature for trust
+11. **Respond to Messages**: Use built-in messaging to communicate with clients
 
 ### For Developers
 
 1. **Validate Input**: Check coordinates, radius, and types
-2. **Region Calculation**: Ensure correct region placement
+2. **City Lookup**: Use city database to determine folder structure
 3. **Handle Multilingual**: Implement fallback (requested → EN → first)
 4. **Atomic Operations**: Use temp files for updates
 5. **Permission Checks**: Verify user rights
 6. **Map Integration**: Show service areas on maps
 7. **Search by Type**: Enable filtering by service types
 8. **Proximity Search**: Find services covering user's location
+9. **Direct Messaging**: Integrate with chat system for messaging
 
 ## Security Considerations
 
@@ -1259,6 +1489,24 @@ Monthly support packages available starting at £50/month.
 - [NOSTR Protocol](https://github.com/nostr-protocol/nostr)
 
 ## Change Log
+
+### Version 1.1 (2025-12-28)
+
+**Major Changes**:
+- Changed folder organization from coordinate-based to country/city-based
+- Folder structure: `{country}/{city}/{CALLSIGN}_{name}/`
+- City determined by matching coordinates to internal city database
+- Location (COORDINATES) is now mandatory
+- Removed social media contact fields (WhatsApp, Instagram, Facebook)
+- Added built-in direct messaging via Geogram chat
+- Added pricing fields (PRICE, CURRENCY, PRICE_UNIT)
+
+**New Service Types**:
+- Creative & Arts: artist, writer, illustrator, animator, voice-actor, art-teacher
+- Technology & Software: programmer, mobile-developer, data-analyst, ai-specialist, cybersecurity, devops
+- Security & Protection: security-guard, night-guard, bodyguard, private-investigator, alarm-monitoring, access-control
+
+**Total service types**: ~68 across 10 categories
 
 ### Version 1.0 (2025-12-28)
 
