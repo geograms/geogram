@@ -691,7 +691,22 @@ class DirectMessageService {
     final fileSha1 = copyResult.sha1Hash;
     final originalName = copyResult.originalName;
 
-    // 5. Create the message with file metadata
+    // 5. Upload file to remote device BEFORE sending the message
+    // The receiver needs the file to display the image/attachment
+    final localFilePath = p.join(conversation.path, 'files', storedFileName);
+    final uploaded = await _uploadFileToRemote(
+      normalizedCallsign,
+      localFilePath,
+      storedFileName,
+      profile.callsign,
+    );
+    if (!uploaded) {
+      // Clean up copied file on failure
+      await _deleteFile(conversation.path, storedFileName);
+      throw DMDeliveryFailedException('Failed to upload file to $normalizedCallsign');
+    }
+
+    // 6. Create the message with file metadata
     // SHA1 hash is included in metadata for integrity verification
     final message = ChatMessage.now(
       author: profile.callsign,
@@ -704,7 +719,7 @@ class DirectMessageService {
       },
     );
 
-    // 6. Sign the message
+    // 7. Sign the message
     final signingService = SigningService();
     await signingService.initialize();
 
@@ -735,10 +750,10 @@ class DirectMessageService {
       }
     }
 
-    // 7. Push to remote device's chat API FIRST
+    // 8. Push message to remote device's chat API
     final delivered = await _pushToRemoteChatAPI(device, signedEvent, profile.callsign);
 
-    // 8. Only save locally if delivered successfully
+    // 9. Only save locally if message delivered successfully
     if (!delivered) {
       // Clean up copied file on failure
       await _deleteFile(conversation.path, storedFileName);
@@ -747,7 +762,7 @@ class DirectMessageService {
       );
     }
 
-    // 9. Save locally (message was delivered)
+    // 10. Save locally (message was delivered)
     await _saveMessage(conversation.path, message, otherNpub: conversation.otherNpub);
 
     // Update conversation metadata
@@ -755,7 +770,7 @@ class DirectMessageService {
     conversation.lastMessagePreview = '📎 $originalName';
     conversation.lastMessageAuthor = profile.callsign;
 
-    // 10. Fire event and notify listeners
+    // 11. Fire event and notify listeners
     _fireMessageEvent(message, otherCallsign, fromSync: false);
     _notifyListeners();
 
@@ -1309,6 +1324,69 @@ class DirectMessageService {
       filtered[key] = value;
     });
     return filtered;
+  }
+
+  /// Upload a file to the remote device before sending the DM message
+  /// Uses the same pattern as station chat file uploads
+  /// Returns true if upload successful, false otherwise
+  Future<bool> _uploadFileToRemote(
+    String targetCallsign,
+    String localFilePath,
+    String remoteFileName,
+    String myCallsign,
+  ) async {
+    if (kIsWeb) return false;
+
+    try {
+      final file = File(localFilePath);
+      if (!await file.exists()) {
+        LogService().log('DM: Upload failed - file not found: $localFilePath');
+        return false;
+      }
+
+      final bytes = await file.readAsBytes();
+
+      // 10 MB limit
+      if (bytes.length > 10 * 1024 * 1024) {
+        LogService().log('DM: Upload failed - file too large: ${bytes.length} bytes');
+        return false;
+      }
+
+      // POST to: /api/dm/{myCallsign}/files/{filename}
+      // The receiver stores it in their chat/{myCallsign}/files/ folder
+      final path = '/api/dm/$myCallsign/files/$remoteFileName';
+
+      LogService().log('DM: Uploading file to $targetCallsign: $remoteFileName (${bytes.length} bytes)');
+
+      // Use base64 encoding like station chat uploads
+      final response = await DevicesService().makeDeviceApiRequest(
+        callsign: targetCallsign,
+        method: 'POST',
+        path: path,
+        headers: {
+          'Content-Type': 'application/octet-stream',
+          'Content-Transfer-Encoding': 'base64',
+          'X-Filename': remoteFileName,
+        },
+        body: base64Encode(bytes),
+      );
+
+      if (response == null) {
+        LogService().log('DM: No route to $targetCallsign for file upload');
+        return false;
+      }
+
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        LogService().log('DM: File uploaded successfully to $targetCallsign');
+        return true;
+      } else {
+        LogService().log('DM: File upload failed: ${response.statusCode} - ${response.body}');
+        return false;
+      }
+    } catch (e) {
+      LogService().log('DM: File upload error: $e');
+      return false;
+    }
   }
 
   /// Save an incoming/synced message without re-signing

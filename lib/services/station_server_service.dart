@@ -4659,9 +4659,10 @@ class StationServerService {
           request.response.statusCode = 405;
           request.response.write('Method not allowed');
         }
-      } else if (pathParts.length == 6 && pathParts[4] == 'files' && method == 'GET') {
-        // GET /{callsign}/api/dm/{otherCallsign}/files/{filename}
-        // Serve voice files and other DM attachments
+      } else if (pathParts.length == 6 && pathParts[4] == 'files') {
+        // /{callsign}/api/dm/{otherCallsign}/files/{filename}
+        // GET: Serve voice files and other DM attachments
+        // POST: Receive file uploads from remote DMs
         final otherCallsign = pathParts[3].toUpperCase();
         final filename = pathParts[5];
 
@@ -4672,36 +4673,121 @@ class StationServerService {
           return;
         }
 
-        // Get the file path
-        final filePath = await dmService.getVoiceFilePath(otherCallsign, filename);
-        if (filePath == null) {
-          request.response.statusCode = 404;
-          request.response.write('File not found');
-          return;
-        }
+        if (method == 'GET') {
+          // Try voice file first, then general file attachments
+          var filePath = await dmService.getVoiceFilePath(otherCallsign, filename);
+          filePath ??= await dmService.getFilePath(otherCallsign, filename);
 
-        final file = File(filePath);
-        if (!await file.exists()) {
-          request.response.statusCode = 404;
-          request.response.write('File not found');
-          return;
-        }
+          if (filePath == null) {
+            request.response.statusCode = 404;
+            request.response.write('File not found');
+            return;
+          }
 
-        // Determine content type
-        String contentType = 'application/octet-stream';
-        if (filename.endsWith('.webm')) {
-          contentType = 'audio/webm';
-        } else if (filename.endsWith('.ogg')) {
-          contentType = 'audio/ogg';
-        } else if (filename.endsWith('.mp3')) {
-          contentType = 'audio/mpeg';
-        } else if (filename.endsWith('.wav')) {
-          contentType = 'audio/wav';
-        }
+          final file = File(filePath);
+          if (!await file.exists()) {
+            request.response.statusCode = 404;
+            request.response.write('File not found');
+            return;
+          }
 
-        request.response.headers.set('Content-Type', contentType);
-        request.response.headers.set('Content-Length', await file.length());
-        await file.openRead().pipe(request.response);
+          // Determine content type from file extension
+          final lowerName = filename.toLowerCase();
+          String contentType = 'application/octet-stream';
+          if (lowerName.endsWith('.webm')) {
+            contentType = 'audio/webm';
+          } else if (lowerName.endsWith('.ogg')) {
+            contentType = 'audio/ogg';
+          } else if (lowerName.endsWith('.mp3')) {
+            contentType = 'audio/mpeg';
+          } else if (lowerName.endsWith('.wav')) {
+            contentType = 'audio/wav';
+          } else if (lowerName.endsWith('.jpg') || lowerName.endsWith('.jpeg')) {
+            contentType = 'image/jpeg';
+          } else if (lowerName.endsWith('.png')) {
+            contentType = 'image/png';
+          } else if (lowerName.endsWith('.gif')) {
+            contentType = 'image/gif';
+          } else if (lowerName.endsWith('.webp')) {
+            contentType = 'image/webp';
+          } else if (lowerName.endsWith('.pdf')) {
+            contentType = 'application/pdf';
+          }
+
+          request.response.headers.set('Content-Type', contentType);
+          request.response.headers.set('Content-Length', await file.length());
+          await file.openRead().pipe(request.response);
+
+        } else if (method == 'POST') {
+          // Receive file upload from remote DM sender
+          // The sender uploads file to our device before sending the message
+          try {
+            // Read file bytes from request body
+            var bytes = await request.fold<List<int>>(
+              <int>[],
+              (previous, element) => previous..addAll(element),
+            );
+
+            // Handle base64 encoding if specified (same as station chat uploads)
+            final transferEncoding = request.headers.value('Content-Transfer-Encoding') ??
+                request.headers.value('content-transfer-encoding');
+            if (transferEncoding != null && transferEncoding.toLowerCase().contains('base64')) {
+              try {
+                bytes = base64Decode(utf8.decode(bytes));
+              } catch (e) {
+                request.response.statusCode = 400;
+                request.response.headers.contentType = ContentType.json;
+                request.response.write(jsonEncode({'error': 'Invalid base64 payload'}));
+                return;
+              }
+            }
+
+            if (bytes.isEmpty) {
+              request.response.statusCode = 400;
+              request.response.headers.contentType = ContentType.json;
+              request.response.write(jsonEncode({'error': 'Empty file'}));
+              return;
+            }
+
+            // 10 MB limit
+            if (bytes.length > 10 * 1024 * 1024) {
+              request.response.statusCode = 413;
+              request.response.headers.contentType = ContentType.json;
+              request.response.write(jsonEncode({'error': 'File too large (max 10 MB)'}));
+              return;
+            }
+
+            // Ensure DM files directory exists
+            final storagePath = StorageConfig().baseDir;
+            final filesDir = Directory('$storagePath/chat/$otherCallsign/files');
+            if (!await filesDir.exists()) {
+              await filesDir.create(recursive: true);
+            }
+
+            // Save file
+            final filePath = '${filesDir.path}/$filename';
+            final file = File(filePath);
+            await file.writeAsBytes(bytes);
+
+            LogService().log('DM: Received file from $otherCallsign: $filename (${bytes.length} bytes)');
+
+            request.response.statusCode = 201;
+            request.response.headers.contentType = ContentType.json;
+            request.response.write(jsonEncode({
+              'success': true,
+              'filename': filename,
+              'size': bytes.length,
+            }));
+          } catch (e) {
+            LogService().log('DM: File upload error: $e');
+            request.response.statusCode = 500;
+            request.response.headers.contentType = ContentType.json;
+            request.response.write(jsonEncode({'error': e.toString()}));
+          }
+        } else {
+          request.response.statusCode = 405;
+          request.response.write('Method not allowed');
+        }
       } else {
         request.response.statusCode = 404;
         request.response.write('DM endpoint not found');

@@ -60,7 +60,7 @@ class DMNotificationService {
   /// Initialize flutter_local_notifications
   Future<void> _initializeNotifications({bool skipPermissionRequest = false}) async {
     // Android initialization settings
-    const androidSettings = AndroidInitializationSettings('@mipmap/ic_launcher');
+    const androidSettings = AndroidInitializationSettings('@drawable/ic_notification');
 
     // iOS initialization settings - don't request permission here if skipping
     final iosSettings = DarwinInitializationSettings(
