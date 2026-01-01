@@ -1,5 +1,6 @@
 # Geogram
 
+
 When the internet goes down, most apps stop working. Geogram keeps going.
 
 Geogram connects people directly -phone to phone, laptop to laptop -without requiring servers, accounts, or infrastructure you don't control. Messages hop between devices over whatever path works: WiFi when available, Bluetooth when it's not, internet when you want global reach.
@@ -7,6 +8,7 @@ Geogram connects people directly -phone to phone, laptop to laptop -without requ
 Every message is signed with cryptographic keys, so you always know who you're talking to. No spoofing, no impersonation, no "trust us" from a company that might not exist next year.
 
 Built for communities that need to communicate when things get difficult: remote areas, disaster response, places where the network is censored or unreliable, or simply people who believe their conversations shouldn't depend on corporate infrastructure.
+
 
 ## Station Server
 
@@ -18,6 +20,7 @@ A station at a community center might serve visitors during open hours, then con
 
 No monthly fees. No account required. No company can shut down your community's infrastructure because you own it.
 
+
 ## Offline Maps
 
 Geogram includes worldwide satellite imagery and street maps that work without internet. Pan and zoom anywhere on the planet using cached tiles stored locally on your device or synced from a nearby station.
@@ -26,6 +29,7 @@ Stations can cache map tiles for their region, serving them to connected devices
 
 The map is also your interface to local information. Events, relevant places, and active alerts appear directly on the map -tap to see details, get directions, or add your own. The same map works whether you're online in a city or offline in the wilderness.
 
+
 ## Device Discovery
 
 Geogram finds other devices around you automatically. Someone running Geogram on the same WiFi network? They appear in your device list. Someone within Bluetooth range? They show up too. Connected to a station that knows about other devices? You can reach them as well.
@@ -33,6 +37,7 @@ Geogram finds other devices around you automatically. Someone running Geogram on
 Once you see a device, you can communicate directly -send messages, sync data, share files. Geogram picks the fastest path available: local network when you're on the same WiFi, direct Bluetooth when you're nearby, internet relay when nothing else works. You don't choose the transport; Geogram figures out what's available and uses it.
 
 This means the same conversation continues regardless of how you're connected. Start chatting over WiFi at home, keep talking over Bluetooth while walking together, sync up later through a station when you're apart. The communication adapts; you just talk.
+
 
 ## Apps
 
@@ -44,7 +49,7 @@ Real-time messaging with room-based channels and direct messages. Chat supports 
 
 In off-grid scenarios, chat enables coordination between field teams, emergency responders, or community members who come within Bluetooth range of each other. Messages queue locally and sync when devices reconnect, ensuring nothing is lost even with intermittent connectivity.
 
-See [docs/apps/chat-format-specification.md](docs/apps/chat-format-specification.md)
+Details: [docs/apps/chat-format-specification.md](docs/apps/chat-format-specification.md)
 
 ### Blog
 
@@ -52,7 +57,7 @@ Long-form publishing with markdown content, drafts, tags, and comments. Blogs pr
 
 Blogs enable local journalism, community newsletters, and personal documentation in environments without internet hosting. A local publication can distribute articles to readers who sync when they visit community gathering points, creating a sneakernet distribution network for information.
 
-See [docs/apps/blog-format-specification.md](docs/apps/blog-format-specification.md)
+Details: [docs/apps/blog-format-specification.md](docs/apps/blog-format-specification.md)
 
 ### Events
 
@@ -60,7 +65,7 @@ Community calendars with event details, locations, media galleries, and particip
 
 For organizing community gatherings, emergency drills, or mutual aid distributions, events provide the scheduling and coordination layer. Information propagates through the network as devices sync, ensuring even members with intermittent connectivity learn about upcoming activities.
 
-See [docs/apps/events-format-specification.md](docs/apps/events-format-specification.md)
+Details: [docs/apps/events-format-specification.md](docs/apps/events-format-specification.md)
 
 ### Places
 
@@ -68,7 +73,7 @@ Geographic points of interest organized by coordinate-based regions. Places docu
 
 Communities can document water sources, shelter locations, supply caches, hazards, or any other geographic knowledge without relying on commercial mapping services. This information persists locally and syncs between members, building a community-maintained geographic database.
 
-See [docs/apps/places-format-specification.md](docs/apps/places-format-specification.md)
+Details: [docs/apps/places-format-specification.md](docs/apps/places-format-specification.md)
 
 ### Alerts
 
@@ -76,7 +81,7 @@ Geographic alert system with severity classification and community verification.
 
 Communities use alerts to maintain shared awareness of local conditions. A downed power line, flooded road, or unsafe structure gets documented with photos and location, then verified by others who encounter it. Updates track progress as situations evolve, and resolution proof closes the loop when issues are addressed.
 
-See [docs/apps/alert-format-specification.md](docs/apps/alert-format-specification.md)
+Details: [docs/apps/alert-format-specification.md](docs/apps/alert-format-specification.md)
 
 ### Inventory
 
@@ -84,7 +89,7 @@ Personal and shared asset tracking with folder organization up to five levels de
 
 The borrowing system tracks who has what, with support for both callsign-identified community members and free-text entries for external borrowers. Usage and refill tracking monitors consumables. Communities can share inventory visibility through groups while keeping sensitive items private.
 
-See [docs/apps/inventory-format-specification.md](docs/apps/inventory-format-specification.md)
+Details: [docs/apps/inventory-format-specification.md](docs/apps/inventory-format-specification.md)
 
 ### Transfer
 
@@ -92,7 +97,7 @@ Unified download and upload management across all apps. Transfer handles file mo
 
 When syncing with devices that appear intermittently, transfer queues pending files and completes them as connections become available. Priority levels (urgent, high, normal, low) ensure critical files move first. Ban lists block unwanted transfers from specific callsigns.
 
-See [docs/apps/transfer-format-specification.md](docs/apps/transfer-format-specification.md)
+Details: [docs/apps/transfer-format-specification.md](docs/apps/transfer-format-specification.md)
 
 ### Bot
 
@@ -100,7 +105,8 @@ Offline AI assistant using local GGUF models. The bot provides Q&A about station
 
 Stations can provide AI assistance without internet API calls. Content moderation runs locally, search works across all apps, and voice input enables hands-free interaction. The bot indexes station content automatically, making accumulated knowledge searchable.
 
-See [docs/apps/bot-format-specification.md](docs/apps/bot-format-specification.md)
+Details: [docs/apps/bot-format-specification.md](docs/apps/bot-format-specification.md)
+
 
 ## Upcoming
 
@@ -115,6 +121,7 @@ The following apps are in development:
 - **Contacts**: Decentralized address book tracking identities by callsign and NOSTR public key. Handles identity changes, revocations, and successor tracking.
 
 - **Postcards**: Sneakernet message delivery through physical carrier chains. Messages travel via intermediate carriers who stamp them with cryptographic proof, creating tamper-proof chains of custody.
+
 
 ## Platforms
 
@@ -131,6 +138,7 @@ Geogram runs on all major platforms from a single codebase:
 
 The Android and Linux versions receive the most testing and are recommended for production use. All platforms share the same data formats and can sync with each other through any available transport.
 
+
 ## Download
 
 Grab the latest release from the [releases page](https://github.com/geograms/geogram/releases).
@@ -141,9 +149,11 @@ Grab the latest release from the [releases page](https://github.com/geograms/geo
 
 **Other platforms**: Windows, macOS, iOS, and web builds are available but receive less testing. See [docs/technical.md](docs/technical.md) for build instructions if you want to compile from source.
 
+
 ## Documentation
 
 See [docs/technical.md](docs/technical.md) for architecture documentation, build instructions, and detailed specifications covering the API, transport layers, event system, and data formats.
+
 
 ## License
 
