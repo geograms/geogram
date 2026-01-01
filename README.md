@@ -26,6 +26,14 @@ Stations can cache map tiles for their region, serving them to connected devices
 
 The map is also your interface to local information. Events, relevant places, and active alerts appear directly on the map—tap to see details, get directions, or add your own. The same map works whether you're online in a city or offline in the wilderness.
 
+## Device Discovery
+
+Geogram finds other devices around you automatically. Someone running Geogram on the same WiFi network? They appear in your device list. Someone within Bluetooth range? They show up too. Connected to a station that knows about other devices? You can reach them as well.
+
+Once you see a device, you can communicate directly—send messages, sync data, share files. Geogram picks the fastest path available: local network when you're on the same WiFi, direct Bluetooth when you're nearby, internet relay when nothing else works. You don't choose the transport; Geogram figures out what's available and uses it.
+
+This means the same conversation continues regardless of how you're connected. Start chatting over WiFi at home, keep talking over Bluetooth while walking together, sync up later through a station when you're apart. The communication adapts; you just talk.
+
 ## Apps
 
 Geogram provides a suite of apps designed for community coordination and information sharing. Each app stores data in human-readable text formats that sync between devices through any available transport.
