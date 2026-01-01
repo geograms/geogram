@@ -2,7 +2,7 @@
 
 When the internet goes down, most apps stop working. Geogram keeps going.
 
-Geogram connects people directly—phone to phone, laptop to laptop—without requiring servers, accounts, or infrastructure you don't control. Messages hop between devices over whatever path works: WiFi when available, Bluetooth when it's not, internet when you want global reach.
+Geogram connects people directly -phone to phone, laptop to laptop -without requiring servers, accounts, or infrastructure you don't control. Messages hop between devices over whatever path works: WiFi when available, Bluetooth when it's not, internet when you want global reach.
 
 Every message is signed with cryptographic keys, so you always know who you're talking to. No spoofing, no impersonation, no "trust us" from a company that might not exist next year.
 
@@ -14,7 +14,7 @@ Your phone can be a server. Your laptop can be a server. That old Raspberry Pi c
 
 Want your blog readable from the internet? Connect your station and it serves pages to any browser. Prefer to stay local? The same station serves your neighborhood over WiFi or syncs with phones over Bluetooth as people walk by. You decide what's reachable and when.
 
-A station at a community center might serve visitors during open hours, then continue syncing with members who pass by after closing. A station on a boat might collect messages while at sea and deliver them when returning to port. The software doesn't care about your connectivity situation—it works with whatever you have.
+A station at a community center might serve visitors during open hours, then continue syncing with members who pass by after closing. A station on a boat might collect messages while at sea and deliver them when returning to port. The software doesn't care about your connectivity situation -it works with whatever you have.
 
 No monthly fees. No account required. No company can shut down your community's infrastructure because you own it.
 
@@ -24,13 +24,13 @@ Geogram includes worldwide satellite imagery and street maps that work without i
 
 Stations can cache map tiles for their region, serving them to connected devices over WiFi or Bluetooth. A field team downloads tiles before heading out; a community station keeps regional maps available for anyone who connects. No Google, no Mapbox, no API keys, no usage limits.
 
-The map is also your interface to local information. Events, relevant places, and active alerts appear directly on the map—tap to see details, get directions, or add your own. The same map works whether you're online in a city or offline in the wilderness.
+The map is also your interface to local information. Events, relevant places, and active alerts appear directly on the map -tap to see details, get directions, or add your own. The same map works whether you're online in a city or offline in the wilderness.
 
 ## Device Discovery
 
 Geogram finds other devices around you automatically. Someone running Geogram on the same WiFi network? They appear in your device list. Someone within Bluetooth range? They show up too. Connected to a station that knows about other devices? You can reach them as well.
 
-Once you see a device, you can communicate directly—send messages, sync data, share files. Geogram picks the fastest path available: local network when you're on the same WiFi, direct Bluetooth when you're nearby, internet relay when nothing else works. You don't choose the transport; Geogram figures out what's available and uses it.
+Once you see a device, you can communicate directly -send messages, sync data, share files. Geogram picks the fastest path available: local network when you're on the same WiFi, direct Bluetooth when you're nearby, internet relay when nothing else works. You don't choose the transport; Geogram figures out what's available and uses it.
 
 This means the same conversation continues regardless of how you're connected. Start chatting over WiFi at home, keep talking over Bluetooth while walking together, sync up later through a station when you're apart. The communication adapts; you just talk.
 
