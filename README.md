@@ -1,10 +1,30 @@
 # Geogram
 
-Geogram is an offgrid-first communication platform that connects devices directly without central servers, data collection, or compromise. Built for scenarios where traditional internet infrastructure is unavailable, unreliable, or untrustworthy, Geogram enables communities to communicate, organize, and share information through multiple independent transport layers.
+When the internet goes down, most apps stop working. Geogram keeps going.
 
-The platform uses WebRTC for peer-to-peer connections across NAT boundaries, Bluetooth mesh networking for proximity-based communication, and local network discovery for high-speed transfers on shared WiFi. All messages are cryptographically signed using NOSTR-compatible keys, ensuring authenticity and preventing spoofing regardless of which transport layer delivers them.
+Geogram connects people directly—phone to phone, laptop to laptop—without requiring servers, accounts, or infrastructure you don't control. Messages hop between devices over whatever path works: WiFi when available, Bluetooth when it's not, internet when you want global reach.
 
-Geogram adapts to available infrastructure. When internet is present, devices connect directly via WebRTC or through optional relay stations. When internet fails, communication continues over Bluetooth and local networks. This layered approach means the same apps and data formats work whether you're in a connected city or a remote location with no infrastructure at all.
+Every message is signed with cryptographic keys, so you always know who you're talking to. No spoofing, no impersonation, no "trust us" from a company that might not exist next year.
+
+Built for communities that need to communicate when things get difficult: remote areas, disaster response, places where the network is censored or unreliable, or simply people who believe their conversations shouldn't depend on corporate infrastructure.
+
+## Station Server
+
+Your phone can be a server. Your laptop can be a server. That old Raspberry Pi collecting dust can be a server. Geogram runs station software on any device, turning personal hardware into community infrastructure. Nothing lives on someone else's cloud.
+
+Want your blog readable from the internet? Connect your station and it serves pages to any browser. Prefer to stay local? The same station serves your neighborhood over WiFi or syncs with phones over Bluetooth as people walk by. You decide what's reachable and when.
+
+A station at a community center might serve visitors during open hours, then continue syncing with members who pass by after closing. A station on a boat might collect messages while at sea and deliver them when returning to port. The software doesn't care about your connectivity situation—it works with whatever you have.
+
+No monthly fees. No account required. No company can shut down your community's infrastructure because you own it.
+
+## Offline Maps
+
+Geogram includes worldwide satellite imagery and street maps that work without internet. Pan and zoom anywhere on the planet using cached tiles stored locally on your device or synced from a nearby station.
+
+Stations can cache map tiles for their region, serving them to connected devices over WiFi or Bluetooth. A field team downloads tiles before heading out; a community station keeps regional maps available for anyone who connects. No Google, no Mapbox, no API keys, no usage limits.
+
+The map is also your interface to local information. Events, relevant places, and active alerts appear directly on the map—tap to see details, get directions, or add your own. The same map works whether you're online in a city or offline in the wilderness.
 
 ## Apps
 
@@ -87,11 +107,15 @@ Geogram runs on all major platforms from a single codebase:
 
 The Android and Linux versions receive the most testing and are recommended for production use. All platforms share the same data formats and can sync with each other through any available transport.
 
-## Get Involved
+## Download
 
-Download the latest release from the [releases page](https://github.com/geograms/geogram/releases). The Android APK installs directly on any Android device. The Linux AppImage runs on most distributions without installation.
+Grab the latest release from the [releases page](https://github.com/geograms/geogram/releases).
 
-For other platforms, see [docs/technical.md](docs/technical.md) for build instructions.
+**Android**: Download the APK and install it directly. No Play Store account needed, no approval process, no tracking. Works on any Android device.
+
+**Linux**: Download the AppImage and run it. No installation, no root access, no package manager. Just download, make executable, and launch.
+
+**Other platforms**: Windows, macOS, iOS, and web builds are available but receive less testing. See [docs/technical.md](docs/technical.md) for build instructions if you want to compile from source.
 
 ## Documentation
 
