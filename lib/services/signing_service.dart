@@ -6,6 +6,7 @@
  * Otherwise, uses the local nsec for signing.
  */
 
+import 'dart:convert';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import '../models/chat_message.dart';
 import '../models/profile.dart';
@@ -267,5 +268,59 @@ class SigningService {
   Future<String?> nip04Decrypt(String pubkey, String ciphertext) async {
     if (!kIsWeb) return null;
     return await _extensionService?.nip04Decrypt(pubkey, ciphertext);
+  }
+
+  /// Generate a NOSTR authorization header for API requests
+  ///
+  /// Creates a signed NOSTR event with the specified action and tags,
+  /// then encodes it as a base64 string suitable for the Authorization header.
+  ///
+  /// Returns the header value (without 'Nostr ' prefix) or null if signing fails.
+  ///
+  /// Usage:
+  /// ```dart
+  /// final authHeader = await signingService.generateAuthHeader(
+  ///   profile,
+  ///   action: 'list-rooms',
+  ///   tags: [['resource', 'chat']],
+  /// );
+  /// if (authHeader != null) {
+  ///   headers['Authorization'] = 'Nostr $authHeader';
+  /// }
+  /// ```
+  Future<String?> generateAuthHeader(
+    Profile profile, {
+    String action = 'auth',
+    List<List<String>>? tags,
+  }) async {
+    if (!canSign(profile)) {
+      return null;
+    }
+
+    try {
+      final pubkeyHex = NostrCrypto.decodeNpub(profile.npub);
+
+      final eventTags = <List<String>>[
+        ['action', action],
+        ['callsign', profile.callsign],
+        ...?tags,
+      ];
+
+      final event = NostrEvent.textNote(
+        pubkeyHex: pubkeyHex,
+        content: action,
+        tags: eventTags,
+      );
+
+      final signedEvent = await signEvent(event, profile);
+      if (signedEvent == null || signedEvent.sig == null) {
+        return null;
+      }
+
+      return base64Encode(utf8.encode(jsonEncode(signedEvent.toJson())));
+    } catch (e) {
+      LogService().log('SigningService: Error generating auth header: $e');
+      return null;
+    }
   }
 }

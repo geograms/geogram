@@ -143,10 +143,27 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
     try {
       LogService().log('RemoteChatRoomPage: Fetching messages from ${widget.device.callsign}, room ${widget.room.id}');
 
+      // Generate signed auth header for restricted room access
+      final profile = _profileService.getProfile();
+      final signingService = SigningService();
+      await signingService.initialize();
+
+      final authHeader = await signingService.generateAuthHeader(
+        profile,
+        action: 'read-messages',
+        tags: [['room', widget.room.id]],
+      );
+
+      final headers = <String, String>{};
+      if (authHeader != null) {
+        headers['Authorization'] = 'Nostr $authHeader';
+      }
+
       final response = await _devicesService.makeDeviceApiRequest(
         callsign: widget.device.callsign,
         method: 'GET',
         path: '/api/chat/${widget.room.id}/messages?limit=100',
+        headers: headers.isNotEmpty ? headers : null,
       );
 
       LogService().log('RemoteChatRoomPage: Response status=${response?.statusCode}, body length=${response?.body.length}');

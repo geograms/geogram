@@ -1203,7 +1203,7 @@ class LogApiService {
       }
 
       final debugController = DebugController();
-      final result = debugController.executeAction(action, params);
+      final result = await debugController.executeAction(action, params);
 
       LogService().log('LogApiService: Debug action executed: $action -> $result');
 
@@ -2089,6 +2089,25 @@ class LogApiService {
     }
   }
 
+  /// Load room config from disk (config.json in room folder)
+  Future<ChatChannelConfig?> _loadRoomConfig(String collectionPath, String roomId) async {
+    try {
+      final configPath = '$collectionPath/$roomId/config.json';
+      final configFile = io.File(configPath);
+      if (await configFile.exists()) {
+        final content = await configFile.readAsString();
+        final json = jsonDecode(content) as Map<String, dynamic>;
+        // Add id and name if missing (required by ChatChannelConfig)
+        json['id'] ??= roomId;
+        json['name'] ??= json['name'] ?? roomId;
+        return ChatChannelConfig.fromJson(json);
+      }
+    } catch (e) {
+      LogService().log('LogApiService: Error loading room config for $roomId: $e');
+    }
+    return null;
+  }
+
   /// Check if npub can access a chat room
   /// For DM channels (type: direct), also accepts a callsign parameter to allow access
   /// based on callsign matching the room participants
@@ -2099,9 +2118,15 @@ class LogApiService {
       return false;
     }
 
-    // Get visibility from config (default to PUBLIC)
-    final config = channel.config;
-    final visibility = config?.visibility ?? 'PUBLIC';
+    // Get visibility from config
+    // If config not loaded in channel, try to load from disk
+    var config = channel.config;
+    if (config == null && chatService.collectionPath != null) {
+      config = await _loadRoomConfig(chatService.collectionPath!, roomId);
+    }
+
+    // Security: Default to RESTRICTED if config is missing (fail closed)
+    final visibility = config?.visibility ?? 'RESTRICTED';
 
     // PUBLIC rooms are accessible to everyone
     if (visibility == 'PUBLIC') {

@@ -9,6 +9,8 @@ import 'package:flutter/material.dart';
 import '../services/devices_service.dart';
 import '../services/i18n_service.dart';
 import '../services/log_service.dart';
+import '../services/profile_service.dart';
+import '../services/signing_service.dart';
 import '../services/storage_config.dart';
 import 'remote_chat_room_page.dart';
 
@@ -28,14 +30,24 @@ class RemoteChatBrowserPage extends StatefulWidget {
 class _RemoteChatBrowserPageState extends State<RemoteChatBrowserPage> {
   final DevicesService _devicesService = DevicesService();
   final I18nService _i18n = I18nService();
+  final ProfileService _profileService = ProfileService();
+  final SigningService _signingService = SigningService();
 
   List<ChatRoom> _rooms = [];
   bool _isLoading = true;
   String? _error;
+  String? _myNpub;
 
   @override
   void initState() {
     super.initState();
+    _initAndLoad();
+  }
+
+  Future<void> _initAndLoad() async {
+    await _signingService.initialize();
+    final profile = _profileService.getProfile();
+    _myNpub = profile.npub.isNotEmpty ? profile.npub : null;
     _loadRooms();
   }
 
@@ -93,9 +105,26 @@ class _RemoteChatBrowserPageState extends State<RemoteChatBrowserPage> {
               final configContent = await configFile.readAsString();
               final config = json.decode(configContent) as Map<String, dynamic>;
 
-              // Only include public rooms
               final visibility = config['visibility'] as String? ?? 'PUBLIC';
-              if (visibility == 'PUBLIC') {
+
+              // Include PUBLIC rooms always
+              // Include RESTRICTED rooms only if visitor's npub is a member
+              bool shouldInclude = visibility == 'PUBLIC';
+
+              if (visibility == 'RESTRICTED' && _myNpub != null) {
+                // Check if visitor is owner, admin, moderator, or member
+                final owner = config['owner'] as String?;
+                final members = (config['members'] as List?)?.cast<String>() ?? [];
+                final admins = (config['admins'] as List?)?.cast<String>() ?? [];
+                final moderators = (config['moderators'] as List?)?.cast<String>() ?? [];
+
+                shouldInclude = owner == _myNpub ||
+                    members.contains(_myNpub) ||
+                    admins.contains(_myNpub) ||
+                    moderators.contains(_myNpub);
+              }
+
+              if (shouldInclude) {
                 rooms.add(ChatRoom(
                   id: roomName,
                   name: config['name'] as String? ?? roomName,
@@ -119,7 +148,7 @@ class _RemoteChatBrowserPageState extends State<RemoteChatBrowserPage> {
         }
       }
 
-      LogService().log('RemoteChatBrowserPage: Loaded ${rooms.length} cached rooms');
+      LogService().log('RemoteChatBrowserPage: Loaded ${rooms.length} cached rooms (myNpub=${_myNpub != null})');
       return rooms;
     } catch (e) {
       LogService().log('RemoteChatBrowserPage: Error loading cache: $e');
@@ -132,10 +161,25 @@ class _RemoteChatBrowserPageState extends State<RemoteChatBrowserPage> {
     try {
       LogService().log('RemoteChatBrowserPage: Fetching rooms from ${widget.device.callsign}');
 
+      // Generate signed auth header for NOSTR authentication
+      final profile = _profileService.getProfile();
+      final authHeader = await _signingService.generateAuthHeader(
+        profile,
+        action: 'list-rooms',
+        tags: [['resource', 'chat']],
+      );
+
+      final headers = <String, String>{};
+      if (authHeader != null) {
+        headers['Authorization'] = 'Nostr $authHeader';
+        LogService().log('RemoteChatBrowserPage: Using signed NOSTR auth');
+      }
+
       final response = await _devicesService.makeDeviceApiRequest(
         callsign: widget.device.callsign,
         method: 'GET',
         path: '/api/chat/rooms',
+        headers: headers.isNotEmpty ? headers : null,
       );
 
       LogService().log('RemoteChatBrowserPage: Response status=${response?.statusCode}, body length=${response?.body.length}');
@@ -247,7 +291,7 @@ class _RemoteChatBrowserPageState extends State<RemoteChatBrowserPage> {
                           ),
                           const SizedBox(height: 8),
                           Text(
-                            'This device has no public chat rooms',
+                            'This device has no accessible chat rooms',
                             style: theme.textTheme.bodySmall?.copyWith(
                               color: theme.colorScheme.onSurfaceVariant,
                             ),

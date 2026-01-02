@@ -311,6 +311,9 @@ class DevicesService {
       case DebugAction.sendChatMessage:
         // Chat message sending is handled by ChatBrowserPage
         break;
+      case DebugAction.refreshChat:
+        // Chat refresh is handled by DebugController.triggerChatRefresh()
+        break;
     }
   }
 

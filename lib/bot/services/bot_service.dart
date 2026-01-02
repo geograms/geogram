@@ -426,7 +426,7 @@ class BotService {
     }
 
     // Execute the debug action
-    final result = _debugController.executeAction(action, params);
+    final result = await _debugController.executeAction(action, params);
 
     if (result['success'] == true) {
       return BotMessage.bot(

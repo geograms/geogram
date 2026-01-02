@@ -5,6 +5,7 @@
 
 import 'dart:async';
 import 'package:flutter/foundation.dart';
+import 'chat_service.dart';
 import 'devices_service.dart';
 
 /// Debug action types that can be triggered via API
@@ -38,6 +39,9 @@ enum DebugAction {
 
   /// Disconnect from station
   disconnectStation,
+
+  /// Refresh chat channels
+  refreshChat,
 
   /// Send direct message to a device
   sendDM,
@@ -301,6 +305,15 @@ class DebugController {
     triggerAction(DebugAction.localNetworkScan);
   }
 
+  /// Trigger chat channels refresh
+  Future<void> triggerChatRefresh() async {
+    final chatService = ChatService();
+    if (chatService.collectionPath != null) {
+      await chatService.refreshChannels();
+    }
+    triggerAction(DebugAction.refreshChat);
+  }
+
   /// Trigger station connection
   void triggerConnectStation({String? stationUrl}) {
     triggerAction(
@@ -444,6 +457,11 @@ class DebugController {
       {
         'action': 'local_scan',
         'description': 'Scan local network for devices',
+        'params': {},
+      },
+      {
+        'action': 'refresh_chat',
+        'description': 'Refresh chat channels from channels.json',
         'params': {},
       },
       {
@@ -633,7 +651,7 @@ class DebugController {
 
   /// Parse and execute action from API request
   /// Returns result map with success status and message
-  Map<String, dynamic> executeAction(String action, Map<String, dynamic> params) {
+  Future<Map<String, dynamic>> executeAction(String action, Map<String, dynamic> params) async {
     switch (action.toLowerCase()) {
       case 'navigate':
         final panel = params['panel'] as String?;
@@ -694,6 +712,10 @@ class DebugController {
       case 'local_scan':
         triggerLocalNetworkScan();
         return {'success': true, 'message': 'Local network scan triggered'};
+
+      case 'refresh_chat':
+        await triggerChatRefresh();
+        return {'success': true, 'message': 'Chat channels refreshed'};
 
       case 'connect_station':
         triggerConnectStation(stationUrl: params['url'] as String?);
