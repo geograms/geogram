@@ -1,0 +1,44 @@
+Categories:
+  - Connectivity
+  - Internet
+
+License: Apache-2.0
+
+AuthorName: Geogram
+AuthorEmail: brito_pt@pm.me
+AuthorWebSite: https://geogram.radio
+
+SourceCode: https://github.com/geograms/geogram
+IssueTracker: https://github.com/geograms/geogram/issues
+Changelog: https://github.com/geograms/geogram/releases
+
+AutoName: Geogram
+
+RepoType: git
+Repo: https://github.com/geograms/geogram.git
+
+Builds:
+  - versionName: 1.6.74
+    versionCode: 408
+    commit: v1.6.74
+    output: build/app/outputs/flutter-apk/app-release.apk
+    srclibs:
+      - flutter@stable
+    rm:
+      - ios
+      - macos
+      - windows
+      - linux
+      - web
+    prebuild:
+      - export PATH="$PATH:$$flutter$$/bin"
+      - flutter config --no-analytics
+      - flutter pub get
+    build:
+      - export PATH="$PATH:$$flutter$$/bin"
+      - flutter build apk --release
+
+AutoUpdateMode: Version
+UpdateCheckMode: Tags
+CurrentVersion: 1.6.74
+CurrentVersionCode: 408
