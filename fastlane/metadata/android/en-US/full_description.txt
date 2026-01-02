@@ -1,0 +1,42 @@
+When the internet goes down, most apps stop working. Geogram keeps going.
+
+Geogram connects devices directly - phone to phone, laptop to laptop - without requiring servers, accounts, or infrastructure you don't control. Messages hop between devices over whatever path works: WiFi when available, Bluetooth when it's not, internet when you want global reach.
+
+Every message is signed with cryptographic keys, so you always know who you're talking to. No spoofing, no impersonation.
+
+Built for communities that need to communicate when things get difficult: remote areas, disaster response, places where the network is censored or unreliable, or people who believe their conversations shouldn't depend on corporate infrastructure.
+
+STATION SERVER
+
+Your phone can be a server. Your laptop can be a server. Geogram runs station software on any device, turning personal hardware into community infrastructure. Nothing lives on someone else's cloud. No monthly fees, no account required.
+
+OFFLINE MAPS
+
+Worldwide satellite imagery and street maps that work without internet. Pan and zoom anywhere using cached tiles stored locally or synced from a nearby station. No API keys, no usage limits.
+
+DEVICE DISCOVERY
+
+Geogram finds other devices around you automatically. Someone on the same WiFi? They appear in your device list. Within Bluetooth range? They show up too. Communication adapts to available connections.
+
+APPS
+
+- Chat: Real-time messaging with rooms, file attachments, voice messages, location sharing
+- Blog: Long-form publishing with markdown, drafts, tags, comments
+- Events: Community calendars with locations, participant tracking
+- Places: Geographic points of interest with descriptions, photos
+- Alerts: Geographic alert system with severity levels and verification
+- Inventory: Asset tracking with folder organization, borrowing system
+- Bot: Offline AI assistant using local models
+
+CONNECTIVITY
+
+- Local WiFi networks
+- Bluetooth Low Energy
+- WebRTC for NAT traversal
+- Station relay for global reach
+
+All platforms share the same data formats and can sync through any available transport.
+
+Source code: https://github.com/geograms/geogram
+Website: https://geogram.radio
+License: Apache-2.0

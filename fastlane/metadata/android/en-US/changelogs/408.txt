@@ -1,0 +1,5 @@
+- Added Apache 2.0 license
+- Added signed NOSTR authentication for restricted chat rooms
+- Fixed Windows build: bundled VC++ Runtime DLLs
+- Fixed iOS/macOS builds: updated deployment targets
+- Prepared F-Droid metadata for store submission
