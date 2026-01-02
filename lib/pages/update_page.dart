@@ -985,7 +985,7 @@ class _UpdatePageState extends State<UpdatePage> {
       subtitle = _statusMessage ?? _i18n.t('please_wait');
     } else if (_completedDownloadPath != null && hasUpdate && !kIsWeb) {
       // Download completed, ready to install
-      cardColor = Theme.of(context).colorScheme.tertiaryContainer;
+      cardColor = Theme.of(context).colorScheme.primaryContainer;
       icon = Icons.install_mobile;
       title = _i18n.t('ready_to_install');
       subtitle = _i18n.t('tap_to_install_version', params: [_latestRelease!.version]);
