@@ -7,7 +7,10 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import '../services/i18n_service.dart';
 import '../bot/services/vision_model_manager.dart';
+import '../bot/services/music_model_manager.dart';
+import '../bot/services/music_storage_service.dart';
 import '../bot/models/vision_model_info.dart';
+import '../bot/models/music_model_info.dart';
 
 /// Settings page for the Bot assistant
 class BotSettingsPage extends StatefulWidget {
@@ -20,6 +23,8 @@ class BotSettingsPage extends StatefulWidget {
 class _BotSettingsPageState extends State<BotSettingsPage> {
   final I18nService _i18n = I18nService();
   final VisionModelManager _visionModelManager = VisionModelManager();
+  final MusicModelManager _musicModelManager = MusicModelManager();
+  final MusicStorageService _musicStorage = MusicStorageService();
 
   // Settings state (placeholder - will be persisted later)
   String _selectedModel = 'none';
@@ -45,16 +50,30 @@ class _BotSettingsPageState extends State<BotSettingsPage> {
   String _visionStorageUsed = '0 MB';
   StreamSubscription? _downloadStateSubscription;
 
+  // Music model state
+  final Map<String, bool> _downloadedMusicModels = {};
+  final Map<String, double> _musicDownloadProgress = {};
+  final Map<String, StreamSubscription> _musicDownloadSubscriptions = {};
+  String _musicModelsStorageUsed = '0 MB';
+  String _musicTracksStorageUsed = '0 MB';
+  int _savedTracksCount = 0;
+  StreamSubscription? _musicDownloadStateSubscription;
+
   @override
   void initState() {
     super.initState();
     _initializeVisionModels();
+    _initializeMusicModels();
   }
 
   @override
   void dispose() {
     _downloadStateSubscription?.cancel();
     for (final sub in _downloadSubscriptions.values) {
+      sub.cancel();
+    }
+    _musicDownloadStateSubscription?.cancel();
+    for (final sub in _musicDownloadSubscriptions.values) {
       sub.cancel();
     }
     super.dispose();
@@ -105,6 +124,67 @@ class _BotSettingsPageState extends State<BotSettingsPage> {
     }
   }
 
+  Future<void> _initializeMusicModels() async {
+    await _musicModelManager.initialize();
+    await _musicStorage.initialize();
+
+    // Check which models are downloaded
+    for (final model in MusicModels.available) {
+      if (!model.isNative) {
+        final isDownloaded = await _musicModelManager.isDownloaded(model.id);
+        if (mounted) {
+          setState(() {
+            _downloadedMusicModels[model.id] = isDownloaded;
+          });
+        }
+      }
+    }
+
+    // Get storage usage
+    final modelsStorage = await _musicModelManager.getStorageUsedString();
+    final tracksStorage = await _musicStorage.getStorageUsedString();
+    final tracksCount = (await _musicStorage.getSavedTracks()).length;
+
+    if (mounted) {
+      setState(() {
+        _musicModelsStorageUsed = modelsStorage;
+        _musicTracksStorageUsed = tracksStorage;
+        _savedTracksCount = tracksCount;
+      });
+    }
+
+    // Listen for download state changes
+    _musicDownloadStateSubscription =
+        _musicModelManager.downloadStateChanges.listen((modelId) {
+      _refreshMusicModelState();
+    });
+  }
+
+  Future<void> _refreshMusicModelState() async {
+    for (final model in MusicModels.available) {
+      if (!model.isNative) {
+        final isDownloaded = await _musicModelManager.isDownloaded(model.id);
+        if (mounted) {
+          setState(() {
+            _downloadedMusicModels[model.id] = isDownloaded;
+          });
+        }
+      }
+    }
+
+    final modelsStorage = await _musicModelManager.getStorageUsedString();
+    final tracksStorage = await _musicStorage.getStorageUsedString();
+    final tracksCount = (await _musicStorage.getSavedTracks()).length;
+
+    if (mounted) {
+      setState(() {
+        _musicModelsStorageUsed = modelsStorage;
+        _musicTracksStorageUsed = tracksStorage;
+        _savedTracksCount = tracksCount;
+      });
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
@@ -124,6 +204,12 @@ class _BotSettingsPageState extends State<BotSettingsPage> {
           // Vision Models
           _buildSectionHeader(_i18n.t('bot_vision_models')),
           _buildVisionModelsSection(colorScheme),
+
+          const Divider(),
+
+          // Music Generation
+          _buildSectionHeader(_i18n.t('bot_music_generation')),
+          _buildMusicModelsSection(colorScheme),
 
           const Divider(),
 
@@ -366,6 +452,409 @@ class _BotSettingsPageState extends State<BotSettingsPage> {
           ),
         ),
       ],
+    );
+  }
+
+  Widget _buildMusicModelsSection(ColorScheme colorScheme) {
+    // Separate native (FM Synth) from downloadable models
+    final nativeModels =
+        MusicModels.available.where((m) => m.isNative).toList();
+    final downloadableModels =
+        MusicModels.available.where((m) => !m.isNative).toList();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Storage info
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  const Icon(Icons.storage, size: 18),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Models: $_musicModelsStorageUsed',
+                    style: TextStyle(
+                      color: colorScheme.onSurfaceVariant,
+                      fontSize: 13,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 4),
+              Row(
+                children: [
+                  const Icon(Icons.music_note, size: 18),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Saved tracks: $_savedTracksCount ($_musicTracksStorageUsed)',
+                    style: TextStyle(
+                      color: colorScheme.onSurfaceVariant,
+                      fontSize: 13,
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+
+        // Native/built-in models
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+          child: Text(
+            'Built-in (Always Available)',
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w500,
+              color: colorScheme.primary,
+            ),
+          ),
+        ),
+        for (final model in nativeModels)
+          _buildMusicModelTile(model, colorScheme),
+
+        // Downloadable AI models
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+          child: Text(
+            'AI Models (Higher Quality)',
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w500,
+              color: colorScheme.primary,
+            ),
+          ),
+        ),
+        for (final model in downloadableModels)
+          _buildMusicModelTile(model, colorScheme),
+
+        // Clear tracks button
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          child: Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  icon: const Icon(Icons.delete_sweep, size: 18),
+                  label: Text(_i18n.t('bot_clear_music_tracks')),
+                  onPressed: _savedTracksCount > 0 ? _showClearMusicTracksDialog : null,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: OutlinedButton.icon(
+                  icon: const Icon(Icons.delete_outline, size: 18),
+                  label: Text(_i18n.t('bot_clear_music_models')),
+                  onPressed: _showClearMusicModelsDialog,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildMusicModelTile(MusicModelInfo model, ColorScheme colorScheme) {
+    final isNative = model.isNative;
+    final isDownloaded = isNative || (_downloadedMusicModels[model.id] ?? false);
+    final isDownloading = _musicDownloadProgress.containsKey(model.id);
+    final progress = _musicDownloadProgress[model.id] ?? 0.0;
+
+    return ListTile(
+      leading: Icon(
+        _getMusicModelIcon(model.tier),
+        color: isDownloaded ? Colors.green : colorScheme.onSurfaceVariant,
+      ),
+      title: Text(model.name),
+      subtitle: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            _getMusicModelDescription(model),
+            style: TextStyle(
+              fontSize: 12,
+              color: colorScheme.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Row(
+            children: [
+              if (!isNative)
+                Text(
+                  model.sizeString,
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              if (!isNative) const SizedBox(width: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                decoration: BoxDecoration(
+                  color: _getMusicTierColor(model.tier).withValues(alpha: 0.2),
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: Text(
+                  model.tier.toUpperCase(),
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.bold,
+                    color: _getMusicTierColor(model.tier),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                'RAM: ${model.minRamMb}MB+',
+                style: TextStyle(
+                  fontSize: 10,
+                  color: colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ],
+          ),
+          if (isDownloading)
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: LinearProgressIndicator(
+                value: progress,
+                backgroundColor: colorScheme.surfaceContainerHighest,
+              ),
+            ),
+        ],
+      ),
+      trailing: isNative
+          ? Icon(Icons.check_circle, color: Colors.green, size: 20)
+          : isDownloading
+              ? SizedBox(
+                  width: 48,
+                  child: Text(
+                    '${(progress * 100).toInt()}%',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: colorScheme.primary,
+                    ),
+                  ),
+                )
+              : isDownloaded
+                  ? IconButton(
+                      icon: const Icon(Icons.delete_outline),
+                      onPressed: () => _deleteMusicModel(model),
+                      tooltip: _i18n.t('delete'),
+                    )
+                  : IconButton(
+                      icon: const Icon(Icons.download),
+                      onPressed: () => _downloadMusicModel(model),
+                      tooltip: _i18n.t('download'),
+                    ),
+    );
+  }
+
+  String _getMusicModelDescription(MusicModelInfo model) {
+    if (model.isNative) {
+      return 'Instant procedural music - no download needed';
+    }
+    final speed = model.genSpeedRatio > 0
+        ? '~${(1 / model.genSpeedRatio).toStringAsFixed(0)}s per 10s audio'
+        : '';
+    return '${model.genres.join(", ")} ${speed.isNotEmpty ? "• $speed" : ""}';
+  }
+
+  IconData _getMusicModelIcon(String tier) {
+    switch (tier) {
+      case 'instant':
+        return Icons.flash_on;
+      case 'lite':
+        return Icons.speed;
+      case 'standard':
+        return Icons.music_note;
+      case 'quality':
+        return Icons.auto_awesome;
+      default:
+        return Icons.music_note;
+    }
+  }
+
+  Color _getMusicTierColor(String tier) {
+    switch (tier) {
+      case 'instant':
+        return Colors.teal;
+      case 'lite':
+        return Colors.green;
+      case 'standard':
+        return Colors.blue;
+      case 'quality':
+        return Colors.purple;
+      default:
+        return Colors.grey;
+    }
+  }
+
+  Future<void> _downloadMusicModel(MusicModelInfo model) async {
+    if (_musicDownloadProgress.containsKey(model.id)) return;
+
+    setState(() {
+      _musicDownloadProgress[model.id] = 0.0;
+    });
+
+    try {
+      final stream = _musicModelManager.downloadModel(model.id);
+      _musicDownloadSubscriptions[model.id] = stream.listen(
+        (progress) {
+          if (mounted) {
+            setState(() {
+              _musicDownloadProgress[model.id] = progress;
+            });
+          }
+        },
+        onDone: () {
+          if (mounted) {
+            setState(() {
+              _musicDownloadProgress.remove(model.id);
+              _downloadedMusicModels[model.id] = true;
+            });
+            _refreshMusicModelState();
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('${model.name} ${_i18n.t('downloaded')}'),
+                duration: const Duration(seconds: 2),
+              ),
+            );
+          }
+          _musicDownloadSubscriptions.remove(model.id);
+        },
+        onError: (error) {
+          if (mounted) {
+            setState(() {
+              _musicDownloadProgress.remove(model.id);
+            });
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('${_i18n.t('download_failed')}: $error'),
+                backgroundColor: Colors.red,
+              ),
+            );
+          }
+          _musicDownloadSubscriptions.remove(model.id);
+        },
+      );
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _musicDownloadProgress.remove(model.id);
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('${_i18n.t('download_failed')}: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _deleteMusicModel(MusicModelInfo model) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(_i18n.t('delete_model')),
+        content:
+            Text(_i18n.t('delete_model_confirm').replaceAll('{0}', model.name)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text(_i18n.t('cancel')),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: Text(_i18n.t('delete')),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      await _musicModelManager.deleteModel(model.id);
+      if (mounted) {
+        setState(() {
+          _downloadedMusicModels[model.id] = false;
+        });
+        _refreshMusicModelState();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('${model.name} ${_i18n.t('deleted')}'),
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      }
+    }
+  }
+
+  void _showClearMusicModelsDialog() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(_i18n.t('bot_clear_music_models')),
+        content: Text(_i18n.t('bot_clear_music_models_confirm')),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text(_i18n.t('cancel')),
+          ),
+          TextButton(
+            onPressed: () async {
+              Navigator.pop(context);
+              await _musicModelManager.clearAllModels();
+              await _refreshMusicModelState();
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(_i18n.t('bot_music_models_cleared')),
+                  ),
+                );
+              }
+            },
+            child: Text(_i18n.t('delete')),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showClearMusicTracksDialog() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(_i18n.t('bot_clear_music_tracks')),
+        content: Text(_i18n.t('bot_clear_music_tracks_confirm')
+            .replaceAll('{0}', _savedTracksCount.toString())),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text(_i18n.t('cancel')),
+          ),
+          TextButton(
+            onPressed: () async {
+              Navigator.pop(context);
+              await _musicStorage.clearAllTracks();
+              await _refreshMusicModelState();
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(_i18n.t('bot_music_tracks_cleared')),
+                  ),
+                );
+              }
+            },
+            child: Text(_i18n.t('delete')),
+          ),
+        ],
+      ),
     );
   }
 

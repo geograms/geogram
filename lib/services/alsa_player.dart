@@ -91,6 +91,7 @@ class AlsaPlayer {
   bool _isPlaying = false;
   bool _isPaused = false;
   bool _stopRequested = false;
+  bool _isDisposed = false;
 
   late SndPcmOpen _sndPcmOpen;
   late SndPcmClose _sndPcmClose;
@@ -175,6 +176,16 @@ class AlsaPlayer {
   String _getError(int code) {
     final ptr = _sndStrError(code);
     return ptr.toDartString();
+  }
+
+  void _emitState(AlsaPlayerState state) {
+    if (_isDisposed || _stateController.isClosed) return;
+    _stateController.add(state);
+  }
+
+  void _emitPosition(Duration value) {
+    if (_isDisposed || _positionController.isClosed) return;
+    _positionController.add(value);
   }
 
   /// Load PCM samples for playback.
@@ -277,7 +288,7 @@ class AlsaPlayer {
 
     if (_isPaused) {
       _isPaused = false;
-      _stateController.add(AlsaPlayerState.playing);
+      _emitState(AlsaPlayerState.playing);
       return;
     }
 
@@ -285,7 +296,7 @@ class AlsaPlayer {
 
     _isPlaying = true;
     _stopRequested = false;
-    _stateController.add(AlsaPlayerState.playing);
+    _emitState(AlsaPlayerState.playing);
 
     // Start playback in background
     _playbackLoop();
@@ -293,16 +304,20 @@ class AlsaPlayer {
 
   /// Background playback loop.
   Future<void> _playbackLoop() async {
+    if (_isDisposed) return;
     if (!_openDevice()) {
       _isPlaying = false;
-      _stateController.add(AlsaPlayerState.stopped);
+      _emitState(AlsaPlayerState.stopped);
       return;
     }
 
     final framesPerWrite = _sampleRate ~/ 20; // 50ms chunks
     final samplesPerWrite = framesPerWrite * _channels;
 
-    while (_isPlaying && !_stopRequested && _position < _samples!.length) {
+    while (_isPlaying &&
+        !_stopRequested &&
+        !_isDisposed &&
+        _position < _samples!.length) {
       if (_isPaused) {
         await Future.delayed(const Duration(milliseconds: 50));
         continue;
@@ -328,25 +343,27 @@ class AlsaPlayer {
       }
 
       _position += written * _channels;
-      _positionController.add(position);
+      _emitPosition(position);
 
       // Small delay to prevent tight loop
       await Future.delayed(const Duration(milliseconds: 10));
     }
 
     // Drain remaining audio
-    if (_pcm != null && !_stopRequested) {
+    if (_pcm != null && !_stopRequested && !_isDisposed) {
       _sndPcmDrain(_pcm!);
     }
 
     _closeDevice();
     _isPlaying = false;
 
-    if (_position >= _samples!.length) {
+    if (_isDisposed) return;
+
+    if (_position >= _samples!.length && !_stopRequested) {
       _position = 0;
-      _stateController.add(AlsaPlayerState.completed);
+      _emitState(AlsaPlayerState.completed);
     } else {
-      _stateController.add(AlsaPlayerState.stopped);
+      _emitState(AlsaPlayerState.stopped);
     }
   }
 
@@ -354,7 +371,7 @@ class AlsaPlayer {
   void pause() {
     if (_isPlaying && !_isPaused) {
       _isPaused = true;
-      _stateController.add(AlsaPlayerState.paused);
+      _emitState(AlsaPlayerState.paused);
     }
   }
 
@@ -363,22 +380,38 @@ class AlsaPlayer {
     _stopRequested = true;
     _isPaused = false;
     _position = 0;
-    _stateController.add(AlsaPlayerState.stopped);
+    _isPlaying = false;
+    if (_pcm != null) {
+      _sndPcmDrop(_pcm!);
+    }
+    _emitState(AlsaPlayerState.stopped);
   }
 
   /// Seek to position.
   void seek(Duration position) {
     final frames = (position.inMilliseconds * _sampleRate) ~/ 1000;
     _position = (frames * _channels).clamp(0, _samples?.length ?? 0);
-    _positionController.add(this.position);
+    _emitPosition(this.position);
   }
 
   /// Release resources.
   void dispose() {
-    stop();
+    if (_isDisposed) return;
+    _isDisposed = true;
+    _stopRequested = true;
+    _isPaused = false;
+    _isPlaying = false;
+    _position = 0;
+    if (_pcm != null) {
+      _sndPcmDrop(_pcm!);
+    }
     _closeDevice();
-    _positionController.close();
-    _stateController.close();
+    if (!_positionController.isClosed) {
+      _positionController.close();
+    }
+    if (!_stateController.isClosed) {
+      _stateController.close();
+    }
   }
 }
 

@@ -32,7 +32,7 @@ if(BLUEZ_FOUND)
   target_link_libraries(${BINARY_NAME} PRIVATE PkgConfig::BLUEZ)
   target_compile_definitions(${BINARY_NAME} PRIVATE HAVE_BLUETOOTH=1)
 else()
-  message(WARNING "BlueZ dev library not found - Bluetooth Classic support will be limited. Install libbluetooth-dev for full support.")
+  message(STATUS "BlueZ dev library not found - Bluetooth Classic support will be limited.")
   # Plugin will use DBus-only mode without direct RFCOMM socket support
 endif()
 

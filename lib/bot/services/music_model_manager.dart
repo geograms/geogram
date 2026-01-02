@@ -6,17 +6,19 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:http/http.dart' as http;
-import 'package:path/path.dart' as path;
-import 'package:path_provider/path_provider.dart';
+import 'package:path/path.dart' as p;
 
 import '../models/music_model_info.dart';
-import '../../connection/connection_manager.dart';
 import '../../services/log_service.dart';
 import '../../services/station_service.dart';
+import '../../services/storage_config.dart';
+import '../../transfer/models/transfer_models.dart';
+import '../../transfer/services/transfer_service.dart';
+import '../../util/event_bus.dart';
 
 /// Manages music generation model downloads and storage.
-/// Follows the same station-first pattern as VisionModelManager.
+/// Downloads are routed through TransferService which uses ConnectionManager
+/// to find the best transport (LAN, WebRTC, Station, BLE+, BLE).
 class MusicModelManager {
   static final MusicModelManager _instance = MusicModelManager._internal();
   factory MusicModelManager() => _instance;
@@ -25,7 +27,14 @@ class MusicModelManager {
   /// Directory for storing music models
   String? _modelsPath;
 
-  /// Currently downloading models
+  /// Transfer service for downloading models
+  final TransferService _transferService = TransferService();
+  final EventBus _eventBus = EventBus();
+
+  /// Maps model IDs to their active transfer IDs (supports multi-file models)
+  final Map<String, List<String>> _modelTransferIds = {};
+
+  /// Currently downloading models (for backward compatibility with UI)
   final Map<String, _DownloadProgress> _activeDownloads = {};
 
   /// Notifier for download state changes
@@ -37,8 +46,12 @@ class MusicModelManager {
 
   /// Initialize the manager
   Future<void> initialize() async {
-    final appDir = await getApplicationDocumentsDirectory();
-    _modelsPath = '${appDir.path}/bot/models/music';
+    final storageConfig = StorageConfig();
+    if (!storageConfig.isInitialized) {
+      await storageConfig.init();
+    }
+
+    _modelsPath = p.join(storageConfig.baseDir, 'bot', 'models', 'music');
 
     // Create directory if it doesn't exist
     final dir = Directory(_modelsPath!);
@@ -70,13 +83,13 @@ class MusicModelManager {
       throw ArgumentError('Native model $modelId has no directory');
     }
 
-    return path.join(basePath, modelId);
+    return p.join(basePath, modelId);
   }
 
   /// Get path to a specific model file (relative to model directory)
   Future<String> getModelFilePath(String modelId, String relativePath) async {
     final modelDir = await getModelDir(modelId);
-    return path.join(modelDir, relativePath);
+    return p.join(modelDir, relativePath);
   }
 
   /// Check if a model is downloaded
@@ -91,7 +104,7 @@ class MusicModelManager {
       if (model.files.isEmpty) {
         // Legacy single-file model fallback
         final extension = model.format == 'onnx' ? '.onnx' : '.tflite';
-        final legacyPath = path.join(await modelsPath, '$modelId$extension');
+        final legacyPath = p.join(await modelsPath, '$modelId$extension');
         final file = File(legacyPath);
         if (!await file.exists()) return false;
 
@@ -131,13 +144,20 @@ class MusicModelManager {
     return _activeDownloads[modelId]?.progress ?? 0.0;
   }
 
-  /// Download a model with progress tracking.
-  /// Uses station-first download pattern:
-  /// 1. Check local cache
-  /// 2. Try station server via ConnectionManager
-  /// 3. Fallback to internet (HuggingFace)
+  /// Download a model with progress tracking via TransferService.
+  ///
+  /// Downloads are routed through the Transfer app which uses ConnectionManager
+  /// to find the best transport (LAN, WebRTC, Station, BLE+, BLE).
+  ///
+  /// Multi-file models create separate transfers for each file, with
+  /// aggregate progress tracking.
+  ///
   /// Returns a stream of progress updates (0.0 - 1.0)
-  Stream<double> downloadModel(String modelId) async* {
+  Stream<double> downloadModel(
+    String modelId, {
+    String? stationUrl,
+    String? stationCallsign,
+  }) async* {
     final model = MusicModels.getById(modelId);
     if (model == null) {
       throw ArgumentError('Unknown model: $modelId');
@@ -149,26 +169,30 @@ class MusicModelManager {
       return;
     }
 
-    // Check if already downloading
-    if (_activeDownloads.containsKey(modelId)) {
-      // Return existing download progress
-      while (_activeDownloads.containsKey(modelId)) {
-        yield _activeDownloads[modelId]!.progress;
-        await Future.delayed(const Duration(milliseconds: 100));
-      }
-      return;
-    }
-
     // Check if already downloaded
     if (await isDownloaded(modelId)) {
       yield 1.0;
       return;
     }
 
-    // Track download
-    _activeDownloads[modelId] = _DownloadProgress();
-    _downloadStateController.add(modelId);
+    // Ensure TransferService is initialized
+    if (!_transferService.isInitialized) {
+      await _transferService.initialize();
+    }
 
+    // Get station info for the transfer
+    final preferredStation = StationService().getPreferredStation();
+    final resolvedStationUrl = stationUrl ?? preferredStation?.url;
+    final resolvedCallsign = stationCallsign ?? preferredStation?.callsign;
+    if (resolvedStationUrl == null ||
+        resolvedStationUrl.isEmpty ||
+        resolvedCallsign == null ||
+        resolvedCallsign.isEmpty) {
+      throw Exception(
+          'No station configured. Please connect to a station to download models.');
+    }
+
+    // Build file list (single file for legacy models, multiple for new)
     final files = model.files.isNotEmpty
         ? model.files
         : [
@@ -178,140 +202,193 @@ class MusicModelManager {
             )
           ];
 
+    // Track download
+    _activeDownloads[modelId] = _DownloadProgress();
+    _modelTransferIds[modelId] = [];
+    _downloadStateController.add(modelId);
+
+    // Track progress per file
+    final fileProgress = <int, double>{};
+    final completers = <Completer<void>>[];
+    final subscriptions = <EventSubscription>[];
+
     try {
+      // Create transfers for each file
       for (var i = 0; i < files.length; i++) {
         final fileInfo = files[i];
-        final destPath = model.files.isNotEmpty
+        final localPath = model.files.isNotEmpty
             ? await getModelFilePath(modelId, fileInfo.path)
-            : path.join(await modelsPath, fileInfo.path);
-        final destFile = File(destPath);
-        final tempFile = File('$destPath.tmp');
+            : p.join(await modelsPath, fileInfo.path);
+        final remotePath = '/bot/models/music/$modelId/${fileInfo.path}';
 
         // Create parent directory if needed
-        final parentDir = destFile.parent;
+        final parentDir = Directory(localPath).parent;
         if (!await parentDir.exists()) {
           await parentDir.create(recursive: true);
         }
 
-        // Skip if already downloaded
-        if (await destFile.exists()) {
+        // Skip if file already downloaded
+        final localFile = File(localPath);
+        if (await localFile.exists()) {
           if (fileInfo.size > 0) {
-            final actualSize = await destFile.length();
+            final actualSize = await localFile.length();
             final tolerance = fileInfo.size * 0.05;
             if ((actualSize - fileInfo.size).abs() < tolerance) {
-              _activeDownloads[modelId]!.progress = (i + 1) / files.length;
-              yield _activeDownloads[modelId]!.progress;
+              fileProgress[i] = 1.0;
               continue;
             }
           } else {
-            _activeDownloads[modelId]!.progress = (i + 1) / files.length;
-            yield _activeDownloads[modelId]!.progress;
+            fileProgress[i] = 1.0;
             continue;
           }
         }
 
-        // Station-first download pattern per file
-        if (await _isStationReachable()) {
-          final stationUrl = _getStationModelUrl(modelId, fileInfo.path);
-          if (stationUrl != null) {
-            LogService().log(
-                'MusicModelManager: Trying station download for $modelId (${fileInfo.path})');
-            try {
-              await for (final progress in _downloadFromUrl(
-                stationUrl,
-                modelId,
-                fileInfo.path,
-                destPath,
-                tempFile,
-                expectedSize: fileInfo.size,
-              )) {
-                final overall = (i + progress) / files.length;
-                _activeDownloads[modelId]!.progress = overall;
-                yield overall;
-              }
-              continue; // Success - next file
-            } catch (e) {
-              LogService().log(
-                  'MusicModelManager: Station download failed: $e, trying internet...');
-              if (await tempFile.exists()) {
-                await tempFile.delete();
-              }
+        // Check if transfer already exists
+        var transfer = _transferService.findTransfer(
+          callsign: resolvedCallsign,
+          remotePath: remotePath,
+        );
+
+        if (transfer == null) {
+          LogService().log(
+              'MusicModelManager: Requesting transfer for $modelId (${fileInfo.path}) from station $resolvedCallsign');
+
+          transfer = await _transferService.requestDownload(
+            TransferRequest(
+              direction: TransferDirection.download,
+              callsign: resolvedCallsign,
+              stationUrl: resolvedStationUrl,
+              remotePath: remotePath,
+              localPath: localPath,
+              expectedBytes: fileInfo.size,
+              timeout: const Duration(hours: 2),
+              priority: TransferPriority.high,
+              requestingApp: 'bot',
+              metadata: {
+                'model_id': modelId,
+                'model_type': 'music',
+                'model_name': model.name,
+                'file_index': i,
+                'file_path': fileInfo.path,
+                'size_tolerance_ratio': 0.05,
+              },
+            ),
+          );
+        }
+
+        _modelTransferIds[modelId]!.add(transfer.id);
+        fileProgress[i] = 0.0;
+
+        // Create completer for this file
+        final completer = Completer<void>();
+        completers.add(completer);
+
+        // Subscribe to progress events for this file
+        final progressSub = _eventBus.on<TransferProgressEvent>((event) {
+          if (event.transferId == transfer!.id) {
+            final progress = event.totalBytes > 0
+                ? event.bytesTransferred / event.totalBytes
+                : 0.0;
+            fileProgress[i] = progress;
+          }
+        });
+        subscriptions.add(progressSub);
+
+        // Subscribe to completion events
+        final completeSub = _eventBus.on<TransferCompletedEvent>((event) {
+          if (event.transferId == transfer!.id) {
+            fileProgress[i] = 1.0;
+            if (!completer.isCompleted) completer.complete();
+          }
+        });
+        subscriptions.add(completeSub);
+
+        // Subscribe to failure events
+        final failedSub = _eventBus.on<TransferFailedEvent>((event) {
+          if (event.transferId == transfer!.id && !event.willRetry) {
+            if (!completer.isCompleted) {
+              completer.completeError(Exception(event.error));
+            }
+          }
+        });
+        subscriptions.add(failedSub);
+      }
+
+      // Yield progress updates until all files complete
+      while (!completers.every((c) => c.isCompleted)) {
+        // Calculate aggregate progress
+        var totalProgress = 0.0;
+        for (var i = 0; i < files.length; i++) {
+          totalProgress += (fileProgress[i] ?? 0.0) / files.length;
+        }
+
+        _activeDownloads[modelId]!.progress = totalProgress;
+        yield totalProgress;
+
+        if (totalProgress >= 1.0) break;
+
+        // Check transfer status periodically
+        var allComplete = true;
+        var anyFailed = false;
+        String? failError;
+
+        for (final transferId in _modelTransferIds[modelId] ?? []) {
+          final currentTransfer = _transferService.getTransfer(transferId);
+          if (currentTransfer != null) {
+            if (currentTransfer.isFailed) {
+              anyFailed = true;
+              failError = currentTransfer.error;
+              break;
+            }
+            if (!currentTransfer.isCompleted) {
+              allComplete = false;
             }
           }
         }
 
-        // Fallback to internet (HuggingFace)
-        final url = _buildInternetUrl(model, fileInfo.path);
-        if (url == null) {
-          throw Exception('Model $modelId has no download URL for ${fileInfo.path}');
+        if (anyFailed) {
+          throw Exception(failError ?? 'Transfer failed');
         }
 
-        LogService().log(
-            'MusicModelManager: Starting internet download of $modelId (${fileInfo.path}) from $url');
-        await for (final progress in _downloadFromUrl(
-          url,
-          modelId,
-          fileInfo.path,
-          destPath,
-          tempFile,
-          expectedSize: fileInfo.size,
-        )) {
-          final overall = (i + progress) / files.length;
-          _activeDownloads[modelId]!.progress = overall;
-          yield overall;
+        if (allComplete && fileProgress.values.every((p) => p >= 1.0)) {
+          break;
         }
+
+        await Future.delayed(const Duration(milliseconds: 200));
       }
 
+      // Wait for all completers
+      await Future.wait(completers.map((c) => c.future));
+
+      LogService()
+          .log('MusicModelManager: Downloaded $modelId via TransferService');
       yield 1.0;
     } catch (e) {
       LogService().log('MusicModelManager: Error downloading $modelId: $e');
-
       rethrow;
     } finally {
+      // Cleanup subscriptions
+      for (final sub in subscriptions) {
+        sub.cancel();
+      }
+
       _activeDownloads.remove(modelId);
+      _modelTransferIds.remove(modelId);
       _downloadStateController.add(modelId);
     }
   }
 
-  /// Download from a specific URL with progress tracking
-  Stream<double> _downloadFromUrl(
-    String url,
-    String modelId,
-    String fileLabel,
-    String path,
-    File tempFile, {
-    int expectedSize = 0,
-  }) async* {
-    final request = http.Request('GET', Uri.parse(url));
-    final response = await http.Client().send(request);
+  /// Get the transfer IDs for a model download (if in progress)
+  List<String>? getTransferIds(String modelId) => _modelTransferIds[modelId];
 
-    if (response.statusCode != 200) {
-      throw Exception(
-          'HTTP ${response.statusCode}: Failed to download model from $url');
-    }
-
-    final totalBytes = response.contentLength ?? expectedSize;
-    var receivedBytes = 0;
-
-    final sink = tempFile.openWrite();
-
-    await for (final chunk in response.stream) {
-      sink.add(chunk);
-      receivedBytes += chunk.length;
-
-      final progress =
-          totalBytes > 0 ? receivedBytes / totalBytes : 0.0;
-      yield progress;
-    }
-
-    await sink.close();
-
-    // Move temp file to final location
-    await tempFile.rename(path);
-
-    LogService().log(
-        'MusicModelManager: Downloaded $modelId ($fileLabel) from $url');
-    yield 1.0;
+  /// Get the current transfers for a model (if in progress)
+  List<Transfer> getTransfers(String modelId) {
+    final transferIds = _modelTransferIds[modelId];
+    if (transferIds == null) return [];
+    return transferIds
+        .map((id) => _transferService.getTransfer(id))
+        .whereType<Transfer>()
+        .toList();
   }
 
   /// Delete a downloaded model
@@ -375,7 +452,7 @@ class MusicModelManager {
       if (model.files.isEmpty) {
         try {
           final extension = model.format == 'onnx' ? '.onnx' : '.tflite';
-          final legacyPath = path.join(await modelsPath, '${model.id}$extension');
+          final legacyPath = p.join(await modelsPath, '${model.id}$extension');
           final file = File(legacyPath);
           if (await file.exists()) {
             total += await file.length();
@@ -422,54 +499,6 @@ class MusicModelManager {
       await deleteModel(model.id);
     }
     LogService().log('MusicModelManager: Cleared all music models');
-  }
-
-  // ============================================================
-  // Station-First Download (Offline-First Pattern)
-  // ============================================================
-
-  /// Get station URL for model downloads
-  String? _getStationModelUrl(String modelId, String relativePath) {
-    final station = StationService().getPreferredStation();
-    if (station == null || station.url.isEmpty) return null;
-
-    var stationUrl = station.url;
-    // Convert WebSocket URL to HTTP
-    if (stationUrl.startsWith('ws://')) {
-      stationUrl = stationUrl.replaceFirst('ws://', 'http://');
-    } else if (stationUrl.startsWith('wss://')) {
-      stationUrl = stationUrl.replaceFirst('wss://', 'https://');
-    }
-
-    // Remove trailing slash if present
-    if (stationUrl.endsWith('/')) {
-      stationUrl = stationUrl.substring(0, stationUrl.length - 1);
-    }
-
-    return '$stationUrl/bot/models/music/$modelId/$relativePath';
-  }
-
-  String? _buildInternetUrl(MusicModelInfo model, String relativePath) {
-    if (model.repoId != null && model.repoId!.isNotEmpty) {
-      return 'https://huggingface.co/${model.repoId}/resolve/main/$relativePath';
-    }
-    return model.url;
-  }
-
-  /// Check if station is reachable via any transport
-  Future<bool> _isStationReachable() async {
-    final station = StationService().getPreferredStation();
-    if (station == null || station.callsign == null) return false;
-
-    try {
-      return await ConnectionManager()
-          .isReachable(station.callsign!)
-          .timeout(const Duration(seconds: 5), onTimeout: () => false);
-    } catch (e) {
-      LogService()
-          .log('MusicModelManager: Station reachability check failed: $e');
-      return false;
-    }
   }
 
   void dispose() {

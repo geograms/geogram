@@ -26,6 +26,7 @@ import 'signing_service.dart';
 import 'debug_controller.dart';
 import 'config_service.dart';
 import 'app_args.dart';
+import 'group_sync_service.dart';
 import 'bluetooth_classic_pairing_service.dart';
 import '../util/nostr_event.dart';
 import '../util/event_bus.dart';
@@ -917,6 +918,24 @@ class DevicesService {
     return states[folderId] ?? true; // Default to expanded
   }
 
+  /// Set folder chat enabled state
+  void setFolderChatEnabled(String folderId, bool enabled) {
+    final folders = getFolders();
+    final index = folders.indexWhere((f) => f.id == folderId);
+    if (index != -1) {
+      folders[index].chatEnabled = enabled;
+      _saveFolders(folders);
+      LogService().log('DevicesService: Set chat ${enabled ? "enabled" : "disabled"} for folder $folderId');
+    }
+  }
+
+  /// Check if folder has chat enabled
+  bool isFolderChatEnabled(String folderId) {
+    final folders = getFolders();
+    final folder = folders.where((f) => f.id == folderId).firstOrNull;
+    return folder?.chatEnabled ?? true; // Default to enabled
+  }
+
   /// Reorder folders - move folder to new position
   void reorderFolders(int oldIndex, int newIndex) {
     final folders = getFolders();
@@ -941,11 +960,22 @@ class DevicesService {
     final id = 'folder_${DateTime.now().millisecondsSinceEpoch}';
     // New folders get order at the end
     final maxOrder = folders.isEmpty ? 0 : folders.map((f) => f.order).reduce((a, b) => a > b ? a : b);
-    final folder = DeviceFolder(id: id, name: name, order: maxOrder + 1);
+    final folder = DeviceFolder(id: id, name: name, order: maxOrder + 1, chatEnabled: true);
     folders.add(folder);
     _saveFolders(folders);
     LogService().log('DevicesService: Created folder "$name" with id $id');
+
+    // Trigger chat room creation asynchronously
+    _triggerFolderChatSync();
+
     return folder;
+  }
+
+  /// Trigger chat room sync for folders (fire-and-forget)
+  void _triggerFolderChatSync() {
+    GroupSyncService().ensureFolderChatRooms().catchError((e) {
+      LogService().log('DevicesService: Failed to sync chat rooms: $e');
+    });
   }
 
   /// Ensure a folder exists with a specific id (used for group synchronization)
@@ -2551,6 +2581,7 @@ class DeviceFolder {
   final bool isDefault;
   bool isExpanded;
   int order;  // Lower number = higher in list
+  bool chatEnabled;  // Whether chat room is enabled for this folder
 
   DeviceFolder({
     required this.id,
@@ -2558,6 +2589,7 @@ class DeviceFolder {
     this.isDefault = false,
     this.isExpanded = true,
     this.order = 0,
+    this.chatEnabled = true,
   });
 
   factory DeviceFolder.fromJson(Map<String, dynamic> json) {
@@ -2567,6 +2599,7 @@ class DeviceFolder {
       isDefault: json['isDefault'] as bool? ?? false,
       isExpanded: json['isExpanded'] as bool? ?? true,
       order: json['order'] as int? ?? 0,
+      chatEnabled: json['chatEnabled'] as bool? ?? true,
     );
   }
 
@@ -2577,6 +2610,7 @@ class DeviceFolder {
       'isDefault': isDefault,
       'isExpanded': isExpanded,
       'order': order,
+      'chatEnabled': chatEnabled,
     };
   }
 }

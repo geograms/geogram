@@ -108,7 +108,10 @@ class BLEForegroundService {
   /// This should be called after WebSocket connects to the station.
   /// The foreground service will periodically trigger [onKeepAlivePing] even
   /// when the display is off, allowing the WebSocket connection to stay alive.
-  Future<bool> enableKeepAlive() async {
+  ///
+  /// [stationName] - Optional friendly name for the station (e.g., "P2P Radio")
+  /// [stationUrl] - The station URL/hostname (e.g., "p2p.radio")
+  Future<bool> enableKeepAlive({String? stationName, String? stationUrl}) async {
     if (kIsWeb || !Platform.isAndroid) {
       return false; // Only needed on Android
     }
@@ -124,10 +127,13 @@ class BLEForegroundService {
     }
 
     try {
-      final result = await _channel.invokeMethod<bool>('enableKeepAlive');
+      final result = await _channel.invokeMethod<bool>('enableKeepAlive', {
+        'stationName': stationName,
+        'stationUrl': stationUrl,
+      });
       _keepAliveEnabled = result ?? false;
       if (_keepAliveEnabled) {
-        LogService().log('BLEForegroundService: WebSocket keep-alive enabled');
+        LogService().log('BLEForegroundService: WebSocket keep-alive enabled for ${stationName ?? stationUrl ?? "station"}');
       } else {
         LogService().log('BLEForegroundService: Failed to enable keep-alive');
       }

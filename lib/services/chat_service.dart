@@ -16,6 +16,7 @@ import '../util/chat_format.dart';
 import '../util/event_bus.dart';
 import '../util/reaction_utils.dart';
 import 'profile_service.dart';
+import 'signing_service.dart';
 
 /// Notification when chat files change
 class ChatFileChange {
@@ -630,6 +631,13 @@ class ChatService {
     // Apply limit
     if (messages.length > limit) {
       messages = messages.sublist(messages.length - limit);
+    }
+
+    // Verify signatures for loaded messages (like DirectMessageService does)
+    for (final msg in messages) {
+      if (msg.isSigned) {
+        SigningService().verifyMessageSignature(msg, roomId: channelId);
+      }
     }
 
     return messages;
@@ -1684,6 +1692,52 @@ class ChatService {
       name: name,
       folder: id,
       participants: [], // Will be managed through config.members
+      description: description,
+      created: DateTime.now(),
+      config: config,
+    );
+
+    return await createChannel(channel);
+  }
+
+  /// Create a chat room linked to a group for dynamic membership
+  /// The room's membership is resolved dynamically from GroupsService
+  Future<ChatChannel> createGroupLinkedRoom({
+    required String groupId,
+    required String name,
+    required String ownerNpub,
+    String? description,
+  }) async {
+    if (_collectionPath == null) {
+      throw Exception('Collection not initialized');
+    }
+
+    // Check if channel already exists
+    if (_channels.any((ch) => ch.id == groupId)) {
+      throw Exception('Channel already exists: $groupId');
+    }
+
+    // Create config with groupId for dynamic membership lookup
+    final config = ChatChannelConfig(
+      id: groupId,
+      name: name,
+      description: description,
+      visibility: 'RESTRICTED',
+      owner: ownerNpub,
+      groupId: groupId, // Link to group for dynamic membership
+      admins: [],
+      moderatorNpubs: [],
+      members: [ownerNpub], // Owner is initially a member, will be resolved dynamically
+      banned: [],
+      pendingApplicants: [],
+    );
+
+    final channel = ChatChannel(
+      id: groupId,
+      type: ChatChannelType.group,
+      name: name,
+      folder: groupId,
+      participants: [], // Will be resolved dynamically from group
       description: description,
       created: DateTime.now(),
       config: config,

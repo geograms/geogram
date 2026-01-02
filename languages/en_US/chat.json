@@ -1,0 +1,20 @@
+{
+  "channel_already_exists": "Channel with this callsign already exists",
+  "channel_bluetooth_desc": "Offline communication—no internet needed",
+  "channel_bluetooth_title": "Bluetooth Mesh",
+  "channel_created_success": "Channel created successfully",
+  "channel_info": "Channel info",
+  "channel_lan_desc": "Fastest—direct HTTP on same WiFi network",
+  "channel_lan_title": "Local Network (LAN)",
+  "channel_moderators": "{0} Moderators",
+  "channel_name": "Channel Name",
+  "channel_station_desc": "Fallback relay when P2P unavailable",
+  "channel_station_title": "Station Relay",
+  "channel_type": "Channel Type",
+  "channel_webrtc_desc": "Direct connection via NAT traversal—true privacy",
+  "channel_webrtc_title": "WebRTC P2P",
+  "chat_rooms": "Chat Rooms",
+  "chat_settings": "Chat Settings",
+  "dm_sync_complete": "Sync complete: {0} received, {1} sent",
+  "dm_sync_failed": "Sync failed: {0}"
+}

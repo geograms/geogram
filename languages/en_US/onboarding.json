@@ -1,0 +1,16 @@
+{
+  "onboarding_continue": "Continue",
+  "onboarding_intro_description": "Geogram is an offline-first communication app that works without internet. It uses Bluetooth mesh networking, NOSTR encryption, and radio integration to keep you connected anywhere.",
+  "onboarding_permission_bluetooth": "Bluetooth",
+  "onboarding_permission_bluetooth_short": "To discover nearby Geogram devices",
+  "onboarding_permission_install": "Install Updates",
+  "onboarding_permission_install_short": "For in-app updates from GitHub",
+  "onboarding_permission_internet": "Internet",
+  "onboarding_permission_internet_short": "For NOSTR relays and map tiles",
+  "onboarding_permission_location": "Location",
+  "onboarding_permission_location_short": "For maps and geographic message routing",
+  "onboarding_permissions_title": "Permissions Needed",
+  "onboarding_privacy_short": "Your data stays on your device. Location is only shared when you choose.",
+  "onboarding_welcome_subtitle": "Resilient, Decentralized Communication",
+  "onboarding_welcome_title": "Welcome to Geogram"
+}

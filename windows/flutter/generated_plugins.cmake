@@ -5,6 +5,7 @@
 list(APPEND FLUTTER_PLUGIN_LIST
   ble_peripheral
   file_selector_windows
+  flutter_onnxruntime
   flutter_webrtc
   geolocator_windows
   objectbox_flutter_libs

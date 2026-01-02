@@ -1,0 +1,20 @@
+{
+  "station_alerts": "Nearby Alerts",
+  "station_already_exists": "Only one station per device",
+  "station_dashboard": "Station Dashboard",
+  "station_description": "Network station server",
+  "station_instructions": "• Select ONE preferred station (star icon)\n• Select multiple backup stations (checkmarks) for redundancy\n• Stations may disclose their name and location coordinates",
+  "station_name": "Station Name *",
+  "station_name_hint": "e.g., My Custom Station",
+  "station_places": "Station Places",
+  "station_profile": "Station Profile",
+  "station_required_for_media": "No station configured for public event media.",
+  "station_send_failed": "Failed to send to station",
+  "station_settings": "Station Settings",
+  "station_status": "Station Status",
+  "station_status_desc": "Notify about station connection changes",
+  "station_system": "Station System",
+  "station_system_desc": "Store-and-forward message delivery",
+  "station_url": "Station URL *",
+  "station_url_hint": "wss://station.example.com"
+}

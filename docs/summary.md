@@ -98,6 +98,15 @@ Postcard messages format. How postcards (short location-based messages) are crea
 ### apps/relay-format-specification.md
 Station/relay configuration and metadata. Network information, node registration, authority files, and station policies.
 
+### apps/service-format-specification.md
+Service provider listings and service metadata. Defines how service providers are registered, discovered, and accessed.
+
+### apps/transfer-format-specification.md
+Centralized download/upload center with unified progress tracking. Covers bidirectional transfers, automatic retry logic, resume capability, patient mode (30-day offline support), priority queue, ban list, and verification.
+
+### apps/bot-format-specification.md
+Offline AI assistant for Geogram stations using GGUF models. Covers Q&A assistant, auto-moderation, semantic search, voice input (Whisper), content crawling, and HuggingFace model support.
+
 ## How to Use This Summary
 
 1. **For API Integration**: Start with API.md and chat-api.md
@@ -125,8 +134,10 @@ Station/relay configuration and metadata. Network information, node registration
 - Releasing versions? → tutorials/publish-new-version.md
 - CLI options? → command-line-switches.md
 - Events system? → EventBus.md
+- Transfer center? → apps/transfer-format-specification.md
+- AI Bot? → apps/bot-format-specification.md
 
 ---
 
-*Last updated: 2025-12-22*
+*Last updated: 2026-01-01*
 *This summary covers all documentation in the docs/ folder*

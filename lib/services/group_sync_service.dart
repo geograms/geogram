@@ -430,4 +430,63 @@ class GroupSyncService {
         return 0;
     }
   }
+
+  /// Verify and create missing chat rooms for all device folders with chat enabled.
+  /// Call this at app startup and when chat is enabled for a folder.
+  Future<void> ensureFolderChatRooms() async {
+    final chatCollectionPath = await findCollectionPathByType('chat');
+    final groupsCollectionPath = await findCollectionPathByType('groups');
+
+    if (chatCollectionPath == null) {
+      LogService().log('GroupSyncService: Cannot ensure chat rooms - chat collection not configured');
+      return;
+    }
+
+    final chatService = ChatService();
+    if (chatService.collectionPath != chatCollectionPath) {
+      await chatService.initializeCollection(chatCollectionPath);
+    }
+
+    GroupsService? groupsService;
+    if (groupsCollectionPath != null) {
+      groupsService = GroupsService();
+      await groupsService.initializeCollection(groupsCollectionPath);
+    }
+
+    final devicesService = DevicesService();
+    final profile = ProfileService().getProfile();
+    final folders = devicesService.getFolders();
+
+    for (final folder in folders) {
+      // Skip default folder and folders with chat disabled
+      if (folder.isDefault || !folder.chatEnabled) continue;
+
+      final existingChannel = chatService.getChannel(folder.id);
+      if (existingChannel == null) {
+        LogService().log('GroupSyncService: Creating missing chat room for folder ${folder.name}');
+
+        try {
+          await chatService.createGroupLinkedRoom(
+            groupId: folder.id,
+            name: folder.name,
+            ownerNpub: profile.npub,
+            description: 'Group chat for ${folder.name}',
+          );
+        } catch (e) {
+          LogService().log('GroupSyncService: Failed to create chat room for ${folder.id}: $e');
+        }
+      } else if (existingChannel.config?.groupId == null) {
+        // Update existing channel to use groupId for dynamic membership
+        final updatedConfig = existingChannel.config?.copyWith(groupId: folder.id) ??
+            ChatChannelConfig(
+              id: folder.id,
+              name: folder.name,
+              groupId: folder.id,
+            );
+        final updatedChannel = existingChannel.copyWith(config: updatedConfig);
+        await chatService.updateChannel(updatedChannel);
+        LogService().log('GroupSyncService: Updated chat room ${folder.id} with groupId');
+      }
+    }
+  }
 }

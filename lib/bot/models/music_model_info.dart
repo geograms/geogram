@@ -191,30 +191,30 @@ class MusicModels {
     genres: ['rock', 'jazz', 'electronic', 'ambient', 'classical', 'lofi'],
   );
 
-  /// MusicGen Tiny (ONNX, quantized)
+  /// MusicGen Tiny (ONNX, FP32)
   static const musicgenTiny = MusicModelInfo(
     id: 'musicgen-tiny-jungle',
-    name: 'MusicGen Tiny (Jungle)',
+    name: 'MusicGen Tiny (Jungle FP32)',
     tier: 'lite',
-    size: 499202955, // Sum of required ONNX files (approx)
+    size: 1872143394, // Sum of required ONNX files (approx)
     format: 'onnx',
     repoId: 'pharoAIsanders420/musicgen-tiny-jungle-onnx',
     files: [
       MusicModelFile(
-        path: 'onnx/text_encoder_quantized.onnx',
-        size: 110069861,
+        path: 'onnx/text_encoder.onnx',
+        size: 438689759,
       ),
       MusicModelFile(
-        path: 'onnx/decoder_model_quantized.onnx',
-        size: 173881253,
+        path: 'onnx/decoder_model.onnx',
+        size: 694425570,
       ),
       MusicModelFile(
-        path: 'onnx/decoder_with_past_model_quantized.onnx',
-        size: 155484971,
+        path: 'onnx/decoder_with_past_model.onnx',
+        size: 620993470,
       ),
       MusicModelFile(
-        path: 'onnx/encodec_decode_quantized.onnx',
-        size: 59766870,
+        path: 'onnx/encodec_decode.onnx',
+        size: 118034595,
       ),
       MusicModelFile(path: 'config.json'),
       MusicModelFile(path: 'generation_config.json'),
@@ -223,8 +223,8 @@ class MusicModels {
       MusicModelFile(path: 'tokenizer_config.json'),
       MusicModelFile(path: 'special_tokens_map.json'),
     ],
-    description: 'Text-to-audio generation (ONNX, quantized)',
-    minRamMb: 3000,
+    description: 'Text-to-audio generation (ONNX, FP32)',
+    minRamMb: 6000,
     maxDurationSec: 30,
     genSpeedRatio: 0.25,
     genres: [

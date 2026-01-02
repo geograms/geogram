@@ -105,7 +105,7 @@ class MusicGenerationService {
       duration: duration,
       genre: genre,
       allowFMFallback: true,
-      useHybridMode: true,
+      useHybridMode: false,
     );
   }
 
@@ -273,7 +273,11 @@ class MusicGenerationService {
           LogService().log('MusicGenerationService: AI generation failed: $e');
           if (request.allowFMFallback) {
             if (fmTrack != null) {
-              controller.add(MusicGenerationState.completed(fmTrack));
+              final fallbackTrack = fmTrack.copyWith(
+                isFMFallback: true,
+                modelUsed: bestModel.id,
+              );
+              controller.add(MusicGenerationState.completed(fallbackTrack));
               return;
             }
             final fallback = await _fmSynth.generate(
@@ -282,7 +286,12 @@ class MusicGenerationService {
               prompt: request.prompt,
             );
             await _playTrack(fallback);
-            controller.add(MusicGenerationState.completed(fallback));
+            controller.add(MusicGenerationState.completed(
+              fallback.copyWith(
+                isFMFallback: true,
+                modelUsed: bestModel.id,
+              ),
+            ));
             return;
           }
           rethrow;

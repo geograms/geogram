@@ -2012,79 +2012,10 @@ class DirectMessageService {
 
   /// Verify a message signature per chat-format-specification.md
   ///
-  /// Reconstructs the NOSTR event and verifies the signature:
-  /// 1. Extract npub and signature from metadata
-  /// 2. Derive pubkey from npub
-  /// 3. Reconstruct tags: [['t', 'chat'], ['room', roomId], ['callsign', callsign]]
-  /// 4. Create NOSTR event and verify signature
+  /// For DMs, roomId should be the RECIPIENT's callsign.
+  /// Delegates to SigningService.verifyMessageSignature() for the actual verification.
   bool verifySignature(ChatMessage message, {String? roomId}) {
-    // If no signature, accept the message (unsigned messages are valid)
-    if (!message.isSigned) {
-      LogService().log('verifySignature: Message not signed, accepting');
-      return true;
-    }
-
-    try {
-      final npub = message.npub;
-      final signature = message.signature;
-
-      if (npub == null || signature == null) {
-        LogService().log('verifySignature: Missing npub or signature, accepting');
-        return true; // Can't verify without both, accept it
-      }
-
-      // Derive hex pubkey from npub
-      final pubkeyHex = NostrCrypto.decodeNpub(npub);
-
-      // Use stored created_at for verification (same value used during signing)
-      // Fall back to calculating from timestamp if not available
-      final createdAtStr = message.getMeta('created_at');
-      final createdAt = createdAtStr != null
-          ? int.parse(createdAtStr)
-          : message.dateTime.millisecondsSinceEpoch ~/ 1000;
-
-      // For DMs, roomId is the conversation partner's callsign
-      final effectiveRoomId = roomId ?? 'dm';
-
-      LogService().log('verifySignature: Reconstructing event with:');
-      LogService().log('  pubkey: ${pubkeyHex.substring(0, 20)}...');
-      LogService().log('  createdAt: $createdAt (from ${message.timestamp})');
-      LogService().log('  roomId: $effectiveRoomId');
-      LogService().log('  callsign: ${message.author}');
-      LogService().log('  content: ${message.content.substring(0, message.content.length.clamp(0, 50))}...');
-      LogService().log('  signature: ${signature.substring(0, 20)}...');
-
-      // Reconstruct the NOSTR event per chat-format-specification.md
-      final event = NostrEvent(
-        pubkey: pubkeyHex,
-        createdAt: createdAt,
-        kind: 1,
-        tags: [
-          ['t', 'chat'],
-          ['room', effectiveRoomId],
-          ['callsign', message.author],
-        ],
-        content: message.content,
-        sig: signature,
-      );
-
-      // Calculate event ID and verify
-      event.calculateId();
-      LogService().log('verifySignature: Calculated eventId: ${event.id?.substring(0, 20)}...');
-
-      final verified = event.verify();
-      LogService().log('verifySignature: Verification result: $verified');
-
-      // Update message metadata with verification result
-      if (verified) {
-        message.setMeta('verified', 'true');
-      }
-
-      return verified;
-    } catch (e) {
-      LogService().log('DirectMessageService: Error verifying signature: $e');
-      return true; // On error, accept the message but don't mark as verified
-    }
+    return SigningService().verifyMessageSignature(message, roomId: roomId);
   }
 
   /// Fire DirectMessageReceivedEvent

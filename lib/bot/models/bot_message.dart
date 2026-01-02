@@ -3,6 +3,8 @@
  * License: Apache-2.0
  */
 
+import 'music_generation_state.dart';
+import 'music_track.dart';
 import 'vision_result.dart';
 
 /// Represents a message in the bot conversation
@@ -21,6 +23,12 @@ class BotMessage {
   /// Vision analysis result (for image messages)
   final VisionResult? visionResult;
 
+  /// Generated music track (for music messages)
+  final MusicTrack? musicTrack;
+
+  /// Music generation state stream (for in-progress generation)
+  final Stream<MusicGenerationState>? musicGenerationStream;
+
   const BotMessage({
     required this.id,
     required this.content,
@@ -31,10 +39,18 @@ class BotMessage {
     this.error,
     this.imagePath,
     this.visionResult,
+    this.musicTrack,
+    this.musicGenerationStream,
   });
 
   /// Check if this message has an image
   bool get hasImage => imagePath != null;
+
+  /// Check if this message has a music track
+  bool get hasMusic => musicTrack != null;
+
+  /// Check if this message has music generation in progress
+  bool get hasMusicGenerating => musicGenerationStream != null;
 
   BotMessage copyWith({
     String? id,
@@ -46,6 +62,8 @@ class BotMessage {
     String? error,
     String? imagePath,
     VisionResult? visionResult,
+    MusicTrack? musicTrack,
+    Stream<MusicGenerationState>? musicGenerationStream,
   }) {
     return BotMessage(
       id: id ?? this.id,
@@ -57,6 +75,9 @@ class BotMessage {
       error: error ?? this.error,
       imagePath: imagePath ?? this.imagePath,
       visionResult: visionResult ?? this.visionResult,
+      musicTrack: musicTrack ?? this.musicTrack,
+      musicGenerationStream:
+          musicGenerationStream ?? this.musicGenerationStream,
     );
   }
 
@@ -70,6 +91,7 @@ class BotMessage {
       'error': error,
       if (imagePath != null) 'imagePath': imagePath,
       if (visionResult != null) 'visionResult': visionResult!.toJson(),
+      if (musicTrack != null) 'musicTrack': musicTrack!.toJson(),
     };
   }
 
@@ -84,6 +106,9 @@ class BotMessage {
       imagePath: json['imagePath'] as String?,
       visionResult: json['visionResult'] != null
           ? VisionResult.fromJson(json['visionResult'] as Map<String, dynamic>)
+          : null,
+      musicTrack: json['musicTrack'] != null
+          ? MusicTrack.fromJson(json['musicTrack'] as Map<String, dynamic>)
           : null,
     );
   }
@@ -134,6 +159,31 @@ class BotMessage {
       isUser: false,
       timestamp: DateTime.now(),
       error: errorMessage,
+    );
+  }
+
+  /// Create a music message with a completed track
+  factory BotMessage.music(MusicTrack track, {String? content}) {
+    return BotMessage(
+      id: 'music_${DateTime.now().millisecondsSinceEpoch}',
+      content: content ?? 'Generated ${track.genreDisplayName} music',
+      isUser: false,
+      timestamp: DateTime.now(),
+      musicTrack: track,
+    );
+  }
+
+  /// Create a music message with generation in progress
+  factory BotMessage.musicGenerating(
+    Stream<MusicGenerationState> stateStream, {
+    String? content,
+  }) {
+    return BotMessage(
+      id: 'music_gen_${DateTime.now().millisecondsSinceEpoch}',
+      content: content ?? 'Generating music...',
+      isUser: false,
+      timestamp: DateTime.now(),
+      musicGenerationStream: stateStream,
     );
   }
 }

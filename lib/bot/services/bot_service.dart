@@ -10,7 +10,9 @@ import 'dart:math';
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import '../models/bot_message.dart';
+import '../models/music_track.dart';
 import '../models/vision_result.dart';
+import 'music_generation_service.dart';
 import 'vision_service.dart';
 import '../../services/log_service.dart';
 import '../../services/user_location_service.dart';
@@ -40,6 +42,9 @@ class BotService {
   // Vision service for image analysis
   final VisionService _visionService = VisionService();
 
+  // Music generation service
+  final MusicGenerationService _musicService = MusicGenerationService();
+
   // Debug controller for executing internal commands
   final DebugController _debugController = DebugController();
 
@@ -60,6 +65,7 @@ class BotService {
       await _loadConversationHistory();
       await _loadWorldCities();
       await _visionService.initialize();
+      await _musicService.initialize();
       _setupEventBusListeners();
       _initialized = true;
       LogService().log('BotService initialized');
@@ -220,11 +226,40 @@ class BotService {
       return await _handleCityInfoQuery(query);
     }
 
+    // Check for music generation query
+    if (_musicService.isMusicQuery(lowerQuery)) {
+      LogService().log('BotService: Detected music query: $query');
+      return await _handleMusicQuery(query);
+    }
+
     // Default response - provide helpful suggestions
     return BotMessage.bot(
       _getDefaultResponse(),
       sources: sources,
     );
+  }
+
+  /// Handle music generation query
+  Future<BotMessage> _handleMusicQuery(String query) async {
+    // Parse the request to get duration and genre info
+    final request = _musicService.parsePrompt(query);
+
+    // Check if we have an AI model for higher quality
+    final hasAI = await _musicService.hasAIModel();
+
+    // Build a helpful response message
+    String message;
+    if (hasAI) {
+      message = 'Generating ${request.duration.inMinutes > 0 ? "${request.duration.inMinutes} minute(s)" : "${request.duration.inSeconds} seconds"} of ${request.genre} music using AI...';
+    } else {
+      message = 'Generating ${request.duration.inMinutes > 0 ? "${request.duration.inMinutes} minute(s)" : "${request.duration.inSeconds} seconds"} of ${request.genre} music.\n\n'
+          'Tip: For higher quality AI-generated music, download a music model in Bot Settings.';
+    }
+
+    // Create stream directly - the async* generator won't start until subscribed
+    final stream = _musicService.generateMusic(query);
+    LogService().log('BotService: Created music generation stream');
+    return BotMessage.musicGenerating(stream, content: message);
   }
 
   /// Check if query is a debug/system command
@@ -839,6 +874,11 @@ ${i18n.t('bot_example_questions')}
 - "Identify this plant"
 - "What does this sign say?"
 
+**Music Generation:**
+- "Play 5 minutes of jazz"
+- "Generate ambient music"
+- "Play rock music"
+
 **Commands** (internal app control):
 - "scan devices" - Start BLE scan
 - "go to settings" - Navigate to panel
@@ -854,6 +894,30 @@ ${i18n.t('bot_example_questions')}
     _messages.clear();
     _notifyListeners();
     await _saveConversationHistory();
+  }
+
+  /// Update a music generating message with the completed track
+  Future<void> updateMusicMessage(String messageId, MusicTrack track) async {
+    final index = _messages.indexWhere((m) => m.id == messageId);
+    if (index == -1) {
+      LogService().log('BotService: Message $messageId not found for music update');
+      return;
+    }
+
+    // Replace the message with a completed music message
+    final oldMessage = _messages[index];
+    final newMessage = BotMessage(
+      id: oldMessage.id,
+      content: 'Generated ${track.genreDisplayName} music',
+      isUser: false,
+      timestamp: oldMessage.timestamp,
+      musicTrack: track,
+    );
+
+    _messages[index] = newMessage;
+    _notifyListeners();
+    await _saveConversationHistory();
+    LogService().log('BotService: Updated message $messageId with music track');
   }
 
   /// Load conversation history from file
@@ -904,4 +968,7 @@ ${i18n.t('bot_example_questions')}
 
   /// Get the vision service for external access (e.g., settings page)
   VisionService get visionService => _visionService;
+
+  /// Get the music service for external access (e.g., settings page)
+  MusicGenerationService get musicService => _musicService;
 }

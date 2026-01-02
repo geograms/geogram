@@ -459,6 +459,16 @@ class DebugController {
         'params': {},
       },
       {
+        'action': 'bot_download_model',
+        'description': 'Download a bot model via TransferService',
+        'params': {
+          'model_type': 'Model type: vision or music (required)',
+          'model_id': 'Model ID to download (required)',
+          'station_url': '(optional) Station URL override',
+          'station_callsign': '(optional) Station callsign override',
+        },
+      },
+      {
         'action': 'send_dm',
         'description': 'Send a direct message to another device',
         'params': {

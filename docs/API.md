@@ -1857,6 +1857,7 @@ Triggers a debug action.
 | `local_scan` | Scan local network for devices | None |
 | `connect_station` | Connect to a station | `url` (optional): Station WebSocket URL |
 | `disconnect_station` | Disconnect from current station | None |
+| `bot_download_model` | Download a bot model via TransferService | `model_type` (required): vision or music, `model_id` (required), `station_url` (optional), `station_callsign` (optional) |
 | `send_dm` | Send a direct message | `callsign`: Target callsign (required), `content`: Message (required) |
 | `sync_dm` | Sync DMs with a device | `callsign`: Target callsign (required), `url` (optional): Device URL |
 | `open_dm` | Open DM conversation UI with a device | `callsign`: Target device callsign (required) |
@@ -1945,6 +1946,16 @@ curl -X POST http://localhost:3456/api/debug \
 curl -X POST http://localhost:3456/api/debug \
   -H "Content-Type: application/json" \
   -d '{"action": "refresh_devices"}'
+
+# Start a bot model download (vision)
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action": "bot_download_model", "model_type": "vision", "model_id": "mobilenet-v3"}'
+
+# Start a bot model download (vision) via a specific station
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action": "bot_download_model", "model_type": "vision", "model_id": "mobilenet-v3", "station_url": "https://p2p.radio", "station_callsign": "X3WFE4"}'
 
 # Send BLE HELLO handshake to first discovered device
 curl -X POST http://localhost:3456/api/debug \

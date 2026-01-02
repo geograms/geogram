@@ -24,6 +24,7 @@ import '../services/station_place_api.dart';
 import '../services/station_feedback_api.dart';
 import '../bot/services/vision_model_manager.dart';
 import '../bot/models/vision_model_info.dart';
+import '../bot/models/music_model_info.dart';
 import '../models/blog_post.dart';
 import '../models/chat_channel.dart';
 import '../models/chat_message.dart';
@@ -510,9 +511,10 @@ class StationServerService {
       // Start update polling if enabled
       _startUpdatePolling();
 
-      // Download all vision models for offline-first client access
-      // Run in background to not block server startup
-      downloadAllVisionModels();
+      // Download all vision and music models for offline-first client access
+      // Run synchronously to ensure models are available before clients connect
+      await downloadAllVisionModels();
+      await downloadAllMusicModels();
 
       return true;
     } catch (e) {
@@ -2090,7 +2092,9 @@ class StationServerService {
   // ============================================================
 
   /// Handle bot model download requests
-  /// URL pattern: /bot/models/{modelId}.{ext}
+  /// URL patterns:
+  /// - /bot/models/{type}/{filename}
+  /// - /bot/models/{type}/{modelId}/{path...}
   Future<void> _handleBotModelRequest(HttpRequest request) async {
     if (request.method != 'GET') {
       request.response.statusCode = 405;
@@ -2104,20 +2108,49 @@ class StationServerService {
       return;
     }
 
-    final requestPath = request.uri.path;
-    // Parse: /bot/models/{filename}
-    // e.g., /bot/models/mobilenet-v3.tflite or /bot/models/llava-7b-q3.gguf
-    final regex = RegExp(r'/bot/models/([^/]+\.(tflite|gguf))$');
-    final match = regex.firstMatch(requestPath);
-
-    if (match == null) {
+    final segments = request.uri.pathSegments;
+    if (segments.length < 4 ||
+        segments[0] != 'bot' ||
+        segments[1] != 'models') {
       request.response.statusCode = 400;
       request.response.write('Invalid model path');
       return;
     }
 
-    final filename = match.group(1)!;
-    final modelPath = path.join(_appDir!, 'bot', 'models', 'vision', filename);
+    final modelType = segments[2]; // 'vision' or 'music'
+    if (modelType != 'vision' && modelType != 'music') {
+      request.response.statusCode = 400;
+      request.response.write('Invalid model type');
+      return;
+    }
+
+    final baseDir = path.join(_appDir!, 'bot', 'models', modelType);
+    String modelPath;
+    String filename;
+
+    if (segments.length == 4) {
+      // Legacy single-file models: /bot/models/{type}/{filename}
+      filename = segments[3];
+      modelPath = path.normalize(path.join(baseDir, filename));
+      if (!path.isWithin(baseDir, modelPath)) {
+        request.response.statusCode = 400;
+        request.response.write('Invalid model path');
+        return;
+      }
+    } else {
+      // Multi-file models: /bot/models/{type}/{modelId}/{path...}
+      final modelId = segments[3];
+      final relativePath = segments.sublist(4).join('/');
+      final modelDir = path.join(baseDir, modelId);
+      modelPath = path.normalize(path.join(modelDir, relativePath));
+      if (!path.isWithin(modelDir, modelPath)) {
+        request.response.statusCode = 400;
+        request.response.write('Invalid model path');
+        return;
+      }
+      filename = path.basename(modelPath);
+    }
+
     final file = File(modelPath);
 
     if (!await file.exists()) {
@@ -2248,6 +2281,135 @@ class StationServerService {
       await tempFile.rename(targetPath);
     } finally {
       client.close();
+    }
+  }
+
+  /// Download all music models at station startup (offline-first pattern)
+  /// This ensures clients can download music models from the station even without internet
+  /// Only downloads if sufficient disk space is available
+  Future<void> downloadAllMusicModels() async {
+    if (_appDir == null) {
+      LogService().log('StationServer: Cannot download music models - not initialized');
+      return;
+    }
+
+    final modelsDir = path.join(_appDir!, 'bot', 'models', 'music');
+    await Directory(modelsDir).create(recursive: true);
+
+    // Check initial disk space
+    final initialFreeSpace = await _getFreeDiskSpace(modelsDir);
+    if (initialFreeSpace != null) {
+      LogService().log(
+          'StationServer: Available disk space for music: ${_formatBytes(initialFreeSpace)}');
+      if (initialFreeSpace < _minFreeSpaceBuffer) {
+        LogService().log(
+            'StationServer: Insufficient disk space to download music models (need at least ${_formatBytes(_minFreeSpaceBuffer)} free)');
+        return;
+      }
+    }
+
+    LogService().log('StationServer: Checking music models for download...');
+    var downloadedFiles = 0;
+    var alreadyAvailableFiles = 0;
+    var skippedDueToSpace = 0;
+    var failedFiles = 0;
+
+    // Only download AI models (not FM synth which is native)
+    final aiModels = MusicModels.available.where((m) => !m.isNative);
+
+    for (final model in aiModels) {
+      final files = model.files.isNotEmpty
+          ? model.files
+          : [
+              MusicModelFile(
+                path: '${model.id}.${model.format}',
+                size: model.size,
+              )
+            ];
+
+      for (final fileInfo in files) {
+        final modelDir = model.files.isNotEmpty
+            ? path.join(modelsDir, model.id)
+            : modelsDir;
+        final targetPath = path.join(modelDir, fileInfo.path);
+        final file = File(targetPath);
+
+        if (await file.exists()) {
+          if (fileInfo.size > 0) {
+            final actualSize = await file.length();
+            final tolerance = fileInfo.size * 0.05;
+            if ((actualSize - fileInfo.size).abs() < tolerance) {
+              alreadyAvailableFiles++;
+              continue;
+            }
+            // File exists but wrong size - delete and re-download
+            await file.delete();
+          } else {
+            alreadyAvailableFiles++;
+            continue;
+          }
+        }
+
+        final url = model.repoId != null && model.repoId!.isNotEmpty
+            ? 'https://huggingface.co/${model.repoId}/resolve/main/${fileInfo.path}'
+            : model.url;
+        if (url == null || url.isEmpty) {
+          continue;
+        }
+
+        // Check disk space before each download when size is known
+        final freeSpace = await _getFreeDiskSpace(modelsDir);
+        if (freeSpace != null && fileInfo.size > 0) {
+          final requiredSpace = fileInfo.size + _minFreeSpaceBuffer;
+          if (freeSpace < requiredSpace) {
+            LogService().log(
+                'StationServer: Skipping ${model.id}/${fileInfo.path} - insufficient disk space '
+                '(need ${_formatBytes(requiredSpace)}, have ${_formatBytes(freeSpace)})');
+            skippedDueToSpace++;
+            continue;
+          }
+        }
+
+        await file.parent.create(recursive: true);
+        LogService().log('StationServer: Downloading music model file: ${model.id}/${fileInfo.path}');
+
+        // Retry up to 3 times
+        var success = false;
+        for (var attempt = 1; attempt <= 3 && !success; attempt++) {
+          try {
+            await _downloadModelFromInternet(url, targetPath);
+            downloadedFiles++;
+            LogService().log('StationServer: Downloaded ${model.id}/${fileInfo.path} successfully');
+            success = true;
+          } catch (e) {
+            LogService().log(
+                'StationServer: Attempt $attempt failed for ${model.id}/${fileInfo.path}: $e');
+            if (attempt < 3) {
+              await Future.delayed(Duration(seconds: 5 * attempt));
+            }
+          }
+        }
+        if (!success) {
+          failedFiles++;
+          LogService().log(
+              'StationServer: Failed to download ${model.id}/${fileInfo.path} after 3 attempts');
+        }
+      }
+    }
+
+    if (downloadedFiles > 0 ||
+        alreadyAvailableFiles > 0 ||
+        skippedDueToSpace > 0 ||
+        failedFiles > 0) {
+      var summary =
+          'StationServer: Music model files - $alreadyAvailableFiles available, $downloadedFiles downloaded';
+      if (skippedDueToSpace > 0) {
+        summary += ', $skippedDueToSpace skipped (disk space)';
+      }
+      if (failedFiles > 0) {
+        summary += ', $failedFiles failed';
+      }
+      LogService().log(summary);
     }
   }
 

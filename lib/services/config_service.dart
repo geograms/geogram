@@ -107,6 +107,12 @@ class ConfigService {
     });
   }
 
+  /// Force immediate save (public, for use when app is closing)
+  Future<void> saveNow() async {
+    _saveDebounceTimer?.cancel();
+    await _saveImmediate();
+  }
+
   /// Save configuration immediately (used for initial save and when needed)
   Future<void> _saveImmediate() async {
     _pendingSave = false;

@@ -1,0 +1,20 @@
+{
+  "channel_already_exists": "Já existe um canal com este indicativo",
+  "channel_bluetooth_desc": "Comunicação offline—sem necessidade de internet",
+  "channel_bluetooth_title": "Bluetooth Mesh",
+  "channel_created_success": "Canal criado com sucesso",
+  "channel_info": "Informação do canal",
+  "channel_lan_desc": "Mais rápido—HTTP direto na mesma rede WiFi",
+  "channel_lan_title": "Rede Local (LAN)",
+  "channel_moderators": "Moderadores de {0}",
+  "channel_name": "Nome do Canal",
+  "channel_station_desc": "Relay de fallback quando P2P não disponível",
+  "channel_station_title": "Estação Relay",
+  "channel_type": "Tipo de Canal",
+  "channel_webrtc_desc": "Conexão direta via NAT traversal—privacidade total",
+  "channel_webrtc_title": "WebRTC P2P",
+  "chat_rooms": "Salas de Chat",
+  "chat_settings": "Definições de Chat",
+  "dm_sync_complete": "Sincronização completa: {0} recebidas, {1} enviadas",
+  "dm_sync_failed": "Sincronização falhou: {0}"
+}

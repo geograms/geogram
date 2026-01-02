@@ -7,6 +7,7 @@
  */
 
 import 'package:flutter/foundation.dart' show kIsWeb;
+import '../models/chat_message.dart';
 import '../models/profile.dart';
 import '../platform/nostr_extension.dart';
 import '../util/nostr_event.dart';
@@ -176,6 +177,77 @@ class SigningService {
     } catch (e) {
       LogService().log('Error generating signed event: $e');
       return null;
+    }
+  }
+
+  /// Verify a chat message signature per chat-format-specification.md
+  ///
+  /// Reconstructs the NOSTR event and verifies the BIP-340 Schnorr signature.
+  /// This is the inverse of [generateSignedEvent] - it reconstructs the event
+  /// from message data and verifies the signature matches.
+  ///
+  /// [message] - The ChatMessage to verify
+  /// [roomId] - The room/channel ID used in signing (for DMs: recipient's callsign)
+  ///
+  /// Returns true if:
+  /// - Message is unsigned (unsigned messages are valid)
+  /// - Signature verification succeeds
+  /// Returns false if signature verification fails.
+  ///
+  /// On success, sets message.metadata['verified'] = 'true'
+  bool verifyMessageSignature(ChatMessage message, {String? roomId}) {
+    // If no signature, accept the message (unsigned messages are valid)
+    if (!message.isSigned) {
+      return true;
+    }
+
+    try {
+      final npub = message.npub;
+      final signature = message.signature;
+
+      if (npub == null || signature == null) {
+        return true; // Can't verify without both, accept it
+      }
+
+      // Derive hex pubkey from npub
+      final pubkeyHex = NostrCrypto.decodeNpub(npub);
+
+      // Use stored created_at for verification (same value used during signing)
+      // Fall back to calculating from timestamp if not available
+      final createdAtStr = message.getMeta('created_at');
+      final createdAt = createdAtStr != null
+          ? int.parse(createdAtStr)
+          : message.dateTime.millisecondsSinceEpoch ~/ 1000;
+
+      final effectiveRoomId = roomId ?? 'main';
+
+      // Reconstruct the NOSTR event per chat-format-specification.md
+      final event = NostrEvent(
+        pubkey: pubkeyHex,
+        createdAt: createdAt,
+        kind: 1,
+        tags: [
+          ['t', 'chat'],
+          ['room', effectiveRoomId],
+          ['callsign', message.author],
+        ],
+        content: message.content,
+        sig: signature,
+      );
+
+      // Calculate event ID and verify
+      event.calculateId();
+      final verified = event.verify();
+
+      // Update message metadata with verification result
+      if (verified) {
+        message.setMeta('verified', 'true');
+      }
+
+      return verified;
+    } catch (e) {
+      LogService().log('SigningService: Error verifying signature: $e');
+      return true; // On error, accept the message but don't mark as verified
     }
   }
 

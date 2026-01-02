@@ -6,13 +6,15 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:http/http.dart' as http;
-import 'package:path_provider/path_provider.dart';
+import 'package:path/path.dart' as p;
 
 import '../models/vision_model_info.dart';
-import '../../connection/connection_manager.dart';
 import '../../services/log_service.dart';
 import '../../services/station_service.dart';
+import '../../services/storage_config.dart';
+import '../../transfer/models/transfer_models.dart';
+import '../../transfer/services/transfer_service.dart';
+import '../../util/event_bus.dart';
 
 /// Manages vision model downloads and storage
 class VisionModelManager {
@@ -23,7 +25,14 @@ class VisionModelManager {
   /// Directory for storing vision models
   String? _modelsPath;
 
-  /// Currently downloading models
+  /// Transfer service for downloading models
+  final TransferService _transferService = TransferService();
+  final EventBus _eventBus = EventBus();
+
+  /// Maps model IDs to their active transfer IDs
+  final Map<String, String> _modelTransferIds = {};
+
+  /// Currently downloading models (for backward compatibility with UI)
   final Map<String, _DownloadProgress> _activeDownloads = {};
 
   /// Notifier for download state changes
@@ -35,8 +44,12 @@ class VisionModelManager {
 
   /// Initialize the manager
   Future<void> initialize() async {
-    final appDir = await getApplicationDocumentsDirectory();
-    _modelsPath = '${appDir.path}/bot/models/vision';
+    final storageConfig = StorageConfig();
+    if (!storageConfig.isInitialized) {
+      await storageConfig.init();
+    }
+
+    _modelsPath = p.join(storageConfig.baseDir, 'bot', 'models', 'vision');
 
     // Create directory if it doesn't exist
     final dir = Directory(_modelsPath!);
@@ -94,26 +107,22 @@ class VisionModelManager {
     return _activeDownloads[modelId]?.progress ?? 0.0;
   }
 
-  /// Download a model with progress tracking
-  /// Uses station-first download pattern (like map tiles):
-  /// 1. Check local cache
-  /// 2. Try station server via ConnectionManager
-  /// 3. Fallback to internet (HuggingFace/TFHub)
+  /// Download a model with progress tracking via TransferService
+  ///
+  /// Downloads are routed through the Transfer app which uses ConnectionManager
+  /// to find the best transport (LAN, WebRTC, Station, BLE+, BLE).
+  ///
+  /// Models are downloaded from stations at /bot/models/vision/{modelId}.{extension}
+  ///
   /// Returns a stream of progress updates (0.0 - 1.0)
-  Stream<double> downloadModel(String modelId) async* {
+  Stream<double> downloadModel(
+    String modelId, {
+    String? stationUrl,
+    String? stationCallsign,
+  }) async* {
     final model = VisionModels.getById(modelId);
     if (model == null) {
       throw ArgumentError('Unknown model: $modelId');
-    }
-
-    // Check if already downloading
-    if (_activeDownloads.containsKey(modelId)) {
-      // Return existing download progress
-      while (_activeDownloads.containsKey(modelId)) {
-        yield _activeDownloads[modelId]!.progress;
-        await Future.delayed(const Duration(milliseconds: 100));
-      }
-      return;
     }
 
     // Check if already downloaded
@@ -122,96 +131,151 @@ class VisionModelManager {
       return;
     }
 
-    final path = await getModelPath(modelId);
-    final file = File(path);
-    final tempFile = File('$path.tmp');
-
-    // Create parent directory if needed
-    final parentDir = file.parent;
-    if (!await parentDir.exists()) {
-      await parentDir.create(recursive: true);
+    // Ensure TransferService is initialized
+    if (!_transferService.isInitialized) {
+      await _transferService.initialize();
     }
 
-    // Track download
+    final localPath = await getModelPath(modelId);
+    final extension = model.format == 'tflite' ? 'tflite' : 'gguf';
+    final remotePath = '/bot/models/vision/$modelId.$extension';
+
+    // Get station info for the transfer
+    final preferredStation = StationService().getPreferredStation();
+    final resolvedStationUrl = stationUrl ?? preferredStation?.url;
+    final resolvedCallsign = stationCallsign ?? preferredStation?.callsign;
+    if (resolvedStationUrl == null ||
+        resolvedStationUrl.isEmpty ||
+        resolvedCallsign == null ||
+        resolvedCallsign.isEmpty) {
+      throw Exception(
+          'No station configured. Please connect to a station to download models.');
+    }
+
+    // Check if transfer already exists
+    var transfer = _transferService.findTransfer(
+      callsign: resolvedCallsign,
+      remotePath: remotePath,
+    );
+
+    if (transfer == null) {
+      // Create new transfer request
+      LogService().log(
+          'VisionModelManager: Requesting transfer for $modelId from station $resolvedCallsign');
+
+      // Create parent directory if needed
+      final parentDir = Directory(localPath).parent;
+      if (!await parentDir.exists()) {
+        await parentDir.create(recursive: true);
+      }
+
+      transfer = await _transferService.requestDownload(
+        TransferRequest(
+          direction: TransferDirection.download,
+          callsign: resolvedCallsign,
+          stationUrl: resolvedStationUrl,
+          remotePath: remotePath,
+          localPath: localPath,
+          expectedBytes: model.size,
+          timeout: const Duration(hours: 2),
+          priority: TransferPriority.high,
+          requestingApp: 'bot',
+          metadata: {
+            'model_id': modelId,
+            'model_type': 'vision',
+            'model_name': model.name,
+            'model_tier': model.tier,
+            'size_tolerance_ratio': 0.05,
+          },
+        ),
+      );
+    }
+
+    // Track the transfer
+    _modelTransferIds[modelId] = transfer.id;
     _activeDownloads[modelId] = _DownloadProgress();
     _downloadStateController.add(modelId);
 
-    final extension = model.format == 'tflite' ? 'tflite' : 'gguf';
+    // Create a completer to track completion
+    final completer = Completer<void>();
+    String? errorMessage;
+
+    // Subscribe to progress events
+    final progressSub = _eventBus.on<TransferProgressEvent>((event) {
+      if (event.transferId == transfer!.id) {
+        final progress = event.totalBytes > 0
+            ? event.bytesTransferred / event.totalBytes
+            : 0.0;
+        _activeDownloads[modelId]?.progress = progress;
+      }
+    });
+
+    // Subscribe to completion events
+    final completeSub = _eventBus.on<TransferCompletedEvent>((event) {
+      if (event.transferId == transfer!.id) {
+        _activeDownloads[modelId]?.progress = 1.0;
+        if (!completer.isCompleted) completer.complete();
+      }
+    });
+
+    // Subscribe to failure events
+    final failedSub = _eventBus.on<TransferFailedEvent>((event) {
+      if (event.transferId == transfer!.id && !event.willRetry) {
+        errorMessage = event.error;
+        if (!completer.isCompleted) completer.completeError(Exception(event.error));
+      }
+    });
 
     try {
-      // Station-first download pattern
-      // Try station server first if reachable (via any transport)
-      if (await _isStationReachable()) {
-        final stationUrl = _getStationModelUrl(modelId, extension);
-        if (stationUrl != null) {
-          LogService().log('VisionModelManager: Trying station download for $modelId');
-          try {
-            yield* _downloadFromUrl(stationUrl, modelId, model, path, tempFile);
-            return; // Success - exit early
-          } catch (e) {
-            LogService().log('VisionModelManager: Station download failed: $e, trying internet...');
-            // Clean up temp file before trying internet fallback
-            if (await tempFile.exists()) {
-              await tempFile.delete();
-            }
+      // Yield progress updates until transfer completes
+      while (!completer.isCompleted) {
+        final progress = _activeDownloads[modelId]?.progress ?? 0.0;
+        yield progress;
+
+        if (progress >= 1.0) break;
+
+        // Check transfer status periodically
+        final currentTransfer = _transferService.getTransfer(transfer.id);
+        if (currentTransfer != null) {
+          if (currentTransfer.isCompleted) {
+            yield 1.0;
+            break;
+          }
+          if (currentTransfer.isFailed) {
+            throw Exception(currentTransfer.error ?? 'Transfer failed');
           }
         }
+
+        await Future.delayed(const Duration(milliseconds: 200));
       }
 
-      // Fallback to internet (HuggingFace/TFHub)
-      LogService().log('VisionModelManager: Starting internet download of $modelId from ${model.url}');
-      yield* _downloadFromUrl(model.url, modelId, model, path, tempFile);
+      // Wait for completion
+      await completer.future;
+      LogService().log('VisionModelManager: Downloaded $modelId via TransferService');
+      yield 1.0;
     } catch (e) {
       LogService().log('VisionModelManager: Error downloading $modelId: $e');
-
-      // Clean up temp file
-      if (await tempFile.exists()) {
-        await tempFile.delete();
-      }
-
       rethrow;
     } finally {
+      // Cleanup subscriptions
+      progressSub.cancel();
+      completeSub.cancel();
+      failedSub.cancel();
+
       _activeDownloads.remove(modelId);
+      _modelTransferIds.remove(modelId);
       _downloadStateController.add(modelId);
     }
   }
 
-  /// Download from a specific URL with progress tracking
-  Stream<double> _downloadFromUrl(
-    String url,
-    String modelId,
-    VisionModelInfo model,
-    String path,
-    File tempFile,
-  ) async* {
-    final request = http.Request('GET', Uri.parse(url));
-    final response = await http.Client().send(request);
+  /// Get the transfer ID for a model download (if in progress)
+  String? getTransferId(String modelId) => _modelTransferIds[modelId];
 
-    if (response.statusCode != 200) {
-      throw Exception('HTTP ${response.statusCode}: Failed to download model from $url');
-    }
-
-    final totalBytes = response.contentLength ?? model.size;
-    var receivedBytes = 0;
-
-    final sink = tempFile.openWrite();
-
-    await for (final chunk in response.stream) {
-      sink.add(chunk);
-      receivedBytes += chunk.length;
-
-      final progress = receivedBytes / totalBytes;
-      _activeDownloads[modelId]!.progress = progress;
-      yield progress;
-    }
-
-    await sink.close();
-
-    // Move temp file to final location
-    await tempFile.rename(path);
-
-    LogService().log('VisionModelManager: Downloaded $modelId (${model.sizeString}) from $url');
-    yield 1.0;
+  /// Get the current transfer for a model (if in progress)
+  Transfer? getTransfer(String modelId) {
+    final transferId = _modelTransferIds[modelId];
+    if (transferId == null) return null;
+    return _transferService.getTransfer(transferId);
   }
 
   /// Delete a downloaded model
@@ -298,49 +362,6 @@ class VisionModelManager {
     return VisionModels.available
         .where((m) => m.minRamMb <= availableRamMb)
         .toList();
-  }
-
-  // ============================================================
-  // Station-First Download (Offline-First Pattern)
-  // ============================================================
-
-  /// Get station URL for model downloads (same pattern as MapTileService)
-  String? _getStationModelUrl(String modelId, String extension) {
-    final station = StationService().getPreferredStation();
-    if (station == null || station.url.isEmpty) return null;
-
-    var stationUrl = station.url;
-    // Convert WebSocket URL to HTTP (same pattern as MapTileService)
-    if (stationUrl.startsWith('ws://')) {
-      stationUrl = stationUrl.replaceFirst('ws://', 'http://');
-    } else if (stationUrl.startsWith('wss://')) {
-      stationUrl = stationUrl.replaceFirst('wss://', 'https://');
-    }
-
-    // Remove trailing slash if present
-    if (stationUrl.endsWith('/')) {
-      stationUrl = stationUrl.substring(0, stationUrl.length - 1);
-    }
-
-    return '$stationUrl/bot/models/$modelId.$extension';
-  }
-
-  /// Check if station is reachable via any transport
-  /// Uses ConnectionManager for transport-agnostic reachability check
-  Future<bool> _isStationReachable() async {
-    final station = StationService().getPreferredStation();
-    if (station == null || station.callsign == null) return false;
-
-    try {
-      // Use ConnectionManager to check reachability across all transports
-      // (LAN, WebRTC, Station WS, BLE+, BLE)
-      return await ConnectionManager()
-          .isReachable(station.callsign!)
-          .timeout(const Duration(seconds: 5), onTimeout: () => false);
-    } catch (e) {
-      LogService().log('VisionModelManager: Station reachability check failed: $e');
-      return false;
-    }
   }
 
   void dispose() {

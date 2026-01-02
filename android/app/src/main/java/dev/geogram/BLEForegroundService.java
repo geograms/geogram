@@ -47,6 +47,10 @@ public class BLEForegroundService extends Service {
     private Runnable keepAliveRunnable;
     private boolean keepAliveEnabled = false;
 
+    // Station info for notification display
+    private static String stationName = null;
+    private static String stationUrl = null;
+
     // Static reference to method channel for callbacks to Flutter
     private static MethodChannel methodChannel;
 
@@ -73,8 +77,15 @@ public class BLEForegroundService extends Service {
     /**
      * Enable WebSocket keep-alive from the foreground service.
      * This should be called after WebSocket connects to the station.
+     * @param context The application context
+     * @param name The station name (optional, can be null)
+     * @param url The station URL (e.g., "p2p.radio")
      */
-    public static void enableKeepAlive(Context context) {
+    public static void enableKeepAlive(Context context, String name, String url) {
+        // Store station info for notification
+        stationName = name;
+        stationUrl = url;
+
         Intent intent = new Intent(context, BLEForegroundService.class);
         intent.setAction("ENABLE_KEEPALIVE");
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -82,7 +93,14 @@ public class BLEForegroundService extends Service {
         } else {
             context.startService(intent);
         }
-        Log.d(TAG, "WebSocket keep-alive enable requested");
+        Log.d(TAG, "WebSocket keep-alive enable requested for station: " + (name != null ? name : url));
+    }
+
+    /**
+     * Enable WebSocket keep-alive (backwards compatible, no station info).
+     */
+    public static void enableKeepAlive(Context context) {
+        enableKeepAlive(context, null, null);
     }
 
     /**
@@ -260,7 +278,21 @@ public class BLEForegroundService extends Service {
         }
         PendingIntent pendingIntent = PendingIntent.getActivity(this, 0, launchIntent, flags);
 
-        String contentText = keepAliveEnabled ? "Connected to station" : "BLE active";
+        String contentText;
+        if (keepAliveEnabled) {
+            // Format: "Connected to Name (url)" or "Connected to url"
+            if (stationName != null && !stationName.isEmpty() && stationUrl != null && !stationUrl.isEmpty()) {
+                contentText = "Connected to " + stationName + " (" + stationUrl + ")";
+            } else if (stationUrl != null && !stationUrl.isEmpty()) {
+                contentText = "Connected to " + stationUrl;
+            } else if (stationName != null && !stationName.isEmpty()) {
+                contentText = "Connected to " + stationName;
+            } else {
+                contentText = "Connected to station";
+            }
+        } else {
+            contentText = "BLE active";
+        }
 
         return new NotificationCompat.Builder(this, CHANNEL_ID)
                 .setContentTitle("Geogram")

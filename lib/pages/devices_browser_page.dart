@@ -23,6 +23,8 @@ import '../services/websocket_service.dart';
 import '../services/network_monitor_service.dart';
 import '../services/bluetooth_classic_service.dart';
 import '../services/bluetooth_classic_pairing_service.dart';
+import '../services/group_sync_service.dart';
+import '../services/collection_service.dart';
 import '../services/debug_controller.dart';
 import '../util/event_bus.dart';
 import 'chat_browser_page.dart';
@@ -988,6 +990,19 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
                     ],
                   ),
                 ),
+                // Chat icon for non-default folders with chat enabled
+                if (!folder.isDefault && folder.chatEnabled)
+                  IconButton(
+                    icon: Icon(
+                      Icons.message_outlined,
+                      size: 20,
+                      color: theme.colorScheme.primary,
+                    ),
+                    onPressed: () => _openFolderChat(folder),
+                    tooltip: _i18n.t('open_group_chat'),
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                  ),
                 // Folder options menu (not for default folder on some actions)
                 PopupMenuButton<String>(
                   icon: Icon(
@@ -1038,6 +1053,24 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
                             Icon(Icons.delete_outline, size: 20, color: theme.colorScheme.error),
                             const SizedBox(width: 12),
                             Text(_i18n.t('delete_folder'), style: TextStyle(color: theme.colorScheme.error)),
+                          ],
+                        ),
+                      ),
+                    // Toggle chat for non-default folders
+                    if (!folder.isDefault)
+                      PopupMenuItem<String>(
+                        value: folder.chatEnabled ? 'disable_chat' : 'enable_chat',
+                        child: Row(
+                          children: [
+                            Icon(
+                              folder.chatEnabled ? Icons.chat_bubble : Icons.chat_bubble_outline,
+                              size: 20,
+                              color: theme.colorScheme.primary,
+                            ),
+                            const SizedBox(width: 12),
+                            Text(folder.chatEnabled
+                                ? _i18n.t('disable_chat')
+                                : _i18n.t('enable_chat')),
                           ],
                         ),
                       ),
@@ -1188,6 +1221,16 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
       case 'remove_disconnected':
         await _confirmRemoveDisconnected(folder);
         break;
+      case 'enable_chat':
+        _devicesService.setFolderChatEnabled(folder.id, true);
+        // Trigger chat room creation
+        GroupSyncService().ensureFolderChatRooms();
+        setState(() {});
+        break;
+      case 'disable_chat':
+        _devicesService.setFolderChatEnabled(folder.id, false);
+        setState(() {});
+        break;
     }
   }
 
@@ -1333,7 +1376,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
     final distanceStr = _formatDistance(device, distanceKm);
     final isStation = CallsignGenerator.isStationCallsign(device.callsign);
 
-    return ListTile(
+    final tile = ListTile(
       selected: isSelected && !_isMultiSelectMode,
       selectedTileColor: theme.colorScheme.primaryContainer.withValues(alpha: 0.3),
       contentPadding: const EdgeInsets.only(left: 16, right: 4),
@@ -1504,6 +1547,9 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
                 case 'unpin':
                   _devicesService.unpinDevice(device.callsign);
                   break;
+                case 'move':
+                  _showMoveToFolderDialog([device.callsign]);
+                  break;
                 case 'delete':
                   _confirmDeleteDevice(device);
                   break;
@@ -1557,6 +1603,20 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
                   ),
                 ),
                 PopupMenuItem<String>(
+                  value: 'move',
+                  child: Row(
+                    children: [
+                      Icon(
+                        Icons.drive_file_move_outlined,
+                        size: 20,
+                        color: theme.colorScheme.primary,
+                      ),
+                      const SizedBox(width: 12),
+                      Text(_i18n.t('move_to_folder')),
+                    ],
+                  ),
+                ),
+                PopupMenuItem<String>(
                   value: 'delete',
                   child: Row(
                     children: [
@@ -1586,6 +1646,17 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
         }
       },
     );
+
+    // On desktop (non-narrow mode), wrap with GestureDetector for double-click to move
+    final isDesktop = MediaQuery.of(context).size.width >= 600;
+    if (isDesktop) {
+      return GestureDetector(
+        onDoubleTap: () => _showMoveToFolderDialog([device.callsign]),
+        child: tile,
+      );
+    }
+
+    return tile;
   }
 
   /// Build online/offline status indicator
@@ -2059,6 +2130,37 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
         ),
       ),
     );
+  }
+
+  /// Open the chat room for a device folder
+  Future<void> _openFolderChat(DeviceFolder folder) async {
+    // Get chat collection
+    final collections = await CollectionService().loadCollections();
+    final chatCollection = collections.where((c) => c.type == 'chat').firstOrNull;
+
+    if (chatCollection == null || chatCollection.storagePath == null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(_i18n.t('chat_room_not_found'))),
+        );
+      }
+      return;
+    }
+
+    // Ensure chat room exists
+    await GroupSyncService().ensureFolderChatRooms();
+
+    if (mounted) {
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => ChatBrowserPage(
+            collection: chatCollection,
+            initialRoomId: folder.id,
+          ),
+        ),
+      );
+    }
   }
 
   /// Initiate BLE+ upgrade for a device

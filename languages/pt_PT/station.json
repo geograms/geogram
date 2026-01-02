@@ -1,0 +1,20 @@
+{
+  "station_alerts": "Alertas Próximos",
+  "station_already_exists": "Apenas uma estação por dispositivo",
+  "station_dashboard": "Painel do Relay",
+  "station_description": "Servidor de estação de rede",
+  "station_instructions": "• Selecione UM estação preferida (ícone de estrela)\n• Selecione múltiplos estações de backup (marcas de verificação) para redundância\n• Estações podem divulgar o seu nome e coordenadas de localização",
+  "station_name": "Nome da Estação *",
+  "station_name_hint": "ex., A Minha Estação Personalizada",
+  "station_places": "Locais da Estação",
+  "station_profile": "Perfil de Estação",
+  "station_required_for_media": "Nenhuma estação configurada para media pública do evento.",
+  "station_send_failed": "Falha ao enviar para a estação",
+  "station_settings": "Configurações do Relay",
+  "station_status": "Estado da Estação",
+  "station_status_desc": "Notificar sobre alterações de conexão da estação",
+  "station_system": "Sistema de Relés",
+  "station_system_desc": "Entrega de mensagens store-and-forward",
+  "station_url": "URL da Estação *",
+  "station_url_hint": "wss://station.exemplo.com"
+}

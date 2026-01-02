@@ -13,6 +13,10 @@ set(APPLICATION_ID "dev.geogram")
 # versions of CMake.
 cmake_policy(SET CMP0063 NEW)
 
+# Suppress FetchContent_Populate deprecation warning from third-party plugins
+# (objectbox_flutter_libs uses the old API) - set as default for all subdirectories
+set(CMAKE_POLICY_DEFAULT_CMP0169 OLD)
+
 # Load bundled libraries from the lib/ directory relative to the binary.
 set(CMAKE_INSTALL_RPATH "$ORIGIN/lib")
 

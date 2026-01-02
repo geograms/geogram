@@ -42,7 +42,9 @@ class MainActivity : FlutterActivity() {
                 }
                 "enableKeepAlive" -> {
                     // Enable WebSocket keep-alive in the foreground service
-                    BLEForegroundService.enableKeepAlive(this)
+                    val stationName = call.argument<String>("stationName")
+                    val stationUrl = call.argument<String>("stationUrl")
+                    BLEForegroundService.enableKeepAlive(this, stationName, stationUrl)
                     result.success(true)
                 }
                 "disableKeepAlive" -> {

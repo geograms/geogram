@@ -154,82 +154,56 @@ class VisionModels {
       minRamMb: 200,
     ),
     VisionModelInfo(
-      id: 'plant-classifier',
-      name: 'Plant Classifier',
+      id: 'mobilenet-v3-small',
+      name: 'MobileNet V3 Small',
       tier: 'lite',
-      category: 'plant',
-      size: 80 * 1024 * 1024, // 80 MB
-      capabilities: ['plant_id', 'classification'],
-      url: 'https://huggingface.co/google/plant-classifier-lite/resolve/main/model.tflite',
+      category: 'general',
+      size: 10 * 1024 * 1024, // 10.2 MB
+      capabilities: ['classification'],
+      url: 'https://huggingface.co/qualcomm/MobileNet-v3-Small/resolve/main/MobileNet-v3-Small_float.tflite',
       format: 'tflite',
-      description: 'Identify plant species from photos',
-      minRamMb: 300,
+      description: 'Fast image classification (1000 categories)',
+      minRamMb: 200,
     ),
     VisionModelInfo(
-      id: 'paddle-ocr-lite',
-      name: 'PaddleOCR Lite',
+      id: 'mobilenet-v4-medium',
+      name: 'MobileNet V4 Medium',
       tier: 'lite',
-      category: 'ocr',
-      size: 15 * 1024 * 1024, // 15 MB
-      capabilities: ['ocr'],
-      url: 'https://huggingface.co/PaddlePaddle/ppocr-lite/resolve/main/model.tflite',
+      category: 'general',
+      size: 19 * 1024 * 1024, // 19.4 MB
+      capabilities: ['classification'],
+      url: 'https://huggingface.co/byoussef/MobileNetV4_Conv_Medium_TFLite_224/resolve/main/mobilenetv4_conv_medium.e500_r224_in1k_float16.tflite',
       format: 'tflite',
-      description: 'Extract text from images (multilingual)',
-      minRamMb: 200,
+      description: 'Better accuracy image classification (1000 categories)',
+      minRamMb: 300,
     ),
 
     // Standard tier - Quantized multimodal models
     VisionModelInfo(
-      id: 'llava-7b-q3',
-      name: 'LLaVA 7B (Q3)',
+      id: 'llava-7b-q4',
+      name: 'LLaVA 7B (Q4)',
       tier: 'standard',
       category: 'general',
-      size: 800 * 1024 * 1024, // 800 MB
+      size: 4080 * 1024 * 1024, // 4.08 GB
       capabilities: ['visual_qa', 'classification', 'ocr', 'translation'],
-      url: 'https://huggingface.co/mys/ggml_llava-v1.5-7b/resolve/main/ggml-model-q3_k.gguf',
+      url: 'https://huggingface.co/mys/ggml_llava-v1.5-7b/resolve/main/ggml-model-q4_k.gguf',
       format: 'gguf',
       description: 'Full visual Q&A - ask any question about images',
-      minRamMb: 1500,
+      minRamMb: 6000,
     ),
 
     // Quality tier - Better quantization
     VisionModelInfo(
-      id: 'llava-7b-q4',
-      name: 'LLaVA 7B (Q4)',
+      id: 'llava-7b-q5',
+      name: 'LLaVA 7B (Q5)',
       tier: 'quality',
       category: 'general',
-      size: 1200 * 1024 * 1024, // 1.2 GB
+      size: 4780 * 1024 * 1024, // 4.78 GB
       capabilities: ['visual_qa', 'classification', 'ocr', 'translation'],
-      url: 'https://huggingface.co/mys/ggml_llava-v1.5-7b/resolve/main/ggml-model-q4_k.gguf',
+      url: 'https://huggingface.co/mys/ggml_llava-v1.5-7b/resolve/main/ggml-model-q5_k.gguf',
       format: 'gguf',
       description: 'Better quality visual Q&A with improved accuracy',
-      minRamMb: 2000,
-    ),
-    VisionModelInfo(
-      id: 'qwen2-vl-7b-q4',
-      name: 'Qwen2-VL 7B (Q4)',
-      tier: 'quality',
-      category: 'general',
-      size: 1000 * 1024 * 1024, // 1 GB
-      capabilities: ['visual_qa', 'classification', 'ocr', 'translation', 'transliteration'],
-      url: 'https://huggingface.co/Qwen/Qwen2-VL-7B-Instruct-GGUF/resolve/main/qwen2-vl-7b-instruct-q4_k_m.gguf',
-      format: 'gguf',
-      description: 'Multilingual vision - best for translation and OCR',
-      minRamMb: 2000,
-    ),
-
-    // Premium tier - Highest quality
-    VisionModelInfo(
-      id: 'llava-7b-q6',
-      name: 'LLaVA 7B (Q6)',
-      tier: 'premium',
-      category: 'general',
-      size: 2000 * 1024 * 1024, // 2 GB
-      capabilities: ['visual_qa', 'classification', 'ocr', 'translation'],
-      url: 'https://huggingface.co/mys/ggml_llava-v1.5-7b/resolve/main/ggml-model-q6_k.gguf',
-      format: 'gguf',
-      description: 'Highest quality visual understanding',
-      minRamMb: 2500,
+      minRamMb: 8000,
     ),
   ];
 

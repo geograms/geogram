@@ -83,7 +83,7 @@ class MusicTrack {
       case 'fm-synth':
         return 'FM Synthesis';
       case 'musicgen-tiny-jungle':
-        return 'MusicGen Tiny (Jungle)';
+        return 'MusicGen Tiny (Jungle FP32)';
       default:
         return modelUsed;
     }

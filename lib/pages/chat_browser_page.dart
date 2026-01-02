@@ -790,23 +790,31 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
 
   /// Auto-select a room by ID (used for debug API and initialRoomId)
   void _autoSelectRoom(String roomId) {
-    print('DEBUG _autoSelectRoom: looking for $roomId in ${_stationRooms.length} rooms');
-    if (_stationRooms.isEmpty) {
-      print('DEBUG _autoSelectRoom: no rooms loaded yet');
+    // First check local channels (for folder group chats)
+    final localChannels = _chatService.channels;
+    final localChannel = localChannels.cast<ChatChannel?>().firstWhere(
+      (c) => c?.id == roomId,
+      orElse: () => null,
+    );
+
+    if (localChannel != null) {
+      _selectChannel(localChannel);
       return;
     }
 
-    print('DEBUG _autoSelectRoom: available rooms = ${_stationRooms.map((r) => r.id).toList()}');
+    // Then check station rooms
+    if (_stationRooms.isEmpty) {
+      return;
+    }
+
     final room = _stationRooms.cast<StationChatRoom?>().firstWhere(
       (r) => r?.id == roomId,
       orElse: () => null,
     );
 
     if (room != null) {
-      print('DEBUG _autoSelectRoom: found room, selecting...');
       _selectRelayRoom(room);
     } else {
-      print('DEBUG _autoSelectRoom: room $roomId not found, selecting first room');
       // Fall back to first room if specified room not found
       _selectRelayRoom(_stationRooms.first);
     }

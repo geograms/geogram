@@ -277,6 +277,10 @@ class ChatChannelConfig {
   /// Pending membership applications
   final List<MembershipApplication> pendingApplicants;
 
+  /// Group ID for dynamic membership lookup
+  /// When set, membership is resolved dynamically from GroupsService
+  final String? groupId;
+
   ChatChannelConfig({
     required this.id,
     required this.name,
@@ -294,7 +298,11 @@ class ChatChannelConfig {
     this.members = const [],
     this.banned = const [],
     this.pendingApplicants = const [],
+    this.groupId,
   });
+
+  /// Check if this config uses dynamic group membership
+  bool get usesDynamicMembership => groupId != null && groupId!.isNotEmpty;
 
   // === Role Check Methods ===
 
@@ -383,6 +391,7 @@ class ChatChannelConfig {
       pendingApplicants: (json['pending_applicants'] as List? ?? [])
           .map((a) => MembershipApplication.fromJson(a as Map<String, dynamic>))
           .toList(),
+      groupId: json['group_id'] as String?,
     );
   }
 
@@ -407,6 +416,7 @@ class ChatChannelConfig {
       if (banned.isNotEmpty) 'banned': banned,
       if (pendingApplicants.isNotEmpty)
         'pending_applicants': pendingApplicants.map((a) => a.toJson()).toList(),
+      if (groupId != null) 'group_id': groupId,
     };
   }
 
@@ -428,6 +438,7 @@ class ChatChannelConfig {
     List<String>? members,
     List<String>? banned,
     List<MembershipApplication>? pendingApplicants,
+    String? groupId,
   }) {
     return ChatChannelConfig(
       id: id ?? this.id,
@@ -447,6 +458,7 @@ class ChatChannelConfig {
       banned: banned ?? List<String>.from(this.banned),
       pendingApplicants: pendingApplicants ??
           this.pendingApplicants.map((a) => a.copy()).toList(),
+      groupId: groupId ?? this.groupId,
     );
   }
 

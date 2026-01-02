@@ -33,6 +33,7 @@ import 'services/user_location_service.dart';
 import 'services/direct_message_service.dart';
 import 'services/backup_service.dart';
 import 'services/window_state_service.dart';
+import 'services/group_sync_service.dart';
 import 'cli/pure_storage_config.dart';
 import 'connection/connection_manager.dart';
 import 'connection/transports/lan_transport.dart';
@@ -57,6 +58,7 @@ import 'pages/postcards_browser_page.dart';
 import 'pages/contacts_browser_page.dart';
 import 'pages/places_browser_page.dart';
 import 'pages/market_browser_page.dart';
+import 'pages/inventory_browser_page.dart';
 import 'pages/report_browser_page.dart';
 import 'pages/groups_browser_page.dart';
 import 'pages/maps_browser_page.dart';
@@ -64,6 +66,7 @@ import 'pages/station_dashboard_page.dart';
 import 'pages/devices_browser_page.dart';
 import 'pages/bot_page.dart';
 import 'pages/backup_browser_page.dart';
+import 'pages/transfer_page.dart';
 import 'pages/profile_management_page.dart';
 import 'pages/create_collection_page.dart';
 import 'pages/onboarding_page.dart';
@@ -359,6 +362,13 @@ void main() async {
       // Initialize BackupService for E2E encrypted backups
       await BackupService().initialize();
       LogService().log('BackupService initialized');
+
+      // Ensure chat rooms exist for all device folders with chat enabled
+      GroupSyncService().ensureFolderChatRooms().then((_) {
+        LogService().log('GroupSyncService: Folder chat rooms verified');
+      }).catchError((e) {
+        LogService().log('GroupSyncService: Error verifying chat rooms: $e');
+      });
     } catch (e, stackTrace) {
       LogService().log('ERROR during deferred initialization: $e');
       LogService().log('Stack trace: $stackTrace');
@@ -618,7 +628,7 @@ class _HomePageState extends State<HomePage> {
   /// Create default collections for first launch
   Future<void> _createDefaultCollections() async {
     final collectionService = CollectionService();
-    final defaultTypes = ['chat', 'blog', 'alerts', 'places'];
+    final defaultTypes = ['chat', 'blog', 'alerts', 'places', 'inventory', 'transfer'];
 
     LogService().log('Creating default collections. Path: ${collectionService.getDefaultCollectionsPath()}');
 
@@ -1025,12 +1035,8 @@ class _CollectionsPageState extends State<CollectionsPage> {
     super.dispose();
   }
 
-  bool _isFixedCollectionType(Collection collection) {
-    const fixedTypes = {
-      'chat', 'forum', 'blog', 'events', 'news',
-      'www', 'postcards', 'contacts', 'places', 'market', 'alerts', 'groups', 'station', 'backup'
-    };
-    return fixedTypes.contains(collection.type);
+  bool _isFileCollectionType(Collection collection) {
+    return collection.type == 'files';
   }
 
   Future<void> _loadCollections() async {
@@ -1061,9 +1067,9 @@ class _CollectionsPageState extends State<CollectionsPage> {
   }
 
   void _updateCollectionsList(List<Collection> collections, {required bool isComplete}) {
-    // Separate fixed and file collections
-    final fixedCollections = collections.where(_isFixedCollectionType).toList();
-    final fileCollections = collections.where((c) => !_isFixedCollectionType(c)).toList();
+    // Separate app and file collections
+    final appCollections = collections.where((c) => !_isFileCollectionType(c)).toList();
+    final fileCollections = collections.where(_isFileCollectionType).toList();
 
     // Sort each group: favorites first, then alphabetically
     void sortGroup(List<Collection> group) {
@@ -1075,11 +1081,11 @@ class _CollectionsPageState extends State<CollectionsPage> {
       });
     }
 
-    sortGroup(fixedCollections);
+    sortGroup(appCollections);
     sortGroup(fileCollections);
 
-    // Combine: fixed first, then file collections
-    final sortedCollections = [...fixedCollections, ...fileCollections];
+    // Combine: apps first, then file collections
+    final sortedCollections = [...appCollections, ...fileCollections];
 
     setState(() {
       _allCollections = sortedCollections;
@@ -1198,14 +1204,14 @@ class _CollectionsPageState extends State<CollectionsPage> {
                                             ? 7 // Large desktop: 7 columns
                                             : 8; // Extra large: 8 columns
 
-                            // Separate fixed and file collections from filtered list
-                            final fixedCollections = _allCollections.where(_isFixedCollectionType).toList();
-                            final fileCollections = _allCollections.where((c) => !_isFixedCollectionType(c)).toList();
+                            // Separate app collections from file collections
+                            final appCollections = _allCollections.where((c) => !_isFileCollectionType(c)).toList();
+                            final fileCollections = _allCollections.where(_isFileCollectionType).toList();
 
                             return CustomScrollView(
                               slivers: [
-                                // Fixed collections grid
-                                if (fixedCollections.isNotEmpty)
+                                // App collections grid
+                                if (appCollections.isNotEmpty)
                                   SliverPadding(
                                     padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
                                     sliver: SliverGrid(
@@ -1217,7 +1223,7 @@ class _CollectionsPageState extends State<CollectionsPage> {
                                       ),
                                       delegate: SliverChildBuilderDelegate(
                                         (context, index) {
-                                          final collection = fixedCollections[index];
+                                          final collection = appCollections[index];
                                           return _CollectionGridCard(
                                   collection: collection,
                                   onTap: () {
@@ -1259,7 +1265,13 @@ class _CollectionsPageState extends State<CollectionsPage> {
                                                                             collectionPath: collection.storagePath ?? '',
                                                                             collectionTitle: collection.title,
                                                                           )
-                                                                        : collection.type == 'alerts'
+                                                                        : collection.type == 'inventory'
+                                                                            ? InventoryBrowserPage(
+                                                                                collectionPath: collection.storagePath ?? '',
+                                                                                collectionTitle: collection.title,
+                                                                                i18n: _i18n,
+                                                                              )
+                                                                            : collection.type == 'alerts'
                                                                             ? ReportBrowserPage(
                                                                                 collectionPath: collection.storagePath ?? '',
                                                                                 collectionTitle: collection.title,
@@ -1273,7 +1285,9 @@ class _CollectionsPageState extends State<CollectionsPage> {
                                                                                     ? const BackupBrowserPage()
                                                                                     : collection.type == 'station'
                                                                                         ? const StationDashboardPage()
-                                                                                        : CollectionBrowserPage(collection: collection);
+                                                                                        : collection.type == 'transfer'
+                                                                                            ? const TransferPage()
+                                                                                            : CollectionBrowserPage(collection: collection);
 
                                               LogService().log('Opening collection: ${collection.title} (type: ${collection.type}) -> ${targetPage.runtimeType}');
                                               Navigator.push(
@@ -1288,13 +1302,13 @@ class _CollectionsPageState extends State<CollectionsPage> {
                                             unreadCount: collection.type == 'chat' ? _chatNotificationService.totalUnreadCount : 0,
                                           );
                                         },
-                                        childCount: fixedCollections.length,
+                                        childCount: appCollections.length,
                                       ),
                                     ),
                                   ),
 
                                 // Separator between fixed and file collections
-                                if (fixedCollections.isNotEmpty && fileCollections.isNotEmpty)
+                                if (appCollections.isNotEmpty && fileCollections.isNotEmpty)
                                   SliverToBoxAdapter(
                                     child: Padding(
                                       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
@@ -1360,17 +1374,23 @@ class _CollectionsPageState extends State<CollectionsPage> {
                                                                                       collectionPath: collection.storagePath ?? '',
                                                                                       collectionTitle: collection.title,
                                                                                     )
-                                                                                  : collection.type == 'alerts'
-                                                                                      ? ReportBrowserPage(
+                                                                                  : collection.type == 'inventory'
+                                                                                      ? InventoryBrowserPage(
                                                                                           collectionPath: collection.storagePath ?? '',
                                                                                           collectionTitle: collection.title,
+                                                                                          i18n: _i18n,
                                                                                         )
-                                                                                      : collection.type == 'groups'
-                                                                                          ? GroupsBrowserPage(
+                                                                                      : collection.type == 'alerts'
+                                                                                          ? ReportBrowserPage(
                                                                                               collectionPath: collection.storagePath ?? '',
                                                                                               collectionTitle: collection.title,
                                                                                             )
-                                                                                          : CollectionBrowserPage(collection: collection);
+                                                                                          : collection.type == 'groups'
+                                                                                              ? GroupsBrowserPage(
+                                                                                                  collectionPath: collection.storagePath ?? '',
+                                                                                                  collectionTitle: collection.title,
+                                                                                                )
+                                                                                              : CollectionBrowserPage(collection: collection);
 
                                               LogService().log('Opening collection: ${collection.title} (type: ${collection.type}) -> ${targetPage.runtimeType}');
                                               Navigator.push(
@@ -1422,19 +1442,15 @@ class _CollectionGridCard extends StatelessWidget {
     this.unreadCount = 0,
   });
 
-  /// Check if this is a fixed collection type
-  bool _isFixedCollectionType() {
-    const fixedTypes = {
-      'chat', 'forum', 'blog', 'events', 'news',
-      'www', 'postcards', 'contacts', 'places', 'market', 'groups', 'alerts', 'station'
-    };
-    return fixedTypes.contains(collection.type);
+  /// Check if this is a file collection type (not an app)
+  bool _isFileCollectionType() {
+    return collection.type == 'files';
   }
 
-  /// Get display title with proper capitalization and translation for fixed types
+  /// Get display title with proper capitalization and translation for app types
   String _getDisplayTitle() {
     final i18n = I18nService();
-    if (_isFixedCollectionType() && collection.title.isNotEmpty) {
+    if (!_isFileCollectionType() && collection.title.isNotEmpty) {
       // Try to get translated label for known collection types
       final key = 'collection_type_${collection.type}';
       final translated = i18n.t(key);
@@ -1473,6 +1489,8 @@ class _CollectionGridCard extends StatelessWidget {
         return Icons.place;
       case 'market':
         return Icons.store;
+      case 'inventory':
+        return Icons.inventory_2;
       case 'groups':
         return Icons.groups;
       case 'alerts':
@@ -1481,6 +1499,8 @@ class _CollectionGridCard extends StatelessWidget {
         return Icons.backup;
       case 'station':
         return Icons.cell_tower;
+      case 'transfer':
+        return Icons.swap_horiz;
       default:
         return Icons.folder_special;
     }
@@ -1696,6 +1716,18 @@ class _CollectionCard extends StatelessWidget {
         return Icons.place;
       case 'market':
         return Icons.store;
+      case 'inventory':
+        return Icons.inventory_2;
+      case 'groups':
+        return Icons.groups;
+      case 'alerts':
+        return Icons.campaign;
+      case 'backup':
+        return Icons.backup;
+      case 'station':
+        return Icons.cell_tower;
+      case 'transfer':
+        return Icons.swap_horiz;
       default:
         return Icons.folder_special;
     }

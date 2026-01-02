@@ -19,6 +19,23 @@ class I18nService {
     'pt_PT': 'Português (Portugal)',
   };
 
+  // Feature files to load for each language
+  static const List<String> _featureFiles = [
+    'common',
+    'bot',
+    'backup',
+    'transfer',
+    'collection',
+    'places',
+    'groups',
+    'event',
+    'station',
+    'chat',
+    'onboarding',
+    'settings',
+    'inventory',
+  ];
+
   // Notifier for UI updates when language changes
   final ValueNotifier<String> languageNotifier = ValueNotifier<String>('en_US');
 
@@ -71,33 +88,39 @@ class I18nService {
     return code;
   }
 
-  /// Load a language file
+  /// Load all language files for a given locale
   Future<void> _loadLanguage(String language) async {
     try {
-      LogService().log('Loading language file: $language');
-      print('I18N: Loading language file: $language'); // Debug for web console
+      LogService().log('Loading language files: $language');
 
-      // Load the JSON file from assets
-      // On web, rootBundle requires asset paths exactly as declared in pubspec.yaml
-      final assetPath = 'languages/$language.json';
-      print('I18N: Asset path: $assetPath'); // Debug for web console
+      final Map<String, String> allTranslations = {};
 
-      final String jsonString = await rootBundle.loadString(assetPath);
-      print('I18N: Loaded JSON string length: ${jsonString.length}'); // Debug for web console
+      // Load all feature files in parallel
+      final futures = _featureFiles.map((feature) async {
+        final assetPath = 'languages/$language/$feature.json';
+        try {
+          final String jsonString = await rootBundle.loadString(assetPath);
+          final Map<String, dynamic> jsonMap = json.decode(jsonString);
+          return jsonMap.map((key, value) => MapEntry(key, value.toString()));
+        } catch (e) {
+          LogService().log('Warning: Could not load $assetPath: $e');
+          return <String, String>{};
+        }
+      });
 
-      final Map<String, dynamic> jsonMap = json.decode(jsonString);
+      final results = await Future.wait(futures);
 
-      // Convert to Map<String, String>
-      _translations = jsonMap.map((key, value) => MapEntry(key, value.toString()));
+      // Merge all translations
+      for (final translations in results) {
+        allTranslations.addAll(translations);
+      }
 
-      LogService().log('Language file loaded successfully: $language (${_translations.length} translations)');
-      print('I18N: Language file loaded successfully: $language (${_translations.length} translations)'); // Debug for web console
-      print('I18N: Sample translations - welcome_to_geogram: ${_translations['welcome_to_geogram']}'); // Debug
+      _translations = allTranslations;
+
+      LogService().log('Language loaded: $language (${_translations.length} translations from ${_featureFiles.length} files)');
     } catch (e, stackTrace) {
-      LogService().log('ERROR loading language file $language: $e');
+      LogService().log('ERROR loading language files $language: $e');
       LogService().log('Stack trace: $stackTrace');
-      print('I18N ERROR: $e'); // Debug for web console
-      print('I18N Stack trace: $stackTrace'); // Debug for web console
 
       // If loading fails, ensure we have empty translations rather than crashing
       _translations = {};

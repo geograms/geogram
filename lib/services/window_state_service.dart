@@ -76,9 +76,10 @@ class WindowStateService with WindowListener {
 
   /// Validate window state against screen bounds
   Future<WindowState> validateState(WindowState state) async {
-    // Clamp size to minimum
-    final width = max(state.size.width, minWidth);
-    final height = max(state.size.height, minHeight);
+    // Clamp size to minimum and reasonable maximum
+    // Most screens are at most 4K (3840x2160), cap at slightly above
+    final width = max(state.size.width, minWidth).clamp(minWidth, 4000.0);
+    final height = max(state.size.height, minHeight).clamp(minHeight, 2500.0);
     final size = Size(width, height);
 
     // If no saved position, center the window
@@ -91,27 +92,26 @@ class WindowStateService with WindowListener {
       );
     }
 
-    // Basic sanity check: position should be reasonable
-    // We can't fully validate without screen info, but we can check for clearly invalid values
-    final x = state.position!.dx;
-    final y = state.position!.dy;
+    // Validate position
+    var x = state.position!.dx;
+    var y = state.position!.dy;
 
-    // If position is extremely negative or very large, it's likely off-screen
-    // Most monitors are less than 10000 pixels wide/tall
-    if (x < -width || y < -height || x > 10000 || y > 10000) {
-      LogService().log('Window position ($x, $y) seems off-screen, centering');
-      return WindowState(
-        size: size,
-        position: null,
-        shouldCenter: true,
-        isMaximized: state.isMaximized,
-      );
+    // Ensure window is at least partially visible
+    // X: at least 100px of the window should be visible from the left
+    // Y: must be >= 0 (don't go above screen top) and leave room for title bar
+    if (x < -width + 100) x = 0;
+    if (x > 3800) x = 100; // Don't start too far right on even the largest screens
+    if (y < 0) y = 0;
+    if (y > 2000) y = 100; // Don't start too far down
+
+    // If position was adjusted significantly, log it
+    if (x != state.position!.dx || y != state.position!.dy) {
+      LogService().log('Window position adjusted from (${state.position!.dx}, ${state.position!.dy}) to ($x, $y)');
     }
 
-    // Position seems reasonable, use it
     return WindowState(
       size: size,
-      position: state.position,
+      position: Offset(x, y),
       shouldCenter: false,
       isMaximized: state.isMaximized,
     );
@@ -145,7 +145,7 @@ class WindowStateService with WindowListener {
     });
   }
 
-  /// Save current window state immediately
+  /// Save current window state immediately (and flush to disk)
   Future<void> _saveCurrentState() async {
     try {
       final size = await windowManager.getSize();
@@ -155,6 +155,9 @@ class WindowStateService with WindowListener {
       _config.setNestedValue(_keyWindowHeight, size.height);
       _config.setNestedValue(_keyWindowX, position.dx);
       _config.setNestedValue(_keyWindowY, position.dy);
+
+      // Force immediate save to disk (don't rely on ConfigService debounce)
+      await _config.saveNow();
 
       LogService().log('WindowStateService: Saved window state - ${size.width}x${size.height} at (${position.dx}, ${position.dy})');
     } catch (e) {
@@ -166,6 +169,7 @@ class WindowStateService with WindowListener {
   void _saveMaximizedState(bool maximized) {
     _isMaximized = maximized;
     _config.setNestedValue(_keyIsMaximized, maximized);
+    _config.saveNow(); // Persist immediately
     LogService().log('WindowStateService: Saved maximized state: $maximized');
   }
 
@@ -197,9 +201,12 @@ class WindowStateService with WindowListener {
 
   @override
   void onWindowClose() {
-    // Save state one more time before closing
+    // Save state immediately before closing
     _saveDebounceTimer?.cancel();
-    _saveCurrentState();
+    // Only save size/position if not maximized (we want to preserve the unmaximized dimensions)
+    if (!_isMaximized) {
+      _saveCurrentState();
+    }
   }
 
   @override

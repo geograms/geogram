@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.6.71+1
+version: 1.6.72+1
 
 environment:
   sdk: ^3.10.0
@@ -72,6 +72,8 @@ dependencies:
   image_picker: ^1.1.2           # Camera + gallery image picker for bot vision
   image: ^4.3.0                  # Image preprocessing for vision models
   tflite_flutter: ^0.11.0        # TensorFlow Lite for lightweight vision models
+  flutter_onnxruntime: ^1.6.1    # ONNX Runtime for offline music generation
+  unorm_dart: ^0.3.2             # Unicode normalization for MusicGen tokenizer
 
 dev_dependencies:
   flutter_test:
@@ -110,10 +112,10 @@ flutter:
   # the material Icons class.
   uses-material-design: true
 
-  # Language files for internationalization
+  # Language files for internationalization (per-feature structure)
   assets:
-    - languages/en_US.json
-    - languages/pt_PT.json
+    - languages/en_US/
+    - languages/pt_PT/
     - assets/worldcities.csv
     - assets/default_profile.png
     - assets/geogram-icon-dark.svg

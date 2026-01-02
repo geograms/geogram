@@ -512,11 +512,11 @@ class AudioService {
       // Track which file is now loaded
       _currentPlaybackPath = filePath;
 
-      // On Linux with local OGG files, use ALSA player
+      // On Linux with local OGG or WAV files, use ALSA player
       if (isLinuxPlatform &&
           AlsaPlayer.isAvailable &&
           !filePath.startsWith('http') &&
-          filePath.endsWith('.ogg')) {
+          (filePath.endsWith('.ogg') || filePath.endsWith('.wav'))) {
         return await _loadAlsa(filePath);
       }
 
@@ -541,17 +541,30 @@ class AudioService {
     }
   }
 
-  /// Load OGG/Opus file for ALSA playback on Linux.
+  /// Load OGG/Opus or WAV file for ALSA playback on Linux.
   Future<Duration?> _loadAlsa(String filePath) async {
     try {
-      // Use platform-specific decoding (native only, returns null on web)
-      final result = await decodeOggOpus(filePath);
-      if (result == null) {
-        LogService().log('AudioService: Failed to decode OGG/Opus file');
-        return null;
-      }
+      Int16List samples;
+      int sampleRate;
+      int channels;
 
-      final (samples, sampleRate, channels) = result;
+      if (filePath.endsWith('.wav')) {
+        // Load WAV file directly
+        final wavResult = await _loadWavFile(filePath);
+        if (wavResult == null) {
+          LogService().log('AudioService: Failed to load WAV file');
+          return null;
+        }
+        (samples, sampleRate, channels) = wavResult;
+      } else {
+        // Use platform-specific decoding for OGG (native only, returns null on web)
+        final result = await decodeOggOpus(filePath);
+        if (result == null) {
+          LogService().log('AudioService: Failed to decode OGG/Opus file');
+          return null;
+        }
+        (samples, sampleRate, channels) = result;
+      }
 
       // Initialize ALSA player
       _alsaPlayer = AlsaPlayer();
@@ -692,6 +705,117 @@ class AudioService {
       return duration;
     } catch (e) {
       LogService().log('AudioService: Failed to get file duration: $e');
+      return null;
+    }
+  }
+
+  /// Load a WAV file and extract PCM samples.
+  /// Returns (samples, sampleRate, channels) or null on failure.
+  Future<(Int16List, int, int)?> _loadWavFile(String filePath) async {
+    try {
+      final file = PlatformFile(filePath);
+      if (!await file.exists()) {
+        LogService().log('AudioService: WAV file not found: $filePath');
+        return null;
+      }
+
+      final bytes = await file.readAsBytes();
+      if (bytes.length < 44) {
+        LogService().log('AudioService: WAV file too small');
+        return null;
+      }
+
+      final data = ByteData.view(bytes.buffer);
+
+      // Verify RIFF header
+      if (bytes[0] != 0x52 || bytes[1] != 0x49 || bytes[2] != 0x46 || bytes[3] != 0x46) {
+        LogService().log('AudioService: Invalid WAV file - missing RIFF header');
+        return null;
+      }
+
+      // Verify WAVE format
+      if (bytes[8] != 0x57 || bytes[9] != 0x41 || bytes[10] != 0x56 || bytes[11] != 0x45) {
+        LogService().log('AudioService: Invalid WAV file - missing WAVE format');
+        return null;
+      }
+
+      // Parse fmt chunk (starts at offset 12)
+      // Skip to find 'fmt ' chunk
+      var offset = 12;
+      while (offset < bytes.length - 8) {
+        if (bytes[offset] == 0x66 && bytes[offset + 1] == 0x6D &&
+            bytes[offset + 2] == 0x74 && bytes[offset + 3] == 0x20) {
+          break;
+        }
+        offset++;
+      }
+
+      if (offset >= bytes.length - 8) {
+        LogService().log('AudioService: Invalid WAV file - fmt chunk not found');
+        return null;
+      }
+
+      offset += 4; // Skip 'fmt '
+      final fmtChunkSize = data.getUint32(offset, Endian.little);
+      offset += 4;
+
+      final audioFormat = data.getUint16(offset, Endian.little);
+      if (audioFormat != 1) {
+        LogService().log('AudioService: Unsupported WAV format: $audioFormat (only PCM supported)');
+        return null;
+      }
+      offset += 2;
+
+      final channels = data.getUint16(offset, Endian.little);
+      offset += 2;
+
+      final sampleRate = data.getUint32(offset, Endian.little);
+      offset += 4;
+
+      offset += 4; // Skip byte rate
+      offset += 2; // Skip block align
+
+      final bitsPerSample = data.getUint16(offset, Endian.little);
+      if (bitsPerSample != 16) {
+        LogService().log('AudioService: Unsupported bits per sample: $bitsPerSample (only 16-bit supported)');
+        return null;
+      }
+
+      // Skip to end of fmt chunk
+      offset = 12 + 8 + fmtChunkSize;
+
+      // Find data chunk
+      while (offset < bytes.length - 8) {
+        if (bytes[offset] == 0x64 && bytes[offset + 1] == 0x61 &&
+            bytes[offset + 2] == 0x74 && bytes[offset + 3] == 0x61) {
+          break;
+        }
+        offset++;
+      }
+
+      if (offset >= bytes.length - 8) {
+        LogService().log('AudioService: Invalid WAV file - data chunk not found');
+        return null;
+      }
+
+      offset += 4; // Skip 'data'
+      final dataSize = data.getUint32(offset, Endian.little);
+      offset += 4;
+
+      // Read PCM samples
+      final numSamples = dataSize ~/ 2;
+      final samples = Int16List(numSamples);
+
+      for (var i = 0; i < numSamples && offset + 1 < bytes.length; i++) {
+        samples[i] = data.getInt16(offset, Endian.little);
+        offset += 2;
+      }
+
+      LogService().log('AudioService: Loaded WAV file: $sampleRate Hz, $channels ch, ${samples.length} samples');
+      return (samples, sampleRate, channels);
+    } catch (e, stackTrace) {
+      LogService().log('AudioService: Error loading WAV file: $e');
+      LogService().log('AudioService: Stack trace: $stackTrace');
       return null;
     }
   }

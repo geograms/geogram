@@ -17,6 +17,7 @@ import '../services/user_location_service.dart';
 import '../services/security_service.dart';
 import '../services/backup_service.dart';
 import '../services/ble_foreground_service.dart';
+import '../services/station_service.dart';
 import '../util/nostr_event.dart';
 import '../util/tlsh.dart';
 import '../util/event_bus.dart';
@@ -1184,9 +1185,31 @@ class WebSocketService {
       _sendPing();
     };
 
-    // Enable keep-alive in the foreground service
-    foregroundService.enableKeepAlive();
-    LogService().log('WebSocket: Enabled foreground service keep-alive');
+    // Extract station info for the notification
+    String? stationName;
+    String? stationHost;
+    if (_stationUrl != null) {
+      try {
+        final uri = Uri.parse(_stationUrl!);
+        stationHost = uri.host;
+        // Try to get the friendly name from StationService
+        final stationService = StationService();
+        final stations = stationService.getAllStations();
+        final station = stations.where((s) => s.url == _stationUrl).firstOrNull;
+        if (station != null && station.name.isNotEmpty) {
+          stationName = station.name;
+        }
+      } catch (_) {
+        // Ignore parsing errors
+      }
+    }
+
+    // Enable keep-alive in the foreground service with station info
+    foregroundService.enableKeepAlive(
+      stationName: stationName,
+      stationUrl: stationHost,
+    );
+    LogService().log('WebSocket: Enabled foreground service keep-alive for ${stationName ?? stationHost ?? "station"}');
   }
 
   /// Disable Android foreground service keep-alive for WebSocket

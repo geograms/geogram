@@ -78,20 +78,20 @@ class MusicOnnxService {
     _tokenizer = await MusicGenTokenizer.load(modelDir);
 
     final textEncoderPath = _resolveFile(modelDir, const [
-      'onnx/text_encoder_quantized.onnx',
       'onnx/text_encoder.onnx',
+      'onnx/text_encoder_quantized.onnx',
     ]);
     final decoderPath = _resolveFile(modelDir, const [
-      'onnx/decoder_model_quantized.onnx',
       'onnx/decoder_model.onnx',
+      'onnx/decoder_model_quantized.onnx',
     ]);
     final decoderWithPastPath = _resolveFile(modelDir, const [
-      'onnx/decoder_with_past_model_quantized.onnx',
       'onnx/decoder_with_past_model.onnx',
+      'onnx/decoder_with_past_model_quantized.onnx',
     ]);
     final encodecPath = _resolveFile(modelDir, const [
-      'onnx/encodec_decode_quantized.onnx',
       'onnx/encodec_decode.onnx',
+      'onnx/encodec_decode_quantized.onnx',
     ]);
 
     _textEncoder = await _ort.createSession(textEncoderPath);

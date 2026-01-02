@@ -9,6 +9,8 @@ import 'package:http/http.dart' as http;
 import 'package:markdown/markdown.dart' as md;
 import 'package:path/path.dart' as path;
 import 'pure_storage_config.dart';
+import '../bot/models/music_model_info.dart';
+import '../bot/models/vision_model_info.dart';
 import '../models/blog_post.dart';
 import '../models/event.dart';
 import '../models/report.dart';
@@ -1959,6 +1961,8 @@ class PureStationServer {
         _stats.totalTileRequests++;
         _stats.lastTileRequest = DateTime.now();
         await _handleTileRequest(request);
+      } else if (path.startsWith('/bot/models/')) {
+        await _handleBotModelRequest(request);
       } else if (path == '/api/cli' && method == 'POST') {
         await _handleCliCommand(request);
       } else if (path == '/alerts') {
@@ -7052,6 +7056,191 @@ class PureStationServer {
 
     request.response.statusCode = 404;
     request.response.write('Tile not found');
+  }
+
+  // ============================================================
+  // Bot Model Hosting (CLI Station)
+  // ============================================================
+
+  Future<void> _handleBotModelRequest(HttpRequest request) async {
+    if (request.method != 'GET') {
+      request.response.statusCode = 405;
+      request.response.write('Method not allowed');
+      return;
+    }
+
+    if (_dataDir == null) {
+      request.response.statusCode = 500;
+      request.response.write('Server not initialized');
+      return;
+    }
+
+    final segments = request.uri.pathSegments;
+    if (segments.length < 4 || segments[0] != 'bot' || segments[1] != 'models') {
+      request.response.statusCode = 400;
+      request.response.write('Invalid model path');
+      return;
+    }
+
+    final modelType = segments[2];
+    if (modelType != 'vision' && modelType != 'music') {
+      request.response.statusCode = 400;
+      request.response.write('Invalid model type');
+      return;
+    }
+
+    final baseDir = path.join(_dataDir!, 'bot', 'models', modelType);
+    String modelPath;
+    String filename;
+    String modelId;
+    String? relativePath;
+
+    if (segments.length == 4) {
+      // Legacy single-file models: /bot/models/{type}/{filename}
+      filename = segments[3];
+      modelId = filename.split('.').first;
+      relativePath = filename;
+      modelPath = path.normalize(path.join(baseDir, filename));
+      if (!path.isWithin(baseDir, modelPath)) {
+        request.response.statusCode = 400;
+        request.response.write('Invalid model path');
+        return;
+      }
+    } else {
+      // Multi-file models: /bot/models/{type}/{modelId}/{path...}
+      modelId = segments[3];
+      relativePath = segments.sublist(4).join('/');
+      final modelDir = path.join(baseDir, modelId);
+      modelPath = path.normalize(path.join(modelDir, relativePath));
+      if (!path.isWithin(modelDir, modelPath)) {
+        request.response.statusCode = 400;
+        request.response.write('Invalid model path');
+        return;
+      }
+      filename = path.basename(modelPath);
+    }
+
+    final file = File(modelPath);
+    if (!await file.exists()) {
+      final url = _resolveBotModelUrl(modelType, modelId, relativePath);
+      if (url == null || url.isEmpty) {
+        request.response.statusCode = 404;
+        request.response.write('Model not found: $filename');
+        return;
+      }
+
+      try {
+        _log('INFO', 'Bot model cache miss: $modelType/$modelId/$filename');
+        await _streamAndCacheModel(url, modelPath, filename, request.response);
+        return;
+      } catch (e) {
+        _log('ERROR', 'Bot model download failed: $modelType/$modelId/$filename: $e');
+        request.response.statusCode = 500;
+        request.response.write('Error downloading model');
+        return;
+      }
+    }
+
+    try {
+      final fileSize = await file.length();
+      request.response.headers.contentType =
+          ContentType('application', 'octet-stream');
+      request.response.headers.contentLength = fileSize;
+      request.response.headers.add(
+          'Content-Disposition', 'attachment; filename="$filename"');
+      await request.response.addStream(file.openRead());
+      _log('INFO',
+          'Served bot model $filename (${_formatBytes(fileSize)})');
+    } catch (e) {
+      _log('ERROR', 'Error serving bot model $filename: $e');
+      request.response.statusCode = 500;
+      request.response.write('Error serving model');
+    }
+  }
+
+  String? _resolveBotModelUrl(
+    String modelType,
+    String modelId,
+    String? relativePath,
+  ) {
+    if (modelType == 'vision') {
+      final model = VisionModels.getById(modelId);
+      return model?.url;
+    }
+
+    if (modelType == 'music') {
+      final model = MusicModels.getById(modelId);
+      if (model == null) return null;
+      if (model.repoId != null && model.repoId!.isNotEmpty) {
+        final resolvedPath = relativePath ?? '';
+        if (resolvedPath.isEmpty) return null;
+        return 'https://huggingface.co/${model.repoId}/resolve/main/$resolvedPath';
+      }
+      return model.url;
+    }
+
+    return null;
+  }
+
+  Future<void> _streamAndCacheModel(
+    String url,
+    String targetPath,
+    String filename,
+    HttpResponse response,
+  ) async {
+    final tempPath = '$targetPath.tmp';
+    final tempFile = File(tempPath);
+    await tempFile.parent.create(recursive: true);
+
+    final client = http.Client();
+    try {
+      final upstream = await client.send(http.Request('GET', Uri.parse(url)));
+      if (upstream.statusCode < 200 || upstream.statusCode >= 300) {
+        throw Exception('HTTP ${upstream.statusCode}');
+      }
+
+      response.headers.contentType =
+          ContentType('application', 'octet-stream');
+      if (upstream.contentLength != null && upstream.contentLength! > 0) {
+        response.headers.contentLength = upstream.contentLength!;
+      }
+      response.headers.add(
+          'Content-Disposition', 'attachment; filename="$filename"');
+
+      final sink = tempFile.openWrite();
+      var totalBytes = 0;
+      await for (final chunk in upstream.stream) {
+        response.add(chunk);
+        sink.add(chunk);
+        totalBytes += chunk.length;
+      }
+
+      await sink.close();
+      await tempFile.rename(targetPath);
+      _log('INFO',
+          'Cached bot model $filename (${_formatBytes(totalBytes)})');
+    } catch (e) {
+      if (await tempFile.exists()) {
+        try {
+          await tempFile.delete();
+        } catch (_) {}
+      }
+      rethrow;
+    } finally {
+      client.close();
+    }
+  }
+
+  String _formatBytes(int bytes) {
+    if (bytes < 1024) {
+      return '$bytes B';
+    } else if (bytes < 1024 * 1024) {
+      return '${(bytes / 1024).toStringAsFixed(1)} KB';
+    } else if (bytes < 1024 * 1024 * 1024) {
+      return '${(bytes / (1024 * 1024)).toStringAsFixed(0)} MB';
+    } else {
+      return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(1)} GB';
+    }
   }
 
   Future<Uint8List?> _fetchTileFromInternet(int z, int x, int y, bool satellite) async {

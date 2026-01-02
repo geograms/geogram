@@ -6,10 +6,14 @@
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import '../bot/models/bot_message.dart';
 import '../bot/services/bot_service.dart';
+import '../services/config_service.dart';
 import '../services/i18n_service.dart';
+import '../widgets/music_player_widget.dart';
+import '../widgets/music_progress_widget.dart';
 import 'bot_settings_page.dart';
 
 /// Bot chat page - main interface for talking to the AI assistant
@@ -33,6 +37,13 @@ class _BotPageState extends State<BotPage> {
   bool _isInitialized = false;
   String? _selectedImagePath;
 
+  // Command history for CLI-like navigation
+  static const String _historyKey = 'bot_command_history';
+  static const int _maxHistorySize = 50;
+  final List<String> _commandHistory = [];
+  int _historyIndex = -1;
+  String _currentInput = '';
+
   @override
   void initState() {
     super.initState();
@@ -51,6 +62,9 @@ class _BotPageState extends State<BotPage> {
   Future<void> _initialize() async {
     await _botService.initialize();
 
+    // Load command history from storage
+    _loadCommandHistory();
+
     _messagesSubscription = _botService.messagesStream.listen((messages) {
       if (mounted) {
         setState(() {
@@ -64,20 +78,39 @@ class _BotPageState extends State<BotPage> {
       _messages = _botService.messages;
       _isInitialized = true;
     });
+
+    // Scroll to bottom after initialization
+    _scrollToBottom();
+  }
+
+  /// Load command history from persistent storage
+  void _loadCommandHistory() {
+    final history = ConfigService().get(_historyKey);
+    if (history is List) {
+      _commandHistory.clear();
+      _commandHistory.addAll(history.cast<String>());
+    }
+  }
+
+  /// Save command history to persistent storage
+  void _saveCommandHistory() {
+    // Keep only the last _maxHistorySize commands
+    while (_commandHistory.length > _maxHistorySize) {
+      _commandHistory.removeAt(0);
+    }
+    ConfigService().set(_historyKey, _commandHistory);
   }
 
   void _scrollToBottom() {
-    if (_scrollController.hasClients) {
-      Future.delayed(const Duration(milliseconds: 100), () {
-        if (_scrollController.hasClients) {
-          _scrollController.animateTo(
-            _scrollController.position.maxScrollExtent,
-            duration: const Duration(milliseconds: 300),
-            curve: Curves.easeOut,
-          );
-        }
-      });
-    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_scrollController.hasClients) {
+        _scrollController.animateTo(
+          _scrollController.position.maxScrollExtent,
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeOut,
+        );
+      }
+    });
   }
 
   Future<void> _sendMessage() async {
@@ -85,6 +118,17 @@ class _BotPageState extends State<BotPage> {
     final imagePath = _selectedImagePath;
 
     if (content.isEmpty && imagePath == null) return;
+
+    // Add to command history (avoid duplicates of last command)
+    if (content.isNotEmpty) {
+      if (_commandHistory.isEmpty || _commandHistory.last != content) {
+        _commandHistory.add(content);
+        _saveCommandHistory();
+      }
+    }
+    // Reset history navigation
+    _historyIndex = -1;
+    _currentInput = '';
 
     _inputController.clear();
     setState(() {
@@ -94,6 +138,57 @@ class _BotPageState extends State<BotPage> {
     if (mounted) {
       setState(() {}); // Trigger rebuild when processing complete
     }
+  }
+
+  /// Handle keyboard events for command history navigation
+  KeyEventResult _handleKeyEvent(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent) return KeyEventResult.ignored;
+
+    if (event.logicalKey == LogicalKeyboardKey.arrowUp) {
+      _navigateHistoryUp();
+      return KeyEventResult.handled;
+    } else if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
+      _navigateHistoryDown();
+      return KeyEventResult.handled;
+    }
+
+    return KeyEventResult.ignored;
+  }
+
+  /// Navigate to previous command in history
+  void _navigateHistoryUp() {
+    if (_commandHistory.isEmpty) return;
+
+    if (_historyIndex == -1) {
+      // Save current input before navigating
+      _currentInput = _inputController.text;
+      _historyIndex = _commandHistory.length - 1;
+    } else if (_historyIndex > 0) {
+      _historyIndex--;
+    }
+
+    _inputController.text = _commandHistory[_historyIndex];
+    _inputController.selection = TextSelection.fromPosition(
+      TextPosition(offset: _inputController.text.length),
+    );
+  }
+
+  /// Navigate to next command in history
+  void _navigateHistoryDown() {
+    if (_historyIndex == -1) return;
+
+    if (_historyIndex < _commandHistory.length - 1) {
+      _historyIndex++;
+      _inputController.text = _commandHistory[_historyIndex];
+    } else {
+      // Return to current input
+      _historyIndex = -1;
+      _inputController.text = _currentInput;
+    }
+
+    _inputController.selection = TextSelection.fromPosition(
+      TextPosition(offset: _inputController.text.length),
+    );
   }
 
   Future<void> _pickImage() async {
@@ -266,6 +361,7 @@ class _BotPageState extends State<BotPage> {
                 _buildSuggestionChip(_i18n.t('bot_example_events')),
                 _buildSuggestionChip(_i18n.t('bot_example_distance')),
                 _buildSuggestionChip('Where am I?'),
+                _buildSuggestionChip('Play jazz music'),
               ],
             ),
           ],
@@ -410,6 +506,28 @@ class _BotPageState extends State<BotPage> {
                           : colorScheme.onSurface,
                 ),
               ),
+            // Display music player if track is available
+            if (message.hasMusic)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: MusicPlayerWidget(
+                  track: message.musicTrack!,
+                  backgroundColor: colorScheme.surfaceContainerHighest,
+                ),
+              ),
+            // Display music generation progress if generating
+            if (message.hasMusicGenerating)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: MusicProgressWidget(
+                  stateStream: message.musicGenerationStream!,
+                  backgroundColor: colorScheme.surfaceContainerHighest,
+                  onComplete: (track) {
+                    // Update the message with the completed track and save
+                    _botService.updateMusicMessage(message.id, track);
+                  },
+                ),
+              ),
             if (message.sources.isNotEmpty)
               Padding(
                 padding: const EdgeInsets.only(top: 8),
@@ -474,27 +592,30 @@ class _BotPageState extends State<BotPage> {
                   tooltip: _i18n.t('bot_take_photo'),
                 ),
                 Expanded(
-                  child: TextField(
-                    controller: _inputController,
-                    focusNode: _inputFocusNode,
-                    decoration: InputDecoration(
-                      hintText: _selectedImagePath != null
-                          ? _i18n.t('bot_ask_about_image')
-                          : _i18n.t('bot_ask_placeholder'),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(24),
-                        borderSide: BorderSide.none,
+                  child: Focus(
+                    onKeyEvent: _handleKeyEvent,
+                    child: TextField(
+                      controller: _inputController,
+                      focusNode: _inputFocusNode,
+                      decoration: InputDecoration(
+                        hintText: _selectedImagePath != null
+                            ? _i18n.t('bot_ask_about_image')
+                            : _i18n.t('bot_ask_placeholder'),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(24),
+                          borderSide: BorderSide.none,
+                        ),
+                        filled: true,
+                        fillColor: colorScheme.surfaceContainerHighest,
+                        contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 8,
+                        ),
                       ),
-                      filled: true,
-                      fillColor: colorScheme.surfaceContainerHighest,
-                      contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 16,
-                        vertical: 8,
-                      ),
+                      textInputAction: TextInputAction.send,
+                      onSubmitted: (_) => _sendMessage(),
+                      enabled: !_botService.isProcessing,
                     ),
-                    textInputAction: TextInputAction.send,
-                    onSubmitted: (_) => _sendMessage(),
-                    enabled: !_botService.isProcessing,
                   ),
                 ),
                 const SizedBox(width: 8),

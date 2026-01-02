@@ -367,3 +367,147 @@ class ChatMessagesLoadedEvent extends AppEvent {
     required this.messageCount,
   });
 }
+
+// ============================================================
+// Transfer Events
+// ============================================================
+
+/// Transfer direction for events
+enum TransferEventDirection { upload, download, stream }
+
+/// Transfer requested event - fired when a new transfer is queued
+class TransferRequestedEvent extends AppEvent {
+  final String transferId;
+  final TransferEventDirection direction;
+  final String callsign;
+  final String path;
+  final String? requestingApp;
+
+  TransferRequestedEvent({
+    required this.transferId,
+    required this.direction,
+    required this.callsign,
+    required this.path,
+    this.requestingApp,
+  });
+
+  @override
+  String toString() =>
+      'TransferRequestedEvent(id: $transferId, direction: $direction, callsign: $callsign)';
+}
+
+/// Transfer progress update event
+class TransferProgressEvent extends AppEvent {
+  final String transferId;
+  final String status;
+  final int bytesTransferred;
+  final int totalBytes;
+  final double? speedBytesPerSecond;
+  final Duration? eta;
+
+  TransferProgressEvent({
+    required this.transferId,
+    required this.status,
+    required this.bytesTransferred,
+    required this.totalBytes,
+    this.speedBytesPerSecond,
+    this.eta,
+  });
+
+  double get progressPercent =>
+      totalBytes > 0 ? (bytesTransferred / totalBytes * 100) : 0;
+
+  @override
+  String toString() =>
+      'TransferProgressEvent(id: $transferId, progress: ${progressPercent.toStringAsFixed(1)}%)';
+}
+
+/// Transfer completed successfully
+class TransferCompletedEvent extends AppEvent {
+  final String transferId;
+  final TransferEventDirection direction;
+  final String callsign;
+  final String localPath;
+  final int totalBytes;
+  final Duration duration;
+  final String transportUsed;
+  final String? requestingApp;
+  final Map<String, dynamic>? metadata;
+
+  TransferCompletedEvent({
+    required this.transferId,
+    required this.direction,
+    required this.callsign,
+    required this.localPath,
+    required this.totalBytes,
+    required this.duration,
+    required this.transportUsed,
+    this.requestingApp,
+    this.metadata,
+  });
+
+  @override
+  String toString() =>
+      'TransferCompletedEvent(id: $transferId, callsign: $callsign, bytes: $totalBytes)';
+}
+
+/// Transfer failed
+class TransferFailedEvent extends AppEvent {
+  final String transferId;
+  final TransferEventDirection direction;
+  final String callsign;
+  final String path;
+  final String error;
+  final bool willRetry;
+  final DateTime? nextRetryAt;
+  final String? requestingApp;
+
+  TransferFailedEvent({
+    required this.transferId,
+    required this.direction,
+    required this.callsign,
+    required this.path,
+    required this.error,
+    required this.willRetry,
+    this.nextRetryAt,
+    this.requestingApp,
+  });
+
+  @override
+  String toString() =>
+      'TransferFailedEvent(id: $transferId, error: $error, willRetry: $willRetry)';
+}
+
+/// Transfer cancelled by user
+class TransferCancelledEvent extends AppEvent {
+  final String transferId;
+  final String? requestingApp;
+
+  TransferCancelledEvent({
+    required this.transferId,
+    this.requestingApp,
+  });
+
+  @override
+  String toString() => 'TransferCancelledEvent(id: $transferId)';
+}
+
+/// Transfer paused by user
+class TransferPausedEvent extends AppEvent {
+  final String transferId;
+
+  TransferPausedEvent({required this.transferId});
+
+  @override
+  String toString() => 'TransferPausedEvent(id: $transferId)';
+}
+
+/// Transfer resumed by user
+class TransferResumedEvent extends AppEvent {
+  final String transferId;
+
+  TransferResumedEvent({required this.transferId});
+
+  @override
+  String toString() => 'TransferResumedEvent(id: $transferId)';
+}

@@ -12,6 +12,9 @@
 -dontwarn org.tensorflow.**
 -dontwarn org.tensorflow.lite.gpu.GpuDelegateFactory$Options
 
+# ONNX Runtime rules
+-keep class ai.onnxruntime.** { *; }
+
 # Keep TFLite Flutter plugin
 -keep class com.tfliteflutter.** { *; }
 -dontwarn com.tfliteflutter.**

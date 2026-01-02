@@ -60,6 +60,7 @@ class _MusicPlayerWidgetState extends State<MusicPlayerWidget> {
     super.initState();
     _duration = widget.track.duration;
     _setupPlayer();
+    _syncInitialState();
   }
 
   void _setupPlayer() {
@@ -115,6 +116,18 @@ class _MusicPlayerWidgetState extends State<MusicPlayerWidget> {
       setState(() {
         _position = pos;
       });
+    });
+  }
+
+  void _syncInitialState() {
+    final isOurTrack =
+        _audioService.currentPlaybackPath == widget.track.filePath;
+    if (!isOurTrack || !_audioService.isPlaying) return;
+
+    _startPositionTimer();
+    setState(() {
+      _state = _PlayerState.playing;
+      _position = _audioService.position;
     });
   }
 
@@ -337,8 +350,9 @@ class _MusicPlayerWidgetState extends State<MusicPlayerWidget> {
                   ],
                 ),
               ),
-              if (_state == _PlayerState.playing ||
-                  _state == _PlayerState.paused) ...[
+              if ((_state == _PlayerState.playing ||
+                      _state == _PlayerState.paused) &&
+                  _audioService.currentPlaybackPath == widget.track.filePath) ...[
                 const SizedBox(width: 12),
                 Material(
                   color: fgColor.withOpacity(0.15),

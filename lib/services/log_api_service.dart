@@ -42,6 +42,10 @@ import 'station_blog_api.dart';
 import 'station_service.dart';
 import 'station_server_service.dart';
 import 'websocket_service.dart';
+import '../bot/models/music_model_info.dart';
+import '../bot/models/vision_model_info.dart';
+import '../bot/services/music_model_manager.dart';
+import '../bot/services/vision_model_manager.dart';
 import '../models/station.dart';
 import '../util/alert_folder_utils.dart';
 import '../util/feedback_comment_utils.dart';
@@ -57,6 +61,8 @@ class LogApiService {
 
   /// Track when the service started for uptime calculation
   DateTime? _startTime;
+
+  final Map<String, StreamSubscription<double>> _botDownloadSubscriptions = {};
 
   /// Get the configured port from AppArgs (defaults to 3456)
   int get port => AppArgs().port;
@@ -1186,6 +1192,11 @@ class LogApiService {
         return await _handleStationAction(action.toLowerCase(), params, headers);
       }
 
+      // Handle bot actions separately (they are async)
+      if (action.toLowerCase().startsWith('bot_')) {
+        return await _handleBotAction(action.toLowerCase(), params, headers);
+      }
+
       // Handle device actions separately (they are async)
       if (action.toLowerCase().startsWith('device_')) {
         return await _handleDeviceAction(action.toLowerCase(), params, headers);
@@ -1212,6 +1223,176 @@ class LogApiService {
         headers: headers,
       );
     }
+  }
+
+  // ============================================================
+  // Bot Model Debug Actions
+  // ============================================================
+
+  Future<shelf.Response> _handleBotAction(
+    String action,
+    Map<String, dynamic> params,
+    Map<String, String> headers,
+  ) async {
+    if (action != 'bot_download_model' &&
+        action != 'bot_download_vision' &&
+        action != 'bot_download_music') {
+      return shelf.Response.badRequest(
+        body: jsonEncode({
+          'error': 'Unknown bot action: $action',
+          'available_actions': ['bot_download_model', 'bot_download_vision', 'bot_download_music'],
+        }),
+        headers: headers,
+      );
+    }
+
+    final modelId = (params['model_id'] ?? params['id']) as String?;
+    if (modelId == null || modelId.isEmpty) {
+      return shelf.Response.badRequest(
+        body: jsonEncode({'error': 'Missing model_id parameter'}),
+        headers: headers,
+      );
+    }
+
+    String? modelType = params['model_type'] as String?;
+    if (action == 'bot_download_vision') {
+      modelType = 'vision';
+    } else if (action == 'bot_download_music') {
+      modelType = 'music';
+    }
+
+    if (modelType == null || modelType.isEmpty) {
+      return shelf.Response.badRequest(
+        body: jsonEncode({'error': 'Missing model_type parameter (vision|music)'}),
+        headers: headers,
+      );
+    }
+
+    final normalizedType = modelType.toLowerCase();
+    final stationUrl = params['station_url'] as String?;
+    final stationCallsign = params['station_callsign'] as String?;
+    final key = '$normalizedType:$modelId';
+
+    if (_botDownloadSubscriptions.containsKey(key)) {
+      return shelf.Response.ok(
+        jsonEncode({
+          'success': true,
+          'message': 'Download already in progress',
+          'model_type': normalizedType,
+          'model_id': modelId,
+        }),
+        headers: headers,
+      );
+    }
+
+    if (normalizedType == 'vision') {
+      final model = VisionModels.getById(modelId);
+      if (model == null) {
+        return shelf.Response.badRequest(
+          body: jsonEncode({'error': 'Unknown vision model: $modelId'}),
+          headers: headers,
+        );
+      }
+
+      final manager = VisionModelManager();
+      final stream = manager.downloadModel(
+        modelId,
+        stationUrl: stationUrl,
+        stationCallsign: stationCallsign,
+      );
+
+      _botDownloadSubscriptions[key] =
+          _trackBotDownload(stream, key, normalizedType, modelId);
+
+      return shelf.Response.ok(
+        jsonEncode({
+          'success': true,
+          'message': 'Vision model download started',
+          'model_type': normalizedType,
+          'model_id': modelId,
+          'transfer_id': manager.getTransferId(modelId),
+        }),
+        headers: headers,
+      );
+    }
+
+    if (normalizedType == 'music') {
+      final model = MusicModels.getById(modelId);
+      if (model == null) {
+        return shelf.Response.badRequest(
+          body: jsonEncode({'error': 'Unknown music model: $modelId'}),
+          headers: headers,
+        );
+      }
+
+      if (model.isNative) {
+        return shelf.Response.ok(
+          jsonEncode({
+            'success': true,
+            'message': 'Model is native and does not require download',
+            'model_type': normalizedType,
+            'model_id': modelId,
+          }),
+          headers: headers,
+        );
+      }
+
+      final manager = MusicModelManager();
+      final stream = manager.downloadModel(
+        modelId,
+        stationUrl: stationUrl,
+        stationCallsign: stationCallsign,
+      );
+
+      _botDownloadSubscriptions[key] =
+          _trackBotDownload(stream, key, normalizedType, modelId);
+
+      return shelf.Response.ok(
+        jsonEncode({
+          'success': true,
+          'message': 'Music model download started',
+          'model_type': normalizedType,
+          'model_id': modelId,
+          'transfer_ids': manager.getTransferIds(modelId) ?? [],
+        }),
+        headers: headers,
+      );
+    }
+
+    return shelf.Response.badRequest(
+      body: jsonEncode({'error': 'Invalid model_type: $normalizedType'}),
+      headers: headers,
+    );
+  }
+
+  StreamSubscription<double> _trackBotDownload(
+    Stream<double> stream,
+    String key,
+    String modelType,
+    String modelId,
+  ) {
+    var lastLoggedPercent = -1;
+    return stream.listen(
+      (progress) {
+        final percent = (progress * 100).floor();
+        if (percent - lastLoggedPercent >= 5 || percent == 100) {
+          lastLoggedPercent = percent;
+          LogService()
+              .log('DebugBotDownload: $modelType/$modelId ${percent.toString()}%');
+        }
+      },
+      onError: (error) {
+        _botDownloadSubscriptions.remove(key);
+        LogService()
+            .log('DebugBotDownload: $modelType/$modelId failed: $error');
+      },
+      onDone: () {
+        _botDownloadSubscriptions.remove(key);
+        LogService()
+            .log('DebugBotDownload: $modelType/$modelId completed');
+      },
+      cancelOnError: true,
+    );
   }
 
   // ============================================================

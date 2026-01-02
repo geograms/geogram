@@ -44,7 +44,9 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
     _CollectionTypeInfo('alerts', Icons.campaign),
     _CollectionTypeInfo('news', Icons.newspaper),
     _CollectionTypeInfo('www', Icons.language),
+    _CollectionTypeInfo('inventory', Icons.inventory_2),
     _CollectionTypeInfo('backup', Icons.backup),
+    _CollectionTypeInfo('transfer', Icons.swap_horiz),
     _CollectionTypeInfo('files', Icons.folder),
     _CollectionTypeInfo('postcards', Icons.mail),
     _CollectionTypeInfo('market', Icons.storefront),
@@ -57,7 +59,7 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
   // Single-instance types (all except 'files')
   static const Set<String> _singleInstanceTypes = {
     'forum', 'chat', 'blog', 'events', 'news', 'www',
-    'postcards', 'places', 'market', 'alerts', 'groups', 'backup'
+    'postcards', 'places', 'market', 'alerts', 'groups', 'backup', 'transfer', 'inventory'
   };
 
   @override
@@ -749,6 +751,8 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
         return 'Organize people into groups for easier management and communication. Create teams or interest groups.';
       case 'backup':
         return 'Securely backup your data to other devices with end-to-end encryption. Your data stays private while being safely stored across trusted contacts.';
+      case 'inventory':
+        return 'Track and manage your items with folder-based organization. Keep track of quantities, usage, expiry dates, and borrowed items.';
       case 'station':
         return 'Station configuration for network communication settings. Manage how your node connects to the network.';
       default:
@@ -860,6 +864,14 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
           'Multiple providers',
           'Automatic scheduling',
           'Full restore support',
+        ];
+      case 'inventory':
+        return [
+          'Folder-based organization',
+          'Quantity and usage tracking',
+          'Batch/lot management with expiry',
+          'Borrowing and lending',
+          '200+ item types with templates',
         ];
       case 'station':
         return [
