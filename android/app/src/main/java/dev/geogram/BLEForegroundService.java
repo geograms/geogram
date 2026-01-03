@@ -281,8 +281,13 @@ public class BLEForegroundService extends Service {
         String contentText;
         if (keepAliveEnabled) {
             // Format: "Connected to Name (url)" or "Connected to url"
+            // Skip parenthetical if name equals url to avoid redundancy like "p2p.radio (p2p.radio)"
             if (stationName != null && !stationName.isEmpty() && stationUrl != null && !stationUrl.isEmpty()) {
-                contentText = "Connected to " + stationName + " (" + stationUrl + ")";
+                if (stationName.equalsIgnoreCase(stationUrl)) {
+                    contentText = "Connected to " + stationName;
+                } else {
+                    contentText = "Connected to " + stationName + " (" + stationUrl + ")";
+                }
             } else if (stationUrl != null && !stationUrl.isEmpty()) {
                 contentText = "Connected to " + stationUrl;
             } else if (stationName != null && !stationName.isEmpty()) {
