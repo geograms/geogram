@@ -180,6 +180,8 @@ class _EventDetailPageState extends State<EventDetailPage> {
               backgroundColor: Colors.green,
             ),
           );
+          // Refresh event to show uploaded files immediately
+          await _refreshEvent();
         }
       }
     } catch (e) {

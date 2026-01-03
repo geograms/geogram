@@ -126,13 +126,13 @@ final typeId = await showModalBottomSheet<String>(
 
 **File:** `lib/pages/photo_viewer_page.dart`
 
-Full-screen photo gallery viewer with zoom, pan, and navigation.
+Full-screen media viewer for photos and videos with zoom, pan, and navigation.
 
 **Parameters:**
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `imagePaths` | List\<String\> | Yes | List of local or network image paths |
-| `initialIndex` | int | No | Starting image index (default: 0) |
+| `imagePaths` | List\<String\> | Yes | List of local or network media paths (images and videos) |
+| `initialIndex` | int | No | Starting media index (default: 0) |
 
 **Usage:**
 ```dart
@@ -140,7 +140,7 @@ Navigator.push(
   context,
   MaterialPageRoute(
     builder: (_) => PhotoViewerPage(
-      imagePaths: ['/path/to/image1.jpg', '/path/to/image2.jpg'],
+      imagePaths: ['/path/to/image.jpg', '/path/to/video.mp4'],
       initialIndex: 0,
     ),
   ),
@@ -148,15 +148,18 @@ Navigator.push(
 ```
 
 **Features:**
-- Zoom (0.5x to 4.0x) with pinch gesture
-- Pan support when zoomed
-- Swipe navigation between images
+- **Images:** Zoom (0.5x to 4.0x) with pinch gesture, pan support
+- **Videos:** Tap to play/pause, progress bar with scrubbing, duration display
+- Swipe navigation between media items
 - Keyboard navigation (arrows, escape)
-- Image counter display
+- Media counter display
 - Page indicator dots
-- Save/download button
+- Save/download button (images and videos)
 - Network and local file support
 - Black background (cinema mode)
+
+**Supported Video Formats:**
+`.mp4`, `.avi`, `.mkv`, `.mov`, `.wmv`, `.flv`, `.webm`
 
 ---
 
@@ -744,7 +747,7 @@ if (jurisdiction != null) {
 | UserPickerWidget | widgets/ | Picker | Select users from devices |
 | CurrencyPickerWidget | widgets/wallet/ | Picker | Select currencies |
 | TypeSelectorWidget | widgets/inventory/ | Picker | Select inventory types |
-| PhotoViewerPage | pages/ | Viewer | Image gallery |
+| PhotoViewerPage | pages/ | Viewer | Image & video gallery |
 | DocumentViewerEditorPage | pages/ | Viewer | PDF, text, markdown |
 | LocationPickerPage | pages/ | Picker | Map location selection |
 | ContractDocumentPage | pages/ | Viewer | Markdown document |

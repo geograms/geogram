@@ -431,6 +431,8 @@
   "save_image": "Guardar imagem",
   "save_image_as": "Guardar imagem como",
   "image_saved": "Imagem guardada",
+  "video_saved": "Vídeo guardado",
+  "save_video_as": "Guardar vídeo como",
   "failed_to_save_image": "Falha ao guardar imagem: {0}",
   "cannot_save_network_image": "Não é possível guardar imagens da internet",
   "microphone_permission_required": "Permissão de microfone necessária",

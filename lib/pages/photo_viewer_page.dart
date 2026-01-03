@@ -9,8 +9,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:path/path.dart' as path;
+import 'package:video_player/video_player.dart';
 import '../platform/file_image_helper.dart' as file_helper;
 import '../services/i18n_service.dart';
+import '../util/file_icon_helper.dart';
 
 /// Full-screen photo viewer with zoom, pan, and swipe navigation
 class PhotoViewerPage extends StatefulWidget {
@@ -31,6 +33,7 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
   late PageController _pageController;
   late int _currentIndex;
   final Map<int, TransformationController> _transformationControllers = {};
+  final Map<int, VideoPlayerController> _videoControllers = {};
   final FocusNode _focusNode = FocusNode();
   final I18nService _i18n = I18nService();
   bool _isSaving = false;
@@ -47,6 +50,9 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
     _pageController.dispose();
     _focusNode.dispose();
     for (final controller in _transformationControllers.values) {
+      controller.dispose();
+    }
+    for (final controller in _videoControllers.values) {
       controller.dispose();
     }
     super.dispose();
@@ -100,13 +106,13 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
     }
   }
 
-  /// Save the current image to a user-selected location
-  Future<void> _saveImage() async {
+  /// Save the current media file to a user-selected location
+  Future<void> _saveMedia() async {
     if (kIsWeb) return;
 
-    final imagePath = widget.imagePaths[_currentIndex];
-    if (_isNetworkImage(imagePath)) {
-      // For network images, we'd need to download first - not implemented yet
+    final mediaPath = widget.imagePaths[_currentIndex];
+    if (_isNetworkImage(mediaPath)) {
+      // For network files, we'd need to download first - not implemented yet
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(_i18n.t('cannot_save_network_image'))),
@@ -119,20 +125,22 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
       _isSaving = true;
     });
 
+    final isVideo = FileIconHelper.isVideo(mediaPath);
+
     try {
-      final sourceFile = File(imagePath);
+      final sourceFile = File(mediaPath);
       if (!await sourceFile.exists()) {
         throw Exception(_i18n.t('file_not_found'));
       }
 
       // Get the original filename
-      final originalName = path.basename(imagePath);
+      final originalName = path.basename(mediaPath);
 
       // Let user pick save location
       final result = await FilePicker.platform.saveFile(
-        dialogTitle: _i18n.t('save_image_as'),
+        dialogTitle: isVideo ? _i18n.t('save_video_as') : _i18n.t('save_image_as'),
         fileName: originalName,
-        type: FileType.image,
+        type: isVideo ? FileType.video : FileType.image,
       );
 
       if (result == null) {
@@ -146,7 +154,7 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(_i18n.t('image_saved')),
+            content: Text(isVideo ? _i18n.t('video_saved') : _i18n.t('image_saved')),
             backgroundColor: Colors.green,
           ),
         );
@@ -204,7 +212,7 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
                       ),
                     )
                   : const Icon(Icons.download, color: Colors.white),
-              onPressed: _isSaving ? null : _saveImage,
+              onPressed: _isSaving ? null : _saveMedia,
               tooltip: _i18n.t('save_image'),
             ),
           IconButton(
@@ -289,15 +297,21 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
   }
 
   Widget _buildPhotoView(int index) {
-    final imagePath = widget.imagePaths[index];
-    if (_isNetworkImage(imagePath)) {
+    final mediaPath = widget.imagePaths[index];
+
+    // Check if it's a video file
+    if (!_isNetworkImage(mediaPath) && FileIconHelper.isVideo(mediaPath)) {
+      return _buildVideoView(index, mediaPath);
+    }
+
+    if (_isNetworkImage(mediaPath)) {
       return InteractiveViewer(
         transformationController: _getTransformationController(index),
         minScale: 0.5,
         maxScale: 4.0,
         child: Center(
           child: Image.network(
-            imagePath,
+            mediaPath,
             fit: BoxFit.contain,
             errorBuilder: (context, error, stackTrace) {
               return const Center(
@@ -313,7 +327,7 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
       );
     }
 
-    final imageProvider = file_helper.getFileImageProvider(imagePath);
+    final imageProvider = file_helper.getFileImageProvider(mediaPath);
 
     if (imageProvider == null) {
       return const Center(
@@ -345,6 +359,92 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
         ),
       ),
     );
+  }
+
+  Widget _buildVideoView(int index, String videoPath) {
+    // Initialize controller if needed
+    if (!_videoControllers.containsKey(index)) {
+      final controller = VideoPlayerController.file(File(videoPath));
+      controller.initialize().then((_) {
+        if (mounted) setState(() {});
+      });
+      controller.addListener(() {
+        if (mounted) setState(() {});
+      });
+      _videoControllers[index] = controller;
+    }
+
+    final controller = _videoControllers[index]!;
+
+    if (!controller.value.isInitialized) {
+      return const Center(
+        child: CircularProgressIndicator(color: Colors.white),
+      );
+    }
+
+    return GestureDetector(
+      onTap: () {
+        if (controller.value.isPlaying) {
+          controller.pause();
+        } else {
+          controller.play();
+        }
+      },
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          Center(
+            child: AspectRatio(
+              aspectRatio: controller.value.aspectRatio,
+              child: VideoPlayer(controller),
+            ),
+          ),
+          // Play button overlay when paused
+          if (!controller.value.isPlaying)
+            Container(
+              decoration: const BoxDecoration(
+                color: Colors.black45,
+                shape: BoxShape.circle,
+              ),
+              padding: const EdgeInsets.all(16),
+              child: const Icon(Icons.play_arrow, size: 48, color: Colors.white),
+            ),
+          // Progress bar at bottom
+          Positioned(
+            bottom: 48,
+            left: 16,
+            right: 16,
+            child: VideoProgressIndicator(
+              controller,
+              allowScrubbing: true,
+              colors: const VideoProgressColors(
+                playedColor: Colors.white,
+                bufferedColor: Colors.white38,
+                backgroundColor: Colors.white24,
+              ),
+            ),
+          ),
+          // Duration display
+          Positioned(
+            bottom: 60,
+            right: 16,
+            child: Text(
+              '${_formatDuration(controller.value.position)} / ${_formatDuration(controller.value.duration)}',
+              style: const TextStyle(color: Colors.white70, fontSize: 12),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _formatDuration(Duration duration) {
+    final minutes = duration.inMinutes.remainder(60).toString().padLeft(2, '0');
+    final seconds = duration.inSeconds.remainder(60).toString().padLeft(2, '0');
+    if (duration.inHours > 0) {
+      return '${duration.inHours}:$minutes:$seconds';
+    }
+    return '$minutes:$seconds';
   }
 
   bool _isNetworkImage(String path) {

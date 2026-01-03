@@ -517,6 +517,8 @@
   "save_image": "Save image",
   "save_image_as": "Save image as",
   "image_saved": "Image saved",
+  "video_saved": "Video saved",
+  "save_video_as": "Save video as",
   "failed_to_save_image": "Failed to save image: {0}",
   "cannot_save_network_image": "Cannot save network images",
   "microphone_permission_required": "Microphone permission required",
