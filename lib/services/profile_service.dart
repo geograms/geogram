@@ -351,6 +351,34 @@ class ProfileService {
     return newProfile;
   }
 
+  /// Create a new profile with pre-generated keys (for callsign preview/selection)
+  Future<Profile> createNewProfileWithKeys({
+    required String npub,
+    required String nsec,
+    required String callsign,
+    String? nickname,
+    ProfileType type = ProfileType.client,
+  }) async {
+    final newProfile = Profile(
+      nickname: nickname ?? '',
+      type: type,
+    );
+    newProfile.npub = npub;
+    newProfile.nsec = nsec;
+    newProfile.callsign = callsign;
+
+    // Set random preferred color
+    if (newProfile.preferredColor.isEmpty) {
+      final colors = ['red', 'blue', 'green', 'yellow', 'purple', 'orange', 'pink', 'cyan'];
+      newProfile.preferredColor = colors[Random().nextInt(colors.length)];
+    }
+
+    _profiles.add(newProfile);
+    _saveAllProfiles();
+    LogService().log('Created new profile with pre-generated keys: $callsign (${type.name})');
+    return newProfile;
+  }
+
   /// Create a new profile using NIP-07 browser extension (web only)
   /// This creates a profile without storing the nsec - signing is done via extension
   Future<Profile?> createProfileWithExtension({String? nickname}) async {

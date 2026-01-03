@@ -3,8 +3,9 @@
  * License: Apache-2.0
  */
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
-import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
+import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import 'package:path/path.dart' as path;
 import 'package:latlong2/latlong.dart';
@@ -1133,14 +1134,19 @@ class _EventSettingsPageState extends State<EventSettingsPage>
       children: [
         ClipRRect(
           borderRadius: BorderRadius.circular(8),
-          child: Image.file(
-            File(flyerPath),
-            fit: BoxFit.cover,
-            errorBuilder: (_, __, ___) => Container(
-              color: theme.colorScheme.surfaceContainerHighest,
-              child: const Icon(Icons.broken_image),
-            ),
-          ),
+          child: kIsWeb
+              ? Container(
+                  color: theme.colorScheme.surfaceContainerHighest,
+                  child: const Icon(Icons.image),
+                )
+              : Image.file(
+                  File(flyerPath),
+                  fit: BoxFit.cover,
+                  errorBuilder: (_, __, ___) => Container(
+                    color: theme.colorScheme.surfaceContainerHighest,
+                    child: const Icon(Icons.broken_image),
+                  ),
+                ),
         ),
         // Primary badge
         if (isPrimary)

@@ -10,6 +10,7 @@ import '../models/profile.dart';
 import '../services/profile_service.dart';
 import '../services/i18n_service.dart';
 import '../services/log_service.dart';
+import '../util/nostr_key_generator.dart';
 import '../dialogs/import_export_profiles_dialog.dart';
 import 'profile_page.dart';
 import 'station_dashboard_page.dart';
@@ -126,8 +127,15 @@ class _ProfileManagementPageState extends State<ProfileManagementPage> {
             return;
           }
         } else {
-          // Create profile with generated keys
-          await _profileService.createNewProfile(
+          // Create profile with pre-generated keys from dialog
+          final npub = result['npub'] as String;
+          final nsec = result['nsec'] as String;
+          final callsign = result['callsign'] as String;
+
+          await _profileService.createNewProfileWithKeys(
+            npub: npub,
+            nsec: nsec,
+            callsign: callsign,
             nickname: nickname,
             type: type,
           );
@@ -733,17 +741,36 @@ class _CreateProfileDialogState extends State<_CreateProfileDialog> {
   bool _checkingExtension = true;
   bool _hasExistingStation = false;
 
+  // Pre-generated keys for callsign preview
+  NostrKeys? _generatedKeys;
+
   @override
   void initState() {
     super.initState();
     _checkExtensionAvailability();
     _checkExistingStation();
+    _generateNewCallsign();
   }
 
   void _checkExistingStation() {
     // Check if there's already a station profile - only one allowed per machine
     final profiles = _profileService.getAllProfiles();
     _hasExistingStation = profiles.any((p) => p.isRelay);
+  }
+
+  void _generateNewCallsign() {
+    final keys = NostrKeyGenerator.generateKeyPair();
+    setState(() {
+      _generatedKeys = keys;
+    });
+  }
+
+  String _getDisplayCallsign() {
+    if (_generatedKeys == null) return '------';
+    if (_selectedType == ProfileType.station) {
+      return NostrKeyGenerator.deriveStationCallsign(_generatedKeys!.npub);
+    }
+    return _generatedKeys!.callsign;
   }
 
   Future<void> _checkExtensionAvailability() async {
@@ -819,6 +846,39 @@ class _CreateProfileDialogState extends State<_CreateProfileDialog> {
                 ],
               ),
               const SizedBox(height: 24),
+              // Callsign preview with regenerate button
+              Text(
+                _i18n.t('your_callsign'),
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              const SizedBox(height: 8),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        _getDisplayCallsign(),
+                        style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                          fontWeight: FontWeight.bold,
+                          color: Theme.of(context).colorScheme.primary,
+                          fontFamily: 'monospace',
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      onPressed: _generateNewCallsign,
+                      icon: const Icon(Icons.refresh),
+                      tooltip: _i18n.t('generate_new'),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 16),
             ],
             Text(
               _i18n.t('nickname_optional'),
@@ -842,15 +902,20 @@ class _CreateProfileDialogState extends State<_CreateProfileDialog> {
           child: Text(_i18n.t('cancel')),
         ),
         FilledButton(
-          onPressed: () {
-            Navigator.pop(context, {
-              'type': _selectedType,
-              'useExtension': _useExtension,
-              'nickname': _nicknameController.text.trim().isEmpty
-                  ? null
-                  : _nicknameController.text.trim(),
-            });
-          },
+          onPressed: _generatedKeys == null
+              ? null
+              : () {
+                  Navigator.pop(context, {
+                    'type': _selectedType,
+                    'useExtension': _useExtension,
+                    'nickname': _nicknameController.text.trim().isEmpty
+                        ? null
+                        : _nicknameController.text.trim(),
+                    'npub': _generatedKeys!.npub,
+                    'nsec': _generatedKeys!.nsec,
+                    'callsign': _getDisplayCallsign(),
+                  });
+                },
           child: Text(_i18n.t('create')),
         ),
       ],

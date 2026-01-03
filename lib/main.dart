@@ -2029,13 +2029,30 @@ class _LogPageState extends State<LogPage> {
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
     return Scaffold(
-      body: Container(
-        color: isDark ? Colors.black : Colors.grey[900],
-        child: Column(
-          children: [
+      body: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: Row(
+              children: [
+                IconButton(
+                  icon: const Icon(Icons.arrow_back),
+                  onPressed: () => Navigator.pop(context),
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(),
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  _i18n.t('collection_type_log'),
+                  style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+                ),
+              ],
+            ),
+          ),
           // Controls Bar
           Container(
-            padding: const EdgeInsets.all(8),
+            color: isDark ? Colors.black : Colors.grey[900],
+            padding: const EdgeInsets.symmetric(horizontal: 8),
             child: Row(
               children: [
                 // Pause/Resume Button
@@ -2115,7 +2132,6 @@ class _LogPageState extends State<LogPage> {
             ),
           ),
         ],
-        ),
       ),
     );
   }
