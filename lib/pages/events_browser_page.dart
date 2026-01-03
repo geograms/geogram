@@ -457,7 +457,7 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
 
   String _eventFolderPath(String eventId) {
     final year = eventId.substring(0, 4);
-    return '${widget.collectionPath}/events/$year/$eventId';
+    return '${widget.collectionPath}/$year/$eventId';
   }
 
   Future<String> _ensureUniqueFileName(String dirPath, String fileName) async {
@@ -540,7 +540,7 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
 
       if (result != null && result.files.isNotEmpty && mounted) {
         final year = _selectedEvent!.id.substring(0, 4);
-        final eventPath = '${widget.collectionPath}/events/$year/${_selectedEvent!.id}';
+        final eventPath = '${widget.collectionPath}/$year/${_selectedEvent!.id}';
 
         int copiedCount = 0;
         for (var file in result.files) {

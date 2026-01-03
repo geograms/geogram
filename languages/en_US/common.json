@@ -761,6 +761,7 @@
   "longitude_optional": "Longitude (optional)",
   "places": "Places",
   "new_place": "New Place",
+  "add_place": "Add Place",
   "search_places": "Search places...",
   "no_places_found": "No places found",
   "no_places_yet": "No places yet",
@@ -1414,7 +1415,9 @@
   "location_from_gps": "Location from GPS",
   "location_from_ip": "Location from IP address",
   "location_from_browser": "Location from browser",
+  "location_from_profile": "Location from profile",
   "location_detected": "Location detected",
+  "location_unavailable": "Location unavailable",
 
   "import_export_profiles": "Import/Export Profiles",
   "import_export_info": "Export your profiles to save them outside the app folder. Import them later to restore after reinstalling.",

@@ -155,7 +155,7 @@ class _EventDetailPageState extends State<EventDetailPage> {
 
       if (result != null && result.files.isNotEmpty && mounted) {
         final year = _event.id.substring(0, 4);
-        final eventPath = '${widget.collectionPath}/events/$year/${_event.id}';
+        final eventPath = '${widget.collectionPath}/$year/${_event.id}';
 
         int copiedCount = 0;
         for (var file in result.files) {

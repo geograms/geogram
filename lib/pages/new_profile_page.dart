@@ -248,8 +248,8 @@ class _NewProfilePageState extends State<NewProfilePage> {
                 ),
                 foundAt: DateTime.now(),
               ));
-              // Keep only 50 most recent matches (but preserve pinned)
-              if (_vanityMatches.length > 50) {
+              // Keep only 500 most recent matches (but preserve pinned)
+              if (_vanityMatches.length > 500) {
                 // Find the last non-pinned match to remove
                 for (int i = _vanityMatches.length - 1; i >= 0; i--) {
                   if (!_vanityMatches[i].pinned) {
@@ -286,12 +286,15 @@ class _NewProfilePageState extends State<NewProfilePage> {
     _vanityReceivePort = null;
     _vanitySendPort = null;
 
-    setState(() {
-      _vanityRunning = false;
-    });
+    _vanityRunning = false;
     _vanityTimer?.cancel();
     _vanityTimer = null;
     _vanityStopwatch?.stop();
+
+    // Only call setState if widget is still mounted
+    if (mounted) {
+      setState(() {});
+    }
   }
 
   void _selectVanityMatch(_VanityMatch match) {
@@ -611,81 +614,92 @@ class _NewProfilePageState extends State<NewProfilePage> {
             const SizedBox(height: 8),
             ConstrainedBox(
               constraints: const BoxConstraints(maxHeight: 300),
-              child: ListView.builder(
-                shrinkWrap: true,
-                itemCount: _vanityMatches.length,
-                itemBuilder: (context, index) {
-                  final match = _vanityMatches[index];
-                  final isSelected = _selectedVanityMatch == match;
-                  return Card(
-                    margin: const EdgeInsets.only(bottom: 8),
-                    color: isSelected
-                        ? theme.colorScheme.primaryContainer
-                        : match.pinned
-                            ? theme.colorScheme.tertiaryContainer.withOpacity(0.5)
-                            : null,
-                    child: InkWell(
-                      onTap: () => _selectVanityMatch(match),
-                      borderRadius: BorderRadius.circular(12),
-                      child: Padding(
-                        padding: const EdgeInsets.all(12),
-                        child: Row(
-                          children: [
-                            if (isSelected)
-                              Icon(
-                                Icons.check_circle,
-                                color: theme.colorScheme.primary,
-                                size: 20,
-                              )
-                            else
-                              Icon(
-                                Icons.radio_button_unchecked,
-                                color: theme.colorScheme.outline,
-                                size: 20,
-                              ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    match.keys.callsign,
-                                    style: theme.textTheme.titleMedium?.copyWith(
-                                      fontWeight: FontWeight.bold,
-                                      fontFamily: 'monospace',
-                                      color: isSelected
-                                          ? theme.colorScheme.onPrimaryContainer
-                                          : null,
-                                    ),
+              child: Builder(
+                builder: (context) {
+                  // Sort matches: pinned first, then by time
+                  final sortedMatches = List<_VanityMatch>.from(_vanityMatches)
+                    ..sort((a, b) {
+                      if (a.pinned && !b.pinned) return -1;
+                      if (!a.pinned && b.pinned) return 1;
+                      return b.foundAt.compareTo(a.foundAt);
+                    });
+                  return ListView.builder(
+                    shrinkWrap: true,
+                    itemCount: sortedMatches.length,
+                    itemBuilder: (context, index) {
+                      final match = sortedMatches[index];
+                      final isSelected = _selectedVanityMatch == match;
+                      return Card(
+                        margin: const EdgeInsets.only(bottom: 8),
+                        color: isSelected
+                            ? theme.colorScheme.primaryContainer
+                            : match.pinned
+                                ? theme.colorScheme.tertiaryContainer.withOpacity(0.5)
+                                : null,
+                        child: InkWell(
+                          onTap: () => _selectVanityMatch(match),
+                          borderRadius: BorderRadius.circular(12),
+                          child: Padding(
+                            padding: const EdgeInsets.all(12),
+                            child: Row(
+                              children: [
+                                if (isSelected)
+                                  Icon(
+                                    Icons.check_circle,
+                                    color: theme.colorScheme.primary,
+                                    size: 20,
+                                  )
+                                else
+                                  Icon(
+                                    Icons.radio_button_unchecked,
+                                    color: theme.colorScheme.outline,
+                                    size: 20,
                                   ),
-                                  Text(
-                                    '${match.keys.npub.substring(0, 20)}...',
-                                    style: theme.textTheme.bodySmall?.copyWith(
-                                      color: isSelected
-                                          ? theme.colorScheme.onPrimaryContainer.withOpacity(0.7)
-                                          : theme.colorScheme.onSurfaceVariant,
-                                      fontFamily: 'monospace',
-                                    ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        match.keys.callsign,
+                                        style: theme.textTheme.titleMedium?.copyWith(
+                                          fontWeight: FontWeight.bold,
+                                          fontFamily: 'monospace',
+                                          color: isSelected
+                                              ? theme.colorScheme.onPrimaryContainer
+                                              : null,
+                                        ),
+                                      ),
+                                      Text(
+                                        '${match.keys.npub.substring(0, 20)}...',
+                                        style: theme.textTheme.bodySmall?.copyWith(
+                                          color: isSelected
+                                              ? theme.colorScheme.onPrimaryContainer.withOpacity(0.7)
+                                              : theme.colorScheme.onSurfaceVariant,
+                                          fontFamily: 'monospace',
+                                        ),
+                                      ),
+                                    ],
                                   ),
-                                ],
-                              ),
+                                ),
+                                IconButton(
+                                  onPressed: () => _togglePin(match),
+                                  icon: Icon(
+                                    match.pinned ? Icons.push_pin : Icons.push_pin_outlined,
+                                    size: 20,
+                                    color: match.pinned
+                                        ? theme.colorScheme.tertiary
+                                        : theme.colorScheme.outline,
+                                  ),
+                                  tooltip: match.pinned ? 'Unpin' : 'Pin',
+                                  visualDensity: VisualDensity.compact,
+                                ),
+                              ],
                             ),
-                            IconButton(
-                              onPressed: () => _togglePin(match),
-                              icon: Icon(
-                                match.pinned ? Icons.push_pin : Icons.push_pin_outlined,
-                                size: 20,
-                                color: match.pinned
-                                    ? theme.colorScheme.tertiary
-                                    : theme.colorScheme.outline,
-                              ),
-                              tooltip: match.pinned ? 'Unpin' : 'Pin',
-                              visualDensity: VisualDensity.compact,
-                            ),
-                          ],
+                          ),
                         ),
-                      ),
-                    ),
+                      );
+                    },
                   );
                 },
               ),

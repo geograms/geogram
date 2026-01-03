@@ -322,10 +322,27 @@ class _ProfileManagementPageState extends State<ProfileManagementPage> {
         title: Text(_i18n.t('manage_profiles')),
         actions: [
           if (!kIsWeb)
-            IconButton(
-              icon: const Icon(Icons.import_export),
-              onPressed: _showImportExportDialog,
-              tooltip: _i18n.t('import_export_profiles'),
+            PopupMenuButton<String>(
+              icon: const Icon(Icons.more_vert),
+              onSelected: (value) {
+                switch (value) {
+                  case 'import_export':
+                    _showImportExportDialog();
+                    break;
+                }
+              },
+              itemBuilder: (context) => [
+                PopupMenuItem(
+                  value: 'import_export',
+                  child: Row(
+                    children: [
+                      const Icon(Icons.import_export),
+                      const SizedBox(width: 8),
+                      Text(_i18n.t('import_export_profiles')),
+                    ],
+                  ),
+                ),
+              ],
             ),
         ],
       ),

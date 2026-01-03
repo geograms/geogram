@@ -28,7 +28,7 @@ class EventTileWidget extends StatelessWidget {
     if (kIsWeb || collectionPath == null) return null;
     if (!event.hasFlyer) return null;
     final year = event.id.substring(0, 4);
-    return '$collectionPath/events/$year/${event.id}/${event.primaryFlyer}';
+    return '$collectionPath/$year/${event.id}/${event.primaryFlyer}';
   }
 
   @override

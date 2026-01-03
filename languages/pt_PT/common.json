@@ -674,6 +674,7 @@
   "longitude_optional": "Longitude (opcional)",
   "places": "Locais",
   "new_place": "Novo Local",
+  "add_place": "Adicionar Local",
   "search_places": "Procurar locais...",
   "no_places_found": "Nenhum local encontrado",
   "no_places_yet": "Ainda sem locais",
@@ -1323,7 +1324,9 @@
   "location_from_gps": "Localização via GPS",
   "location_from_ip": "Localização via endereço IP",
   "location_from_browser": "Localização via navegador",
+  "location_from_profile": "Localização via perfil",
   "location_detected": "Localização detectada",
+  "location_unavailable": "Localização indisponível",
 
   "import_export_profiles": "Importar/Exportar Perfis",
   "import_export_info": "Exporte os seus perfis para guardar fora da pasta da aplicação. Importe-os mais tarde para restaurar após reinstalar.",

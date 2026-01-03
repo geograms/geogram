@@ -46,7 +46,7 @@ class _EventLikeButtonState extends State<EventLikeButton> {
   String? get _contentPath {
     if (widget.collectionPath.isEmpty) return null;
     final year = widget.event.id.substring(0, 4);
-    return '${widget.collectionPath}/events/$year/${widget.event.id}';
+    return '${widget.collectionPath}/$year/${widget.event.id}';
   }
 
   @override
@@ -259,7 +259,7 @@ class _EventFeedbackSectionState extends State<EventFeedbackSection> {
   String? get _contentPath {
     if (widget.collectionPath.isEmpty) return null;
     final year = widget.event.id.substring(0, 4);
-    return '${widget.collectionPath}/events/$year/${widget.event.id}';
+    return '${widget.collectionPath}/$year/${widget.event.id}';
   }
 
   @override

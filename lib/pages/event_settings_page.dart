@@ -271,7 +271,7 @@ class _EventSettingsPageState extends State<EventSettingsPage>
 
       // Copy to event folder
       final year = widget.event.id.substring(0, 4);
-      final eventPath = '${widget.collectionPath}/events/$year/${widget.event.id}';
+      final eventPath = '${widget.collectionPath}/$year/${widget.event.id}';
       final sourceFile = File(result.files.single.path!);
       final targetPath = '$eventPath/$trailerFileName';
 
@@ -306,7 +306,7 @@ class _EventSettingsPageState extends State<EventSettingsPage>
     try {
       final year = widget.event.id.substring(0, 4);
       final eventDir = Directory(
-        '${widget.collectionPath}/events/$year/${widget.event.id}',
+        '${widget.collectionPath}/$year/${widget.event.id}',
       );
 
       if (await eventDir.exists()) {
@@ -374,7 +374,7 @@ class _EventSettingsPageState extends State<EventSettingsPage>
     if (result == null || result.files.isEmpty) return;
 
     final year = widget.event.id.substring(0, 4);
-    final eventPath = '${widget.collectionPath}/events/$year/${widget.event.id}';
+    final eventPath = '${widget.collectionPath}/$year/${widget.event.id}';
 
     int copied = 0;
     for (final file in result.files) {
@@ -454,7 +454,7 @@ class _EventSettingsPageState extends State<EventSettingsPage>
 
       // Copy to event folder
       final year = widget.event.id.substring(0, 4);
-      final eventPath = '${widget.collectionPath}/events/$year/${widget.event.id}';
+      final eventPath = '${widget.collectionPath}/$year/${widget.event.id}';
       final sourceFile = File(result.files.single.path!);
       final targetPath = '$eventPath/$flyerFileName';
 
@@ -478,7 +478,7 @@ class _EventSettingsPageState extends State<EventSettingsPage>
   Future<void> _removeFlyer(String flyerFileName) async {
     // Delete file from event folder
     final year = widget.event.id.substring(0, 4);
-    final eventPath = '${widget.collectionPath}/events/$year/${widget.event.id}';
+    final eventPath = '${widget.collectionPath}/$year/${widget.event.id}';
     final flyerFile = File('$eventPath/$flyerFileName');
 
     try {

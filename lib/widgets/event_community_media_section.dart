@@ -114,7 +114,7 @@ class _EventCommunityMediaSectionState extends State<EventCommunityMediaSection>
   String? get _eventPath {
     if (widget.collectionPath.isEmpty) return null;
     final year = widget.event.id.substring(0, 4);
-    return '${widget.collectionPath}/events/$year/${widget.event.id}';
+    return '${widget.collectionPath}/$year/${widget.event.id}';
   }
 
   String? get _mediaRoot {

@@ -651,6 +651,7 @@ class _NewEventPageState extends State<NewEventPage>
             hintText: _i18n.t('enter_event_title'),
             border: const OutlineInputBorder(),
           ),
+          textCapitalization: TextCapitalization.sentences,
           validator: (value) {
             if (value == null || value.trim().isEmpty) {
               return _i18n.t('title_is_required');
@@ -867,6 +868,7 @@ class _NewEventPageState extends State<NewEventPage>
             hintText: _i18n.t('enter_location_name'),
             border: const OutlineInputBorder(),
           ),
+          textCapitalization: TextCapitalization.sentences,
         ),
         // Photos section
         const SizedBox(height: 24),
@@ -888,28 +890,32 @@ class _NewEventPageState extends State<NewEventPage>
         ),
         const SizedBox(height: 12),
         if (_flyers.isEmpty)
-          Container(
-            padding: const EdgeInsets.all(24),
-            decoration: BoxDecoration(
-              color: theme.colorScheme.surfaceVariant.withOpacity(0.3),
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: theme.colorScheme.outlineVariant),
-            ),
-            child: Column(
-              children: [
-                Icon(
-                  Icons.photo_library_outlined,
-                  size: 48,
-                  color: theme.colorScheme.onSurfaceVariant.withOpacity(0.5),
-                ),
-                const SizedBox(height: 12),
-                Text(
-                  _i18n.t('no_photos_yet'),
-                  style: theme.textTheme.bodyMedium?.copyWith(
-                    color: theme.colorScheme.onSurfaceVariant,
+          InkWell(
+            onTap: _selectPhotos,
+            borderRadius: BorderRadius.circular(8),
+            child: Container(
+              padding: const EdgeInsets.all(24),
+              decoration: BoxDecoration(
+                color: theme.colorScheme.surfaceVariant.withOpacity(0.3),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: theme.colorScheme.outlineVariant),
+              ),
+              child: Column(
+                children: [
+                  Icon(
+                    Icons.photo_library_outlined,
+                    size: 48,
+                    color: theme.colorScheme.onSurfaceVariant.withOpacity(0.5),
                   ),
-                ),
-              ],
+                  const SizedBox(height: 12),
+                  Text(
+                    _i18n.t('no_photos_yet'),
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ),
             ),
           )
         else
@@ -938,6 +944,7 @@ class _NewEventPageState extends State<NewEventPage>
             border: const OutlineInputBorder(),
             alignLabelWithHint: true,
           ),
+          textCapitalization: TextCapitalization.sentences,
           maxLines: 8,
         ),
       ],
@@ -1331,6 +1338,7 @@ class _NewEventPageState extends State<NewEventPage>
                     labelText: '${_i18n.t('day')} ${index + 1} - $dateStr',
                     border: const OutlineInputBorder(),
                   ),
+                  textCapitalization: TextCapitalization.sentences,
                   maxLines: 4,
                 ),
               );
@@ -1343,6 +1351,7 @@ class _NewEventPageState extends State<NewEventPage>
               border: const OutlineInputBorder(),
               alignLabelWithHint: true,
             ),
+            textCapitalization: TextCapitalization.sentences,
             maxLines: 6,
           ),
 
@@ -1653,6 +1662,7 @@ class _LinkEditDialogState extends State<_LinkEditDialog> {
                           labelText: widget.i18n.t('description'),
                           border: const OutlineInputBorder(),
                         ),
+                        textCapitalization: TextCapitalization.sentences,
                         validator: (value) {
                           if (value == null || value.trim().isEmpty) {
                             return widget.i18n.t('description_required');
@@ -1675,6 +1685,7 @@ class _LinkEditDialogState extends State<_LinkEditDialog> {
                           labelText: widget.i18n.t('note_optional'),
                           border: const OutlineInputBorder(),
                         ),
+                        textCapitalization: TextCapitalization.sentences,
                         maxLines: 3,
                       ),
                     ],

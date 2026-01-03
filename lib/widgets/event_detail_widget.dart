@@ -335,9 +335,9 @@ class EventDetailWidget extends StatelessWidget {
 
   Widget _buildFlyer(BuildContext context, ThemeData theme, I18nService i18n) {
     final year = event.id.substring(0, 4);
-    final flyerPath = '$collectionPath/events/$year/${event.id}/${event.primaryFlyer}';
+    final flyerPath = '$collectionPath/$year/${event.id}/${event.primaryFlyer}';
     final flyerPaths = event.flyers
-        .map((flyer) => '$collectionPath/events/$year/${event.id}/$flyer')
+        .map((flyer) => '$collectionPath/$year/${event.id}/$flyer')
         .toList();
     final canOpen = !kIsWeb && flyerPaths.isNotEmpty;
 
@@ -1017,7 +1017,7 @@ class _EventFilesSectionState extends State<EventFilesSection> {
     try {
       final year = widget.event.id.substring(0, 4);
       final eventDir = io.Directory(
-        '${widget.collectionPath}/events/$year/${widget.event.id}',
+        '${widget.collectionPath}/$year/${widget.event.id}',
       );
 
       if (await eventDir.exists()) {

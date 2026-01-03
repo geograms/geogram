@@ -4,18 +4,21 @@
  */
 
 import 'dart:io' show Directory, File, Platform;
+import 'dart:math' show sin, cos, sqrt, atan2, pi;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:url_launcher/url_launcher.dart';
 import 'package:path/path.dart' as path;
 import '../models/place.dart';
+import '../services/config_service.dart';
 import '../services/place_service.dart';
 import '../services/i18n_service.dart';
 import '../services/log_service.dart';
 import '../services/place_sharing_service.dart';
 import '../services/profile_service.dart';
 import '../services/station_place_service.dart';
+import '../services/user_location_service.dart';
 import '../platform/file_image_helper.dart' as file_helper;
 import '../widgets/place_feedback_section.dart';
 import 'add_edit_place_page.dart';
@@ -41,6 +44,8 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
   final I18nService _i18n = I18nService();
   final TextEditingController _searchController = TextEditingController();
   final StationPlaceService _stationPlaceService = StationPlaceService();
+  final UserLocationService _userLocationService = UserLocationService();
+  final ConfigService _configService = ConfigService();
 
   List<Place> _allPlaces = [];
   List<Place> _filteredPlaces = [];
@@ -54,24 +59,47 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
   bool _isLoadingStationPlaces = false;
   bool _selectedPlaceIsStation = false;
   bool _didSyncLocalPlaces = false;
+  double _radiusKm = 100.0; // Default 100km radius
+
+  static const String _radiusConfigKey = 'settings.placesRadiusKm';
 
   @override
   void initState() {
     super.initState();
     _searchController.addListener(_filterPlaces);
+    _userLocationService.addListener(_onLocationChanged);
+    _loadSavedRadius();
     _initialize();
   }
 
   @override
   void dispose() {
     _searchController.dispose();
+    _userLocationService.removeListener(_onLocationChanged);
     super.dispose();
+  }
+
+  void _loadSavedRadius() {
+    final savedRadius = _configService.getNestedValue(_radiusConfigKey);
+    if (savedRadius is num) {
+      _radiusKm = savedRadius.toDouble();
+    }
+  }
+
+  void _saveRadius() {
+    _configService.setNestedValue(_radiusConfigKey, _radiusKm);
+  }
+
+  void _onLocationChanged() {
+    // Re-filter station places when location changes
+    _filterStationPlacesByDistance();
   }
 
   Future<void> _initialize() async {
     await _loadPlaces();
-    await _loadStationPlaces();
-    await _syncLocalPlacesToStation();
+    // Load station places asynchronously (don't block UI)
+    _loadStationPlaces();
+    _syncLocalPlacesToStation();
   }
 
   Future<void> _loadPlaces() async {
@@ -169,11 +197,38 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
       }
     });
 
-    _filterPlaces();
+    // Apply distance filter to station places
+    _filterStationPlacesByDistance();
 
     if (selectedEntry != null) {
       await _loadPlacePhotos(selectedEntry.place);
     }
+  }
+
+  /// Filter station places by distance from user's current location
+  void _filterStationPlacesByDistance() {
+    if (!mounted) return;
+    _filterPlaces();
+  }
+
+  /// Calculate distance between two coordinates in km (Haversine formula)
+  double _calculateDistance(double lat1, double lon1, double lat2, double lon2) {
+    const earthRadius = 6371.0; // Earth radius in kilometers
+    final dLat = _degreesToRadians(lat2 - lat1);
+    final dLon = _degreesToRadians(lon2 - lon1);
+
+    final a = sin(dLat / 2) * sin(dLat / 2) +
+        cos(_degreesToRadians(lat1)) *
+            cos(_degreesToRadians(lat2)) *
+            sin(dLon / 2) *
+            sin(dLon / 2);
+
+    final c = 2 * atan2(sqrt(a), sqrt(1 - a));
+    return earthRadius * c;
+  }
+
+  double _degreesToRadians(double degrees) {
+    return degrees * pi / 180;
   }
 
   Set<String> _buildLocalPlaceKeys() {
@@ -301,7 +356,21 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
   void _filterPlaces() {
     final query = _searchController.text;
     var filteredLocal = _allPlaces;
-    var filteredStation = _stationPlaces;
+    var filteredStation = List<StationPlaceEntry>.from(_stationPlaces);
+
+    // Apply distance filter to station places
+    final userLocation = _userLocationService.currentLocation;
+    if (userLocation != null && userLocation.isValid && _radiusKm < 500) {
+      filteredStation = filteredStation.where((entry) {
+        final distance = _calculateDistance(
+          userLocation.latitude,
+          userLocation.longitude,
+          entry.place.latitude,
+          entry.place.longitude,
+        );
+        return distance <= _radiusKm;
+      }).toList();
+    }
 
     // Apply type filter
     if (_selectedType != null) {
@@ -480,24 +549,6 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
       appBar: AppBar(
         title: Text(_i18n.t('places')),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.add),
-            onPressed: () async {
-              final result = await Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => AddEditPlacePage(
-                    collectionPath: widget.collectionPath,
-                  ),
-                ),
-              );
-
-              if (result == true) {
-                await _refreshAllPlaces();
-              }
-            },
-            tooltip: _i18n.t('new_place'),
-          ),
           if (!isMobilePlatform)
             IconButton(
               icon: const Icon(Icons.refresh),
@@ -505,6 +556,24 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
               tooltip: _i18n.t('refresh'),
             ),
         ],
+      ),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: () async {
+          final result = await Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => AddEditPlacePage(
+                collectionPath: widget.collectionPath,
+              ),
+            ),
+          );
+
+          if (result == true) {
+            await _refreshAllPlaces();
+          }
+        },
+        icon: const Icon(Icons.add),
+        label: Text(_i18n.t('add_place')),
       ),
       body: LayoutBuilder(
         builder: (context, constraints) {
@@ -614,10 +683,12 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
         const Divider(height: 1),
 
         // Place list
+        // Show ListView if there are any places OR if there are unfiltered station places
+        // (so user can adjust radius even when filtered results are empty)
         Expanded(
           child: _isLoading && myPlaces.isEmpty && stationPlaces.isEmpty && _isLoadingStationPlaces
               ? const Center(child: CircularProgressIndicator())
-              : (myPlaces.isEmpty && stationPlaces.isEmpty && !_isLoading && !_isLoadingStationPlaces)
+              : (myPlaces.isEmpty && stationPlaces.isEmpty && _stationPlaces.isEmpty && !_isLoading && !_isLoadingStationPlaces)
                   ? Center(
                       child: Column(
                         mainAxisAlignment: MainAxisAlignment.center,
@@ -660,6 +731,7 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
                             isLoading: _isLoadingStationPlaces,
                             onRefresh: isMobilePlatform ? null : _loadStationPlaces,
                           ),
+                          _buildRadiusSlider(theme),
                           if (stationPlaces.isNotEmpty)
                             ...stationPlaces.map(
                               (entry) => _buildPlaceListTile(
@@ -766,6 +838,143 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
               visualDensity: VisualDensity.compact,
               tooltip: _i18n.t('refresh'),
             ),
+        ],
+      ),
+    );
+  }
+
+  /// Build the radius slider widget for filtering station places
+  Widget _buildRadiusSlider(ThemeData theme) {
+    // Format radius display
+    String radiusText;
+    if (_radiusKm >= 500) {
+      radiusText = _i18n.t('radius_unlimited');
+    } else if (_radiusKm >= 100) {
+      radiusText = '${_radiusKm.round()} km';
+    } else if (_radiusKm >= 10) {
+      radiusText = '${_radiusKm.round()} km';
+    } else {
+      radiusText = '${_radiusKm.toStringAsFixed(1)} km';
+    }
+
+    // Get location status for indicator
+    final userLocation = _userLocationService.currentLocation;
+    final hasLocation = userLocation?.isValid ?? false;
+    final isUpdating = _userLocationService.isUpdating;
+
+    // Location source icon
+    IconData locationIcon;
+    String locationTooltip;
+    if (isUpdating) {
+      locationIcon = Icons.my_location;
+      locationTooltip = _i18n.t('detecting_location');
+    } else if (!hasLocation) {
+      locationIcon = Icons.location_off;
+      locationTooltip = _i18n.t('location_unavailable');
+    } else {
+      switch (userLocation!.source) {
+        case 'gps':
+          locationIcon = Icons.gps_fixed;
+          locationTooltip = _i18n.t('location_from_gps');
+          break;
+        case 'ip':
+          locationIcon = Icons.wifi;
+          locationTooltip = _i18n.t('location_from_ip');
+          break;
+        case 'browser':
+          locationIcon = Icons.language;
+          locationTooltip = _i18n.t('location_from_browser');
+          break;
+        case 'profile':
+          locationIcon = Icons.person_pin_circle;
+          locationTooltip = _i18n.t('location_from_profile');
+          break;
+        default:
+          locationIcon = Icons.location_on;
+          locationTooltip = _i18n.t('location_detected');
+      }
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      child: Row(
+        children: [
+          // Location indicator
+          Tooltip(
+            message: locationTooltip,
+            child: SizedBox(
+              width: 24,
+              height: 24,
+              child: isUpdating
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                      ),
+                    )
+                  : Icon(
+                      locationIcon,
+                      size: 18,
+                      color: hasLocation
+                          ? theme.colorScheme.primary
+                          : theme.colorScheme.error,
+                    ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            _i18n.t('radius'),
+            style: theme.textTheme.bodySmall?.copyWith(
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: SliderTheme(
+              data: SliderTheme.of(context).copyWith(
+                trackHeight: 4,
+                thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 8),
+                overlayShape: const RoundSliderOverlayShape(overlayRadius: 16),
+              ),
+              child: Slider(
+                value: _radiusKm,
+                min: 1,
+                max: 500,
+                divisions: 49,
+                onChanged: (value) {
+                  setState(() {
+                    // Snap to nice values with exponential feel
+                    if (value <= 10) {
+                      _radiusKm = value.roundToDouble();
+                    } else if (value <= 50) {
+                      _radiusKm = (value / 5).round() * 5.0;
+                    } else if (value <= 100) {
+                      _radiusKm = (value / 10).round() * 10.0;
+                    } else {
+                      _radiusKm = (value / 25).round() * 25.0;
+                    }
+                  });
+                },
+                onChangeEnd: (value) {
+                  // Save and filter with the new radius
+                  _saveRadius();
+                  _filterPlaces();
+                },
+              ),
+            ),
+          ),
+          SizedBox(
+            width: 70,
+            child: Text(
+              radiusText,
+              style: theme.textTheme.bodySmall?.copyWith(
+                fontWeight: FontWeight.bold,
+                color: theme.colorScheme.primary,
+              ),
+              textAlign: TextAlign.end,
+            ),
+          ),
         ],
       ),
     );
