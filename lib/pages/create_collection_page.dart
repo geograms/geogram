@@ -47,6 +47,7 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
     // _CollectionTypeInfo('www', Icons.language),  // Hidden: not ready
     _CollectionTypeInfo('inventory', Icons.inventory_2),
     _CollectionTypeInfo('wallet', Icons.account_balance_wallet),
+    _CollectionTypeInfo('log', Icons.article_outlined),
     // _CollectionTypeInfo('backup', Icons.backup),  // Hidden: not ready
     // _CollectionTypeInfo('transfer', Icons.swap_horiz),  // Hidden: not ready
     _CollectionTypeInfo('files', Icons.folder),
@@ -61,7 +62,7 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
   // Single-instance types (all except 'files')
   static const Set<String> _singleInstanceTypes = {
     'forum', 'chat', 'blog', 'events', 'news', 'www',
-    'postcards', 'places', 'market', 'alerts', 'groups', 'backup', 'transfer', 'inventory', 'wallet'
+    'postcards', 'places', 'market', 'alerts', 'groups', 'backup', 'transfer', 'inventory', 'wallet', 'log'
   };
 
   @override

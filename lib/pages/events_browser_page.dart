@@ -836,6 +836,7 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
               ...events.map((event) => EventTileWidget(
                     event: event,
                     isSelected: _selectedEvent?.id == event.id,
+                    collectionPath: widget.collectionPath,
                     onTap: () {
                       if (widget.isRemoteDevice) {
                         _selectRemoteEvent(event);

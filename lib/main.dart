@@ -808,7 +808,7 @@ class _HomePageState extends State<HomePage> {
               ScaffoldMessenger.of(context).hideCurrentMaterialBanner();
               // Navigate to Updates page and start download immediately
               setState(() {
-                _selectedIndex = 4; // Settings tab
+                _selectedIndex = 3; // Settings tab
               });
               // After settings page loads, navigate to Updates with autoInstall
               WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -876,7 +876,7 @@ class _HomePageState extends State<HomePage> {
               tooltip: _i18n.t('settings'),
               onPressed: () {
                 setState(() {
-                  _selectedIndex = 4; // Navigate to Settings
+                  _selectedIndex = 3; // Navigate to Settings
                 });
               },
             ),
@@ -1288,7 +1288,9 @@ class _CollectionsPageState extends State<CollectionsPage> {
                                                                                                     collectionTitle: collection.title,
                                                                                                     i18n: _i18n,
                                                                                                   )
-                                                                                                : CollectionBrowserPage(collection: collection);
+                                                                                                : collection.type == 'log'
+                                                                                                    ? const LogPage()
+                                                                                                    : CollectionBrowserPage(collection: collection);
 
                                               LogService().log('Opening collection: ${collection.title} (type: ${collection.type}) -> ${targetPage.runtimeType}');
                                               Navigator.push(
@@ -1397,7 +1399,9 @@ class _CollectionsPageState extends State<CollectionsPage> {
                                                                                                       collectionTitle: collection.title,
                                                                                                       i18n: _i18n,
                                                                                                     )
-                                                                                                  : CollectionBrowserPage(collection: collection);
+                                                                                                  : collection.type == 'log'
+                                                                                                      ? const LogPage()
+                                                                                                      : CollectionBrowserPage(collection: collection);
 
                                               LogService().log('Opening collection: ${collection.title} (type: ${collection.type}) -> ${targetPage.runtimeType}');
                                               Navigator.push(
@@ -1510,6 +1514,8 @@ class _CollectionGridCard extends StatelessWidget {
         return Icons.swap_horiz;
       case 'wallet':
         return Icons.account_balance_wallet;
+      case 'log':
+        return Icons.article_outlined;
       default:
         return Icons.folder_special;
     }
@@ -1739,6 +1745,8 @@ class _CollectionCard extends StatelessWidget {
         return Icons.swap_horiz;
       case 'wallet':
         return Icons.account_balance_wallet;
+      case 'log':
+        return Icons.article_outlined;
       default:
         return Icons.folder_special;
     }

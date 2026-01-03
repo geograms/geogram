@@ -3,6 +3,7 @@
  * License: Apache-2.0
  */
 
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:path/path.dart' as path;
@@ -873,8 +874,216 @@ class _NewEventPageState extends State<NewEventPage>
           ),
           maxLines: 8,
         ),
+
+        // Photos section
+        const SizedBox(height: 24),
+        Row(
+          children: [
+            Text(
+              _i18n.t('photos'),
+              style: theme.textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const Spacer(),
+            OutlinedButton.icon(
+              onPressed: _selectPhotos,
+              icon: const Icon(Icons.add_photo_alternate, size: 18),
+              label: Text(_i18n.t('add_photos')),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        if (_flyers.isEmpty)
+          Container(
+            padding: const EdgeInsets.all(24),
+            decoration: BoxDecoration(
+              color: theme.colorScheme.surfaceVariant.withOpacity(0.3),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: theme.colorScheme.outlineVariant),
+            ),
+            child: Column(
+              children: [
+                Icon(
+                  Icons.photo_library_outlined,
+                  size: 48,
+                  color: theme.colorScheme.onSurfaceVariant.withOpacity(0.5),
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  _i18n.t('no_photos_yet'),
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ),
+          )
+        else
+          GridView.builder(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: 3,
+              crossAxisSpacing: 8,
+              mainAxisSpacing: 8,
+            ),
+            itemCount: _flyers.length,
+            itemBuilder: (context, index) {
+              final photo = _flyers[index];
+              final isPrimary = index == 0;
+              return _buildPhotoTile(theme, photo, isPrimary, index);
+            },
+          ),
       ],
     );
+  }
+
+  Widget _buildPhotoTile(ThemeData theme, _PendingFile photo, bool isPrimary, int index) {
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        ClipRRect(
+          borderRadius: BorderRadius.circular(8),
+          child: Image.file(
+            File(photo.path),
+            fit: BoxFit.cover,
+            errorBuilder: (_, __, ___) => Container(
+              color: theme.colorScheme.surfaceVariant,
+              child: const Icon(Icons.broken_image),
+            ),
+          ),
+        ),
+        // Primary badge
+        if (isPrimary)
+          Positioned(
+            top: 4,
+            left: 4,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: theme.colorScheme.primary,
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: Text(
+                _i18n.t('cover'),
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: theme.colorScheme.onPrimary,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+          ),
+        // Action buttons
+        Positioned(
+          top: 4,
+          right: 4,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (!isPrimary)
+                _buildPhotoAction(
+                  theme,
+                  Icons.star_outline,
+                  _i18n.t('set_as_cover'),
+                  () => _setAsPrimaryPhoto(index),
+                ),
+              _buildPhotoAction(
+                theme,
+                Icons.delete,
+                _i18n.t('remove'),
+                () => _removeFlyer(photo),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildPhotoAction(ThemeData theme, IconData icon, String tooltip, VoidCallback onTap) {
+    return Padding(
+      padding: const EdgeInsets.only(left: 4),
+      child: Material(
+        color: Colors.black54,
+        borderRadius: BorderRadius.circular(4),
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(4),
+          child: Padding(
+            padding: const EdgeInsets.all(4),
+            child: Icon(icon, size: 16, color: Colors.white),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _selectPhotos() async {
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.image,
+      allowMultiple: true,
+      dialogTitle: _i18n.t('select_photos'),
+    );
+
+    if (result == null || result.files.isEmpty) return;
+
+    setState(() {
+      for (final file in result.files) {
+        if (file.path == null) continue;
+        final originalFileName = file.name;
+        final extension = path.extension(originalFileName).replaceFirst('.', '').toLowerCase();
+
+        String flyerFileName;
+        if (_flyers.isEmpty) {
+          flyerFileName = extension.isNotEmpty ? 'flyer.$extension' : 'flyer.jpg';
+        } else {
+          int altNum = _flyers.length;
+          flyerFileName = extension.isNotEmpty
+              ? 'flyer-$altNum.$extension'
+              : 'flyer-$altNum.jpg';
+          while (_flyers.any((flyer) => flyer.targetName == flyerFileName)) {
+            altNum++;
+            flyerFileName = extension.isNotEmpty
+                ? 'flyer-$altNum.$extension'
+                : 'flyer-$altNum.jpg';
+          }
+        }
+
+        _flyers.add(
+          _PendingFile(
+            path: file.path!,
+            name: originalFileName,
+            targetName: flyerFileName,
+          ),
+        );
+      }
+    });
+  }
+
+  void _setAsPrimaryPhoto(int index) {
+    if (index == 0 || index >= _flyers.length) return;
+    setState(() {
+      final photo = _flyers.removeAt(index);
+      // Rename to be primary (flyer.ext)
+      final extension = path.extension(photo.targetName);
+      final primaryName = 'flyer$extension';
+      // Rename old primary
+      if (_flyers.isNotEmpty) {
+        final oldPrimary = _flyers.first;
+        final oldExt = path.extension(oldPrimary.targetName);
+        _flyers[0] = _PendingFile(
+          path: oldPrimary.path,
+          name: oldPrimary.name,
+          targetName: 'flyer-1$oldExt',
+        );
+      }
+      _flyers.insert(0, _PendingFile(
+        path: photo.path,
+        name: photo.name,
+        targetName: primaryName,
+      ));
+    });
   }
 
   Widget _buildMediaTab(ThemeData theme) {
