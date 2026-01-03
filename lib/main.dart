@@ -2028,10 +2028,11 @@ class _LogPageState extends State<LogPage> {
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
-    return Container(
-      color: isDark ? Colors.black : Colors.grey[900],
-      child: Column(
-        children: [
+    return Scaffold(
+      body: Container(
+        color: isDark ? Colors.black : Colors.grey[900],
+        child: Column(
+          children: [
           // Controls Bar
           Container(
             padding: const EdgeInsets.all(8),
@@ -2114,6 +2115,7 @@ class _LogPageState extends State<LogPage> {
             ),
           ),
         ],
+        ),
       ),
     );
   }
