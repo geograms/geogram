@@ -29,6 +29,7 @@ class EventDetailWidget extends StatelessWidget {
   final VoidCallback? onUploadFiles;
   final VoidCallback? onCreateUpdate;
   final Future<void> Function()? onFeedbackUpdated;
+  final void Function(String placePath)? onPlaceOpen;
 
   const EventDetailWidget({
     Key? key,
@@ -41,6 +42,7 @@ class EventDetailWidget extends StatelessWidget {
     this.onUploadFiles,
     this.onCreateUpdate,
     this.onFeedbackUpdated,
+    this.onPlaceOpen,
   }) : super(key: key);
 
   @override
@@ -50,49 +52,6 @@ class EventDetailWidget extends StatelessWidget {
 
     return Column(
       children: [
-        // Action toolbar with title
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-          decoration: BoxDecoration(
-            color: theme.colorScheme.surface,
-            border: Border(
-              bottom: BorderSide(
-                color: theme.colorScheme.outlineVariant,
-                width: 1,
-              ),
-            ),
-          ),
-          child: Row(
-            children: [
-              // Event title
-              Expanded(
-                child: Text(
-                  event.title,
-                  style: theme.textTheme.titleLarge?.copyWith(
-                    fontWeight: FontWeight.bold,
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-              // Like button
-              EventLikeButton(
-                event: event,
-                collectionPath: collectionPath,
-                compact: true,
-                showCount: false,
-                onFeedbackUpdated: onFeedbackUpdated,
-              ),
-              // Edit/Settings button (if allowed)
-              if (canEdit)
-                IconButton(
-                  icon: const Icon(Icons.settings),
-                  onPressed: onEdit,
-                  tooltip: i18n.t('event_settings'),
-                ),
-            ],
-          ),
-        ),
         Expanded(
           child: ListView(
             physics: const AlwaysScrollableScrollPhysics(),
@@ -122,9 +81,11 @@ class EventDetailWidget extends StatelessWidget {
           ] else
             const SizedBox(height: 16),
 
-          // Event content
-          _buildContent(theme, i18n),
-          const SizedBox(height: 24),
+          // Event content (only if not empty)
+          if (event.content.trim().isNotEmpty) ...[
+            _buildContent(theme, i18n),
+            const SizedBox(height: 24),
+          ],
 
           // Agenda
           if (event.agenda != null && event.agenda!.isNotEmpty) ...[
@@ -206,24 +167,25 @@ class EventDetailWidget extends StatelessWidget {
       spacing: 16,
       runSpacing: 8,
       children: [
-        // Author
-        Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              Icons.person,
-              size: 18,
-              color: theme.colorScheme.onSurfaceVariant,
-            ),
-            const SizedBox(width: 6),
-            Text(
-              event.author,
-              style: theme.textTheme.bodyMedium?.copyWith(
+        // Author (only if not empty)
+        if (event.author.trim().isNotEmpty)
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.person,
+                size: 18,
                 color: theme.colorScheme.onSurfaceVariant,
               ),
-            ),
-          ],
-        ),
+              const SizedBox(width: 6),
+              Text(
+                event.author,
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ],
+          ),
         // Date
         Row(
           mainAxisSize: MainAxisSize.min,
@@ -262,24 +224,51 @@ class EventDetailWidget extends StatelessWidget {
               ),
             ],
           ),
-        // Location
-        Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              event.isOnline ? Icons.language : Icons.place,
-              size: 18,
-              color: theme.colorScheme.onSurfaceVariant,
-            ),
-            const SizedBox(width: 6),
-            Text(
-              event.locationName ?? event.location,
-              style: theme.textTheme.bodyMedium?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
+        // Location (clickable if linked to a place)
+        if (event.hasPlaceReference && onPlaceOpen != null)
+          InkWell(
+            onTap: () => onPlaceOpen!(event.placePath!),
+            borderRadius: BorderRadius.circular(4),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 2),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Icons.place,
+                    size: 18,
+                    color: theme.colorScheme.primary,
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    event.locationName ?? event.location,
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: theme.colorScheme.primary,
+                      decoration: TextDecoration.underline,
+                    ),
+                  ),
+                ],
               ),
             ),
-          ],
-        ),
+          )
+        else
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                event.isOnline ? Icons.language : Icons.place,
+                size: 18,
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+              const SizedBox(width: 6),
+              Text(
+                event.locationName ?? event.location,
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ],
+          ),
         // Visibility
         Row(
           mainAxisSize: MainAxisSize.min,
@@ -1048,6 +1037,15 @@ class _EventFilesSectionState extends State<EventFilesSection> {
     return ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp'].contains(ext);
   }
 
+  bool _isVideoFile(String fileName) {
+    final ext = path.extension(fileName).toLowerCase();
+    return ['.mp4', '.avi', '.mkv', '.mov', '.wmv', '.flv', '.webm'].contains(ext);
+  }
+
+  bool _isMediaFile(String fileName) {
+    return _isImageFile(fileName) || _isVideoFile(fileName);
+  }
+
   IconData _getFileIcon(String fileName) {
     final ext = path.extension(fileName).toLowerCase();
 
@@ -1069,19 +1067,19 @@ class _EventFilesSectionState extends State<EventFilesSection> {
     }
   }
 
-  void _openImageViewer(BuildContext context, io.File file) {
-    final imageFiles = _files
-        .where((entry) => _isImageFile(path.basename(entry.path)))
+  void _openMediaViewer(BuildContext context, io.File file) {
+    final mediaFiles = _files
+        .where((entry) => _isMediaFile(path.basename(entry.path)))
         .toList();
-    if (imageFiles.isEmpty) return;
+    if (mediaFiles.isEmpty) return;
 
-    final imagePaths = imageFiles.map((entry) => entry.path).toList();
-    final initialIndex = imagePaths.indexOf(file.path);
+    final mediaPaths = mediaFiles.map((entry) => entry.path).toList();
+    final initialIndex = mediaPaths.indexOf(file.path);
 
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (context) => PhotoViewerPage(
-          imagePaths: imagePaths,
+          imagePaths: mediaPaths,
           initialIndex: initialIndex >= 0 ? initialIndex : 0,
         ),
       ),
@@ -1089,8 +1087,8 @@ class _EventFilesSectionState extends State<EventFilesSection> {
   }
 
   void _handleFileTap(BuildContext context, io.File file) {
-    if (_isImageFile(path.basename(file.path))) {
-      _openImageViewer(context, file);
+    if (_isMediaFile(path.basename(file.path))) {
+      _openMediaViewer(context, file);
       return;
     }
 
@@ -1172,16 +1170,17 @@ class _EventFilesSectionState extends State<EventFilesSection> {
             shrinkWrap: true,
             physics: const NeverScrollableScrollPhysics(),
             gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-              crossAxisCount: 4,
+              crossAxisCount: 3,
               crossAxisSpacing: 8,
               mainAxisSpacing: 8,
-              childAspectRatio: 1,
+              childAspectRatio: 0.85,
             ),
             itemCount: _files.length,
             itemBuilder: (context, index) {
               final file = _files[index];
               final fileName = path.basename(file.path);
               final isImage = _isImageFile(fileName);
+              final isVideo = _isVideoFile(fileName);
 
               return InkWell(
                 onTap: () => _handleFileTap(context, file),
@@ -1207,6 +1206,8 @@ class _EventFilesSectionState extends State<EventFilesSection> {
                                   child: Image.file(
                                     io.File(file.path),
                                     fit: BoxFit.cover,
+                                    width: double.infinity,
+                                    height: double.infinity,
                                     errorBuilder: (context, error, stackTrace) {
                                       return Icon(
                                         Icons.broken_image,
@@ -1216,11 +1217,34 @@ class _EventFilesSectionState extends State<EventFilesSection> {
                                     },
                                   ),
                                 )
-                              : Icon(
-                                  _getFileIcon(fileName),
-                                  size: 48,
-                                  color: theme.colorScheme.primary,
-                                ),
+                              : isVideo
+                                  ? Stack(
+                                      alignment: Alignment.center,
+                                      children: [
+                                        Icon(
+                                          Icons.video_file,
+                                          size: 48,
+                                          color: theme.colorScheme.primary,
+                                        ),
+                                        Container(
+                                          padding: const EdgeInsets.all(4),
+                                          decoration: BoxDecoration(
+                                            color: Colors.black54,
+                                            shape: BoxShape.circle,
+                                          ),
+                                          child: const Icon(
+                                            Icons.play_arrow,
+                                            size: 24,
+                                            color: Colors.white,
+                                          ),
+                                        ),
+                                      ],
+                                    )
+                                  : Icon(
+                                      _getFileIcon(fileName),
+                                      size: 48,
+                                      color: theme.colorScheme.primary,
+                                    ),
                         ),
                       ),
                       // File name

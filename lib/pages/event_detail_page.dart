@@ -14,9 +14,11 @@ import '../models/event.dart';
 import '../models/event_link.dart';
 import '../services/event_service.dart';
 import '../services/i18n_service.dart';
+import '../util/place_parser.dart';
 import '../services/profile_service.dart';
 import '../widgets/event_detail_widget.dart';
 import 'event_settings_page.dart';
+import 'place_detail_page.dart';
 
 /// Full-screen event detail page (shared by events browser and map).
 class EventDetailPage extends StatefulWidget {
@@ -233,6 +235,74 @@ class _EventDetailPageState extends State<EventDetailPage> {
     }
   }
 
+  Future<void> _openPlace(String placePath) async {
+    if (widget.collectionPath.isEmpty) return;
+
+    // Resolve the place path relative to the collection
+    final basePath = path.dirname(widget.collectionPath);
+    final fullPlacePath = path.isAbsolute(placePath)
+        ? placePath
+        : path.normalize(path.join(basePath, placePath));
+
+    try {
+      final placeFile = File('$fullPlacePath/place.txt');
+      if (!await placeFile.exists()) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(widget.i18n.t('place_not_found')),
+              backgroundColor: Colors.orange,
+            ),
+          );
+        }
+        return;
+      }
+
+      final content = await placeFile.readAsString();
+      final place = PlaceParser.parsePlaceContent(
+        content: content,
+        filePath: placeFile.path,
+        folderPath: fullPlacePath,
+        regionName: '',
+      );
+
+      if (place != null && mounted) {
+        // Derive places collection path from place folder
+        final placesCollectionPath = _derivePlacesCollectionPath(fullPlacePath);
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => PlaceDetailPage(
+              collectionPath: placesCollectionPath,
+              place: place,
+            ),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('${widget.i18n.t('error')}: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  /// Derive the places collection path from a place folder path.
+  /// Assumes structure: .../places/region/place-name or .../places/place-name
+  String _derivePlacesCollectionPath(String placeFolderPath) {
+    final parts = path.split(placeFolderPath);
+    final placesIndex = parts.lastIndexOf('places');
+    if (placesIndex >= 0) {
+      return path.joinAll(parts.sublist(0, placesIndex + 1));
+    }
+    // Fallback: go up two levels from the place folder
+    return path.dirname(path.dirname(placeFolderPath));
+  }
+
   @override
   Widget build(BuildContext context) {
     final canEdit = !widget.readOnly &&
@@ -252,6 +322,7 @@ class _EventDetailPageState extends State<EventDetailPage> {
       onFeedbackUpdated: widget.collectionPath.isNotEmpty
           ? () => _refreshEvent(markChanged: true)
           : null,
+      onPlaceOpen: _openPlace,
     );
 
     return PopScope(
@@ -264,6 +335,14 @@ class _EventDetailPageState extends State<EventDetailPage> {
       child: Scaffold(
         appBar: AppBar(
           title: Text(_event.title),
+          actions: [
+            if (canEdit)
+              IconButton(
+                icon: const Icon(Icons.edit),
+                onPressed: _editEvent,
+                tooltip: widget.i18n.t('edit'),
+              ),
+          ],
         ),
         body: widget.collectionPath.isEmpty
             ? detail

@@ -11,6 +11,9 @@ import 'package:file_picker/file_picker.dart';
 import 'package:path/path.dart' as path;
 import 'package:video_player/video_player.dart';
 import '../platform/file_image_helper.dart' as file_helper;
+import '../platform/video_controller_factory.dart'
+    if (dart.library.html) '../platform/video_controller_factory_web.dart'
+    as video_factory;
 import '../services/i18n_service.dart';
 import '../util/file_icon_helper.dart';
 
@@ -362,9 +365,30 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
   }
 
   Widget _buildVideoView(int index, String videoPath) {
-    // Initialize controller if needed
+    // Initialize controller if needed (uses platform-specific factory)
     if (!_videoControllers.containsKey(index)) {
-      final controller = VideoPlayerController.file(File(videoPath));
+      final controller = video_factory.createVideoController(videoPath);
+      if (controller == null) {
+        // Video file playback not supported on this platform (e.g., web)
+        return Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.videocam_off, size: 64, color: Colors.white54),
+              const SizedBox(height: 16),
+              Text(
+                path.basename(videoPath),
+                style: const TextStyle(color: Colors.white70),
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                'Video playback not available on this platform',
+                style: TextStyle(color: Colors.white54, fontSize: 12),
+              ),
+            ],
+          ),
+        );
+      }
       controller.initialize().then((_) {
         if (mounted) setState(() {});
       });

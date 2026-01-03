@@ -81,7 +81,7 @@ class _PlaceDetailPageState extends State<PlaceDetailPage> {
         final entities = await imagesDir.list().toList();
         setState(() {
           _photos = entities
-              .where((e) => e is File && _isImageFile(e.path))
+              .where((e) => e is File && _isMediaFile(e.path))
               .map((e) => e.path)
               .toList();
         });
@@ -96,6 +96,18 @@ class _PlaceDetailPageState extends State<PlaceDetailPage> {
     return ext.endsWith('.jpg') || ext.endsWith('.jpeg') ||
            ext.endsWith('.png') || ext.endsWith('.gif') ||
            ext.endsWith('.webp');
+  }
+
+  bool _isVideoFile(String path) {
+    final ext = path.toLowerCase();
+    return ext.endsWith('.mp4') || ext.endsWith('.avi') ||
+           ext.endsWith('.mkv') || ext.endsWith('.mov') ||
+           ext.endsWith('.wmv') || ext.endsWith('.flv') ||
+           ext.endsWith('.webm');
+  }
+
+  bool _isMediaFile(String path) {
+    return _isImageFile(path) || _isVideoFile(path);
   }
 
   IconData _getTypeIcon(String? type) {

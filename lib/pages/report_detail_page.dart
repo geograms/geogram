@@ -728,7 +728,7 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
         final entities = await imagesDir.list().toList();
         setState(() {
           _existingImages = entities
-              .where((e) => e is File && _isImageFile(e.path))
+              .where((e) => e is File && _isMediaFile(e.path))
               .map((e) => e.path)
               .toList();
         });
@@ -829,6 +829,15 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
   bool _isImageFile(String filePath) {
     final ext = path.extension(filePath).toLowerCase();
     return ['.jpg', '.jpeg', '.png', '.gif', '.webp'].contains(ext);
+  }
+
+  bool _isVideoFile(String filePath) {
+    final ext = path.extension(filePath).toLowerCase();
+    return ['.mp4', '.avi', '.mkv', '.mov', '.wmv', '.flv', '.webm'].contains(ext);
+  }
+
+  bool _isMediaFile(String filePath) {
+    return _isImageFile(filePath) || _isVideoFile(filePath);
   }
 
   /// Get translated severity label

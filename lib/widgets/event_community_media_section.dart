@@ -60,14 +60,18 @@ class _MediaFileEntry {
   final String name;
   final String path;
   final bool isImage;
+  final bool isVideo;
   final bool isRemote;
 
   const _MediaFileEntry({
     required this.name,
     required this.path,
     required this.isImage,
+    required this.isVideo,
     required this.isRemote,
   });
+
+  bool get isMedia => isImage || isVideo;
 }
 
 class _StationConnectionInfo {
@@ -204,6 +208,7 @@ class _EventCommunityMediaSectionState extends State<EventCommunityMediaSection>
                 name: name,
                 path: entry.path,
                 isImage: _isImageFile(entry.path),
+                isVideo: _isVideoFile(entry.path),
                 isRemote: false,
               ));
             }
@@ -212,8 +217,8 @@ class _EventCommunityMediaSectionState extends State<EventCommunityMediaSection>
           if (files.isEmpty) continue;
           files.sort((a, b) => a.name.compareTo(b.name));
 
-          final imageFiles = files.where((file) => file.isImage).toList();
-          final otherFiles = files.where((file) => !file.isImage).toList();
+          final imageFiles = files.where((file) => file.isMedia).toList();
+          final otherFiles = files.where((file) => !file.isMedia).toList();
           final isApproved = _isPublic ? approved.contains(callsign) : true;
           final isBanned = _isPublic ? banned.contains(callsign) : false;
 
@@ -325,11 +330,14 @@ class _EventCommunityMediaSectionState extends State<EventCommunityMediaSection>
           final name = file['name'] as String? ?? '';
           final pathValue = file['path'] as String? ?? '';
           if (name.isEmpty || pathValue.isEmpty) continue;
-          final isImage = (file['type'] as String?) == 'image' || _isImageFile(name);
+          final fileType = file['type'] as String?;
+          final isImage = fileType == 'image' || _isImageFile(name);
+          final isVideo = fileType == 'video' || _isVideoFile(name);
           files.add(_MediaFileEntry(
             name: name,
             path: pathValue,
             isImage: isImage,
+            isVideo: isVideo,
             isRemote: true,
           ));
         }
@@ -337,8 +345,8 @@ class _EventCommunityMediaSectionState extends State<EventCommunityMediaSection>
         if (files.isEmpty) continue;
         files.sort((a, b) => a.name.compareTo(b.name));
 
-        final imageFiles = files.where((file) => file.isImage).toList();
-        final otherFiles = files.where((file) => !file.isImage).toList();
+        final imageFiles = files.where((file) => file.isMedia).toList();
+        final otherFiles = files.where((file) => !file.isMedia).toList();
         final isApproved = entry['is_approved'] is bool
             ? entry['is_approved'] as bool
             : approved.contains(callsign);
@@ -806,6 +814,15 @@ class _EventCommunityMediaSectionState extends State<EventCommunityMediaSection>
   bool _isImageFile(String filePath) {
     final ext = path.extension(filePath).toLowerCase();
     return ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'].contains(ext);
+  }
+
+  bool _isVideoFile(String filePath) {
+    final ext = path.extension(filePath).toLowerCase();
+    return ['.mp4', '.avi', '.mkv', '.mov', '.wmv', '.flv', '.webm'].contains(ext);
+  }
+
+  bool _isMediaFile(String filePath) {
+    return _isImageFile(filePath) || _isVideoFile(filePath);
   }
 
   Future<void> _approveContributor(String callsign) async {
