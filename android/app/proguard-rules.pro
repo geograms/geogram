@@ -11,7 +11,23 @@
 # Suppress warnings for excluded classes
 -dontwarn io.flutter.embedding.engine.deferredcomponents.PlayStoreDeferredComponentManager
 -dontwarn io.flutter.embedding.android.FlutterPlayStoreSplitApplication
+
+# ============================================
+# F-Droid compliance: Remove Google Play Core
+# ============================================
+# Suppress all warnings from Play Core
 -dontwarn com.google.android.play.core.**
+
+# Remove all Play Core classes entirely
+-assumenosideeffects class com.google.android.play.core.** { *; }
+
+# Specifically target the classes F-Droid flagged
+-assumenosideeffects class com.google.android.play.core.splitinstall.** { *; }
+-assumenosideeffects class com.google.android.play.core.splitcompat.** { *; }
+-assumenosideeffects class com.google.android.play.core.tasks.** { *; }
+
+# Tell R8 these classes don't exist and can be removed
+-dontnote com.google.android.play.core.**
 
 # TensorFlow Lite rules
 -keep class org.tensorflow.** { *; }
@@ -25,6 +41,3 @@
 # Keep TFLite Flutter plugin
 -keep class com.tfliteflutter.** { *; }
 -dontwarn com.tfliteflutter.**
-
-# Ignore missing Play Core classes (not needed for F-Droid builds)
--dontwarn com.google.android.play.core.**
