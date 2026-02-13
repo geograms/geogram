@@ -16,5 +16,7 @@
   "station_system": "Sistema de Relés",
   "station_system_desc": "Entrega de mensagens store-and-forward",
   "station_url": "URL da Estação *",
-  "station_url_hint": "wss://station.exemplo.com"
+  "station_url_hint": "wss://station.exemplo.com",
+  "station_running": "Estação Ativa",
+  "station_stopped": "Estação Parada"
 }

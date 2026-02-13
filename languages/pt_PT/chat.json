@@ -16,5 +16,6 @@
   "chat_rooms": "Salas de Chat",
   "chat_settings": "Definições de Chat",
   "dm_sync_complete": "Sincronização completa: {0} recebidas, {1} enviadas",
-  "dm_sync_failed": "Sincronização falhou: {0}"
+  "dm_sync_failed": "Sincronização falhou: {0}",
+  "chat_room_not_found": "Sala de chat nao encontrada"
 }

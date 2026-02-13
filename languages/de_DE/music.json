@@ -110,5 +110,11 @@
   "albums_tracks_count": "{0} Alben, {1} Titel",
   "albums_dash_tracks": "{0} Alben - {1} Titel",
   "shuffle_all": "Alle zufällig abspielen",
-  "back": "Zurück"
+  "back": "Zurück",
+  "music_tab_home": "Start",
+  "music_tab_folders": "Ordner",
+  "music_tab_playlists": "Wiedergabelisten",
+  "music_value_seconds_short": "{0}s",
+  "music_value_percent": "{0}%",
+  "music_value_mb": "{0} MB"
 }

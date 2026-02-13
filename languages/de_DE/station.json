@@ -5,7 +5,7 @@
   "station_description": "Netzwerk-Stationsserver",
   "station_instructions": "• Wählen Sie EINE bevorzugte Station aus (Sternsymbol)\n• Wählen Sie mehrere Ersatzstationen (Häkchen) für Redundanz\n• Stationen können ihren Namen und ihre Standortkoordinaten offenlegen",
   "station_name": "Stationsname *",
-  "station_name_hint": "z.\u00a0B. Meine eigene Station",
+  "station_name_hint": "z. B. Meine eigene Station",
   "station_places": "Stationsorte",
   "station_profile": "Stationsprofil",
   "station_required_for_media": "Keine Station für öffentliche Veranstaltungsmedien konfiguriert.",
@@ -16,5 +16,7 @@
   "station_system": "Stationssystem",
   "station_system_desc": "Zwischenspeichern und Weiterleiten von Nachrichten",
   "station_url": "Stations-URL *",
-  "station_url_hint": "wss://station.example.com"
+  "station_url_hint": "wss://station.example.com",
+  "station_running": "Station läuft",
+  "station_stopped": "Station gestoppt"
 }

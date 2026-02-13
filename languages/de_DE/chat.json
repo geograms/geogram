@@ -1,20 +1,21 @@
 {
   "channel_already_exists": "Kanal mit diesem Rufzeichen existiert bereits",
-  "channel_bluetooth_desc": "Offline-Kommunikation \u2013 kein Internet erforderlich",
+  "channel_bluetooth_desc": "Offline-Kommunikation – kein Internet erforderlich",
   "channel_bluetooth_title": "Bluetooth-Mesh",
   "channel_created_success": "Kanal erfolgreich erstellt",
   "channel_info": "Kanalinformationen",
-  "channel_lan_desc": "Am schnellsten \u2013 direktes HTTP im selben WLAN-Netzwerk",
+  "channel_lan_desc": "Am schnellsten – direktes HTTP im selben WLAN-Netzwerk",
   "channel_lan_title": "Lokales Netzwerk (LAN)",
   "channel_moderators": "{0} Moderatoren",
   "channel_name": "Kanalname",
-  "channel_station_desc": "Ausweich-Relay, wenn P2P nicht verf\u00fcgbar",
+  "channel_station_desc": "Ausweich-Relay, wenn P2P nicht verfügbar",
   "channel_station_title": "Station-Relay",
   "channel_type": "Kanaltyp",
-  "channel_webrtc_desc": "Direktverbindung \u00fcber NAT-Traversal \u2013 echte Privatsph\u00e4re",
+  "channel_webrtc_desc": "Direktverbindung über NAT-Traversal – echte Privatsphäre",
   "channel_webrtc_title": "WebRTC P2P",
-  "chat_rooms": "Chatr\u00e4ume",
+  "chat_rooms": "Chaträume",
   "chat_settings": "Chat-Einstellungen",
   "dm_sync_complete": "Synchronisation abgeschlossen: {0} empfangen, {1} gesendet",
-  "dm_sync_failed": "Synchronisation fehlgeschlagen: {0}"
+  "dm_sync_failed": "Synchronisation fehlgeschlagen: {0}",
+  "chat_room_not_found": "Chatraum nicht gefunden"
 }

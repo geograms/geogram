@@ -106,9 +106,17 @@
   "app_type_features_qr": "QR-Codes und Barcodes scannen|WLAN-, URL-, Kontaktcodes erstellen|Unterstützung für EAN, UPC, Code 128|In Ordnern organisieren|Als Bilder teilen",
   "app_updates": "App-Aktualisierungen",
   "app_updates_desc": "Benachrichtigen, wenn Apps aktualisiert oder synchronisiert werden",
-
   "location_notification_title": "Standort aktiv",
   "location_notification_text": "GPS-Position wird bereitgestellt",
   "location_recording_title": "Pfadaufzeichnung",
-  "location_recording_text": "GPS-Verfolgung ist aktiv"
+  "location_recording_text": "GPS-Verfolgung ist aktiv",
+  "app_name": "Geogram",
+  "app_recovered": "Geogram Wiederhergestellt",
+  "app_recovered_description": "Die App wurde nach einem unerwarteten Fehler wiederhergestellt. Sie können Absturzprotokolle in den Einstellungen anzeigen.",
+  "app_theme": "Designs",
+  "app_type_desc_reader": "Ihr persönlicher Lese-Hub für RSS-Feeds, Mangas und E-Books. Abonnieren Sie Nachrichtenquellen, folgen Sie Manga-Serien und organisieren Sie Ihre digitale Bibliothek.",
+  "app_type_features_reader": "RSS-Feed-Abonnements|Integration von Manga-Quellen|E-Book-Bibliothek|Lesefortschrittsverfolgung",
+  "app_type_flasher": "Flasher",
+  "app_type_reader": "Leser",
+  "app_version_and_info": "App-Version und Informationen"
 }
