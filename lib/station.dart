@@ -2874,6 +2874,7 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, EmailHandlerMixin 
 
     final contactsPath = path.join(PureStorageConfig().getCallsignDir(_settings.callsign), 'contacts');
     final contactService = ContactService();
+    contactService.setStorage(FilesystemProfileStorage(contactsPath));
     await contactService.initializeApp(contactsPath);
     final contacts = await contactService.loadAllContactsRecursively();
     for (final contact in contacts) {
