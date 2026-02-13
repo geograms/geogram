@@ -21,6 +21,7 @@ class SMTPSendResult {
   final String? message;
   final String? error;
   final Duration? duration;
+  final String? messageId;
 
   SMTPSendResult._({
     required this.success,
@@ -28,10 +29,19 @@ class SMTPSendResult {
     this.message,
     this.error,
     this.duration,
+    this.messageId,
   });
 
-  factory SMTPSendResult.success({String? message, Duration? duration}) =>
-      SMTPSendResult._(success: true, message: message, duration: duration);
+  factory SMTPSendResult.success({
+    String? message,
+    Duration? duration,
+    String? messageId,
+  }) => SMTPSendResult._(
+    success: true,
+    message: message,
+    duration: duration,
+    messageId: messageId,
+  );
 
   factory SMTPSendResult.failure({int? code, String? error}) =>
       SMTPSendResult._(success: false, responseCode: code, error: error);
@@ -176,9 +186,18 @@ class SMTPClient {
     // Check if all domains succeeded
     final allSuccess = results.values.every((r) => r.success);
     if (allSuccess) {
+      String? firstMessageId;
+      for (final result in results.values) {
+        final candidate = result.messageId;
+        if (candidate != null && candidate.isNotEmpty) {
+          firstMessageId = candidate;
+          break;
+        }
+      }
       return SMTPSendResult.success(
         message: 'Delivered to ${to.length} recipient(s)',
         duration: stopwatch.elapsed,
+        messageId: firstMessageId,
       );
     }
 
@@ -371,7 +390,7 @@ class SMTPClient {
       }
 
       // Build and send message content
-      final messageContent = _buildMessage(
+      final builtMessage = _buildMessage(
         from: from,
         to: to,
         cc: cc,
@@ -380,6 +399,7 @@ class SMTPClient {
         attachments: attachments,
         extraHeaders: extraHeaders,
       );
+      final messageContent = builtMessage.raw;
 
       // Escape content and add terminator
       final escapedContent = SMTPProtocol.escapeData(messageContent);
@@ -406,7 +426,10 @@ class SMTPClient {
         'SMTP: Successfully delivered to ${to.join(", ")} via $targetHost',
       );
 
-      return SMTPSendResult.success(message: 'Delivered via $targetHost');
+      return SMTPSendResult.success(
+        message: 'Delivered via $targetHost',
+        messageId: builtMessage.messageId,
+      );
     } catch (e) {
       LogService().log('SMTP: Error sending to $domain: $e');
       return SMTPSendResult.failure(error: e.toString());
@@ -517,7 +540,7 @@ class SMTPClient {
   }
 
   /// Build MIME message content with optional DKIM signing
-  String _buildMessage({
+  _BuiltMessage _buildMessage({
     required String from,
     required List<String> to,
     List<String>? cc,
@@ -613,7 +636,7 @@ class SMTPClient {
       buffer.write(messageBody);
     }
 
-    return buffer.toString();
+    return _BuiltMessage(raw: buffer.toString(), messageId: messageId);
   }
 
   /// Fold a long header value for email formatting (RFC 5322)
@@ -660,6 +683,13 @@ class _MXCacheEntry {
 
   bool get isExpired =>
       DateTime.now().difference(timestamp) > SMTPClient._mxCacheTtl;
+}
+
+class _BuiltMessage {
+  final String raw;
+  final String messageId;
+
+  const _BuiltMessage({required this.raw, required this.messageId});
 }
 
 /// SMTP session helper for managing socket stream

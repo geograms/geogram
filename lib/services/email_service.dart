@@ -60,6 +60,13 @@ class _IncomingAttachment {
   _IncomingAttachment({required this.name, required this.bytes});
 }
 
+class _OutboundThreadingHeaders {
+  final String? inReplyTo;
+  final String? references;
+
+  const _OutboundThreadingHeaders({this.inReplyTo, this.references});
+}
+
 /// Service for managing emails across multiple stations
 class EmailService {
   static final EmailService _instance = EmailService._internal();
@@ -425,6 +432,262 @@ class EmailService {
       }
     }
     return null;
+  }
+
+  /// Normalize subject by removing common reply/forward prefixes.
+  static String _normalizeThreadSubject(String? subject) {
+    if (subject == null) return '';
+    return subject
+        .replaceAll(RegExp(r'^((re|fwd?|aw):\s*)+', caseSensitive: false), '')
+        .trim()
+        .toLowerCase();
+  }
+
+  /// Normalize an email-like identity value to a lowercase address.
+  static String _normalizeEmailIdentity(String value) {
+    final trimmed = value.trim();
+    final bracketMatch = RegExp(r'<([^>]+)>').firstMatch(trimmed);
+    final candidate = bracketMatch?.group(1) ?? trimmed;
+    return candidate.trim().toLowerCase();
+  }
+
+  /// Client-side reply matching fallback when station thread_id is unknown/new.
+  Future<EmailThread?> _findThreadByReplyContext({
+    required String from,
+    required String? subject,
+  }) async {
+    final normalizedFrom = _normalizeEmailIdentity(from);
+    final normalizedSubject = _normalizeThreadSubject(subject);
+    if (normalizedFrom.isEmpty || normalizedSubject.isEmpty) {
+      return null;
+    }
+
+    // Prefer inbox matches so incoming replies are shown in Inbox first.
+    for (final thread in await getInbox()) {
+      if (_normalizeThreadSubject(thread.subject) != normalizedSubject)
+        continue;
+      if (_normalizeEmailIdentity(thread.from) == normalizedFrom) {
+        return thread;
+      }
+    }
+
+    // Fall back to sent/outbox threads where the sender is one of our
+    // recipients (e.g., first external reply to a previously sent email).
+    for (final thread in await getSent()) {
+      if (_normalizeThreadSubject(thread.subject) != normalizedSubject)
+        continue;
+      final toMatches = thread.to.any(
+        (addr) => _normalizeEmailIdentity(addr) == normalizedFrom,
+      );
+      if (toMatches || _normalizeEmailIdentity(thread.from) == normalizedFrom) {
+        return thread;
+      }
+    }
+    for (final thread in await getOutbox()) {
+      if (_normalizeThreadSubject(thread.subject) != normalizedSubject)
+        continue;
+      final toMatches = thread.to.any(
+        (addr) => _normalizeEmailIdentity(addr) == normalizedFrom,
+      );
+      if (toMatches || _normalizeEmailIdentity(thread.from) == normalizedFrom) {
+        return thread;
+      }
+    }
+
+    return null;
+  }
+
+  static String _normalizeMessageIdToken(String value) {
+    var token = value.trim();
+    if (token.startsWith('<') && token.endsWith('>') && token.length > 2) {
+      token = token.substring(1, token.length - 1);
+    }
+    return token.trim().toLowerCase();
+  }
+
+  static List<String> _extractMessageIdCandidates(String? headerValue) {
+    if (headerValue == null) return const [];
+    final trimmed = headerValue.trim();
+    if (trimmed.isEmpty) return const [];
+
+    final bracketMatches = RegExp(r'<([^>]+)>')
+        .allMatches(trimmed)
+        .map((m) => m.group(1))
+        .whereType<String>()
+        .map(_normalizeMessageIdToken)
+        .where((id) => id.isNotEmpty)
+        .toList();
+    if (bracketMatches.isNotEmpty) return bracketMatches;
+
+    return trimmed
+        .split(RegExp(r'[\s,]+'))
+        .map(_normalizeMessageIdToken)
+        .where((id) => id.isNotEmpty)
+        .toList();
+  }
+
+  Future<EmailThread?> _findThreadByExternalMessageIds(
+    List<String> messageIds,
+  ) async {
+    if (messageIds.isEmpty) return null;
+    final targetIds = messageIds
+        .map(_normalizeMessageIdToken)
+        .where((id) => id.isNotEmpty)
+        .toSet();
+    if (targetIds.isEmpty) return null;
+
+    for (final folder in ['inbox', 'sent', 'outbox']) {
+      final threads = await listThreads(folder);
+      for (final thread in threads) {
+        for (final msg in thread.messages) {
+          final externalId = msg.metadata['external_message_id'];
+          if (externalId == null || externalId.isEmpty) continue;
+          if (targetIds.contains(_normalizeMessageIdToken(externalId))) {
+            return thread;
+          }
+        }
+      }
+    }
+    return null;
+  }
+
+  Future<EmailThread?> _findThreadByIdInFolder(
+    String folder,
+    String threadId,
+  ) async {
+    final threads = await listThreads(folder);
+    for (final thread in threads) {
+      if (thread.threadId == threadId) {
+        return thread;
+      }
+    }
+    return null;
+  }
+
+  EmailMessage _cloneEmailMessage(EmailMessage source) {
+    final clonedReactions = source.reactions.map(
+      (key, users) => MapEntry(key, List<String>.from(users)),
+    );
+    return EmailMessage(
+      author: source.author,
+      timestamp: source.timestamp,
+      content: source.content,
+      metadata: Map<String, String>.from(source.metadata),
+      reactions: clonedReactions,
+    );
+  }
+
+  Future<EmailThread> _ensureInboxThreadForIncoming({
+    required EmailThread sourceThread,
+    required String incomingFrom,
+  }) async {
+    if (sourceThread.status == EmailStatus.received) {
+      return sourceThread;
+    }
+
+    final existingInboxThread = await _findThreadByIdInFolder(
+      'inbox',
+      sourceThread.threadId,
+    );
+    if (existingInboxThread != null) {
+      return existingInboxThread;
+    }
+
+    final preferredStation = StationService().getPreferredStation()?.name;
+    final station = sourceThread.station.isNotEmpty
+        ? sourceThread.station
+        : (preferredStation ?? 'p2p.radio');
+    final localAddress =
+        '${ProfileService().getProfile().callsign.toLowerCase()}@$station';
+
+    return EmailThread(
+      station: station,
+      from: incomingFrom,
+      to: [localAddress],
+      cc: List<String>.from(sourceThread.cc),
+      bcc: const [],
+      subject: sourceThread.subject,
+      created: sourceThread.created,
+      status: EmailStatus.received,
+      isRead: false,
+      threadId: sourceThread.threadId,
+      labels: List<String>.from(sourceThread.labels),
+      priority: sourceThread.priority,
+      inReplyTo: sourceThread.inReplyTo,
+      messages: sourceThread.messages.map(_cloneEmailMessage).toList(),
+    );
+  }
+
+  void _applyExternalThreadingMetadata(
+    EmailMessage emailMessage, {
+    String? externalMessageId,
+    String? inReplyTo,
+    String? references,
+  }) {
+    if (externalMessageId != null && externalMessageId.trim().isNotEmpty) {
+      emailMessage.metadata['external_message_id'] = _normalizeMessageIdToken(
+        externalMessageId,
+      );
+    }
+    if (inReplyTo != null && inReplyTo.trim().isNotEmpty) {
+      emailMessage.metadata['in_reply_to'] = inReplyTo.trim();
+    }
+    if (references != null && references.trim().isNotEmpty) {
+      emailMessage.metadata['references'] = references.trim();
+    }
+  }
+
+  _OutboundThreadingHeaders _buildOutboundThreadingHeaders(EmailThread thread) {
+    if (thread.messages.isEmpty) return const _OutboundThreadingHeaders();
+
+    final orderedExternalIds = <String>[];
+    final seenExternalIds = <String>{};
+    for (final message in thread.messages) {
+      final rawExternalId = message.metadata['external_message_id'];
+      if (rawExternalId == null || rawExternalId.trim().isEmpty) continue;
+      final normalizedId = _normalizeMessageIdToken(rawExternalId);
+      if (normalizedId.isEmpty || seenExternalIds.contains(normalizedId)) {
+        continue;
+      }
+      seenExternalIds.add(normalizedId);
+      orderedExternalIds.add(normalizedId);
+    }
+
+    if (orderedExternalIds.isEmpty) {
+      return const _OutboundThreadingHeaders();
+    }
+
+    final parentId = orderedExternalIds.last;
+    final latestMessage = thread.messages.last;
+    final referenceCandidates = <String>[
+      ..._extractMessageIdCandidates(latestMessage.metadata['references']),
+      ..._extractMessageIdCandidates(latestMessage.metadata['in_reply_to']),
+      ...orderedExternalIds,
+    ];
+
+    final orderedReferences = <String>[];
+    final seenReferences = <String>{};
+    for (final candidate in referenceCandidates) {
+      final normalized = _normalizeMessageIdToken(candidate);
+      if (normalized.isEmpty || seenReferences.contains(normalized)) continue;
+      seenReferences.add(normalized);
+      orderedReferences.add(normalized);
+    }
+
+    if (orderedReferences.isNotEmpty) {
+      orderedReferences.remove(parentId);
+      orderedReferences.add(parentId);
+    }
+
+    final inReplyToHeader = '<$parentId>';
+    final referencesHeader = orderedReferences.isEmpty
+        ? null
+        : orderedReferences.map((id) => '<$id>').join(' ');
+
+    return _OutboundThreadingHeaders(
+      inReplyTo: inReplyToHeader,
+      references: referencesHeader,
+    );
   }
 
   /// Get inbox threads (unified)
@@ -934,6 +1197,13 @@ class EmailService {
         'event': signedEvent?.toJson(),
         'total_size_bytes': totalPayloadSizeBytes,
       };
+      final threadingHeaders = _buildOutboundThreadingHeaders(thread);
+      if (threadingHeaders.inReplyTo != null) {
+        message['in_reply_to'] = threadingHeaders.inReplyTo;
+      }
+      if (threadingHeaders.references != null) {
+        message['references'] = threadingHeaders.references;
+      }
       if (outgoingAttachments.isNotEmpty) {
         message['attachments'] = outgoingAttachments
             .map(
@@ -1047,6 +1317,7 @@ class EmailService {
     final action = dsn['action'] as String?;
     final recipient = dsn['recipient'] as String?;
     final reason = dsn['reason'] as String?;
+    final externalMessageId = dsn['external_message_id'] as String?;
 
     if (threadId == null || action == null) return;
 
@@ -1073,6 +1344,13 @@ class EmailService {
     if (thread.threadId.isNotEmpty) {
       switch (action) {
         case 'delivered':
+          if (externalMessageId != null &&
+              externalMessageId.trim().isNotEmpty &&
+              thread.messages.isNotEmpty) {
+            thread.messages.last.metadata['external_message_id'] =
+                _normalizeMessageIdToken(externalMessageId);
+            await saveThread(thread);
+          }
           await markAsSent(thread);
           notificationMessage =
               'Email delivered to ${recipient ?? thread.to.join(", ")}';
@@ -1127,20 +1405,25 @@ class EmailService {
       await initialize();
 
       final from = message['from'] as String?;
-      final threadId = message['thread_id'] as String?;
+      final incomingThreadId = message['thread_id'] as String?;
       final subject = message['subject'] as String?;
       final contentB64 = message['content'] as String?;
       final event = message['event'] as Map<String, dynamic>?;
+      final externalMessageId = message['external_message_id'] as String?;
+      final inReplyTo = message['in_reply_to'] as String?;
+      final references = message['references'] as String?;
       final incomingAttachments = _parseIncomingAttachments(
         message['attachments'],
       );
 
-      if (from == null || threadId == null || contentB64 == null) {
+      if (from == null || contentB64 == null) {
         LogService().log(
           'EmailService: Invalid email_receive message - missing fields',
         );
         return false;
       }
+
+      var resolvedThreadId = incomingThreadId ?? '';
 
       // Decode content (base64-encoded thread.md)
       String content;
@@ -1156,9 +1439,59 @@ class EmailService {
           : from.toUpperCase();
 
       // Try to find existing thread by threadId (for reply appending)
-      EmailThread? existingThread = await _findThreadById(threadId);
+      final replyCandidates = <String>{
+        ..._extractMessageIdCandidates(inReplyTo),
+        ..._extractMessageIdCandidates(references),
+      }.toList();
+
+      // Normal email-client behavior: resolve thread by In-Reply-To/References.
+      EmailThread? existingThread;
+      if (replyCandidates.isNotEmpty) {
+        final byMessageId = await _findThreadByExternalMessageIds(
+          replyCandidates,
+        );
+        if (byMessageId != null) {
+          existingThread = byMessageId;
+          resolvedThreadId = byMessageId.threadId;
+          LogService().log(
+            'EmailService: Thread resolved via In-Reply-To/References from $from to ${byMessageId.threadId}',
+          );
+        }
+      }
+
+      // Use station-provided thread_id only as a fallback hint.
+      if (existingThread == null &&
+          incomingThreadId != null &&
+          incomingThreadId.isNotEmpty) {
+        existingThread = await _findThreadById(incomingThreadId);
+      }
+
+      // Station may generate a new thread_id for external replies after restart.
+      // Resolve by sender+subject on the client so threading remains stable.
+      if (existingThread == null) {
+        final contextualMatch = await _findThreadByReplyContext(
+          from: from,
+          subject: subject,
+        );
+        if (contextualMatch != null) {
+          existingThread = contextualMatch;
+          resolvedThreadId = contextualMatch.threadId;
+          LogService().log(
+            'EmailService: Client-side thread resolution mapped "$subject" from $from to ${contextualMatch.threadId}',
+          );
+        }
+      }
 
       if (existingThread != null) {
+        var targetThread = existingThread;
+        if (targetThread.status != EmailStatus.received) {
+          targetThread = await _ensureInboxThreadForIncoming(
+            sourceThread: existingThread,
+            incomingFrom: from,
+          );
+          resolvedThreadId = targetThread.threadId;
+        }
+
         // Append new message to existing thread
         final timestamp = DateTime.now();
         final created =
@@ -1173,6 +1506,12 @@ class EmailService {
           metadata: {},
         );
         _applyIncomingAttachmentMetadata(emailMessage, incomingAttachments);
+        _applyExternalThreadingMetadata(
+          emailMessage,
+          externalMessageId: externalMessageId,
+          inReplyTo: inReplyTo,
+          references: references,
+        );
 
         if (event != null) {
           emailMessage.metadata['event_id'] = event['id'] as String? ?? '';
@@ -1180,29 +1519,31 @@ class EmailService {
           emailMessage.metadata['signature'] = event['sig'] as String? ?? '';
         }
 
-        existingThread.addMessage(emailMessage);
-        existingThread.isRead = false;
-        await saveThread(existingThread);
+        targetThread.addMessage(emailMessage);
+        targetThread.status = EmailStatus.received;
+        targetThread.isRead = false;
+        await saveThread(targetThread);
         if (incomingAttachments.isNotEmpty) {
-          await _storeIncomingAttachments(existingThread, incomingAttachments);
+          await _storeIncomingAttachments(targetThread, incomingAttachments);
         }
 
         LogService().log(
-          'EmailService: Appended reply from $from to existing thread $threadId',
+          'EmailService: Appended reply from $from to existing thread $resolvedThreadId',
         );
 
         _eventController.add(
           EmailChangeEvent(
-            existingThread.station,
-            threadId,
+            targetThread.station,
+            resolvedThreadId,
             EmailChangeType.received,
           ),
         );
 
         await _showIncomingEmailNotification(
           from: from,
-          subject: subject ?? existingThread.subject,
+          subject: subject ?? targetThread.subject,
           content: content,
+          threadId: targetThread.threadId,
         );
 
         return true;
@@ -1235,7 +1576,9 @@ class EmailService {
           created: created,
           status: EmailStatus.received,
           isRead: false,
-          threadId: threadId,
+          threadId: resolvedThreadId.isNotEmpty
+              ? resolvedThreadId
+              : 'ext_${(subject ?? from).hashCode.abs()}',
           messages: [],
         );
 
@@ -1247,6 +1590,12 @@ class EmailService {
           metadata: {},
         );
         _applyIncomingAttachmentMetadata(emailMessage, incomingAttachments);
+        _applyExternalThreadingMetadata(
+          emailMessage,
+          externalMessageId: externalMessageId,
+          inReplyTo: inReplyTo,
+          references: references,
+        );
 
         // Add NOSTR metadata if event provided
         if (event != null) {
@@ -1260,6 +1609,14 @@ class EmailService {
         // Thread was parsed from content, mark as received
         thread.status = EmailStatus.received;
         thread.isRead = false;
+        if (thread.messages.isNotEmpty) {
+          _applyExternalThreadingMetadata(
+            thread.messages.last,
+            externalMessageId: externalMessageId,
+            inReplyTo: inReplyTo,
+            references: references,
+          );
+        }
       }
 
       // Save to inbox
@@ -1269,18 +1626,23 @@ class EmailService {
       }
 
       LogService().log(
-        'EmailService: Received email from $from (thread: $threadId)',
+        'EmailService: Received email from $from (thread: ${thread.threadId})',
       );
 
       // Notify listeners
       _eventController.add(
-        EmailChangeEvent(thread.station, threadId, EmailChangeType.received),
+        EmailChangeEvent(
+          thread.station,
+          thread.threadId,
+          EmailChangeType.received,
+        ),
       );
 
       await _showIncomingEmailNotification(
         from: from,
         subject: thread.subject,
         content: content,
+        threadId: thread.threadId,
       );
 
       return true;
@@ -1420,12 +1782,14 @@ class EmailService {
     required String from,
     required String subject,
     required String content,
+    required String threadId,
   }) async {
     try {
       await DMNotificationService().showEmailMessage(
         fromAddress: from,
         subject: subject,
         preview: _buildEmailPreview(content),
+        threadId: threadId,
       );
     } catch (e) {
       LogService().log('EmailService: Failed to show email notification: $e');

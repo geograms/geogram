@@ -69,11 +69,7 @@ class SMTPCommand {
   final String? argument;
   final String raw;
 
-  SMTPCommand({
-    required this.verb,
-    this.argument,
-    required this.raw,
-  });
+  SMTPCommand({required this.verb, this.argument, required this.raw});
 
   /// Parse a raw SMTP command line
   factory SMTPCommand.parse(String line) {
@@ -117,7 +113,8 @@ class SMTPCommand {
   }
 
   @override
-  String toString() => 'SMTPCommand($verb${argument != null ? " $argument" : ""})';
+  String toString() =>
+      'SMTPCommand($verb${argument != null ? " $argument" : ""})';
 }
 
 /// SMTP response builder
@@ -129,8 +126,8 @@ class SMTPResponse {
   SMTPResponse(this.code, this.lines, {this.multiline = false});
 
   SMTPResponse.single(this.code, String message)
-      : lines = [message],
-        multiline = false;
+    : lines = [message],
+      multiline = false;
 
   SMTPResponse.multi(this.code, this.lines) : multiline = true;
 
@@ -202,6 +199,11 @@ class SMTPSession {
   bool authenticated = false;
   String? authenticatedUser;
 
+  // Serialize socket writes to avoid concurrent write/flush calls on the same
+  // IOSink, which can throw "StreamSink is bound to a stream".
+  Future<void> _pendingWrite = Future<void>.value();
+  bool _isClosed = false;
+
   SMTPSession({
     required this.socket,
     required this.remoteAddress,
@@ -210,14 +212,30 @@ class SMTPSession {
 
   /// Send response to client/server
   Future<void> send(SMTPResponse response) async {
-    socket.write(response.format());
-    await socket.flush();
+    return _queueWrite(() async {
+      socket.write(response.format());
+      await socket.flush();
+    });
   }
 
   /// Send raw data (for DATA content)
   Future<void> sendRaw(String data) async {
-    socket.write(data);
-    await socket.flush();
+    return _queueWrite(() async {
+      socket.write(data);
+      await socket.flush();
+    });
+  }
+
+  Future<void> _queueWrite(Future<void> Function() writer) {
+    _pendingWrite = _pendingWrite.then((_) async {
+      if (_isClosed) return;
+      try {
+        await writer();
+      } catch (_) {
+        _isClosed = true;
+      }
+    });
+    return _pendingWrite;
   }
 
   /// Reset session state (RSET command)
@@ -233,6 +251,7 @@ class SMTPSession {
   /// Close session
   Future<void> close() async {
     state = SMTPState.quit;
+    _isClosed = true;
     try {
       await socket.close();
     } catch (_) {
@@ -278,18 +297,12 @@ class SMTPProtocol {
   /// Escape data for transmission (dot stuffing per RFC 5321)
   static String escapeData(String data) {
     // Lines starting with a dot must be dot-stuffed
-    return data.replaceAllMapped(
-      RegExp(r'^\.', multiLine: true),
-      (m) => '..',
-    );
+    return data.replaceAllMapped(RegExp(r'^\.', multiLine: true), (m) => '..');
   }
 
   /// Unescape received data (reverse dot stuffing)
   static String unescapeData(String data) {
-    return data.replaceAllMapped(
-      RegExp(r'^\.\.', multiLine: true),
-      (m) => '.',
-    );
+    return data.replaceAllMapped(RegExp(r'^\.\.', multiLine: true), (m) => '.');
   }
 
   /// Build EHLO extensions list for server greeting
@@ -329,8 +342,18 @@ class SMTPProtocol {
   static String formatDate(DateTime date) {
     final days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
     final months = [
-      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
     ];
 
     final utc = date.toUtc();

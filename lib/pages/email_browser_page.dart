@@ -61,12 +61,16 @@ class EmailBrowserPage extends StatefulWidget {
   /// Initial label (for label folder)
   final String? initialLabel;
 
+  /// Optional thread to open/select once the list is loaded.
+  final String? initialThreadId;
+
   const EmailBrowserPage({
     super.key,
     this.app,
     this.initialFolder = EmailFolder.inbox,
     this.initialStation,
     this.initialLabel,
+    this.initialThreadId,
   });
 
   @override
@@ -110,6 +114,7 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
 
   StreamSubscription<EmailChangeEvent>? _emailSubscription;
   EventSubscription<EmailNotificationEvent>? _notificationSubscription;
+  bool _didHandleInitialThreadOpen = false;
 
   bool get _isSelectionMode => _selectedThreadIds.isNotEmpty;
 
@@ -618,6 +623,7 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
             _selectedThread = null;
           }
         });
+        await _openInitialThreadIfNeeded(threads);
       }
     } catch (e) {
       if (mounted) {
@@ -626,6 +632,44 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
           _isLoading = false;
         });
       }
+    }
+  }
+
+  Future<void> _openInitialThreadIfNeeded(List<EmailThread> threads) async {
+    if (_didHandleInitialThreadOpen) return;
+
+    final targetThreadId = widget.initialThreadId?.trim();
+    if (targetThreadId == null || targetThreadId.isEmpty) {
+      _didHandleInitialThreadOpen = true;
+      return;
+    }
+
+    EmailThread? targetThread;
+    for (final thread in threads) {
+      if (thread.threadId == targetThreadId) {
+        targetThread = thread;
+        break;
+      }
+    }
+    if (targetThread == null || !mounted) return;
+
+    _didHandleInitialThreadOpen = true;
+    final isWide = MediaQuery.sizeOf(context).width >= _desktopBreakpoint;
+    if (isWide) {
+      setState(() {
+        _selectedThread = targetThread;
+      });
+      return;
+    }
+
+    final selectedThread = targetThread;
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) => EmailThreadPage(thread: selectedThread),
+      ),
+    );
+    if (mounted) {
+      await _loadThreads();
     }
   }
 

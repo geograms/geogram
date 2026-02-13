@@ -5,7 +5,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'dart:io' if (dart.library.html) 'platform/io_stub.dart';
 import 'package:media_kit/media_kit.dart';
-import 'package:flutter_quill/flutter_quill.dart' show FlutterQuillLocalizations;
+import 'package:flutter_quill/flutter_quill.dart'
+    show FlutterQuillLocalizations;
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'services/crash_service.dart';
 import 'package:file_picker/file_picker.dart';
@@ -560,11 +561,16 @@ void main() async {
 
           if (appPath is! String || appPath.isEmpty) {
             // Auto-find tracker app
-            LogService().log('[PROXIMITY] No saved path, searching for tracker app...');
+            LogService().log(
+              '[PROXIMITY] No saved path, searching for tracker app...',
+            );
             final tracker = AppService().getAppByType('tracker');
             if (tracker?.storagePath != null) {
               appPath = tracker!.storagePath;
-              ConfigService().setNestedValue('tracker.proximityAppPath', appPath);
+              ConfigService().setNestedValue(
+                'tracker.proximityAppPath',
+                appPath,
+              );
               LogService().log('[PROXIMITY] Found tracker app: $appPath');
             }
           }
@@ -591,13 +597,17 @@ void main() async {
               '[PROXIMITY] Background tracking STARTED - app: $appPath',
             );
           } else {
-            LogService().log('[PROXIMITY] No tracker app found, tracking not started');
+            LogService().log(
+              '[PROXIMITY] No tracker app found, tracking not started',
+            );
           }
         } catch (e) {
           LogService().log('[PROXIMITY] Failed to auto-start: $e');
         }
       } else if (!firstLaunchComplete) {
-        LogService().log('[PROXIMITY] Skipped on first launch - will start after onboarding');
+        LogService().log(
+          '[PROXIMITY] Skipped on first launch - will start after onboarding',
+        );
       } else {
         LogService().log('[PROXIMITY] Tracking disabled by user setting');
       }
@@ -607,7 +617,9 @@ void main() async {
         await StationService().initialize();
         LogService().log('StationService initialized (deferred)');
       } else {
-        LogService().log('StationService skipped on first launch - will start after onboarding');
+        LogService().log(
+          'StationService skipped on first launch - will start after onboarding',
+        );
       }
 
       // Initialize NetworkMonitorService to track LAN/Internet connectivity
@@ -650,21 +662,14 @@ void _setupCrashHandlers() {
     final fullError = details.toString();
 
     // Log the error with full context
-    CrashService().logCrashSync(
-      'FlutterError',
-      fullError,
-      details.stack,
-    );
+    CrashService().logCrashSync('FlutterError', fullError, details.stack);
 
     // Present error in debug mode
     FlutterError.presentError(details);
 
     // For fatal errors, notify native for potential restart (with full context)
     if (details.silent != true) {
-      CrashService().notifyNativeCrash(
-        fullError,
-        stackTrace: details.stack,
-      );
+      CrashService().notifyNativeCrash(fullError, stackTrace: details.stack);
     }
   };
 
@@ -688,6 +693,8 @@ class _GeogramAppState extends State<GeogramApp> with WidgetsBindingObserver {
   final AppThemeService _themeService = AppThemeService();
   final GlobalKey<NavigatorState> _navigatorKey = GlobalKey<NavigatorState>();
   EventSubscription<DMNotificationTappedEvent>? _dmNotificationSubscription;
+  EventSubscription<EmailNotificationTappedEvent>?
+  _emailNotificationSubscription;
   EventSubscription<NavigateToDevicesEvent>? _navigateToDevicesSubscription;
   EventSubscription<TransferOfferReceivedEvent>? _transferOfferSubscription;
   EventSubscription<MirrorPairCompletedEvent>? _mirrorPairSubscription;
@@ -710,6 +717,14 @@ class _GeogramAppState extends State<GeogramApp> with WidgetsBindingObserver {
       );
       _navigateToDMChat(event.targetCallsign);
     });
+    _emailNotificationSubscription = EventBus().on<EmailNotificationTappedEvent>(
+      (event) {
+        LogService().log(
+          'GeogramApp: Email notification tapped for thread ${event.threadId}',
+        );
+        unawaited(_navigateToEmailThread(event.threadId));
+      },
+    );
 
     // Subscribe to navigate-to-devices events (e.g., summary notification tap)
     _navigateToDevicesSubscription = EventBus().on<NavigateToDevicesEvent>((_) {
@@ -760,6 +775,7 @@ class _GeogramAppState extends State<GeogramApp> with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     _themeService.removeListener(_onThemeChanged);
     _dmNotificationSubscription?.cancel();
+    _emailNotificationSubscription?.cancel();
     _navigateToDevicesSubscription?.cancel();
     _transferOfferSubscription?.cancel();
     _mirrorPairSubscription?.cancel();
@@ -822,6 +838,9 @@ class _GeogramAppState extends State<GeogramApp> with WidgetsBindingObserver {
       case 'chat':
         // Future: navigate to chat room
         break;
+      case 'email':
+        await _navigateToEmailThread(action.data);
+        break;
     }
   }
 
@@ -852,6 +871,46 @@ class _GeogramAppState extends State<GeogramApp> with WidgetsBindingObserver {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _navigateToDMChat(callsign);
     });
+  }
+
+  Future<void> _navigateToEmailThread(String threadId) async {
+    if (threadId.trim().isEmpty) return;
+
+    if (_navigatorKey.currentState == null) {
+      LogService().log('GeogramApp: Navigator not ready for email deep link');
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        unawaited(_navigateToEmailThread(threadId));
+      });
+      return;
+    }
+
+    App? emailApp = AppService().getAppByType('email');
+    if (emailApp == null) {
+      try {
+        emailApp = await AppService().createApp(title: 'Email', type: 'email');
+      } catch (e) {
+        LogService().log(
+          'GeogramApp: Could not create email app for deep link: $e',
+        );
+        emailApp = AppService().getAppByType('email');
+      }
+    }
+    if (emailApp == null) {
+      LogService().log(
+        'GeogramApp: Email app unavailable for notification deep link',
+      );
+      return;
+    }
+
+    _navigatorKey.currentState!.push(
+      MaterialPageRoute(
+        builder: (context) => EmailBrowserPage(
+          app: emailApp,
+          initialFolder: EmailFolder.inbox,
+          initialThreadId: threadId,
+        ),
+      ),
+    );
   }
 
   /// Show incoming transfer offer dialog
@@ -885,11 +944,7 @@ class _GeogramAppState extends State<GeogramApp> with WidgetsBindingObserver {
         GlobalCupertinoLocalizations.delegate,
         FlutterQuillLocalizations.delegate,
       ],
-      supportedLocales: const [
-        Locale('en'),
-        Locale('pt'),
-        Locale('de'),
-      ],
+      supportedLocales: const [Locale('en'), Locale('pt'), Locale('de')],
       builder: (context, child) {
         if (child == null) return const SizedBox.shrink();
         return SafeArea(
@@ -930,10 +985,7 @@ class _HomePageState extends State<HomePage> {
   // Hidden pages (not ready): BotPage
   // Indices: 0=Apps, 1=Maps, 2=Devices, 3=Log
   List<Widget> get _pages => [
-    AppsPage(
-      searchQuery: _searchQuery,
-      onAppSelected: _clearSearchAndUnfocus,
-    ),
+    AppsPage(searchQuery: _searchQuery, onAppSelected: _clearSearchAndUnfocus),
     const MapsBrowserPage(),
     const DevicesBrowserPage(),
     // BotPage(),  // Hidden: not ready
@@ -1085,9 +1137,7 @@ class _HomePageState extends State<HomePage> {
     } else if (event.action == DebugAction.mirrorOpenSettings) {
       Navigator.push(
         context,
-        MaterialPageRoute(
-          builder: (_) => const MirrorSettingsPage(),
-        ),
+        MaterialPageRoute(builder: (_) => const MirrorSettingsPage()),
       );
     } else if (event.action == DebugAction.mirrorOpenWizard) {
       Navigator.push(
@@ -1106,7 +1156,15 @@ class _HomePageState extends State<HomePage> {
 
     final ext = path.split('.').last.toLowerCase();
     final isImage = {'jpg', 'jpeg', 'png'}.contains(ext);
-    final isVideo = {'mp4', 'avi', 'mkv', 'mov', 'wmv', 'flv', 'webm'}.contains(ext);
+    final isVideo = {
+      'mp4',
+      'avi',
+      'mkv',
+      'mov',
+      'wmv',
+      'flv',
+      'webm',
+    }.contains(ext);
     final isPdf = ext == 'pdf';
 
     if (!mounted) return;
@@ -1114,9 +1172,7 @@ class _HomePageState extends State<HomePage> {
     if (isImage || isVideo) {
       Navigator.push(
         context,
-        MaterialPageRoute(
-          builder: (_) => PhotoViewerPage(imagePaths: [path]),
-        ),
+        MaterialPageRoute(builder: (_) => PhotoViewerPage(imagePaths: [path])),
       );
     } else if (isPdf) {
       Navigator.push(
@@ -1133,20 +1189,26 @@ class _HomePageState extends State<HomePage> {
 
   /// Handle opening Flasher on Monitor tab with optional auto-connect
   void _handleOpenFlasherMonitor(String? devicePath) async {
-    LogService().log('HomePage: Opening Flasher Monitor (devicePath: $devicePath)');
+    LogService().log(
+      'HomePage: Opening Flasher Monitor (devicePath: $devicePath)',
+    );
 
     // Find flasher app
     var flasherApp = AppService().getAppByType('flasher');
 
     // Auto-create flasher app if it doesn't exist
     if (flasherApp == null) {
-      LogService().log('HomePage: No flasher app found, creating one automatically');
+      LogService().log(
+        'HomePage: No flasher app found, creating one automatically',
+      );
       try {
         flasherApp = await AppService().createApp(
           title: _i18n.t('app_type_flasher'),
           type: 'flasher',
         );
-        LogService().log('HomePage: Created flasher app: ${flasherApp.storagePath}');
+        LogService().log(
+          'HomePage: Created flasher app: ${flasherApp.storagePath}',
+        );
       } catch (e) {
         LogService().log('HomePage: Failed to create flasher app: $e');
         if (mounted) {
@@ -1258,9 +1320,7 @@ class _HomePageState extends State<HomePage> {
           Navigator.push(
             context,
             MaterialPageRoute(
-              builder: (context) => ChatBrowserPage(
-                app: newApp,
-              ),
+              builder: (context) => ChatBrowserPage(app: newApp),
             ),
           );
         }
@@ -1270,17 +1330,15 @@ class _HomePageState extends State<HomePage> {
       return;
     }
 
-    print('HomePage: Found chat app: ${chatApp.title} at ${chatApp.storagePath}');
+    print(
+      'HomePage: Found chat app: ${chatApp.title} at ${chatApp.storagePath}',
+    );
 
     // Navigate to ChatBrowserPage with the local app
     if (mounted) {
       Navigator.push(
         context,
-        MaterialPageRoute(
-          builder: (context) => ChatBrowserPage(
-            app: chatApp,
-          ),
-        ),
+        MaterialPageRoute(builder: (context) => ChatBrowserPage(app: chatApp)),
       );
       print('HomePage: Navigation pushed for local chat app');
     }
@@ -1343,7 +1401,8 @@ class _HomePageState extends State<HomePage> {
   /// Start ProximityDetectionService after onboarding completes
   Future<void> _startProximityServiceAfterOnboarding() async {
     final proximityDisabled =
-        ConfigService().getNestedValue('tracker.proximityTrackingEnabled') == false;
+        ConfigService().getNestedValue('tracker.proximityTrackingEnabled') ==
+        false;
 
     if (proximityDisabled) {
       LogService().log('[PROXIMITY] Tracking disabled by user setting');
@@ -1374,9 +1433,14 @@ class _HomePageState extends State<HomePage> {
         } else {
           TrackerService().setStorage(FilesystemProfileStorage(appPath));
         }
-        await TrackerService().initializeApp(appPath, callsign: profileCallsign);
+        await TrackerService().initializeApp(
+          appPath,
+          callsign: profileCallsign,
+        );
         await ProximityDetectionService().start(TrackerService());
-        LogService().log('[PROXIMITY] Started after onboarding - app: $appPath');
+        LogService().log(
+          '[PROXIMITY] Started after onboarding - app: $appPath',
+        );
       }
     } catch (e) {
       LogService().log('[PROXIMITY] Failed to start after onboarding: $e');
@@ -1618,9 +1682,9 @@ class _HomePageState extends State<HomePage> {
                             hintText: _i18n.t('search_apps'),
                             hintStyle: TextStyle(
                               fontSize: 14,
-                              color: Theme.of(context)
-                                  .colorScheme
-                                  .onSurfaceVariant,
+                              color: Theme.of(
+                                context,
+                              ).colorScheme.onSurfaceVariant,
                             ),
                             prefixIcon: const Icon(Icons.search, size: 20),
                             suffixIcon: _searchQuery.isNotEmpty
@@ -1637,9 +1701,9 @@ class _HomePageState extends State<HomePage> {
                               borderSide: BorderSide.none,
                             ),
                             filled: true,
-                            fillColor: Theme.of(context)
-                                .colorScheme
-                                .surfaceContainerHighest,
+                            fillColor: Theme.of(
+                              context,
+                            ).colorScheme.surfaceContainerHighest,
                             contentPadding: const EdgeInsets.symmetric(
                               horizontal: 12,
                               vertical: 0,
@@ -2057,9 +2121,7 @@ class _AppsPageState extends State<AppsPage> {
   void _onAppsChanged() {
     if (!mounted) return;
     // Apps were created/updated/deleted, reload the list
-    LogService().log(
-      'AppsPage: appsNotifier triggered, reloading',
-    );
+    LogService().log('AppsPage: appsNotifier triggered, reloading');
     _loadApps();
   }
 
@@ -2084,9 +2146,7 @@ class _AppsPageState extends State<AppsPage> {
   void dispose() {
     _i18n.languageNotifier.removeListener(_onLanguageChanged);
     _profileService.activeProfileNotifier.removeListener(_onProfileChanged);
-    _appService.appsNotifier.removeListener(
-      _onAppsChanged,
-    );
+    _appService.appsNotifier.removeListener(_onAppsChanged);
     _unreadSubscription?.cancel();
     _debugActionSubscription?.cancel();
     super.dispose();
@@ -2101,9 +2161,7 @@ class _AppsPageState extends State<AppsPage> {
     final profileStorage = AppService().profileStorage;
     if (profileStorage == null) {
       // Fallback: if no profile storage, show error
-      return Center(
-        child: Text(_i18n.t('work_storage_not_available')),
-      );
+      return Center(child: Text(_i18n.t('work_storage_not_available')));
     }
 
     // Extract relative path from absolute storagePath
@@ -2123,7 +2181,8 @@ class _AppsPageState extends State<AppsPage> {
       }
     } else {
       // Fallback: use basename
-      relativePath = storagePath.split('/').where((s) => s.isNotEmpty).lastOrNull ?? '';
+      relativePath =
+          storagePath.split('/').where((s) => s.isNotEmpty).lastOrNull ?? '';
     }
 
     return WorkPage(
@@ -2150,10 +2209,7 @@ class _AppsPageState extends State<AppsPage> {
     }
   }
 
-  void _updateAppsList(
-    List<App> apps, {
-    required bool isComplete,
-  }) {
+  void _updateAppsList(List<App> apps, {required bool isComplete}) {
     if (!mounted) return;
 
     final appItems = apps.where((c) => !_isFileAppType(c)).toList();
@@ -2213,9 +2269,7 @@ class _AppsPageState extends State<AppsPage> {
   void _handleDebugAction(DebugActionEvent event) {
     if (event.action == DebugAction.openConsole) {
       unawaited(
-        _openConsoleApp(
-          sessionId: event.params['session_id'] as String?,
-        ),
+        _openConsoleApp(sessionId: event.params['session_id'] as String?),
       );
     }
   }
@@ -2230,9 +2284,9 @@ class _AppsPageState extends State<AppsPage> {
     } catch (e) {
       LogService().log('Error deleting app: $e');
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error deleting app: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Error deleting app: $e')));
       }
     }
   }
@@ -2251,9 +2305,7 @@ class _AppsPageState extends State<AppsPage> {
   }
 
   /// Create an app from a placeholder when triggered via debug API
-  Future<App?> _createAppFromPlaceholder(
-    App placeholder,
-  ) async {
+  Future<App?> _createAppFromPlaceholder(App placeholder) async {
     try {
       final created = await _appService.createApp(
         title: placeholder.title,
@@ -2283,27 +2335,20 @@ class _AppsPageState extends State<AppsPage> {
 
     if (consoleApp == null) {
       try {
-        final placeholder = _allApps.firstWhere(
-          (c) => c.type == 'console',
-        );
+        final placeholder = _allApps.firstWhere((c) => c.type == 'console');
         consoleApp = await _createAppFromPlaceholder(placeholder);
       } catch (_) {}
     }
 
     if (consoleApp != null && _isPlaceholder(consoleApp)) {
-      consoleApp = await _createAppFromPlaceholder(
-        consoleApp,
-      );
+      consoleApp = await _createAppFromPlaceholder(consoleApp);
     }
 
     consoleApp ??= await _findConsoleAppEntry();
     if (!mounted || consoleApp == null) {
       try {
         final title = _i18n.t('app_type_console');
-        consoleApp = await _appService.createApp(
-          title: title,
-          type: 'console',
-        );
+        consoleApp = await _appService.createApp(title: title, type: 'console');
         await _loadApps();
         LogService().log(
           'AppsPage: Created console app for debug open_console',
@@ -2327,10 +2372,8 @@ class _AppsPageState extends State<AppsPage> {
     await Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (context) => ConsoleBrowserPage(
-          appPath: appPath,
-          appTitle: appTitle,
-        ),
+        builder: (context) =>
+            ConsoleBrowserPage(appPath: appPath, appTitle: appTitle),
       ),
     );
 
@@ -2400,549 +2443,398 @@ class _AppsPageState extends State<AppsPage> {
           : RefreshIndicator(
               onRefresh: _loadApps,
               child: LayoutBuilder(
-                      builder: (context, constraints) {
-                        // Calculate number of columns based on screen width
-                        final screenWidth = constraints.maxWidth;
-                        final crossAxisCount = screenWidth < 600
-                            ? 2 // Mobile/Small: 2 columns
-                            : screenWidth < 900
-                            ? 4 // Tablet: 4 columns
-                            : screenWidth < 1400
-                            ? 6 // Desktop: 6 columns
-                            : screenWidth < 1800
-                            ? 7 // Large desktop: 7 columns
-                            : 8; // Extra large: 8 columns
+                builder: (context, constraints) {
+                  // Calculate number of columns based on screen width
+                  final screenWidth = constraints.maxWidth;
+                  final crossAxisCount = screenWidth < 600
+                      ? 2 // Mobile/Small: 2 columns
+                      : screenWidth < 900
+                      ? 4 // Tablet: 4 columns
+                      : screenWidth < 1400
+                      ? 6 // Desktop: 6 columns
+                      : screenWidth < 1800
+                      ? 7 // Large desktop: 7 columns
+                      : 8; // Extra large: 8 columns
 
-                        // Separate app items from file apps
-                        final appItems = filteredApps
-                            .where((c) => !_isFileAppType(c))
-                            .toList();
-                        final fileApps = filteredApps
-                            .where(_isFileAppType)
-                            .toList();
+                  // Separate app items from file apps
+                  final appItems = filteredApps
+                      .where((c) => !_isFileAppType(c))
+                      .toList();
+                  final fileApps = filteredApps.where(_isFileAppType).toList();
 
-                        return CustomScrollView(
-                          slivers: [
-                            // App items grid
-                            if (appItems.isNotEmpty)
-                              SliverPadding(
-                                padding: const EdgeInsets.fromLTRB(
-                                  16,
-                                  0,
-                                  16,
-                                  8,
+                  return CustomScrollView(
+                    slivers: [
+                      // App items grid
+                      if (appItems.isNotEmpty)
+                        SliverPadding(
+                          padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                          sliver: SliverGrid(
+                            gridDelegate:
+                                SliverGridDelegateWithFixedCrossAxisCount(
+                                  crossAxisCount: crossAxisCount,
+                                  crossAxisSpacing: 8,
+                                  mainAxisSpacing: 8,
+                                  childAspectRatio: 1.9,
                                 ),
-                                sliver: SliverGrid(
-                                  gridDelegate:
-                                      SliverGridDelegateWithFixedCrossAxisCount(
-                                        crossAxisCount: crossAxisCount,
-                                        crossAxisSpacing: 8,
-                                        mainAxisSpacing: 8,
-                                        childAspectRatio: 1.9,
-                                      ),
-                                  delegate: SliverChildBuilderDelegate((
+                            delegate: SliverChildBuilderDelegate((
+                              context,
+                              index,
+                            ) {
+                              final appEntry = appItems[index];
+                              return _AppGridCard(
+                                app: appEntry,
+                                onTap: () {
+                                  // Clear search when app is selected
+                                  widget.onAppSelected?.call();
+                                  _recordAppUsage(appEntry.type);
+                                  LogService().log(
+                                    'Opened app: ${appEntry.title}',
+                                  );
+                                  // Route to appropriate page based on app type
+                                  final Widget targetPage =
+                                      appEntry.type == 'chat'
+                                      ? ChatBrowserPage(app: appEntry)
+                                      : appEntry.type == 'email'
+                                      ? EmailBrowserPage(app: appEntry)
+                                      : appEntry.type == 'forum'
+                                      ? ForumBrowserPage(app: appEntry)
+                                      : appEntry.type == 'blog'
+                                      ? BlogBrowserPage(
+                                          appPath: appEntry.storagePath ?? '',
+                                          appTitle: appEntry.title,
+                                        )
+                                      : appEntry.type == 'news'
+                                      ? NewsBrowserPage(app: appEntry)
+                                      : appEntry.type == 'events'
+                                      ? EventsBrowserPage(
+                                          appPath: appEntry.storagePath ?? '',
+                                          appTitle: appEntry.title,
+                                        )
+                                      : appEntry.type == 'postcards'
+                                      ? PostcardsBrowserPage(
+                                          appPath: appEntry.storagePath ?? '',
+                                          appTitle: appEntry.title,
+                                        )
+                                      : appEntry.type == 'contacts'
+                                      ? ContactsBrowserPage(
+                                          appPath: appEntry.storagePath ?? '',
+                                          appTitle: appEntry.title,
+                                        )
+                                      : appEntry.type == 'places'
+                                      ? PlacesBrowserPage(
+                                          appPath: appEntry.storagePath ?? '',
+                                          appTitle: appEntry.title,
+                                        )
+                                      : appEntry.type == 'market'
+                                      ? MarketBrowserPage(
+                                          appPath: appEntry.storagePath ?? '',
+                                          appTitle: appEntry.title,
+                                        )
+                                      : appEntry.type == 'inventory'
+                                      ? InventoryBrowserPage(
+                                          appPath: appEntry.storagePath ?? '',
+                                          appTitle: appEntry.title,
+                                          i18n: _i18n,
+                                        )
+                                      : appEntry.type == 'tracker'
+                                      ? TrackerBrowserPage(
+                                          appPath: appEntry.storagePath ?? '',
+                                          appTitle: appEntry.title,
+                                          i18n: _i18n,
+                                        )
+                                      : appEntry.type == 'alerts'
+                                      ? ReportBrowserPage(
+                                          appPath: appEntry.storagePath ?? '',
+                                          appTitle: appEntry.title,
+                                        )
+                                      : appEntry.type == 'groups'
+                                      ? GroupsBrowserPage(
+                                          appPath: appEntry.storagePath ?? '',
+                                          appTitle: appEntry.title,
+                                        )
+                                      : appEntry.type == 'backup'
+                                      ? const BackupBrowserPage()
+                                      : appEntry.type == 'station'
+                                      ? const StationDashboardPage()
+                                      : appEntry.type == 'transfer'
+                                      ? const TransferPage()
+                                      : appEntry.type == 'wallet'
+                                      ? WalletBrowserPage(
+                                          appPath: appEntry.storagePath ?? '',
+                                          appTitle: appEntry.title,
+                                          i18n: _i18n,
+                                        )
+                                      : appEntry.type == 'console'
+                                      ? ConsoleBrowserPage(
+                                          appPath: appEntry.storagePath ?? '',
+                                          appTitle: appEntry.title,
+                                        )
+                                      : appEntry.type == 'log'
+                                      ? const LogBrowserPage()
+                                      : appEntry.type == 'videos'
+                                      ? VideoBrowserPage(
+                                          appPath: appEntry.storagePath ?? '',
+                                          appTitle: appEntry.title,
+                                        )
+                                      : appEntry.type == 'transfer'
+                                      ? const TransferPage()
+                                      : appEntry.type == 'reader'
+                                      ? ReaderHomePage(
+                                          appPath: appEntry.storagePath ?? '',
+                                          appTitle: appEntry.title,
+                                          i18n: _i18n,
+                                        )
+                                      : appEntry.type == 'flasher'
+                                      ? FlasherPage(
+                                          basePath: appEntry.storagePath ?? '',
+                                        )
+                                      : appEntry.type == 'work'
+                                      ? _buildWorkPage(appEntry)
+                                      : appEntry.type == 'usenet'
+                                      ? const UsenetAppPage()
+                                      : appEntry.type == 'music'
+                                      ? MusicHomePage(
+                                          appPath: appEntry.storagePath ?? '',
+                                          appTitle: appEntry.title,
+                                          i18n: _i18n,
+                                        )
+                                      : appEntry.type == 'stories'
+                                      ? StoriesHomePage(
+                                          appPath: appEntry.storagePath ?? '',
+                                          appTitle: appEntry.title,
+                                          i18n: _i18n,
+                                        )
+                                      : appEntry.type == 'files'
+                                      ? FilesBrowserPage(
+                                          appPath: appEntry.storagePath ?? '',
+                                          appTitle: appEntry.title,
+                                          i18n: _i18n,
+                                        )
+                                      : appEntry.type == 'qr'
+                                      ? QrBrowserPage(
+                                          appPath: appEntry.storagePath ?? '',
+                                          appTitle: appEntry.title,
+                                        )
+                                      : appEntry.type == 'www'
+                                      ? WebsiteBrowserPage(
+                                          appPath: appEntry.storagePath ?? '',
+                                          appTitle: appEntry.title,
+                                          i18n: _i18n,
+                                        )
+                                      : AppBrowserPage(app: appEntry);
+
+                                  LogService().log(
+                                    'Opening app: ${appEntry.title} (type: ${appEntry.type}) -> ${targetPage.runtimeType}',
+                                  );
+                                  Navigator.push(
                                     context,
-                                    index,
-                                  ) {
-                                    final appEntry = appItems[index];
-                                    return _AppGridCard(
-                                      app: appEntry,
-                                      onTap: () {
-                                        // Clear search when app is selected
-                                        widget.onAppSelected?.call();
-                                        _recordAppUsage(appEntry.type);
-                                        LogService().log(
-                                          'Opened app: ${appEntry.title}',
-                                        );
-                                        // Route to appropriate page based on app type
-                                        final Widget targetPage =
-                                            appEntry.type == 'chat'
-                                            ? ChatBrowserPage(
-                                                app: appEntry,
-                                              )
-                                            : appEntry.type == 'email'
-                                            ? EmailBrowserPage(app: appEntry)
-                                            : appEntry.type == 'forum'
-                                            ? ForumBrowserPage(
-                                                app: appEntry,
-                                              )
-                                            : appEntry.type == 'blog'
-                                            ? BlogBrowserPage(
-                                                appPath:
-                                                    appEntry.storagePath ??
-                                                    '',
-                                                appTitle:
-                                                    appEntry.title,
-                                              )
-                                            : appEntry.type == 'news'
-                                            ? NewsBrowserPage(
-                                                app: appEntry,
-                                              )
-                                            : appEntry.type == 'events'
-                                            ? EventsBrowserPage(
-                                                appPath:
-                                                    appEntry.storagePath ??
-                                                    '',
-                                                appTitle:
-                                                    appEntry.title,
-                                              )
-                                            : appEntry.type == 'postcards'
-                                            ? PostcardsBrowserPage(
-                                                appPath:
-                                                    appEntry.storagePath ??
-                                                    '',
-                                                appTitle:
-                                                    appEntry.title,
-                                              )
-                                            : appEntry.type == 'contacts'
-                                            ? ContactsBrowserPage(
-                                                appPath:
-                                                    appEntry.storagePath ??
-                                                    '',
-                                                appTitle:
-                                                    appEntry.title,
-                                              )
-                                            : appEntry.type == 'places'
-                                            ? PlacesBrowserPage(
-                                                appPath:
-                                                    appEntry.storagePath ??
-                                                    '',
-                                                appTitle:
-                                                    appEntry.title,
-                                              )
-                                            : appEntry.type == 'market'
-                                            ? MarketBrowserPage(
-                                                appPath:
-                                                    appEntry.storagePath ??
-                                                    '',
-                                                appTitle:
-                                                    appEntry.title,
-                                              )
-                                            : appEntry.type == 'inventory'
-                                            ? InventoryBrowserPage(
-                                                appPath:
-                                                    appEntry.storagePath ??
-                                                    '',
-                                                appTitle:
-                                                    appEntry.title,
-                                                i18n: _i18n,
-                                              )
-                                            : appEntry.type == 'tracker'
-                                            ? TrackerBrowserPage(
-                                                appPath:
-                                                    appEntry.storagePath ??
-                                                    '',
-                                                appTitle:
-                                                    appEntry.title,
-                                                i18n: _i18n,
-                                              )
-                                            : appEntry.type == 'alerts'
-                                            ? ReportBrowserPage(
-                                                appPath:
-                                                    appEntry.storagePath ??
-                                                    '',
-                                                appTitle:
-                                                    appEntry.title,
-                                              )
-                                            : appEntry.type == 'groups'
-                                            ? GroupsBrowserPage(
-                                                appPath:
-                                                    appEntry.storagePath ??
-                                                    '',
-                                                appTitle:
-                                                    appEntry.title,
-                                              )
-                                            : appEntry.type == 'backup'
-                                            ? const BackupBrowserPage()
-                                            : appEntry.type == 'station'
-                                            ? const StationDashboardPage()
-                                            : appEntry.type == 'transfer'
-                                            ? const TransferPage()
-                                            : appEntry.type == 'wallet'
-                                            ? WalletBrowserPage(
-                                                appPath:
-                                                    appEntry.storagePath ??
-                                                    '',
-                                                appTitle:
-                                                    appEntry.title,
-                                                i18n: _i18n,
-                                              )
-                                            : appEntry.type == 'console'
-                                            ? ConsoleBrowserPage(
-                                                appPath:
-                                                    appEntry.storagePath ??
-                                                    '',
-                                                appTitle:
-                                                    appEntry.title,
-                                              )
-                                            : appEntry.type == 'log'
-                                            ? const LogBrowserPage()
-                                            : appEntry.type == 'videos'
-                                            ? VideoBrowserPage(
-                                                appPath:
-                                                    appEntry.storagePath ??
-                                                    '',
-                                                appTitle:
-                                                    appEntry.title,
-                                              )
-                                            : appEntry.type == 'transfer'
-                                            ? const TransferPage()
-                                            : appEntry.type == 'reader'
-                                            ? ReaderHomePage(
-                                                appPath:
-                                                    appEntry.storagePath ??
-                                                    '',
-                                                appTitle:
-                                                    appEntry.title,
-                                                i18n: _i18n,
-                                              )
-                                            : appEntry.type == 'flasher'
-                                            ? FlasherPage(
-                                                basePath:
-                                                    appEntry.storagePath ??
-                                                    '',
-                                              )
-                                            : appEntry.type == 'work'
-                                            ? _buildWorkPage(appEntry)
-                                            : appEntry.type == 'usenet'
-                                            ? const UsenetAppPage()
-                                            : appEntry.type == 'music'
-                                            ? MusicHomePage(
-                                                appPath:
-                                                    appEntry.storagePath ??
-                                                        '',
-                                                appTitle:
-                                                    appEntry.title,
-                                                i18n: _i18n,
-                                              )
-                                            : appEntry.type == 'stories'
-                                            ? StoriesHomePage(
-                                                appPath:
-                                                    appEntry.storagePath ??
-                                                        '',
-                                                appTitle:
-                                                    appEntry.title,
-                                                i18n: _i18n,
-                                              )
-                                            : appEntry.type == 'files'
-                                            ? FilesBrowserPage(
-                                                appPath:
-                                                    appEntry.storagePath ??
-                                                        '',
-                                                appTitle:
-                                                    appEntry.title,
-                                                i18n: _i18n,
-                                              )
-                                            : appEntry.type == 'qr'
-                                            ? QrBrowserPage(
-                                                appPath:
-                                                    appEntry.storagePath ??
-                                                        '',
-                                                appTitle:
-                                                    appEntry.title,
-                                              )
-                                            : appEntry.type == 'www'
-                                            ? WebsiteBrowserPage(
-                                                appPath:
-                                                    appEntry.storagePath ??
-                                                        '',
-                                                appTitle:
-                                                    appEntry.title,
-                                                i18n: _i18n,
-                                              )
-                                            : AppBrowserPage(
-                                                app: appEntry,
-                                              );
+                                    MaterialPageRoute(
+                                      builder: (context) => targetPage,
+                                    ),
+                                  ).then((_) => _loadApps());
+                                },
+                                onFavoriteToggle: () =>
+                                    _toggleFavorite(appEntry),
+                                onDelete: () => _deleteApp(appEntry),
+                                unreadCount: appEntry.type == 'chat'
+                                    ? _chatNotificationService.totalUnreadCount
+                                    : 0,
+                              );
+                            }, childCount: appItems.length),
+                          ),
+                        ),
 
-                                        LogService().log(
-                                          'Opening app: ${appEntry.title} (type: ${appEntry.type}) -> ${targetPage.runtimeType}',
-                                        );
-                                        Navigator.push(
-                                          context,
-                                          MaterialPageRoute(
-                                            builder: (context) => targetPage,
-                                          ),
-                                        ).then((_) => _loadApps());
-                                      },
-                                      onFavoriteToggle: () =>
-                                          _toggleFavorite(appEntry),
-                                      onDelete: () =>
-                                          _deleteApp(appEntry),
-                                      unreadCount: appEntry.type == 'chat'
-                                          ? _chatNotificationService
-                                                .totalUnreadCount
-                                          : 0,
-                                    );
-                                  }, childCount: appItems.length),
-                                ),
-                              ),
+                      // Separator between fixed and file apps
+                      if (appItems.isNotEmpty && fileApps.isNotEmpty)
+                        SliverToBoxAdapter(
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 16,
+                              vertical: 12,
+                            ),
+                            child: Divider(
+                              thickness: 1,
+                              color: Theme.of(
+                                context,
+                              ).colorScheme.outlineVariant,
+                            ),
+                          ),
+                        ),
 
-                            // Separator between fixed and file apps
-                            if (appItems.isNotEmpty &&
-                                fileApps.isNotEmpty)
-                              SliverToBoxAdapter(
-                                child: Padding(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 16,
-                                    vertical: 12,
-                                  ),
-                                  child: Divider(
-                                    thickness: 1,
-                                    color: Theme.of(
-                                      context,
-                                    ).colorScheme.outlineVariant,
-                                  ),
+                      // File apps grid
+                      if (fileApps.isNotEmpty)
+                        SliverPadding(
+                          padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                          sliver: SliverGrid(
+                            gridDelegate:
+                                SliverGridDelegateWithFixedCrossAxisCount(
+                                  crossAxisCount: crossAxisCount,
+                                  crossAxisSpacing: 8,
+                                  mainAxisSpacing: 8,
+                                  childAspectRatio: 1.9,
                                 ),
-                              ),
+                            delegate: SliverChildBuilderDelegate((
+                              context,
+                              index,
+                            ) {
+                              final appEntry = fileApps[index];
+                              return _AppGridCard(
+                                app: appEntry,
+                                onTap: () {
+                                  // Clear search when app is selected
+                                  widget.onAppSelected?.call();
+                                  _recordAppUsage(appEntry.type);
+                                  LogService().log(
+                                    'Opened app: ${appEntry.title}',
+                                  );
+                                  // Route to appropriate page based on app type
+                                  final Widget targetPage =
+                                      appEntry.type == 'chat'
+                                      ? ChatBrowserPage(app: appEntry)
+                                      : appEntry.type == 'email'
+                                      ? EmailBrowserPage(app: appEntry)
+                                      : appEntry.type == 'forum'
+                                      ? ForumBrowserPage(app: appEntry)
+                                      : appEntry.type == 'blog'
+                                      ? BlogBrowserPage(
+                                          appPath: appEntry.storagePath ?? '',
+                                          appTitle: appEntry.title,
+                                        )
+                                      : appEntry.type == 'news'
+                                      ? NewsBrowserPage(app: appEntry)
+                                      : appEntry.type == 'events'
+                                      ? EventsBrowserPage(
+                                          appPath: appEntry.storagePath ?? '',
+                                          appTitle: appEntry.title,
+                                        )
+                                      : appEntry.type == 'postcards'
+                                      ? PostcardsBrowserPage(
+                                          appPath: appEntry.storagePath ?? '',
+                                          appTitle: appEntry.title,
+                                        )
+                                      : appEntry.type == 'contacts'
+                                      ? ContactsBrowserPage(
+                                          appPath: appEntry.storagePath ?? '',
+                                          appTitle: appEntry.title,
+                                        )
+                                      : appEntry.type == 'places'
+                                      ? PlacesBrowserPage(
+                                          appPath: appEntry.storagePath ?? '',
+                                          appTitle: appEntry.title,
+                                        )
+                                      : appEntry.type == 'market'
+                                      ? MarketBrowserPage(
+                                          appPath: appEntry.storagePath ?? '',
+                                          appTitle: appEntry.title,
+                                        )
+                                      : appEntry.type == 'inventory'
+                                      ? InventoryBrowserPage(
+                                          appPath: appEntry.storagePath ?? '',
+                                          appTitle: appEntry.title,
+                                          i18n: _i18n,
+                                        )
+                                      : appEntry.type == 'tracker'
+                                      ? TrackerBrowserPage(
+                                          appPath: appEntry.storagePath ?? '',
+                                          appTitle: appEntry.title,
+                                          i18n: _i18n,
+                                        )
+                                      : appEntry.type == 'alerts'
+                                      ? ReportBrowserPage(
+                                          appPath: appEntry.storagePath ?? '',
+                                          appTitle: appEntry.title,
+                                        )
+                                      : appEntry.type == 'groups'
+                                      ? GroupsBrowserPage(
+                                          appPath: appEntry.storagePath ?? '',
+                                          appTitle: appEntry.title,
+                                        )
+                                      : appEntry.type == 'wallet'
+                                      ? WalletBrowserPage(
+                                          appPath: appEntry.storagePath ?? '',
+                                          appTitle: appEntry.title,
+                                          i18n: _i18n,
+                                        )
+                                      : appEntry.type == 'console'
+                                      ? ConsoleBrowserPage(
+                                          appPath: appEntry.storagePath ?? '',
+                                          appTitle: appEntry.title,
+                                        )
+                                      : appEntry.type == 'log'
+                                      ? const LogBrowserPage()
+                                      : appEntry.type == 'videos'
+                                      ? VideoBrowserPage(
+                                          appPath: appEntry.storagePath ?? '',
+                                          appTitle: appEntry.title,
+                                        )
+                                      : appEntry.type == 'reader'
+                                      ? ReaderHomePage(
+                                          appPath: appEntry.storagePath ?? '',
+                                          appTitle: appEntry.title,
+                                          i18n: _i18n,
+                                        )
+                                      : appEntry.type == 'flasher'
+                                      ? FlasherPage(
+                                          basePath: appEntry.storagePath ?? '',
+                                        )
+                                      : appEntry.type == 'work'
+                                      ? _buildWorkPage(appEntry)
+                                      : appEntry.type == 'usenet'
+                                      ? const UsenetAppPage()
+                                      : appEntry.type == 'music'
+                                      ? MusicHomePage(
+                                          appPath: appEntry.storagePath ?? '',
+                                          appTitle: appEntry.title,
+                                          i18n: _i18n,
+                                        )
+                                      : appEntry.type == 'stories'
+                                      ? StoriesHomePage(
+                                          appPath: appEntry.storagePath ?? '',
+                                          appTitle: appEntry.title,
+                                          i18n: _i18n,
+                                        )
+                                      : appEntry.type == 'files'
+                                      ? FilesBrowserPage(
+                                          appPath: appEntry.storagePath ?? '',
+                                          appTitle: appEntry.title,
+                                          i18n: _i18n,
+                                        )
+                                      : appEntry.type == 'qr'
+                                      ? QrBrowserPage(
+                                          appPath: appEntry.storagePath ?? '',
+                                          appTitle: appEntry.title,
+                                        )
+                                      : appEntry.type == 'www'
+                                      ? WebsiteBrowserPage(
+                                          appPath: appEntry.storagePath ?? '',
+                                          appTitle: appEntry.title,
+                                          i18n: _i18n,
+                                        )
+                                      : AppBrowserPage(app: appEntry);
 
-                            // File apps grid
-                            if (fileApps.isNotEmpty)
-                              SliverPadding(
-                                padding: const EdgeInsets.fromLTRB(
-                                  16,
-                                  8,
-                                  16,
-                                  16,
-                                ),
-                                sliver: SliverGrid(
-                                  gridDelegate:
-                                      SliverGridDelegateWithFixedCrossAxisCount(
-                                        crossAxisCount: crossAxisCount,
-                                        crossAxisSpacing: 8,
-                                        mainAxisSpacing: 8,
-                                        childAspectRatio: 1.9,
-                                      ),
-                                  delegate: SliverChildBuilderDelegate((
+                                  LogService().log(
+                                    'Opening app: ${appEntry.title} (type: ${appEntry.type}) -> ${targetPage.runtimeType}',
+                                  );
+                                  Navigator.push(
                                     context,
-                                    index,
-                                  ) {
-                                    final appEntry = fileApps[index];
-                                    return _AppGridCard(
-                                      app: appEntry,
-                                      onTap: () {
-                                        // Clear search when app is selected
-                                        widget.onAppSelected?.call();
-                                        _recordAppUsage(appEntry.type);
-                                        LogService().log(
-                                          'Opened app: ${appEntry.title}',
-                                        );
-                                        // Route to appropriate page based on app type
-                                        final Widget targetPage =
-                                            appEntry.type == 'chat'
-                                            ? ChatBrowserPage(
-                                                app: appEntry,
-                                              )
-                                            : appEntry.type == 'email'
-                                            ? EmailBrowserPage(app: appEntry)
-                                            : appEntry.type == 'forum'
-                                            ? ForumBrowserPage(
-                                                app: appEntry,
-                                              )
-                                            : appEntry.type == 'blog'
-                                            ? BlogBrowserPage(
-                                                appPath:
-                                                    appEntry.storagePath ??
-                                                    '',
-                                                appTitle:
-                                                    appEntry.title,
-                                              )
-                                            : appEntry.type == 'news'
-                                            ? NewsBrowserPage(
-                                                app: appEntry,
-                                              )
-                                            : appEntry.type == 'events'
-                                            ? EventsBrowserPage(
-                                                appPath:
-                                                    appEntry.storagePath ??
-                                                    '',
-                                                appTitle:
-                                                    appEntry.title,
-                                              )
-                                            : appEntry.type == 'postcards'
-                                            ? PostcardsBrowserPage(
-                                                appPath:
-                                                    appEntry.storagePath ??
-                                                    '',
-                                                appTitle:
-                                                    appEntry.title,
-                                              )
-                                            : appEntry.type == 'contacts'
-                                            ? ContactsBrowserPage(
-                                                appPath:
-                                                    appEntry.storagePath ??
-                                                    '',
-                                                appTitle:
-                                                    appEntry.title,
-                                              )
-                                            : appEntry.type == 'places'
-                                            ? PlacesBrowserPage(
-                                                appPath:
-                                                    appEntry.storagePath ??
-                                                    '',
-                                                appTitle:
-                                                    appEntry.title,
-                                              )
-                                            : appEntry.type == 'market'
-                                            ? MarketBrowserPage(
-                                                appPath:
-                                                    appEntry.storagePath ??
-                                                    '',
-                                                appTitle:
-                                                    appEntry.title,
-                                              )
-                                            : appEntry.type == 'inventory'
-                                            ? InventoryBrowserPage(
-                                                appPath:
-                                                    appEntry.storagePath ??
-                                                    '',
-                                                appTitle:
-                                                    appEntry.title,
-                                                i18n: _i18n,
-                                              )
-                                            : appEntry.type == 'tracker'
-                                            ? TrackerBrowserPage(
-                                                appPath:
-                                                    appEntry.storagePath ??
-                                                    '',
-                                                appTitle:
-                                                    appEntry.title,
-                                                i18n: _i18n,
-                                              )
-                                            : appEntry.type == 'alerts'
-                                            ? ReportBrowserPage(
-                                                appPath:
-                                                    appEntry.storagePath ??
-                                                    '',
-                                                appTitle:
-                                                    appEntry.title,
-                                              )
-                                            : appEntry.type == 'groups'
-                                            ? GroupsBrowserPage(
-                                                appPath:
-                                                    appEntry.storagePath ??
-                                                    '',
-                                                appTitle:
-                                                    appEntry.title,
-                                              )
-                                            : appEntry.type == 'wallet'
-                                            ? WalletBrowserPage(
-                                                appPath:
-                                                    appEntry.storagePath ??
-                                                    '',
-                                                appTitle:
-                                                    appEntry.title,
-                                                i18n: _i18n,
-                                              )
-                                            : appEntry.type == 'console'
-                                            ? ConsoleBrowserPage(
-                                                appPath:
-                                                    appEntry.storagePath ??
-                                                    '',
-                                                appTitle:
-                                                    appEntry.title,
-                                              )
-                                            : appEntry.type == 'log'
-                                            ? const LogBrowserPage()
-                                            : appEntry.type == 'videos'
-                                            ? VideoBrowserPage(
-                                                appPath:
-                                                    appEntry.storagePath ??
-                                                    '',
-                                                appTitle:
-                                                    appEntry.title,
-                                              )
-                                            : appEntry.type == 'reader'
-                                            ? ReaderHomePage(
-                                                appPath:
-                                                    appEntry.storagePath ??
-                                                    '',
-                                                appTitle:
-                                                    appEntry.title,
-                                                i18n: _i18n,
-                                              )
-                                            : appEntry.type == 'flasher'
-                                            ? FlasherPage(
-                                                basePath:
-                                                    appEntry.storagePath ??
-                                                    '',
-                                              )
-                                            : appEntry.type == 'work'
-                                            ? _buildWorkPage(appEntry)
-                                            : appEntry.type == 'usenet'
-                                            ? const UsenetAppPage()
-                                            : appEntry.type == 'music'
-                                            ? MusicHomePage(
-                                                appPath:
-                                                    appEntry.storagePath ??
-                                                        '',
-                                                appTitle:
-                                                    appEntry.title,
-                                                i18n: _i18n,
-                                              )
-                                            : appEntry.type == 'stories'
-                                            ? StoriesHomePage(
-                                                appPath:
-                                                    appEntry.storagePath ??
-                                                        '',
-                                                appTitle:
-                                                    appEntry.title,
-                                                i18n: _i18n,
-                                              )
-                                            : appEntry.type == 'files'
-                                            ? FilesBrowserPage(
-                                                appPath:
-                                                    appEntry.storagePath ??
-                                                        '',
-                                                appTitle:
-                                                    appEntry.title,
-                                                i18n: _i18n,
-                                              )
-                                            : appEntry.type == 'qr'
-                                            ? QrBrowserPage(
-                                                appPath:
-                                                    appEntry.storagePath ??
-                                                        '',
-                                                appTitle:
-                                                    appEntry.title,
-                                              )
-                                            : appEntry.type == 'www'
-                                            ? WebsiteBrowserPage(
-                                                appPath:
-                                                    appEntry.storagePath ??
-                                                        '',
-                                                appTitle:
-                                                    appEntry.title,
-                                                i18n: _i18n,
-                                              )
-                                            : AppBrowserPage(
-                                                app: appEntry,
-                                              );
-
-                                        LogService().log(
-                                          'Opening app: ${appEntry.title} (type: ${appEntry.type}) -> ${targetPage.runtimeType}',
-                                        );
-                                        Navigator.push(
-                                          context,
-                                          MaterialPageRoute(
-                                            builder: (context) => targetPage,
-                                          ),
-                                        ).then((_) => _loadApps());
-                                      },
-                                      onFavoriteToggle: () =>
-                                          _toggleFavorite(appEntry),
-                                      onDelete: () =>
-                                          _deleteApp(appEntry),
-                                      unreadCount:
-                                          0, // File apps don't track unread
-                                    );
-                                  }, childCount: fileApps.length),
-                                ),
-                              ),
-                          ],
-                        );
-                      },
-                    ),
-                  ),
+                                    MaterialPageRoute(
+                                      builder: (context) => targetPage,
+                                    ),
+                                  ).then((_) => _loadApps());
+                                },
+                                onFavoriteToggle: () =>
+                                    _toggleFavorite(appEntry),
+                                onDelete: () => _deleteApp(appEntry),
+                                unreadCount: 0, // File apps don't track unread
+                              );
+                            }, childCount: fileApps.length),
+                          ),
+                        ),
+                    ],
+                  );
+                },
+              ),
+            ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _createNewApp,
         icon: const Icon(Icons.add),
@@ -3164,9 +3056,7 @@ class _AppGridCard extends StatelessWidget {
                       child: Row(
                         children: [
                           Icon(
-                            app.isFavorite
-                                ? Icons.star
-                                : Icons.star_border,
+                            app.isFavorite ? Icons.star : Icons.star_border,
                             color: app.isFavorite ? Colors.amber : null,
                           ),
                           const SizedBox(width: 8),
@@ -3250,11 +3140,7 @@ class _AppCard extends StatelessWidget {
                         ),
                       ],
                     ),
-                    child: Icon(
-                      _getAppIcon(),
-                      color: Colors.white,
-                      size: 24,
-                    ),
+                    child: Icon(_getAppIcon(), color: Colors.white, size: 24),
                   ),
                   const SizedBox(width: 14),
                   Expanded(
@@ -3276,12 +3162,8 @@ class _AppCard extends StatelessWidget {
                             ),
                             IconButton(
                               icon: Icon(
-                                app.isFavorite
-                                    ? Icons.star
-                                    : Icons.star_border,
-                                color: app.isFavorite
-                                    ? Colors.amber
-                                    : null,
+                                app.isFavorite ? Icons.star : Icons.star_border,
+                                color: app.isFavorite ? Colors.amber : null,
                                 size: 22,
                               ),
                               onPressed: onFavoriteToggle,
@@ -3663,10 +3545,7 @@ class _AppBrowserPageState extends State<AppBrowserPage> {
       );
 
       // Force regeneration of all app files
-      await _appService.ensureAppFilesUpdated(
-        widget.app,
-        force: true,
-      );
+      await _appService.ensureAppFilesUpdated(widget.app, force: true);
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -4165,14 +4044,9 @@ class _EditAppDialogState extends State<EditAppDialog> {
       widget.app.encryption = _encryption;
 
       // Save to disk (will rename folder if title changed)
-      await _appService.updateApp(
-        widget.app,
-        oldTitle: oldTitle,
-      );
+      await _appService.updateApp(widget.app, oldTitle: oldTitle);
 
-      LogService().log(
-        'Updated app settings: ${widget.app.title}',
-      );
+      LogService().log('Updated app settings: ${widget.app.title}');
 
       if (mounted) {
         Navigator.pop(context, true);

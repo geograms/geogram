@@ -21,6 +21,16 @@ import '../services/profile_service.dart';
 import 'email_compose_page.dart';
 import 'photo_viewer_page.dart';
 
+class _MessageDisplayParts {
+  final String mainText;
+  final String quotedText;
+
+  const _MessageDisplayParts({
+    required this.mainText,
+    required this.quotedText,
+  });
+}
+
 /// Email thread page showing conversation messages
 class EmailThreadPage extends StatefulWidget {
   final EmailThread thread;
@@ -39,6 +49,7 @@ class _EmailThreadPageState extends State<EmailThreadPage> {
   final EmailService _emailService = EmailService();
   final ProfileService _profileService = ProfileService();
   final ScrollController _scrollController = ScrollController();
+  final Set<String> _expandedQuotedMessageIds = <String>{};
 
   late EmailThread _thread;
   bool _isLoading = false;
@@ -55,6 +66,7 @@ class _EmailThreadPageState extends State<EmailThreadPage> {
     super.didUpdateWidget(oldWidget);
     if (widget.thread.threadId != oldWidget.thread.threadId) {
       _thread = widget.thread;
+      _expandedQuotedMessageIds.clear();
       _scheduleMarkThreadReadIfViewed();
     }
   }
@@ -395,7 +407,7 @@ class _EmailThreadPageState extends State<EmailThreadPage> {
 
   Widget _buildMessageCard(EmailMessage message, bool isFirst, bool isLast) {
     final profile = _profileService.getProfile();
-    final isOwn = profile?.callsign == message.author;
+    final isOwn = profile.callsign == message.author;
 
     final theme = Theme.of(context);
     final platform = theme.platform;
@@ -505,13 +517,7 @@ class _EmailThreadPageState extends State<EmailThreadPage> {
                           ],
                         ),
                         const SizedBox(height: 12),
-                        SelectableText(
-                          message.content,
-                          style: theme.textTheme.bodyMedium?.copyWith(
-                            height: 1.35,
-                            fontSize: 14,
-                          ),
-                        ),
+                        _buildMessageContent(message, theme),
                         if (message.hasFile || message.hasImage)
                           Padding(
                             padding: const EdgeInsets.only(top: 10),
@@ -538,6 +544,141 @@ class _EmailThreadPageState extends State<EmailThreadPage> {
           ),
         ],
       ),
+    );
+  }
+
+  String _messageDisplayKey(EmailMessage message) {
+    return '${message.author}|${message.timestamp}|${message.content.hashCode}';
+  }
+
+  String _decodeQuotedPrintableLoose(String text) {
+    final softLineBreakNormalized = text.replaceAll(RegExp(r'=\r?\n'), '');
+    return softLineBreakNormalized.replaceAllMapped(
+      RegExp(r'=([0-9A-Fa-f]{2})'),
+      (match) {
+        final value = int.tryParse(match.group(1)!, radix: 16);
+        if (value == null) return match.group(0)!;
+        return String.fromCharCode(value);
+      },
+    );
+  }
+
+  _MessageDisplayParts _splitMessageForDisplay(String rawContent) {
+    final normalized = rawContent.replaceAll('\r\n', '\n').trimRight();
+    if (normalized.isEmpty) {
+      return const _MessageDisplayParts(mainText: '', quotedText: '');
+    }
+
+    final decoded = _decodeQuotedPrintableLoose(normalized);
+    final lines = decoded.split('\n');
+
+    var quotedIndex = -1;
+    var signatureIndex = -1;
+
+    for (var i = 0; i < lines.length; i++) {
+      final rawLine = lines[i].trimRight();
+      final line = rawLine.trimLeft();
+      final dequoted = line.startsWith('>')
+          ? line.replaceFirst(RegExp(r'^>\s*'), '')
+          : line;
+
+      if (signatureIndex < 0 &&
+          dequoted.contains('Signature verification for NOSTR')) {
+        signatureIndex = i;
+      }
+      if (quotedIndex < 0 &&
+          RegExp(r'^On .+wrote:$', caseSensitive: false).hasMatch(dequoted)) {
+        quotedIndex = i;
+      }
+      if (quotedIndex < 0 && line.startsWith('>')) {
+        quotedIndex = i;
+      }
+    }
+
+    var collapseIndex = quotedIndex;
+    if (signatureIndex >= 0 &&
+        (collapseIndex < 0 || signatureIndex < collapseIndex)) {
+      collapseIndex = signatureIndex > 0 ? signatureIndex - 1 : signatureIndex;
+    }
+
+    if (collapseIndex < 0) {
+      return _MessageDisplayParts(mainText: decoded.trim(), quotedText: '');
+    }
+
+    final mainText = lines.take(collapseIndex).join('\n').trimRight();
+    final quotedText = lines.skip(collapseIndex).join('\n').trim();
+    return _MessageDisplayParts(mainText: mainText, quotedText: quotedText);
+  }
+
+  Widget _buildMessageContent(EmailMessage message, ThemeData theme) {
+    final parts = _splitMessageForDisplay(message.content);
+    final messageKey = _messageDisplayKey(message);
+    final isExpanded = _expandedQuotedMessageIds.contains(messageKey);
+    final contentStyle = theme.textTheme.bodyMedium?.copyWith(
+      height: 1.35,
+      fontSize: 14,
+    );
+
+    final children = <Widget>[];
+    if (parts.mainText.isNotEmpty) {
+      children.add(SelectableText(parts.mainText, style: contentStyle));
+    }
+    if (parts.quotedText.isNotEmpty) {
+      if (parts.mainText.isNotEmpty) {
+        children.add(const SizedBox(height: 8));
+      }
+      children.add(
+        TextButton.icon(
+          onPressed: () {
+            setState(() {
+              if (isExpanded) {
+                _expandedQuotedMessageIds.remove(messageKey);
+              } else {
+                _expandedQuotedMessageIds.add(messageKey);
+              }
+            });
+          },
+          icon: Icon(
+            isExpanded ? Icons.expand_less : Icons.expand_more,
+            size: 18,
+          ),
+          label: Text(isExpanded ? 'Hide quoted text' : 'Show quoted text'),
+          style: TextButton.styleFrom(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            minimumSize: const Size(0, 0),
+            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          ),
+        ),
+      );
+      if (isExpanded) {
+        children.add(
+          Container(
+            width: double.infinity,
+            margin: const EdgeInsets.only(top: 6),
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: theme.colorScheme.surfaceVariant.withValues(alpha: 0.5),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: SelectableText(
+              parts.quotedText,
+              style: theme.textTheme.bodySmall?.copyWith(
+                height: 1.3,
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ),
+        );
+      }
+    }
+
+    if (children.isEmpty) {
+      return SelectableText(message.content, style: contentStyle);
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: children,
     );
   }
 

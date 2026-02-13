@@ -292,11 +292,9 @@ class EmailRelayService {
   /// TODO: Persist this to disk and provide admin UI to manage
   final Set<String> _externalEmailBlocklist = {};
 
-  /// Outgoing Message-ID -> threadId mapping for reply matching
+  /// Outgoing Message-ID -> threadId mapping for reply matching.
+  /// Stored as normalized lowercase IDs without angle brackets.
   final Map<String, String> _outgoingMessageIds = {};
-
-  /// Normalized subject -> threadId mapping for reply matching
-  final Map<String, String> _outgoingSubjects = {};
 
   /// Maximum cache size per recipient (10 MB)
   static const int _maxCacheSizeBytes = 10 * 1024 * 1024;
@@ -477,16 +475,39 @@ class EmailRelayService {
       final extraHeaders = <String, String>{
         'X-Geogram-Thread-ID': entry.threadId,
         'X-Geogram-Sender-Npub': entry.senderNpub,
+        'X-Geogram-Sender-Callsign': entry.senderCallsign.toUpperCase(),
+        'Reply-To': fromEmail,
       };
 
-      // Add In-Reply-To/References if this thread has previous external messages
-      final lastExternalMessageId = _outgoingMessageIds.entries
-          .where((e) => e.value == entry.threadId)
-          .map((e) => e.key)
-          .lastOrNull;
-      if (lastExternalMessageId != null) {
-        extraHeaders['In-Reply-To'] = lastExternalMessageId;
-        extraHeaders['References'] = lastExternalMessageId;
+      // Prefer client-provided threading metadata for interoperability.
+      final clientInReplyTo = _canonicalMessageIdHeader(
+        entry.message['in_reply_to'] as String?,
+      );
+      final clientReferencesRaw = entry.message['references'] as String?;
+      final clientReferences = _extractMessageIdCandidates(
+        clientReferencesRaw,
+      ).map((id) => '<$id>').join(' ');
+
+      if (clientInReplyTo != null) {
+        extraHeaders['In-Reply-To'] = clientInReplyTo;
+      }
+      if (clientReferences.isNotEmpty) {
+        extraHeaders['References'] = clientReferences;
+      }
+
+      // Fallback for older clients that don't provide threading metadata.
+      if (clientInReplyTo == null || clientReferences.isEmpty) {
+        final lastExternalMessageId = _outgoingMessageIds.entries
+            .where((e) => e.value == entry.threadId)
+            .map((e) => e.key)
+            .lastOrNull;
+        if (lastExternalMessageId != null) {
+          final normalized = _normalizeMessageIdToken(lastExternalMessageId);
+          if (normalized.isNotEmpty) {
+            extraHeaders.putIfAbsent('In-Reply-To', () => '<$normalized>');
+            extraHeaders.putIfAbsent('References', () => '<$normalized>');
+          }
+        }
       }
 
       final result = await client.send(
@@ -502,9 +523,12 @@ class EmailRelayService {
         entry.status = ExternalEmailStatus.sent;
 
         // Track outgoing email for reply matching
-        trackOutgoingEmail(threadId: entry.threadId, subject: entry.subject);
+        trackOutgoingEmail(
+          threadId: entry.threadId,
+          messageId: result.messageId,
+        );
         LogService().log(
-          'SMTP: Successfully sent external email: ${entry.id} (${result.message})',
+          'SMTP: Successfully sent external email: ${entry.id} (${result.message}, messageId=${result.messageId ?? "n/a"})',
         );
 
         // Send DSN to notify sender of successful delivery
@@ -513,6 +537,7 @@ class EmailRelayService {
             action: 'delivered',
             threadId: entry.threadId,
             recipient: entry.externalRecipients.join(', '),
+            externalMessageId: result.messageId,
           );
           entry.sendToClientCallback!(entry.senderId, jsonEncode(dsn));
           LogService().log(
@@ -1010,40 +1035,33 @@ class EmailRelayService {
       final senderEmail = MIMEParser.extractEmail(parser.from) ?? from;
       final subject = parser.subject ?? '(No Subject)';
 
-      // Reply thread matching (priority order)
-      String threadId;
+      // Relay-side thread hinting (no subject-based inference):
+      // 1) explicit X-Geogram-Thread-ID
+      // 2) In-Reply-To/References matching known outgoing Message-IDs
+      // 3) deterministic external fallback id
+      final customThreadId = parser.headers['x-geogram-thread-id']?.trim();
+      final replyCandidates = <String>{
+        ..._extractMessageIdCandidates(parser.inReplyTo),
+        ..._extractMessageIdCandidates(parser.references),
+      };
 
-      // 1. Custom header from our outgoing emails
-      final customThreadId = parser.headers['x-geogram-thread-id'];
+      String threadId = '';
       if (customThreadId != null && customThreadId.isNotEmpty) {
         threadId = customThreadId;
+      } else {
+        for (final candidate in replyCandidates) {
+          final mappedThreadId = _outgoingMessageIds[candidate];
+          if (mappedThreadId != null && mappedThreadId.isNotEmpty) {
+            threadId = mappedThreadId;
+            break;
+          }
+        }
       }
-      // 2. In-Reply-To header -> look up in outgoing message IDs
-      else if (parser.inReplyTo != null &&
-          _outgoingMessageIds.containsKey(parser.inReplyTo)) {
-        threadId = _outgoingMessageIds[parser.inReplyTo]!;
-      }
-      // 3. References header -> check each reference
-      else if (parser.references != null) {
-        final refs = parser.references!.split(RegExp(r'\s+'));
-        threadId =
-            refs
-                .where((ref) => _outgoingMessageIds.containsKey(ref))
-                .map((ref) => _outgoingMessageIds[ref]!)
-                .firstOrNull ??
-            _matchBySubject(subject) ??
-            'ext_${(parser.messageId ?? senderEmail).hashCode.abs()}';
-      }
-      // 4. Subject matching
-      else {
-        threadId =
-            _matchBySubject(subject) ??
-            'ext_${(parser.messageId ?? senderEmail).hashCode.abs()}';
-      }
-
-      // Track incoming Message-ID for future reference chain
-      if (parser.messageId != null) {
-        _outgoingMessageIds[parser.messageId!] = threadId;
+      if (threadId.isEmpty) {
+        final fallbackKey = parser.messageId?.trim().isNotEmpty == true
+            ? parser.messageId!
+            : '${senderEmail}_${DateTime.now().toUtc().microsecondsSinceEpoch}';
+        threadId = 'ext_${fallbackKey.hashCode.abs()}';
       }
 
       // Build email_receive message
@@ -1052,9 +1070,12 @@ class EmailRelayService {
         'from': senderEmail,
         'thread_id': threadId,
         'subject': subject,
+        'to': to,
         'content': base64Encode(utf8.encode(parser.body)),
         'delivered_at': DateTime.now().toUtc().toIso8601String(),
         'external_message_id': parser.messageId,
+        'in_reply_to': parser.inReplyTo,
+        'references': parser.references,
       };
 
       bool anyDelivered = false;
@@ -1118,32 +1139,47 @@ class EmailRelayService {
     }
   }
 
-  /// Match a subject line against outgoing subjects (stripping Re:/Fwd: prefixes)
-  String? _matchBySubject(String subject) {
-    final normalized = _normalizeSubject(subject);
-    return _outgoingSubjects[normalized];
-  }
-
-  /// Normalize subject by stripping Re:/Fwd: prefixes
-  static String _normalizeSubject(String subject) {
-    return subject
-        .replaceAll(RegExp(r'^(Re|Fwd|Fw):\s*', caseSensitive: false), '')
-        .trim()
-        .toLowerCase();
-  }
-
-  /// Track outgoing Message-ID and subject for reply matching
-  void trackOutgoingEmail({
-    required String threadId,
-    required String subject,
-    String? messageId,
-  }) {
-    if (messageId != null) {
-      _outgoingMessageIds[messageId] = threadId;
+  static String _normalizeMessageIdToken(String value) {
+    var token = value.trim();
+    if (token.startsWith('<') && token.endsWith('>') && token.length > 2) {
+      token = token.substring(1, token.length - 1);
     }
-    final normalized = _normalizeSubject(subject);
-    if (normalized.isNotEmpty) {
-      _outgoingSubjects[normalized] = threadId;
+    return token.trim().toLowerCase();
+  }
+
+  static String? _canonicalMessageIdHeader(String? value) {
+    if (value == null || value.trim().isEmpty) return null;
+    final token = _normalizeMessageIdToken(value);
+    if (token.isEmpty) return null;
+    return '<$token>';
+  }
+
+  static List<String> _extractMessageIdCandidates(String? headerValue) {
+    if (headerValue == null) return const [];
+    final trimmed = headerValue.trim();
+    if (trimmed.isEmpty) return const [];
+
+    final bracketMatches = RegExp(r'<([^>]+)>')
+        .allMatches(trimmed)
+        .map((m) => m.group(1))
+        .whereType<String>()
+        .map(_normalizeMessageIdToken)
+        .where((id) => id.isNotEmpty)
+        .toList();
+    if (bracketMatches.isNotEmpty) return bracketMatches;
+
+    return trimmed
+        .split(RegExp(r'[\s,]+'))
+        .map(_normalizeMessageIdToken)
+        .where((id) => id.isNotEmpty)
+        .toList();
+  }
+
+  /// Track outgoing Message-ID for reply matching
+  void trackOutgoingEmail({required String threadId, String? messageId}) {
+    final normalizedMessageId = _normalizeMessageIdToken(messageId ?? '');
+    if (normalizedMessageId.isNotEmpty) {
+      _outgoingMessageIds[normalizedMessageId] = threadId;
     }
   }
 
@@ -1156,14 +1192,6 @@ class EmailRelayService {
           .toList();
       for (final key in keysToRemove) {
         _outgoingMessageIds.remove(key);
-      }
-    }
-    if (_outgoingSubjects.length > 1000) {
-      final keysToRemove = _outgoingSubjects.keys
-          .take(_outgoingSubjects.length - 500)
-          .toList();
-      for (final key in keysToRemove) {
-        _outgoingSubjects.remove(key);
       }
     }
   }
@@ -1263,7 +1291,10 @@ class EmailRelayService {
     required FindClientByCallsignCallback findClientByCallsign,
     required GetStationDomainCallback getStationDomain,
   }) {
-    final threadId = message['thread_id'] as String?;
+    final requestedThreadId = (message['thread_id'] as String?)?.trim();
+    final threadId = (requestedThreadId != null && requestedThreadId.isNotEmpty)
+        ? requestedThreadId
+        : 'msg_${DateTime.now().toUtc().millisecondsSinceEpoch.toRadixString(36)}';
     final recipients = message['to'] as List<dynamic>?;
     final subject = message['subject'] as String?;
     final content = message['content'] as String?;
@@ -1273,16 +1304,13 @@ class EmailRelayService {
     final deliveryResults = <String, String>{};
 
     // Validate required fields
-    if (threadId == null ||
-        recipients == null ||
-        recipients.isEmpty ||
-        content == null) {
+    if (recipients == null || recipients.isEmpty || content == null) {
       // Send failure DSN back to sender
       final dsn = _createDsn(
         action: 'failed',
         threadId: threadId,
         recipient: recipients?.firstOrNull?.toString(),
-        reason: 'Missing required fields (thread_id, to, content)',
+        reason: 'Missing required fields (to, content)',
       );
       sendToClient(senderId, jsonEncode(dsn));
       return {'error': 'missing_fields'};
@@ -1695,6 +1723,7 @@ class EmailRelayService {
     String? recipient,
     String? reason,
     DateTime? retryUntil,
+    String? externalMessageId,
   }) {
     final dsn = <String, dynamic>{
       'type': 'email_dsn',
@@ -1705,6 +1734,9 @@ class EmailRelayService {
     if (threadId != null) dsn['thread_id'] = threadId;
     if (recipient != null) dsn['recipient'] = recipient;
     if (reason != null) dsn['reason'] = reason;
+    if (externalMessageId != null && externalMessageId.isNotEmpty) {
+      dsn['external_message_id'] = externalMessageId;
+    }
     if (retryUntil != null) {
       dsn['will_retry_until'] = retryUntil.toIso8601String();
       dsn['retry_after'] = settings.retryIntervalSeconds;

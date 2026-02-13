@@ -195,6 +195,15 @@ class DMNotificationService {
               DMNotificationTappedEvent(targetCallsign: fromCallsign),
             );
           });
+        } else if (payload != null && payload.startsWith('email:')) {
+          final threadId = payload.substring('email:'.length);
+          if (threadId.isNotEmpty) {
+            final prefs = await SharedPreferences.getInstance();
+            await prefs.remove(_pendingActionKey);
+            Future.delayed(const Duration(milliseconds: 500), () {
+              EventBus().fire(EmailNotificationTappedEvent(threadId: threadId));
+            });
+          }
         }
       }
     } catch (e) {
@@ -349,6 +358,7 @@ class DMNotificationService {
     required String fromAddress,
     required String subject,
     required String preview,
+    required String threadId,
   }) async {
     if (!_initialized || !_isSupportedPlatform()) return;
 
@@ -407,7 +417,7 @@ class DMNotificationService {
       title,
       body,
       notificationDetails,
-      payload: 'nav:devices',
+      payload: 'email:$threadId',
     );
 
     LogService().log(
@@ -655,6 +665,10 @@ class DMNotificationService {
       if (type == 'dm') {
         print('NOTIFICATION_DEBUG: Firing DMNotificationTappedEvent for $data');
         EventBus().fire(DMNotificationTappedEvent(targetCallsign: data));
+      } else if (type == 'email') {
+        if (data.isNotEmpty) {
+          EventBus().fire(EmailNotificationTappedEvent(threadId: data));
+        }
       } else if (type == 'nav') {
         EventBus().fire(NavigateToDevicesEvent());
       }

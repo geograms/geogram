@@ -38,10 +38,8 @@ class EventBus {
 
   /// Get or create a stream controller for an event type
   StreamController<T> _getController<T extends AppEvent>() {
-    return _controllers.putIfAbsent(
-      T,
-      () => StreamController<T>.broadcast(),
-    ) as StreamController<T>;
+    return _controllers.putIfAbsent(T, () => StreamController<T>.broadcast())
+        as StreamController<T>;
   }
 
   /// Subscribe to events of type T
@@ -124,11 +122,7 @@ class ClientConnectedEvent extends AppEvent {
   final String? callsign;
   final String? npub;
 
-  ClientConnectedEvent({
-    required this.clientId,
-    this.callsign,
-    this.npub,
-  });
+  ClientConnectedEvent({required this.clientId, this.callsign, this.npub});
 }
 
 /// Client disconnected from station
@@ -136,10 +130,7 @@ class ClientDisconnectedEvent extends AppEvent {
   final String clientId;
   final String? callsign;
 
-  ClientDisconnectedEvent({
-    required this.clientId,
-    this.callsign,
-  });
+  ClientDisconnectedEvent({required this.clientId, this.callsign});
 }
 
 /// Station server started
@@ -163,21 +154,15 @@ class ProfileChangedEvent extends AppEvent {
   final String callsign;
   final String npub;
 
-  ProfileChangedEvent({
-    required this.callsign,
-    required this.npub,
-  });
+  ProfileChangedEvent({required this.callsign, required this.npub});
 }
 
 /// App updated (tiles, files, etc.)
 class AppUpdatedEvent extends AppEvent {
-  final String appType;  // 'tiles', 'files', 'audio', etc.
+  final String appType; // 'tiles', 'files', 'audio', etc.
   final String? path;
 
-  AppUpdatedEvent({
-    required this.appType,
-    this.path,
-  });
+  AppUpdatedEvent({required this.appType, this.path});
 }
 
 /// Error event for global error handling
@@ -187,12 +172,7 @@ class ErrorEvent extends AppEvent {
   final Object? error;
   final StackTrace? stackTrace;
 
-  ErrorEvent({
-    required this.message,
-    this.source,
-    this.error,
-    this.stackTrace,
-  });
+  ErrorEvent({required this.message, this.source, this.error, this.stackTrace});
 }
 
 /// Status update event for UI feedback
@@ -200,10 +180,7 @@ class StatusUpdateEvent extends AppEvent {
   final String message;
   final StatusType type;
 
-  StatusUpdateEvent({
-    required this.message,
-    this.type = StatusType.info,
-  });
+  StatusUpdateEvent({required this.message, this.type = StatusType.info});
 }
 
 enum StatusType { info, success, warning, error }
@@ -239,14 +216,14 @@ class AlertReceivedEvent extends AppEvent {
 
 /// Direct message received (1:1 private chat)
 class DirectMessageReceivedEvent extends AppEvent {
-  final String fromCallsign;    // Sender's callsign
-  final String toCallsign;      // Recipient's callsign (local user)
-  final String content;         // Message content
+  final String fromCallsign; // Sender's callsign
+  final String toCallsign; // Recipient's callsign (local user)
+  final String content; // Message content
   final String messageTimestamp; // Message timestamp (YYYY-MM-DD HH:MM_ss)
-  final String? npub;           // Sender's NOSTR public key
-  final String? signature;      // NOSTR signature
-  final bool verified;          // Signature verification status
-  final bool fromSync;          // True if received via sync, false if local
+  final String? npub; // Sender's NOSTR public key
+  final String? signature; // NOSTR signature
+  final bool verified; // Signature verification status
+  final bool fromSync; // True if received via sync, false if local
 
   DirectMessageReceivedEvent({
     required this.fromCallsign,
@@ -262,20 +239,25 @@ class DirectMessageReceivedEvent extends AppEvent {
 
 /// DM notification tapped (user tapped on notification)
 class DMNotificationTappedEvent extends AppEvent {
-  final String targetCallsign;  // The callsign to open DM conversation with
+  final String targetCallsign; // The callsign to open DM conversation with
 
-  DMNotificationTappedEvent({
-    required this.targetCallsign,
-  });
+  DMNotificationTappedEvent({required this.targetCallsign});
+}
+
+/// Email notification tapped (user tapped on an email notification)
+class EmailNotificationTappedEvent extends AppEvent {
+  final String threadId;
+
+  EmailNotificationTappedEvent({required this.threadId});
 }
 
 /// Direct message sync completed
 class DirectMessageSyncEvent extends AppEvent {
-  final String otherCallsign;   // The callsign we synced with
-  final int newMessages;        // Number of new messages received
-  final int sentMessages;       // Number of messages sent to other device
-  final bool success;           // Whether sync completed successfully
-  final String? error;          // Error message if failed
+  final String otherCallsign; // The callsign we synced with
+  final int newMessages; // Number of new messages received
+  final int sentMessages; // Number of messages sent to other device
+  final bool success; // Whether sync completed successfully
+  final String? error; // Error message if failed
 
   DirectMessageSyncEvent({
     required this.otherCallsign,
@@ -289,7 +271,7 @@ class DirectMessageSyncEvent extends AppEvent {
 /// Queued DM message was successfully delivered
 /// Fired when a message from the offline queue has been sent
 class DMMessageDeliveredEvent extends AppEvent {
-  final String callsign;         // The recipient's callsign
+  final String callsign; // The recipient's callsign
   final String messageTimestamp; // The message timestamp (unique identifier)
 
   DMMessageDeliveredEvent({
@@ -301,11 +283,12 @@ class DMMessageDeliveredEvent extends AppEvent {
 /// DM message status changed (pending -> delivered/failed)
 /// Fired by DMQueueService during background delivery attempts
 class DMMessageStatusChangedEvent extends AppEvent {
-  final String callsign;        // The recipient's callsign
-  final String messageId;       // timestamp|author for identification
+  final String callsign; // The recipient's callsign
+  final String messageId; // timestamp|author for identification
   final MessageStatus newStatus; // New status (pending, delivered, failed)
-  final String? transportUsed;  // Transport used for delivery (webrtc, station, etc.)
-  final String? error;          // Error message if failed
+  final String?
+  transportUsed; // Transport used for delivery (webrtc, station, etc.)
+  final String? error; // Error message if failed
 
   DMMessageStatusChangedEvent({
     required this.callsign,
@@ -323,10 +306,10 @@ class DMMessageStatusChangedEvent extends AppEvent {
 /// Connection type for ConnectionStateChangedEvent
 enum ConnectionType {
   @Deprecated('No longer fired - services check their own endpoints instead')
-  internet,   // Was: general internet connectivity (no longer used)
-  station,    // Station relay connection (WebSocket to p2p.radio)
-  lan,        // Local network connection (WiFi/Ethernet with private IP)
-  bluetooth,  // Bluetooth Low Energy connection
+  internet, // Was: general internet connectivity (no longer used)
+  station, // Station relay connection (WebSocket to p2p.radio)
+  lan, // Local network connection (WiFi/Ethernet with private IP)
+  bluetooth, // Bluetooth Low Energy connection
 }
 
 /// Connection state changed event
@@ -334,7 +317,7 @@ enum ConnectionType {
 class ConnectionStateChangedEvent extends AppEvent {
   final ConnectionType connectionType;
   final bool isConnected;
-  final String? stationUrl;     // For station: the URL connected to
+  final String? stationUrl; // For station: the URL connected to
   final String? stationCallsign; // For station: the station's callsign
 
   ConnectionStateChangedEvent({
@@ -345,21 +328,22 @@ class ConnectionStateChangedEvent extends AppEvent {
   });
 
   @override
-  String toString() => 'ConnectionStateChangedEvent(type: $connectionType, connected: $isConnected)';
+  String toString() =>
+      'ConnectionStateChangedEvent(type: $connectionType, connected: $isConnected)';
 }
 
 /// BLE status types for UI notifications
 enum BLEStatusType {
-  scanning,       // BLE scan started
-  scanComplete,   // BLE scan completed
-  deviceFound,    // New BLE device discovered
-  advertising,    // BLE advertising started
-  connecting,     // Connecting to a BLE device
-  connected,      // Connected to a BLE device
-  disconnected,   // Disconnected from a BLE device
-  sending,        // Sending data via BLE
-  received,       // Received data via BLE
-  error,          // BLE error occurred
+  scanning, // BLE scan started
+  scanComplete, // BLE scan completed
+  deviceFound, // New BLE device discovered
+  advertising, // BLE advertising started
+  connecting, // Connecting to a BLE device
+  connected, // Connected to a BLE device
+  disconnected, // Disconnected from a BLE device
+  sending, // Sending data via BLE
+  received, // Received data via BLE
+  error, // BLE error occurred
 }
 
 /// BLE status event for UI notifications
@@ -387,10 +371,7 @@ class ChatMessagesLoadedEvent extends AppEvent {
   final String? roomId;
   final int messageCount;
 
-  ChatMessagesLoadedEvent({
-    this.roomId,
-    required this.messageCount,
-  });
+  ChatMessagesLoadedEvent({this.roomId, required this.messageCount});
 }
 
 // ============================================================
@@ -546,10 +527,7 @@ class TransferCancelledEvent extends AppEvent {
   final String transferId;
   final String? requestingApp;
 
-  TransferCancelledEvent({
-    required this.transferId,
-    this.requestingApp,
-  });
+  TransferCancelledEvent({required this.transferId, this.requestingApp});
 
   @override
   String toString() => 'TransferCancelledEvent(id: $transferId)';
@@ -595,7 +573,7 @@ class MirrorPairCompletedEvent extends AppEvent {
 /// Fired by EmailService when DSN (Delivery Status Notification) is received
 class EmailNotificationEvent extends AppEvent {
   final String message;
-  final String action;    // 'delivered', 'failed', 'pending_approval', 'delayed'
+  final String action; // 'delivered', 'failed', 'pending_approval', 'delayed'
   final String? threadId;
   final String? recipient;
 
@@ -607,7 +585,8 @@ class EmailNotificationEvent extends AppEvent {
   });
 
   @override
-  String toString() => 'EmailNotificationEvent(action: $action, message: $message)';
+  String toString() =>
+      'EmailNotificationEvent(action: $action, message: $message)';
 }
 
 // ============================================================
