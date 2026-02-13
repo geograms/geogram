@@ -28,6 +28,13 @@ enum EmailFolder {
   label,
 }
 
+class _NavigationRailLayout {
+  final bool extended;
+  final double width;
+
+  const _NavigationRailLayout({required this.extended, required this.width});
+}
+
 /// Email browser page with folder navigation and thread list
 class EmailBrowserPage extends StatefulWidget {
   /// The email app entry (provides storagePath)
@@ -70,6 +77,12 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
   Map<EmailFolder, int> _folderCounts = {};
   final TextEditingController _searchController = TextEditingController();
   String _searchQuery = '';
+
+  static const double _collapsedRailWidth = 72;
+  static const double _minExpandedRailWidth = 152;
+  static const double _maxExpandedRailWidth = 200;
+  static const double _minDesktopContentWidth = 620;
+  static const double _desktopBreakpoint = 960;
 
   static const List<EmailFolder> _folderOrder = [
     EmailFolder.inbox,
@@ -567,8 +580,12 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        _isWideScreen = constraints.maxWidth >= 960;
+        _isWideScreen = constraints.maxWidth >= _desktopBreakpoint;
         final theme = Theme.of(context);
+        final railLayout = _resolveNavigationRailLayout(
+          theme,
+          constraints.maxWidth,
+        );
 
         return Scaffold(
           key: _scaffoldKey,
@@ -582,19 +599,22 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
           ),
           drawer: _isWideScreen ? null : _buildFolderDrawer(theme),
           body: _isWideScreen
-              ? _buildDesktopLayout(theme)
+              ? _buildDesktopLayout(theme, railLayout)
               : _buildMobileLayout(theme),
         );
       },
     );
   }
 
-  Widget _buildDesktopLayout(ThemeData theme) {
+  Widget _buildDesktopLayout(
+    ThemeData theme,
+    _NavigationRailLayout railLayout,
+  ) {
     return Row(
       children: [
         SizedBox(
-          width: 240,
-          child: _buildNavigationRail(theme),
+          width: railLayout.width,
+          child: _buildNavigationRail(theme, railLayout),
         ),
         const VerticalDivider(width: 1),
         Expanded(
@@ -766,18 +786,63 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
     );
   }
 
-  Widget _buildNavigationRail(ThemeData theme) {
+  _NavigationRailLayout _resolveNavigationRailLayout(
+    ThemeData theme,
+    double totalWidth,
+  ) {
+    // Keep labels visible whenever the label text can fit the rail width.
+    final textStyle = theme.textTheme.bodyLarge?.copyWith(
+          fontWeight: FontWeight.w600,
+        ) ??
+        const TextStyle(fontWeight: FontWeight.w600);
+    final longestLabel = _folderOrder
+        .map(_folderLabel)
+        .reduce((a, b) => a.length >= b.length ? a : b);
+
+    final painter = TextPainter(
+      text: TextSpan(text: longestLabel, style: textStyle),
+      maxLines: 1,
+      textDirection: Directionality.of(context),
+    )..layout();
+
+    // Icon + spacing + padding required by NavigationRail destination.
+    final requiredExpandedWidth = (painter.width + 96).clamp(
+      _minExpandedRailWidth,
+      _maxExpandedRailWidth,
+    );
+
+    final maxRailWidthFromViewport = (totalWidth - _minDesktopContentWidth)
+        .clamp(_collapsedRailWidth, _maxExpandedRailWidth);
+
+    if (maxRailWidthFromViewport >= requiredExpandedWidth) {
+      return _NavigationRailLayout(
+        extended: true,
+        width: requiredExpandedWidth,
+      );
+    }
+
+    return const _NavigationRailLayout(
+      extended: false,
+      width: _collapsedRailWidth,
+    );
+  }
+
+  Widget _buildNavigationRail(
+    ThemeData theme,
+    _NavigationRailLayout railLayout,
+  ) {
     final selectedIndex = _folderOrder.contains(_currentFolder)
         ? _folderOrder.indexOf(_currentFolder)
         : 0;
-    final extended = MediaQuery.of(context).size.width > 1200;
     final folderLabelStyle = theme.textTheme.bodyLarge?.copyWith(
       fontWeight: FontWeight.w600,
     );
 
     return NavigationRail(
       backgroundColor: theme.colorScheme.surface,
-      extended: extended,
+      minWidth: _collapsedRailWidth,
+      minExtendedWidth: railLayout.width,
+      extended: railLayout.extended,
       selectedIndex: selectedIndex,
       destinations: _folderOrder.map((folder) {
         final count = _folderCounts[folder] ?? 0;
