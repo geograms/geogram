@@ -715,7 +715,7 @@ class AppService {
   }
 
   /// Detect which apps have public content in the given apps directory.
-  /// Checks each app directory for existence and non-private visibility.
+  /// Checks each app for existence, non-private visibility, AND actual content.
   /// [appsPath] defaults to the current profile's apps directory.
   /// [storage] optional ProfileStorage; falls back to filesystem when null.
   Future<Map<String, bool>> getPublicApps({
@@ -736,36 +736,73 @@ class AppService {
     if (dirPath == null) return result;
 
     try {
-      if (effectiveStorage != null) {
-        final scopedStorage = ScopedProfileStorage.fromAbsolutePath(
-            effectiveStorage, dirPath);
-        for (final appType in result.keys) {
-          if (!await scopedStorage.directoryExists(appType)) continue;
-          final appJs = await scopedStorage.readString('$appType/app.js');
-          if (appJs == null) continue;
-          try {
-            final data = jsonDecode(appJs) as Map<String, dynamic>;
-            if (data['visibility'] == 'private') continue;
-          } catch (_) {}
-          result[appType] = true;
-        }
-      } else {
-        for (final appType in result.keys) {
-          final appDir = Directory('$dirPath/$appType');
-          if (!await appDir.exists()) continue;
-          final appJsFile = File('$dirPath/$appType/app.js');
-          if (!await appJsFile.exists()) continue;
-          try {
-            final data =
-                jsonDecode(await appJsFile.readAsString()) as Map<String, dynamic>;
-            if (data['visibility'] == 'private') continue;
-          } catch (_) {}
-          result[appType] = true;
-        }
+      for (final appType in result.keys) {
+        // Check directory exists and is not private
+        if (!await _appIsPublic(appType, dirPath, effectiveStorage)) continue;
+        // Check for actual content per app type
+        result[appType] = await _appHasContent(appType, dirPath, effectiveStorage);
       }
     } catch (_) {}
 
     return result;
+  }
+
+  /// Check if an app directory exists and is not marked private.
+  Future<bool> _appIsPublic(
+      String appType, String dirPath, ProfileStorage? storage) async {
+    if (storage != null) {
+      final scoped = ScopedProfileStorage.fromAbsolutePath(storage, dirPath);
+      if (!await scoped.directoryExists(appType)) return false;
+      final appJs = await scoped.readString('$appType/app.js');
+      if (appJs == null) return false;
+      try {
+        final data = jsonDecode(appJs) as Map<String, dynamic>;
+        if (data['visibility'] == 'private') return false;
+      } catch (_) {}
+      return true;
+    } else {
+      if (!await Directory('$dirPath/$appType').exists()) return false;
+      final appJsFile = File('$dirPath/$appType/app.js');
+      if (!await appJsFile.exists()) return false;
+      try {
+        final data =
+            jsonDecode(await appJsFile.readAsString()) as Map<String, dynamic>;
+        if (data['visibility'] == 'private') return false;
+      } catch (_) {}
+      return true;
+    }
+  }
+
+  /// Check if an app has actual content to display.
+  Future<bool> _appHasContent(
+      String appType, String dirPath, ProfileStorage? storage) async {
+    final appPath = '$dirPath/$appType';
+    try {
+      switch (appType) {
+        case 'blog':
+          // Blog needs published posts
+          final cache = await getBlogCacheOrRegenerate(appPath);
+          return (cache['publishedCount'] as int? ?? 0) > 0;
+        case 'chat':
+          // Chat is interactive — available if it has channel structure
+          if (storage != null) {
+            final scoped =
+                ScopedProfileStorage.fromAbsolutePath(storage, appPath);
+            return await scoped.exists('extra/channels.json');
+          }
+          return await File('$appPath/extra/channels.json').exists();
+        default:
+          // Events, places, files, alerts: need a generated index.html
+          if (storage != null) {
+            final scoped =
+                ScopedProfileStorage.fromAbsolutePath(storage, appPath);
+            return await scoped.exists('index.html');
+          }
+          return await File('$appPath/index.html').exists();
+      }
+    } catch (_) {
+      return false;
+    }
   }
 
   /// Generate device menu items based on actually available public apps.
