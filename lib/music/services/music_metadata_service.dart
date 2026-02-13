@@ -7,6 +7,7 @@ import 'dart:io';
 
 import 'package:path/path.dart' as path;
 
+import '../../services/i18n_service.dart';
 import '../../services/log_service.dart';
 import '../utils/music_path_utils.dart';
 
@@ -62,7 +63,9 @@ class MusicMetadataService {
       final stat = await file.stat();
       final fileName = path.basename(filePath);
       final folderName = path.basename(path.dirname(filePath));
-      final parentFolderName = path.basename(path.dirname(path.dirname(filePath)));
+      final parentFolderName = path.basename(
+        path.dirname(path.dirname(filePath)),
+      );
 
       // Extract title from filename
       String title = MusicPathUtils.extractTitleFromFilename(fileName);
@@ -72,7 +75,11 @@ class MusicMetadataService {
 
       // Try to extract artist from folder structure
       // Common patterns: "Artist/Album/Track.mp3" or "Artist - Album/Track.mp3"
-      String artist = 'Unknown Artist';
+      final unknownArtistLabel = I18nService().tOrDefault(
+        'unknown_artist',
+        'Unknown Artist',
+      );
+      String artist = unknownArtistLabel;
       String? album;
 
       // Check if folder name contains " - " (Artist - Album pattern)
@@ -89,7 +96,7 @@ class MusicMetadataService {
 
         // Clean up generic folder names
         if (_isGenericFolderName(artist)) {
-          artist = 'Unknown Artist';
+          artist = unknownArtistLabel;
         }
         if (_isGenericFolderName(album)) {
           album = null;
@@ -104,7 +111,9 @@ class MusicMetadataService {
       if (album != null) {
         final yearMatch = RegExp(r'[\(\[](19|20)\d{2}[\)\]]').firstMatch(album);
         if (yearMatch != null) {
-          year = int.tryParse(yearMatch.group(0)!.replaceAll(RegExp(r'[\(\)\[\]]'), ''));
+          year = int.tryParse(
+            yearMatch.group(0)!.replaceAll(RegExp(r'[\(\)\[\]]'), ''),
+          );
           // Clean year from album name
           album = album.replaceAll(yearMatch.group(0)!, '').trim();
         }
@@ -143,7 +152,9 @@ class MusicMetadataService {
         modifiedAt: stat.modified,
       );
     } catch (e) {
-      _log.log('MusicMetadataService: Error extracting metadata from $filePath: $e');
+      _log.log(
+        'MusicMetadataService: Error extracting metadata from $filePath: $e',
+      );
       return null;
     }
   }

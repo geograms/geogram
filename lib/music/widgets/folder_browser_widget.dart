@@ -8,6 +8,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
 
+import '../../services/i18n_service.dart';
 import '../models/music_models.dart';
 import '../services/music_playback_service.dart';
 import 'album_card_widget.dart';
@@ -67,9 +68,11 @@ class _FolderBrowserWidgetState extends State<FolderBrowserWidget> {
     final nodes = <MusicFolderNode>[];
     for (final sourceFolder in widget.sourceFolders) {
       // Check if this source folder has any music
-      final hasMusic = widget.library.albums.any((a) =>
-          a.folderPath == sourceFolder ||
-          p.isWithin(sourceFolder, a.folderPath));
+      final hasMusic = widget.library.albums.any(
+        (a) =>
+            a.folderPath == sourceFolder ||
+            p.isWithin(sourceFolder, a.folderPath),
+      );
 
       if (hasMusic) {
         // Count tracks in this source folder
@@ -96,12 +99,14 @@ class _FolderBrowserWidgetState extends State<FolderBrowserWidget> {
           }
         }
 
-        nodes.add(MusicFolderNode(
-          path: sourceFolder,
-          name: p.basename(sourceFolder),
-          totalTrackCount: trackCount,
-          artwork: artwork,
-        ));
+        nodes.add(
+          MusicFolderNode(
+            path: sourceFolder,
+            name: p.basename(sourceFolder),
+            totalTrackCount: trackCount,
+            artwork: artwork,
+          ),
+        );
       }
     }
     return nodes;
@@ -233,10 +238,13 @@ class _FolderBrowserWidgetState extends State<FolderBrowserWidget> {
 
   Widget _buildNavigationBar(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
+    final i18n = I18nService();
     final folderName = p.basename(_currentFolderPath!);
 
     // Calculate track count for current folder
-    final trackCount = widget.library.getTracksInFolder(_currentFolderPath!).length;
+    final trackCount = widget.library
+        .getTracksInFolder(_currentFolderPath!)
+        .length;
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
@@ -246,25 +254,19 @@ class _FolderBrowserWidgetState extends State<FolderBrowserWidget> {
           IconButton(
             icon: const Icon(Icons.arrow_back),
             onPressed: _navigateBack,
-            tooltip: 'Back',
+            tooltip: i18n.t('back'),
           ),
           const SizedBox(width: 8),
           Expanded(
             child: Text(
               folderName,
-              style: const TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.w500,
-              ),
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
               overflow: TextOverflow.ellipsis,
             ),
           ),
           Text(
-            '$trackCount tracks',
-            style: TextStyle(
-              fontSize: 12,
-              color: colorScheme.onSurfaceVariant,
-            ),
+            i18n.t('tracks_count', params: [trackCount.toString()]),
+            style: TextStyle(fontSize: 12, color: colorScheme.onSurfaceVariant),
           ),
         ],
       ),
@@ -272,11 +274,13 @@ class _FolderBrowserWidgetState extends State<FolderBrowserWidget> {
   }
 
   Widget _buildActionButtons(BuildContext context) {
+    final i18n = I18nService();
     return StreamBuilder<MusicPlaybackState>(
       stream: widget.playback.stateStream,
       initialData: widget.playback.state,
       builder: (context, snapshot) {
-        final isPlaying = snapshot.data == MusicPlaybackState.playing ||
+        final isPlaying =
+            snapshot.data == MusicPlaybackState.playing ||
             snapshot.data == MusicPlaybackState.paused ||
             snapshot.data == MusicPlaybackState.loading;
 
@@ -288,7 +292,7 @@ class _FolderBrowserWidgetState extends State<FolderBrowserWidget> {
                 child: FilledButton.icon(
                   onPressed: isPlaying ? _stopPlayback : _playAll,
                   icon: Icon(isPlaying ? Icons.stop : Icons.play_arrow),
-                  label: Text(isPlaying ? 'Stop' : 'Play All'),
+                  label: Text(isPlaying ? i18n.t('stop') : i18n.t('play_all')),
                 ),
               ),
               const SizedBox(width: 8),
@@ -296,7 +300,7 @@ class _FolderBrowserWidgetState extends State<FolderBrowserWidget> {
                 child: OutlinedButton.icon(
                   onPressed: _shuffleAll,
                   icon: const Icon(Icons.shuffle),
-                  label: const Text('Shuffle'),
+                  label: Text(i18n.t('shuffle')),
                 ),
               ),
             ],
@@ -312,6 +316,7 @@ class _FolderBrowserWidgetState extends State<FolderBrowserWidget> {
 
   Widget _buildEmptyState(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
+    final i18n = I18nService();
 
     return Center(
       child: Padding(
@@ -325,27 +330,22 @@ class _FolderBrowserWidgetState extends State<FolderBrowserWidget> {
               color: colorScheme.onSurfaceVariant,
             ),
             const SizedBox(height: 24),
-            const Text(
-              'No music folders',
-              style: TextStyle(
-                fontSize: 20,
-                fontWeight: FontWeight.bold,
-              ),
+            Text(
+              i18n.t('no_music_folders'),
+              style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 8),
             Text(
-              'Add a music folder to browse your collection',
+              i18n.t('add_folder_to_browse'),
               textAlign: TextAlign.center,
-              style: TextStyle(
-                color: colorScheme.onSurfaceVariant,
-              ),
+              style: TextStyle(color: colorScheme.onSurfaceVariant),
             ),
             if (widget.onAddFolder != null) ...[
               const SizedBox(height: 24),
               FilledButton.icon(
                 onPressed: widget.onAddFolder,
                 icon: const Icon(Icons.folder_open),
-                label: const Text('Add Music Folder'),
+                label: Text(i18n.t('add_music_folder')),
               ),
             ],
           ],
@@ -360,14 +360,12 @@ class _FolderCardWidget extends StatelessWidget {
   final MusicFolderNode folder;
   final VoidCallback? onTap;
 
-  const _FolderCardWidget({
-    required this.folder,
-    this.onTap,
-  });
+  const _FolderCardWidget({required this.folder, this.onTap});
 
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
+    final i18n = I18nService();
 
     return Card(
       clipBehavior: Clip.antiAlias,
@@ -377,9 +375,7 @@ class _FolderCardWidget extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             // Folder artwork or icon
-            Expanded(
-              child: _buildArtwork(colorScheme),
-            ),
+            Expanded(child: _buildArtwork(colorScheme)),
             // Folder info
             Padding(
               padding: const EdgeInsets.all(8),
@@ -397,7 +393,10 @@ class _FolderCardWidget extends StatelessWidget {
                   ),
                   const SizedBox(height: 2),
                   Text(
-                    '${folder.totalTrackCount} tracks',
+                    i18n.t(
+                      'tracks_count',
+                      params: [folder.totalTrackCount.toString()],
+                    ),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
@@ -437,11 +436,7 @@ class _FolderCardWidget extends StatelessWidget {
                 color: colorScheme.surface.withValues(alpha: 0.8),
                 borderRadius: BorderRadius.circular(4),
               ),
-              child: Icon(
-                Icons.folder,
-                size: 16,
-                color: colorScheme.primary,
-              ),
+              child: Icon(Icons.folder, size: 16, color: colorScheme.primary),
             ),
           ),
         ],
@@ -454,11 +449,7 @@ class _FolderCardWidget extends StatelessWidget {
     return Container(
       color: colorScheme.surfaceContainerHighest,
       child: Center(
-        child: Icon(
-          Icons.folder,
-          size: 48,
-          color: colorScheme.primary,
-        ),
+        child: Icon(Icons.folder, size: 48, color: colorScheme.primary),
       ),
     );
   }

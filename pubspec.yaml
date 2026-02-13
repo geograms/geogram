@@ -155,6 +155,7 @@ flutter:
   assets:
     - languages/en_US/
     - languages/pt_PT/
+    - languages/de_DE/
     - sounds/
     - sounds/acoustic/
     - sounds/ambient/

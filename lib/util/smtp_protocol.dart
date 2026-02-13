@@ -233,7 +233,11 @@ class SMTPSession {
   /// Close session
   Future<void> close() async {
     state = SMTPState.quit;
-    await socket.close();
+    try {
+      await socket.close();
+    } catch (_) {
+      // Socket may already be closing or in a bad state
+    }
   }
 
   @override

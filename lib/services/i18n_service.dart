@@ -11,12 +11,13 @@ class I18nService {
 
   Map<String, String> _translations = {};
   String _currentLanguage = 'en_US';
-  final List<String> _supportedLanguages = ['en_US', 'pt_PT'];
+  final List<String> _supportedLanguages = ['en_US', 'pt_PT', 'de_DE'];
 
   // Language display names
   final Map<String, String> _languageNames = {
     'en_US': 'English (US)',
     'pt_PT': 'Português (Portugal)',
+    'de_DE': 'Deutsch (Deutschland)',
   };
 
   // Feature files to load for each language
@@ -82,18 +83,23 @@ class I18nService {
 
   /// Normalize language codes to full locale format
   String _normalizeLanguageCode(String code) {
+    final normalizedCode = code.trim();
+    final codeLower = normalizedCode.toLowerCase().replaceAll('_', '-');
+
     // Map short codes to full locale codes
     const Map<String, String> shortCodeMap = {
       'en': 'en_US',
       'pt': 'pt_PT',
+      'de': 'de_DE',
+      'de-de': 'de_DE',
     };
 
     // If it's a short code, expand it
-    if (shortCodeMap.containsKey(code)) {
-      return shortCodeMap[code]!;
+    if (shortCodeMap.containsKey(codeLower)) {
+      return shortCodeMap[codeLower]!;
     }
 
-    return code;
+    return normalizedCode;
   }
 
   /// Load all language files for a given locale

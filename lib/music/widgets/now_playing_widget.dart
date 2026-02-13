@@ -7,6 +7,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart' hide RepeatMode;
 
+import '../../services/i18n_service.dart';
 import '../models/music_models.dart';
 import '../services/music_playback_service.dart';
 import 'animated_equalizer_widget.dart';
@@ -26,6 +27,7 @@ class NowPlayingWidget extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final i18n = I18nService();
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
     final screenSize = MediaQuery.of(context).size;
@@ -39,7 +41,7 @@ class NowPlayingWidget extends StatelessWidget {
           icon: const Icon(Icons.keyboard_arrow_down),
           onPressed: onClose ?? () => Navigator.of(context).pop(),
         ),
-        title: const Text('Now Playing'),
+        title: Text(i18n.t('now_playing')),
         centerTitle: true,
         actions: [
           IconButton(
@@ -55,9 +57,7 @@ class NowPlayingWidget extends StatelessWidget {
         builder: (context, trackSnapshot) {
           final track = trackSnapshot.data ?? playback.currentTrack;
           if (track == null) {
-            return const Center(
-              child: Text('No track playing'),
-            );
+            return Center(child: Text(i18n.t('no_track_playing')));
           }
 
           final album = library?.getAlbum(track.albumId ?? '');
@@ -126,7 +126,9 @@ class NowPlayingWidget extends StatelessWidget {
                               textAlign: TextAlign.center,
                               style: TextStyle(
                                 fontSize: 14,
-                                color: colorScheme.onSurfaceVariant.withOpacity(0.7),
+                                color: colorScheme.onSurfaceVariant.withOpacity(
+                                  0.7,
+                                ),
                               ),
                             ),
                           ],
@@ -203,8 +205,12 @@ class NowPlayingWidget extends StatelessWidget {
                 SliderTheme(
                   data: SliderThemeData(
                     trackHeight: 4,
-                    thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
-                    overlayShape: const RoundSliderOverlayShape(overlayRadius: 14),
+                    thumbShape: const RoundSliderThumbShape(
+                      enabledThumbRadius: 6,
+                    ),
+                    overlayShape: const RoundSliderOverlayShape(
+                      overlayRadius: 14,
+                    ),
                     activeTrackColor: colorScheme.primary,
                     inactiveTrackColor: colorScheme.surfaceContainerHighest,
                     thumbColor: colorScheme.primary,
@@ -349,10 +355,7 @@ class NowPlayingWidget extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 24),
       child: Row(
         children: [
-          Icon(
-            Icons.volume_down,
-            color: colorScheme.onSurfaceVariant,
-          ),
+          Icon(Icons.volume_down, color: colorScheme.onSurfaceVariant),
           Expanded(
             child: StreamBuilder<double>(
               stream: playback.volumeStream,
@@ -366,10 +369,7 @@ class NowPlayingWidget extends StatelessWidget {
               },
             ),
           ),
-          Icon(
-            Icons.volume_up,
-            color: colorScheme.onSurfaceVariant,
-          ),
+          Icon(Icons.volume_up, color: colorScheme.onSurfaceVariant),
         ],
       ),
     );
@@ -402,21 +402,23 @@ class NowPlayingWidget extends StatelessWidget {
   }
 
   void _cycleRepeat(BuildContext context) {
+    final i18n = I18nService();
     final currentMode = playback.queue.repeat;
     playback.cycleRepeat();
 
     // Show snackbar with next mode
-    final nextMode = RepeatMode.values[(currentMode.index + 1) % RepeatMode.values.length];
+    final nextMode =
+        RepeatMode.values[(currentMode.index + 1) % RepeatMode.values.length];
     final String message;
     switch (nextMode) {
       case RepeatMode.off:
-        message = 'Repeat disabled';
+        message = i18n.t('repeat_disabled');
         break;
       case RepeatMode.one:
-        message = 'Repeating current track';
+        message = i18n.t('repeating_current_track');
         break;
       case RepeatMode.all:
-        message = 'Repeating all tracks';
+        message = i18n.t('repeating_all_tracks');
         break;
     }
 
@@ -443,6 +445,7 @@ class _QueueSheet extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final i18n = I18nService();
     final colorScheme = Theme.of(context).colorScheme;
 
     return StreamBuilder<PlaybackQueue>(
@@ -451,9 +454,7 @@ class _QueueSheet extends StatelessWidget {
         final queue = snapshot.data ?? playback.queue;
 
         if (queue.isEmpty) {
-          return const Center(
-            child: Text('Queue is empty'),
-          );
+          return Center(child: Text(i18n.t('queue_is_empty')));
         }
 
         return Column(
@@ -475,7 +476,7 @@ class _QueueSheet extends StatelessWidget {
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   Text(
-                    'Queue (${queue.length} tracks)',
+                    i18n.t('queue_header', params: [queue.length.toString()]),
                     style: const TextStyle(
                       fontSize: 18,
                       fontWeight: FontWeight.bold,
@@ -483,7 +484,7 @@ class _QueueSheet extends StatelessWidget {
                   ),
                   TextButton(
                     onPressed: playback.clearQueue,
-                    child: const Text('Clear'),
+                    child: Text(i18n.t('clear')),
                   ),
                 ],
               ),
@@ -508,7 +509,9 @@ class _QueueSheet extends StatelessWidget {
 
                       if (track == null) {
                         return ListTile(
-                          title: Text('Unknown track: $trackId'),
+                          title: Text(
+                            i18n.t('unknown_track', params: [trackId]),
+                          ),
                         );
                       }
 

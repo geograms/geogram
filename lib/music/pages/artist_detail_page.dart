@@ -51,12 +51,7 @@ class ArtistDetailPage extends StatelessWidget {
               title: Text(
                 artist.name,
                 style: const TextStyle(
-                  shadows: [
-                    Shadow(
-                      blurRadius: 10,
-                      color: Colors.black,
-                    ),
-                  ],
+                  shadows: [Shadow(blurRadius: 10, color: Colors.black)],
                 ),
               ),
               background: Stack(
@@ -79,10 +74,7 @@ class ArtistDetailPage extends StatelessWidget {
                       gradient: LinearGradient(
                         begin: Alignment.topCenter,
                         end: Alignment.bottomCenter,
-                        colors: [
-                          Colors.transparent,
-                          Colors.black54,
-                        ],
+                        colors: [Colors.transparent, Colors.black54],
                       ),
                     ),
                   ),
@@ -98,7 +90,7 @@ class ArtistDetailPage extends StatelessWidget {
                         playback.toggleShuffle();
                       }
                     : null,
-                tooltip: 'Shuffle all',
+                tooltip: i18n.t('shuffle_all'),
               ),
             ],
           ),
@@ -110,10 +102,14 @@ class ArtistDetailPage extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    '${artist.albumCount} albums - ${artist.trackCount} tracks',
-                    style: TextStyle(
-                      color: colorScheme.onSurfaceVariant,
+                    i18n.t(
+                      'albums_dash_tracks',
+                      params: [
+                        artist.albumCount.toString(),
+                        artist.trackCount.toString(),
+                      ],
                     ),
+                    style: TextStyle(color: colorScheme.onSurfaceVariant),
                   ),
                   const SizedBox(height: 16),
                   // Play all button
@@ -126,7 +122,7 @@ class ArtistDetailPage extends StatelessWidget {
                               }
                             : null,
                         icon: const Icon(Icons.play_arrow),
-                        label: const Text('Play All'),
+                        label: Text(i18n.t('play_all')),
                       ),
                       const SizedBox(width: 8),
                       OutlinedButton.icon(
@@ -138,14 +134,17 @@ class ArtistDetailPage extends StatelessWidget {
                                 ScaffoldMessenger.of(context).showSnackBar(
                                   SnackBar(
                                     content: Text(
-                                      'Added ${allTracks.length} tracks to queue',
+                                      i18n.t(
+                                        'added_tracks_to_queue',
+                                        params: [allTracks.length.toString()],
+                                      ),
                                     ),
                                   ),
                                 );
                               }
                             : null,
                         icon: const Icon(Icons.playlist_add),
-                        label: const Text('Add to Queue'),
+                        label: Text(i18n.t('add_to_queue')),
                       ),
                     ],
                   ),
@@ -158,7 +157,7 @@ class ArtistDetailPage extends StatelessWidget {
             child: Padding(
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
               child: Text(
-                'Albums',
+                i18n.t('albums'),
                 style: TextStyle(
                   fontSize: 18,
                   fontWeight: FontWeight.bold,
@@ -173,7 +172,7 @@ class ArtistDetailPage extends StatelessWidget {
               child: Padding(
                 padding: const EdgeInsets.all(16),
                 child: Text(
-                  'No albums found',
+                  i18n.t('no_albums_found'),
                   style: TextStyle(color: colorScheme.onSurfaceVariant),
                 ),
               ),
@@ -188,29 +187,26 @@ class ArtistDetailPage extends StatelessWidget {
                   crossAxisSpacing: 8,
                   mainAxisSpacing: 8,
                 ),
-                delegate: SliverChildBuilderDelegate(
-                  (context, index) {
-                    final album = albums[index];
-                    return AlbumCardWidget(
-                      album: album,
-                      onFetchArtwork: onFetchArtwork,
-                      onTap: () {
-                        Navigator.of(context).push(
-                          MaterialPageRoute(
-                            builder: (context) => AlbumDetailPage(
-                              album: album,
-                              library: library,
-                              playback: playback,
-                              i18n: i18n,
-                              onFetchArtwork: onFetchArtwork,
-                            ),
+                delegate: SliverChildBuilderDelegate((context, index) {
+                  final album = albums[index];
+                  return AlbumCardWidget(
+                    album: album,
+                    onFetchArtwork: onFetchArtwork,
+                    onTap: () {
+                      Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (context) => AlbumDetailPage(
+                            album: album,
+                            library: library,
+                            playback: playback,
+                            i18n: i18n,
+                            onFetchArtwork: onFetchArtwork,
                           ),
-                        );
-                      },
-                    );
-                  },
-                  childCount: albums.length,
-                ),
+                        ),
+                      );
+                    },
+                  );
+                }, childCount: albums.length),
               ),
             ),
           // All tracks section header
@@ -218,7 +214,7 @@ class ArtistDetailPage extends StatelessWidget {
             child: Padding(
               padding: const EdgeInsets.fromLTRB(16, 24, 16, 8),
               child: Text(
-                'All Tracks',
+                i18n.t('all_tracks'),
                 style: TextStyle(
                   fontSize: 18,
                   fontWeight: FontWeight.bold,
@@ -229,45 +225,45 @@ class ArtistDetailPage extends StatelessWidget {
           ),
           // All tracks list
           SliverList(
-            delegate: SliverChildBuilderDelegate(
-              (context, index) {
-                final track = allTracks[index];
-                return StreamBuilder<MusicTrack?>(
-                  stream: playback.trackStream,
-                  builder: (context, trackSnapshot) {
-                    final isCurrentTrack = (trackSnapshot.data?.id ?? playback.currentTrack?.id) == track.id;
-                    return StreamBuilder<MusicPlaybackState>(
-                      stream: playback.stateStream,
-                      initialData: playback.state,
-                      builder: (context, stateSnapshot) {
-                        final isActuallyPlaying = isCurrentTrack &&
-                            stateSnapshot.data == MusicPlaybackState.playing;
-                        return TrackTileWidget(
-                          track: track,
-                          showAlbum: true,
-                          showTrackNumber: false,
-                          isPlaying: isCurrentTrack,
-                          isActuallyPlaying: isActuallyPlaying,
-                          onTap: () {
-                            if (isCurrentTrack) {
-                              // Toggle play/pause for current track
-                              if (isActuallyPlaying) {
-                                playback.pause();
-                              } else {
-                                playback.play();
-                              }
+            delegate: SliverChildBuilderDelegate((context, index) {
+              final track = allTracks[index];
+              return StreamBuilder<MusicTrack?>(
+                stream: playback.trackStream,
+                builder: (context, trackSnapshot) {
+                  final isCurrentTrack =
+                      (trackSnapshot.data?.id ?? playback.currentTrack?.id) ==
+                      track.id;
+                  return StreamBuilder<MusicPlaybackState>(
+                    stream: playback.stateStream,
+                    initialData: playback.state,
+                    builder: (context, stateSnapshot) {
+                      final isActuallyPlaying =
+                          isCurrentTrack &&
+                          stateSnapshot.data == MusicPlaybackState.playing;
+                      return TrackTileWidget(
+                        track: track,
+                        showAlbum: true,
+                        showTrackNumber: false,
+                        isPlaying: isCurrentTrack,
+                        isActuallyPlaying: isActuallyPlaying,
+                        onTap: () {
+                          if (isCurrentTrack) {
+                            // Toggle play/pause for current track
+                            if (isActuallyPlaying) {
+                              playback.pause();
                             } else {
-                              playback.playTracks(allTracks, startIndex: index);
+                              playback.play();
                             }
-                          },
-                        );
-                      },
-                    );
-                  },
-                );
-              },
-              childCount: allTracks.length,
-            ),
+                          } else {
+                            playback.playTracks(allTracks, startIndex: index);
+                          }
+                        },
+                      );
+                    },
+                  );
+                },
+              );
+            }, childCount: allTracks.length),
           ),
           // Bottom padding for mini player
           const SliverPadding(padding: EdgeInsets.only(bottom: 80)),
@@ -283,12 +279,10 @@ class ArtistDetailPage extends StatelessWidget {
             builder: (context) => SizedBox(
               height: MediaQuery.of(context).size.height * 0.9,
               child: ClipRRect(
-                borderRadius:
-                    const BorderRadius.vertical(top: Radius.circular(16)),
-                child: NowPlayingWidget(
-                  playback: playback,
-                  library: library,
+                borderRadius: const BorderRadius.vertical(
+                  top: Radius.circular(16),
                 ),
+                child: NowPlayingWidget(playback: playback, library: library),
               ),
             ),
           );
@@ -299,7 +293,9 @@ class ArtistDetailPage extends StatelessWidget {
 
   Widget _buildPlaceholder(ColorScheme colorScheme, List<MusicAlbum> albums) {
     // Try to use first album's artwork as fallback
-    final firstAlbumWithArt = albums.where((a) => a.artwork != null).firstOrNull;
+    final firstAlbumWithArt = albums
+        .where((a) => a.artwork != null)
+        .firstOrNull;
 
     if (firstAlbumWithArt?.artwork != null) {
       return Image.file(

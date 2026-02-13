@@ -7,6 +7,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 
+import '../../services/i18n_service.dart';
 import '../models/music_artist.dart';
 
 /// A card for displaying an artist
@@ -28,6 +29,7 @@ class ArtistCardWidget extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
+    final i18n = I18nService();
 
     return Card(
       clipBehavior: Clip.antiAlias,
@@ -42,9 +44,7 @@ class ArtistCardWidget extends StatelessWidget {
             Expanded(
               child: Padding(
                 padding: const EdgeInsets.all(12),
-                child: ClipOval(
-                  child: _buildArtwork(colorScheme),
-                ),
+                child: ClipOval(child: _buildArtwork(colorScheme)),
               ),
             ),
             // Artist info
@@ -64,7 +64,7 @@ class ArtistCardWidget extends StatelessWidget {
             Padding(
               padding: const EdgeInsets.only(bottom: 8, top: 4),
               child: Text(
-                '${artist.albumCount} albums',
+                i18n.t('albums_count', params: [artist.albumCount.toString()]),
                 style: TextStyle(
                   fontSize: 12,
                   color: colorScheme.onSurfaceVariant,
@@ -126,6 +126,7 @@ class ArtistListTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
+    final i18n = I18nService();
 
     return ListTile(
       selected: isSelected,
@@ -138,23 +139,16 @@ class ArtistListTile extends StatelessWidget {
             ? FileImage(File(artist.artwork!))
             : null,
         child: artist.artwork == null
-            ? Icon(
-                Icons.person,
-                color: colorScheme.onSurfaceVariant,
-              )
+            ? Icon(Icons.person, color: colorScheme.onSurfaceVariant)
             : null,
       ),
-      title: Text(
-        artist.name,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-      ),
+      title: Text(artist.name, maxLines: 1, overflow: TextOverflow.ellipsis),
       subtitle: Text(
-        '${artist.albumCount} albums, ${artist.trackCount} tracks',
-        style: TextStyle(
-          fontSize: 12,
-          color: colorScheme.onSurfaceVariant,
+        i18n.t(
+          'albums_tracks_count',
+          params: [artist.albumCount.toString(), artist.trackCount.toString()],
         ),
+        style: TextStyle(fontSize: 12, color: colorScheme.onSurfaceVariant),
       ),
       trailing: trailing,
     );

@@ -393,8 +393,9 @@ class SMTPServer {
 
   /// Handle QUIT command
   void _handleQuit(SMTPSession session) {
-    session.send(SMTPResponse.single(SMTPCode.closing, 'Bye'));
-    _closeSession(session);
+    session.send(SMTPResponse.single(SMTPCode.closing, 'Bye')).then((_) {
+      _closeSession(session);
+    });
   }
 
   /// Process received message
@@ -432,6 +433,7 @@ class SMTPServer {
 
   /// Close a session
   void _closeSession(SMTPSession session) {
+    if (session.state == SMTPState.quit) return;
     session.close();
 
     // Remove from tracking

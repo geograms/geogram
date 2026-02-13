@@ -7,6 +7,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 
+import '../../services/i18n_service.dart';
 import '../models/music_album.dart';
 
 /// Callback for fetching album artwork
@@ -96,9 +97,7 @@ class _AlbumCardWidgetState extends State<AlbumCardWidget> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             // Album artwork - Expanded to fill available space
-            Expanded(
-              child: _buildArtwork(colorScheme),
-            ),
+            Expanded(child: _buildArtwork(colorScheme)),
             // Album info
             Padding(
               padding: const EdgeInsets.all(8),
@@ -116,7 +115,10 @@ class _AlbumCardWidgetState extends State<AlbumCardWidget> {
                   ),
                   const SizedBox(height: 2),
                   Text(
-                    widget.album.artist + (widget.album.year != null ? ' (${widget.album.year})' : ''),
+                    widget.album.artist +
+                        (widget.album.year != null
+                            ? ' (${widget.album.year})'
+                            : ''),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
@@ -154,11 +156,7 @@ class _AlbumCardWidgetState extends State<AlbumCardWidget> {
     return Container(
       color: colorScheme.surfaceContainerHighest,
       child: Center(
-        child: Icon(
-          Icons.album,
-          size: 48,
-          color: colorScheme.onSurfaceVariant,
-        ),
+        child: Icon(Icons.album, size: 48, color: colorScheme.onSurfaceVariant),
       ),
     );
   }
@@ -254,6 +252,7 @@ class _AlbumListTileState extends State<AlbumListTile> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
+    final i18n = I18nService();
 
     return ListTile(
       selected: widget.isSelected,
@@ -274,13 +273,10 @@ class _AlbumListTileState extends State<AlbumListTile> {
       ),
       subtitle: Text(
         '${widget.album.artist}${widget.album.year != null ? ' (${widget.album.year})' : ''}'
-        ' - ${widget.album.trackCount} tracks',
+        ' - ${i18n.t('tracks_count', params: [widget.album.trackCount.toString()])}',
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
-        style: TextStyle(
-          fontSize: 12,
-          color: colorScheme.onSurfaceVariant,
-        ),
+        style: TextStyle(fontSize: 12, color: colorScheme.onSurfaceVariant),
       ),
       trailing: widget.trailing,
     );
@@ -315,11 +311,7 @@ class _AlbumListTileState extends State<AlbumListTile> {
   Widget _buildPlaceholder(ColorScheme colorScheme) {
     return Container(
       color: colorScheme.surfaceContainerHighest,
-      child: Icon(
-        Icons.album,
-        size: 24,
-        color: colorScheme.onSurfaceVariant,
-      ),
+      child: Icon(Icons.album, size: 24, color: colorScheme.onSurfaceVariant),
     );
   }
 }

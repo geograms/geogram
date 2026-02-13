@@ -68,19 +68,16 @@ class _MusicSettingsPageState extends State<MusicSettingsPage> {
         final openSettings = await showDialog<bool>(
           context: context,
           builder: (context) => AlertDialog(
-            title: const Text('Permission Required'),
-            content: const Text(
-              'Storage permission is required to access music files. '
-              'Please enable it in app settings.',
-            ),
+            title: Text(widget.i18n.t('permission_required')),
+            content: Text(widget.i18n.t('storage_permission_message')),
             actions: [
               TextButton(
                 onPressed: () => Navigator.pop(context, false),
-                child: const Text('Cancel'),
+                child: Text(widget.i18n.t('cancel')),
               ),
               TextButton(
                 onPressed: () => Navigator.pop(context, true),
-                child: const Text('Open Settings'),
+                child: Text(widget.i18n.t('open_settings')),
               ),
             ],
           ),
@@ -90,31 +87,29 @@ class _MusicSettingsPageState extends State<MusicSettingsPage> {
         }
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Storage permission required to access music files'),
-          ),
+          SnackBar(content: Text(widget.i18n.t('storage_permission_required'))),
         );
       }
       return;
     }
 
     final result = await FilePicker.platform.getDirectoryPath(
-      dialogTitle: 'Select Music Folder',
+      dialogTitle: widget.i18n.t('select_music_folder'),
     );
 
     if (result != null) {
       final dir = Directory(result);
       if (await dir.exists()) {
         if (!_settings.sourceFolders.contains(result)) {
-          _updateSettings((s) => s.copyWith(
-                sourceFolders: [...s.sourceFolders, result],
-              ));
+          _updateSettings(
+            (s) => s.copyWith(sourceFolders: [...s.sourceFolders, result]),
+          );
           // Auto-save when folder is added
           await widget.storage.saveSettings(_settings);
         } else {
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Folder already added')),
+              SnackBar(content: Text(widget.i18n.t('folder_already_added'))),
             );
           }
         }
@@ -123,9 +118,11 @@ class _MusicSettingsPageState extends State<MusicSettingsPage> {
   }
 
   Future<void> _removeSourceFolder(String folder) async {
-    _updateSettings((s) => s.copyWith(
-          sourceFolders: s.sourceFolders.where((f) => f != folder).toList(),
-        ));
+    _updateSettings(
+      (s) => s.copyWith(
+        sourceFolders: s.sourceFolders.where((f) => f != folder).toList(),
+      ),
+    );
     // Auto-save when folder is removed
     await widget.storage.saveSettings(_settings);
   }
@@ -136,51 +133,53 @@ class _MusicSettingsPageState extends State<MusicSettingsPage> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Music Settings'),
+        title: Text(widget.i18n.t('music_settings')),
         actions: [
           if (_hasChanges)
             TextButton(
               onPressed: _saveSettings,
-              child: const Text('Save'),
+              child: Text(widget.i18n.t('save')),
             ),
         ],
       ),
       body: ListView(
         children: [
           // Source Folders Section
-          _buildSectionHeader('Music Folders'),
+          _buildSectionHeader(widget.i18n.t('music_folders')),
           if (_settings.sourceFolders.isEmpty)
             ListTile(
               leading: Icon(Icons.info_outline, color: colorScheme.primary),
-              title: const Text('No music folders added'),
-              subtitle: const Text('Add a folder to scan for music'),
+              title: Text(widget.i18n.t('no_folders_added')),
+              subtitle: Text(widget.i18n.t('add_folder_hint')),
             )
           else
-            ..._settings.sourceFolders.map((folder) => ListTile(
-                  leading: const Icon(Icons.folder),
-                  title: Text(
-                    folder.split('/').last,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
+            ..._settings.sourceFolders.map(
+              (folder) => ListTile(
+                leading: const Icon(Icons.folder),
+                title: Text(
+                  folder.split('/').last,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                subtitle: Text(
+                  folder,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: colorScheme.onSurfaceVariant,
                   ),
-                  subtitle: Text(
-                    folder,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: colorScheme.onSurfaceVariant,
-                    ),
-                  ),
-                  trailing: IconButton(
-                    icon: const Icon(Icons.remove_circle_outline),
-                    onPressed: () => _removeSourceFolder(folder),
-                  ),
-                )),
+                ),
+                trailing: IconButton(
+                  icon: const Icon(Icons.remove_circle_outline),
+                  onPressed: () => _removeSourceFolder(folder),
+                ),
+              ),
+            ),
           ListTile(
             leading: Icon(Icons.add, color: colorScheme.primary),
             title: Text(
-              'Add Music Folder',
+              widget.i18n.t('add_music_folder'),
               style: TextStyle(color: colorScheme.primary),
             ),
             onTap: _addSourceFolder,
@@ -188,50 +187,58 @@ class _MusicSettingsPageState extends State<MusicSettingsPage> {
           const Divider(),
 
           // Scanning Section
-          _buildSectionHeader('Library'),
+          _buildSectionHeader(widget.i18n.t('library')),
           SwitchListTile(
-            title: const Text('Scan on startup'),
-            subtitle: const Text('Automatically scan folders when app opens'),
+            title: Text(widget.i18n.t('scan_on_startup')),
+            subtitle: Text(widget.i18n.t('scan_on_startup_desc')),
             value: _settings.scanOnStartup,
             onChanged: (value) {
               _updateSettings((s) => s.copyWith(scanOnStartup: value));
             },
           ),
           SwitchListTile(
-            title: const Text('Watch for changes'),
-            subtitle: const Text('Detect new files automatically'),
+            title: Text(widget.i18n.t('watch_for_changes')),
+            subtitle: Text(widget.i18n.t('watch_for_changes_desc')),
             value: _settings.watchFolders,
             onChanged: (value) {
               _updateSettings((s) => s.copyWith(watchFolders: value));
             },
           ),
           SwitchListTile(
-            title: const Text('Group compilations'),
-            subtitle: const Text('Group albums with multiple artists'),
+            title: Text(widget.i18n.t('group_compilations')),
+            subtitle: Text(widget.i18n.t('group_compilations_desc')),
             value: _settings.library.groupCompilations,
             onChanged: (value) {
-              _updateSettings((s) => s.copyWith(
-                    library: s.library.copyWith(groupCompilations: value),
-                  ));
+              _updateSettings(
+                (s) => s.copyWith(
+                  library: s.library.copyWith(groupCompilations: value),
+                ),
+              );
             },
           ),
           const Divider(),
 
           // Playback Section
-          _buildSectionHeader('Playback'),
+          _buildSectionHeader(widget.i18n.t('playback')),
           SwitchListTile(
-            title: const Text('Gapless playback'),
-            subtitle: const Text('Seamless transitions between tracks'),
+            title: Text(widget.i18n.t('gapless_playback')),
+            subtitle: Text(widget.i18n.t('gapless_playback_desc')),
             value: _settings.playback.gapless,
             onChanged: (value) {
-              _updateSettings((s) => s.copyWith(
-                    playback: s.playback.copyWith(gapless: value),
-                  ));
+              _updateSettings(
+                (s) =>
+                    s.copyWith(playback: s.playback.copyWith(gapless: value)),
+              );
             },
           ),
           ListTile(
-            title: const Text('Crossfade'),
-            subtitle: Text('${_settings.playback.crossfadeSeconds} seconds'),
+            title: Text(widget.i18n.t('crossfade')),
+            subtitle: Text(
+              widget.i18n.t(
+                'crossfade_seconds',
+                params: [_settings.playback.crossfadeSeconds.toString()],
+              ),
+            ),
             trailing: SizedBox(
               width: 150,
               child: Slider(
@@ -239,31 +246,54 @@ class _MusicSettingsPageState extends State<MusicSettingsPage> {
                 min: 0,
                 max: 12,
                 divisions: 12,
-                label: '${_settings.playback.crossfadeSeconds}s',
+                label: widget.i18n.t(
+                  'music_value_seconds_short',
+                  params: [_settings.playback.crossfadeSeconds.toString()],
+                ),
                 onChanged: (value) {
-                  _updateSettings((s) => s.copyWith(
-                        playback:
-                            s.playback.copyWith(crossfadeSeconds: value.round()),
-                      ));
+                  _updateSettings(
+                    (s) => s.copyWith(
+                      playback: s.playback.copyWith(
+                        crossfadeSeconds: value.round(),
+                      ),
+                    ),
+                  );
                 },
               ),
             ),
           ),
           ListTile(
-            title: const Text('Replay Gain'),
-            subtitle: Text(_settings.playback.replayGain),
+            title: Text(widget.i18n.t('replay_gain')),
+            subtitle: Text(
+              _settings.playback.replayGain == 'off'
+                  ? widget.i18n.t('replay_gain_off')
+                  : _settings.playback.replayGain == 'track'
+                  ? widget.i18n.t('replay_gain_track')
+                  : widget.i18n.t('replay_gain_album'),
+            ),
             trailing: DropdownButton<String>(
               value: _settings.playback.replayGain,
-              items: const [
-                DropdownMenuItem(value: 'off', child: Text('Off')),
-                DropdownMenuItem(value: 'track', child: Text('Track')),
-                DropdownMenuItem(value: 'album', child: Text('Album')),
+              items: [
+                DropdownMenuItem(
+                  value: 'off',
+                  child: Text(widget.i18n.t('replay_gain_off')),
+                ),
+                DropdownMenuItem(
+                  value: 'track',
+                  child: Text(widget.i18n.t('replay_gain_track')),
+                ),
+                DropdownMenuItem(
+                  value: 'album',
+                  child: Text(widget.i18n.t('replay_gain_album')),
+                ),
               ],
               onChanged: (value) {
                 if (value != null) {
-                  _updateSettings((s) => s.copyWith(
-                        playback: s.playback.copyWith(replayGain: value),
-                      ));
+                  _updateSettings(
+                    (s) => s.copyWith(
+                      playback: s.playback.copyWith(replayGain: value),
+                    ),
+                  );
                 }
               },
             ),
@@ -271,111 +301,137 @@ class _MusicSettingsPageState extends State<MusicSettingsPage> {
           const Divider(),
 
           // Display Section
-          _buildSectionHeader('Display'),
+          _buildSectionHeader(widget.i18n.t('display')),
           ListTile(
-            title: const Text('Album sort order'),
+            title: Text(widget.i18n.t('album_sort_order')),
             trailing: DropdownButton<AlbumSortOrder>(
               value: _settings.display.albumSort,
-              items: const [
+              items: [
                 DropdownMenuItem(
                   value: AlbumSortOrder.artist,
-                  child: Text('Artist'),
+                  child: Text(widget.i18n.t('sort_by_artist')),
                 ),
                 DropdownMenuItem(
                   value: AlbumSortOrder.name,
-                  child: Text('Name'),
+                  child: Text(widget.i18n.t('sort_by_name')),
                 ),
                 DropdownMenuItem(
                   value: AlbumSortOrder.year,
-                  child: Text('Year'),
+                  child: Text(widget.i18n.t('sort_by_year')),
                 ),
                 DropdownMenuItem(
                   value: AlbumSortOrder.added,
-                  child: Text('Date Added'),
+                  child: Text(widget.i18n.t('sort_by_date_added')),
                 ),
                 DropdownMenuItem(
                   value: AlbumSortOrder.mostPlayed,
-                  child: Text('Most Played'),
+                  child: Text(widget.i18n.t('sort_by_most_played')),
                 ),
               ],
               onChanged: (value) {
                 if (value != null) {
-                  _updateSettings((s) => s.copyWith(
-                        display: s.display.copyWith(albumSort: value),
-                      ));
+                  _updateSettings(
+                    (s) => s.copyWith(
+                      display: s.display.copyWith(albumSort: value),
+                    ),
+                  );
                 }
               },
             ),
           ),
           SwitchListTile(
-            title: const Text('Show track numbers'),
+            title: Text(widget.i18n.t('show_track_numbers')),
             value: _settings.display.showTrackNumbers,
             onChanged: (value) {
-              _updateSettings((s) => s.copyWith(
-                    display: s.display.copyWith(showTrackNumbers: value),
-                  ));
+              _updateSettings(
+                (s) => s.copyWith(
+                  display: s.display.copyWith(showTrackNumbers: value),
+                ),
+              );
             },
           ),
           const Divider(),
 
           // Online Features Section
-          _buildSectionHeader('Online Features'),
+          _buildSectionHeader(widget.i18n.t('online_features')),
           SwitchListTile(
-            title: const Text('Auto-download cover art'),
-            subtitle: const Text('Fetch missing artwork from online sources'),
+            title: Text(widget.i18n.t('auto_download_covers')),
+            subtitle: Text(widget.i18n.t('auto_download_covers_desc')),
             value: _settings.online.autoFetchCovers,
             onChanged: (value) {
-              _updateSettings((s) => s.copyWith(
-                    online: s.online.copyWith(autoFetchCovers: value),
-                  ));
+              _updateSettings(
+                (s) => s.copyWith(
+                  online: s.online.copyWith(autoFetchCovers: value),
+                ),
+              );
             },
           ),
           if (_settings.online.autoFetchCovers)
             ListTile(
-              title: const Text('Cover art quality'),
+              title: Text(widget.i18n.t('cover_art_quality')),
               trailing: DropdownButton<String>(
                 value: _settings.online.coverSize,
-                items: const [
-                  DropdownMenuItem(value: 'small', child: Text('Small (250px)')),
-                  DropdownMenuItem(value: 'medium', child: Text('Medium (500px)')),
-                  DropdownMenuItem(value: 'large', child: Text('Large (1200px)')),
+                items: [
+                  DropdownMenuItem(
+                    value: 'small',
+                    child: Text(widget.i18n.t('cover_size_small')),
+                  ),
+                  DropdownMenuItem(
+                    value: 'medium',
+                    child: Text(widget.i18n.t('cover_size_medium')),
+                  ),
+                  DropdownMenuItem(
+                    value: 'large',
+                    child: Text(widget.i18n.t('cover_size_large')),
+                  ),
                 ],
                 onChanged: (value) {
                   if (value != null) {
-                    _updateSettings((s) => s.copyWith(
-                          online: s.online.copyWith(coverSize: value),
-                        ));
+                    _updateSettings(
+                      (s) => s.copyWith(
+                        online: s.online.copyWith(coverSize: value),
+                      ),
+                    );
                   }
                 },
               ),
             ),
           SwitchListTile(
-            title: const Text('Auto-detect genre'),
-            subtitle: const Text('Use audio fingerprinting to identify genre'),
+            title: Text(widget.i18n.t('auto_detect_genre')),
+            subtitle: Text(widget.i18n.t('auto_detect_genre_desc')),
             value: _settings.online.autoDetectGenre,
             onChanged: (value) {
-              _updateSettings((s) => s.copyWith(
-                    online: s.online.copyWith(autoDetectGenre: value),
-                  ));
+              _updateSettings(
+                (s) => s.copyWith(
+                  online: s.online.copyWith(autoDetectGenre: value),
+                ),
+              );
             },
           ),
           SwitchListTile(
-            title: const Text('Auto-fetch lyrics'),
-            subtitle: const Text('Download lyrics for tracks'),
+            title: Text(widget.i18n.t('auto_fetch_lyrics')),
+            subtitle: Text(widget.i18n.t('auto_fetch_lyrics_desc')),
             value: _settings.online.autoFetchLyrics,
             onChanged: (value) {
-              _updateSettings((s) => s.copyWith(
-                    online: s.online.copyWith(autoFetchLyrics: value),
-                  ));
+              _updateSettings(
+                (s) => s.copyWith(
+                  online: s.online.copyWith(autoFetchLyrics: value),
+                ),
+              );
             },
           ),
           const Divider(),
 
           // Cache Section
-          _buildSectionHeader('Cache'),
+          _buildSectionHeader(widget.i18n.t('cache')),
           ListTile(
-            title: const Text('Artwork quality'),
-            subtitle: Text('${_settings.cache.artworkQuality}%'),
+            title: Text(widget.i18n.t('artwork_quality')),
+            subtitle: Text(
+              widget.i18n.t(
+                'music_value_percent',
+                params: [_settings.cache.artworkQuality.toString()],
+              ),
+            ),
             trailing: SizedBox(
               width: 150,
               child: Slider(
@@ -383,19 +439,28 @@ class _MusicSettingsPageState extends State<MusicSettingsPage> {
                 min: 50,
                 max: 100,
                 divisions: 10,
-                label: '${_settings.cache.artworkQuality}%',
+                label: widget.i18n.t(
+                  'music_value_percent',
+                  params: [_settings.cache.artworkQuality.toString()],
+                ),
                 onChanged: (value) {
-                  _updateSettings((s) => s.copyWith(
-                        cache:
-                            s.cache.copyWith(artworkQuality: value.round()),
-                      ));
+                  _updateSettings(
+                    (s) => s.copyWith(
+                      cache: s.cache.copyWith(artworkQuality: value.round()),
+                    ),
+                  );
                 },
               ),
             ),
           ),
           ListTile(
-            title: const Text('Max cache size'),
-            subtitle: Text('${_settings.cache.maxCacheSizeMb} MB'),
+            title: Text(widget.i18n.t('max_cache_size')),
+            subtitle: Text(
+              widget.i18n.t(
+                'music_value_mb',
+                params: [_settings.cache.maxCacheSizeMb.toString()],
+              ),
+            ),
             trailing: SizedBox(
               width: 150,
               child: Slider(
@@ -403,24 +468,30 @@ class _MusicSettingsPageState extends State<MusicSettingsPage> {
                 min: 100,
                 max: 2000,
                 divisions: 19,
-                label: '${_settings.cache.maxCacheSizeMb} MB',
+                label: widget.i18n.t(
+                  'music_value_mb',
+                  params: [_settings.cache.maxCacheSizeMb.toString()],
+                ),
                 onChanged: (value) {
-                  _updateSettings((s) => s.copyWith(
-                        cache:
-                            s.cache.copyWith(maxCacheSizeMb: value.round()),
-                      ));
+                  _updateSettings(
+                    (s) => s.copyWith(
+                      cache: s.cache.copyWith(maxCacheSizeMb: value.round()),
+                    ),
+                  );
                 },
               ),
             ),
           ),
           ListTile(
-            title: const Text('Clear artwork cache'),
+            title: Text(widget.i18n.t('clear_artwork_cache')),
             leading: const Icon(Icons.delete_outline),
             onTap: () async {
               await widget.storage.clearArtworkCache();
               if (mounted) {
                 ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Artwork cache cleared')),
+                  SnackBar(
+                    content: Text(widget.i18n.t('artwork_cache_cleared')),
+                  ),
                 );
               }
             },

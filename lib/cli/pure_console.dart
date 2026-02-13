@@ -526,8 +526,9 @@ class PureConsole {
       _chatMessageSubscription = _station.eventBus.on<ChatMessageEvent>((event) {
         _handleIncomingChatMessage(event);
       });
-    } catch (e) {
+    } catch (e, stackTrace) {
       _printError('Failed to initialize services: $e');
+      _printError('Stack trace: $stackTrace');
       exit(1);
     }
   }

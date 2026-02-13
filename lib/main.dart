@@ -888,6 +888,7 @@ class _GeogramAppState extends State<GeogramApp> with WidgetsBindingObserver {
       supportedLocales: const [
         Locale('en'),
         Locale('pt'),
+        Locale('de'),
       ],
       builder: (context, child) {
         if (child == null) return const SizedBox.shrink();

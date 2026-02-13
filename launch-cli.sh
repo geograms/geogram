@@ -82,13 +82,19 @@ echo "=============================================="
 echo ""
 
 # Build if needed
+# Use the geogram-cli subdirectory which has its own pubspec.yaml
+# without native build hooks (dart compile exe doesn't support hooks)
+CLI_PROJECT_DIR="$SCRIPT_DIR/geogram-cli"
+
 if [ "$SKIP_BUILD" = false ]; then
     # Ensure dependencies are available - try offline first, fall back to online
     echo "Checking dependencies..."
+    pushd "$CLI_PROJECT_DIR" > /dev/null
     if ! "$DART_BIN" pub get --offline --no-example 2>/dev/null; then
         echo "Fetching dependencies online..."
         "$DART_BIN" pub get --no-example
     fi
+    popd > /dev/null
 
     # Check if binary exists and is newer than source files
     NEEDS_BUILD=false
@@ -98,7 +104,7 @@ if [ "$SKIP_BUILD" = false ]; then
         echo "CLI binary not found, building..."
     else
         # Check if any source file is newer than the binary
-        NEWEST_SOURCE=$(find "$SCRIPT_DIR/lib" "$SCRIPT_DIR/bin" -name "*.dart" -newer "$CLI_BINARY" 2>/dev/null | head -1)
+        NEWEST_SOURCE=$(find "$SCRIPT_DIR/lib" "$SCRIPT_DIR/bin" "$CLI_PROJECT_DIR/bin" -name "*.dart" -newer "$CLI_BINARY" 2>/dev/null | head -1)
         if [ -n "$NEWEST_SOURCE" ]; then
             NEEDS_BUILD=true
             echo "Source files changed, rebuilding..."
@@ -107,12 +113,17 @@ if [ "$SKIP_BUILD" = false ]; then
 
     if [ "$NEEDS_BUILD" = true ]; then
         echo "Generating embedded games..."
+        pushd "$SCRIPT_DIR" > /dev/null
         "$DART_BIN" run bin/generate_embedded_games.dart
+        popd > /dev/null
 
         echo "Compiling standalone CLI binary..."
         mkdir -p "$SCRIPT_DIR/build"
-        # Compile to temp file first, then replace (avoids "Text file busy" error)
+        # Compile from geogram-cli/ subdirectory (no build hooks)
+        # Temp file first to avoid "Text file busy" error
+        pushd "$CLI_PROJECT_DIR" > /dev/null
         "$DART_BIN" compile exe bin/cli.dart -o "$CLI_BINARY.tmp"
+        popd > /dev/null
         mv -f "$CLI_BINARY.tmp" "$CLI_BINARY"
         echo ""
         echo "Build completed."

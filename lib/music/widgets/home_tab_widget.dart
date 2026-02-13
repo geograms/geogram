@@ -5,6 +5,7 @@
 
 import 'package:flutter/material.dart';
 
+import '../../services/i18n_service.dart';
 import '../models/music_models.dart';
 import '../services/music_playback_service.dart';
 import 'animated_equalizer_widget.dart';
@@ -51,6 +52,7 @@ class HomeTabWidget extends StatelessWidget {
 
   Widget _buildEmptyState(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
+    final i18n = I18nService();
 
     return Center(
       child: Padding(
@@ -64,20 +66,15 @@ class HomeTabWidget extends StatelessWidget {
               color: colorScheme.onSurfaceVariant,
             ),
             const SizedBox(height: 24),
-            const Text(
-              'No plays this week',
-              style: TextStyle(
-                fontSize: 20,
-                fontWeight: FontWeight.bold,
-              ),
+            Text(
+              i18n.t('no_plays_this_week'),
+              style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 8),
             Text(
-              'Start listening to see your most played tracks here',
+              i18n.t('start_listening_hint'),
               textAlign: TextAlign.center,
-              style: TextStyle(
-                color: colorScheme.onSurfaceVariant,
-              ),
+              style: TextStyle(color: colorScheme.onSurfaceVariant),
             ),
           ],
         ),
@@ -114,7 +111,8 @@ class _TopTrackTile extends StatelessWidget {
           stream: playback.stateStream,
           initialData: playback.state,
           builder: (context, stateSnapshot) {
-            final isActuallyPlaying = isCurrentTrack &&
+            final isActuallyPlaying =
+                isCurrentTrack &&
                 stateSnapshot.data == MusicPlaybackState.playing;
 
             return ListTile(
@@ -130,13 +128,19 @@ class _TopTrackTile extends StatelessWidget {
                   playback.playTrack(track.id);
                 }
               },
-              leading: _buildRankBadge(colorScheme, isCurrentTrack, isActuallyPlaying),
+              leading: _buildRankBadge(
+                colorScheme,
+                isCurrentTrack,
+                isActuallyPlaying,
+              ),
               title: Text(
                 track.title,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(
-                  fontWeight: isCurrentTrack ? FontWeight.bold : FontWeight.normal,
+                  fontWeight: isCurrentTrack
+                      ? FontWeight.bold
+                      : FontWeight.normal,
                   color: isCurrentTrack ? colorScheme.primary : null,
                 ),
               ),
@@ -159,7 +163,11 @@ class _TopTrackTile extends StatelessWidget {
     );
   }
 
-  Widget _buildRankBadge(ColorScheme colorScheme, bool isCurrentTrack, bool isActuallyPlaying) {
+  Widget _buildRankBadge(
+    ColorScheme colorScheme,
+    bool isCurrentTrack,
+    bool isActuallyPlaying,
+  ) {
     Color badgeColor;
     Color textColor;
 

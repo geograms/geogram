@@ -5,6 +5,7 @@
 
 import 'package:flutter/material.dart' hide RepeatMode;
 
+import '../../services/i18n_service.dart';
 import '../models/music_track.dart';
 import '../models/playback_queue.dart';
 import '../services/music_playback_service.dart';
@@ -14,11 +15,7 @@ class MiniPlayerWidget extends StatelessWidget {
   final MusicPlaybackService playback;
   final VoidCallback? onTap;
 
-  const MiniPlayerWidget({
-    super.key,
-    required this.playback,
-    this.onTap,
-  });
+  const MiniPlayerWidget({super.key, required this.playback, this.onTap});
 
   @override
   Widget build(BuildContext context) {
@@ -50,17 +47,23 @@ class MiniPlayerWidget extends StatelessWidget {
                       return StreamBuilder<Duration>(
                         stream: playback.durationStream,
                         builder: (context, durSnapshot) {
-                          final position = posSnapshot.data ?? playback.position;
-                          final duration = durSnapshot.data ?? playback.duration;
+                          final position =
+                              posSnapshot.data ?? playback.position;
+                          final duration =
+                              durSnapshot.data ?? playback.duration;
                           final progress = duration.inMilliseconds > 0
-                              ? position.inMilliseconds / duration.inMilliseconds
+                              ? position.inMilliseconds /
+                                    duration.inMilliseconds
                               : 0.0;
 
                           return LinearProgressIndicator(
                             value: progress,
                             minHeight: 2,
-                            backgroundColor: colorScheme.surfaceContainerHighest,
-                            valueColor: AlwaysStoppedAnimation(colorScheme.primary),
+                            backgroundColor:
+                                colorScheme.surfaceContainerHighest,
+                            valueColor: AlwaysStoppedAnimation(
+                              colorScheme.primary,
+                            ),
                           );
                         },
                       );
@@ -118,8 +121,8 @@ class MiniPlayerWidget extends StatelessWidget {
                                     volume == 0
                                         ? Icons.volume_off
                                         : volume < 0.5
-                                            ? Icons.volume_down
-                                            : Icons.volume_up,
+                                        ? Icons.volume_down
+                                        : Icons.volume_up,
                                     size: 20,
                                     color: colorScheme.onSurfaceVariant,
                                   ),
@@ -130,13 +133,15 @@ class MiniPlayerWidget extends StatelessWidget {
                                         thumbShape: const RoundSliderThumbShape(
                                           enabledThumbRadius: 6,
                                         ),
-                                        overlayShape: const RoundSliderOverlayShape(
-                                          overlayRadius: 12,
-                                        ),
+                                        overlayShape:
+                                            const RoundSliderOverlayShape(
+                                              overlayRadius: 12,
+                                            ),
                                       ),
                                       child: Slider(
                                         value: volume,
-                                        onChanged: (value) => playback.setVolume(value),
+                                        onChanged: (value) =>
+                                            playback.setVolume(value),
                                       ),
                                     ),
                                   ),
@@ -162,7 +167,8 @@ class MiniPlayerWidget extends StatelessWidget {
                           stream: playback.stateStream,
                           builder: (context, stateSnapshot) {
                             final state = stateSnapshot.data ?? playback.state;
-                            final isPlaying = state == MusicPlaybackState.playing;
+                            final isPlaying =
+                                state == MusicPlaybackState.playing;
 
                             return IconButton(
                               icon: Icon(
@@ -203,10 +209,7 @@ class MiniPlayerWidget extends StatelessWidget {
       width: 64,
       height: 64,
       color: colorScheme.surfaceContainerHighest,
-      child: Icon(
-        Icons.music_note,
-        color: colorScheme.onSurfaceVariant,
-      ),
+      child: Icon(Icons.music_note, color: colorScheme.onSurfaceVariant),
     );
 
     // For now, just show placeholder
@@ -237,21 +240,23 @@ class MiniPlayerWidget extends StatelessWidget {
   }
 
   void _cycleRepeat(BuildContext context) {
+    final i18n = I18nService();
     final currentMode = playback.queue.repeat;
     playback.cycleRepeat();
 
     // Show snackbar with next mode
-    final nextMode = RepeatMode.values[(currentMode.index + 1) % RepeatMode.values.length];
+    final nextMode =
+        RepeatMode.values[(currentMode.index + 1) % RepeatMode.values.length];
     final String message;
     switch (nextMode) {
       case RepeatMode.off:
-        message = 'Repeat disabled';
+        message = i18n.t('repeat_disabled');
         break;
       case RepeatMode.one:
-        message = 'Repeating current track';
+        message = i18n.t('repeating_current_track');
         break;
       case RepeatMode.all:
-        message = 'Repeating all tracks';
+        message = i18n.t('repeating_all_tracks');
         break;
     }
 
@@ -265,13 +270,14 @@ class MiniPlayerWidget extends StatelessWidget {
   }
 
   String _getRepeatTooltip(RepeatMode mode) {
+    final i18n = I18nService();
     switch (mode) {
       case RepeatMode.off:
-        return 'Repeat off';
+        return i18n.t('repeat_off');
       case RepeatMode.one:
-        return 'Repeat one';
+        return i18n.t('repeat_one');
       case RepeatMode.all:
-        return 'Repeat all';
+        return i18n.t('repeat_all');
     }
   }
 }

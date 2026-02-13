@@ -94,7 +94,7 @@ class _MusicHomePageState extends State<MusicHomePage>
 
     setState(() {
       _isScanning = true;
-      _scanStatus = 'Starting scan...';
+      _scanStatus = widget.i18n.t('starting_scan');
     });
 
     try {
@@ -102,7 +102,10 @@ class _MusicHomePageState extends State<MusicHomePage>
         _settings.sourceFolders,
         onProgress: (scanned, total, currentFile) {
           setState(() {
-            _scanStatus = 'Scanning: $scanned/$total';
+            _scanStatus = widget.i18n.t(
+              'scanning_progress',
+              params: [scanned.toString(), total.toString()],
+            );
           });
         },
         settings: _settings,
@@ -133,19 +136,16 @@ class _MusicHomePageState extends State<MusicHomePage>
         final openSettings = await showDialog<bool>(
           context: context,
           builder: (context) => AlertDialog(
-            title: const Text('Permission Required'),
-            content: const Text(
-              'Storage permission is required to access music files. '
-              'Please enable it in app settings.',
-            ),
+            title: Text(widget.i18n.t('permission_required')),
+            content: Text(widget.i18n.t('storage_permission_message')),
             actions: [
               TextButton(
                 onPressed: () => Navigator.pop(context, false),
-                child: const Text('Cancel'),
+                child: Text(widget.i18n.t('cancel')),
               ),
               TextButton(
                 onPressed: () => Navigator.pop(context, true),
-                child: const Text('Open Settings'),
+                child: Text(widget.i18n.t('open_settings')),
               ),
             ],
           ),
@@ -155,16 +155,14 @@ class _MusicHomePageState extends State<MusicHomePage>
         }
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Storage permission required to access music files'),
-          ),
+          SnackBar(content: Text(widget.i18n.t('storage_permission_required'))),
         );
       }
       return;
     }
 
     final result = await FilePicker.platform.getDirectoryPath(
-      dialogTitle: 'Select Music Folder',
+      dialogTitle: widget.i18n.t('select_music_folder'),
     );
 
     if (result != null) {
@@ -184,7 +182,7 @@ class _MusicHomePageState extends State<MusicHomePage>
         } else {
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Folder already added')),
+              SnackBar(content: Text(widget.i18n.t('folder_already_added'))),
             );
           }
         }
@@ -287,7 +285,7 @@ class _MusicHomePageState extends State<MusicHomePage>
             IconButton(
               icon: const Icon(Icons.refresh),
               onPressed: _scanLibrary,
-              tooltip: 'Rescan library',
+              tooltip: widget.i18n.t('rescan_library'),
             ),
           IconButton(
             icon: const Icon(Icons.settings),
@@ -296,10 +294,10 @@ class _MusicHomePageState extends State<MusicHomePage>
         ],
         bottom: TabBar(
           controller: _tabController,
-          tabs: const [
-            Tab(text: 'Home'),
-            Tab(text: 'Folders'),
-            Tab(text: 'Playlists'),
+          tabs: [
+            Tab(text: widget.i18n.t('music_tab_home')),
+            Tab(text: widget.i18n.t('music_tab_folders')),
+            Tab(text: widget.i18n.t('music_tab_playlists')),
           ],
         ),
       ),
@@ -315,9 +313,7 @@ class _MusicHomePageState extends State<MusicHomePage>
                     color: colorScheme.primaryContainer,
                     child: Text(
                       _scanStatus!,
-                      style: TextStyle(
-                        color: colorScheme.onPrimaryContainer,
-                      ),
+                      style: TextStyle(color: colorScheme.onPrimaryContainer),
                     ),
                   ),
                 // Main content
@@ -356,18 +352,15 @@ class _MusicHomePageState extends State<MusicHomePage>
               color: Theme.of(context).colorScheme.onSurfaceVariant,
             ),
             const SizedBox(height: 24),
-            const Text(
-              'No music found',
-              style: TextStyle(
-                fontSize: 20,
-                fontWeight: FontWeight.bold,
-              ),
+            Text(
+              widget.i18n.t('no_music_found'),
+              style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 8),
             Text(
               _settings.sourceFolders.isEmpty
-                  ? 'Add a music folder in settings to get started'
-                  : 'Tap the refresh button to scan your music folders',
+                  ? widget.i18n.t('add_folder_get_started')
+                  : widget.i18n.t('tap_refresh_to_scan'),
               textAlign: TextAlign.center,
               style: TextStyle(
                 color: Theme.of(context).colorScheme.onSurfaceVariant,
@@ -377,7 +370,7 @@ class _MusicHomePageState extends State<MusicHomePage>
             FilledButton.icon(
               onPressed: _addFolderAndScan,
               icon: const Icon(Icons.folder_open),
-              label: const Text('Add Music Folder'),
+              label: Text(widget.i18n.t('add_music_folder')),
             ),
           ],
         ),
@@ -386,10 +379,7 @@ class _MusicHomePageState extends State<MusicHomePage>
   }
 
   Widget _buildHomeTab() {
-    return HomeTabWidget(
-      library: _library,
-      playback: _playbackService,
-    );
+    return HomeTabWidget(library: _library, playback: _playbackService);
   }
 
   Widget _buildFoldersTab() {
@@ -407,13 +397,13 @@ class _MusicHomePageState extends State<MusicHomePage>
 
   Widget _buildPlaylistsTab() {
     // TODO: Implement playlists
-    return const Center(
+    return Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(Icons.playlist_play, size: 64),
-          SizedBox(height: 16),
-          Text('Playlists coming soon'),
+          const Icon(Icons.playlist_play, size: 64),
+          const SizedBox(height: 16),
+          Text(widget.i18n.t('playlists_coming_soon')),
         ],
       ),
     );

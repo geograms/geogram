@@ -75,12 +75,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
               title: Text(
                 widget.album.title,
                 style: const TextStyle(
-                  shadows: [
-                    Shadow(
-                      blurRadius: 10,
-                      color: Colors.black,
-                    ),
-                  ],
+                  shadows: [Shadow(blurRadius: 10, color: Colors.black)],
                 ),
               ),
               background: Stack(
@@ -105,10 +100,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                       gradient: LinearGradient(
                         begin: Alignment.topCenter,
                         end: Alignment.bottomCenter,
-                        colors: [
-                          Colors.transparent,
-                          Colors.black54,
-                        ],
+                        colors: [Colors.transparent, Colors.black54],
                       ),
                     ),
                   ),
@@ -122,7 +114,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                   widget.playback.playTracks(tracks);
                   widget.playback.toggleShuffle();
                 },
-                tooltip: 'Shuffle play',
+                tooltip: widget.i18n.t('shuffle_play'),
               ),
             ],
           ),
@@ -144,12 +136,13 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                   Text(
                     [
                       if (widget.album.year != null) '${widget.album.year}',
-                      '${widget.album.trackCount} tracks',
+                      widget.i18n.t(
+                        'tracks_count',
+                        params: [widget.album.trackCount.toString()],
+                      ),
                       widget.album.formattedDuration,
                     ].join(' - '),
-                    style: TextStyle(
-                      color: colorScheme.onSurfaceVariant,
-                    ),
+                    style: TextStyle(color: colorScheme.onSurfaceVariant),
                   ),
                   if (widget.album.genre != null) ...[
                     const SizedBox(height: 4),
@@ -180,7 +173,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                           widget.playback.playAlbum(widget.album.id);
                         },
                         icon: const Icon(Icons.play_arrow),
-                        label: const Text('Play'),
+                        label: Text(widget.i18n.t('play')),
                       ),
                       const SizedBox(width: 8),
                       OutlinedButton.icon(
@@ -192,13 +185,16 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                           ScaffoldMessenger.of(context).showSnackBar(
                             SnackBar(
                               content: Text(
-                                'Added ${tracks.length} tracks to queue',
+                                widget.i18n.t(
+                                  'added_tracks_to_queue',
+                                  params: [tracks.length.toString()],
+                                ),
                               ),
                             ),
                           );
                         },
                         icon: const Icon(Icons.playlist_add),
-                        label: const Text('Add to Queue'),
+                        label: Text(widget.i18n.t('add_to_queue')),
                       ),
                     ],
                   ),
@@ -207,83 +203,85 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
             ),
           ),
           // Divider
-          SliverToBoxAdapter(
-            child: Divider(color: colorScheme.outlineVariant),
-          ),
+          SliverToBoxAdapter(child: Divider(color: colorScheme.outlineVariant)),
           // Track list
           SliverList(
-            delegate: SliverChildBuilderDelegate(
-              (context, index) {
-                final track = tracks[index];
-                return StreamBuilder<MusicTrack?>(
-                  stream: widget.playback.trackStream,
-                  builder: (context, trackSnapshot) {
-                    final isCurrentTrack = (trackSnapshot.data?.id ?? currentTrackId) == track.id;
-                    return StreamBuilder<MusicPlaybackState>(
-                      stream: widget.playback.stateStream,
-                      initialData: widget.playback.state,
-                      builder: (context, stateSnapshot) {
-                        final isActuallyPlaying = isCurrentTrack &&
-                            stateSnapshot.data == MusicPlaybackState.playing;
-                        return TrackTileWidget(
-                          track: track,
-                          isPlaying: isCurrentTrack,
-                          isActuallyPlaying: isActuallyPlaying,
-                          onTap: () {
-                            if (isCurrentTrack) {
-                              // Toggle play/pause for current track
-                              if (isActuallyPlaying) {
-                                widget.playback.pause();
-                              } else {
-                                widget.playback.play();
-                              }
+            delegate: SliverChildBuilderDelegate((context, index) {
+              final track = tracks[index];
+              return StreamBuilder<MusicTrack?>(
+                stream: widget.playback.trackStream,
+                builder: (context, trackSnapshot) {
+                  final isCurrentTrack =
+                      (trackSnapshot.data?.id ?? currentTrackId) == track.id;
+                  return StreamBuilder<MusicPlaybackState>(
+                    stream: widget.playback.stateStream,
+                    initialData: widget.playback.state,
+                    builder: (context, stateSnapshot) {
+                      final isActuallyPlaying =
+                          isCurrentTrack &&
+                          stateSnapshot.data == MusicPlaybackState.playing;
+                      return TrackTileWidget(
+                        track: track,
+                        isPlaying: isCurrentTrack,
+                        isActuallyPlaying: isActuallyPlaying,
+                        onTap: () {
+                          if (isCurrentTrack) {
+                            // Toggle play/pause for current track
+                            if (isActuallyPlaying) {
+                              widget.playback.pause();
                             } else {
-                              widget.playback.playAlbum(widget.album.id, startIndex: index);
+                              widget.playback.play();
                             }
-                          },
-                      trailing: PopupMenuButton<String>(
-                        onSelected: (value) {
-                          switch (value) {
-                            case 'queue':
-                              widget.playback.addToQueue(track.id);
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(
-                                  content: Text('Added to queue'),
-                                ),
-                              );
-                              break;
-                            case 'playlist':
-                              // TODO: Add to playlist
-                              break;
+                          } else {
+                            widget.playback.playAlbum(
+                              widget.album.id,
+                              startIndex: index,
+                            );
                           }
                         },
-                        itemBuilder: (context) => [
-                          const PopupMenuItem(
-                            value: 'queue',
-                            child: ListTile(
-                              leading: Icon(Icons.playlist_add),
-                              title: Text('Add to queue'),
-                              contentPadding: EdgeInsets.zero,
+                        trailing: PopupMenuButton<String>(
+                          onSelected: (value) {
+                            switch (value) {
+                              case 'queue':
+                                widget.playback.addToQueue(track.id);
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: Text(
+                                      widget.i18n.t('added_to_queue'),
+                                    ),
+                                  ),
+                                );
+                                break;
+                              case 'playlist':
+                                // TODO: Add to playlist
+                                break;
+                            }
+                          },
+                          itemBuilder: (context) => [
+                            PopupMenuItem(
+                              value: 'queue',
+                              child: ListTile(
+                                leading: Icon(Icons.playlist_add),
+                                title: Text(widget.i18n.t('add_to_queue')),
+                                contentPadding: EdgeInsets.zero,
+                              ),
                             ),
-                          ),
-                          const PopupMenuItem(
-                            value: 'playlist',
-                            child: ListTile(
-                              leading: Icon(Icons.playlist_add_check),
-                              title: Text('Add to playlist'),
-                              contentPadding: EdgeInsets.zero,
+                            PopupMenuItem(
+                              value: 'playlist',
+                              child: ListTile(
+                                leading: Icon(Icons.playlist_add_check),
+                                title: Text(widget.i18n.t('add_to_playlist')),
+                                contentPadding: EdgeInsets.zero,
+                              ),
                             ),
-                          ),
-                        ],
-                      ),
-                        );
-                      },
-                    );
-                  },
-                );
-              },
-              childCount: tracks.length,
-            ),
+                          ],
+                        ),
+                      );
+                    },
+                  );
+                },
+              );
+            }, childCount: tracks.length),
           ),
           // Bottom padding for mini player
           const SliverPadding(padding: EdgeInsets.only(bottom: 80)),
@@ -299,8 +297,9 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
             builder: (context) => SizedBox(
               height: MediaQuery.of(context).size.height * 0.9,
               child: ClipRRect(
-                borderRadius:
-                    const BorderRadius.vertical(top: Radius.circular(16)),
+                borderRadius: const BorderRadius.vertical(
+                  top: Radius.circular(16),
+                ),
                 child: NowPlayingWidget(
                   playback: widget.playback,
                   library: widget.library,
@@ -317,11 +316,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
     return Container(
       color: colorScheme.surfaceContainerHighest,
       child: Center(
-        child: Icon(
-          Icons.album,
-          size: 80,
-          color: colorScheme.onSurfaceVariant,
-        ),
+        child: Icon(Icons.album, size: 80, color: colorScheme.onSurfaceVariant),
       ),
     );
   }
@@ -333,11 +328,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(
-              Icons.album,
-              size: 80,
-              color: colorScheme.onSurfaceVariant,
-            ),
+            Icon(Icons.album, size: 80, color: colorScheme.onSurfaceVariant),
             const SizedBox(height: 16),
             SizedBox(
               width: 24,
