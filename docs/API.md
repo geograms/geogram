@@ -2385,6 +2385,7 @@ Triggers a debug action.
 | `console_status` | Report Console VM status (files present, rootfs extraction marker, recent logs) | None |
 | `email_compose` | Create a draft email | `to` (required): Recipient email(s) comma-separated, `subject` (required): Subject line, `content` (optional): Message body, `cc` (optional): CC recipients comma-separated, `station` (optional): Station domain (default: preferred station or p2p.radio) |
 | `email_send` | Compose and send an email in one action | `to` (required): Recipient email(s), `subject` (required): Subject line, `content` (required): Message body, `cc` (optional): CC recipients, `station` (optional): Station domain |
+| `email_send_with_image` | Compose and send an email with an attached local picture | `to` (required): Recipient email(s), `subject` (required): Subject line, `content` (required): Message body, `image_path` (required): Local image file path (`.jpg`, `.jpeg`, `.png`, `.gif`, `.webp`, `.bmp`), `image_name` (optional): Attachment filename override, `cc` (optional): CC recipients, `station` (optional): Station domain |
 | `email_list` | List emails in a folder | `folder` (optional): inbox/sent/outbox/drafts/spam/trash (default: inbox), `station` (optional): Station domain (default: p2p.radio) |
 | `email_status` | Get email service status | None. Returns WebSocket connection status, preferred station, and registered accounts |
 | `p2p_navigate` | Navigate to P2P Transfer panel | None |
@@ -2450,6 +2451,13 @@ Sample `console_status` response:
 curl -X POST http://localhost:3456/api/debug \
   -H "Content-Type: application/json" \
   -d '{"action":"email_send", "to":"test@example.com", "subject":"Hello from Geogram", "content":"This is a test email sent via the debug API."}'
+```
+
+- Compose and send an email with an attached local image:
+```bash
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action":"email_send_with_image", "to":"test@example.com", "subject":"Photo Test", "content":"Sending a picture from debug API.", "image_path":"tests/images/photo_2025-03-25_10-33-43.jpg"}'
 ```
 
 - Create a draft email:

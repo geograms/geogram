@@ -75,6 +75,9 @@ class EmailThread implements Comparable<EmailThread> {
   /// Email status
   EmailStatus status;
 
+  /// Read state for inbox threads
+  bool isRead;
+
   /// Unique thread identifier
   final String threadId;
 
@@ -102,13 +105,15 @@ class EmailThread implements Comparable<EmailThread> {
     required this.subject,
     required this.created,
     this.status = EmailStatus.draft,
+    bool? isRead,
     required this.threadId,
     this.labels = const [],
     this.priority = EmailPriority.normal,
     this.inReplyTo,
     List<EmailMessage>? messages,
     this.folderPath,
-  }) : messages = messages ?? [];
+  })  : isRead = isRead ?? (status != EmailStatus.received),
+        messages = messages ?? [];
 
   /// Create a new draft thread
   factory EmailThread.draft({
@@ -182,7 +187,7 @@ class EmailThread implements Comparable<EmailThread> {
   }
 
   /// Check if thread has unread messages
-  bool get isUnread => status == EmailStatus.received;
+  bool get isUnread => status == EmailStatus.received && !isRead;
 
   /// Check if thread is a draft
   bool get isDraft => status == EmailStatus.draft;
@@ -271,6 +276,10 @@ class EmailThread implements Comparable<EmailThread> {
 
   /// Create from JSON
   factory EmailThread.fromJson(Map<String, dynamic> json) {
+    final parsedStatus = EmailStatus.values.firstWhere(
+      (s) => s.name == (json['status'] as String? ?? 'draft'),
+      orElse: () => EmailStatus.draft,
+    );
     return EmailThread(
       station: json['station'] as String? ?? 'local',
       from: json['from'] as String,
@@ -279,10 +288,8 @@ class EmailThread implements Comparable<EmailThread> {
       bcc: (json['bcc'] as List?)?.cast<String>() ?? [],
       subject: json['subject'] as String,
       created: json['created'] as String,
-      status: EmailStatus.values.firstWhere(
-        (s) => s.name == (json['status'] as String? ?? 'draft'),
-        orElse: () => EmailStatus.draft,
-      ),
+      status: parsedStatus,
+      isRead: json['isRead'] as bool? ?? (parsedStatus != EmailStatus.received),
       threadId: json['threadId'] as String,
       labels: (json['labels'] as List?)?.cast<String>() ?? [],
       priority: EmailPriority.values.firstWhere(
@@ -308,6 +315,7 @@ class EmailThread implements Comparable<EmailThread> {
         'subject': subject,
         'created': created,
         'status': status.name,
+        'isRead': isRead,
         'threadId': threadId,
         'labels': labels,
         'priority': priority.name,
@@ -326,6 +334,7 @@ class EmailThread implements Comparable<EmailThread> {
     String? subject,
     String? created,
     EmailStatus? status,
+    bool? isRead,
     String? threadId,
     List<String>? labels,
     EmailPriority? priority,
@@ -342,6 +351,7 @@ class EmailThread implements Comparable<EmailThread> {
       subject: subject ?? this.subject,
       created: created ?? this.created,
       status: status ?? this.status,
+      isRead: isRead ?? this.isRead,
       threadId: threadId ?? this.threadId,
       labels: labels ?? List<String>.from(this.labels),
       priority: priority ?? this.priority,
@@ -363,5 +373,5 @@ class EmailThread implements Comparable<EmailThread> {
   @override
   String toString() =>
       'EmailThread(threadId: $threadId, subject: $subject, '
-      'status: ${status.name}, messages: ${messages.length})';
+      'status: ${status.name}, isRead: $isRead, messages: ${messages.length})';
 }

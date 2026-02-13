@@ -5,6 +5,10 @@
  * Email Thread Page - Displays email conversation
  */
 
+import 'dart:async';
+import 'dart:ui' show PointerDeviceKind;
+
+import 'package:flutter/gestures.dart' show kSecondaryMouseButton;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -24,11 +28,8 @@ class EmailThreadPage extends StatefulWidget {
   /// Whether this is embedded in a larger layout (no AppBar)
   final bool embedded;
 
-  const EmailThreadPage({
-    Key? key,
-    required this.thread,
-    this.embedded = false,
-  }) : super(key: key);
+  const EmailThreadPage({Key? key, required this.thread, this.embedded = false})
+    : super(key: key);
 
   @override
   State<EmailThreadPage> createState() => _EmailThreadPageState();
@@ -46,6 +47,7 @@ class _EmailThreadPageState extends State<EmailThreadPage> {
   void initState() {
     super.initState();
     _thread = widget.thread;
+    _scheduleMarkThreadReadIfViewed();
   }
 
   @override
@@ -53,6 +55,7 @@ class _EmailThreadPageState extends State<EmailThreadPage> {
     super.didUpdateWidget(oldWidget);
     if (widget.thread.threadId != oldWidget.thread.threadId) {
       _thread = widget.thread;
+      _scheduleMarkThreadReadIfViewed();
     }
   }
 
@@ -73,17 +76,25 @@ class _EmailThreadPageState extends State<EmailThreadPage> {
         _thread = reloaded;
         _isLoading = false;
       });
+      _scheduleMarkThreadReadIfViewed();
     } else if (mounted) {
       setState(() => _isLoading = false);
     }
   }
 
+  void _scheduleMarkThreadReadIfViewed() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      if (_thread.status != EmailStatus.received || _thread.isRead) return;
+
+      unawaited(_emailService.markThreadRead(_thread));
+    });
+  }
+
   Future<void> _reply() async {
     final result = await Navigator.of(context).push<EmailThread>(
       MaterialPageRoute(
-        builder: (context) => EmailComposePage(
-          replyTo: _thread,
-        ),
+        builder: (context) => EmailComposePage(replyTo: _thread),
       ),
     );
 
@@ -95,10 +106,8 @@ class _EmailThreadPageState extends State<EmailThreadPage> {
   Future<void> _replyAll() async {
     final result = await Navigator.of(context).push<EmailThread>(
       MaterialPageRoute(
-        builder: (context) => EmailComposePage(
-          replyTo: _thread,
-          replyAll: true,
-        ),
+        builder: (context) =>
+            EmailComposePage(replyTo: _thread, replyAll: true),
       ),
     );
 
@@ -110,9 +119,7 @@ class _EmailThreadPageState extends State<EmailThreadPage> {
   Future<void> _forward() async {
     final result = await Navigator.of(context).push<EmailThread>(
       MaterialPageRoute(
-        builder: (context) => EmailComposePage(
-          forwardFrom: _thread,
-        ),
+        builder: (context) => EmailComposePage(forwardFrom: _thread),
       ),
     );
 
@@ -219,15 +226,12 @@ class _EmailThreadPageState extends State<EmailThreadPage> {
             slivers: [
               SliverToBoxAdapter(child: _buildThreadHeader()),
               SliverList(
-                delegate: SliverChildBuilderDelegate(
-                  (context, index) {
-                    final message = _thread.messages[index];
-                    final isFirst = index == 0;
-                    final isLast = index == _thread.messages.length - 1;
-                    return _buildMessageCard(message, isFirst, isLast);
-                  },
-                  childCount: _thread.messages.length,
-                ),
+                delegate: SliverChildBuilderDelegate((context, index) {
+                  final message = _thread.messages[index];
+                  final isFirst = index == 0;
+                  final isLast = index == _thread.messages.length - 1;
+                  return _buildMessageCard(message, isFirst, isLast);
+                }, childCount: _thread.messages.length),
               ),
               const SliverToBoxAdapter(child: SizedBox(height: 12)),
             ],
@@ -382,10 +386,7 @@ class _EmailThreadPageState extends State<EmailThreadPage> {
           const SizedBox(width: 6),
           Text(
             label,
-            style: TextStyle(
-              color: foreground,
-              fontWeight: FontWeight.w600,
-            ),
+            style: TextStyle(color: foreground, fontWeight: FontWeight.w600),
           ),
         ],
       ),
@@ -397,8 +398,14 @@ class _EmailThreadPageState extends State<EmailThreadPage> {
     final isOwn = profile?.callsign == message.author;
 
     final theme = Theme.of(context);
+    final platform = theme.platform;
+    final isDesktopPlatform =
+        platform == TargetPlatform.linux ||
+        platform == TargetPlatform.macOS ||
+        platform == TargetPlatform.windows;
+    final isAndroidPlatform = platform == TargetPlatform.android;
     final bubbleColor = isOwn
-        ? theme.colorScheme.primaryContainer.withValues(alpha:0.35)
+        ? theme.colorScheme.primaryContainer.withValues(alpha: 0.35)
         : theme.colorScheme.surface;
 
     return Padding(
@@ -410,10 +417,13 @@ class _EmailThreadPageState extends State<EmailThreadPage> {
             children: [
               CircleAvatar(
                 radius: 14,
-                backgroundColor:
-                    isOwn ? theme.colorScheme.primary : theme.colorScheme.secondary,
+                backgroundColor: isOwn
+                    ? theme.colorScheme.primary
+                    : theme.colorScheme.secondary,
                 child: Text(
-                  message.author.isNotEmpty ? message.author[0].toUpperCase() : '?',
+                  message.author.isNotEmpty
+                      ? message.author[0].toUpperCase()
+                      : '?',
                   style: TextStyle(
                     color: theme.colorScheme.onPrimary,
                     fontWeight: FontWeight.bold,
@@ -431,96 +441,97 @@ class _EmailThreadPageState extends State<EmailThreadPage> {
           ),
           const SizedBox(width: 10),
           Expanded(
-            child: Container(
-              decoration: BoxDecoration(
-                color: bubbleColor,
-                border: Border.all(color: theme.colorScheme.outlineVariant),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Padding(
-                padding: const EdgeInsets.all(10),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
+            child: Listener(
+              behavior: HitTestBehavior.translucent,
+              onPointerDown: isDesktopPlatform
+                  ? (event) {
+                      if (event.kind == PointerDeviceKind.mouse &&
+                          (event.buttons & kSecondaryMouseButton) != 0) {
+                        _showMessageActionMenuAt(message, event.position);
+                      }
+                    }
+                  : null,
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onLongPressStart: isAndroidPlatform
+                    ? (details) => _showMessageActionMenuAt(
+                        message,
+                        details.globalPosition,
+                      )
+                    : null,
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: bubbleColor,
+                    border: Border.all(color: theme.colorScheme.outlineVariant),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.all(10),
+                    child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                message.author,
-                                style: theme.textTheme.titleSmall?.copyWith(
-                                  fontWeight: FontWeight.w700,
-                                ),
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    message.author,
+                                    style: theme.textTheme.titleSmall?.copyWith(
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    _formatDateTime(message.dateTime),
+                                    style: theme.textTheme.labelSmall?.copyWith(
+                                      color: theme.colorScheme.onSurfaceVariant,
+                                      fontSize: 11,
+                                    ),
+                                  ),
+                                ],
                               ),
-                              const SizedBox(height: 2),
-                              Text(
-                                _formatDateTime(message.dateTime),
-                                style: theme.textTheme.labelSmall?.copyWith(
-                                  color: theme.colorScheme.onSurfaceVariant,
-                                  fontSize: 11,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        _buildVerificationBadge(message),
-                        PopupMenuButton<String>(
-                          icon: const Icon(Icons.more_vert, size: 20),
-                          onSelected: (value) => _handleMessageAction(value, message),
-                          itemBuilder: (context) => const [
-                            PopupMenuItem(
-                              value: 'copy',
-                              child: Text('Copy'),
                             ),
-                            PopupMenuItem(
-                              value: 'quote',
-                              child: Text('Quote'),
-                            ),
-                            PopupMenuDivider(),
-                            PopupMenuItem(
-                              value: 'delete',
-                              child: ListTile(
-                                contentPadding: EdgeInsets.zero,
-                                leading: Icon(Icons.delete_outline, color: Colors.red),
-                                title: Text(
-                                  'Delete message',
-                                  style: TextStyle(color: Colors.red),
-                                ),
-                              ),
+                            _buildVerificationBadge(message),
+                            PopupMenuButton<String>(
+                              icon: const Icon(Icons.more_vert, size: 20),
+                              onSelected: (value) =>
+                                  _handleMessageAction(value, message),
+                              itemBuilder: (context) =>
+                                  _buildMessageActionMenuItems(),
                             ),
                           ],
                         ),
-                      ],
-                    ),
-                    const SizedBox(height: 12),
-                    SelectableText(
-                      message.content,
-                      style: theme.textTheme.bodyMedium?.copyWith(
-                        height: 1.35,
-                        fontSize: 14,
-                      ),
-                    ),
-                    if (message.hasFile || message.hasImage)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 10),
-                        child: _buildAttachments(message),
-                      ),
-                    if (message.isEdited)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 6),
-                        child: Text(
-                          'Edited ${message.editedAt}',
-                          style: TextStyle(
-                            fontSize: 11,
-                            color: Colors.grey[500],
-                            fontStyle: FontStyle.italic,
+                        const SizedBox(height: 12),
+                        SelectableText(
+                          message.content,
+                          style: theme.textTheme.bodyMedium?.copyWith(
+                            height: 1.35,
+                            fontSize: 14,
                           ),
                         ),
-                      ),
-                  ],
+                        if (message.hasFile || message.hasImage)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 10),
+                            child: _buildAttachments(message),
+                          ),
+                        if (message.isEdited)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 6),
+                            child: Text(
+                              'Edited ${message.editedAt}',
+                              style: TextStyle(
+                                fontSize: 11,
+                                color: Colors.grey[500],
+                                fontStyle: FontStyle.italic,
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
                 ),
               ),
             ),
@@ -528,6 +539,43 @@ class _EmailThreadPageState extends State<EmailThreadPage> {
         ],
       ),
     );
+  }
+
+  List<PopupMenuEntry<String>> _buildMessageActionMenuItems() => const [
+    PopupMenuItem(value: 'copy', child: Text('Copy')),
+    PopupMenuItem(value: 'quote', child: Text('Quote')),
+    PopupMenuDivider(),
+    PopupMenuItem(
+      value: 'delete',
+      child: ListTile(
+        contentPadding: EdgeInsets.zero,
+        leading: Icon(Icons.delete_outline, color: Colors.red),
+        title: Text('Delete message', style: TextStyle(color: Colors.red)),
+      ),
+    ),
+  ];
+
+  Future<void> _showMessageActionMenuAt(
+    EmailMessage message,
+    Offset globalPosition,
+  ) async {
+    final overlayContext = Overlay.maybeOf(context)?.context;
+    if (overlayContext == null) return;
+    final overlayBox = overlayContext.findRenderObject();
+    if (overlayBox is! RenderBox) return;
+
+    final selectedAction = await showMenu<String>(
+      context: context,
+      position: RelativeRect.fromRect(
+        Rect.fromLTWH(globalPosition.dx, globalPosition.dy, 0, 0),
+        Offset.zero & overlayBox.size,
+      ),
+      items: _buildMessageActionMenuItems(),
+    );
+
+    if (selectedAction != null && mounted) {
+      _handleMessageAction(selectedAction, message);
+    }
   }
 
   Widget _buildVerificationBadge(EmailMessage message) {
@@ -605,7 +653,7 @@ class _EmailThreadPageState extends State<EmailThreadPage> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       decoration: BoxDecoration(
-        color: Colors.grey.withValues(alpha:0.1),
+        color: Colors.grey.withValues(alpha: 0.1),
         borderRadius: const BorderRadius.vertical(bottom: Radius.circular(4)),
       ),
       child: Column(
@@ -636,7 +684,10 @@ class _EmailThreadPageState extends State<EmailThreadPage> {
   }
 
   Widget _buildImageThumbnail(
-      String filename, List<String> allImageFilenames, int index) {
+    String filename,
+    List<String> allImageFilenames,
+    int index,
+  ) {
     if (kIsWeb) {
       return Container(
         width: 100,
@@ -699,11 +750,15 @@ class _EmailThreadPageState extends State<EmailThreadPage> {
   }
 
   Future<void> _openImageViewer(
-      List<String> imageFilenames, int initialIndex) async {
+    List<String> imageFilenames,
+    int initialIndex,
+  ) async {
     final paths = <String>[];
     for (final filename in imageFilenames) {
-      final path =
-          await _emailService.exportAttachmentToTemp(_thread, filename);
+      final path = await _emailService.exportAttachmentToTemp(
+        _thread,
+        filename,
+      );
       if (path != null) paths.add(path);
     }
 
@@ -713,10 +768,8 @@ class _EmailThreadPageState extends State<EmailThreadPage> {
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => PhotoViewerPage(
-          imagePaths: paths,
-          initialIndex: adjustedIndex,
-        ),
+        builder: (_) =>
+            PhotoViewerPage(imagePaths: paths, initialIndex: adjustedIndex),
       ),
     );
   }
@@ -763,13 +816,15 @@ class _EmailThreadPageState extends State<EmailThreadPage> {
     }
 
     try {
-      final path =
-          await _emailService.exportAttachmentToTemp(_thread, filename);
+      final path = await _emailService.exportAttachmentToTemp(
+        _thread,
+        filename,
+      );
       if (path == null) {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('File not found')),
-          );
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(const SnackBar(content: Text('File not found')));
         }
         return;
       }
@@ -786,9 +841,9 @@ class _EmailThreadPageState extends State<EmailThreadPage> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Could not open file: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Could not open file: $e')));
       }
     }
   }
@@ -796,6 +851,8 @@ class _EmailThreadPageState extends State<EmailThreadPage> {
   Widget _buildQuickReplyBar() {
     final theme = Theme.of(context);
     return Container(
+      width: double.infinity,
+      alignment: Alignment.centerLeft,
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
         color: theme.colorScheme.surface,
@@ -804,28 +861,26 @@ class _EmailThreadPageState extends State<EmailThreadPage> {
         ),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withValues(alpha:0.04),
+            color: Colors.black.withValues(alpha: 0.04),
             blurRadius: 6,
             offset: const Offset(0, -2),
           ),
         ],
       ),
-      child: Row(
+      child: Wrap(
+        spacing: 8,
+        runSpacing: 8,
         children: [
-          Expanded(
-            child: FilledButton.icon(
-              onPressed: _reply,
-              icon: const Icon(Icons.reply, size: 18),
-              label: const Text('Reply'),
-            ),
+          FilledButton.icon(
+            onPressed: _reply,
+            icon: const Icon(Icons.reply, size: 18),
+            label: const Text('Reply'),
           ),
-          const SizedBox(width: 8),
           OutlinedButton.icon(
             onPressed: _replyAll,
             icon: const Icon(Icons.reply_all, size: 18),
             label: const Text('Reply All'),
           ),
-          const SizedBox(width: 8),
           OutlinedButton.icon(
             onPressed: _forward,
             icon: const Icon(Icons.forward, size: 18),
@@ -880,9 +935,9 @@ class _EmailThreadPageState extends State<EmailThreadPage> {
     switch (action) {
       case 'copy':
         Clipboard.setData(ClipboardData(text: message.content));
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Copied to clipboard')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Copied to clipboard')));
         break;
       case 'quote':
         // TODO: Open compose with quoted message
@@ -924,8 +979,8 @@ class _EmailThreadPageState extends State<EmailThreadPage> {
     }
 
     await _reloadThread();
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Message deleted')),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('Message deleted')));
   }
 }

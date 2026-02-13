@@ -48,32 +48,47 @@ class NetworkScanResult {
   }
 
   @override
-  String toString() => 'NetworkScanResult($ip:$port, type=$type, callsign=$callsign)';
+  String toString() =>
+      'NetworkScanResult($ip:$port, type=$type, callsign=$callsign)';
 }
 
 /// Callback for scan progress updates
-typedef ScanProgressCallback = void Function(String message, int scannedHosts, int totalHosts, List<NetworkScanResult> results);
+typedef ScanProgressCallback =
+    void Function(
+      String message,
+      int scannedHosts,
+      int totalHosts,
+      List<NetworkScanResult> results,
+    );
 
 /// Callback to check if scan should be cancelled
 typedef ScanCancelCheck = bool Function();
 
 /// Service for automatic discovery of stations on local network
 class StationDiscoveryService {
-  static final StationDiscoveryService _instance = StationDiscoveryService._internal();
+  static final StationDiscoveryService _instance =
+      StationDiscoveryService._internal();
   factory StationDiscoveryService() => _instance;
   StationDiscoveryService._internal();
 
   Timer? _discoveryTimer;
   bool _isScanning = false;
+  DateTime? _scanStartedAt;
   // Primary ports scanned first (most common station ports)
   final List<int> _primaryPorts = [3456, 8080];
   // Secondary ports scanned after primary phase
   final List<int> _secondaryPorts = [80, 8081, 3000, 5000];
   final Duration _scanInterval = const Duration(minutes: 5);
-  final Duration _requestTimeout = const Duration(milliseconds: 400); // Fast timeout for LAN
+  final Duration _requestTimeout = const Duration(
+    milliseconds: 400,
+  ); // Fast timeout for LAN
   final Duration _startupDelay = const Duration(seconds: 5);
-  final Duration _localhostScanDelay = const Duration(seconds: 10); // Longer delay when scanning localhost for other instances
-  static const int _maxConcurrentConnections = 50; // Increased for faster scanning
+  final Duration _localhostScanDelay = const Duration(
+    seconds: 10,
+  ); // Longer delay when scanning localhost for other instances
+  static const Duration _staleScanTimeout = Duration(minutes: 2);
+  static const int _maxConcurrentConnections =
+      50; // Increased for faster scanning
 
   /// Start automatic discovery
   void start() {
@@ -85,15 +100,23 @@ class StationDiscoveryService {
 
     // Use longer delay when --scan-localhost is enabled to allow other instances to start
     final localhostScanEnabled = AppArgs().scanLocalhostEnabled;
-    final initialDelay = localhostScanEnabled ? _localhostScanDelay : _startupDelay;
+    final initialDelay = localhostScanEnabled
+        ? _localhostScanDelay
+        : _startupDelay;
 
     if (localhostScanEnabled) {
       final range = AppArgs().scanLocalhostRange;
-      LogService().log('StationDiscovery: Localhost port scanning enabled (range: $range)');
-      LogService().log('StationDiscovery: Will scan localhost ports in ${initialDelay.inSeconds}s to allow other instances to start');
+      LogService().log(
+        'StationDiscovery: Localhost port scanning enabled (range: $range)',
+      );
+      LogService().log(
+        'StationDiscovery: Will scan localhost ports in ${initialDelay.inSeconds}s to allow other instances to start',
+      );
     }
 
-    LogService().log('Starting station auto-discovery service (delayed ${initialDelay.inSeconds}s)');
+    LogService().log(
+      'Starting station auto-discovery service (delayed ${initialDelay.inSeconds}s)',
+    );
 
     // Delay initial scan to let the app initialize fully
     // This prevents "too many open files" errors on startup
@@ -120,6 +143,7 @@ class StationDiscoveryService {
   /// Reset scanning state (useful if a previous scan crashed)
   void resetScanState() {
     _isScanning = false;
+    _scanStartedAt = null;
   }
 
   /// Manual scan with progress callback - returns list of found stations
@@ -134,13 +158,26 @@ class StationDiscoveryService {
       return [];
     }
 
-    // Force reset if stuck (singleton state could be stale)
     if (_isScanning) {
-      LogService().log('Previous scan was stuck, forcing reset');
-      _isScanning = false;
+      final startedAt = _scanStartedAt;
+      final isStale =
+          startedAt != null &&
+          DateTime.now().difference(startedAt) > _staleScanTimeout;
+      if (isStale) {
+        LogService().log('StationDiscovery: Resetting stale in-progress scan');
+        _isScanning = false;
+        _scanStartedAt = null;
+      } else {
+        LogService().log(
+          'StationDiscovery: Scan already in progress, skipping request',
+        );
+        onProgress?.call('Scan already in progress', 0, 0, []);
+        return [];
+      }
     }
 
     _isScanning = true;
+    _scanStartedAt = DateTime.now();
     final results = <NetworkScanResult>[];
     final seenKeys = <String, int>{}; // Maps key -> index in results
 
@@ -194,20 +231,26 @@ class StationDiscoveryService {
 
       // Fallback: if no interfaces detected (common on Android), try to detect subnet
       if (ranges.isEmpty) {
-        LogService().log('ScanWithProgress: No network interfaces detected, trying fallback detection');
+        LogService().log(
+          'ScanWithProgress: No network interfaces detected, trying fallback detection',
+        );
         onProgress?.call('Detecting network...', 0, 0, results);
 
         final fallbackSubnet = await _detectSubnetFromConnectivity();
         if (fallbackSubnet != null) {
           ranges.add(fallbackSubnet);
-          LogService().log('ScanWithProgress: Detected subnet from connectivity: $fallbackSubnet');
+          LogService().log(
+            'ScanWithProgress: Detected subnet from connectivity: $fallbackSubnet',
+          );
         } else {
           // Add common home network ranges as last resort
           ranges.add('192.168.1');
           ranges.add('192.168.0');
           ranges.add('192.168.178'); // Common Fritz!Box range
           ranges.add('10.0.0');
-          LogService().log('ScanWithProgress: Using common fallback ranges: ${ranges.join(", ")}');
+          LogService().log(
+            'ScanWithProgress: Using common fallback ranges: ${ranges.join(", ")}',
+          );
         }
       }
 
@@ -219,18 +262,32 @@ class StationDiscoveryService {
       final totalHosts = primaryHosts + secondaryHosts;
       int scannedHosts = 0;
 
-      LogService().log('StationDiscovery: === PHASE 1: PRIMARY PORTS (${_primaryPorts.join(", ")}) ===');
+      LogService().log(
+        'StationDiscovery: === PHASE 1: PRIMARY PORTS (${_primaryPorts.join(", ")}) ===',
+      );
 
       // PHASE 1: Localhost on primary ports first (fastest check)
-      onProgress?.call('Scanning localhost...', scannedHosts, totalHosts, results);
+      onProgress?.call(
+        'Scanning localhost...',
+        scannedHosts,
+        totalHosts,
+        results,
+      );
       for (var host in ['localhost', '127.0.0.1']) {
         for (var port in _primaryPorts) {
           if (shouldCancel?.call() == true) break;
           final result = await _checkGeogramDevice(host, port, timeoutMs);
           if (result != null && result.type == 'station') {
-            LogService().log('StationDiscovery: Found station at $host:$port - ${result.callsign ?? result.displayName}');
+            LogService().log(
+              'StationDiscovery: Found station at $host:$port - ${result.callsign ?? result.displayName}',
+            );
             addResult(result);
-            onProgress?.call('Found: ${result.displayName}', scannedHosts, totalHosts, results);
+            onProgress?.call(
+              'Found: ${result.displayName}',
+              scannedHosts,
+              totalHosts,
+              results,
+            );
           }
           scannedHosts++;
         }
@@ -239,7 +296,12 @@ class StationDiscoveryService {
       // PHASE 2: LAN on primary ports (fast parallel scan)
       for (var range in ranges) {
         if (shouldCancel?.call() == true) break;
-        onProgress?.call('Scanning $range.x (ports ${_primaryPorts.join(", ")})...', scannedHosts, totalHosts, results);
+        onProgress?.call(
+          'Scanning $range.x (ports ${_primaryPorts.join(", ")})...',
+          scannedHosts,
+          totalHosts,
+          results,
+        );
 
         // Build targets: all IPs on primary ports
         final targets = <MapEntry<String, int>>[];
@@ -250,41 +312,72 @@ class StationDiscoveryService {
         }
 
         // Process in batches of 50 for faster scanning
-        for (int batchStart = 0; batchStart < targets.length; batchStart += _maxConcurrentConnections) {
+        for (
+          int batchStart = 0;
+          batchStart < targets.length;
+          batchStart += _maxConcurrentConnections
+        ) {
           if (shouldCancel?.call() == true) break;
 
-          final batchEnd = (batchStart + _maxConcurrentConnections).clamp(0, targets.length);
+          final batchEnd = (batchStart + _maxConcurrentConnections).clamp(
+            0,
+            targets.length,
+          );
           final batch = targets.sublist(batchStart, batchEnd);
 
           final futures = batch.map((target) async {
-            final result = await _checkGeogramDevice(target.key, target.value, timeoutMs);
+            final result = await _checkGeogramDevice(
+              target.key,
+              target.value,
+              timeoutMs,
+            );
             if (result != null && result.type == 'station') {
-              LogService().log('StationDiscovery: Found station at ${target.key}:${target.value}');
+              LogService().log(
+                'StationDiscovery: Found station at ${target.key}:${target.value}',
+              );
               addResult(result);
-              onProgress?.call('Found: ${result.displayName}', scannedHosts, totalHosts, results);
+              onProgress?.call(
+                'Found: ${result.displayName}',
+                scannedHosts,
+                totalHosts,
+                results,
+              );
             }
           }).toList();
 
-          await Future.wait(futures).timeout(
-            Duration(milliseconds: timeoutMs * 2),
-            onTimeout: () => [],
-          );
+          await Future.wait(
+            futures,
+          ).timeout(Duration(milliseconds: timeoutMs * 2), onTimeout: () => []);
 
           scannedHosts += batch.length;
           final stationCount = results.length;
-          onProgress?.call('Scanning... ($stationCount station${stationCount == 1 ? "" : "s"} found)', scannedHosts, totalHosts, results);
+          onProgress?.call(
+            'Scanning... ($stationCount station${stationCount == 1 ? "" : "s"} found)',
+            scannedHosts,
+            totalHosts,
+            results,
+          );
         }
       }
 
-      LogService().log('StationDiscovery: Primary phase complete: ${results.length} station(s) found');
+      LogService().log(
+        'StationDiscovery: Primary phase complete: ${results.length} station(s) found',
+      );
 
       // PHASE 3: Secondary ports (only if not cancelled)
       if (shouldCancel?.call() != true) {
-        LogService().log('StationDiscovery: === PHASE 2: SECONDARY PORTS (${_secondaryPorts.join(", ")}) ===');
+        LogService().log(
+          'StationDiscovery: === PHASE 2: SECONDARY PORTS (${_secondaryPorts.join(", ")}) ===',
+        );
 
         for (var range in ranges) {
           if (shouldCancel?.call() == true) break;
-          onProgress?.call('Scanning $range.x (secondary ports)...', scannedHosts, totalHosts, results);
+          onProgress?.call(
+            'Scanning $range.x (secondary ports)...',
+            scannedHosts,
+            totalHosts,
+            results,
+          );
 
           // Build targets: all IPs on secondary ports
           final targets = <MapEntry<String, int>>[];
@@ -295,18 +388,36 @@ class StationDiscoveryService {
           }
 
           // Process in batches
-          for (int batchStart = 0; batchStart < targets.length; batchStart += _maxConcurrentConnections) {
+          for (
+            int batchStart = 0;
+            batchStart < targets.length;
+            batchStart += _maxConcurrentConnections
+          ) {
             if (shouldCancel?.call() == true) break;
 
-            final batchEnd = (batchStart + _maxConcurrentConnections).clamp(0, targets.length);
+            final batchEnd = (batchStart + _maxConcurrentConnections).clamp(
+              0,
+              targets.length,
+            );
             final batch = targets.sublist(batchStart, batchEnd);
 
             final futures = batch.map((target) async {
-              final result = await _checkGeogramDevice(target.key, target.value, timeoutMs);
+              final result = await _checkGeogramDevice(
+                target.key,
+                target.value,
+                timeoutMs,
+              );
               if (result != null && result.type == 'station') {
-                LogService().log('StationDiscovery: Found station at ${target.key}:${target.value}');
+                LogService().log(
+                  'StationDiscovery: Found station at ${target.key}:${target.value}',
+                );
                 addResult(result);
-                onProgress?.call('Found: ${result.displayName}', scannedHosts, totalHosts, results);
+                onProgress?.call(
+                  'Found: ${result.displayName}',
+                  scannedHosts,
+                  totalHosts,
+                  results,
+                );
               }
             }).toList();
 
@@ -316,7 +427,12 @@ class StationDiscoveryService {
             );
 
             scannedHosts += batch.length;
-            onProgress?.call('Scanning secondary ports...', scannedHosts, totalHosts, results);
+            onProgress?.call(
+              'Scanning secondary ports...',
+              scannedHosts,
+              totalHosts,
+              results,
+            );
           }
         }
       }
@@ -329,14 +445,16 @@ class StationDiscoveryService {
           : 'Scan complete: $stationCount station${stationCount == 1 ? "" : "s"} found';
       onProgress?.call(message, totalHosts, totalHosts, results);
 
-      LogService().log('StationDiscovery: === SCAN COMPLETE: ${results.length} station(s) ===');
+      LogService().log(
+        'StationDiscovery: === SCAN COMPLETE: ${results.length} station(s) ===',
+      );
       return results;
-
     } catch (e) {
       LogService().log('Error during scan: $e');
       onProgress?.call('Error: $e', 0, 0, results);
     } finally {
       _isScanning = false;
+      _scanStartedAt = null;
     }
 
     return results;
@@ -406,9 +524,13 @@ class StationDiscoveryService {
 
   /// Check if a host:port is a geogram station (only returns stations, ignores clients/desktops)
   /// Stations have X3 callsigns, clients have X1 callsigns
-  Future<NetworkScanResult?> _checkGeogramDevice(String ip, int port, int timeoutMs) async {
+  Future<NetworkScanResult?> _checkGeogramDevice(
+    String ip,
+    int port,
+    int timeoutMs,
+  ) async {
+    final client = http.Client();
     try {
-      final client = http.Client();
       final timeout = Duration(milliseconds: timeoutMs);
 
       try {
@@ -419,15 +541,16 @@ class StationDiscoveryService {
         if (response.statusCode == 200) {
           final body = response.body;
           final data = jsonDecode(body) as Map<String, dynamic>;
-          final callsign = data['callsign'] as String? ?? data['stationCallsign'] as String?;
+          final callsign =
+              data['callsign'] as String? ?? data['stationCallsign'] as String?;
 
           // Only return if it's a station (X3 callsign or station service)
-          final isStation = _isStationCallsign(callsign) ||
+          final isStation =
+              _isStationCallsign(callsign) ||
               body.contains('Geogram Station Server') ||
               data['service'] == 'Geogram Station Server';
 
           if (isStation) {
-            client.close();
             return NetworkScanResult(
               ip: ip,
               port: port,
@@ -459,7 +582,6 @@ class StationDiscoveryService {
 
           // Verify it's a station callsign
           if (_isStationCallsign(callsign)) {
-            client.close();
             return NetworkScanResult(
               ip: ip,
               port: port,
@@ -491,7 +613,6 @@ class StationDiscoveryService {
 
               // Only return if it's a station (X3 callsign)
               if (_isStationCallsign(callsign)) {
-                client.close();
                 return NetworkScanResult(
                   ip: ip,
                   port: port,
@@ -514,10 +635,10 @@ class StationDiscoveryService {
       } catch (_) {
         // Not a geogram device
       }
-
-      client.close();
     } catch (_) {
       // Connection failed
+    } finally {
+      client.close();
     }
 
     return null;
@@ -568,26 +689,36 @@ class StationDiscoveryService {
 
       // Fallback: if no interfaces detected (common on Android), try common private network ranges
       if (ranges.isEmpty) {
-        LogService().log('  No network interfaces detected, adding common private network ranges as fallback');
+        LogService().log(
+          '  No network interfaces detected, adding common private network ranges as fallback',
+        );
         // Try to detect subnet from a test connection
         final fallbackSubnet = await _detectSubnetFromConnectivity();
         if (fallbackSubnet != null) {
           ranges.add(fallbackSubnet);
-          LogService().log('  Detected subnet from connectivity: $fallbackSubnet');
+          LogService().log(
+            '  Detected subnet from connectivity: $fallbackSubnet',
+          );
         } else {
           // Add common home network ranges as last resort
           ranges.add('192.168.1');
           ranges.add('192.168.0');
           ranges.add('192.168.178'); // Common Fritz!Box range
-          LogService().log('  Using common fallback ranges: ${ranges.join(", ")}');
+          LogService().log(
+            '  Using common fallback ranges: ${ranges.join(", ")}',
+          );
         }
       }
 
-      LogService().log('Scanning localhost and ${ranges.length} network ranges: ${ranges.join(", ")}');
+      LogService().log(
+        'Scanning localhost and ${ranges.length} network ranges: ${ranges.join(", ")}',
+      );
 
       // Always scan localhost first on primary ports
       int foundCount = 0;
-      LogService().log('  Scanning localhost (127.0.0.1) on primary ports: ${_primaryPorts.join(", ")}...');
+      LogService().log(
+        '  Scanning localhost (127.0.0.1) on primary ports: ${_primaryPorts.join(", ")}...',
+      );
       for (var port in _primaryPorts) {
         final station = await _checkRelay('127.0.0.1', port);
         if (station != null) {
@@ -606,7 +737,6 @@ class StationDiscoveryService {
       LogService().log('');
       LogService().log('Discovery complete: $foundCount station(s) found');
       LogService().log('══════════════════════════════════════');
-
     } catch (e) {
       LogService().log('Error during discovery: $e');
     } finally {
@@ -637,8 +767,15 @@ class StationDiscoveryService {
     }
 
     // Process primary ports in batches
-    for (int batchStart = 0; batchStart < primaryTargets.length; batchStart += _maxConcurrentConnections) {
-      final batchEnd = (batchStart + _maxConcurrentConnections).clamp(0, primaryTargets.length);
+    for (
+      int batchStart = 0;
+      batchStart < primaryTargets.length;
+      batchStart += _maxConcurrentConnections
+    ) {
+      final batchEnd = (batchStart + _maxConcurrentConnections).clamp(
+        0,
+        primaryTargets.length,
+      );
       final batch = primaryTargets.sublist(batchStart, batchEnd);
 
       final futures = batch.map((target) async {
@@ -648,10 +785,9 @@ class StationDiscoveryService {
         }
       }).toList();
 
-      await Future.wait(futures).timeout(
-        const Duration(seconds: 5),
-        onTimeout: () => [],
-      );
+      await Future.wait(
+        futures,
+      ).timeout(const Duration(seconds: 5), onTimeout: () => []);
     }
 
     // Scan secondary ports
@@ -663,8 +799,15 @@ class StationDiscoveryService {
       }
     }
 
-    for (int batchStart = 0; batchStart < secondaryTargets.length; batchStart += _maxConcurrentConnections) {
-      final batchEnd = (batchStart + _maxConcurrentConnections).clamp(0, secondaryTargets.length);
+    for (
+      int batchStart = 0;
+      batchStart < secondaryTargets.length;
+      batchStart += _maxConcurrentConnections
+    ) {
+      final batchEnd = (batchStart + _maxConcurrentConnections).clamp(
+        0,
+        secondaryTargets.length,
+      );
       final batch = secondaryTargets.sublist(batchStart, batchEnd);
 
       final futures = batch.map((target) async {
@@ -674,10 +817,9 @@ class StationDiscoveryService {
         }
       }).toList();
 
-      await Future.wait(futures).timeout(
-        const Duration(seconds: 5),
-        onTimeout: () => [],
-      );
+      await Future.wait(
+        futures,
+      ).timeout(const Duration(seconds: 5), onTimeout: () => []);
     }
 
     return foundCount;
@@ -688,10 +830,9 @@ class StationDiscoveryService {
     try {
       // Use /api/status endpoint for detection (returns JSON)
       final url = 'http://$ip:$port/api/status';
-      final response = await http.get(
-        Uri.parse(url),
-        headers: {'Accept': 'application/json'},
-      ).timeout(_requestTimeout);
+      final response = await http
+          .get(Uri.parse(url), headers: {'Accept': 'application/json'})
+          .timeout(_requestTimeout);
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body) as Map<String, dynamic>;
@@ -704,7 +845,11 @@ class StationDiscoveryService {
           // Create station object with callsign
           final station = Station(
             url: 'ws://$ip:$port',
-            name: data['callsign'] as String? ?? data['name'] as String? ?? data['description'] as String? ?? 'Local Station ($ip)',
+            name:
+                data['callsign'] as String? ??
+                data['name'] as String? ??
+                data['description'] as String? ??
+                'Local Station ($ip)',
             callsign: data['callsign'] as String?,
             status: 'available',
             location: _buildLocation(data),
@@ -722,11 +867,16 @@ class StationDiscoveryService {
         // Check if it's a Geogram Desktop client (for device-to-device DM)
         if (service == 'Geogram Desktop') {
           final callsign = data['callsign'] as String?;
-          final name = data['nickname'] as String? ?? data['name'] as String? ?? callsign;
+          final name =
+              data['nickname'] as String? ??
+              data['name'] as String? ??
+              callsign;
           final deviceUrl = 'http://$ip:$port';
 
           if (callsign != null && callsign.isNotEmpty) {
-            LogService().log('✓ Found desktop client at $ip:$port - callsign: $callsign');
+            LogService().log(
+              '✓ Found desktop client at $ip:$port - callsign: $callsign',
+            );
 
             // Add to devices service for DM functionality (sets isOnline: true)
             await DevicesService().addDevice(
@@ -793,7 +943,9 @@ class StationDiscoveryService {
       final existingStations = stationService.getAllStations();
 
       // Check if station already exists by URL
-      final existingByUrl = existingStations.indexWhere((r) => r.url == station.url);
+      final existingByUrl = existingStations.indexWhere(
+        (r) => r.url == station.url,
+      );
       if (existingByUrl != -1) {
         LogService().log('  Station already exists: ${station.url}');
         // Update cached info (connected devices, location, etc.)
@@ -810,7 +962,9 @@ class StationDiscoveryService {
             lastChecked: DateTime.now(),
           ),
         );
-        LogService().log('  Updated station cache: ${station.connectedDevices} devices connected');
+        LogService().log(
+          '  Updated station cache: ${station.connectedDevices} devices connected',
+        );
         return;
       }
 
@@ -821,9 +975,12 @@ class StationDiscoveryService {
         );
         if (existingByCallsign != -1) {
           final existing = existingStations[existingByCallsign];
-          LogService().log('  Station with callsign ${station.callsign} already exists at ${existing.url}');
+          LogService().log(
+            '  Station with callsign ${station.callsign} already exists at ${existing.url}',
+          );
           // Prefer non-localhost URL
-          if (existing.url.contains('127.0.0.1') && !station.url.contains('127.0.0.1')) {
+          if (existing.url.contains('127.0.0.1') &&
+              !station.url.contains('127.0.0.1')) {
             // Update existing entry with new URL (prefer LAN IP)
             await stationService.updateStation(
               existing.url,
@@ -836,7 +993,9 @@ class StationDiscoveryService {
                 lastChecked: DateTime.now(),
               ),
             );
-            LogService().log('  Updated station URL from localhost to ${station.url}');
+            LogService().log(
+              '  Updated station URL from localhost to ${station.url}',
+            );
           }
           return;
         }
@@ -856,9 +1015,10 @@ class StationDiscoveryService {
 
       if (!hasPreferred) {
         await stationService.setPreferred(station.url);
-        LogService().log('  ✓ Set as preferred station (first station discovered)');
+        LogService().log(
+          '  ✓ Set as preferred station (first station discovered)',
+        );
       }
-
     } catch (e) {
       LogService().log('  Error adding station: $e');
     }
@@ -912,7 +1072,9 @@ class StationDiscoveryService {
         socket.destroy();
 
         if (localAddress != '127.0.0.1') {
-          LogService().log('  Local IP detected via gateway $gateway: $localAddress');
+          LogService().log(
+            '  Local IP detected via gateway $gateway: $localAddress',
+          );
           return _getSubnet(localAddress);
         }
       } catch (_) {

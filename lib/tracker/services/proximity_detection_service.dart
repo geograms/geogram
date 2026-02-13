@@ -26,6 +26,11 @@ class ProximityDetectionService {
   bool _isRunning = false;
   VoidCallback? _locationConsumerDispose;
   LockedPosition? _lastPosition;
+  bool _scanInProgress = false;
+  DateTime? _lastScanStartedAt;
+
+  /// Minimum interval between external trigger scans to avoid scan storms.
+  static const _externalScanThrottle = Duration(seconds: 8);
 
   /// Active proximity sessions (id -> last detection time)
   final Map<String, DateTime> _activeSessions = {};
@@ -48,30 +53,45 @@ class ProximityDetectionService {
     try {
       _trackerService = trackerService;
       _isRunning = true;
+      _scanInProgress = false;
+      _lastScanStartedAt = null;
 
       // Register as a consumer of LocationProviderService to get GPS updates
       _locationConsumerDispose = await LocationProviderService().registerConsumer(
         intervalSeconds: 60,
         onPosition: (position) {
           _lastPosition = position;
-          LogService().log('ProximityDetectionService: Got position update: ${position.latitude}, ${position.longitude}');
+          LogService().log(
+            'ProximityDetectionService: Got position update: ${position.latitude}, ${position.longitude}',
+          );
         },
       );
 
       // Run initial scan immediately
-      _scanNearbyDevices();
+      unawaited(_requestScan(source: 'startup'));
 
       // On Android, use native foreground service for reliable background operation
       if (!kIsWeb && Platform.isAndroid) {
-        BLEForegroundService().onBleScanPing = _scanNearbyDevices;
+        BLEForegroundService().onBleScanPing = () {
+          unawaited(
+            _requestScan(
+              source: 'foreground-service',
+              minInterval: _externalScanThrottle,
+            ),
+          );
+        };
         await BLEForegroundService().enableBleScanKeepAlive();
-        LogService().log('ProximityDetectionService: Started with native Android handler and GPS consumer');
+        LogService().log(
+          'ProximityDetectionService: Started with native Android handler and GPS consumer',
+        );
       } else {
         // Dart timer for other platforms (iOS, Linux, web)
         _scanTimer = Timer.periodic(const Duration(seconds: 60), (_) {
-          _scanNearbyDevices();
+          unawaited(_requestScan(source: 'timer'));
         });
-        LogService().log('ProximityDetectionService: Started with 60-second timer and GPS consumer');
+        LogService().log(
+          'ProximityDetectionService: Started with 60-second timer and GPS consumer',
+        );
       }
     } catch (e, stack) {
       LogService().log('ProximityDetectionService: Failed to start: $e');
@@ -99,6 +119,8 @@ class ProximityDetectionService {
     _isRunning = false;
     _activeSessions.clear();
     _lastPosition = null;
+    _scanInProgress = false;
+    _lastScanStartedAt = null;
 
     LogService().log('ProximityDetectionService: Stopped');
   }
@@ -106,15 +128,49 @@ class ProximityDetectionService {
   /// Public method to trigger a proximity scan from external code (e.g., BLE handler).
   /// This allows piggy-backing on the BLE scan cycle which is known to work.
   Future<void> triggerScan() async {
-    if (!_isRunning) return;
-    LogService().log('[PROXIMITY] Scan triggered (background service callback)');
-    await _scanNearbyDevices();
+    await _requestScan(
+      source: 'ble-callback',
+      minInterval: _externalScanThrottle,
+    );
+  }
+
+  Future<void> _requestScan({
+    required String source,
+    Duration minInterval = Duration.zero,
+  }) async {
+    if (!_isRunning || _trackerService == null) return;
+
+    final now = DateTime.now();
+    if (_scanInProgress) {
+      return;
+    }
+
+    final lastScanStartedAt = _lastScanStartedAt;
+    if (lastScanStartedAt != null &&
+        now.difference(lastScanStartedAt) < minInterval) {
+      return;
+    }
+
+    _scanInProgress = true;
+    _lastScanStartedAt = now;
+    try {
+      if (source == 'ble-callback') {
+        LogService().log(
+          '[PROXIMITY] Scan triggered (background service callback)',
+        );
+      }
+      await _scanNearbyDevices();
+    } finally {
+      _scanInProgress = false;
+    }
   }
 
   /// Scan for nearby BLE devices (detected via bleRssi != null)
   Future<void> _scanNearbyDevices() async {
     if (!_isRunning || _trackerService == null) {
-      LogService().log('ProximityDetectionService: _scanNearbyDevices skipped (running=$_isRunning, tracker=${_trackerService != null})');
+      LogService().log(
+        'ProximityDetectionService: _scanNearbyDevices skipped (running=$_isRunning, tracker=${_trackerService != null})',
+      );
       return;
     }
 
@@ -125,25 +181,32 @@ class ProximityDetectionService {
       final timestamp = now.toUtc().toIso8601String();
 
       // Get current position from our registered consumer or fallback to service's current position
-      final currentPos = _lastPosition ?? LocationProviderService().currentPosition;
+      final currentPos =
+          _lastPosition ?? LocationProviderService().currentPosition;
       final lat = currentPos?.latitude ?? 0.0;
       final lon = currentPos?.longitude ?? 0.0;
 
-      LogService().log('ProximityDetectionService: Scanning at GPS ($lat, $lon)');
+      LogService().log(
+        'ProximityDetectionService: Scanning at GPS ($lat, $lon)',
+      );
 
       if (lat == 0.0 && lon == 0.0) {
-        LogService().log('ProximityDetectionService: No GPS position available yet');
+        LogService().log(
+          'ProximityDetectionService: No GPS position available yet',
+        );
       }
 
       // Get all devices from DevicesService
       final allDevices = DevicesService().getAllDevices();
 
       // Filter for devices CURRENTLY detected via BLE (bleRssi != null means active BLE detection)
-      final nearbyDevices = allDevices.where((device) =>
-        device.bleRssi != null
-      ).toList();
+      final nearbyDevices = allDevices
+          .where((device) => device.bleRssi != null)
+          .toList();
 
-      LogService().log('[PROXIMITY] Scan complete: ${nearbyDevices.length} nearby BLE devices found (of ${allDevices.length} total)');
+      LogService().log(
+        '[PROXIMITY] Scan complete: ${nearbyDevices.length} nearby BLE devices found (of ${allDevices.length} total)',
+      );
 
       for (final device in nearbyDevices) {
         await _recordProximity(
@@ -170,7 +233,6 @@ class ProximityDetectionService {
 
       // Clean up stale sessions
       _cleanupStaleSessions(now);
-
     } catch (e) {
       LogService().log('ProximityDetectionService: Error scanning: $e');
     }
@@ -186,8 +248,12 @@ class ProximityDetectionService {
     );
 
     if (nearbyPlaces.isNotEmpty) {
-      final placeNames = nearbyPlaces.map((p) => '"${p.name}" (${p.distanceMeters.toStringAsFixed(0)}m)').join(', ');
-      LogService().log('[PROXIMITY] Found ${nearbyPlaces.length} places within ${placeRadiusMeters}m: $placeNames');
+      final placeNames = nearbyPlaces
+          .map((p) => '"${p.name}" (${p.distanceMeters.toStringAsFixed(0)}m)')
+          .join(', ');
+      LogService().log(
+        '[PROXIMITY] Found ${nearbyPlaces.length} places within ${placeRadiusMeters}m: $placeNames',
+      );
     }
 
     if (nearbyPlaces.isEmpty) return;
@@ -198,7 +264,11 @@ class ProximityDetectionService {
     final timestamp = now.toUtc().toIso8601String();
 
     for (final place in nearbyPlaces) {
-      final trackId = ProximityTrack.generatePlaceId(place.name, place.lat, place.lon);
+      final trackId = ProximityTrack.generatePlaceId(
+        place.name,
+        place.lat,
+        place.lon,
+      );
       await _recordProximity(
         id: trackId,
         type: ProximityTargetType.place,
@@ -287,7 +357,12 @@ class ProximityDetectionService {
           track = track.copyWith(entries: updatedEntries);
         } else if (lastHasLocation && currentHasLocation) {
           // Case 2: Both have location → check if we moved significantly
-          final distance = _calculateDistance(lastEntry.lat, lastEntry.lon, lat, lon);
+          final distance = _calculateDistance(
+            lastEntry.lat,
+            lastEntry.lon,
+            lat,
+            lon,
+          );
           if (distance > 50) {
             // Moved >50m → create new entry (path segment)
             final newEntry = ProximityEntry(
@@ -327,9 +402,7 @@ class ProximityDetectionService {
         durationSeconds: 60,
       );
 
-      track = track.copyWith(
-        entries: [...track.entries, entry],
-      );
+      track = track.copyWith(entries: [...track.entries, entry]);
     }
 
     // Update active session
@@ -354,13 +427,19 @@ class ProximityDetectionService {
   }
 
   /// Calculate distance between two coordinates in meters (Haversine formula)
-  double _calculateDistance(double lat1, double lon1, double lat2, double lon2) {
+  double _calculateDistance(
+    double lat1,
+    double lon1,
+    double lat2,
+    double lon2,
+  ) {
     const earthRadius = 6371000.0; // meters
 
     final dLat = _toRadians(lat2 - lat1);
     final dLon = _toRadians(lon2 - lon1);
 
-    final a = math.sin(dLat / 2) * math.sin(dLat / 2) +
+    final a =
+        math.sin(dLat / 2) * math.sin(dLat / 2) +
         math.cos(_toRadians(lat1)) *
             math.cos(_toRadians(lat2)) *
             math.sin(dLon / 2) *

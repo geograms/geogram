@@ -61,6 +61,7 @@ class EmailFormat {
     List<String> labels = [];
     EmailPriority priority = EmailPriority.normal;
     String? inReplyTo;
+    bool? isRead;
 
     int headerEndIndex = 0;
 
@@ -113,6 +114,10 @@ class EmailFormat {
           case 'THREAD_ID':
             threadId = value;
             break;
+          case 'READ':
+            final normalized = value.toLowerCase();
+            isRead = normalized == 'true' || normalized == '1' || normalized == 'yes';
+            break;
           case 'LABELS':
             labels = value.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
             break;
@@ -147,6 +152,7 @@ class EmailFormat {
       subject: subject,
       created: created,
       status: status,
+      isRead: isRead ?? (status != EmailStatus.received),
       threadId: threadId,
       labels: labels,
       priority: priority,
@@ -307,6 +313,7 @@ class EmailFormat {
     buffer.writeln('SUBJECT: ${thread.subject}');
     buffer.writeln('CREATED: ${thread.created}');
     buffer.writeln('STATUS: ${thread.status.name}');
+    buffer.writeln('READ: ${thread.isRead}');
     buffer.writeln('THREAD_ID: ${thread.threadId}');
     if (thread.labels.isNotEmpty) {
       buffer.writeln('LABELS: ${thread.labels.join(', ')}');

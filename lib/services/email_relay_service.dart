@@ -56,6 +56,7 @@ import 'dart:convert';
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'dart:typed_data';
 
+import 'package:mime/mime.dart';
 import 'package:path/path.dart' as path;
 import '../util/backup_encryption.dart';
 import '../util/email_format.dart';
@@ -63,7 +64,8 @@ import '../util/nostr_crypto.dart';
 import '../util/nostr_event.dart';
 import 'log_service.dart';
 import 'nip05_registry_service.dart';
-import 'smtp_client.dart' show SMTPClient, DkimConfig, SMTPRelayConfig;
+import 'smtp_client.dart'
+    show SMTPAttachment, SMTPClient, DkimConfig, SMTPRelayConfig;
 import 'smtp_server.dart' show MIMEParser;
 
 /// Callback type for sending messages to clients
@@ -446,8 +448,28 @@ class EmailRelayService {
       body = entry.content; // Already plain text
     }
 
+    final smtpAttachments = _buildSmtpAttachments(entry.message['attachments']);
+    if (smtpAttachments == null) {
+      LogService().log('SMTP: Invalid attachment payload for ${entry.id}');
+      entry.status = ExternalEmailStatus.failed;
+      if (entry.sendToClientCallback != null) {
+        final dsn = _createDsn(
+          action: 'failed',
+          threadId: entry.threadId,
+          recipient: entry.externalRecipients.join(', '),
+          reason: 'Invalid attachment payload',
+        );
+        entry.sendToClientCallback!(entry.senderId, jsonEncode(dsn));
+      }
+      return;
+    }
+
+    final attachmentSuffix = smtpAttachments.isNotEmpty
+        ? ' with ${smtpAttachments.length} attachment(s)'
+        : '';
+
     LogService().log(
-      'SMTP: Sending external email from $fromEmail to ${entry.externalRecipients.join(", ")}',
+      'SMTP: Sending external email from $fromEmail to ${entry.externalRecipients.join(", ")}$attachmentSuffix',
     );
 
     try {
@@ -473,6 +495,7 @@ class EmailRelayService {
         subject: entry.subject,
         body: body,
         extraHeaders: extraHeaders,
+        attachments: smtpAttachments.isEmpty ? null : smtpAttachments,
       );
 
       if (result.success) {
@@ -1184,6 +1207,31 @@ class EmailRelayService {
     }
 
     return attachments;
+  }
+
+  List<SMTPAttachment>? _buildSmtpAttachments(dynamic raw) {
+    final parsedAttachments = _parseAttachmentPayload(raw);
+    if (parsedAttachments == null) return null;
+
+    final smtpAttachments = <SMTPAttachment>[];
+    for (final attachment in parsedAttachments) {
+      try {
+        final bytes = base64Decode(attachment.contentB64);
+        final mimeType =
+            lookupMimeType(attachment.name) ?? 'application/octet-stream';
+        smtpAttachments.add(
+          SMTPAttachment(
+            filename: attachment.name,
+            mimeType: mimeType,
+            data: bytes,
+          ),
+        );
+      } catch (_) {
+        return null;
+      }
+    }
+
+    return smtpAttachments;
   }
 
   int _decodedContentBytes(String encodedContent) {

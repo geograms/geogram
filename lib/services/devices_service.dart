@@ -79,7 +79,8 @@ class DevicesService {
 
   /// Throttle BLE-triggered LAN discovery to avoid spamming
   DateTime? _lastBLETriggeredLANDiscovery;
-  static const _bleLanDiscoveryThrottle = Duration(seconds: 15);
+  static const _bleLanDiscoveryThrottle = Duration(seconds: 45);
+  bool _isLocalDiscoveryRunning = false;
 
   /// Cache of known devices with their status
   final Map<String, RemoteDevice> _devices = {};
@@ -660,11 +661,13 @@ class DevicesService {
     });
 
     // Subscribe to remote callsign changes (when hello handshake completes)
-    _usbCallsignSubscription =
-        _usbAoaService.remoteCallsignStream.listen((callsign) {
+    _usbCallsignSubscription = _usbAoaService.remoteCallsignStream.listen((
+      callsign,
+    ) {
       if (callsign != null && callsign.isNotEmpty) {
         LogService().log(
-            'DevicesService: USB remote callsign discovered: $callsign');
+          'DevicesService: USB remote callsign discovered: $callsign',
+        );
         _addUsbDevice(callsign);
       }
     });
@@ -681,8 +684,7 @@ class DevicesService {
 
   /// Handle USB connection state changes
   void _handleUSBConnection(UsbAoaConnectionState state) {
-    LogService()
-        .log('DevicesService: USB connection state changed to $state');
+    LogService().log('DevicesService: USB connection state changed to $state');
 
     if (state == UsbAoaConnectionState.connected) {
       // USB connected - check if we already have a callsign from a previous handshake
@@ -725,8 +727,9 @@ class DevicesService {
         lastSeen: DateTime.now(),
       );
       _devices[normalizedCallsign] = newDevice;
-      LogService()
-          .log('DevicesService: Added new USB device: $normalizedCallsign');
+      LogService().log(
+        'DevicesService: Added new USB device: $normalizedCallsign',
+      );
     }
 
     _devicesController.add(getAllDevices());
@@ -737,10 +740,10 @@ class DevicesService {
     var changed = false;
     for (final device in _devices.values) {
       if (device.connectionMethods.contains('usb')) {
-        device.connectionMethods =
-            device.connectionMethods.where((m) => m != 'usb').toList();
-        LogService()
-            .log('DevicesService: Removed USB from ${device.callsign}');
+        device.connectionMethods = device.connectionMethods
+            .where((m) => m != 'usb')
+            .toList();
+        LogService().log('DevicesService: Removed USB from ${device.callsign}');
 
         // Set offline if no other viable connection methods remain
         if (device.connectionMethods.isEmpty) {
@@ -889,7 +892,9 @@ class DevicesService {
 
   /// Handle BLE discovered devices
   Future<void> _handleBLEDevices(List<BLEDevice> bleDevices) async {
-    LogService().log('DevicesService: _handleBLEDevices called with ${bleDevices.length} devices');
+    LogService().log(
+      'DevicesService: _handleBLEDevices called with ${bleDevices.length} devices',
+    );
     // BLE+ (Bluetooth Classic) disabled - use pure BLE
     // final pairingService = BluetoothClassicPairingService();
 
@@ -1008,8 +1013,9 @@ class DevicesService {
       if (lastDiscovery == null ||
           now.difference(lastDiscovery) > _bleLanDiscoveryThrottle) {
         _lastBLETriggeredLANDiscovery = now;
-        // Fire and forget - don't block BLE handler on network discovery
-        _discoverLocalDevices(force: true);
+        // Fire and forget - don't block BLE handler on network discovery.
+        // Avoid forcing full scans from BLE callbacks to prevent scan overlap storms.
+        _discoverLocalDevices();
       }
     }
 
@@ -1492,18 +1498,24 @@ class DevicesService {
     String? body,
   }) async {
     final normalizedCallsign = callsign.toUpperCase();
-    LogService().log('DevicesService: [API] makeDeviceApiRequest $method $path to $normalizedCallsign');
+    LogService().log(
+      'DevicesService: [API] makeDeviceApiRequest $method $path to $normalizedCallsign',
+    );
 
     // Sync device info to ConnectionManager before request
     syncDeviceToConnectionManager(normalizedCallsign);
 
     // Use ConnectionManager for routing
     final connectionManager = ConnectionManager();
-    LogService().log('DevicesService: [API] ConnectionManager.isInitialized=${connectionManager.isInitialized}');
+    LogService().log(
+      'DevicesService: [API] ConnectionManager.isInitialized=${connectionManager.isInitialized}',
+    );
 
     if (!connectionManager.isInitialized) {
       // Fallback to legacy routing if ConnectionManager not ready
-      LogService().log('DevicesService: [API] Using LEGACY routing (ConnectionManager not initialized)');
+      LogService().log(
+        'DevicesService: [API] Using LEGACY routing (ConnectionManager not initialized)',
+      );
       return _makeDeviceApiRequestLegacy(
         callsign: normalizedCallsign,
         method: method,
@@ -1514,7 +1526,9 @@ class DevicesService {
     }
 
     final transports = connectionManager.availableTransports;
-    LogService().log('DevicesService: [API] Available transports: ${transports.map((t) => t.id).toList()}');
+    LogService().log(
+      'DevicesService: [API] Available transports: ${transports.map((t) => t.id).toList()}',
+    );
 
     final result = await connectionManager.apiRequest(
       callsign: normalizedCallsign,
@@ -1534,9 +1548,7 @@ class DevicesService {
         result.statusCode ?? 200,
       );
     } else {
-      LogService().log(
-        'DevicesService: [API] FAILED: ${result.error}',
-      );
+      LogService().log('DevicesService: [API] FAILED: ${result.error}');
       return null;
     }
   }
@@ -1555,7 +1567,8 @@ class DevicesService {
     // Try direct connection first if device has a URL and appears online
     // Skip direct connection in internet-only/BLE-only mode (force station proxy)
     // Also skip if device is only reachable via BLE (no network path)
-    final hasNetworkPath = device?.connectionMethods.any(
+    final hasNetworkPath =
+        device?.connectionMethods.any(
           (m) => m == 'lan' || m == 'wifi_local' || m == 'internet',
         ) ??
         false;
@@ -1570,8 +1583,12 @@ class DevicesService {
           'DevicesService: Direct request to $normalizedCallsign: $method $path',
         );
         // Use shorter timeout (5s) for direct connection - fail fast if unreachable
-        final response = await _makeHttpRequest(method, uri, headers, body)
-            .timeout(const Duration(seconds: 5));
+        final response = await _makeHttpRequest(
+          method,
+          uri,
+          headers,
+          body,
+        ).timeout(const Duration(seconds: 5));
         if (response.statusCode < 500) {
           return response; // Success or client error - don't retry via station
         }
@@ -1645,9 +1662,13 @@ class DevicesService {
       case 'GET':
         return await http.get(uri, headers: h).timeout(defaultTimeout);
       case 'POST':
-        return await http.post(uri, headers: h, body: body).timeout(defaultTimeout);
+        return await http
+            .post(uri, headers: h, body: body)
+            .timeout(defaultTimeout);
       case 'PUT':
-        return await http.put(uri, headers: h, body: body).timeout(defaultTimeout);
+        return await http
+            .put(uri, headers: h, body: body)
+            .timeout(defaultTimeout);
       case 'DELETE':
         return await http.delete(uri, headers: h).timeout(defaultTimeout);
       default:
@@ -1710,17 +1731,18 @@ class DevicesService {
       final connectionMethod = hasBLEConnection
           ? 'bluetooth'
           : (directOk ? 'lan' : 'internet');
-      EventBus().fire(DeviceStatusChangedEvent(
-        callsign: device.callsign,
-        isReachable: true,
-        connectionMethod: connectionMethod,
-      ));
+      EventBus().fire(
+        DeviceStatusChangedEvent(
+          callsign: device.callsign,
+          isReachable: true,
+          connectionMethod: connectionMethod,
+        ),
+      );
     } else if (wasOnline && !isNowOnline) {
       // Device went offline
-      EventBus().fire(DeviceStatusChangedEvent(
-        callsign: device.callsign,
-        isReachable: false,
-      ));
+      EventBus().fire(
+        DeviceStatusChangedEvent(callsign: device.callsign, isReachable: false),
+      );
     }
 
     return isNowOnline;
@@ -2022,22 +2044,28 @@ class DevicesService {
     final callsigns = _devices.keys.toList();
 
     // Fire event to notify UI that scanning started
-    EventBus().fire(DeviceScanEvent(isScanning: true, totalDevices: callsigns.length));
+    EventBus().fire(
+      DeviceScanEvent(isScanning: true, totalDevices: callsigns.length),
+    );
 
     // Run all checks in parallel (non-blocking)
-    final futures = callsigns.map((c) =>
-      checkReachability(c).catchError((_) => false)
-    ).toList();
+    final futures = callsigns
+        .map((c) => checkReachability(c).catchError((_) => false))
+        .toList();
 
     // Track completion in background (don't await - keeps UI responsive)
-    unawaited(Future.wait(futures).then((_) {
-      _lastFullRefreshTime = DateTime.now();
-      EventBus().fire(DeviceScanEvent(
-        isScanning: false,
-        totalDevices: callsigns.length,
-        completedDevices: callsigns.length,
-      ));
-    }));
+    unawaited(
+      Future.wait(futures).then((_) {
+        _lastFullRefreshTime = DateTime.now();
+        EventBus().fire(
+          DeviceScanEvent(
+            isScanning: false,
+            totalDevices: callsigns.length,
+            completedDevices: callsigns.length,
+          ),
+        );
+      }),
+    );
 
     return true;
   }
@@ -2228,6 +2256,14 @@ class DevicesService {
 
   /// Discover devices on local WiFi network (both clients and stations)
   Future<void> _discoverLocalDevices({bool force = false}) async {
+    if (_isLocalDiscoveryRunning) {
+      LogService().log(
+        'DevicesService: Local discovery already running, skipping',
+      );
+      return;
+    }
+
+    _isLocalDiscoveryRunning = true;
     try {
       final now = DateTime.now();
       final shouldFullScan =
@@ -2251,6 +2287,8 @@ class DevicesService {
       }
     } catch (e) {
       LogService().log('DevicesService: Error discovering local devices: $e');
+    } finally {
+      _isLocalDiscoveryRunning = false;
     }
   }
 
@@ -2356,7 +2394,9 @@ class DevicesService {
     await Future.wait(
       localDevices
           .where((device) => device.url != null)
-          .map((device) => _checkDirectConnection(device).catchError((_) => false)),
+          .map(
+            (device) => _checkDirectConnection(device).catchError((_) => false),
+          ),
     );
 
     _notifyListeners();
@@ -2532,9 +2572,7 @@ class DevicesService {
   }
 
   /// Fetch collections from online device using ConnectionManager
-  Future<List<RemoteApp>> _fetchAppsOnline(
-    RemoteDevice device,
-  ) async {
+  Future<List<RemoteApp>> _fetchAppsOnline(RemoteDevice device) async {
     final remoteApps = <RemoteApp>[];
 
     // Sync device to ConnectionManager first
@@ -2663,9 +2701,7 @@ class DevicesService {
         final content = await collectionsFile.readAsString();
         final data = json.decode(content) as List;
 
-        return data
-            .map((item) => RemoteApp.fromJson(item, callsign))
-            .toList();
+        return data.map((item) => RemoteApp.fromJson(item, callsign)).toList();
       }
     } catch (e) {
       LogService().log('DevicesService: Error loading cached collections: $e');
@@ -2675,10 +2711,7 @@ class DevicesService {
   }
 
   /// Cache collections for offline access
-  Future<void> _cacheApps(
-    String callsign,
-    List<RemoteApp> remoteApps,
-  ) async {
+  Future<void> _cacheApps(String callsign, List<RemoteApp> remoteApps) async {
     try {
       final cacheDir = await _cacheService.getDeviceCacheDir(callsign);
       if (cacheDir == null) return;
@@ -2847,14 +2880,10 @@ class DevicesService {
       }
 
       // Generate signed event for DM
-      final signedEvent = await signingService.generateSignedEvent(
-        content,
-        {
-          'room': callsign.toUpperCase(), // DM room is the target callsign
-          'callsign': profile.callsign,
-        },
-        profile,
-      );
+      final signedEvent = await signingService.generateSignedEvent(content, {
+        'room': callsign.toUpperCase(), // DM room is the target callsign
+        'callsign': profile.callsign,
+      }, profile);
 
       if (signedEvent == null || signedEvent.sig == null) {
         LogService().log('DevicesService: Failed to sign BLE DM event');
@@ -3006,10 +3035,7 @@ class DevicesService {
       final response = await makeDeviceApiRequest(
         callsign: callsign,
         method: 'GET',
-        path: ChatApi.fileDownloadPath(
-          roomId,
-          Uri.encodeComponent(filename),
-        ),
+        path: ChatApi.fileDownloadPath(roomId, Uri.encodeComponent(filename)),
       );
 
       if (response != null && response.statusCode == 200) {
@@ -3243,10 +3269,7 @@ class RemoteApp {
     this.visibility,
   });
 
-  factory RemoteApp.fromJson(
-    Map<String, dynamic> json,
-    String deviceCallsign,
-  ) {
+  factory RemoteApp.fromJson(Map<String, dynamic> json, String deviceCallsign) {
     return RemoteApp(
       name: json['name'] ?? json['id'] ?? 'Unknown',
       deviceCallsign: deviceCallsign,

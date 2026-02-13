@@ -551,6 +551,22 @@ class EmailService {
     );
   }
 
+  /// Mark inbox thread as read
+  Future<void> markThreadRead(EmailThread thread) async {
+    if (thread.status != EmailStatus.received || thread.isRead) return;
+
+    thread.isRead = true;
+    await saveThread(thread);
+  }
+
+  /// Mark inbox thread as unread
+  Future<void> markThreadUnread(EmailThread thread) async {
+    if (thread.status != EmailStatus.received || !thread.isRead) return;
+
+    thread.isRead = false;
+    await saveThread(thread);
+  }
+
   /// Move thread to spam
   Future<void> markAsSpam(EmailThread thread) async {
     if (thread.status == EmailStatus.spam) return;
@@ -1156,6 +1172,7 @@ class EmailService {
           content: content,
           metadata: {},
         );
+        _applyIncomingAttachmentMetadata(emailMessage, incomingAttachments);
 
         if (event != null) {
           emailMessage.metadata['event_id'] = event['id'] as String? ?? '';
@@ -1164,6 +1181,7 @@ class EmailService {
         }
 
         existingThread.addMessage(emailMessage);
+        existingThread.isRead = false;
         await saveThread(existingThread);
         if (incomingAttachments.isNotEmpty) {
           await _storeIncomingAttachments(existingThread, incomingAttachments);
@@ -1216,6 +1234,7 @@ class EmailService {
           subject: subject ?? '(No Subject)',
           created: created,
           status: EmailStatus.received,
+          isRead: false,
           threadId: threadId,
           messages: [],
         );
@@ -1227,6 +1246,7 @@ class EmailService {
           content: content,
           metadata: {},
         );
+        _applyIncomingAttachmentMetadata(emailMessage, incomingAttachments);
 
         // Add NOSTR metadata if event provided
         if (event != null) {
@@ -1239,6 +1259,7 @@ class EmailService {
       } else {
         // Thread was parsed from content, mark as received
         thread.status = EmailStatus.received;
+        thread.isRead = false;
       }
 
       // Save to inbox
@@ -1294,6 +1315,39 @@ class EmailService {
       }
     }
     return attachments;
+  }
+
+  void _applyIncomingAttachmentMetadata(
+    EmailMessage message,
+    List<_IncomingAttachment> attachments,
+  ) {
+    if (attachments.isEmpty) return;
+
+    final names = attachments
+        .map((attachment) => attachment.name.trim())
+        .where((name) => name.isNotEmpty)
+        .toList(growable: false);
+    if (names.isEmpty) return;
+
+    if (names.length == 1) {
+      final name = names.first;
+      message.metadata[_isImageAttachmentName(name) ? 'image' : 'file'] = name;
+      return;
+    }
+
+    message.metadata['files'] = names.join(',');
+  }
+
+  bool _isImageAttachmentName(String filename) {
+    final lower = filename.toLowerCase();
+    return lower.endsWith('.jpg') ||
+        lower.endsWith('.jpeg') ||
+        lower.endsWith('.png') ||
+        lower.endsWith('.gif') ||
+        lower.endsWith('.webp') ||
+        lower.endsWith('.bmp') ||
+        lower.endsWith('.heic') ||
+        lower.endsWith('.heif');
   }
 
   bool _isSafeAttachmentFilename(String filename) {

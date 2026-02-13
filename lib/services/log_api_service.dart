@@ -12730,6 +12730,205 @@ class LogApiService {
             headers: headers,
           );
 
+        case 'email_send_with_image':
+        case 'email_send_with_attachment':
+          // Compose and send an email with a local image attachment
+          final to = params['to'] as String?;
+          final subject = params['subject'] as String?;
+          final content = params['content'] as String?;
+          final cc = params['cc'] as String?;
+          final station = params['station'] as String?;
+          final imagePathRaw =
+              (params['image_path'] ?? params['attachment_path']) as String?;
+          final imageNameOverride = params['image_name'] as String?;
+
+          if (to == null || to.isEmpty) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Missing "to" parameter (email address)',
+              }),
+              headers: headers,
+            );
+          }
+
+          if (subject == null || subject.isEmpty) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Missing "subject" parameter',
+              }),
+              headers: headers,
+            );
+          }
+
+          if (content == null || content.isEmpty) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Missing "content" parameter',
+              }),
+              headers: headers,
+            );
+          }
+
+          if (imagePathRaw == null || imagePathRaw.trim().isEmpty) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Missing "image_path" parameter',
+              }),
+              headers: headers,
+            );
+          }
+
+          if (kIsWeb) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Attachments are not supported on web for this debug action',
+              }),
+              headers: headers,
+            );
+          }
+
+          final imagePath = imagePathRaw.trim();
+          final imageFile = io.File(imagePath);
+          if (!await imageFile.exists()) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Image file not found',
+                'image_path': imagePath,
+              }),
+              headers: headers,
+            );
+          }
+
+          final imageBytes = await imageFile.readAsBytes();
+          if (imageBytes.isEmpty) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Image file is empty',
+                'image_path': imagePath,
+              }),
+              headers: headers,
+            );
+          }
+
+          final originalName = (imageNameOverride != null &&
+                  imageNameOverride.trim().isNotEmpty)
+              ? imageNameOverride.trim()
+              : path.basename(imageFile.path);
+          final sanitizedName = originalName.replaceAll(RegExp(r'[\\/]'), '_');
+
+          const supportedImageExtensions = {
+            '.jpg',
+            '.jpeg',
+            '.png',
+            '.gif',
+            '.webp',
+            '.bmp',
+          };
+          final extension = path.extension(sanitizedName).toLowerCase();
+          if (!supportedImageExtensions.contains(extension)) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Unsupported image extension',
+                'supported_extensions': supportedImageExtensions.toList(),
+                'image_name': sanitizedName,
+              }),
+              headers: headers,
+            );
+          }
+
+          final profile = ProfileService().getProfile();
+          final stationService = StationService();
+          final preferredStation = stationService.getPreferredStation();
+          final stationDomain = station ?? preferredStation?.name ?? 'p2p.radio';
+          final fromEmail = '${profile.callsign.toLowerCase()}@$stationDomain';
+
+          final toList = to
+              .split(',')
+              .map((e) => e.trim())
+              .where((e) => e.isNotEmpty)
+              .toList();
+          final ccList = cc
+                  ?.split(',')
+                  .map((e) => e.trim())
+                  .where((e) => e.isNotEmpty)
+                  .toList() ??
+              [];
+
+          final thread = await emailService.createDraft(
+            from: fromEmail,
+            to: toList,
+            subject: subject,
+            cc: ccList,
+            station: stationDomain,
+          );
+
+          // Move to outbox first so attachment is written in final folder.
+          await emailService.markAsPending(thread);
+
+          final hash = sha1.convert(imageBytes).toString().substring(0, 40);
+          final storedAttachmentName = '${hash}_$sanitizedName';
+          await emailService.writeAttachment(
+            thread,
+            storedAttachmentName,
+            Uint8List.fromList(imageBytes),
+          );
+
+          await emailService.createSignedMessage(
+            thread: thread,
+            content: content,
+            metadata: {'image': storedAttachmentName},
+          );
+
+          final ws = WebSocketService();
+          String deliveryStatus = 'pending';
+          if (ws.isConnected) {
+            final sent = await emailService.sendViaWebSocket(thread);
+            if (sent) {
+              deliveryStatus = 'sent_to_station';
+              LogService().log(
+                'LogApiService: Email with image sent to station: ${thread.threadId} ($storedAttachmentName)',
+              );
+            } else {
+              deliveryStatus = 'queued_locally';
+              LogService().log(
+                'LogApiService: Email with image queued locally: ${thread.threadId} ($storedAttachmentName)',
+              );
+            }
+          } else {
+            deliveryStatus = 'queued_no_connection';
+            LogService().log(
+              'LogApiService: Email with image queued (no station connection): ${thread.threadId} ($storedAttachmentName)',
+            );
+          }
+
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'message': 'Email with image created and queued for delivery',
+              'thread_id': thread.threadId,
+              'from': fromEmail,
+              'to': toList,
+              'subject': subject,
+              'station': stationDomain,
+              'delivery_status': deliveryStatus,
+              'websocket_connected': ws.isConnected,
+              'attachment': {
+                'source_path': imageFile.absolute.path,
+                'stored_name': storedAttachmentName,
+                'size_bytes': imageBytes.length,
+              },
+            }),
+            headers: headers,
+          );
+
         case 'email_list':
           // List emails in a folder
           final folder = params['folder'] as String? ?? 'inbox';
@@ -12812,6 +13011,8 @@ class LogApiService {
               'available_actions': [
                 'email_compose',
                 'email_send',
+                'email_send_with_image',
+                'email_send_with_attachment',
                 'email_list',
                 'email_status',
               ],

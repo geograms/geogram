@@ -479,27 +479,27 @@ class _EmailComposePageState extends State<EmailComposePage> {
 
       // If replying, add message to existing thread
       if (widget.replyTo != null) {
-        final attachmentMetadata = await _copyAttachmentsToThread(
-          widget.replyTo!,
-        );
+        final replyThread = widget.replyTo!;
+
+        // Move to outbox first so attachments are written in the final folder.
+        await _emailService.markAsPending(replyThread);
+
+        final attachmentMetadata = await _copyAttachmentsToThread(replyThread);
         await _emailService.createSignedMessage(
-          thread: widget.replyTo!,
+          thread: replyThread,
           content: _bodyController.text,
           metadata: attachmentMetadata,
         );
-
-        // Move to outbox for delivery
-        await _emailService.markAsPending(widget.replyTo!);
 
         // Track recipients for frequent contacts
         final allRecipients = [...to, ...cc, ...bcc];
         await _emailService.trackRecipients(allRecipients);
 
         // Try to send via WebSocket - delivery confirmation comes via DSN
-        await _emailService.sendViaWebSocket(widget.replyTo!);
+        await _emailService.sendViaWebSocket(replyThread);
 
         if (mounted) {
-          Navigator.pop(context, widget.replyTo);
+          Navigator.pop(context, replyThread);
         }
         return;
       }
@@ -976,7 +976,17 @@ class _EmailComposePageState extends State<EmailComposePage> {
     required TextEditingController controller,
     bool required = false,
   }) {
+    TextEditingController? fieldController;
+
+    void syncBackToController() {
+      final source = fieldController;
+      if (source == null) return;
+      if (controller.value == source.value) return;
+      controller.value = source.value;
+    }
+
     return Autocomplete<Map<String, String?>>(
+      initialValue: TextEditingValue(text: controller.text),
       optionsBuilder: (TextEditingValue textEditingValue) {
         final text = textEditingValue.text;
 
@@ -1028,8 +1038,10 @@ class _EmailComposePageState extends State<EmailComposePage> {
         return option['email'] ?? '';
       },
       onSelected: (Map<String, String?> selection) {
+        final activeController = fieldController ?? controller;
+
         // Append the selected email to existing recipients
-        final text = controller.text;
+        final text = activeController.text;
         final parts = text.split(RegExp(r'[,;]'));
 
         // Remove the partial text and add the full email
@@ -1037,15 +1049,15 @@ class _EmailComposePageState extends State<EmailComposePage> {
         parts.add(selection['email'] ?? '');
 
         // Join with comma and add trailing comma for next entry
-        controller.text = parts.where((p) => p.trim().isNotEmpty).join(', ');
-        if (controller.text.isNotEmpty) {
-          controller.text += ', ';
-        }
-
-        // Move cursor to end
-        controller.selection = TextSelection.fromPosition(
-          TextPosition(offset: controller.text.length),
+        final updated = parts.where((p) => p.trim().isNotEmpty).join(', ');
+        final nextText = updated.isNotEmpty ? '$updated, ' : '';
+        activeController.value = TextEditingValue(
+          text: nextText,
+          selection: TextSelection.fromPosition(
+            TextPosition(offset: nextText.length),
+          ),
         );
+        syncBackToController();
       },
       optionsViewBuilder: (context, onSelected, options) {
         return Align(
@@ -1099,16 +1111,7 @@ class _EmailComposePageState extends State<EmailComposePage> {
         );
       },
       fieldViewBuilder: (context, textController, focusNode, onFieldSubmitted) {
-        // Sync with our controller
-        if (textController.text != controller.text) {
-          textController.text = controller.text;
-        }
-        // Listen to changes and sync back
-        textController.addListener(() {
-          if (controller.text != textController.text) {
-            controller.text = textController.text;
-          }
-        });
+        fieldController = textController;
 
         return TextFormField(
           controller: textController,
@@ -1128,6 +1131,7 @@ class _EmailComposePageState extends State<EmailComposePage> {
               : null,
           keyboardType: TextInputType.emailAddress,
           textInputAction: TextInputAction.next,
+          onChanged: (_) => syncBackToController(),
           onFieldSubmitted: (_) => onFieldSubmitted(),
         );
       },

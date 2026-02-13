@@ -17,22 +17,34 @@ import 'email_thread_page.dart';
 import 'email_compose_page.dart';
 
 /// Email folder types
-enum EmailFolder {
-  inbox,
-  sent,
-  outbox,
-  drafts,
-  archive,
-  spam,
-  garbage,
-  label,
-}
+enum EmailFolder { inbox, sent, outbox, drafts, archive, spam, garbage, label }
 
 class _NavigationRailLayout {
   final bool extended;
   final double width;
 
   const _NavigationRailLayout({required this.extended, required this.width});
+}
+
+class _FolderStats {
+  final int totalMessages;
+  final int unreadMessages;
+
+  const _FolderStats({
+    required this.totalMessages,
+    required this.unreadMessages,
+  });
+
+  static const empty = _FolderStats(totalMessages: 0, unreadMessages: 0);
+}
+
+enum _BulkThreadAction {
+  move,
+  archive,
+  reportSpam,
+  delete,
+  markRead,
+  markUnread,
 }
 
 /// Email browser page with folder navigation and thread list
@@ -74,7 +86,9 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
   String? _error;
   List<String> _labels = [];
   bool _isWideScreen = false;
-  Map<EmailFolder, int> _folderCounts = {};
+  Map<EmailFolder, _FolderStats> _folderStats = {};
+  final Set<String> _selectedThreadIds = <String>{};
+  bool _isApplyingBulkAction = false;
   final TextEditingController _searchController = TextEditingController();
   String _searchQuery = '';
 
@@ -97,17 +111,127 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
   StreamSubscription<EmailChangeEvent>? _emailSubscription;
   EventSubscription<EmailNotificationEvent>? _notificationSubscription;
 
-  Future<int> _countForStation(Future<List<EmailThread>> future) async {
+  bool get _isSelectionMode => _selectedThreadIds.isNotEmpty;
+
+  Future<_FolderStats> _computeStatsForStation(
+    Future<List<EmailThread>> future,
+  ) async {
     final threads = await future;
-    if (_currentStation != null) {
-      return threads.where((t) => t.station == _currentStation).length;
+    final filteredThreads = _currentStation != null
+        ? threads.where((t) => t.station == _currentStation)
+        : threads;
+
+    var totalMessages = 0;
+    var unreadMessages = 0;
+    for (final thread in filteredThreads) {
+      totalMessages += 1;
+      if (thread.isUnread) {
+        unreadMessages += 1;
+      }
     }
-    return threads.length;
+
+    return _FolderStats(
+      totalMessages: totalMessages,
+      unreadMessages: unreadMessages,
+    );
+  }
+
+  _FolderStats _computeStatsFromThreads(Iterable<EmailThread> threads) {
+    var totalMessages = 0;
+    var unreadMessages = 0;
+    for (final thread in threads) {
+      totalMessages += 1;
+      if (thread.isUnread) {
+        unreadMessages += 1;
+      }
+    }
+
+    return _FolderStats(
+      totalMessages: totalMessages,
+      unreadMessages: unreadMessages,
+    );
+  }
+
+  _FolderStats get _activeFolderStats {
+    if (_currentFolder == EmailFolder.label) {
+      return _computeStatsFromThreads(_threads);
+    }
+    return _folderStats[_currentFolder] ?? _FolderStats.empty;
   }
 
   PreferredSizeWidget _buildAppBar(ThemeData theme) {
-    final subtitle =
-        _currentLabel != null ? 'Label: $_currentLabel' : _getFolderTitle();
+    if (_isSelectionMode) {
+      final selectedCount = _selectedThreadIds.length;
+      return AppBar(
+        automaticallyImplyLeading: false,
+        leading: IconButton(
+          icon: const Icon(Icons.close),
+          tooltip: 'Cancel selection',
+          onPressed: _isApplyingBulkAction ? null : _clearSelection,
+        ),
+        title: Text('$selectedCount selected'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.drive_file_move_outline),
+            tooltip: 'Move selected',
+            onPressed: _isApplyingBulkAction
+                ? null
+                : () => _applyBulkAction(_BulkThreadAction.move),
+          ),
+          IconButton(
+            icon: const Icon(Icons.archive_outlined),
+            tooltip: 'Archive selected',
+            onPressed: _isApplyingBulkAction
+                ? null
+                : () => _applyBulkAction(_BulkThreadAction.archive),
+          ),
+          IconButton(
+            icon: const Icon(Icons.report_outlined),
+            tooltip: 'Report selected as spam',
+            onPressed: _isApplyingBulkAction
+                ? null
+                : () => _applyBulkAction(_BulkThreadAction.reportSpam),
+          ),
+          IconButton(
+            icon: const Icon(Icons.delete_outline),
+            tooltip: 'Delete selected',
+            onPressed: _isApplyingBulkAction
+                ? null
+                : () => _applyBulkAction(_BulkThreadAction.delete),
+          ),
+          PopupMenuButton<_BulkThreadAction>(
+            icon: const Icon(Icons.more_vert),
+            tooltip: 'More actions',
+            onSelected: (action) {
+              if (_isApplyingBulkAction) return;
+              _applyBulkAction(action);
+            },
+            itemBuilder: (context) => const [
+              PopupMenuItem(
+                value: _BulkThreadAction.markRead,
+                child: ListTile(
+                  leading: Icon(Icons.mark_email_read_outlined),
+                  title: Text('Mark selected as read'),
+                  contentPadding: EdgeInsets.zero,
+                ),
+              ),
+              PopupMenuItem(
+                value: _BulkThreadAction.markUnread,
+                child: ListTile(
+                  leading: Icon(Icons.mark_email_unread_outlined),
+                  title: Text('Mark selected as unread'),
+                  contentPadding: EdgeInsets.zero,
+                ),
+              ),
+            ],
+          ),
+        ],
+      );
+    }
+
+    final subtitle = _currentLabel != null
+        ? 'Label: $_currentLabel'
+        : _getFolderTitle();
 
     return AppBar(
       automaticallyImplyLeading: false,
@@ -131,12 +255,19 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
           Text(
             subtitle,
             style: theme.textTheme.labelMedium?.copyWith(
-              color: theme.colorScheme.onSurface.withValues(alpha:0.7),
+              color: theme.colorScheme.onSurface.withValues(alpha: 0.7),
             ),
           ),
         ],
       ),
       actions: [
+        IconButton(
+          icon: const Icon(Icons.checklist),
+          tooltip: 'Select conversations',
+          onPressed: _isSelectionMode
+              ? null
+              : _enterSelectionModeForVisibleThreads,
+        ),
         PopupMenuButton<String>(
           icon: const Icon(Icons.menu),
           onSelected: (value) {
@@ -146,6 +277,9 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
                 break;
               case 'labels':
                 _showLabelsSheet();
+                break;
+              case 'select':
+                _enterSelectionModeForVisibleThreads();
                 break;
               case 'accounts':
               case 'settings':
@@ -171,6 +305,14 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
                   contentPadding: EdgeInsets.zero,
                 ),
               ),
+            const PopupMenuItem(
+              value: 'select',
+              child: ListTile(
+                leading: Icon(Icons.checklist),
+                title: Text('Select conversations'),
+                contentPadding: EdgeInsets.zero,
+              ),
+            ),
             const PopupMenuDivider(),
             const PopupMenuItem(
               value: 'accounts',
@@ -230,7 +372,9 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
         final profileStorage = AppService().profileStorage;
         if (profileStorage != null) {
           final scopedStorage = ScopedProfileStorage.fromAbsolutePath(
-            profileStorage, storagePath);
+            profileStorage,
+            storagePath,
+          );
           _emailService.setStorage(scopedStorage);
         } else {
           _emailService.setStorage(FilesystemProfileStorage(storagePath));
@@ -239,7 +383,9 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
 
       await _emailService.initialize();
       _emailSubscription = _emailService.onEmailChange.listen(_onEmailChange);
-      _notificationSubscription = EventBus().on<EmailNotificationEvent>(_onEmailNotification);
+      _notificationSubscription = EventBus().on<EmailNotificationEvent>(
+        _onEmailNotification,
+      );
       await _loadLabels();
       await _loadFolderCounts();
       await _loadThreads();
@@ -254,16 +400,30 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
   }
 
   Future<void> _loadFolderCounts() async {
-    final counts = <EmailFolder, int>{};
-    counts[EmailFolder.inbox] = await _countForStation(_emailService.getInbox());
-    counts[EmailFolder.sent] = await _countForStation(_emailService.getSent());
-    counts[EmailFolder.outbox] = await _countForStation(_emailService.getOutbox());
-    counts[EmailFolder.drafts] = await _countForStation(_emailService.getDrafts());
-    counts[EmailFolder.archive] = await _countForStation(_emailService.getArchive());
-    counts[EmailFolder.spam] = await _countForStation(_emailService.getSpam());
-    counts[EmailFolder.garbage] = await _countForStation(_emailService.getGarbage());
+    final counts = <EmailFolder, _FolderStats>{};
+    counts[EmailFolder.inbox] = await _computeStatsForStation(
+      _emailService.getInbox(),
+    );
+    counts[EmailFolder.sent] = await _computeStatsForStation(
+      _emailService.getSent(),
+    );
+    counts[EmailFolder.outbox] = await _computeStatsForStation(
+      _emailService.getOutbox(),
+    );
+    counts[EmailFolder.drafts] = await _computeStatsForStation(
+      _emailService.getDrafts(),
+    );
+    counts[EmailFolder.archive] = await _computeStatsForStation(
+      _emailService.getArchive(),
+    );
+    counts[EmailFolder.spam] = await _computeStatsForStation(
+      _emailService.getSpam(),
+    );
+    counts[EmailFolder.garbage] = await _computeStatsForStation(
+      _emailService.getGarbage(),
+    );
     if (mounted) {
-      setState(() => _folderCounts = counts);
+      setState(() => _folderStats = counts);
     }
   }
 
@@ -370,8 +530,10 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Delete Label?'),
-        content: Text('Are you sure you want to delete the label "$label"?\n\n'
-            'Emails with this label will not be deleted, only the label will be removed.'),
+        content: Text(
+          'Are you sure you want to delete the label "$label"?\n\n'
+          'Emails with this label will not be deleted, only the label will be removed.',
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
@@ -447,6 +609,9 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
       if (mounted) {
         setState(() {
           _threads = threads;
+          _selectedThreadIds.removeWhere(
+            (id) => !_threads.any((t) => t.threadId == id),
+          );
           _isLoading = false;
           if (_selectedThread != null &&
               !_threads.any((t) => t.threadId == _selectedThread!.threadId)) {
@@ -490,21 +655,30 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
   String _getFolderTitle() {
     switch (_currentFolder) {
       case EmailFolder.inbox:
-        return _currentStation != null ? 'Inbox - $_currentStation' : 'Inbox';
+        return _currentStation != null
+            ? '${_folderLabelWithCount(EmailFolder.inbox)} - $_currentStation'
+            : _folderLabelWithCount(EmailFolder.inbox);
       case EmailFolder.sent:
-        return _currentStation != null ? 'Sent - $_currentStation' : 'Sent';
+        return _currentStation != null
+            ? '${_folderLabelWithCount(EmailFolder.sent)} - $_currentStation'
+            : _folderLabelWithCount(EmailFolder.sent);
       case EmailFolder.outbox:
-        return _currentStation != null ? 'Outbox - $_currentStation' : 'Outbox';
+        return _currentStation != null
+            ? '${_folderLabelWithCount(EmailFolder.outbox)} - $_currentStation'
+            : _folderLabelWithCount(EmailFolder.outbox);
       case EmailFolder.drafts:
-        return 'Drafts';
+        return _folderLabelWithCount(EmailFolder.drafts);
       case EmailFolder.archive:
-        return 'Archive';
+        return _folderLabelWithCount(EmailFolder.archive);
       case EmailFolder.spam:
-        return _currentStation != null ? 'Spam - $_currentStation' : 'Spam';
+        return _currentStation != null
+            ? '${_folderLabelWithCount(EmailFolder.spam)} - $_currentStation'
+            : _folderLabelWithCount(EmailFolder.spam);
       case EmailFolder.garbage:
-        return 'Trash';
+        return _folderLabelWithCount(EmailFolder.garbage);
       case EmailFolder.label:
-        return _currentLabel ?? 'Label';
+        final count = _threads.length;
+        return '${_currentLabel ?? 'Label'} ($count)';
     }
   }
 
@@ -535,18 +709,26 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
       _currentStation = station;
       _currentLabel = label;
       _selectedThread = null;
+      _selectedThreadIds.clear();
     });
     _loadThreads();
   }
 
   void _selectThread(EmailThread thread) {
+    if (_isSelectionMode) {
+      _toggleThreadSelection(thread);
+      return;
+    }
+
     // Drafts should open in compose mode for editing
     if (thread.isDraft) {
-      Navigator.of(context).push<EmailThread>(
-        MaterialPageRoute(
-          builder: (context) => EmailComposePage(editDraft: thread),
-        ),
-      ).then((_) => _loadThreads());
+      Navigator.of(context)
+          .push<EmailThread>(
+            MaterialPageRoute(
+              builder: (context) => EmailComposePage(editDraft: thread),
+            ),
+          )
+          .then((_) => _loadThreads());
       return;
     }
 
@@ -556,19 +738,251 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
       });
     } else {
       // Navigate to thread page on mobile
-      Navigator.of(context).push(
-        MaterialPageRoute(
-          builder: (context) => EmailThreadPage(thread: thread),
+      Navigator.of(context)
+          .push(
+            MaterialPageRoute(
+              builder: (context) => EmailThreadPage(thread: thread),
+            ),
+          )
+          .then((_) => _loadThreads());
+    }
+  }
+
+  void _enterSelectionModeForVisibleThreads() {
+    if (_visibleThreads.isEmpty) return;
+    setState(() {
+      _selectedThreadIds.clear();
+      _selectedThreadIds.add(_visibleThreads.first.threadId);
+    });
+  }
+
+  void _startThreadSelection(EmailThread thread) {
+    setState(() {
+      _selectedThreadIds.add(thread.threadId);
+    });
+  }
+
+  void _toggleThreadSelection(EmailThread thread) {
+    setState(() {
+      if (_selectedThreadIds.contains(thread.threadId)) {
+        _selectedThreadIds.remove(thread.threadId);
+      } else {
+        _selectedThreadIds.add(thread.threadId);
+      }
+    });
+  }
+
+  void _clearSelection() {
+    if (!_isSelectionMode) return;
+    setState(() {
+      _selectedThreadIds.clear();
+      _isApplyingBulkAction = false;
+    });
+  }
+
+  Future<void> _applyBulkAction(_BulkThreadAction action) async {
+    if (_selectedThreadIds.isEmpty || _isApplyingBulkAction) return;
+
+    final selectedThreads = _threads
+        .where((thread) => _selectedThreadIds.contains(thread.threadId))
+        .toList();
+    if (selectedThreads.isEmpty) {
+      _clearSelection();
+      return;
+    }
+
+    EmailStatus? moveTargetStatus;
+    if (action == _BulkThreadAction.move) {
+      moveTargetStatus = await _showMoveDestinationPicker(
+        selectedThreads.length,
+      );
+      if (moveTargetStatus == null) return;
+    }
+    if (!mounted) return;
+
+    if (action == _BulkThreadAction.delete) {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Delete selected?'),
+          content: Text(
+            'Move ${selectedThreads.length} selected conversation${selectedThreads.length == 1 ? '' : 's'} to trash?',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(context, true),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Theme.of(context).colorScheme.error,
+                foregroundColor: Theme.of(context).colorScheme.onError,
+              ),
+              child: const Text('Delete'),
+            ),
+          ],
         ),
-      ).then((_) => _loadThreads());
+      );
+      if (confirmed != true) return;
+    }
+
+    setState(() => _isApplyingBulkAction = true);
+
+    try {
+      var affectedCount = 0;
+      for (final thread in selectedThreads) {
+        switch (action) {
+          case _BulkThreadAction.archive:
+            await _emailService.archiveThread(thread);
+            affectedCount += 1;
+            break;
+          case _BulkThreadAction.move:
+            if (moveTargetStatus != null && thread.status != moveTargetStatus) {
+              await _emailService.moveThread(thread, moveTargetStatus);
+              affectedCount += 1;
+            }
+            break;
+          case _BulkThreadAction.reportSpam:
+            await _emailService.markAsSpam(thread);
+            affectedCount += 1;
+            break;
+          case _BulkThreadAction.delete:
+            await _emailService.deleteThread(thread);
+            affectedCount += 1;
+            break;
+          case _BulkThreadAction.markRead:
+            if (thread.status == EmailStatus.received && thread.isUnread) {
+              await _emailService.markThreadRead(thread);
+              affectedCount += 1;
+            }
+            break;
+          case _BulkThreadAction.markUnread:
+            if (thread.status == EmailStatus.received && !thread.isUnread) {
+              await _emailService.markThreadUnread(thread);
+              affectedCount += 1;
+            }
+            break;
+        }
+
+        if (_selectedThread?.threadId == thread.threadId) {
+          _selectedThread = null;
+        }
+      }
+
+      if (mounted) {
+        if (affectedCount > 0) {
+          final actionLabel = switch (action) {
+            _BulkThreadAction.move =>
+              'moved to ${_bulkMoveDestinationLabel(moveTargetStatus!)}',
+            _BulkThreadAction.archive => 'archived',
+            _BulkThreadAction.reportSpam => 'reported as spam',
+            _BulkThreadAction.delete => 'moved to trash',
+            _BulkThreadAction.markRead => 'marked as read',
+            _BulkThreadAction.markUnread => 'marked as unread',
+          };
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                '$affectedCount conversation${affectedCount == 1 ? '' : 's'} $actionLabel',
+              ),
+            ),
+          );
+        } else if (action == _BulkThreadAction.markRead ||
+            action == _BulkThreadAction.markUnread) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('No inbox conversations matched this action'),
+            ),
+          );
+        } else if (action == _BulkThreadAction.move &&
+            moveTargetStatus != null) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                'Selected conversations are already in ${_bulkMoveDestinationLabel(moveTargetStatus)}',
+              ),
+            ),
+          );
+        }
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _selectedThreadIds.clear();
+          _isApplyingBulkAction = false;
+        });
+      }
+      await _loadFolderCounts();
+      await _loadThreads();
+    }
+  }
+
+  Future<EmailStatus?> _showMoveDestinationPicker(int selectedCount) {
+    return showModalBottomSheet<EmailStatus>(
+      context: context,
+      builder: (context) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              title: Text(
+                'Move $selectedCount selected conversation${selectedCount == 1 ? '' : 's'}',
+                style: const TextStyle(fontWeight: FontWeight.w600),
+              ),
+            ),
+            const Divider(height: 1),
+            ListTile(
+              leading: const Icon(Icons.inbox_outlined),
+              title: const Text('Inbox'),
+              onTap: () => Navigator.pop(context, EmailStatus.received),
+            ),
+            ListTile(
+              leading: const Icon(Icons.archive_outlined),
+              title: const Text('Archive'),
+              onTap: () => Navigator.pop(context, EmailStatus.archived),
+            ),
+            ListTile(
+              leading: const Icon(Icons.report_outlined),
+              title: const Text('Spam'),
+              onTap: () => Navigator.pop(context, EmailStatus.spam),
+            ),
+            ListTile(
+              leading: const Icon(Icons.delete_outline),
+              title: const Text('Trash'),
+              onTap: () => Navigator.pop(context, EmailStatus.deleted),
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _bulkMoveDestinationLabel(EmailStatus status) {
+    switch (status) {
+      case EmailStatus.received:
+        return 'Inbox';
+      case EmailStatus.archived:
+        return 'Archive';
+      case EmailStatus.spam:
+        return 'Spam';
+      case EmailStatus.deleted:
+        return 'Trash';
+      case EmailStatus.draft:
+        return 'Drafts';
+      case EmailStatus.pending:
+        return 'Outbox';
+      case EmailStatus.sent:
+        return 'Sent';
+      case EmailStatus.failed:
+        return 'Outbox';
     }
   }
 
   Future<void> _composeEmail() async {
     final result = await Navigator.of(context).push<EmailThread>(
-      MaterialPageRoute(
-        builder: (context) => EmailComposePage(),
-      ),
+      MaterialPageRoute(builder: (context) => EmailComposePage()),
     );
 
     if (result != null) {
@@ -589,7 +1003,9 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
 
         return Scaffold(
           key: _scaffoldKey,
-          backgroundColor: theme.colorScheme.surfaceVariant.withValues(alpha:0.25),
+          backgroundColor: theme.colorScheme.surfaceVariant.withValues(
+            alpha: 0.25,
+          ),
           appBar: _buildAppBar(theme),
           floatingActionButton: FloatingActionButton.extended(
             onPressed: _composeEmail,
@@ -630,10 +1046,7 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
         Expanded(
           flex: 6,
           child: _selectedThread != null
-              ? EmailThreadPage(
-                  thread: _selectedThread!,
-                  embedded: true,
-                )
+              ? EmailThreadPage(thread: _selectedThread!, embedded: true)
               : _buildEmptyState(),
         ),
       ],
@@ -666,7 +1079,10 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
           mainAxisSize: MainAxisSize.min,
           children: [
             ListTile(
-              title: const Text('Labels', style: TextStyle(fontWeight: FontWeight.bold)),
+              title: const Text(
+                'Labels',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
               trailing: IconButton(
                 icon: const Icon(Icons.add),
                 onPressed: () {
@@ -680,24 +1096,31 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
             if (_labels.isEmpty)
               const Padding(
                 padding: EdgeInsets.all(16),
-                child: Text('No labels yet', style: TextStyle(color: Colors.grey)),
+                child: Text(
+                  'No labels yet',
+                  style: TextStyle(color: Colors.grey),
+                ),
               )
             else
-              ...(_labels.map((label) => ListTile(
-                leading: const Icon(Icons.label),
-                title: Text(label),
-                trailing: IconButton(
-                  icon: const Icon(Icons.delete, size: 20),
-                  onPressed: () {
-                    Navigator.pop(context);
-                    _deleteLabel(label);
-                  },
-                ),
-                onTap: () {
-                  Navigator.pop(context);
-                  _selectFolder(EmailFolder.label, label: label);
-                },
-              )).toList()),
+              ...(_labels
+                  .map(
+                    (label) => ListTile(
+                      leading: const Icon(Icons.label),
+                      title: Text(label),
+                      trailing: IconButton(
+                        icon: const Icon(Icons.delete, size: 20),
+                        onPressed: () {
+                          Navigator.pop(context);
+                          _deleteLabel(label);
+                        },
+                      ),
+                      onTap: () {
+                        Navigator.pop(context);
+                        _selectFolder(EmailFolder.label, label: label);
+                      },
+                    ),
+                  )
+                  .toList()),
           ],
         ),
       ),
@@ -721,7 +1144,10 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
                 onPressed: () => _scaffoldKey.currentState?.openDrawer(),
                 tooltip: 'Folders',
               ),
-            Icon(Icons.search, color: theme.colorScheme.onSurface.withValues(alpha:0.7)),
+            Icon(
+              Icons.search,
+              color: theme.colorScheme.onSurface.withValues(alpha: 0.7),
+            ),
             const SizedBox(width: 8),
             Expanded(
               child: TextField(
@@ -756,7 +1182,10 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
         child: Column(
           children: [
             ListTile(
-              title: const Text('Folders', style: TextStyle(fontWeight: FontWeight.bold)),
+              title: const Text(
+                'Folders',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
               trailing: IconButton(
                 icon: const Icon(Icons.close),
                 onPressed: () => Navigator.pop(context),
@@ -766,11 +1195,11 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
             Expanded(
               child: ListView(
                 children: _folderOrder.map((folder) {
-                  final count = _folderCounts[folder] ?? 0;
+                  final stats = _folderStats[folder] ?? _FolderStats.empty;
                   return ListTile(
                     leading: Icon(_getFolderIcon(folder)),
-                    title: Text(_folderLabel(folder)),
-                    trailing: count > 0 ? Text('$count') : null,
+                    title: Text(_folderLabelWithCount(folder)),
+                    trailing: _buildFolderStatsTrailing(theme, stats),
                     selected: folder == _currentFolder,
                     onTap: () {
                       Navigator.pop(context);
@@ -791,9 +1220,8 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
     double totalWidth,
   ) {
     // Keep labels visible whenever the label text can fit the rail width.
-    final textStyle = theme.textTheme.bodyLarge?.copyWith(
-          fontWeight: FontWeight.w600,
-        ) ??
+    final textStyle =
+        theme.textTheme.bodyLarge?.copyWith(fontWeight: FontWeight.w600) ??
         const TextStyle(fontWeight: FontWeight.w600);
     final longestLabel = _folderOrder
         .map(_folderLabel)
@@ -845,14 +1273,11 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
       extended: railLayout.extended,
       selectedIndex: selectedIndex,
       destinations: _folderOrder.map((folder) {
-        final count = _folderCounts[folder] ?? 0;
+        final stats = _folderStats[folder] ?? _FolderStats.empty;
         return NavigationRailDestination(
-          icon: _buildNavIcon(theme, folder, false, count),
-          selectedIcon: _buildNavIcon(theme, folder, true, count),
-          label: Text(
-            _folderLabel(folder),
-            style: folderLabelStyle,
-          ),
+          icon: _buildNavIcon(theme, folder, false, stats),
+          selectedIcon: _buildNavIcon(theme, folder, true, stats),
+          label: Text(_folderLabelWithCount(folder), style: folderLabelStyle),
         );
       }).toList(),
       onDestinationSelected: (index) => _selectFolder(_folderOrder[index]),
@@ -871,33 +1296,30 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
     ThemeData theme,
     EmailFolder folder,
     bool isSelected,
-    int count,
+    _FolderStats stats,
   ) {
-    final color =
-        isSelected ? theme.colorScheme.primary : theme.colorScheme.onSurfaceVariant;
+    final color = isSelected
+        ? theme.colorScheme.primary
+        : theme.colorScheme.onSurfaceVariant;
     return Stack(
       clipBehavior: Clip.none,
       children: [
         Icon(_getFolderIcon(folder), color: color),
-        if (count > 0)
+        if (stats.unreadMessages > 0)
           Positioned(
             right: -8,
             top: -6,
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
               decoration: BoxDecoration(
-                color: isSelected
-                    ? theme.colorScheme.primary
-                    : theme.colorScheme.secondaryContainer,
+                color: theme.colorScheme.error,
                 borderRadius: BorderRadius.circular(10),
               ),
               child: Text(
-                count.toString(),
+                _shortCount(stats.unreadMessages),
                 style: TextStyle(
-                  color: isSelected
-                      ? theme.colorScheme.onPrimary
-                      : theme.colorScheme.onSecondaryContainer,
-                  fontSize: 11,
+                  color: theme.colorScheme.onError,
+                  fontSize: 10,
                   fontWeight: FontWeight.w600,
                 ),
               ),
@@ -907,8 +1329,28 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
     );
   }
 
+  Widget? _buildFolderStatsTrailing(ThemeData theme, _FolderStats stats) {
+    if (stats.unreadMessages <= 0) return null;
+
+    return Text(
+      '${_shortCount(stats.unreadMessages)} unread',
+      style: theme.textTheme.labelSmall?.copyWith(
+        color: theme.colorScheme.onSurfaceVariant,
+        fontWeight: FontWeight.w600,
+      ),
+    );
+  }
+
+  String _shortCount(int value) {
+    if (value < 1000) return '$value';
+    final inK = value / 1000;
+    if (inK >= 10) return '${inK.floor()}k';
+    return '${inK.toStringAsFixed(1)}k';
+  }
+
   Widget _buildFolderHeader(ThemeData theme) {
-    final count = _visibleThreads.length;
+    final threadCount = _visibleThreads.length;
+    final folderStats = _activeFolderStats;
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 10),
@@ -916,7 +1358,7 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
         color: theme.colorScheme.surface,
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withValues(alpha:0.05),
+            color: Colors.black.withValues(alpha: 0.05),
             blurRadius: 8,
             offset: const Offset(0, 2),
           ),
@@ -925,7 +1367,7 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
       child: Row(
         children: [
           _buildFilterPill(
-            label: _folderLabel(_currentFolder),
+            label: _folderLabelWithCount(_currentFolder),
             icon: _getFolderIcon(_currentFolder),
             background: theme.colorScheme.primaryContainer,
             foreground: theme.colorScheme.onPrimaryContainer,
@@ -950,7 +1392,8 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
             ),
           const Spacer(),
           Text(
-            '$count thread${count == 1 ? '' : 's'}',
+            '${folderStats.unreadMessages} unread'
+            ' · $threadCount thread${threadCount == 1 ? '' : 's'}',
             style: theme.textTheme.labelMedium?.copyWith(
               color: theme.colorScheme.onSurfaceVariant,
             ),
@@ -979,10 +1422,7 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
           const SizedBox(width: 6),
           Text(
             label,
-            style: TextStyle(
-              color: foreground,
-              fontWeight: FontWeight.w600,
-            ),
+            style: TextStyle(color: foreground, fontWeight: FontWeight.w600),
           ),
         ],
       ),
@@ -1005,10 +1445,7 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
               (folder) => Padding(
                 padding: const EdgeInsets.only(right: 8),
                 child: ChoiceChip(
-                  label: Text(
-                    _folderLabel(folder),
-                    style: chipLabelStyle,
-                  ),
+                  label: Text(_folderLabel(folder), style: chipLabelStyle),
                   avatar: Icon(_getFolderIcon(folder), size: 18),
                   selected: _currentFolder == folder,
                   onSelected: (_) => _selectFolder(folder),
@@ -1053,6 +1490,14 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
     }
   }
 
+  String _folderLabelWithCount(EmailFolder folder) {
+    final base = _folderLabel(folder);
+    final count = folder == EmailFolder.label
+        ? _threads.length
+        : (_folderStats[folder]?.totalMessages ?? 0);
+    return '$base ($count)';
+  }
+
   Widget _buildThreadList() {
     final threads = _visibleThreads;
 
@@ -1095,7 +1540,7 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
       child: ListView.separated(
         padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
         itemCount: threads.length,
-        separatorBuilder: (_, __) => const SizedBox(height: 8),
+        separatorBuilder: (_, _) => const SizedBox(height: 8),
         itemBuilder: (context, index) {
           final thread = threads[index];
           return _buildSwipeableThreadTile(thread);
@@ -1105,6 +1550,10 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
   }
 
   Widget _buildSwipeableThreadTile(EmailThread thread) {
+    if (_isSelectionMode) {
+      return _buildThreadTile(thread);
+    }
+
     final theme = Theme.of(context);
     return Dismissible(
       key: Key(thread.threadId),
@@ -1162,9 +1611,26 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
 
   Widget _buildThreadTile(EmailThread thread) {
     final theme = Theme.of(context);
+    final isThreadSelected = _selectedThreadIds.contains(thread.threadId);
     final isSelected = _selectedThread?.threadId == thread.threadId;
     final isUnread = thread.isUnread;
     final hasAttachment = thread.hasAttachments;
+    final baseTileColor = isUnread
+        ? theme.colorScheme.primaryContainer.withValues(alpha: 0.5)
+        : theme.colorScheme.surface;
+    final tileColor = isThreadSelected
+        ? theme.colorScheme.secondaryContainer
+        : isSelected
+        ? theme.colorScheme.primaryContainer
+        : baseTileColor;
+    final borderColor = isThreadSelected
+        ? theme.colorScheme.secondary
+        : isSelected
+        ? theme.colorScheme.primary
+        : isUnread
+        ? theme.colorScheme.primary.withValues(alpha: 0.65)
+        : theme.colorScheme.outlineVariant.withValues(alpha: 0.45);
+    final borderWidth = isUnread ? 1.6 : 0.8;
 
     // Determine display name based on folder
     String displayName;
@@ -1177,14 +1643,28 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
     }
 
     return Card(
-      elevation: isSelected ? 3 : 0,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      color:
-          isSelected ? theme.colorScheme.primaryContainer : theme.colorScheme.surface,
+      elevation: isSelected || isThreadSelected ? 3 : 0,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(color: borderColor, width: borderWidth),
+      ),
+      color: tileColor,
       child: InkWell(
         borderRadius: BorderRadius.circular(12),
-        onTap: () => _selectThread(thread),
-        onLongPress: () => _showThreadActions(thread),
+        onTap: () {
+          if (_isSelectionMode) {
+            _toggleThreadSelection(thread);
+            return;
+          }
+          _selectThread(thread);
+        },
+        onLongPress: () {
+          if (_isSelectionMode) {
+            _toggleThreadSelection(thread);
+            return;
+          }
+          _startThreadSelection(thread);
+        },
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
           child: Column(
@@ -1193,12 +1673,32 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  if (_isSelectionMode)
+                    Padding(
+                      padding: const EdgeInsets.only(right: 8, top: 2),
+                      child: Checkbox(
+                        value: isThreadSelected,
+                        onChanged: (_) => _toggleThreadSelection(thread),
+                      ),
+                    ),
+                  if (isUnread)
+                    Container(
+                      width: 5,
+                      height: 54,
+                      margin: const EdgeInsets.only(right: 10, top: 1),
+                      decoration: BoxDecoration(
+                        color: theme.colorScheme.primary,
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                    ),
                   CircleAvatar(
                     backgroundColor: isUnread
                         ? theme.colorScheme.primary
                         : theme.colorScheme.surfaceVariant,
                     child: Text(
-                      displayName.isNotEmpty ? displayName[0].toUpperCase() : '?',
+                      displayName.isNotEmpty
+                          ? displayName[0].toUpperCase()
+                          : '?',
                       style: TextStyle(
                         color: isUnread
                             ? theme.colorScheme.onPrimary
@@ -1234,11 +1734,12 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
                                     thread.subject.isNotEmpty
                                         ? thread.subject
                                         : '(No subject)',
-                                    style: theme.textTheme.titleMedium?.copyWith(
-                                      fontWeight: isUnread
-                                          ? FontWeight.w700
-                                          : FontWeight.w600,
-                                    ),
+                                    style: theme.textTheme.titleMedium
+                                        ?.copyWith(
+                                          fontWeight: isUnread
+                                              ? FontWeight.w700
+                                              : FontWeight.w600,
+                                        ),
                                     maxLines: 1,
                                     overflow: TextOverflow.ellipsis,
                                   ),
@@ -1251,11 +1752,31 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
                                 Text(
                                   _formatDate(thread.lastMessageTime),
                                   style: theme.textTheme.labelSmall?.copyWith(
-                                    color: theme.colorScheme.onSurfaceVariant,
+                                    color: isUnread
+                                        ? theme.colorScheme.primary
+                                        : theme.colorScheme.onSurfaceVariant,
+                                    fontWeight: isUnread
+                                        ? FontWeight.w700
+                                        : FontWeight.w500,
                                   ),
                                 ),
                                 const SizedBox(height: 6),
                                 _buildStatusChip(thread, compact: true),
+                                if (!_isSelectionMode)
+                                  IconButton(
+                                    icon: const Icon(
+                                      Icons.more_horiz,
+                                      size: 18,
+                                    ),
+                                    visualDensity: VisualDensity.compact,
+                                    padding: EdgeInsets.zero,
+                                    constraints: const BoxConstraints(
+                                      minWidth: 28,
+                                      minHeight: 28,
+                                    ),
+                                    tooltip: 'Actions',
+                                    onPressed: () => _showThreadActions(thread),
+                                  ),
                               ],
                             ),
                           ],
@@ -1271,9 +1792,12 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
                     ? thread.preview
                     : 'No message preview',
                 style: theme.textTheme.bodyMedium?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant,
+                  color: isUnread
+                      ? theme.colorScheme.onSurface
+                      : theme.colorScheme.onSurfaceVariant,
                   height: 1.2,
                   fontSize: 13,
+                  fontWeight: isUnread ? FontWeight.w500 : FontWeight.w400,
                 ),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
@@ -1283,6 +1807,13 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
                 spacing: 6,
                 runSpacing: 4,
                 children: [
+                  if (isUnread)
+                    _buildFilterPill(
+                      label: 'Unread',
+                      icon: Icons.mark_email_unread_outlined,
+                      background: theme.colorScheme.primary,
+                      foreground: theme.colorScheme.onPrimary,
+                    ),
                   if (hasAttachment)
                     _buildFilterPill(
                       label: 'Attachment',
@@ -1319,9 +1850,9 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
     return Container(
       padding: padding,
       decoration: BoxDecoration(
-        color: color.withValues(alpha:0.15),
+        color: color.withValues(alpha: 0.15),
         borderRadius: BorderRadius.circular(radius),
-        border: Border.all(color: color.withValues(alpha:0.3)),
+        border: Border.all(color: color.withValues(alpha: 0.3)),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -1347,9 +1878,7 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
       label: Text(label),
       avatar: const Icon(Icons.label, size: 16),
       backgroundColor: theme.colorScheme.surfaceVariant,
-      labelStyle: TextStyle(
-        color: theme.colorScheme.onSurface,
-      ),
+      labelStyle: TextStyle(color: theme.colorScheme.onSurface),
       onPressed: () => _selectFolder(EmailFolder.label, label: label),
     );
   }
@@ -1418,11 +1947,14 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
                 title: const Text('Edit Draft'),
                 onTap: () {
                   Navigator.pop(context);
-                  Navigator.of(this.context).push<EmailThread>(
-                    MaterialPageRoute(
-                      builder: (context) => EmailComposePage(editDraft: thread),
-                    ),
-                  ).then((_) => _loadThreads());
+                  Navigator.of(this.context)
+                      .push<EmailThread>(
+                        MaterialPageRoute(
+                          builder: (context) =>
+                              EmailComposePage(editDraft: thread),
+                        ),
+                      )
+                      .then((_) => _loadThreads());
                 },
               ),
             if (!thread.isDraft) ...[
@@ -1431,11 +1963,14 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
                 title: const Text('Reply'),
                 onTap: () {
                   Navigator.pop(context);
-                  Navigator.of(this.context).push<EmailThread>(
-                    MaterialPageRoute(
-                      builder: (context) => EmailComposePage(replyTo: thread),
-                    ),
-                  ).then((_) => _loadThreads());
+                  Navigator.of(this.context)
+                      .push<EmailThread>(
+                        MaterialPageRoute(
+                          builder: (context) =>
+                              EmailComposePage(replyTo: thread),
+                        ),
+                      )
+                      .then((_) => _loadThreads());
                 },
               ),
               ListTile(
@@ -1443,12 +1978,14 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
                 title: const Text('Reply All'),
                 onTap: () {
                   Navigator.pop(context);
-                  Navigator.of(this.context).push<EmailThread>(
-                    MaterialPageRoute(
-                      builder: (context) =>
-                          EmailComposePage(replyTo: thread, replyAll: true),
-                    ),
-                  ).then((_) => _loadThreads());
+                  Navigator.of(this.context)
+                      .push<EmailThread>(
+                        MaterialPageRoute(
+                          builder: (context) =>
+                              EmailComposePage(replyTo: thread, replyAll: true),
+                        ),
+                      )
+                      .then((_) => _loadThreads());
                 },
               ),
               ListTile(
@@ -1456,12 +1993,14 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
                 title: const Text('Forward'),
                 onTap: () {
                   Navigator.pop(context);
-                  Navigator.of(this.context).push<EmailThread>(
-                    MaterialPageRoute(
-                      builder: (context) =>
-                          EmailComposePage(forwardFrom: thread),
-                    ),
-                  ).then((_) => _loadThreads());
+                  Navigator.of(this.context)
+                      .push<EmailThread>(
+                        MaterialPageRoute(
+                          builder: (context) =>
+                              EmailComposePage(forwardFrom: thread),
+                        ),
+                      )
+                      .then((_) => _loadThreads());
                 },
               ),
             ],
@@ -1503,10 +2042,30 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
                   }
                 },
               ),
+            if (thread.status == EmailStatus.received && thread.isUnread)
+              ListTile(
+                leading: const Icon(Icons.mark_email_read_outlined),
+                title: const Text('Mark as read'),
+                onTap: () async {
+                  Navigator.pop(context);
+                  await _emailService.markThreadRead(thread);
+                  _loadThreads();
+                },
+              ),
+            if (thread.status == EmailStatus.received && !thread.isUnread)
+              ListTile(
+                leading: const Icon(Icons.mark_email_unread_outlined),
+                title: const Text('Mark as unread'),
+                onTap: () async {
+                  Navigator.pop(context);
+                  await _emailService.markThreadUnread(thread);
+                  _loadThreads();
+                },
+              ),
             if (thread.status != EmailStatus.spam)
               ListTile(
                 leading: const Icon(Icons.report),
-                title: const Text('Mark as Spam'),
+                title: const Text('Report as spam'),
                 onTap: () async {
                   Navigator.pop(context);
                   await _emailService.markAsSpam(thread);
@@ -1531,8 +2090,10 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
             if (thread.status == EmailStatus.deleted)
               ListTile(
                 leading: const Icon(Icons.delete_forever, color: Colors.red),
-                title: const Text('Delete Permanently',
-                    style: TextStyle(color: Colors.red)),
+                title: const Text(
+                  'Delete Permanently',
+                  style: TextStyle(color: Colors.red),
+                ),
                 onTap: () async {
                   Navigator.pop(context);
                   await _emailService.permanentlyDelete(thread);
@@ -1597,10 +2158,7 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
             const SizedBox(height: 16),
             Text(
               message,
-              style: TextStyle(
-                fontSize: 16,
-                color: Colors.grey[600],
-              ),
+              style: TextStyle(fontSize: 16, color: Colors.grey[600]),
               textAlign: TextAlign.center,
             ),
           ],
@@ -1614,21 +2172,24 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(Icons.mail_outline,
-              size: 72, color: Theme.of(context).colorScheme.onSurfaceVariant),
+          Icon(
+            Icons.mail_outline,
+            size: 72,
+            color: Theme.of(context).colorScheme.onSurfaceVariant,
+          ),
           const SizedBox(height: 12),
           Text(
             'Select a conversation to read',
             style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
-                ),
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
           ),
           const SizedBox(height: 8),
           Text(
             'Stay on top of multi-station mail with the preview pane.',
             style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
-                ),
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
           ),
         ],
       ),
