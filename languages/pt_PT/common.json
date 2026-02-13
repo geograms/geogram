@@ -1355,5 +1355,15 @@
   "open_folder": "Abrir pasta",
   "could_not_open_folder": "Não foi possível abrir a pasta",
   "encrypting_progress": "A encriptar: {0}/{1} ficheiros ({2}%)",
-  "decrypting_progress": "A desencriptar: {0}/{1} ficheiros ({2}%)"
+  "decrypting_progress": "A desencriptar: {0}/{1} ficheiros ({2}%)",
+  "delete_devices": "Eliminar Dispositivos",
+  "delete_devices_confirm": "Tem a certeza de que quer eliminar {0} dispositivo(s)? Esta ação não pode ser desfeita.",
+  "empty_folder": "Esvaziar pasta",
+  "empty_folder_confirm": "Mover todos os {1} dispositivo(s) de \"{0}\" para Descobertos?",
+  "point": "Marcar",
+  "pointed": "Marcado",
+  "points": "Pontos",
+  "select_app_type": "Selecionar tipo de app",
+  "unpointed": "Desmarcado",
+  "whats_new_in_version": "Novidades na v{0}"
 }
