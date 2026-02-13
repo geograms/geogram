@@ -603,6 +603,7 @@ class AppService {
       // Process template
       final html = themeService.processTemplate(template, {
         'TITLE': _currentCallsign ?? 'Blog',
+        'COLLECTION_NAME': _currentCallsign ?? 'Blog',
         'APP_NAME': _currentCallsign ?? 'Blog',
         'APP_DESCRIPTION': '${publishedPosts.length} post${publishedPosts.length != 1 ? 's' : ''}',
         'CONTENT': postsHtml.toString(),
@@ -931,6 +932,7 @@ class AppService {
       // Process template
       final html = themeService.processTemplate(template, {
         'TITLE': _currentCallsign ?? 'Chat',
+        'COLLECTION_NAME': _currentCallsign ?? 'Chat',
         'APP_NAME': _currentCallsign ?? 'Chat',
         'APP_DESCRIPTION': '${channels.length} channel${channels.length != 1 ? 's' : ''}',
         'CONTENT': messagesHtml.toString(),
