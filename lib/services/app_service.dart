@@ -327,10 +327,10 @@ class AppService {
 
       contentBuffer.writeln('</div>');
 
-      // Generate dynamic menu items
-      final menuItems = WebNavigation.generateDeviceMenuItems(
+      // Generate dynamic menu items based on available public apps
+      final menuItems = await generateDeviceMenu(
         activeApp: 'home',
-        hasBlog: recentPosts.isNotEmpty,
+        appsPath: appsPath,
         isRootLevel: true,
       );
 
@@ -594,10 +594,10 @@ class AppService {
         }
       }
 
-      // Generate dynamic menu items
-      final menuItems = WebNavigation.generateDeviceMenuItems(
+      // Generate dynamic menu items based on available public apps
+      final menuItems = await generateDeviceMenu(
         activeApp: 'blog',
-        hasBlog: true,
+        appsPath: p.dirname(blogAppPath),
       );
 
       // Process template
@@ -714,6 +714,84 @@ class AppService {
     return null;
   }
 
+  /// Detect which apps have public content in the given apps directory.
+  /// Checks each app directory for existence and non-private visibility.
+  /// [appsPath] defaults to the current profile's apps directory.
+  /// [storage] optional ProfileStorage; falls back to filesystem when null.
+  Future<Map<String, bool>> getPublicApps({
+    String? appsPath,
+    ProfileStorage? storage,
+  }) async {
+    final result = <String, bool>{
+      'blog': false,
+      'chat': false,
+      'events': false,
+      'places': false,
+      'files': false,
+      'alerts': false,
+    };
+
+    final effectiveStorage = storage ?? _profileStorage;
+    final dirPath = appsPath ?? _appsDir?.path;
+    if (dirPath == null) return result;
+
+    try {
+      if (effectiveStorage != null) {
+        final scopedStorage = ScopedProfileStorage.fromAbsolutePath(
+            effectiveStorage, dirPath);
+        for (final appType in result.keys) {
+          if (!await scopedStorage.directoryExists(appType)) continue;
+          final appJs = await scopedStorage.readString('$appType/app.js');
+          if (appJs == null) continue;
+          try {
+            final data = jsonDecode(appJs) as Map<String, dynamic>;
+            if (data['visibility'] == 'private') continue;
+          } catch (_) {}
+          result[appType] = true;
+        }
+      } else {
+        for (final appType in result.keys) {
+          final appDir = Directory('$dirPath/$appType');
+          if (!await appDir.exists()) continue;
+          final appJsFile = File('$dirPath/$appType/app.js');
+          if (!await appJsFile.exists()) continue;
+          try {
+            final data =
+                jsonDecode(await appJsFile.readAsString()) as Map<String, dynamic>;
+            if (data['visibility'] == 'private') continue;
+          } catch (_) {}
+          result[appType] = true;
+        }
+      }
+    } catch (_) {}
+
+    return result;
+  }
+
+  /// Generate device menu items based on actually available public apps.
+  /// [activeApp] the currently active app ID.
+  /// [appsPath] defaults to the current profile's apps directory.
+  /// [storage] optional ProfileStorage; falls back to the profile's storage.
+  /// [isRootLevel] true for pages served at the device root (/{callsign}/).
+  Future<String> generateDeviceMenu({
+    required String activeApp,
+    String? appsPath,
+    ProfileStorage? storage,
+    bool isRootLevel = false,
+  }) async {
+    final apps = await getPublicApps(appsPath: appsPath, storage: storage);
+    return WebNavigation.generateDeviceMenuItems(
+      activeApp: activeApp,
+      hasBlog: apps['blog']!,
+      hasChat: apps['chat']!,
+      hasEvents: apps['events']!,
+      hasPlaces: apps['places']!,
+      hasFiles: apps['files']!,
+      hasAlerts: apps['alerts']!,
+      isRootLevel: isRootLevel,
+    );
+  }
+
   /// Generate chat index.html with IRC-style retro interface
   /// This is public so it can be called from WebsocketService for on-demand creation
   Future<void> generateChatIndex(String chatAppPath) async {
@@ -807,29 +885,10 @@ class AppService {
       });
 
       // Determine which apps are available for this app
-      // chatAppPath is like /path/to/app/chat, so parent is the apps dir
-      final parentPath = p.dirname(chatAppPath);
-      bool hasBlog;
-      bool hasEvents;
-      bool hasPlaces;
-      if (_profileStorage != null) {
-        final parentStorage = ScopedProfileStorage.fromAbsolutePath(_profileStorage!, parentPath);
-        hasBlog = await parentStorage.directoryExists('blog');
-        hasEvents = await parentStorage.directoryExists('events');
-        hasPlaces = await parentStorage.directoryExists('places');
-      } else {
-        hasBlog = await Directory('$parentPath/blog').exists();
-        hasEvents = await Directory('$parentPath/events').exists();
-        hasPlaces = await Directory('$parentPath/places').exists();
-      }
-
-      // Generate menu items for device pages
-      final menuItems = WebNavigation.generateDeviceMenuItems(
+      // Generate dynamic menu items based on available public apps
+      final menuItems = await generateDeviceMenu(
         activeApp: 'chat',
-        hasChat: true,
-        hasBlog: hasBlog,
-        hasEvents: hasEvents,
-        hasPlaces: hasPlaces,
+        appsPath: p.dirname(chatAppPath),
       );
 
       // Process template

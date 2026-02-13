@@ -2556,27 +2556,31 @@ Generates `<li>` menu items for web page navigation. Pure Dart library (no Flutt
 
 **Format:** `station > home | chat | blog` (station pages) or `home | chat | blog` (device pages)
 
-**Methods:**
+**Path modes:**
+- `isStationPage: true` - absolute paths: `/chat/`
+- `isRootLevel: true` - root-relative: `./chat/` (for pages at `/{callsign}/`)
+- default (sub-level) - up-one-level: `../chat/` (for pages at `/{callsign}/blog/`)
 
-**generateStationMenuItems** - For station server pages (absolute paths like `/chat/`, prefixed with "station >")
+**Low-level methods (WebNavigation):**
+
+`generateStationMenuItems` - For station server pages (absolute paths, prefixed with "station >")
+
+`generateDeviceMenuItems` - For device pages (relative paths, `isRootLevel` controls prefix)
+
+**Unified method (AppService):**
+
+For device pages, always use `AppService().generateDeviceMenu()` instead of calling `WebNavigation.generateDeviceMenuItems()` directly. This method auto-detects which apps are publicly available by scanning sibling app directories.
+
 ```dart
-static String generateStationMenuItems({
-  required String activeApp,
-  bool hasBlog = false, bool hasChat = true, bool hasEvents = false,
-  bool hasPlaces = false, bool hasFiles = false, bool hasAlerts = false,
-  bool hasDownload = false,
-})
+// In any page generator:
+final menuItems = await AppService().generateDeviceMenu(
+  activeApp: 'chat',
+  appsPath: p.dirname(chatAppPath),  // optional, defaults to profile apps dir
+  isRootLevel: false,                // true for /{callsign}/ root pages
+);
 ```
 
-**generateDeviceMenuItems** - For device/collection pages (relative paths like `../chat/`)
-```dart
-static String generateDeviceMenuItems({
-  required String activeApp,
-  bool hasBlog = false, bool hasChat = true, bool hasEvents = false,
-  bool hasPlaces = false, bool hasFiles = false, bool hasAlerts = false,
-  bool hasDownload = false,
-})
-```
+The detection (`AppService().getPublicApps()`) checks each app directory for existence and non-private visibility via `app.js`.
 
 **Usage in Templates:**
 Templates use `{{MENU_ITEMS}}` placeholder inside `<ul class="menu__inner">`:
@@ -2588,27 +2592,17 @@ Templates use `{{MENU_ITEMS}}` placeholder inside `<ul class="menu__inner">`:
 </nav>
 ```
 
-**Usage in Generators:**
-```dart
-final menuItems = WebNavigation.generateDeviceMenuItems(
-  activeApp: 'blog', hasBlog: true,
-);
-final html = themeService.processTemplate(template, {
-  'MENU_ITEMS': menuItems,
-});
-```
-
 **Supported Apps:**
-| ID | Label | Station Path | Device Path |
-|----|-------|--------------|-------------|
-| home | home | / | ../ |
-| blog | blog | /blog/ | ../blog/ |
-| chat | chat | /chat/ | ../chat/ |
-| events | events | /events/ | ../events/ |
-| places | places | /places/ | ../places/ |
-| files | files | /files/ | ../files/ |
-| alerts | alerts | /alerts/ | ../alerts/ |
-| download | download | /download/ | ../download/ |
+| ID | Label | Station Path | Device Path (sub) | Device Path (root) |
+|----|-------|--------------|-------------------|-------------------|
+| home | home | / | ../ | ./ |
+| blog | blog | /blog/ | ../blog/ | ./blog/ |
+| chat | chat | /chat/ | ../chat/ | ./chat/ |
+| events | events | /events/ | ../events/ | ./events/ |
+| places | places | /places/ | ../places/ | ./places/ |
+| files | files | /files/ | ../files/ | ./files/ |
+| alerts | alerts | /alerts/ | ../alerts/ | ./alerts/ |
+| download | download | /download/ | ../download/ | ./download/ |
 
 **CSS Classes (in themes/default/styles.css):**
 ```css
@@ -2623,7 +2617,8 @@ final html = themeService.processTemplate(template, {
 |----------|--------|---------|
 | `lib/station.dart` | `generateStationMenuItems()` | Station chat/homepage |
 | `lib/cli/pure_station.dart` | `generateStationMenuItems()` | Station chat/homepage |
-| `lib/services/app_service.dart` | `generateDeviceMenuItems()` | Blog index, www homepage |
+| `lib/services/app_service.dart` | `generateDeviceMenu()` | All device pages (www, blog, chat) |
+| `lib/services/log_api_service.dart` | `generateDeviceMenu()` | Blog post pages (on-the-fly) |
 
 ---
 

@@ -76,7 +76,6 @@ import '../transfer/services/p2p_transfer_service.dart';
 import '../pages/transfer_send_page.dart';
 import '../util/event_bus.dart';
 import '../util/station_html_templates.dart';
-import '../util/web_navigation.dart';
 
 class LogApiService {
   static final LogApiService _instance = LogApiService._internal();
@@ -11790,8 +11789,18 @@ class LogApiService {
         } catch (_) {}
       }
 
+      // Generate menu items based on available public apps
+      final appsDir = isOwnBlog
+          ? null // uses AppService default
+          : '$dataDir/devices/$deviceCallsign';
+      final blogMenuItems = await AppService().generateDeviceMenu(
+        activeApp: 'blog',
+        appsPath: appsDir,
+        storage: isOwnBlog ? null : FilesystemProfileStorage('$dataDir/devices/$deviceCallsign'),
+      );
+
       // Render HTML
-      final html = _renderBlogPostHtml(post, nickname ?? callsign, likedHexPubkeys);
+      final html = _renderBlogPostHtml(post, nickname ?? callsign, likedHexPubkeys, blogMenuItems);
 
       return shelf.Response.ok(
         html,
@@ -11807,8 +11816,8 @@ class LogApiService {
     }
   }
 
-  /// Render blog post as HTML (sync wrapper for compatibility)
-  String _renderBlogPostHtml(BlogPost post, String authorIdentifier, [List<String> likedHexPubkeys = const []]) {
+  /// Render blog post as HTML
+  String _renderBlogPostHtml(BlogPost post, String authorIdentifier, List<String> likedHexPubkeys, String menuItems) {
     // Pre-render plain text content to HTML paragraphs
     final htmlContent = post.content.split('\n\n')
       .where((p) => p.trim().isNotEmpty)
@@ -11839,7 +11848,7 @@ class LogApiService {
       author: authorIdentifier,
       htmlContent: htmlContent,
       tags: post.tags,
-      menuItems: WebNavigation.generateDeviceMenuItems(activeApp: 'blog', hasBlog: true),
+      menuItems: menuItems,
       logoText: authorIdentifier,
       logoHref: '../',
       postId: post.id,
