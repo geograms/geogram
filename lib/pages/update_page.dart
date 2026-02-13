@@ -28,7 +28,7 @@ class _UpdatePageState extends State<UpdatePage> {
   String? _completedDownloadPath; // Track completed download ready to install
   VoidCallback? _completedDownloadListener;
   VoidCallback? _updateAvailableListener;
-  bool _showLinuxRestartDialog = false; // Linux: Show restart dialog after staging
+  bool _showDesktopRestartDialog = false; // Show restart dialog after staging (Linux/Windows)
 
   @override
   void initState() {
@@ -298,11 +298,11 @@ class _UpdatePageState extends State<UpdatePage> {
           _setStateIfMounted(() {
             _statusMessage = _i18n.t('apk_installer_launched');
           });
-        } else if (!kIsWeb && Platform.isLinux && _updateService.hasPendingLinuxUpdate) {
-          // Linux: Show restart dialog (update is staged, needs restart to apply)
+        } else if (!kIsWeb && (Platform.isLinux || Platform.isWindows) && _updateService.hasPendingDesktopUpdate) {
+          // Desktop: Show restart dialog (update is staged, needs restart to apply)
           _setStateIfMounted(() {
             _statusMessage = null;
-            _showLinuxRestartDialog = true;
+            _showDesktopRestartDialog = true;
           });
         } else {
           final backups = await _updateService.listBackups();
@@ -564,7 +564,7 @@ class _UpdatePageState extends State<UpdatePage> {
               const SizedBox(height: 16),
 
               // Linux Restart Dialog - shows after update is staged
-              if (_showLinuxRestartDialog)
+              if (_showDesktopRestartDialog)
                 Card(
                   color: Theme.of(context).colorScheme.primaryContainer,
                   child: Padding(
@@ -591,7 +591,7 @@ class _UpdatePageState extends State<UpdatePage> {
                         ),
                         const SizedBox(height: 16),
                         FilledButton.icon(
-                          onPressed: () => _updateService.applyPendingLinuxUpdate(),
+                          onPressed: () => _updateService.applyPendingDesktopUpdate(),
                           icon: const Icon(Icons.restart_alt),
                           label: Text(_i18n.t('restart_now')),
                         ),
@@ -600,7 +600,7 @@ class _UpdatePageState extends State<UpdatePage> {
                   ),
                 ),
 
-              if (_showLinuxRestartDialog) const SizedBox(height: 16),
+              if (_showDesktopRestartDialog) const SizedBox(height: 16),
 
               // Download Progress
               if (_updateService.isDownloading)

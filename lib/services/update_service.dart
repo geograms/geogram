@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 
+import 'package:archive/archive.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
@@ -62,8 +63,8 @@ class UpdateService {
   Timer? _periodicCheckTimer;
   static const _periodicCheckInterval = Duration(minutes: 30);
 
-  /// Track pending Linux update (staged but not yet applied)
-  ({String scriptPath, String version, String appDir})? _pendingLinuxUpdate;
+  /// Track pending desktop update (staged but not yet applied — Linux or Windows)
+  ({String scriptPath, String version, String appDir})? _pendingDesktopUpdate;
 
   /// Initialize update service
   Future<void> initialize() async {
@@ -980,11 +981,13 @@ class UpdateService {
       }
       LogService().log('Download directory: ${tempDir.path}');
       final platform = detectPlatform();
-      final extension = platform == UpdatePlatform.windows
-          ? '.exe'
-          : platform == UpdatePlatform.android
-              ? '.apk'
-              : '';
+      final extension = platform == UpdatePlatform.android
+          ? '.apk'
+          : platform == UpdatePlatform.windows || platform == UpdatePlatform.macos
+              ? '.zip'
+              : platform == UpdatePlatform.linux
+                  ? '.tar.gz'
+                  : '';
       final tempFilePath =
           '${tempDir.path}${Platform.pathSeparator}geogram-update-${release.version}$extension';
       final partialFilePath = '$tempFilePath.partial';
@@ -1250,7 +1253,8 @@ class UpdateService {
         final path = entity.path;
         if (path.contains('geogram-update') &&
             (path.endsWith('.apk') || path.endsWith('.partial') ||
-             path.endsWith('.exe'))) {
+             path.endsWith('.exe') || path.endsWith('.zip') ||
+             path.endsWith('.tar.gz'))) {
           LogService().log('Deleting: $path');
           await entity.delete();
         }
@@ -1447,11 +1451,13 @@ class UpdateService {
 
     try {
       final platform = detectPlatform();
-      final extension = platform == UpdatePlatform.windows
-          ? '.exe'
-          : platform == UpdatePlatform.android
-              ? '.apk'
-              : '';
+      final extension = platform == UpdatePlatform.android
+          ? '.apk'
+          : platform == UpdatePlatform.windows || platform == UpdatePlatform.macos
+              ? '.zip'
+              : platform == UpdatePlatform.linux
+                  ? '.tar.gz'
+                  : '';
 
       // Check primary temp directory
       final tempDir = await getTemporaryDirectory();
@@ -1560,13 +1566,18 @@ class UpdateService {
         return await _stageLinuxUpdate(updateFilePath, expectedVersion);
       }
 
+      // Windows requires staged update (running .exe is locked by OS)
+      if (Platform.isWindows) {
+        return await _stageWindowsUpdate(updateFilePath, expectedVersion);
+      }
+
       final currentBinary = await _getCurrentBinaryPath();
       if (currentBinary == null) {
         LogService().log('Current binary not found');
         return false;
       }
 
-      // For Windows/macOS, replace the binary directly
+      // For macOS, replace the binary directly (Unix inode semantics allow this)
       LogService().log('Applying update: $updateFilePath -> $currentBinary');
       await File(updateFilePath).copy(currentBinary);
 
@@ -1590,12 +1601,12 @@ class UpdateService {
   // Linux-specific update methods
   // ============================================================
 
-  /// Check if there's a pending Linux update ready to apply
-  bool get hasPendingLinuxUpdate => _pendingLinuxUpdate != null;
+  /// Check if there's a pending desktop update ready to apply
+  bool get hasPendingDesktopUpdate => _pendingDesktopUpdate != null;
 
-  /// Get the pending Linux update info
-  ({String scriptPath, String version, String appDir})? get pendingLinuxUpdate =>
-      _pendingLinuxUpdate;
+  /// Get the pending desktop update info
+  ({String scriptPath, String version, String appDir})? get pendingDesktopUpdate =>
+      _pendingDesktopUpdate;
 
   /// Check if we can write next to the current binary
   Future<bool> _canWriteNextToBinary() async {
@@ -1734,7 +1745,7 @@ nohup "\$APP_DIR/geogram" > /dev/null 2>&1 &
       await Process.run('chmod', ['+x', scriptPath]);
 
       // Save pending update info
-      _pendingLinuxUpdate = (
+      _pendingDesktopUpdate = (
         scriptPath: scriptPath,
         version: version ?? 'unknown',
         appDir: appDir,
@@ -1754,31 +1765,166 @@ nohup "\$APP_DIR/geogram" > /dev/null 2>&1 &
     }
   }
 
-  /// Apply pending Linux update (launches script and exits app)
-  Future<void> applyPendingLinuxUpdate() async {
-    if (_pendingLinuxUpdate == null) return;
+  // ============================================================
+  // Windows-specific update methods
+  // ============================================================
 
-    final scriptPath = _pendingLinuxUpdate!.scriptPath;
+  /// Stage update for Windows - extracts ZIP and prepares full bundle replacement
+  Future<bool> _stageWindowsUpdate(String updateFilePath, String? version) async {
+    try {
+      // Get the actual running binary path
+      final currentBinary = Platform.resolvedExecutable;
+      if (!await File(currentBinary).exists()) {
+        LogService().log('Current binary not found: $currentBinary');
+        return false;
+      }
+
+      // Check write permission first
+      if (!await _canWriteNextToBinary()) {
+        LogService().log('No write permission to app directory. '
+            'If installed to Program Files, self-update is not supported.');
+        return false;
+      }
+
+      // App directory is where the binary lives (contains geogram.exe, data/, lib/, DLLs)
+      final appDir = File(currentBinary).parent.path;
+      final stagingDir = Directory('$appDir\\.geogram-update');
+
+      // Clean up any previous failed update
+      if (await stagingDir.exists()) {
+        await stagingDir.delete(recursive: true);
+      }
+      await stagingDir.create(recursive: true);
+
+      // Extract ZIP to staging directory using the archive package
+      LogService().log('Extracting update ZIP to: ${stagingDir.path}');
+      final bytes = await File(updateFilePath).readAsBytes();
+      final archive = ZipDecoder().decodeBytes(bytes);
+
+      for (final file in archive) {
+        final filePath = '${stagingDir.path}\\${file.name.replaceAll('/', '\\')}';
+        if (file.isFile) {
+          await File(filePath).create(recursive: true);
+          await File(filePath).writeAsBytes(file.content as List<int>);
+        } else {
+          await Directory(filePath).create(recursive: true);
+        }
+      }
+
+      // Find the extracted bundle (might be in bundle/ subfolder or directly)
+      String extractedPath = stagingDir.path;
+      final bundleDir = Directory('${stagingDir.path}\\bundle');
+      if (await bundleDir.exists()) {
+        extractedPath = bundleDir.path;
+      }
+
+      // Verify extracted files exist
+      final extractedBinary = File('$extractedPath\\geogram.exe');
+      if (!await extractedBinary.exists()) {
+        LogService().log('Extracted binary not found at: $extractedPath\\geogram.exe');
+        await stagingDir.delete(recursive: true);
+        return false;
+      }
+
+      final extractedData = Directory('$extractedPath\\data');
+      final extractedLib = Directory('$extractedPath\\lib');
+      final hasData = await extractedData.exists();
+      final hasLib = await extractedLib.exists();
+      LogService().log(
+          'Extracted: binary=true, data=$hasData, lib=$hasLib');
+
+      // Get current process PID
+      final currentPid = pid;
+
+      // Create updater batch script
+      final script = '''@echo off
+REM Geogram Update Script - Auto-generated
+REM Wait for app to exit, replace entire app bundle, restart
+
+set "APP_DIR=$appDir"
+set "EXTRACTED_DIR=$extractedPath"
+set "STAGING_DIR=${stagingDir.path}"
+set "APP_PID=$currentPid"
+
+REM Wait for app to exit (max 30 seconds)
+for /L %%i in (1,1,30) do (
+  tasklist /FI "PID eq %APP_PID%" 2>NUL | find /I "%APP_PID%" >NUL
+  if errorlevel 1 goto :done_waiting
+  timeout /t 1 /nobreak >NUL
+)
+:done_waiting
+
+REM Extra wait for file handle release
+timeout /t 2 /nobreak >NUL
+
+REM Replace bundle (preserves uninstaller, portable.marker, user data)
+cd /d "%APP_DIR%"
+xcopy "%EXTRACTED_DIR%\\*" "%APP_DIR%\\" /E /Y /Q
+
+REM Clean up staging
+rmdir /S /Q "%STAGING_DIR%"
+
+REM Restart app
+start "" "%APP_DIR%\\geogram.exe"
+''';
+
+      final scriptPath = '${stagingDir.path}\\apply-update.bat';
+      await File(scriptPath).writeAsString(script);
+
+      // Save pending update info
+      _pendingDesktopUpdate = (
+        scriptPath: scriptPath,
+        version: version ?? 'unknown',
+        appDir: appDir,
+      );
+
+      // Clean up the downloaded ZIP
+      try {
+        await File(updateFilePath).delete();
+      } catch (_) {}
+
+      LogService().log('Windows update staged in: ${stagingDir.path}');
+      LogService().log('Will replace app at: $appDir');
+      return true;
+    } catch (e) {
+      LogService().log('Error staging Windows update: $e');
+      return false;
+    }
+  }
+
+  /// Apply pending desktop update (launches script and exits app)
+  Future<void> applyPendingDesktopUpdate() async {
+    if (_pendingDesktopUpdate == null) return;
+
+    final scriptPath = _pendingDesktopUpdate!.scriptPath;
     LogService().log('Launching update script: $scriptPath');
 
     // Launch script in background (detached from this process)
-    await Process.start(
-      'bash',
-      [scriptPath],
-      mode: ProcessStartMode.detached,
-    );
+    if (Platform.isWindows) {
+      await Process.start(
+        'cmd',
+        ['/c', scriptPath],
+        mode: ProcessStartMode.detached,
+      );
+    } else {
+      await Process.start(
+        'bash',
+        [scriptPath],
+        mode: ProcessStartMode.detached,
+      );
+    }
 
     // Exit app - script will wait, replace binary, and restart
     exit(0);
   }
 
-  /// Clear pending Linux update (if user cancels)
-  Future<void> clearPendingLinuxUpdate() async {
-    if (_pendingLinuxUpdate == null) return;
+  /// Clear pending desktop update (if user cancels)
+  Future<void> clearPendingDesktopUpdate() async {
+    if (_pendingDesktopUpdate == null) return;
 
     try {
       final stagingDir = Directory(
-          File(_pendingLinuxUpdate!.scriptPath).parent.path);
+          File(_pendingDesktopUpdate!.scriptPath).parent.path);
       if (await stagingDir.exists()) {
         await stagingDir.delete(recursive: true);
       }
@@ -1786,6 +1932,6 @@ nohup "\$APP_DIR/geogram" > /dev/null 2>&1 &
       LogService().log('Error cleaning up staged update: $e');
     }
 
-    _pendingLinuxUpdate = null;
+    _pendingDesktopUpdate = null;
   }
 }
