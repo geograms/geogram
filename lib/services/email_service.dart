@@ -41,11 +41,32 @@ class EmailChangeEvent {
 
 enum EmailChangeType { created, updated, deleted, statusChanged, received }
 
+class _OutgoingAttachment {
+  final String name;
+  final String contentB64;
+  final int sizeBytes;
+
+  _OutgoingAttachment({
+    required this.name,
+    required this.contentB64,
+    required this.sizeBytes,
+  });
+}
+
+class _IncomingAttachment {
+  final String name;
+  final Uint8List bytes;
+
+  _IncomingAttachment({required this.name, required this.bytes});
+}
+
 /// Service for managing emails across multiple stations
 class EmailService {
   static final EmailService _instance = EmailService._internal();
   factory EmailService() => _instance;
   EmailService._internal();
+
+  static const int _maxOutgoingMessageSizeBytes = 10 * 1024 * 1024;
 
   /// Profile storage abstraction - MUST be set before using the service
   late ProfileStorage _storage;
@@ -840,6 +861,33 @@ class EmailService {
     try {
       final profile = ProfileService().getProfile();
       final content = EmailFormat.export(thread);
+      final contentBytes = utf8.encode(content);
+      final outgoingAttachments = await _buildOutgoingAttachmentPayload(thread);
+      final attachmentsSizeBytes = outgoingAttachments.fold<int>(
+        0,
+        (sum, attachment) => sum + attachment.sizeBytes,
+      );
+      final totalPayloadSizeBytes = contentBytes.length + attachmentsSizeBytes;
+
+      if (totalPayloadSizeBytes > _maxOutgoingMessageSizeBytes) {
+        final totalMb = (totalPayloadSizeBytes / (1024 * 1024)).toStringAsFixed(
+          2,
+        );
+        final limitMb = (_maxOutgoingMessageSizeBytes / (1024 * 1024))
+            .toStringAsFixed(0);
+        final reason =
+            'Message size $totalMb MB exceeds $limitMb MB limit (content + attachments)';
+        LogService().log('EmailService: $reason');
+        EventBus().fire(
+          EmailNotificationEvent(
+            message: 'Cannot send: $reason',
+            action: 'failed',
+            threadId: thread.threadId,
+            recipient: thread.to.isNotEmpty ? thread.to.first : null,
+          ),
+        );
+        return false;
+      }
 
       // Create NOSTR event for the email
       final event = NostrEvent(
@@ -866,9 +914,20 @@ class EmailService {
         'to': thread.to,
         'cc': thread.cc,
         'subject': thread.subject,
-        'content': base64Encode(utf8.encode(content)),
+        'content': base64Encode(contentBytes),
         'event': signedEvent?.toJson(),
+        'total_size_bytes': totalPayloadSizeBytes,
       };
+      if (outgoingAttachments.isNotEmpty) {
+        message['attachments'] = outgoingAttachments
+            .map(
+              (attachment) => {
+                'name': attachment.name,
+                'content': attachment.contentB64,
+              },
+            )
+            .toList();
+      }
 
       // Send via WebSocket
       ws.send(message);
@@ -896,6 +955,57 @@ class EmailService {
       );
       return false;
     }
+  }
+
+  Future<List<_OutgoingAttachment>> _buildOutgoingAttachmentPayload(
+    EmailThread thread,
+  ) async {
+    final latestMessage = thread.messages.isNotEmpty
+        ? thread.messages.last
+        : null;
+    final attachmentNames = _extractAttachmentNames(latestMessage);
+    if (attachmentNames.isEmpty) return [];
+
+    final payload = <_OutgoingAttachment>[];
+    for (final filename in attachmentNames) {
+      final bytes = await readAttachmentBytes(thread, filename);
+      if (bytes == null || bytes.isEmpty) {
+        LogService().log(
+          'EmailService: Attachment missing or empty in thread ${thread.threadId}: $filename',
+        );
+        continue;
+      }
+      payload.add(
+        _OutgoingAttachment(
+          name: filename,
+          contentB64: base64Encode(bytes),
+          sizeBytes: bytes.length,
+        ),
+      );
+    }
+    return payload;
+  }
+
+  Set<String> _extractAttachmentNames(EmailMessage? message) {
+    if (message == null) return <String>{};
+
+    final names = <String>{};
+    final file = message.getMeta('file');
+    final image = message.getMeta('image');
+    final voice = message.getMeta('voice');
+    final files = message.getMeta('files');
+
+    if (file != null && file.isNotEmpty) names.add(file);
+    if (image != null && image.isNotEmpty) names.add(image);
+    if (voice != null && voice.isNotEmpty) names.add(voice);
+    if (files != null && files.isNotEmpty) {
+      for (final item in files.split(',')) {
+        final trimmed = item.trim();
+        if (trimmed.isNotEmpty) names.add(trimmed);
+      }
+    }
+
+    return names;
   }
 
   /// Process outbox - attempt to send all pending emails
@@ -1005,6 +1115,9 @@ class EmailService {
       final subject = message['subject'] as String?;
       final contentB64 = message['content'] as String?;
       final event = message['event'] as Map<String, dynamic>?;
+      final incomingAttachments = _parseIncomingAttachments(
+        message['attachments'],
+      );
 
       if (from == null || threadId == null || contentB64 == null) {
         LogService().log(
@@ -1052,6 +1165,9 @@ class EmailService {
 
         existingThread.addMessage(emailMessage);
         await saveThread(existingThread);
+        if (incomingAttachments.isNotEmpty) {
+          await _storeIncomingAttachments(existingThread, incomingAttachments);
+        }
 
         LogService().log(
           'EmailService: Appended reply from $from to existing thread $threadId',
@@ -1127,6 +1243,9 @@ class EmailService {
 
       // Save to inbox
       await saveThread(thread);
+      if (incomingAttachments.isNotEmpty) {
+        await _storeIncomingAttachments(thread, incomingAttachments);
+      }
 
       LogService().log(
         'EmailService: Received email from $from (thread: $threadId)',
@@ -1148,6 +1267,53 @@ class EmailService {
       LogService().log('EmailService: Error receiving email: $e\n$stack');
       return false;
     }
+  }
+
+  List<_IncomingAttachment> _parseIncomingAttachments(dynamic rawAttachments) {
+    if (rawAttachments is! List) return const [];
+
+    final attachments = <_IncomingAttachment>[];
+    for (final entry in rawAttachments) {
+      if (entry is! Map) continue;
+      final map = entry.cast<dynamic, dynamic>();
+      final filename = (map['name'] ?? '').toString().trim();
+      final contentB64 = (map['content'] ?? '').toString().trim();
+
+      if (!_isSafeAttachmentFilename(filename) || contentB64.isEmpty) {
+        continue;
+      }
+
+      try {
+        final bytes = base64Decode(contentB64);
+        if (bytes.isEmpty) continue;
+        attachments.add(_IncomingAttachment(name: filename, bytes: bytes));
+      } catch (_) {
+        LogService().log(
+          'EmailService: Skipping invalid attachment payload for $filename',
+        );
+      }
+    }
+    return attachments;
+  }
+
+  bool _isSafeAttachmentFilename(String filename) {
+    if (filename.isEmpty) return false;
+    if (filename.contains('..')) return false;
+    if (filename.contains('/')) return false;
+    if (filename.contains('\\')) return false;
+    return true;
+  }
+
+  Future<void> _storeIncomingAttachments(
+    EmailThread thread,
+    List<_IncomingAttachment> attachments,
+  ) async {
+    for (final attachment in attachments) {
+      await writeAttachment(thread, attachment.name, attachment.bytes);
+    }
+    LogService().log(
+      'EmailService: Stored ${attachments.length} attachment(s) for thread ${thread.threadId}',
+    );
   }
 
   /// Receive an encrypted cached email (was offline when originally sent)

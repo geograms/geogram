@@ -12,7 +12,6 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:crypto/crypto.dart';
-import 'dart:convert';
 import 'package:path/path.dart' as p;
 
 import '../models/email_account.dart';
@@ -90,8 +89,8 @@ class _EmailComposePageState extends State<EmailComposePage> {
   /// Selected attachments (path -> name)
   final List<_AttachmentInfo> _attachments = [];
 
-  /// Maximum attachment size (5 MB)
-  static const int _maxAttachmentSize = 5 * 1024 * 1024; // 5 MB
+  /// Maximum attachment size (10 MB)
+  static const int _maxAttachmentSize = 10 * 1024 * 1024; // 10 MB
 
   /// Maximum total attachments size (10 MB total)
   static const int _maxTotalAttachmentsSize = 10 * 1024 * 1024; // 10 MB
@@ -109,14 +108,16 @@ class _EmailComposePageState extends State<EmailComposePage> {
     if (mounted) {
       setState(() {
         _frequentContacts = frequent
-            .map((f) => {
-                  'displayName': f.name.isNotEmpty ? f.name : f.email,
-                  'email': f.email,
-                  'callsign': '',
-                  'profilePicture': null,
-                  'isFrequent': 'true',
-                  'count': f.count.toString(),
-                })
+            .map(
+              (f) => {
+                'displayName': f.name.isNotEmpty ? f.name : f.email,
+                'email': f.email,
+                'callsign': '',
+                'profilePicture': null,
+                'isFrequent': 'true',
+                'count': f.count.toString(),
+              },
+            )
             .toList();
       });
     }
@@ -124,8 +125,7 @@ class _EmailComposePageState extends State<EmailComposePage> {
     // Initialize contact service with contacts collection
     final contactsCollection = AppService().getAppByType('contacts');
 
-    if (contactsCollection != null &&
-        contactsCollection.storagePath != null) {
+    if (contactsCollection != null && contactsCollection.storagePath != null) {
       await _contactService.initializeApp(contactsCollection.storagePath!);
       final contacts = await _contactService.getContactsWithEmails();
       if (mounted) {
@@ -149,7 +149,9 @@ class _EmailComposePageState extends State<EmailComposePage> {
 
         final account = EmailAccount.fromStation(
           stationDomain: stationDomain,
-          nickname: profile.nickname.isNotEmpty ? profile.nickname : profile.callsign.toLowerCase(),
+          nickname: profile.nickname.isNotEmpty
+              ? profile.nickname
+              : profile.callsign.toLowerCase(),
           callsign: profile.callsign,
           npub: profile.npub,
           stationName: station.name,
@@ -377,32 +379,35 @@ class _EmailComposePageState extends State<EmailComposePage> {
       final bcc = _parseRecipients(_bccController.text);
 
       // Update existing draft or create new one
-      final thread = _existingThread?.copyWith(
-        station: _selectedAccount?.station ?? _existingThread!.station,
-        from: _selectedAccount?.email ?? _existingThread!.from,
-        to: to.isEmpty ? ['(draft)'] : to,
-        cc: cc,
-        bcc: bcc,
-        subject: _subjectController.text.isEmpty
-            ? '(No Subject)'
-            : _subjectController.text,
-        priority: _priority,
-        messages: [], // Clear messages, will add updated content below
-      ) ?? EmailThread(
-        station: _selectedAccount?.station ?? 'local',
-        from: _selectedAccount?.email ?? profile.callsign,
-        to: to.isEmpty ? ['(draft)'] : to,
-        cc: cc,
-        bcc: bcc,
-        subject: _subjectController.text.isEmpty
-            ? '(No Subject)'
-            : _subjectController.text,
-        created: EmailMessage.formatTimestamp(DateTime.now()),
-        status: EmailStatus.draft,
-        threadId: DateTime.now().millisecondsSinceEpoch.toRadixString(36) +
-            (DateTime.now().microsecond * 1000).toRadixString(36),
-        priority: _priority,
-      );
+      final thread =
+          _existingThread?.copyWith(
+            station: _selectedAccount?.station ?? _existingThread!.station,
+            from: _selectedAccount?.email ?? _existingThread!.from,
+            to: to.isEmpty ? ['(draft)'] : to,
+            cc: cc,
+            bcc: bcc,
+            subject: _subjectController.text.isEmpty
+                ? '(No Subject)'
+                : _subjectController.text,
+            priority: _priority,
+            messages: [], // Clear messages, will add updated content below
+          ) ??
+          EmailThread(
+            station: _selectedAccount?.station ?? 'local',
+            from: _selectedAccount?.email ?? profile.callsign,
+            to: to.isEmpty ? ['(draft)'] : to,
+            cc: cc,
+            bcc: bcc,
+            subject: _subjectController.text.isEmpty
+                ? '(No Subject)'
+                : _subjectController.text,
+            created: EmailMessage.formatTimestamp(DateTime.now()),
+            status: EmailStatus.draft,
+            threadId:
+                DateTime.now().millisecondsSinceEpoch.toRadixString(36) +
+                (DateTime.now().microsecond * 1000).toRadixString(36),
+            priority: _priority,
+          );
 
       // Add message content
       if (_bodyController.text.isNotEmpty) {
@@ -427,16 +432,16 @@ class _EmailComposePageState extends State<EmailComposePage> {
       _existingThread = thread;
 
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Draft saved')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Draft saved')));
         _isDirty = false;
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to save draft: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Failed to save draft: $e')));
       }
     }
   }
@@ -456,7 +461,11 @@ class _EmailComposePageState extends State<EmailComposePage> {
     // Require a station account for sending
     if (_selectedAccount == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No email account selected. Please configure an account first.')),
+        const SnackBar(
+          content: Text(
+            'No email account selected. Please configure an account first.',
+          ),
+        ),
       );
       return;
     }
@@ -470,9 +479,13 @@ class _EmailComposePageState extends State<EmailComposePage> {
 
       // If replying, add message to existing thread
       if (widget.replyTo != null) {
+        final attachmentMetadata = await _copyAttachmentsToThread(
+          widget.replyTo!,
+        );
         await _emailService.createSignedMessage(
           thread: widget.replyTo!,
           content: _bodyController.text,
+          metadata: attachmentMetadata,
         );
 
         // Move to outbox for delivery
@@ -503,7 +516,8 @@ class _EmailComposePageState extends State<EmailComposePage> {
             : _subjectController.text,
         created: EmailMessage.formatTimestamp(DateTime.now()),
         status: EmailStatus.pending, // Directly to outbox
-        threadId: DateTime.now().millisecondsSinceEpoch.toRadixString(36) +
+        threadId:
+            DateTime.now().millisecondsSinceEpoch.toRadixString(36) +
             (DateTime.now().microsecond * 1000).toRadixString(36),
         priority: _priority,
       );
@@ -531,7 +545,7 @@ class _EmailComposePageState extends State<EmailComposePage> {
       // Try to send immediately via WebSocket
       // Note: This only queues the email for sending - actual delivery
       // confirmation comes via DSN (Delivery Status Notification)
-      final queued = await _emailService.sendViaWebSocket(thread);
+      await _emailService.sendViaWebSocket(thread);
 
       // Don't show any message here - wait for DSN confirmation
       // The email stays in outbox until the station confirms delivery
@@ -540,9 +554,9 @@ class _EmailComposePageState extends State<EmailComposePage> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to send: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Failed to send: $e')));
       }
     } finally {
       if (mounted) {
@@ -693,57 +707,57 @@ class _EmailComposePageState extends State<EmailComposePage> {
                     ),
                   )
                 : hasMultipleAccounts
-                    ? DropdownButtonFormField<EmailAccount>(
-                        value: _selectedAccount,
-                        isExpanded: true,
-                        decoration: const InputDecoration(
-                          border: OutlineInputBorder(),
-                          isDense: true,
+                ? DropdownButtonFormField<EmailAccount>(
+                    value: _selectedAccount,
+                    isExpanded: true,
+                    decoration: const InputDecoration(
+                      border: OutlineInputBorder(),
+                      isDense: true,
+                    ),
+                    items: accounts.map((account) {
+                      return DropdownMenuItem(
+                        value: account,
+                        child: Row(
+                          children: [
+                            Icon(
+                              account.isConnected
+                                  ? Icons.cloud_done
+                                  : Icons.cloud_off,
+                              size: 16,
+                              color: account.isConnected
+                                  ? Colors.green
+                                  : Colors.grey,
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(child: Text(account.email)),
+                          ],
                         ),
-                        items: accounts.map((account) {
-                          return DropdownMenuItem(
-                            value: account,
-                            child: Row(
-                              children: [
-                                Icon(
-                                  account.isConnected
-                                      ? Icons.cloud_done
-                                      : Icons.cloud_off,
-                                  size: 16,
-                                  color: account.isConnected
-                                      ? Colors.green
-                                      : Colors.grey,
-                                ),
-                                const SizedBox(width: 8),
-                                Expanded(child: Text(account.email)),
-                              ],
-                            ),
-                          );
-                        }).toList(),
-                        onChanged: (account) {
-                          setState(() => _selectedAccount = account);
-                        },
-                      )
-                    : Row(
-                        children: [
-                          Icon(
-                            _selectedAccount?.isConnected == true
-                                ? Icons.cloud_done
-                                : Icons.cloud_off,
-                            size: 16,
-                            color: _selectedAccount?.isConnected == true
-                                ? Colors.green
-                                : Colors.grey,
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              _selectedAccount?.email ?? 'No account',
-                              style: const TextStyle(fontWeight: FontWeight.w600),
-                            ),
-                          ),
-                        ],
+                      );
+                    }).toList(),
+                    onChanged: (account) {
+                      setState(() => _selectedAccount = account);
+                    },
+                  )
+                : Row(
+                    children: [
+                      Icon(
+                        _selectedAccount?.isConnected == true
+                            ? Icons.cloud_done
+                            : Icons.cloud_off,
+                        size: 16,
+                        color: _selectedAccount?.isConnected == true
+                            ? Colors.green
+                            : Colors.grey,
                       ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          _selectedAccount?.email ?? 'No account',
+                          style: const TextStyle(fontWeight: FontWeight.w600),
+                        ),
+                      ),
+                    ],
+                  ),
             const SizedBox(height: 12),
             Wrap(
               spacing: 8,
@@ -753,7 +767,9 @@ class _EmailComposePageState extends State<EmailComposePage> {
                   icon: _selectedAccount?.isConnected == true
                       ? Icons.cloud_done
                       : Icons.cloud_off,
-                  label: _selectedAccount?.isConnected == true ? 'Connected' : 'Offline',
+                  label: _selectedAccount?.isConnected == true
+                      ? 'Connected'
+                      : 'Offline',
                   color: _selectedAccount?.isConnected == true
                       ? theme.colorScheme.secondary
                       : theme.colorScheme.error,
@@ -784,9 +800,9 @@ class _EmailComposePageState extends State<EmailComposePage> {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         decoration: BoxDecoration(
-          color: color.withValues(alpha:0.12),
+          color: color.withValues(alpha: 0.12),
           borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: color.withValues(alpha:0.4)),
+          border: Border.all(color: color.withValues(alpha: 0.4)),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
@@ -795,10 +811,7 @@ class _EmailComposePageState extends State<EmailComposePage> {
             const SizedBox(width: 6),
             Text(
               label,
-              style: TextStyle(
-                color: color,
-                fontWeight: FontWeight.w700,
-              ),
+              style: TextStyle(color: color, fontWeight: FontWeight.w700),
             ),
           ],
         ),
@@ -1051,8 +1064,11 @@ class _EmailComposePageState extends State<EmailComposePage> {
                   return ListTile(
                     leading: CircleAvatar(
                       radius: 16,
-                      backgroundColor: Theme.of(context).primaryColor.withValues(alpha: 0.1),
-                      backgroundImage: (!kIsWeb && option['profilePicture'] != null)
+                      backgroundColor: Theme.of(
+                        context,
+                      ).primaryColor.withValues(alpha: 0.1),
+                      backgroundImage:
+                          (!kIsWeb && option['profilePicture'] != null)
                           ? FileImage(File(option['profilePicture']!))
                           : null,
                       child: (kIsWeb || option['profilePicture'] == null)
@@ -1071,10 +1087,7 @@ class _EmailComposePageState extends State<EmailComposePage> {
                     ),
                     subtitle: Text(
                       option['email'] ?? '',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: Colors.grey[600],
-                      ),
+                      style: TextStyle(fontSize: 12, color: Colors.grey[600]),
                     ),
                     dense: true,
                     onTap: () => onSelected(option),
@@ -1175,9 +1188,7 @@ class _EmailComposePageState extends State<EmailComposePage> {
               Navigator.pop(context);
               Navigator.pop(this.context);
             },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.red,
-            ),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
             child: const Text('Discard'),
           ),
         ],
@@ -1208,13 +1219,14 @@ class _EmailComposePageState extends State<EmailComposePage> {
           final fileObj = File(file.path!);
           final fileSize = await fileObj.length();
 
-          // Check individual file size (5MB limit)
+          // Check individual file size (10MB limit)
           if (fileSize > _maxAttachmentSize) {
             if (mounted) {
               ScaffoldMessenger.of(context).showSnackBar(
                 SnackBar(
                   content: Text(
-                      '${file.name} is too large (max 5 MB per file)'),
+                    '${file.name} is too large (max 10 MB per file)',
+                  ),
                   backgroundColor: Theme.of(context).colorScheme.error,
                 ),
               );
@@ -1227,8 +1239,9 @@ class _EmailComposePageState extends State<EmailComposePage> {
             if (mounted) {
               ScaffoldMessenger.of(context).showSnackBar(
                 SnackBar(
-                  content:
-                      const Text('Total attachments size exceeded (max 10 MB)'),
+                  content: const Text(
+                    'Total attachments size exceeded (max 10 MB)',
+                  ),
                   backgroundColor: Theme.of(context).colorScheme.error,
                 ),
               );
@@ -1243,16 +1256,24 @@ class _EmailComposePageState extends State<EmailComposePage> {
 
           // Determine if it's an image
           final extension = file.extension?.toLowerCase() ?? '';
-          final isImage = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp']
-              .contains(extension);
+          final isImage = [
+            'jpg',
+            'jpeg',
+            'png',
+            'gif',
+            'webp',
+            'bmp',
+          ].contains(extension);
 
           setState(() {
-            _attachments.add(_AttachmentInfo(
-              path: file.path!,
-              name: file.name,
-              size: fileSize,
-              isImage: isImage,
-            ));
+            _attachments.add(
+              _AttachmentInfo(
+                path: file.path!,
+                name: file.name,
+                size: fileSize,
+                isImage: isImage,
+              ),
+            );
             _isDirty = true;
           });
           currentTotalSize += fileSize;
@@ -1260,9 +1281,9 @@ class _EmailComposePageState extends State<EmailComposePage> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error picking file: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Error picking file: $e')));
       }
     }
   }
@@ -1294,10 +1315,7 @@ class _EmailComposePageState extends State<EmailComposePage> {
                 const SizedBox(width: 6),
                 Text(
                   '${_attachments.length} attachment${_attachments.length > 1 ? 's' : ''} ($totalSizeMB MB)',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: Colors.grey[600],
-                  ),
+                  style: TextStyle(fontSize: 12, color: Colors.grey[600]),
                 ),
               ],
             ),
@@ -1340,7 +1358,9 @@ class _EmailComposePageState extends State<EmailComposePage> {
   }
 
   /// Copy attachments to thread folder and return metadata
-  Future<Map<String, String>?> _copyAttachmentsToThread(EmailThread thread) async {
+  Future<Map<String, String>?> _copyAttachmentsToThread(
+    EmailThread thread,
+  ) async {
     if (_attachments.isEmpty || kIsWeb) return null;
 
     final metadata = <String, String>{};
@@ -1354,7 +1374,10 @@ class _EmailComposePageState extends State<EmailComposePage> {
 
         // Write attachment via ProfileStorage (works for both filesystem and encrypted)
         await _emailService.writeAttachment(
-            thread, hashedName, Uint8List.fromList(bytes));
+          thread,
+          hashedName,
+          Uint8List.fromList(bytes),
+        );
 
         attachmentNames.add(hashedName);
       } catch (e) {
@@ -1368,8 +1391,14 @@ class _EmailComposePageState extends State<EmailComposePage> {
       if (attachmentNames.length == 1) {
         final name = attachmentNames.first;
         final ext = p.extension(name).toLowerCase();
-        final isImage = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp']
-            .contains(ext);
+        final isImage = [
+          '.jpg',
+          '.jpeg',
+          '.png',
+          '.gif',
+          '.webp',
+          '.bmp',
+        ].contains(ext);
         metadata[isImage ? 'image' : 'file'] = name;
       } else {
         // Multiple files - comma separated

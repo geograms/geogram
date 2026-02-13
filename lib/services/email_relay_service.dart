@@ -177,6 +177,20 @@ class CachedEncryptedEmailEntry {
   }
 }
 
+class _RelayAttachment {
+  final String name;
+  final String contentB64;
+  final int sizeBytes;
+
+  _RelayAttachment({
+    required this.name,
+    required this.contentB64,
+    required this.sizeBytes,
+  });
+
+  Map<String, dynamic> toJson() => {'name': name, 'content': contentB64};
+}
+
 /// Approval status for external emails
 enum ExternalEmailStatus {
   /// Awaiting station operator review
@@ -1135,6 +1149,51 @@ class EmailRelayService {
   // Email Routing
   // ============================================================
 
+  List<_RelayAttachment>? _parseAttachmentPayload(dynamic raw) {
+    if (raw == null) return <_RelayAttachment>[];
+    if (raw is! List) return null;
+
+    final attachments = <_RelayAttachment>[];
+    for (final item in raw) {
+      if (item is! Map) return null;
+
+      final map = item.cast<dynamic, dynamic>();
+      final name = (map['name'] ?? '').toString().trim();
+      final contentB64 = (map['content'] ?? '').toString().trim();
+      if (name.isEmpty ||
+          contentB64.isEmpty ||
+          name.contains('..') ||
+          name.contains('/') ||
+          name.contains('\\')) {
+        return null;
+      }
+
+      try {
+        final bytes = base64Decode(contentB64);
+        if (bytes.isEmpty) return null;
+        attachments.add(
+          _RelayAttachment(
+            name: name,
+            contentB64: contentB64,
+            sizeBytes: bytes.length,
+          ),
+        );
+      } catch (_) {
+        return null;
+      }
+    }
+
+    return attachments;
+  }
+
+  int _decodedContentBytes(String encodedContent) {
+    try {
+      return base64Decode(encodedContent).length;
+    } catch (_) {
+      return utf8.encode(encodedContent).length;
+    }
+  }
+
   /// Check if an email address is internal (Geogram-to-Geogram)
   bool _isInternalAddress(String email, String stationDomain) {
     final atIndex = email.indexOf('@');
@@ -1161,6 +1220,7 @@ class EmailRelayService {
     final subject = message['subject'] as String?;
     final content = message['content'] as String?;
     final event = message['event'] as Map<String, dynamic>?;
+    final parsedAttachments = _parseAttachmentPayload(message['attachments']);
 
     final deliveryResults = <String, String>{};
 
@@ -1178,6 +1238,41 @@ class EmailRelayService {
       );
       sendToClient(senderId, jsonEncode(dsn));
       return {'error': 'missing_fields'};
+    }
+
+    if (parsedAttachments == null) {
+      final dsn = _createDsn(
+        action: 'failed',
+        threadId: threadId,
+        recipient: recipients.first.toString(),
+        reason: 'Invalid attachments payload',
+      );
+      sendToClient(senderId, jsonEncode(dsn));
+      return {'error': 'invalid_attachments'};
+    }
+
+    final attachmentPayload = parsedAttachments
+        .map((attachment) => attachment.toJson())
+        .toList(growable: false);
+    final contentBytes = _decodedContentBytes(content);
+    final attachmentsBytes = parsedAttachments.fold<int>(
+      0,
+      (sum, attachment) => sum + attachment.sizeBytes,
+    );
+    final totalMessageBytes = contentBytes + attachmentsBytes;
+    if (totalMessageBytes > _maxCacheSizeBytes) {
+      final limitMb = (_maxCacheSizeBytes / (1024 * 1024)).toStringAsFixed(0);
+      final sizeMb = (totalMessageBytes / (1024 * 1024)).toStringAsFixed(2);
+      final reason =
+          'Message size $sizeMb MB exceeds $limitMb MB limit (content + attachments)';
+      final dsn = _createDsn(
+        action: 'failed',
+        threadId: threadId,
+        recipient: recipients.first.toString(),
+        reason: reason,
+      );
+      sendToClient(senderId, jsonEncode(dsn));
+      return {'error': 'message_too_large'};
     }
 
     // Verify NOSTR signature if present
@@ -1251,6 +1346,7 @@ class EmailRelayService {
         'subject': subject,
         'content': content,
         'event': event,
+        if (attachmentPayload.isNotEmpty) 'attachments': attachmentPayload,
         'delivered_at': DateTime.now().toUtc().toIso8601String(),
       };
 
@@ -1464,6 +1560,7 @@ class EmailRelayService {
       final subject = message['subject'] as String?;
       final content = message['content'] as String?;
       final event = message['event'] as Map<String, dynamic>?;
+      final attachments = message['attachments'] as List<dynamic>?;
 
       final deliveryMessage = message['type'] == 'email_receive'
           ? {
@@ -1478,6 +1575,8 @@ class EmailRelayService {
               'subject': subject,
               'content': content,
               'event': event,
+              if (attachments != null && attachments.isNotEmpty)
+                'attachments': attachments,
               'delivered_at': DateTime.now().toUtc().toIso8601String(),
             };
 
