@@ -60,10 +60,7 @@ class DkimConfig {
   final String privateKeyPem;
   final String selector;
 
-  const DkimConfig({
-    required this.privateKeyPem,
-    this.selector = 'geogram',
-  });
+  const DkimConfig({required this.privateKeyPem, this.selector = 'geogram'});
 }
 
 /// SMTP Relay configuration for authenticated sending
@@ -236,14 +233,18 @@ class SMTPClient {
           timeout: connectTimeout,
         ).timeout(connectTimeout);
       } on SocketException catch (e) {
-        LogService().log('SMTP: Connection failed to $targetHost:$targetPort - $e');
+        LogService().log(
+          'SMTP: Connection failed to $targetHost:$targetPort - $e',
+        );
         return SMTPSendResult.failure(
-          error: 'Cannot connect to mail server ($targetHost:$targetPort). Port may be blocked by hosting provider.',
+          error:
+              'Cannot connect to mail server ($targetHost:$targetPort). Port may be blocked by hosting provider.',
         );
       } on TimeoutException {
         LogService().log('SMTP: Connection timeout to $targetHost:$targetPort');
         return SMTPSendResult.failure(
-          error: 'Connection timeout to mail server. Outbound SMTP port $targetPort may be blocked.',
+          error:
+              'Connection timeout to mail server. Outbound SMTP port $targetPort may be blocked.',
         );
       }
       activeSocket = socket;
@@ -274,7 +275,11 @@ class SMTPClient {
       }
 
       // Check for STARTTLS support and upgrade if using relay
-      final supportsStartTls = ehloResponse?.lines.any((l) => l.toUpperCase().contains('STARTTLS')) ?? false;
+      final supportsStartTls =
+          ehloResponse?.lines.any(
+            (l) => l.toUpperCase().contains('STARTTLS'),
+          ) ??
+          false;
       if (relayConfig != null && relayConfig!.useStartTls && supportsStartTls) {
         LogService().log('SMTP: Upgrading to TLS via STARTTLS');
         final startTlsResponse = await session.sendAndRead('STARTTLS');
@@ -284,7 +289,8 @@ class SMTPClient {
           secureSocket = await SecureSocket.secure(
             socket,
             host: targetHost,
-            onBadCertificate: (_) => true, // Allow self-signed certs for testing
+            onBadCertificate: (_) =>
+                true, // Allow self-signed certs for testing
           );
           activeSocket = secureSocket;
           session = _SMTPSession(secureSocket, timeout);
@@ -349,7 +355,8 @@ class SMTPClient {
         if (rcptResponse == null || !rcptResponse.isSuccess) {
           return SMTPSendResult.failure(
             code: rcptResponse?.code,
-            error: 'Server rejected recipient $recipient: ${rcptResponse?.lines.join(" ")}',
+            error:
+                'Server rejected recipient $recipient: ${rcptResponse?.lines.join(" ")}',
           );
         }
       }
@@ -395,11 +402,11 @@ class SMTPClient {
       // QUIT
       await session.sendAndRead('QUIT');
 
-      LogService().log('SMTP: Successfully delivered to ${to.join(", ")} via $targetHost');
-
-      return SMTPSendResult.success(
-        message: 'Delivered via $targetHost',
+      LogService().log(
+        'SMTP: Successfully delivered to ${to.join(", ")} via $targetHost',
       );
+
+      return SMTPSendResult.success(message: 'Delivered via $targetHost');
     } catch (e) {
       LogService().log('SMTP: Error sending to $domain: $e');
       return SMTPSendResult.failure(error: e.toString());
@@ -480,7 +487,9 @@ class SMTPClient {
     // Fallback to domain itself
     if (results.isEmpty) {
       try {
-        await InternetAddress.lookup(domain).timeout(const Duration(seconds: 2));
+        await InternetAddress.lookup(
+          domain,
+        ).timeout(const Duration(seconds: 2));
         results.add(_MXRecord(domain, 100));
       } catch (_) {}
     }
@@ -520,13 +529,16 @@ class SMTPClient {
     final buffer = StringBuffer();
     final messageId = SMTPProtocol.generateMessageId(localDomain);
     final date = SMTPProtocol.formatDate(DateTime.now());
+    final hasAttachments = attachments != null && attachments.isNotEmpty;
+    final boundary = hasAttachments
+        ? 'geogram_${DateTime.now().millisecondsSinceEpoch}'
+        : null;
 
     // Build message body first (needed for DKIM body hash)
     final bodyBuffer = StringBuffer();
-    if (attachments == null || attachments.isEmpty) {
+    if (!hasAttachments) {
       bodyBuffer.writeln(body);
     } else {
-      final boundary = 'geogram_${DateTime.now().millisecondsSinceEpoch}';
       bodyBuffer.writeln('--$boundary');
       bodyBuffer.writeln('Content-Type: text/plain; charset=UTF-8');
       bodyBuffer.writeln('Content-Transfer-Encoding: 8bit');
@@ -535,8 +547,12 @@ class SMTPClient {
 
       for (final attachment in attachments) {
         bodyBuffer.writeln('--$boundary');
-        bodyBuffer.writeln('Content-Type: ${attachment.mimeType}; name="${attachment.filename}"');
-        bodyBuffer.writeln('Content-Disposition: attachment; filename="${attachment.filename}"');
+        bodyBuffer.writeln(
+          'Content-Type: ${attachment.mimeType}; name="${attachment.filename}"',
+        );
+        bodyBuffer.writeln(
+          'Content-Disposition: attachment; filename="${attachment.filename}"',
+        );
         bodyBuffer.writeln('Content-Transfer-Encoding: base64');
         bodyBuffer.writeln();
 
@@ -586,13 +602,12 @@ class SMTPClient {
     });
 
     // Content type and body
-    if (attachments == null || attachments.isEmpty) {
+    if (!hasAttachments) {
       buffer.writeln('Content-Type: text/plain; charset=UTF-8');
       buffer.writeln('Content-Transfer-Encoding: 8bit');
       buffer.writeln();
       buffer.write(messageBody);
     } else {
-      final boundary = 'geogram_${DateTime.now().millisecondsSinceEpoch}';
       buffer.writeln('Content-Type: multipart/mixed; boundary="$boundary"');
       buffer.writeln();
       buffer.write(messageBody);
@@ -626,7 +641,6 @@ class SMTPClient {
 
     return parts.join('\r\n\t');
   }
-
 }
 
 /// MX record entry
@@ -657,11 +671,7 @@ class _SMTPSession {
   final List<Completer<String>> _pendingReads = [];
 
   _SMTPSession(this._socket, this._timeout) {
-    _subscription = _socket.listen(
-      _onData,
-      onError: _onError,
-      onDone: _onDone,
-    );
+    _subscription = _socket.listen(_onData, onError: _onError, onDone: _onDone);
   }
 
   void _onData(List<int> data) {
