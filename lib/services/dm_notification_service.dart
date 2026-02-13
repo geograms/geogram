@@ -38,13 +38,16 @@ void onBackgroundNotificationResponse(NotificationResponse response) {
   // This is async but we can't await in a top-level callback
   SharedPreferences.getInstance().then((prefs) {
     prefs.setString(_pendingActionKey, payload);
-    print('NOTIFICATION_DEBUG: Saved pending action to SharedPreferences: $payload');
+    print(
+      'NOTIFICATION_DEBUG: Saved pending action to SharedPreferences: $payload',
+    );
   });
 }
 
 /// Service for showing local push notifications for direct messages
 class DMNotificationService {
-  static final DMNotificationService _instance = DMNotificationService._internal();
+  static final DMNotificationService _instance =
+      DMNotificationService._internal();
   factory DMNotificationService() => _instance;
   DMNotificationService._internal();
 
@@ -55,7 +58,8 @@ class DMNotificationService {
   static const int _summaryNotificationId = 900100;
   static const int _maxSummaryLines = 10;
 
-  final FlutterLocalNotificationsPlugin _notificationsPlugin = FlutterLocalNotificationsPlugin();
+  final FlutterLocalNotificationsPlugin _notificationsPlugin =
+      FlutterLocalNotificationsPlugin();
   EventSubscription<DirectMessageReceivedEvent>? _dmEventSubscription;
   EventSubscription<ChatMessageEvent>? _chatEventSubscription;
   bool _initialized = false;
@@ -70,13 +74,17 @@ class DMNotificationService {
 
     // Only initialize on supported platforms (Android/iOS/Linux/Windows/macOS)
     if (!_isSupportedPlatform()) {
-      LogService().log('DMNotificationService: Skipping initialization on unsupported platform');
+      LogService().log(
+        'DMNotificationService: Skipping initialization on unsupported platform',
+      );
       _initialized = true;
       return;
     }
 
     try {
-      await _initializeNotifications(skipPermissionRequest: skipPermissionRequest);
+      await _initializeNotifications(
+        skipPermissionRequest: skipPermissionRequest,
+      );
       _subscribeToEvents();
       _initialized = true;
       LogService().log('DMNotificationService initialized');
@@ -103,9 +111,13 @@ class DMNotificationService {
   }
 
   /// Initialize flutter_local_notifications
-  Future<void> _initializeNotifications({bool skipPermissionRequest = false}) async {
+  Future<void> _initializeNotifications({
+    bool skipPermissionRequest = false,
+  }) async {
     // Android initialization settings
-    const androidSettings = AndroidInitializationSettings('@drawable/ic_notification');
+    const androidSettings = AndroidInitializationSettings(
+      '@drawable/ic_notification',
+    );
 
     // iOS initialization settings - don't request permission here if skipping
     final iosSettings = DarwinInitializationSettings(
@@ -129,25 +141,27 @@ class DMNotificationService {
     await _notificationsPlugin.initialize(
       initSettings,
       onDidReceiveNotificationResponse: _onNotificationTapped,
-      onDidReceiveBackgroundNotificationResponse: onBackgroundNotificationResponse,
+      onDidReceiveBackgroundNotificationResponse:
+          onBackgroundNotificationResponse,
     );
 
     // Request permissions for iOS (unless skipping for onboarding)
     if (!skipPermissionRequest && defaultTargetPlatform == TargetPlatform.iOS) {
       await _notificationsPlugin
-          .resolvePlatformSpecificImplementation<IOSFlutterLocalNotificationsPlugin>()
-          ?.requestPermissions(
-            alert: true,
-            badge: true,
-            sound: true,
-          );
+          .resolvePlatformSpecificImplementation<
+            IOSFlutterLocalNotificationsPlugin
+          >()
+          ?.requestPermissions(alert: true, badge: true, sound: true);
       _permissionRequested = true;
     }
 
     // Request permissions for Android 13+ (unless skipping for onboarding)
-    if (!skipPermissionRequest && defaultTargetPlatform == TargetPlatform.android) {
+    if (!skipPermissionRequest &&
+        defaultTargetPlatform == TargetPlatform.android) {
       await _notificationsPlugin
-          .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
+          .resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin
+          >()
           ?.requestNotificationsPermission();
       _permissionRequested = true;
     }
@@ -157,23 +171,37 @@ class DMNotificationService {
       _permissionRequested = true;
     }
 
-    LogService().log('DMNotificationService: Notifications initialized (skipPermissionRequest: $skipPermissionRequest)');
+    LogService().log(
+      'DMNotificationService: Notifications initialized (skipPermissionRequest: $skipPermissionRequest)',
+    );
 
     // Check if app was launched from notification (cold start)
-    final launchDetails = await _notificationsPlugin.getNotificationAppLaunchDetails();
-    if (launchDetails?.didNotificationLaunchApp == true) {
-      final payload = launchDetails?.notificationResponse?.payload;
-      LogService().log('DMNotificationService: App launched from notification with payload: $payload');
-      if (payload != null && payload.startsWith('dm:')) {
-        final fromCallsign = payload.substring(3);
-        // Clear SharedPreferences to prevent double handling by _checkPendingNotification
-        final prefs = await SharedPreferences.getInstance();
-        await prefs.remove(_pendingActionKey);
-        // Fire event after a short delay to ensure app UI is ready
-        Future.delayed(const Duration(milliseconds: 500), () {
-          EventBus().fire(DMNotificationTappedEvent(targetCallsign: fromCallsign));
-        });
+    try {
+      final launchDetails = await _notificationsPlugin
+          .getNotificationAppLaunchDetails();
+      if (launchDetails?.didNotificationLaunchApp == true) {
+        final payload = launchDetails?.notificationResponse?.payload;
+        LogService().log(
+          'DMNotificationService: App launched from notification with payload: $payload',
+        );
+        if (payload != null && payload.startsWith('dm:')) {
+          final fromCallsign = payload.substring(3);
+          // Clear SharedPreferences to prevent double handling by _checkPendingNotification
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.remove(_pendingActionKey);
+          // Fire event after a short delay to ensure app UI is ready
+          Future.delayed(const Duration(milliseconds: 500), () {
+            EventBus().fire(
+              DMNotificationTappedEvent(targetCallsign: fromCallsign),
+            );
+          });
+        }
       }
+    } catch (e) {
+      // Not all desktop implementations support launch-details retrieval.
+      LogService().log(
+        'DMNotificationService: Launch details unavailable on this platform: $e',
+      );
     }
   }
 
@@ -186,36 +214,44 @@ class DMNotificationService {
 
     // Ensure service is initialized before requesting permission
     if (!_initialized) {
-      LogService().log('DMNotificationService: Service not initialized, cannot request permission');
+      LogService().log(
+        'DMNotificationService: Service not initialized, cannot request permission',
+      );
       return false;
     }
 
     try {
       if (defaultTargetPlatform == TargetPlatform.iOS) {
         final result = await _notificationsPlugin
-            .resolvePlatformSpecificImplementation<IOSFlutterLocalNotificationsPlugin>()
-            ?.requestPermissions(
-              alert: true,
-              badge: true,
-              sound: true,
-            );
+            .resolvePlatformSpecificImplementation<
+              IOSFlutterLocalNotificationsPlugin
+            >()
+            ?.requestPermissions(alert: true, badge: true, sound: true);
         _permissionRequested = true;
-        LogService().log('DMNotificationService: iOS permission result: $result');
+        LogService().log(
+          'DMNotificationService: iOS permission result: $result',
+        );
         return result ?? false;
       }
 
       if (defaultTargetPlatform == TargetPlatform.android) {
         final result = await _notificationsPlugin
-            .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
+            .resolvePlatformSpecificImplementation<
+              AndroidFlutterLocalNotificationsPlugin
+            >()
             ?.requestNotificationsPermission();
         _permissionRequested = true;
-        LogService().log('DMNotificationService: Android permission result: $result');
+        LogService().log(
+          'DMNotificationService: Android permission result: $result',
+        );
         return result ?? false;
       }
 
       return false;
     } catch (e) {
-      LogService().log('DMNotificationService: Error requesting permission: $e');
+      LogService().log(
+        'DMNotificationService: Error requesting permission: $e',
+      );
       return false;
     }
   }
@@ -228,7 +264,9 @@ class DMNotificationService {
     _chatEventSubscription = EventBus().on<ChatMessageEvent>((event) {
       _handleIncomingChatMessage(event);
     });
-    LogService().log('DMNotificationService: Subscribed to DirectMessageReceivedEvent');
+    LogService().log(
+      'DMNotificationService: Subscribed to DirectMessageReceivedEvent',
+    );
   }
 
   /// Handle incoming direct message
@@ -238,7 +276,9 @@ class DMNotificationService {
     // Check notification settings
     final settings = NotificationService().getSettings();
     if (!settings.enableNotifications || !settings.notifyNewMessages) {
-      LogService().log('DMNotificationService: Notifications disabled in settings');
+      LogService().log(
+        'DMNotificationService: Notifications disabled in settings',
+      );
       return;
     }
 
@@ -255,7 +295,9 @@ class DMNotificationService {
       verified: event.verified,
     );
 
-    LogService().log('DMNotificationService: Showed notification for message from ${event.fromCallsign}');
+    LogService().log(
+      'DMNotificationService: Showed notification for message from ${event.fromCallsign}',
+    );
   }
 
   /// Handle incoming chat message (group/room)
@@ -281,7 +323,9 @@ class DMNotificationService {
 
     final settings = NotificationService().getSettings();
     if (!settings.enableNotifications || !settings.notifyNewMessages) {
-      LogService().log('DMNotificationService: Notifications disabled in settings');
+      LogService().log(
+        'DMNotificationService: Notifications disabled in settings',
+      );
       return;
     }
 
@@ -298,6 +342,80 @@ class DMNotificationService {
       fileName: fileName,
       imagePath: imagePath,
     );
+  }
+
+  /// Show a notification for incoming email messages.
+  Future<void> showEmailMessage({
+    required String fromAddress,
+    required String subject,
+    required String preview,
+  }) async {
+    if (!_initialized || !_isSupportedPlatform()) return;
+
+    final settings = NotificationService().getSettings();
+    if (!settings.enableNotifications || !settings.notifyNewMessages) {
+      LogService().log(
+        'DMNotificationService: Notifications disabled in settings',
+      );
+      return;
+    }
+
+    final sender = _extractEmailSenderDisplay(fromAddress);
+    final displaySubject = subject.trim().isEmpty
+        ? '(No Subject)'
+        : subject.trim();
+    final body = _buildEmailNotificationBody(
+      subject: displaySubject,
+      preview: preview,
+    );
+
+    final androidDetails = AndroidNotificationDetails(
+      'email_channel',
+      'Email',
+      channelDescription: 'Notifications for incoming email',
+      importance: Importance.high,
+      priority: Priority.high,
+      enableVibration: settings.vibrationEnabled,
+      playSound: settings.soundEnabled,
+      groupKey: _messageGroupKey,
+    );
+
+    final iosDetails = DarwinNotificationDetails(
+      presentAlert: true,
+      presentBadge: true,
+      presentSound: settings.soundEnabled,
+    );
+
+    const linuxDetails = LinuxNotificationDetails(
+      urgency: LinuxNotificationUrgency.normal,
+    );
+
+    final notificationDetails = NotificationDetails(
+      android: androidDetails,
+      iOS: iosDetails,
+      linux: linuxDetails,
+    );
+
+    final notificationId =
+        'email:$fromAddress:$displaySubject:${DateTime.now().millisecondsSinceEpoch}'
+            .hashCode
+            .abs();
+
+    final title = 'Email from $sender';
+    await _notificationsPlugin.show(
+      notificationId,
+      title,
+      body,
+      notificationDetails,
+      payload: 'nav:devices',
+    );
+
+    LogService().log(
+      'DMNotificationService: Showed email notification from $sender (subject: $displaySubject)',
+    );
+
+    _recordRecentMessage('$title: $displaySubject');
+    await _showSummaryNotification();
   }
 
   /// Show a notification for a direct message
@@ -475,13 +593,41 @@ class DMNotificationService {
         lower.endsWith('.ogg');
   }
 
+  String _extractEmailSenderDisplay(String fromAddress) {
+    final normalized = fromAddress.trim();
+    final atIndex = normalized.indexOf('@');
+    if (atIndex > 0) {
+      return normalized.substring(0, atIndex).toUpperCase();
+    }
+    return normalized.toUpperCase();
+  }
+
+  String _buildEmailNotificationBody({
+    required String subject,
+    required String preview,
+  }) {
+    final normalizedPreview = preview.trim().replaceAll(RegExp(r'\s+'), ' ');
+    if (normalizedPreview.isEmpty) {
+      return _truncateNotificationText(subject, 160);
+    }
+    final combined = '$subject - $normalizedPreview';
+    return _truncateNotificationText(combined, 160);
+  }
+
+  String _truncateNotificationText(String text, int maxChars) {
+    if (text.length <= maxChars) return text;
+    return '${text.substring(0, maxChars)}...';
+  }
+
   /// Handle notification tap
   void _onNotificationTapped(NotificationResponse response) {
     // This callback is called when notification is tapped:
     // - App in foreground: called immediately
     // - App in background: called when app resumes
     print('NOTIFICATION_DEBUG: *** _onNotificationTapped CALLED ***');
-    print('NOTIFICATION_DEBUG: actionId=${response.actionId}, id=${response.id}');
+    print(
+      'NOTIFICATION_DEBUG: actionId=${response.actionId}, id=${response.id}',
+    );
     final payload = response.payload;
     print('NOTIFICATION_DEBUG: payload=$payload');
     if (payload == null) {
@@ -489,7 +635,9 @@ class DMNotificationService {
       return;
     }
 
-    LogService().log('DMNotificationService: Notification tapped with payload: $payload');
+    LogService().log(
+      'DMNotificationService: Notification tapped with payload: $payload',
+    );
 
     // Parse payload (format: "type:data", e.g., "dm:CALLSIGN")
     final colonIndex = payload.indexOf(':');
@@ -523,14 +671,18 @@ class DMNotificationService {
     try {
       final prefs = await SharedPreferences.getInstance();
       final payload = prefs.getString(_pendingActionKey);
-      print('NOTIFICATION_DEBUG: consumePendingAction - payload from SharedPreferences: $payload');
+      print(
+        'NOTIFICATION_DEBUG: consumePendingAction - payload from SharedPreferences: $payload',
+      );
 
       if (payload == null) {
         // Also check static variable for foreground case
         final action = pendingAction;
         if (action != null) {
           pendingAction = null;
-          print('NOTIFICATION_DEBUG: consumePendingAction - returning static pendingAction: ${action.type}:${action.data}');
+          print(
+            'NOTIFICATION_DEBUG: consumePendingAction - returning static pendingAction: ${action.type}:${action.data}',
+          );
           return action;
         }
         return null;
@@ -538,7 +690,9 @@ class DMNotificationService {
 
       // Clear from storage
       await prefs.remove(_pendingActionKey);
-      print('NOTIFICATION_DEBUG: consumePendingAction - cleared from SharedPreferences');
+      print(
+        'NOTIFICATION_DEBUG: consumePendingAction - cleared from SharedPreferences',
+      );
 
       // Parse payload
       final colonIndex = payload.indexOf(':');
@@ -547,7 +701,9 @@ class DMNotificationService {
           type: payload.substring(0, colonIndex),
           data: payload.substring(colonIndex + 1),
         );
-        print('NOTIFICATION_DEBUG: consumePendingAction - returning: ${action.type}:${action.data}');
+        print(
+          'NOTIFICATION_DEBUG: consumePendingAction - returning: ${action.type}:${action.data}',
+        );
         return action;
       }
     } catch (e) {
@@ -566,7 +722,10 @@ class DMNotificationService {
     _totalMessageCount += 1;
     _recentMessageLines.insert(0, line);
     if (_recentMessageLines.length > _maxSummaryLines) {
-      _recentMessageLines.removeRange(_maxSummaryLines, _recentMessageLines.length);
+      _recentMessageLines.removeRange(
+        _maxSummaryLines,
+        _recentMessageLines.length,
+      );
     }
   }
 
@@ -600,9 +759,7 @@ class DMNotificationService {
       groupAlertBehavior: GroupAlertBehavior.summary,
     );
 
-    final notificationDetails = NotificationDetails(
-      android: androidDetails,
-    );
+    final notificationDetails = NotificationDetails(android: androidDetails);
 
     await _notificationsPlugin.show(
       _summaryNotificationId,

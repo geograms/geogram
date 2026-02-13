@@ -1628,6 +1628,7 @@ class PureStationServer with EmailHandlerMixin {
       emailRelay.settings.smtpRelayUsername = _settings.smtpRelayUsername;
       emailRelay.settings.smtpRelayPassword = _settings.smtpRelayPassword;
       emailRelay.settings.smtpRelayStartTls = _settings.smtpRelayStartTls;
+      emailRelay.setCacheDirectory(path.join(PureStorageConfig().baseDir, 'email-cache'));
 
       _log('INFO', 'SMTP config: enabled=${_settings.smtpEnabled}, serverEnabled=${_settings.smtpServerEnabled}, port=${_settings.smtpPort}, domain=${_settings.sslDomain}, relay=${_settings.smtpRelayHost ?? "none"}');
 

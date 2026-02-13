@@ -21,6 +21,8 @@ import '../util/email_format.dart';
 import '../util/event_bus.dart';
 import '../util/nostr_crypto.dart';
 import '../util/nostr_event.dart';
+import 'app_service.dart';
+import 'dm_notification_service.dart';
 import 'log_service.dart';
 import 'profile_service.dart';
 import 'profile_storage.dart';
@@ -37,13 +39,7 @@ class EmailChangeEvent {
   EmailChangeEvent(this.station, this.threadId, this.type);
 }
 
-enum EmailChangeType {
-  created,
-  updated,
-  deleted,
-  statusChanged,
-  received,
-}
+enum EmailChangeType { created, updated, deleted, statusChanged, received }
 
 /// Service for managing emails across multiple stations
 class EmailService {
@@ -53,6 +49,8 @@ class EmailService {
 
   /// Profile storage abstraction - MUST be set before using the service
   late ProfileStorage _storage;
+  bool _hasStorage = false;
+  String? _storageForCallsign;
 
   /// Connected email accounts (station -> account)
   final Map<String, EmailAccount> _accounts = {};
@@ -76,15 +74,54 @@ class EmailService {
   /// Set the storage implementation
   void setStorage(ProfileStorage storage) {
     _storage = storage;
+    _hasStorage = true;
+    try {
+      _storageForCallsign = ProfileService().getProfile().callsign;
+    } catch (_) {
+      _storageForCallsign = null;
+    }
     // Reset initialization when storage changes
     _initialized = false;
+    _initializedForCallsign = null;
     _frequentContacts = null;
+  }
+
+  /// Configure storage from the active profile's email collection.
+  ///
+  /// Uses ProfileStorage/ScopedProfileStorage only (supports encrypted profiles).
+  Future<void> _configureStorageForCallsign(String callsign) async {
+    final profileStorage = AppService().profileStorage;
+    if (profileStorage == null) {
+      throw StateError(
+        'EmailService: profile storage unavailable for $callsign',
+      );
+    }
+
+    final emailAppPath =
+        AppService().getAppByType('email')?.storagePath ??
+        profileStorage.getAbsolutePath('email');
+
+    final scopedStorage = ScopedProfileStorage.fromAbsolutePath(
+      profileStorage,
+      emailAppPath,
+    );
+    setStorage(scopedStorage);
+    _storageForCallsign = callsign;
+    LogService().log(
+      'EmailService: storage configured for $callsign at $emailAppPath',
+    );
   }
 
   /// Initialize email service
   Future<void> initialize() async {
     final profile = ProfileService().getProfile();
-    final currentCallsign = profile?.callsign;
+    final currentCallsign = profile.callsign;
+
+    // Auto-bind storage for the active profile if not configured yet, or if
+    // profile switched and stale storage is still bound.
+    if (!_hasStorage || _storageForCallsign != currentCallsign) {
+      await _configureStorageForCallsign(currentCallsign);
+    }
 
     // Re-initialize if profile changed
     if (_initialized && _initializedForCallsign != currentCallsign) {
@@ -198,41 +235,45 @@ class EmailService {
     thread.folderPath = relativePath;
 
     // Notify listeners
-    _eventController.add(EmailChangeEvent(
-      thread.station,
-      thread.threadId,
-      EmailChangeType.updated,
-    ));
+    _eventController.add(
+      EmailChangeEvent(
+        thread.station,
+        thread.threadId,
+        EmailChangeType.updated,
+      ),
+    );
   }
 
   /// Get the full folder path for a thread (for attachments)
   Future<String?> getThreadFolderPath(EmailThread thread) async {
     await initialize();
-    final relativePath =
-        thread.folderPath ?? EmailFormat.getThreadPath(thread);
+    final relativePath = thread.folderPath ?? EmailFormat.getThreadPath(thread);
     return _storage.getAbsolutePath(relativePath);
   }
 
   // ============ Attachment Operations ============
 
   /// Whether the underlying storage is encrypted
-  bool get isEncryptedStorage => _storage.isEncrypted;
+  bool get isEncryptedStorage => _hasStorage && _storage.isEncrypted;
 
   /// Write attachment bytes to a thread's folder via ProfileStorage.
   Future<void> writeAttachment(
-      EmailThread thread, String filename, Uint8List bytes) async {
+    EmailThread thread,
+    String filename,
+    Uint8List bytes,
+  ) async {
     await initialize();
-    final relativePath =
-        thread.folderPath ?? EmailFormat.getThreadPath(thread);
+    final relativePath = thread.folderPath ?? EmailFormat.getThreadPath(thread);
     await _storage.writeBytes('$relativePath/$filename', bytes);
   }
 
   /// Read attachment bytes from a thread's folder via ProfileStorage.
   Future<Uint8List?> readAttachmentBytes(
-      EmailThread thread, String filename) async {
+    EmailThread thread,
+    String filename,
+  ) async {
     await initialize();
-    final relativePath =
-        thread.folderPath ?? EmailFormat.getThreadPath(thread);
+    final relativePath = thread.folderPath ?? EmailFormat.getThreadPath(thread);
     return _storage.readBytes('$relativePath/$filename');
   }
 
@@ -241,10 +282,11 @@ class EmailService {
   /// For filesystem storage, returns the direct path (no copy needed).
   /// For encrypted storage, extracts to a temp directory first.
   Future<String?> exportAttachmentToTemp(
-      EmailThread thread, String filename) async {
+    EmailThread thread,
+    String filename,
+  ) async {
     await initialize();
-    final relativePath =
-        thread.folderPath ?? EmailFormat.getThreadPath(thread);
+    final relativePath = thread.folderPath ?? EmailFormat.getThreadPath(thread);
     final fileRelPath = '$relativePath/$filename';
 
     if (!_storage.isEncrypted) {
@@ -305,7 +347,9 @@ class EmailService {
             final threadEntries = await _storage.listDirectory(yearEntry.path);
             for (final threadEntry in threadEntries) {
               if (threadEntry.isDirectory) {
-                final thread = await _loadThreadFromRelativePath(threadEntry.path);
+                final thread = await _loadThreadFromRelativePath(
+                  threadEntry.path,
+                );
                 if (thread != null) threads.add(thread);
               }
             }
@@ -460,11 +504,13 @@ class EmailService {
     thread.status = EmailStatus.sent;
     await saveThread(thread);
 
-    _eventController.add(EmailChangeEvent(
-      thread.station,
-      thread.threadId,
-      EmailChangeType.statusChanged,
-    ));
+    _eventController.add(
+      EmailChangeEvent(
+        thread.station,
+        thread.threadId,
+        EmailChangeType.statusChanged,
+      ),
+    );
   }
 
   /// Move thread to outbox (pending delivery)
@@ -475,11 +521,13 @@ class EmailService {
     thread.status = EmailStatus.pending;
     await saveThread(thread);
 
-    _eventController.add(EmailChangeEvent(
-      thread.station,
-      thread.threadId,
-      EmailChangeType.statusChanged,
-    ));
+    _eventController.add(
+      EmailChangeEvent(
+        thread.station,
+        thread.threadId,
+        EmailChangeType.statusChanged,
+      ),
+    );
   }
 
   /// Move thread to spam
@@ -490,11 +538,13 @@ class EmailService {
     thread.status = EmailStatus.spam;
     await saveThread(thread);
 
-    _eventController.add(EmailChangeEvent(
-      thread.station,
-      thread.threadId,
-      EmailChangeType.statusChanged,
-    ));
+    _eventController.add(
+      EmailChangeEvent(
+        thread.station,
+        thread.threadId,
+        EmailChangeType.statusChanged,
+      ),
+    );
   }
 
   /// Move thread to garbage
@@ -505,22 +555,26 @@ class EmailService {
     thread.status = EmailStatus.deleted;
     await saveThread(thread);
 
-    _eventController.add(EmailChangeEvent(
-      thread.station,
-      thread.threadId,
-      EmailChangeType.deleted,
-    ));
+    _eventController.add(
+      EmailChangeEvent(
+        thread.station,
+        thread.threadId,
+        EmailChangeType.deleted,
+      ),
+    );
   }
 
   /// Permanently delete thread
   Future<void> permanentlyDelete(EmailThread thread) async {
     await _deleteThreadFiles(thread);
 
-    _eventController.add(EmailChangeEvent(
-      thread.station,
-      thread.threadId,
-      EmailChangeType.deleted,
-    ));
+    _eventController.add(
+      EmailChangeEvent(
+        thread.station,
+        thread.threadId,
+        EmailChangeType.deleted,
+      ),
+    );
   }
 
   /// Delete a single message from a thread. Returns true if the entire
@@ -551,11 +605,13 @@ class EmailService {
     thread.status = EmailStatus.archived;
     await saveThread(thread);
 
-    _eventController.add(EmailChangeEvent(
-      thread.station,
-      thread.threadId,
-      EmailChangeType.statusChanged,
-    ));
+    _eventController.add(
+      EmailChangeEvent(
+        thread.station,
+        thread.threadId,
+        EmailChangeType.statusChanged,
+      ),
+    );
   }
 
   /// Move thread to a specific status/folder
@@ -566,11 +622,13 @@ class EmailService {
     thread.status = targetStatus;
     await saveThread(thread);
 
-    _eventController.add(EmailChangeEvent(
-      thread.station,
-      thread.threadId,
-      EmailChangeType.statusChanged,
-    ));
+    _eventController.add(
+      EmailChangeEvent(
+        thread.station,
+        thread.threadId,
+        EmailChangeType.statusChanged,
+      ),
+    );
   }
 
   /// Restore thread from trash/spam back to inbox
@@ -614,7 +672,11 @@ class EmailService {
   }
 
   /// Update label refs.json
-  Future<void> _updateLabelRefs(String label, EmailThread thread, {required bool add}) async {
+  Future<void> _updateLabelRefs(
+    String label,
+    EmailThread thread, {
+    required bool add,
+  }) async {
     final labelPath = 'labels/$label';
     final refsPath = '$labelPath/refs.json';
 
@@ -764,12 +826,14 @@ class EmailService {
 
     if (!ws.isConnected) {
       LogService().log('WebSocket not connected, cannot send email');
-      EventBus().fire(EmailNotificationEvent(
-        message: 'Cannot send: Not connected to station',
-        action: 'failed',
-        threadId: thread.threadId,
-        recipient: thread.to.isNotEmpty ? thread.to.first : null,
-      ));
+      EventBus().fire(
+        EmailNotificationEvent(
+          message: 'Cannot send: Not connected to station',
+          action: 'failed',
+          threadId: thread.threadId,
+          recipient: thread.to.isNotEmpty ? thread.to.first : null,
+        ),
+      );
       return false;
     }
 
@@ -779,7 +843,9 @@ class EmailService {
 
       // Create NOSTR event for the email
       final event = NostrEvent(
-        pubkey: profile.npub != null ? NostrCrypto.decodeNpub(profile.npub!) : '',
+        pubkey: profile.npub != null
+            ? NostrCrypto.decodeNpub(profile.npub!)
+            : '',
         createdAt: DateTime.now().millisecondsSinceEpoch ~/ 1000,
         kind: 30078, // Private direct message / email
         tags: [
@@ -808,22 +874,26 @@ class EmailService {
       ws.send(message);
 
       // Fire pending notification - actual delivery confirmed via DSN
-      EventBus().fire(EmailNotificationEvent(
-        message: 'Email queued, awaiting delivery...',
-        action: 'pending',
-        threadId: thread.threadId,
-        recipient: thread.to.isNotEmpty ? thread.to.first : null,
-      ));
+      EventBus().fire(
+        EmailNotificationEvent(
+          message: 'Email queued, awaiting delivery...',
+          action: 'pending',
+          threadId: thread.threadId,
+          recipient: thread.to.isNotEmpty ? thread.to.first : null,
+        ),
+      );
 
       return true;
     } catch (e) {
       LogService().log('Error sending email via WebSocket: $e');
-      EventBus().fire(EmailNotificationEvent(
-        message: 'Failed to send: $e',
-        action: 'failed',
-        threadId: thread.threadId,
-        recipient: thread.to.isNotEmpty ? thread.to.first : null,
-      ));
+      EventBus().fire(
+        EmailNotificationEvent(
+          message: 'Failed to send: $e',
+          action: 'failed',
+          threadId: thread.threadId,
+          recipient: thread.to.isNotEmpty ? thread.to.first : null,
+        ),
+      );
       return false;
     }
   }
@@ -854,7 +924,9 @@ class EmailService {
 
     if (threadId == null || action == null) return;
 
-    LogService().log('DSN received: action=$action, threadId=$threadId, recipient=$recipient');
+    LogService().log(
+      'DSN received: action=$action, threadId=$threadId, recipient=$recipient',
+    );
 
     // Find the thread in unified outbox
     final outbox = await getOutbox();
@@ -876,12 +948,14 @@ class EmailService {
       switch (action) {
         case 'delivered':
           await markAsSent(thread);
-          notificationMessage = 'Email delivered to ${recipient ?? thread.to.join(", ")}';
+          notificationMessage =
+              'Email delivered to ${recipient ?? thread.to.join(", ")}';
           break;
         case 'failed':
           thread.status = EmailStatus.failed;
           await saveThread(thread);
-          notificationMessage = 'Email delivery failed${reason != null ? ": $reason" : ""}';
+          notificationMessage =
+              'Email delivery failed${reason != null ? ": $reason" : ""}';
           break;
         case 'pending_approval':
           // Email is waiting for station operator approval
@@ -893,26 +967,27 @@ class EmailService {
           break;
         case 'delayed':
           // Keep in outbox, maybe add retry info to metadata
-          notificationMessage = 'Email to $recipient delayed - recipient offline';
+          notificationMessage =
+              'Email to $recipient delayed - recipient offline';
           break;
       }
     }
 
     // Fire notification event for UI to display
     if (notificationMessage != null) {
-      EventBus().fire(EmailNotificationEvent(
-        message: notificationMessage,
-        action: action!,
-        threadId: threadId,
-        recipient: recipient,
-      ));
+      EventBus().fire(
+        EmailNotificationEvent(
+          message: notificationMessage,
+          action: action!,
+          threadId: threadId,
+          recipient: recipient,
+        ),
+      );
     }
 
-    _eventController.add(EmailChangeEvent(
-      '',
-      threadId,
-      EmailChangeType.statusChanged,
-    ));
+    _eventController.add(
+      EmailChangeEvent('', threadId, EmailChangeType.statusChanged),
+    );
   }
 
   /// Receive an email from the station (via WebSocket)
@@ -932,7 +1007,9 @@ class EmailService {
       final event = message['event'] as Map<String, dynamic>?;
 
       if (from == null || threadId == null || contentB64 == null) {
-        LogService().log('EmailService: Invalid email_receive message - missing fields');
+        LogService().log(
+          'EmailService: Invalid email_receive message - missing fields',
+        );
         return false;
       }
 
@@ -955,7 +1032,8 @@ class EmailService {
       if (existingThread != null) {
         // Append new message to existing thread
         final timestamp = DateTime.now();
-        final created = '${timestamp.year}-${timestamp.month.toString().padLeft(2, '0')}-${timestamp.day.toString().padLeft(2, '0')} '
+        final created =
+            '${timestamp.year}-${timestamp.month.toString().padLeft(2, '0')}-${timestamp.day.toString().padLeft(2, '0')} '
             '${timestamp.hour.toString().padLeft(2, '0')}:${timestamp.minute.toString().padLeft(2, '0')}_'
             '${timestamp.second.toString().padLeft(2, '0')}';
 
@@ -975,13 +1053,23 @@ class EmailService {
         existingThread.addMessage(emailMessage);
         await saveThread(existingThread);
 
-        LogService().log('EmailService: Appended reply from $from to existing thread $threadId');
+        LogService().log(
+          'EmailService: Appended reply from $from to existing thread $threadId',
+        );
 
-        _eventController.add(EmailChangeEvent(
-          existingThread.station,
-          threadId,
-          EmailChangeType.received,
-        ));
+        _eventController.add(
+          EmailChangeEvent(
+            existingThread.station,
+            threadId,
+            EmailChangeType.received,
+          ),
+        );
+
+        await _showIncomingEmailNotification(
+          from: from,
+          subject: subject ?? existingThread.subject,
+          content: content,
+        );
 
         return true;
       }
@@ -994,7 +1082,8 @@ class EmailService {
         // Content might just be the message body, not full thread.md
         // Create a new thread for this received email
         final timestamp = DateTime.now();
-        final created = '${timestamp.year}-${timestamp.month.toString().padLeft(2, '0')}-${timestamp.day.toString().padLeft(2, '0')} '
+        final created =
+            '${timestamp.year}-${timestamp.month.toString().padLeft(2, '0')}-${timestamp.day.toString().padLeft(2, '0')} '
             '${timestamp.hour.toString().padLeft(2, '0')}:${timestamp.minute.toString().padLeft(2, '0')}_'
             '${timestamp.second.toString().padLeft(2, '0')}';
 
@@ -1039,14 +1128,20 @@ class EmailService {
       // Save to inbox
       await saveThread(thread);
 
-      LogService().log('EmailService: Received email from $from (thread: $threadId)');
+      LogService().log(
+        'EmailService: Received email from $from (thread: $threadId)',
+      );
 
       // Notify listeners
-      _eventController.add(EmailChangeEvent(
-        thread.station,
-        threadId,
-        EmailChangeType.received,
-      ));
+      _eventController.add(
+        EmailChangeEvent(thread.station, threadId, EmailChangeType.received),
+      );
+
+      await _showIncomingEmailNotification(
+        from: from,
+        subject: thread.subject,
+        content: content,
+      );
 
       return true;
     } catch (e, stack) {
@@ -1062,13 +1157,17 @@ class EmailService {
     try {
       final encryptedB64 = message['encrypted_content'] as String?;
       if (encryptedB64 == null) {
-        LogService().log('EmailService: Missing encrypted_content in email_receive_encrypted');
+        LogService().log(
+          'EmailService: Missing encrypted_content in email_receive_encrypted',
+        );
         return false;
       }
 
       final profile = ProfileService().getProfile();
       if (profile.nsec.isEmpty) {
-        LogService().log('EmailService: Cannot decrypt cached email - no nsec available');
+        LogService().log(
+          'EmailService: Cannot decrypt cached email - no nsec available',
+        );
         return false;
       }
 
@@ -1080,16 +1179,44 @@ class EmailService {
       );
 
       // Parse decrypted JSON as email message
-      final decryptedJson = jsonDecode(utf8.decode(decryptedBytes)) as Map<String, dynamic>;
+      final decryptedJson =
+          jsonDecode(utf8.decode(decryptedBytes)) as Map<String, dynamic>;
 
-      LogService().log('EmailService: Decrypted cached email from ${decryptedJson['from']}');
+      LogService().log(
+        'EmailService: Decrypted cached email from ${decryptedJson['from']}',
+      );
 
       // Delegate to standard receiveEmail logic
       return await receiveEmail(decryptedJson);
     } catch (e, stack) {
-      LogService().log('EmailService: Error decrypting cached email: $e\n$stack');
+      LogService().log(
+        'EmailService: Error decrypting cached email: $e\n$stack',
+      );
       return false;
     }
+  }
+
+  Future<void> _showIncomingEmailNotification({
+    required String from,
+    required String subject,
+    required String content,
+  }) async {
+    try {
+      await DMNotificationService().showEmailMessage(
+        fromAddress: from,
+        subject: subject,
+        preview: _buildEmailPreview(content),
+      );
+    } catch (e) {
+      LogService().log('EmailService: Failed to show email notification: $e');
+    }
+  }
+
+  String _buildEmailPreview(String content) {
+    final normalized = content.trim().replaceAll(RegExp(r'\s+'), ' ');
+    if (normalized.isEmpty) return '';
+    if (normalized.length <= 120) return normalized;
+    return '${normalized.substring(0, 120)}...';
   }
 
   // ============================================
@@ -1134,7 +1261,8 @@ class EmailService {
 
     try {
       final content = jsonEncode(
-          _frequentContacts!.map((c) => c.toJson()).toList());
+        _frequentContacts!.map((c) => c.toJson()).toList(),
+      );
       await _storage.writeString('frequent.json', content);
     } catch (e) {
       print('Error saving frequent contacts: $e');
@@ -1143,7 +1271,10 @@ class EmailService {
 
   /// Update frequent contacts when sending to recipients
   /// Call this when sending an email to track usage
-  Future<void> trackRecipients(List<String> recipients, {String? senderName}) async {
+  Future<void> trackRecipients(
+    List<String> recipients, {
+    String? senderName,
+  }) async {
     if (recipients.isEmpty) return;
 
     await loadFrequentContacts();
@@ -1155,8 +1286,9 @@ class EmailService {
       final name = parsed['name'] ?? senderName ?? '';
 
       // Find existing or create new
-      final existingIndex =
-          _frequentContacts!.indexWhere((c) => c.email.toLowerCase() == email);
+      final existingIndex = _frequentContacts!.indexWhere(
+        (c) => c.email.toLowerCase() == email,
+      );
 
       if (existingIndex >= 0) {
         // Update existing
@@ -1168,11 +1300,9 @@ class EmailService {
         );
       } else {
         // Add new
-        _frequentContacts!.add(FrequentContact(
-          name: name,
-          email: email,
-          count: 1,
-        ));
+        _frequentContacts!.add(
+          FrequentContact(name: name, email: email, count: 1),
+        );
       }
     }
 
@@ -1190,17 +1320,11 @@ class EmailService {
     // Check for "Name <email>" format
     final match = RegExp(r'^(.+?)\s*<(.+?)>$').firstMatch(trimmed);
     if (match != null) {
-      return {
-        'name': match.group(1)!.trim(),
-        'email': match.group(2)!.trim(),
-      };
+      return {'name': match.group(1)!.trim(), 'email': match.group(2)!.trim()};
     }
 
     // Just email address
-    return {
-      'name': '',
-      'email': trimmed,
-    };
+    return {'name': '', 'email': trimmed};
   }
 
   /// Get top frequent contacts (for dropdown suggestions)
@@ -1254,10 +1378,10 @@ class FrequentContact {
   }
 
   Map<String, dynamic> toJson() => {
-        'name': name,
-        'email': email,
-        'count': count,
-      };
+    'name': name,
+    'email': email,
+    'count': count,
+  };
 
   /// Display string for autocomplete
   String get displayString {

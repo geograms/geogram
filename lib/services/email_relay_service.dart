@@ -53,12 +53,11 @@
  */
 
 import 'dart:convert';
+import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
+import 'dart:typed_data';
 
-// TODO: Re-enable when ECIES encryption is properly implemented
-// import 'dart:io';
-// import 'dart:typed_data';
-// import 'package:sqlite3/sqlite3.dart' as sqlite;
-// import '../util/backup_encryption.dart';
+import 'package:path/path.dart' as path;
+import '../util/backup_encryption.dart';
 import '../util/email_format.dart';
 import '../util/nostr_crypto.dart';
 import '../util/nostr_event.dart';
@@ -66,8 +65,6 @@ import 'log_service.dart';
 import 'nip05_registry_service.dart';
 import 'smtp_client.dart' show SMTPClient, DkimConfig, SMTPRelayConfig;
 import 'smtp_server.dart' show MIMEParser;
-// TODO: Re-enable when ECIES encryption is properly implemented
-// import 'storage_config.dart';
 
 /// Callback type for sending messages to clients
 typedef SendToClientCallback = bool Function(String clientId, String message);
@@ -101,6 +98,83 @@ class PendingEmail {
   });
 
   bool get isExpired => DateTime.now().isAfter(retryUntil);
+}
+
+/// Encrypted cached email entry persisted on the station for offline recipients.
+///
+/// The encrypted payload can only be decrypted by the recipient's nsec.
+class CachedEncryptedEmailEntry {
+  final String id;
+  final String recipientCallsign;
+  final String recipientNpub;
+  final String senderCallsign;
+  final String senderId;
+  final String recipient;
+  final String threadId;
+  final DateTime timestamp;
+  final DateTime retryUntil;
+  final String encryptedContentB64;
+  final int payloadSizeBytes;
+
+  CachedEncryptedEmailEntry({
+    required this.id,
+    required this.recipientCallsign,
+    required this.recipientNpub,
+    required this.senderCallsign,
+    required this.senderId,
+    required this.recipient,
+    required this.threadId,
+    required this.timestamp,
+    required this.retryUntil,
+    required this.encryptedContentB64,
+    required this.payloadSizeBytes,
+  });
+
+  bool get isExpired => DateTime.now().isAfter(retryUntil);
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'recipient_callsign': recipientCallsign,
+    'recipient_npub': recipientNpub,
+    'sender_callsign': senderCallsign,
+    'sender_id': senderId,
+    'recipient': recipient,
+    'thread_id': threadId,
+    'timestamp': timestamp.toIso8601String(),
+    'retry_until': retryUntil.toIso8601String(),
+    'encrypted_content': encryptedContentB64,
+    'payload_size_bytes': payloadSizeBytes,
+  };
+
+  factory CachedEncryptedEmailEntry.fromJson(Map<String, dynamic> json) {
+    final encryptedContent = json['encrypted_content'] as String? ?? '';
+    var payloadSize = json['payload_size_bytes'] as int? ?? 0;
+    if (payloadSize <= 0 && encryptedContent.isNotEmpty) {
+      try {
+        payloadSize = base64Decode(encryptedContent).length;
+      } catch (_) {
+        payloadSize = encryptedContent.length;
+      }
+    }
+
+    return CachedEncryptedEmailEntry(
+      id: json['id'] as String? ?? '',
+      recipientCallsign: json['recipient_callsign'] as String? ?? '',
+      recipientNpub: json['recipient_npub'] as String? ?? '',
+      senderCallsign: json['sender_callsign'] as String? ?? '',
+      senderId: json['sender_id'] as String? ?? '',
+      recipient: json['recipient'] as String? ?? '',
+      threadId: json['thread_id'] as String? ?? '',
+      timestamp:
+          DateTime.tryParse(json['timestamp'] as String? ?? '') ??
+          DateTime.now().toUtc(),
+      retryUntil:
+          DateTime.tryParse(json['retry_until'] as String? ?? '') ??
+          DateTime.now().toUtc().add(const Duration(hours: 24)),
+      encryptedContentB64: encryptedContent,
+      payloadSizeBytes: payloadSize,
+    );
+  }
 }
 
 /// Approval status for external emails
@@ -209,11 +283,17 @@ class EmailRelayService {
   final Map<String, String> _outgoingSubjects = {};
 
   /// Maximum cache size per recipient (10 MB)
-  // TODO: Re-enable when ECIES encryption is properly implemented
-  // static const int _maxCacheSizeBytes = 10 * 1024 * 1024;
+  static const int _maxCacheSizeBytes = 10 * 1024 * 1024;
+  String? _cacheDirectoryPath;
 
   /// Email relay settings
   EmailRelaySettings settings = EmailRelaySettings();
+
+  /// Configure cache directory for encrypted offline email storage.
+  void setCacheDirectory(String cacheDirectoryPath) {
+    _cacheDirectoryPath = cacheDirectoryPath;
+    _ensureCacheDirectoryExists();
+  }
 
   // ============================================================
   // External Email Approval Queue Methods
@@ -255,7 +335,9 @@ class EmailRelayService {
       _externalEmailAllowlist.add(entry.senderCallsign.toUpperCase());
     }
 
-    LogService().log('External email approved: ${entry.id} by $reviewerCallsign');
+    LogService().log(
+      'External email approved: ${entry.id} by $reviewerCallsign',
+    );
 
     // Trigger SMTP delivery
     _sendExternalEmailViaSMTP(entry);
@@ -270,7 +352,9 @@ class EmailRelayService {
   Future<void> _sendExternalEmailViaSMTP(ExternalEmailEntry entry) async {
     // Check if station domain is configured
     if (settings.stationDomain == 'localhost') {
-      LogService().log('SMTP: Station domain not configured, skipping delivery');
+      LogService().log(
+        'SMTP: Station domain not configured, skipping delivery',
+      );
       entry.status = ExternalEmailStatus.failed;
 
       if (entry.sendToClientCallback != null) {
@@ -295,7 +379,8 @@ class EmailRelayService {
           action: 'failed',
           threadId: entry.threadId,
           recipient: entry.externalRecipients.join(', '),
-          reason: 'External email not available: SMTP relay not configured on station',
+          reason:
+              'External email not available: SMTP relay not configured on station',
         );
         entry.sendToClientCallback!(entry.senderId, jsonEncode(dsn));
       }
@@ -304,7 +389,8 @@ class EmailRelayService {
 
     // Create DKIM config if private key is available
     DkimConfig? dkimConfig;
-    if (settings.dkimPrivateKey != null && settings.dkimPrivateKey!.isNotEmpty) {
+    if (settings.dkimPrivateKey != null &&
+        settings.dkimPrivateKey!.isNotEmpty) {
       dkimConfig = DkimConfig(
         privateKeyPem: settings.dkimPrivateKey!,
         selector: settings.dkimSelector,
@@ -321,7 +407,9 @@ class EmailRelayService {
         password: settings.smtpRelayPassword,
         useStartTls: settings.smtpRelayStartTls,
       );
-      LogService().log('SMTP: Using relay ${settings.smtpRelayHost}:${settings.smtpRelayPort}');
+      LogService().log(
+        'SMTP: Using relay ${settings.smtpRelayHost}:${settings.smtpRelayPort}',
+      );
     }
 
     final client = SMTPClient(
@@ -332,7 +420,8 @@ class EmailRelayService {
     );
 
     // Build sender email from callsign
-    final fromEmail = '${entry.senderCallsign.toLowerCase()}@${settings.stationDomain}';
+    final fromEmail =
+        '${entry.senderCallsign.toLowerCase()}@${settings.stationDomain}';
 
     // Extract email body from content (base64 decoded thread.md content)
     String body;
@@ -343,7 +432,9 @@ class EmailRelayService {
       body = entry.content; // Already plain text
     }
 
-    LogService().log('SMTP: Sending external email from $fromEmail to ${entry.externalRecipients.join(", ")}');
+    LogService().log(
+      'SMTP: Sending external email from $fromEmail to ${entry.externalRecipients.join(", ")}',
+    );
 
     try {
       // Build extra headers including reply threading
@@ -374,11 +465,10 @@ class EmailRelayService {
         entry.status = ExternalEmailStatus.sent;
 
         // Track outgoing email for reply matching
-        trackOutgoingEmail(
-          threadId: entry.threadId,
-          subject: entry.subject,
+        trackOutgoingEmail(threadId: entry.threadId, subject: entry.subject);
+        LogService().log(
+          'SMTP: Successfully sent external email: ${entry.id} (${result.message})',
         );
-        LogService().log('SMTP: Successfully sent external email: ${entry.id} (${result.message})');
 
         // Send DSN to notify sender of successful delivery
         if (entry.sendToClientCallback != null) {
@@ -388,11 +478,15 @@ class EmailRelayService {
             recipient: entry.externalRecipients.join(', '),
           );
           entry.sendToClientCallback!(entry.senderId, jsonEncode(dsn));
-          LogService().log('SMTP: Sent delivery confirmation DSN to ${entry.senderCallsign}');
+          LogService().log(
+            'SMTP: Sent delivery confirmation DSN to ${entry.senderCallsign}',
+          );
         }
       } else {
         entry.status = ExternalEmailStatus.failed;
-        LogService().log('SMTP: Failed to send external email: ${entry.id} - ${result.error}');
+        LogService().log(
+          'SMTP: Failed to send external email: ${entry.id} - ${result.error}',
+        );
 
         // Send DSN to notify sender of failed delivery
         if (entry.sendToClientCallback != null) {
@@ -407,7 +501,9 @@ class EmailRelayService {
       }
     } catch (e) {
       entry.status = ExternalEmailStatus.failed;
-      LogService().log('SMTP: Exception sending external email: ${entry.id} - $e');
+      LogService().log(
+        'SMTP: Exception sending external email: ${entry.id} - $e',
+      );
 
       // Send DSN to notify sender of exception
       if (entry.sendToClientCallback != null) {
@@ -441,13 +537,16 @@ class EmailRelayService {
     }
 
     // Append signature verification block if any message has signing metadata
-    final hasSigningMetadata = thread.messages.any((m) =>
-        m.hasMeta('event_id') || m.hasMeta('npub') || m.hasMeta('signature'));
+    final hasSigningMetadata = thread.messages.any(
+      (m) =>
+          m.hasMeta('event_id') || m.hasMeta('npub') || m.hasMeta('signature'),
+    );
 
     if (hasSigningMetadata) {
       buffer.write('\n\n\n--------------\n');
       buffer.writeln(
-          'Signature verification for NOSTR, you can ignore the text below.');
+        'Signature verification for NOSTR, you can ignore the text below.',
+      );
       buffer.writeln('--------------');
       for (int i = 0; i < thread.messages.length; i++) {
         if (i > 0) buffer.write('\n');
@@ -482,10 +581,14 @@ class EmailRelayService {
     // Optionally ban the sender
     if (banSender) {
       _externalEmailBlocklist.add(entry.senderCallsign.toUpperCase());
-      LogService().log('Sender banned from external emails: ${entry.senderCallsign}');
+      LogService().log(
+        'Sender banned from external emails: ${entry.senderCallsign}',
+      );
     }
 
-    LogService().log('External email rejected: ${entry.id} by $reviewerCallsign - ${entry.rejectionReason}');
+    LogService().log(
+      'External email rejected: ${entry.id} by $reviewerCallsign - ${entry.rejectionReason}',
+    );
 
     // Notify sender if callback provided
     if (sendToClient != null) {
@@ -540,8 +643,9 @@ class EmailRelayService {
   List<String> getBlocklist() => _externalEmailBlocklist.toList();
 
   /// Get count of pending external emails
-  int get pendingExternalEmailCount =>
-      _externalApprovalQueue.values.where((e) => e.status == ExternalEmailStatus.pending).length;
+  int get pendingExternalEmailCount => _externalApprovalQueue.values
+      .where((e) => e.status == ExternalEmailStatus.pending)
+      .length;
 
   /// Clean up old external email entries (approved, rejected, or expired)
   void cleanupExternalEmailQueue([Duration maxAge = const Duration(days: 30)]) {
@@ -556,26 +660,298 @@ class EmailRelayService {
       _externalApprovalQueue.remove(key);
     }
     if (toRemove.isNotEmpty) {
-      LogService().log('Cleaned up ${toRemove.length} external email queue entries');
+      LogService().log(
+        'Cleaned up ${toRemove.length} external email queue entries',
+      );
     }
   }
 
   // ============================================================
   // Encrypted Email Cache (for offline recipients)
-  // TODO: Re-enable when ECIES encryption is properly implemented
   // ============================================================
 
-  // String _getCachePath(String callsign) {
-  //   return '${StorageConfig().emailCacheDir}/${callsign.toUpperCase()}.db';
-  // }
+  String _resolveCacheDirectoryPath() {
+    if (_cacheDirectoryPath != null && _cacheDirectoryPath!.isNotEmpty) {
+      return _cacheDirectoryPath!;
+    }
+    return path.join('.', 'email-cache');
+  }
 
-  // Future<bool> cacheEmailForRecipient({
-  //   required String recipientCallsign,
-  //   required String recipientNpub,
-  //   required Map<String, dynamic> emailMessage,
-  // }) async { ... }
+  void _ensureCacheDirectoryExists() {
+    final dir = Directory(_resolveCacheDirectoryPath());
+    if (!dir.existsSync()) {
+      dir.createSync(recursive: true);
+    }
+  }
 
-  // Future<List<Uint8List>> retrieveAndClearCache(String recipientCallsign) async { ... }
+  String _getCacheFilePath(String callsign) {
+    return path.join(
+      _resolveCacheDirectoryPath(),
+      '${callsign.toUpperCase()}.json',
+    );
+  }
+
+  String? _getAuthorizedRecipientNpub(String callsign) {
+    return Nip05RegistryService().getRegistration(callsign)?.npub;
+  }
+
+  List<CachedEncryptedEmailEntry> _loadCacheEntries(String callsign) {
+    final file = File(_getCacheFilePath(callsign));
+    if (!file.existsSync()) {
+      return [];
+    }
+
+    try {
+      final raw = file.readAsStringSync();
+      if (raw.trim().isEmpty) {
+        return [];
+      }
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map<String, dynamic>) {
+        return [];
+      }
+      final entriesRaw = decoded['entries'];
+      if (entriesRaw is! List) {
+        return [];
+      }
+      final entries = <CachedEncryptedEmailEntry>[];
+      for (final item in entriesRaw) {
+        if (item is Map<String, dynamic>) {
+          entries.add(CachedEncryptedEmailEntry.fromJson(item));
+        } else if (item is Map) {
+          entries.add(
+            CachedEncryptedEmailEntry.fromJson(item.cast<String, dynamic>()),
+          );
+        }
+      }
+      entries.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+      return entries;
+    } catch (e) {
+      LogService().log('Email cache read error for $callsign: $e');
+      return [];
+    }
+  }
+
+  void _saveCacheEntries(
+    String callsign,
+    List<CachedEncryptedEmailEntry> entries,
+  ) {
+    final file = File(_getCacheFilePath(callsign));
+    if (entries.isEmpty) {
+      if (file.existsSync()) {
+        file.deleteSync();
+      }
+      return;
+    }
+
+    _ensureCacheDirectoryExists();
+    final payload = <String, dynamic>{
+      'version': 1,
+      'callsign': callsign.toUpperCase(),
+      'updated_at': DateTime.now().toUtc().toIso8601String(),
+      'entries': entries.map((e) => e.toJson()).toList(),
+    };
+    file.writeAsStringSync(jsonEncode(payload));
+  }
+
+  int _totalCacheBytes(List<CachedEncryptedEmailEntry> entries) {
+    return entries.fold<int>(0, (sum, entry) => sum + entry.payloadSizeBytes);
+  }
+
+  int _trimCacheToLimit(List<CachedEncryptedEmailEntry> entries) {
+    entries.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+    var dropped = 0;
+    var total = _totalCacheBytes(entries);
+    while (total > _maxCacheSizeBytes && entries.isNotEmpty) {
+      final removed = entries.removeAt(0);
+      total -= removed.payloadSizeBytes;
+      dropped++;
+    }
+    return dropped;
+  }
+
+  bool _cacheEmailForRecipient({
+    required String recipientCallsign,
+    required String recipientNpub,
+    required Map<String, dynamic> emailMessage,
+    required String senderCallsign,
+    required String senderId,
+    required String recipient,
+    required DateTime retryUntil,
+  }) {
+    try {
+      final plaintext = Uint8List.fromList(
+        utf8.encode(jsonEncode(emailMessage)),
+      );
+      final encryptedBytes = BackupEncryption.encryptFile(
+        plaintext,
+        recipientNpub,
+      );
+
+      if (encryptedBytes.length > _maxCacheSizeBytes) {
+        LogService().log(
+          'Email cache: message too large for $recipientCallsign (${encryptedBytes.length} bytes)',
+        );
+        return false;
+      }
+
+      final entries = _loadCacheEntries(recipientCallsign)
+        ..removeWhere((entry) => entry.isExpired);
+
+      final threadId = emailMessage['thread_id'] as String? ?? '';
+      final entry = CachedEncryptedEmailEntry(
+        id: '${DateTime.now().microsecondsSinceEpoch}_${threadId.hashCode.abs()}',
+        recipientCallsign: recipientCallsign.toUpperCase(),
+        recipientNpub: recipientNpub,
+        senderCallsign: senderCallsign,
+        senderId: senderId,
+        recipient: recipient,
+        threadId: threadId,
+        timestamp: DateTime.now().toUtc(),
+        retryUntil: retryUntil.toUtc(),
+        encryptedContentB64: base64Encode(encryptedBytes),
+        payloadSizeBytes: encryptedBytes.length,
+      );
+
+      entries.add(entry);
+      final dropped = _trimCacheToLimit(entries);
+      _saveCacheEntries(recipientCallsign, entries);
+
+      if (dropped > 0) {
+        LogService().log(
+          'Email cache: dropped $dropped old message(s) for $recipientCallsign to stay under ${_maxCacheSizeBytes ~/ (1024 * 1024)}MB',
+        );
+      }
+      return true;
+    } catch (e) {
+      LogService().log('Email cache write error for $recipientCallsign: $e');
+      return false;
+    }
+  }
+
+  int _deliverCachedEmails({
+    required String clientId,
+    required String callsign,
+    required SendToClientCallback sendToClient,
+  }) {
+    final entries = _loadCacheEntries(callsign);
+    if (entries.isEmpty) {
+      return 0;
+    }
+
+    final authorizedNpub = _getAuthorizedRecipientNpub(callsign);
+    if (authorizedNpub == null || authorizedNpub.isEmpty) {
+      // Recipient is no longer authorized in NIP-05, clear cached messages.
+      _saveCacheEntries(callsign, <CachedEncryptedEmailEntry>[]);
+      LogService().log(
+        'Email cache cleared for unauthorized recipient: ${callsign.toUpperCase()}',
+      );
+      return 0;
+    }
+
+    final remaining = <CachedEncryptedEmailEntry>[];
+    var delivered = 0;
+    var droppedUnauthorized = 0;
+    var droppedExpired = 0;
+
+    for (var i = 0; i < entries.length; i++) {
+      final entry = entries[i];
+
+      if (entry.isExpired) {
+        droppedExpired++;
+        continue;
+      }
+
+      if (entry.recipientNpub != authorizedNpub) {
+        droppedUnauthorized++;
+        continue;
+      }
+
+      final encryptedMessage = <String, dynamic>{
+        'type': 'email_receive_encrypted',
+        'encrypted_content': entry.encryptedContentB64,
+        'thread_id': entry.threadId,
+        'cached_at': entry.timestamp.toIso8601String(),
+      };
+
+      if (sendToClient(clientId, jsonEncode(encryptedMessage))) {
+        delivered++;
+        if (entry.senderId.isNotEmpty) {
+          final dsn = _createDsn(
+            action: 'delivered',
+            threadId: entry.threadId,
+            recipient: entry.recipient,
+          );
+          sendToClient(entry.senderId, jsonEncode(dsn));
+        }
+      } else {
+        // Connection likely dropped. Keep this and all remaining entries.
+        remaining.add(entry);
+        if (i + 1 < entries.length) {
+          remaining.addAll(entries.sublist(i + 1));
+        }
+        break;
+      }
+    }
+
+    _saveCacheEntries(callsign, remaining);
+
+    if (droppedExpired > 0 || droppedUnauthorized > 0) {
+      LogService().log(
+        'Email cache cleanup for $callsign: expired=$droppedExpired, unauthorized=$droppedUnauthorized',
+      );
+    }
+    if (delivered > 0) {
+      LogService().log('Delivered $delivered cached email(s) to $callsign');
+    }
+    return delivered;
+  }
+
+  void _cleanupExpiredCachedEmails() {
+    final dir = Directory(_resolveCacheDirectoryPath());
+    if (!dir.existsSync()) {
+      return;
+    }
+
+    final files = dir
+        .listSync()
+        .whereType<File>()
+        .where((file) => file.path.toLowerCase().endsWith('.json'))
+        .toList();
+
+    var cleanedEntries = 0;
+    for (final file in files) {
+      final callsign = path.basenameWithoutExtension(file.path).toUpperCase();
+      final entries = _loadCacheEntries(callsign);
+      final before = entries.length;
+      entries.removeWhere((entry) => entry.isExpired);
+      if (entries.length != before) {
+        cleanedEntries += (before - entries.length);
+        _saveCacheEntries(callsign, entries);
+      }
+    }
+
+    if (cleanedEntries > 0) {
+      LogService().log('Cleaned up $cleanedEntries expired cached email(s)');
+    }
+  }
+
+  int _countCachedEmails() {
+    final dir = Directory(_resolveCacheDirectoryPath());
+    if (!dir.existsSync()) {
+      return 0;
+    }
+
+    var count = 0;
+    final files = dir.listSync().whereType<File>().where(
+      (file) => file.path.toLowerCase().endsWith('.json'),
+    );
+    for (final file in files) {
+      final callsign = path.basenameWithoutExtension(file.path).toUpperCase();
+      count += _loadCacheEntries(callsign).length;
+    }
+    return count;
+  }
 
   // ============================================================
   // Incoming Email Handling (SMTP -> WebSocket)
@@ -606,20 +982,26 @@ class EmailRelayService {
         threadId = customThreadId;
       }
       // 2. In-Reply-To header -> look up in outgoing message IDs
-      else if (parser.inReplyTo != null && _outgoingMessageIds.containsKey(parser.inReplyTo)) {
+      else if (parser.inReplyTo != null &&
+          _outgoingMessageIds.containsKey(parser.inReplyTo)) {
         threadId = _outgoingMessageIds[parser.inReplyTo]!;
       }
       // 3. References header -> check each reference
       else if (parser.references != null) {
         final refs = parser.references!.split(RegExp(r'\s+'));
-        threadId = refs
-            .where((ref) => _outgoingMessageIds.containsKey(ref))
-            .map((ref) => _outgoingMessageIds[ref]!)
-            .firstOrNull ?? _matchBySubject(subject) ?? 'ext_${(parser.messageId ?? senderEmail).hashCode.abs()}';
+        threadId =
+            refs
+                .where((ref) => _outgoingMessageIds.containsKey(ref))
+                .map((ref) => _outgoingMessageIds[ref]!)
+                .firstOrNull ??
+            _matchBySubject(subject) ??
+            'ext_${(parser.messageId ?? senderEmail).hashCode.abs()}';
       }
       // 4. Subject matching
       else {
-        threadId = _matchBySubject(subject) ?? 'ext_${(parser.messageId ?? senderEmail).hashCode.abs()}';
+        threadId =
+            _matchBySubject(subject) ??
+            'ext_${(parser.messageId ?? senderEmail).hashCode.abs()}';
       }
 
       // Track incoming Message-ID for future reference chain
@@ -649,21 +1031,46 @@ class EmailRelayService {
           // Online: deliver immediately via WebSocket
           if (sendToClient(clientId, jsonEncode(emailMessage))) {
             anyDelivered = true;
-            LogService().log('External email delivered: $senderEmail -> $callsign (thread: $threadId)');
+            LogService().log(
+              'External email delivered: $senderEmail -> $callsign (thread: $threadId)',
+            );
           }
         } else {
-          // Offline: queue for delivery when recipient reconnects
-          final pendingKey = '${threadId}_$callsign';
-          _pendingEmails[pendingKey] = PendingEmail(
-            message: emailMessage,
-            senderCallsign: senderEmail,
-            senderId: '',
-            recipient: callsign,
-            timestamp: DateTime.now(),
-            retryUntil: DateTime.now().add(Duration(hours: settings.retryHours)),
+          // Offline: cache encrypted for authorized recipients; fallback to
+          // in-memory queue for non-authorized recipients.
+          final retryUntil = DateTime.now().add(
+            Duration(hours: settings.retryHours),
           );
-          anyDelivered = true;
-          LogService().log('External email queued for offline recipient: $callsign (thread: $threadId)');
+          final recipientNpub = _getAuthorizedRecipientNpub(callsign);
+          if (recipientNpub != null &&
+              _cacheEmailForRecipient(
+                recipientCallsign: callsign,
+                recipientNpub: recipientNpub,
+                emailMessage: emailMessage,
+                senderCallsign: senderEmail,
+                senderId: '',
+                recipient: recipientAddr,
+                retryUntil: retryUntil,
+              )) {
+            anyDelivered = true;
+            LogService().log(
+              'External email cached (encrypted) for offline recipient: $callsign (thread: $threadId)',
+            );
+          } else {
+            final pendingKey = '${threadId}_$callsign';
+            _pendingEmails[pendingKey] = PendingEmail(
+              message: emailMessage,
+              senderCallsign: senderEmail,
+              senderId: '',
+              recipient: callsign,
+              timestamp: DateTime.now(),
+              retryUntil: retryUntil,
+            );
+            anyDelivered = true;
+            LogService().log(
+              'External email queued in-memory for offline recipient: $callsign (thread: $threadId)',
+            );
+          }
         }
       }
 
@@ -707,13 +1114,17 @@ class EmailRelayService {
   void cleanupTrackingEntries() {
     // Keep tracking maps reasonable size (max 1000 entries each)
     if (_outgoingMessageIds.length > 1000) {
-      final keysToRemove = _outgoingMessageIds.keys.take(_outgoingMessageIds.length - 500).toList();
+      final keysToRemove = _outgoingMessageIds.keys
+          .take(_outgoingMessageIds.length - 500)
+          .toList();
       for (final key in keysToRemove) {
         _outgoingMessageIds.remove(key);
       }
     }
     if (_outgoingSubjects.length > 1000) {
-      final keysToRemove = _outgoingSubjects.keys.take(_outgoingSubjects.length - 500).toList();
+      final keysToRemove = _outgoingSubjects.keys
+          .take(_outgoingSubjects.length - 500)
+          .toList();
       for (final key in keysToRemove) {
         _outgoingSubjects.remove(key);
       }
@@ -731,8 +1142,8 @@ class EmailRelayService {
 
     final domain = email.substring(atIndex + 1).toLowerCase();
     return domain == stationDomain.toLowerCase() ||
-           domain == 'local' ||
-           domain.isEmpty;
+        domain == 'local' ||
+        domain.isEmpty;
   }
 
   /// Handle email send request
@@ -754,7 +1165,10 @@ class EmailRelayService {
     final deliveryResults = <String, String>{};
 
     // Validate required fields
-    if (threadId == null || recipients == null || recipients.isEmpty || content == null) {
+    if (threadId == null ||
+        recipients == null ||
+        recipients.isEmpty ||
+        content == null) {
       // Send failure DSN back to sender
       final dsn = _createDsn(
         action: 'failed',
@@ -796,7 +1210,8 @@ class EmailRelayService {
           final dsn = _createDsn(
             action: 'failed',
             threadId: threadId,
-            reason: 'Email address "$senderCallsign" belongs to another identity',
+            reason:
+                'Email address "$senderCallsign" belongs to another identity',
           );
           sendToClient(senderId, jsonEncode(dsn));
           LogService().log(
@@ -807,7 +1222,9 @@ class EmailRelayService {
       }
     }
 
-    LogService().log('Email send: $senderCallsign -> ${recipients.join(", ")} (thread: $threadId)');
+    LogService().log(
+      'Email send: $senderCallsign -> ${recipients.join(", ")} (thread: $threadId)',
+    );
 
     final stationDomain = getStationDomain();
 
@@ -827,42 +1244,64 @@ class EmailRelayService {
     // Process internal recipients (Geogram-to-Geogram)
     for (final recipientStr in internalRecipients) {
       final targetCallsign = _extractCallsign(recipientStr);
+      final deliveryMessage = {
+        'type': 'email_receive',
+        'from': '${senderCallsign.toLowerCase()}@$stationDomain',
+        'thread_id': threadId,
+        'subject': subject,
+        'content': content,
+        'event': event,
+        'delivered_at': DateTime.now().toUtc().toIso8601String(),
+      };
 
       // Find recipient client
       final targetClientId = findClientByCallsign(targetCallsign);
 
       if (targetClientId != null) {
         // Recipient is connected - deliver immediately
-        final deliveryMessage = {
-          'type': 'email_receive',
-          'from': '${senderCallsign.toLowerCase()}@$stationDomain',
-          'thread_id': threadId,
-          'subject': subject,
-          'content': content,
-          'event': event,
-          'delivered_at': DateTime.now().toUtc().toIso8601String(),
-        };
-
         if (sendToClient(targetClientId, jsonEncode(deliveryMessage))) {
           deliveryResults[recipientStr] = 'delivered';
-          LogService().log('Email delivered: $senderCallsign -> $targetCallsign (thread: $threadId)');
+          LogService().log(
+            'Email delivered: $senderCallsign -> $targetCallsign (thread: $threadId)',
+          );
         } else {
           deliveryResults[recipientStr] = 'failed';
         }
       } else {
-        // Recipient not connected - queue for later delivery
-        final pendingKey = '${threadId}_$recipientStr';
-        _pendingEmails[pendingKey] = PendingEmail(
-          message: message,
-          senderCallsign: senderCallsign,
-          senderId: senderId,
-          recipient: recipientStr,
-          timestamp: DateTime.now(),
-          retryUntil: DateTime.now().add(Duration(hours: settings.retryHours)),
+        // Recipient not connected. Cache encrypted for authorized users; fallback
+        // to in-memory queue for non-authorized recipients.
+        final retryUntil = DateTime.now().add(
+          Duration(hours: settings.retryHours),
         );
-
+        final recipientNpub = _getAuthorizedRecipientNpub(targetCallsign);
+        if (recipientNpub != null &&
+            _cacheEmailForRecipient(
+              recipientCallsign: targetCallsign,
+              recipientNpub: recipientNpub,
+              emailMessage: deliveryMessage,
+              senderCallsign: senderCallsign,
+              senderId: senderId,
+              recipient: recipientStr,
+              retryUntil: retryUntil,
+            )) {
+          LogService().log(
+            'Email cached (encrypted): $senderCallsign -> $targetCallsign (thread: $threadId)',
+          );
+        } else {
+          final pendingKey = '${threadId}_$recipientStr';
+          _pendingEmails[pendingKey] = PendingEmail(
+            message: message,
+            senderCallsign: senderCallsign,
+            senderId: senderId,
+            recipient: recipientStr,
+            timestamp: DateTime.now(),
+            retryUntil: retryUntil,
+          );
+          LogService().log(
+            'Email queued in-memory: $senderCallsign -> $recipientStr (thread: $threadId)',
+          );
+        }
         deliveryResults[recipientStr] = 'delayed';
-        LogService().log('Email queued: $senderCallsign -> $recipientStr (thread: $threadId)');
       }
     }
 
@@ -873,19 +1312,23 @@ class EmailRelayService {
         for (final recipientStr in externalRecipients) {
           deliveryResults[recipientStr] = 'blocked';
         }
-        LogService().log('External email blocked: $senderCallsign is on blocklist');
+        LogService().log(
+          'External email blocked: $senderCallsign is on blocklist',
+        );
 
         final dsn = _createDsn(
           action: 'failed',
           threadId: threadId,
           recipient: externalRecipients.join(', '),
-          reason: 'You are not permitted to send external emails from this station',
+          reason:
+              'You are not permitted to send external emails from this station',
         );
         sendToClient(senderId, jsonEncode(dsn));
       }
       // Check if sender is on allowlist (auto-approve)
       else if (isSenderAllowlisted(senderCallsign)) {
-        final entryId = '${threadId}_external_${DateTime.now().millisecondsSinceEpoch}';
+        final entryId =
+            '${threadId}_external_${DateTime.now().millisecondsSinceEpoch}';
         final senderNpub = event?['pubkey'] as String? ?? '';
 
         final entry = ExternalEmailEntry(
@@ -906,14 +1349,17 @@ class EmailRelayService {
         for (final recipientStr in externalRecipients) {
           deliveryResults[recipientStr] = 'queued_approved';
         }
-        LogService().log('External email auto-approved (allowlisted sender): $senderCallsign -> ${externalRecipients.join(", ")}');
+        LogService().log(
+          'External email auto-approved (allowlisted sender): $senderCallsign -> ${externalRecipients.join(", ")}',
+        );
 
         // Trigger SMTP delivery
         _sendExternalEmailViaSMTP(entry);
       }
       // Auto-approve and send immediately (no manual approval required for now)
       else {
-        final entryId = '${threadId}_external_${DateTime.now().millisecondsSinceEpoch}';
+        final entryId =
+            '${threadId}_external_${DateTime.now().millisecondsSinceEpoch}';
         final senderNpub = event?['pubkey'] as String? ?? '';
 
         final entry = ExternalEmailEntry(
@@ -934,7 +1380,9 @@ class EmailRelayService {
         for (final recipientStr in externalRecipients) {
           deliveryResults[recipientStr] = 'sending';
         }
-        LogService().log('External email auto-approved: $senderCallsign -> ${externalRecipients.join(", ")} (id: $entryId)');
+        LogService().log(
+          'External email auto-approved: $senderCallsign -> ${externalRecipients.join(", ")} (id: $entryId)',
+        );
 
         // Notify sender that email is being sent
         final dsn = _createDsn(
@@ -962,8 +1410,8 @@ class EmailRelayService {
         reason: entry.value == 'delayed'
             ? 'Recipient device offline'
             : entry.value == 'failed'
-                ? 'Failed to deliver message'
-                : null,
+            ? 'Failed to deliver message'
+            : null,
         retryUntil: entry.value == 'delayed'
             ? DateTime.now().add(Duration(hours: settings.retryHours))
             : null,
@@ -981,6 +1429,11 @@ class EmailRelayService {
     required SendToClientCallback sendToClient,
     required GetStationDomainCallback getStationDomain,
   }) {
+    final cachedDelivered = _deliverCachedEmails(
+      clientId: clientId,
+      callsign: callsign,
+      sendToClient: sendToClient,
+    );
     final toDeliver = <String>[];
     final toRemove = <String>[];
 
@@ -1012,18 +1465,26 @@ class EmailRelayService {
       final content = message['content'] as String?;
       final event = message['event'] as Map<String, dynamic>?;
 
-      final deliveryMessage = {
-        'type': 'email_receive',
-        'from': '${pending.senderCallsign.toLowerCase()}@${getStationDomain()}',
-        'thread_id': threadId,
-        'subject': subject,
-        'content': content,
-        'event': event,
-        'delivered_at': DateTime.now().toUtc().toIso8601String(),
-      };
+      final deliveryMessage = message['type'] == 'email_receive'
+          ? {
+              ...message,
+              'delivered_at': DateTime.now().toUtc().toIso8601String(),
+            }
+          : {
+              'type': 'email_receive',
+              'from':
+                  '${pending.senderCallsign.toLowerCase()}@${getStationDomain()}',
+              'thread_id': threadId,
+              'subject': subject,
+              'content': content,
+              'event': event,
+              'delivered_at': DateTime.now().toUtc().toIso8601String(),
+            };
 
       if (sendToClient(clientId, jsonEncode(deliveryMessage))) {
-        LogService().log('Email delivered (queued): ${pending.senderCallsign} -> $callsign (thread: $threadId)');
+        LogService().log(
+          'Email delivered (queued): ${pending.senderCallsign} -> $callsign (thread: $threadId)',
+        );
 
         // Notify original sender
         final dsn = _createDsn(
@@ -1042,8 +1503,10 @@ class EmailRelayService {
       _pendingEmails.remove(key);
     }
 
-    if (toDeliver.isNotEmpty) {
-      LogService().log('Delivered ${toDeliver.length} pending email(s) to $callsign');
+    if (toDeliver.isNotEmpty || cachedDelivered > 0) {
+      LogService().log(
+        'Delivered ${toDeliver.length} in-memory pending and $cachedDelivered cached email(s) to $callsign',
+      );
     }
   }
 
@@ -1059,12 +1522,15 @@ class EmailRelayService {
       _pendingEmails.remove(key);
     }
     if (toRemove.isNotEmpty) {
-      LogService().log('Cleaned up ${toRemove.length} expired pending email(s)');
+      LogService().log(
+        'Cleaned up ${toRemove.length} expired pending email(s)',
+      );
     }
+    _cleanupExpiredCachedEmails();
   }
 
   /// Get pending email count
-  int get pendingEmailCount => _pendingEmails.length;
+  int get pendingEmailCount => _pendingEmails.length + _countCachedEmails();
 
   /// Extract callsign from email address
   String _extractCallsign(String email) {

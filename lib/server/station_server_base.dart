@@ -191,6 +191,9 @@ abstract class StationServerBase {
     // Load cached release info
     await _loadCachedRelease();
 
+    // Configure encrypted offline email cache directory.
+    EmailRelayService().setCacheDirectory('$dataDir/email-cache');
+
     log('INFO', 'Station server base initialized');
     log('INFO', 'Data directory: $_dataDir');
   }

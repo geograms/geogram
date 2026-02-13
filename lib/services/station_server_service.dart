@@ -611,6 +611,9 @@ class StationServerService {
         nip05Registry.setStationOwner(profile.npub!);
       }
 
+      // Configure encrypted offline email cache directory (10MB per recipient).
+      EmailRelayService().setCacheDirectory(StorageConfig().emailCacheDir);
+
       // Initialize GeoIP service for offline IP geolocation
       try {
         final data = await rootBundle.load('assets/dbip-city-lite.mmdb');
