@@ -1,8 +1,8 @@
-if(CONFIG_GEOGRAM_BOARD_HELTEC_V1 OR CONFIG_GEOGRAM_BOARD_HELTEC_V2)
+if(CONFIG_GEOGRAM_BOARD_KV4P)
     idf_component_register(
-        SRCS "sx1276.c"
+        SRCS "model_init.c"
         INCLUDE_DIRS "."
-        REQUIRES driver log
+        REQUIRES driver log nvs_flash geogram_sa818
         PRIV_REQUIRES freertos
     )
 else()

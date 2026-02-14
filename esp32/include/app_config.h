@@ -12,6 +12,7 @@
 #define MODEL_HELTEC_V3             3
 #define MODEL_HELTEC_V2             4
 #define MODEL_HELTEC_V1             5
+#define MODEL_KV4P                  6
 #define MODEL_ESP32_GENERIC         99
 
 // Validate board model is defined

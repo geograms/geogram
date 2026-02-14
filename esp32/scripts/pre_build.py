@@ -52,6 +52,7 @@ def patch_all_legacy_drivers():
         ("deprecated/pcnt_legacy.c", "pcnt"),
         ("deprecated/timer_legacy.c", "timer"),
         ("deprecated/i2s_legacy.c", "i2s"),
+        ("deprecated/dac_common_legacy.c", "dac"),
         ("deprecated/sigma_delta_legacy.c", "sigma_delta"),
         ("deprecated/adc_legacy.c", "adc"),
         ("deprecated/adc_dma_legacy.c", "adc_dma"),

@@ -24,6 +24,10 @@ menu "Geogram Board Selection"
             bool "Heltec WiFi LoRa 32 V1"
             depends on IDF_TARGET_ESP32
 
+        config GEOGRAM_BOARD_KV4P
+            bool "KV4P-HT (SA818)"
+            depends on IDF_TARGET_ESP32
+
         config GEOGRAM_BOARD_GENERIC
             bool "Generic ESP32"
             depends on IDF_TARGET_ESP32

@@ -64,6 +64,14 @@
     #if HAS_LED
     #include "led_bsp.h"
     #endif
+#elif BOARD_MODEL == MODEL_KV4P
+    #include "model_config.h"
+    #include "model_init.h"
+    #include "wifi_bsp.h"
+    #include "http_server.h"
+    #if HAS_LED
+    #include "led_bsp.h"
+    #endif
 #elif BOARD_MODEL == MODEL_HELTEC_V3
     #include "model_config.h"
     #include "model_init.h"
@@ -144,7 +152,7 @@ static void mesh_event_cb(geogram_mesh_event_t event, void *event_data)
                      geogram_mesh_is_root() ? "root" : "child");
             s_mesh_connected = true;
 
-#if BOARD_MODEL == MODEL_ESP32C3_MINI && HAS_LED
+#if (BOARD_MODEL == MODEL_ESP32C3_MINI || BOARD_MODEL == MODEL_KV4P) && HAS_LED
             // System OK - solid green LED
             led_set_state(LED_STATE_OK);
 #endif
@@ -161,7 +169,7 @@ static void mesh_event_cb(geogram_mesh_event_t event, void *event_data)
             ESP_LOGI(TAG, "Mesh nodes now: %zu", geogram_mesh_get_node_count());
             s_mesh_connected = false;
 
-#if BOARD_MODEL == MODEL_ESP32C3_MINI && HAS_LED
+#if (BOARD_MODEL == MODEL_ESP32C3_MINI || BOARD_MODEL == MODEL_KV4P) && HAS_LED
             // Error state - blinking red LED
             led_set_state(LED_STATE_ERROR);
 #endif
@@ -206,7 +214,7 @@ static void start_mesh_mode(void)
     esp_err_t ret = geogram_mesh_init();
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Mesh init failed: %s", esp_err_to_name(ret));
-#if BOARD_MODEL == MODEL_ESP32C3_MINI && HAS_LED
+#if (BOARD_MODEL == MODEL_ESP32C3_MINI || BOARD_MODEL == MODEL_KV4P) && HAS_LED
         led_set_state(LED_STATE_ERROR);
 #endif
         return;
@@ -225,7 +233,7 @@ static void start_mesh_mode(void)
     ret = geogram_mesh_start(&mesh_cfg);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Mesh start failed: %s", esp_err_to_name(ret));
-#if BOARD_MODEL == MODEL_ESP32C3_MINI && HAS_LED
+#if (BOARD_MODEL == MODEL_ESP32C3_MINI || BOARD_MODEL == MODEL_KV4P) && HAS_LED
         led_set_state(LED_STATE_ERROR);
 #endif
         return;
@@ -804,7 +812,7 @@ extern "C" void app_main(void)
     geogram_log_plain(TAG, "Mesh support: DISABLED in this build");
 #endif
 
-#if defined(CONFIG_GEOGRAM_MESH_ENABLED) && BOARD_MODEL == MODEL_ESP32C3_MINI
+#if defined(CONFIG_GEOGRAM_MESH_ENABLED) && (BOARD_MODEL == MODEL_ESP32C3_MINI || BOARD_MODEL == MODEL_KV4P)
     geogram_log_plain(TAG, "Starting mesh mode by default");
     start_mesh_mode();
 #endif
@@ -893,8 +901,8 @@ extern "C" void app_main(void)
 
 #endif  // BOARD_MODEL == MODEL_ESP32S3_EPAPER_1IN54
 
-#if BOARD_MODEL == MODEL_ESP32C3_MINI && !defined(CONFIG_GEOGRAM_MESH_ENABLED)
-    // Standalone WiFi AP mode for ESP32C3 when mesh is disabled
+#if (BOARD_MODEL == MODEL_ESP32C3_MINI || BOARD_MODEL == MODEL_KV4P) && !defined(CONFIG_GEOGRAM_MESH_ENABLED)
+    // Standalone WiFi AP mode for minimal ESP32 boards when mesh is disabled
     // When mesh is enabled, mesh_bsp handles all WiFi/netif initialization
 
     // Initialize NOSTR keys (needed for AP SSID with callsign)
@@ -951,7 +959,7 @@ extern "C" void app_main(void)
 #endif
         }
     }
-#endif  // BOARD_MODEL == MODEL_ESP32C3_MINI && !CONFIG_GEOGRAM_MESH_ENABLED
+#endif  // Minimal ESP32 boards and !CONFIG_GEOGRAM_MESH_ENABLED
 
 #if BOARD_MODEL == MODEL_HELTEC_V3
     // Heltec V3: OLED display + SX1262 LoRa + WiFi AP
