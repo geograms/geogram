@@ -6,9 +6,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include "sa818_radio.h"
+#if CONFIG_IDF_TARGET_ESP32
+#include "driver/i2s.h"
+#endif
 #include "driver/dac_oneshot.h"
 #include "driver/gpio.h"
 #include "esp_adc/adc_oneshot.h"
+#include "esp_idf_version.h"
 #include "esp_log.h"
 #include "esp_rom_sys.h"
 #include "esp_timer.h"
@@ -37,6 +41,42 @@ static const char *TAG = "sa818_radio";
 #define APRS_TX_TAIL_MS                 120U
 #define APRS_MAX_FRAME_BYTES            330U
 #define APRS_MAX_INFO_BYTES             120U
+#define APRS_MAX_MESSAGE_SEQ            999U
+
+#if CONFIG_IDF_TARGET_ESP32
+#define APRS_I2S_SAMPLE_RATE_HZ         48000U
+#define APRS_I2S_BITS_PER_SAMPLE        16
+#define APRS_I2S_SAMPLES_PER_BIT        (APRS_I2S_SAMPLE_RATE_HZ / 1200U)
+#define APRS_I2S_SIN_LEN                512U
+#define APRS_I2S_TX_BLOCK_SAMPLES       320U
+#define APRS_I2S_PHASE_MARK_INC         ((uint16_t)(((APRS_I2S_SIN_LEN * APRS_MARK_FREQ_HZ) / APRS_I2S_SAMPLE_RATE_HZ) + 0.5f))
+#define APRS_I2S_PHASE_SPACE_INC        ((uint16_t)(((APRS_I2S_SIN_LEN * APRS_SPACE_FREQ_HZ) / APRS_I2S_SAMPLE_RATE_HZ) + 0.5f))
+#endif
+
+#if CONFIG_IDF_TARGET_ESP32
+// Quarter-wave table adapted from APRS-ESP LibAPRS_ESP32 (Afsk sin LUT path).
+static const uint8_t s_aprs_sin_q[] = {
+    128, 129, 131, 132, 134, 135, 137, 138, 140, 142, 143, 145, 146, 148, 149, 151,
+    152, 154, 155, 157, 158, 160, 162, 163, 165, 166, 167, 169, 170, 172, 173, 175,
+    176, 178, 179, 181, 182, 183, 185, 186, 188, 189, 190, 192, 193, 194, 196, 197,
+    198, 200, 201, 202, 203, 205, 206, 207, 208, 210, 211, 212, 213, 214, 215, 217,
+    218, 219, 220, 221, 222, 223, 224, 225, 226, 227, 228, 229, 230, 231, 232, 233,
+    234, 234, 235, 236, 237, 238, 238, 239, 240, 241, 241, 242, 243, 243, 244, 245,
+    245, 246, 246, 247, 248, 248, 249, 249, 250, 250, 250, 251, 251, 252, 252, 252,
+    253, 253, 253, 253, 254, 254, 254, 254, 254, 255, 255, 255, 255, 255, 255, 255,
+    255,
+};
+
+static inline uint8_t aprs_sin_sample(uint16_t phase)
+{
+    uint16_t idx = phase % (APRS_I2S_SIN_LEN / 2U);
+    if (idx >= (APRS_I2S_SIN_LEN / 4U)) {
+        idx = (APRS_I2S_SIN_LEN / 2U) - idx - 1U;
+    }
+    uint8_t s = s_aprs_sin_q[idx];
+    return (phase >= (APRS_I2S_SIN_LEN / 2U)) ? (uint8_t)(255U - s) : s;
+}
+#endif
 
 typedef struct {
     uint8_t frame[APRS_MAX_FRAME_BYTES];
@@ -72,6 +112,9 @@ struct sa818_radio_dev {
 
     bool dac_ready;
     dac_oneshot_handle_t dac_handle;
+#if CONFIG_IDF_TARGET_ESP32
+    bool i2s_tx_ready;
+#endif
 
     volatile bool rx_task_running;
     TaskHandle_t rx_task;
@@ -81,6 +124,7 @@ struct sa818_radio_dev {
     sa818_aprs_rx_cb_t aprs_rx_cb;
     void *aprs_rx_ctx;
     aprs_decoder_state_t aprs_dec;
+    uint16_t aprs_message_seq;
 
     SemaphoreHandle_t lock;
 };
@@ -222,6 +266,9 @@ static void sanitize_message_text(const char *in, char *out, size_t out_len)
         if (c < 32 || c > 126) {
             continue;
         }
+        if (c == '{' || c == '|' || c == '~') {
+            c = ' ';
+        }
         out[out_idx++] = (char)c;
     }
     out[out_idx] = '\0';
@@ -311,6 +358,64 @@ static esp_err_t sa818_radio_configure_adc(sa818_radio_handle_t handle)
     handle->adc_ready = true;
     return ESP_OK;
 }
+
+#if CONFIG_IDF_TARGET_ESP32
+static esp_err_t sa818_radio_configure_i2s_tx(sa818_radio_handle_t handle)
+{
+    if (!handle) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (handle->cfg.audio_out_pin != 25 && handle->cfg.audio_out_pin != 26) {
+        return ESP_ERR_NOT_SUPPORTED;
+    }
+
+    i2s_config_t i2s_cfg = {
+        .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX | I2S_MODE_DAC_BUILT_IN),
+        .sample_rate = APRS_I2S_SAMPLE_RATE_HZ,
+        .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT,
+        .channel_format = I2S_CHANNEL_FMT_ONLY_RIGHT,
+#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(4, 2, 0)
+        .communication_format = I2S_COMM_FORMAT_STAND_MSB,
+#else
+        .communication_format = I2S_COMM_FORMAT_I2S_MSB,
+#endif
+        .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
+        .dma_buf_count = 8,
+        .dma_buf_len = 256,
+        .use_apll = false,
+        .tx_desc_auto_clear = true,
+        .fixed_mclk = 0,
+    };
+
+    esp_err_t ret = i2s_driver_install(I2S_NUM_0, &i2s_cfg, 0, NULL);
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    ret = i2s_set_pin(I2S_NUM_0, NULL);
+    if (ret != ESP_OK) {
+        i2s_driver_uninstall(I2S_NUM_0);
+        return ret;
+    }
+
+    i2s_dac_mode_t dac_mode = (handle->cfg.audio_out_pin == 25) ? I2S_DAC_CHANNEL_RIGHT_EN : I2S_DAC_CHANNEL_LEFT_EN;
+    ret = i2s_set_dac_mode(dac_mode);
+    if (ret != ESP_OK) {
+        i2s_driver_uninstall(I2S_NUM_0);
+        return ret;
+    }
+
+    ret = i2s_zero_dma_buffer(I2S_NUM_0);
+    if (ret != ESP_OK) {
+        i2s_driver_uninstall(I2S_NUM_0);
+        return ret;
+    }
+
+    handle->i2s_tx_ready = true;
+    ESP_LOGI(TAG, "APRS TX using I2S+DAC on GPIO%d @ %u Hz", handle->cfg.audio_out_pin, APRS_I2S_SAMPLE_RATE_HZ);
+    return ESP_OK;
+}
+#endif
 
 static esp_err_t sa818_radio_configure_dac(sa818_radio_handle_t handle)
 {
@@ -619,16 +724,75 @@ static void sa818_radio_rx_task(void *arg)
     vTaskDelete(NULL);
 }
 
+typedef struct {
+#if CONFIG_IDF_TARGET_ESP32
+    uint16_t phase_acc;
+    uint16_t pcm_block[APRS_I2S_TX_BLOCK_SAMPLES];
+    size_t pcm_fill;
+#endif
+    float phase;
+    int64_t next_sample_us;
+} aprs_tx_stream_t;
+
+static esp_err_t aprs_tx_stream_flush(sa818_radio_handle_t handle, aprs_tx_stream_t *stream)
+{
+#if CONFIG_IDF_TARGET_ESP32
+    if (handle->i2s_tx_ready && stream->pcm_fill > 0) {
+        size_t bytes_written = 0;
+        esp_err_t ret = i2s_write(I2S_NUM_0,
+                                  (const char *)stream->pcm_block,
+                                  stream->pcm_fill * sizeof(uint16_t),
+                                  &bytes_written,
+                                  portMAX_DELAY);
+        stream->pcm_fill = 0;
+        if (ret != ESP_OK) {
+            return ret;
+        }
+    }
+#else
+    (void)handle;
+    (void)stream;
+#endif
+    return ESP_OK;
+}
+
+static void aprs_tx_stream_init(sa818_radio_handle_t handle, aprs_tx_stream_t *stream)
+{
+    memset(stream, 0, sizeof(*stream));
+    if (!handle->dac_ready) {
+        return;
+    }
+    stream->phase = 0.0f;
+    stream->next_sample_us = esp_timer_get_time();
+}
+
 static esp_err_t aprs_tx_symbol(sa818_radio_handle_t handle,
                                 bool mark_tone,
-                                float *phase,
-                                int64_t *next_sample_us)
+                                aprs_tx_stream_t *stream)
 {
+#if CONFIG_IDF_TARGET_ESP32
+    if (handle->i2s_tx_ready) {
+        const uint16_t phase_inc = mark_tone ? APRS_I2S_PHASE_MARK_INC : APRS_I2S_PHASE_SPACE_INC;
+        for (size_t i = 0; i < APRS_I2S_SAMPLES_PER_BIT; i++) {
+            uint8_t sample = aprs_sin_sample(stream->phase_acc);
+            stream->phase_acc = (uint16_t)((stream->phase_acc + phase_inc) % APRS_I2S_SIN_LEN);
+            stream->pcm_block[stream->pcm_fill++] = (uint16_t)sample << 8;
+            if (stream->pcm_fill >= APRS_I2S_TX_BLOCK_SAMPLES) {
+                esp_err_t ret = aprs_tx_stream_flush(handle, stream);
+                if (ret != ESP_OK) {
+                    return ret;
+                }
+            }
+        }
+        return ESP_OK;
+    }
+#endif
+
     const float freq = mark_tone ? APRS_MARK_FREQ_HZ : APRS_SPACE_FREQ_HZ;
     const float step = (float)(2.0 * M_PI * freq / (double)APRS_SAMPLE_RATE_HZ);
 
     for (size_t i = 0; i < APRS_SAMPLES_PER_BIT; i++) {
-        int sample = 128 + (int)(38.0f * sinf(*phase));
+        int sample = 128 + (int)(38.0f * sinf(stream->phase));
         if (sample < 0) {
             sample = 0;
         } else if (sample > 255) {
@@ -640,17 +804,17 @@ static esp_err_t aprs_tx_symbol(sa818_radio_handle_t handle,
             return ret;
         }
 
-        *phase += step;
-        if (*phase >= (float)(2.0 * M_PI)) {
-            *phase -= (float)(2.0 * M_PI);
+        stream->phase += step;
+        if (stream->phase >= (float)(2.0 * M_PI)) {
+            stream->phase -= (float)(2.0 * M_PI);
         }
 
-        *next_sample_us += (1000000U / APRS_SAMPLE_RATE_HZ);
+        stream->next_sample_us += (1000000U / APRS_SAMPLE_RATE_HZ);
         int64_t now_us = esp_timer_get_time();
-        if (*next_sample_us > now_us) {
-            esp_rom_delay_us((uint32_t)(*next_sample_us - now_us));
+        if (stream->next_sample_us > now_us) {
+            esp_rom_delay_us((uint32_t)(stream->next_sample_us - now_us));
         } else {
-            *next_sample_us = now_us;
+            stream->next_sample_us = now_us;
         }
     }
 
@@ -660,24 +824,22 @@ static esp_err_t aprs_tx_symbol(sa818_radio_handle_t handle,
 static esp_err_t aprs_tx_nrzi_bit(sa818_radio_handle_t handle,
                                   uint8_t bit,
                                   bool *mark_state,
-                                  float *phase,
-                                  int64_t *next_sample_us)
+                                  aprs_tx_stream_t *stream)
 {
     if ((bit & 0x01U) == 0U) {
         *mark_state = !(*mark_state);
     }
-    return aprs_tx_symbol(handle, *mark_state, phase, next_sample_us);
+    return aprs_tx_symbol(handle, *mark_state, stream);
 }
 
 static esp_err_t aprs_tx_flag(sa818_radio_handle_t handle,
                               bool *mark_state,
-                              float *phase,
-                              int64_t *next_sample_us)
+                              aprs_tx_stream_t *stream)
 {
     const uint8_t flag = 0x7EU;
     for (int bit = 0; bit < 8; bit++) {
         esp_err_t ret = aprs_tx_nrzi_bit(handle, (uint8_t)((flag >> bit) & 0x01U),
-                                         mark_state, phase, next_sample_us);
+                                         mark_state, stream);
         if (ret != ESP_OK) {
             return ret;
         }
@@ -689,15 +851,14 @@ static esp_err_t aprs_tx_data_with_stuffing(sa818_radio_handle_t handle,
                                             const uint8_t *data,
                                             size_t len,
                                             bool *mark_state,
-                                            float *phase,
-                                            int64_t *next_sample_us)
+                                            aprs_tx_stream_t *stream)
 {
     uint8_t ones = 0;
 
     for (size_t i = 0; i < len; i++) {
         for (int bit = 0; bit < 8; bit++) {
             uint8_t b = (uint8_t)((data[i] >> bit) & 0x01U);
-            esp_err_t ret = aprs_tx_nrzi_bit(handle, b, mark_state, phase, next_sample_us);
+            esp_err_t ret = aprs_tx_nrzi_bit(handle, b, mark_state, stream);
             if (ret != ESP_OK) {
                 return ret;
             }
@@ -705,7 +866,7 @@ static esp_err_t aprs_tx_data_with_stuffing(sa818_radio_handle_t handle,
             if (b != 0U) {
                 ones++;
                 if (ones == 5U) {
-                    ret = aprs_tx_nrzi_bit(handle, 0U, mark_state, phase, next_sample_us);
+                    ret = aprs_tx_nrzi_bit(handle, 0U, mark_state, stream);
                     if (ret != ESP_OK) {
                         return ret;
                     }
@@ -723,6 +884,7 @@ static esp_err_t aprs_tx_data_with_stuffing(sa818_radio_handle_t handle,
 static esp_err_t build_aprs_message_frame(const char *from_callsign,
                                           const char *to_callsign,
                                           const char *message_text,
+                                          uint16_t message_seq,
                                           uint8_t *out_frame,
                                           size_t out_frame_len,
                                           size_t *out_len)
@@ -764,7 +926,8 @@ static esp_err_t build_aprs_message_frame(const char *from_callsign,
     sanitize_message_text(message_text, cleaned_msg, sizeof(cleaned_msg));
 
     char info[APRS_MAX_INFO_BYTES + 1];
-    snprintf(info, sizeof(info), ":%-9.9s:%.67s", addressee, cleaned_msg);
+    snprintf(info, sizeof(info), ":%-9.9s:%.67s{%03u",
+             addressee, cleaned_msg, (unsigned)(message_seq % (APRS_MAX_MESSAGE_SEQ + 1U)));
     size_t info_len = strlen(info);
 
     size_t idx = 0;
@@ -847,9 +1010,22 @@ esp_err_t sa818_radio_create(const sa818_radio_config_t *config, sa818_radio_han
         ESP_LOGW(TAG, "RX audio capture disabled: %s", esp_err_to_name(ret));
     }
 
-    ret = sa818_radio_configure_dac(dev);
+#if CONFIG_IDF_TARGET_ESP32
+    ret = sa818_radio_configure_i2s_tx(dev);
     if (ret != ESP_OK && dev->cfg.audio_out_pin >= 0) {
-        ESP_LOGW(TAG, "APRS AFSK TX disabled: %s", esp_err_to_name(ret));
+        ESP_LOGW(TAG, "I2S APRS TX unavailable, falling back to DAC oneshot: %s", esp_err_to_name(ret));
+    }
+#endif
+
+    if (
+#if CONFIG_IDF_TARGET_ESP32
+        !dev->i2s_tx_ready &&
+#endif
+        dev->cfg.audio_out_pin >= 0) {
+        ret = sa818_radio_configure_dac(dev);
+        if (ret != ESP_OK) {
+            ESP_LOGW(TAG, "APRS AFSK TX disabled: %s", esp_err_to_name(ret));
+        }
     }
 
     dev->aprs_dec.prev_tone = -1;
@@ -861,6 +1037,12 @@ esp_err_t sa818_radio_create(const sa818_radio_config_t *config, sa818_radio_han
         if (dev->adc_ready && dev->adc_unit) {
             adc_oneshot_del_unit(dev->adc_unit);
         }
+#if CONFIG_IDF_TARGET_ESP32
+        if (dev->i2s_tx_ready) {
+            i2s_driver_uninstall(I2S_NUM_0);
+            dev->i2s_tx_ready = false;
+        }
+#endif
         if (dev->dac_ready && dev->dac_handle) {
             dac_oneshot_del_channel(dev->dac_handle);
         }
@@ -894,6 +1076,12 @@ esp_err_t sa818_radio_delete(sa818_radio_handle_t handle)
         handle->dac_handle = NULL;
         handle->dac_ready = false;
     }
+#if CONFIG_IDF_TARGET_ESP32
+    if (handle->i2s_tx_ready) {
+        i2s_driver_uninstall(I2S_NUM_0);
+        handle->i2s_tx_ready = false;
+    }
+#endif
 
     if (handle->modem != NULL) {
         sa818_delete(handle->modem);
@@ -1195,7 +1383,11 @@ esp_err_t sa818_radio_send_aprs_message(sa818_radio_handle_t handle,
     if (!handle || !from_callsign || !to_callsign || !message_text) {
         return ESP_ERR_INVALID_ARG;
     }
-    if (!handle->dac_ready) {
+    if (!handle->dac_ready
+#if CONFIG_IDF_TARGET_ESP32
+        && !handle->i2s_tx_ready
+#endif
+    ) {
         return ESP_ERR_NOT_SUPPORTED;
     }
 
@@ -1208,7 +1400,9 @@ esp_err_t sa818_radio_send_aprs_message(sa818_radio_handle_t handle,
 
     uint8_t frame[APRS_MAX_FRAME_BYTES];
     size_t frame_len = 0;
-    esp_err_t ret = build_aprs_message_frame(from_callsign, to_callsign, message_text,
+    uint16_t message_seq = handle->aprs_message_seq;
+    handle->aprs_message_seq = (uint16_t)((handle->aprs_message_seq + 1U) % (APRS_MAX_MESSAGE_SEQ + 1U));
+    esp_err_t ret = build_aprs_message_frame(from_callsign, to_callsign, message_text, message_seq,
                                              frame, sizeof(frame), &frame_len);
     if (ret != ESP_OK) {
         return ret;
@@ -1227,30 +1421,55 @@ esp_err_t sa818_radio_send_aprs_message(sa818_radio_handle_t handle,
     vTaskDelay(pdMS_TO_TICKS(APRS_TX_LEAD_MS));
 
     bool mark_state = true;
-    float phase = 0.0f;
-    int64_t next_sample_us = esp_timer_get_time();
+    aprs_tx_stream_t stream;
+    aprs_tx_stream_init(handle, &stream);
 
     for (size_t i = 0; i < APRS_PREAMBLE_FLAGS; i++) {
-        ret = aprs_tx_flag(handle, &mark_state, &phase, &next_sample_us);
+        ret = aprs_tx_flag(handle, &mark_state, &stream);
         if (ret != ESP_OK) {
             break;
         }
     }
 
     if (ret == ESP_OK) {
-        ret = aprs_tx_data_with_stuffing(handle, frame, frame_len, &mark_state, &phase, &next_sample_us);
+        ret = aprs_tx_data_with_stuffing(handle, frame, frame_len, &mark_state, &stream);
     }
 
     if (ret == ESP_OK) {
         for (size_t i = 0; i < APRS_TAIL_FLAGS; i++) {
-            ret = aprs_tx_flag(handle, &mark_state, &phase, &next_sample_us);
+            ret = aprs_tx_flag(handle, &mark_state, &stream);
             if (ret != ESP_OK) {
                 break;
             }
         }
     }
 
-    dac_oneshot_output_voltage(handle->dac_handle, 128);
+    if (ret == ESP_OK) {
+        ret = aprs_tx_stream_flush(handle, &stream);
+    }
+
+#if CONFIG_IDF_TARGET_ESP32
+    if (ret == ESP_OK && handle->i2s_tx_ready) {
+        uint16_t zeros[APRS_I2S_TX_BLOCK_SAMPLES];
+        memset(zeros, 0, sizeof(zeros));
+        for (int i = 0; i < 4; i++) {
+            size_t bytes_written = 0;
+            esp_err_t wr = i2s_write(I2S_NUM_0,
+                                     (const char *)zeros,
+                                     sizeof(zeros),
+                                     &bytes_written,
+                                     portMAX_DELAY);
+            if (wr != ESP_OK) {
+                ret = wr;
+                break;
+            }
+        }
+    }
+#endif
+
+    if (handle->dac_ready) {
+        dac_oneshot_output_voltage(handle->dac_handle, 128);
+    }
     vTaskDelay(pdMS_TO_TICKS(APRS_TX_TAIL_MS));
     sa818_radio_set_ptt(handle, false);
 
