@@ -70,6 +70,12 @@ static int cmd_radio_status(int argc, char **argv)
     float rx_mhz = 0.0f;
     uint8_t squelch = 0;
     bool squelched = false;
+    const char *aprs_tx_backend = "none";
+    if (sa818_radio_is_aprs_tx_i2s(radio)) {
+        aprs_tx_backend = "i2s";
+    } else if (sa818_radio_is_aprs_tx_supported(radio)) {
+        aprs_tx_backend = "dac";
+    }
 
     sa818_radio_get_frequency(radio, &tx_mhz, &rx_mhz);
     sa818_radio_get_squelch(radio, &squelch);
@@ -84,12 +90,13 @@ static int cmd_radio_status(int argc, char **argv)
 
     if (console_get_output_mode() == CONSOLE_OUTPUT_JSON) {
         printf("{\"powered\":%s,\"ptt\":%s,\"high_power\":%s,\"tx_freq\":%.3f,\"rx_freq\":%.3f,"
-               "\"aprs_freq\":%.3f,\"squelch\":%u,\"audio_rx\":%s",
+               "\"aprs_freq\":%.3f,\"aprs_tx_backend\":\"%s\",\"squelch\":%u,\"audio_rx\":%s",
                sa818_radio_is_powered(radio) ? "true" : "false",
                sa818_radio_is_ptt_enabled(radio) ? "true" : "false",
                sa818_radio_is_high_power(radio) ? "true" : "false",
                (double)tx_mhz, (double)rx_mhz,
                (double)sa818_radio_get_aprs_frequency(radio),
+               aprs_tx_backend,
                (unsigned)squelch,
                sa818_radio_is_audio_rx_running(radio) ? "true" : "false");
 
@@ -109,6 +116,8 @@ static int cmd_radio_status(int argc, char **argv)
     printf("Frequency TX:   %.3f MHz\n", (double)tx_mhz);
     printf("Frequency RX:   %.3f MHz\n", (double)rx_mhz);
     printf("APRS frequency: %.3f MHz\n", (double)sa818_radio_get_aprs_frequency(radio));
+    printf("APRS TX audio:  %s\n", sa818_radio_is_aprs_tx_i2s(radio) ? "I2S+DAC" :
+                                (sa818_radio_is_aprs_tx_supported(radio) ? "DAC oneshot" : "UNAVAILABLE"));
     printf("Squelch level:  %u\n", (unsigned)squelch);
     if (sq_ret == ESP_OK) {
         printf("Squelch pin:    %s\n", squelched ? "CLOSED" : "OPEN");

@@ -6,12 +6,14 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdarg.h>
+#include <stdlib.h>
 #include "console.h"
 #include "esp_console.h"
 #include "esp_vfs_dev.h"
 #include "esp_log.h"
 #include "driver/uart.h"
 #include "linenoise/linenoise.h"
+#include "nvs.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -21,13 +23,151 @@ static const char *TAG = "console";
 #define CONSOLE_PROMPT      "geogram> "
 #define MAX_CMDLINE_LENGTH  256
 #define MAX_CMDLINE_ARGS    8
-#define HISTORY_SIZE        8
+#define HISTORY_SIZE        30
+#define HISTORY_NVS_NS      "console"
+#define HISTORY_NVS_KEY     "history_v1"
+#define HISTORY_BLOB_MAX    (HISTORY_SIZE * MAX_CMDLINE_LENGTH)
 #define CONSOLE_TASK_STACK  4096
 #define CONSOLE_TASK_PRIO   2
 
 static TaskHandle_t s_console_task = NULL;
 static bool s_running = false;
 static console_output_mode_t s_output_mode = CONSOLE_OUTPUT_TEXT;
+static char s_history[HISTORY_SIZE][MAX_CMDLINE_LENGTH];
+static size_t s_history_count = 0;
+
+static void history_append_local(const char *line, bool dedupe_last)
+{
+    if (!line || line[0] == '\0') {
+        return;
+    }
+
+    if (dedupe_last && s_history_count > 0) {
+        const char *last = s_history[s_history_count - 1];
+        if (strcmp(last, line) == 0) {
+            return;
+        }
+    }
+
+    if (s_history_count >= HISTORY_SIZE) {
+        memmove(s_history[0], s_history[1], (HISTORY_SIZE - 1) * sizeof(s_history[0]));
+        s_history_count = HISTORY_SIZE - 1;
+    }
+
+    strlcpy(s_history[s_history_count], line, sizeof(s_history[s_history_count]));
+    s_history_count++;
+}
+
+static esp_err_t history_save_nvs(void)
+{
+    char blob[HISTORY_BLOB_MAX];
+    size_t blob_len = 0;
+
+    for (size_t i = 0; i < s_history_count; i++) {
+        size_t line_len = strnlen(s_history[i], MAX_CMDLINE_LENGTH - 1);
+        if (line_len == 0) {
+            continue;
+        }
+        if (blob_len + line_len + 1 > sizeof(blob)) {
+            break;
+        }
+        memcpy(&blob[blob_len], s_history[i], line_len);
+        blob_len += line_len;
+        blob[blob_len++] = '\n';
+    }
+
+    nvs_handle_t nvs = 0;
+    esp_err_t ret = nvs_open(HISTORY_NVS_NS, NVS_READWRITE, &nvs);
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    if (blob_len == 0) {
+        ret = nvs_erase_key(nvs, HISTORY_NVS_KEY);
+        if (ret == ESP_ERR_NVS_NOT_FOUND) {
+            ret = ESP_OK;
+        }
+    } else {
+        ret = nvs_set_blob(nvs, HISTORY_NVS_KEY, blob, blob_len);
+    }
+
+    if (ret == ESP_OK) {
+        ret = nvs_commit(nvs);
+    }
+
+    nvs_close(nvs);
+    return ret;
+}
+
+static void history_load_nvs(void)
+{
+    nvs_handle_t nvs = 0;
+    esp_err_t ret = nvs_open(HISTORY_NVS_NS, NVS_READONLY, &nvs);
+    if (ret != ESP_OK) {
+        if (ret != ESP_ERR_NVS_NOT_FOUND) {
+            ESP_LOGW(TAG, "Cannot open NVS for history: %s", esp_err_to_name(ret));
+        }
+        return;
+    }
+
+    size_t blob_len = 0;
+    ret = nvs_get_blob(nvs, HISTORY_NVS_KEY, NULL, &blob_len);
+    if (ret == ESP_ERR_NVS_NOT_FOUND) {
+        nvs_close(nvs);
+        return;
+    }
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "Cannot read console history length: %s", esp_err_to_name(ret));
+        nvs_close(nvs);
+        return;
+    }
+    if (blob_len == 0 || blob_len > HISTORY_BLOB_MAX) {
+        ESP_LOGW(TAG, "Skipping invalid history size: %u", (unsigned)blob_len);
+        nvs_close(nvs);
+        return;
+    }
+
+    char *blob = calloc(1, blob_len + 1);
+    if (!blob) {
+        ESP_LOGW(TAG, "Out of memory loading console history");
+        nvs_close(nvs);
+        return;
+    }
+
+    ret = nvs_get_blob(nvs, HISTORY_NVS_KEY, blob, &blob_len);
+    nvs_close(nvs);
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "Cannot read console history: %s", esp_err_to_name(ret));
+        free(blob);
+        return;
+    }
+
+    char *saveptr = NULL;
+    char *line = strtok_r(blob, "\n", &saveptr);
+    while (line != NULL) {
+        if (line[0] != '\0') {
+            linenoiseHistoryAdd(line);
+            history_append_local(line, false);
+        }
+        line = strtok_r(NULL, "\n", &saveptr);
+    }
+
+    if (s_history_count > 0) {
+        ESP_LOGI(TAG, "Loaded %u console history entries", (unsigned)s_history_count);
+    }
+    free(blob);
+}
+
+static void history_add_and_persist(const char *line)
+{
+    linenoiseHistoryAdd(line);
+    history_append_local(line, true);
+
+    esp_err_t ret = history_save_nvs();
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to persist console history: %s", esp_err_to_name(ret));
+    }
+}
 
 console_output_mode_t console_get_output_mode(void)
 {
@@ -76,7 +216,7 @@ static void console_task(void *arg)
 
         if (strlen(line) > 0) {
             // Add to history
-            linenoiseHistoryAdd(line);
+            history_add_and_persist(line);
 
             // Execute command
             int ret;
@@ -150,6 +290,7 @@ esp_err_t console_init(void)
     // Configure linenoise history/input behavior
     linenoiseHistorySetMaxLen(HISTORY_SIZE);
     linenoiseAllowEmpty(false);
+    history_load_nvs();
 
     // Register built-in help command
     esp_console_register_help_command();

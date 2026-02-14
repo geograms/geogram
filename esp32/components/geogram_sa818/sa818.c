@@ -378,6 +378,17 @@ esp_err_t sa818_set_filters(sa818_handle_t handle,
     return sa818_command(handle, command, NULL, NULL, 0, timeout_ms);
 }
 
+esp_err_t sa818_set_tail(sa818_handle_t handle, uint8_t tail, uint32_t timeout_ms)
+{
+    if (!handle) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    char command[24];
+    snprintf(command, sizeof(command), "AT+SETTAIL=%u", tail);
+    return sa818_command(handle, command, NULL, NULL, 0, timeout_ms);
+}
+
 esp_err_t sa818_set_group(sa818_handle_t handle,
                           uint8_t bandwidth,
                           float tx_freq_mhz,

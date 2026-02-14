@@ -70,6 +70,8 @@ bool sa818_radio_is_audio_rx_running(sa818_radio_handle_t handle);
 
 esp_err_t sa818_radio_set_aprs_frequency(sa818_radio_handle_t handle, float aprs_freq_mhz);
 float sa818_radio_get_aprs_frequency(sa818_radio_handle_t handle);
+bool sa818_radio_is_aprs_tx_supported(sa818_radio_handle_t handle);
+bool sa818_radio_is_aprs_tx_i2s(sa818_radio_handle_t handle);
 
 esp_err_t sa818_radio_set_aprs_rx_callback(sa818_radio_handle_t handle,
                                            sa818_aprs_rx_cb_t callback,

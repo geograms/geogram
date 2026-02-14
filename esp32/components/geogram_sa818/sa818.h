@@ -83,6 +83,11 @@ esp_err_t sa818_set_filters(sa818_handle_t handle,
                             uint32_t timeout_ms);
 
 /**
+ * @brief Configure SA818 tail elimination.
+ */
+esp_err_t sa818_set_tail(sa818_handle_t handle, uint8_t tail, uint32_t timeout_ms);
+
+/**
  * @brief Configure SA818 channel group parameters.
  *
  * @param bandwidth 0=narrow, 1=wide
