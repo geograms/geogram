@@ -13,4 +13,8 @@ if [[ ! -x "${PIO_BIN}" ]]; then
 fi
 
 cd "${SCRIPT_DIR}"
-exec "${PIO_BIN}" device monitor -p "${PORT}" -b "${BAUD}"
+
+exec "${PIO_BIN}" device monitor \
+  -p "${PORT}" \
+  -b "${BAUD}" \
+  --eol LF
