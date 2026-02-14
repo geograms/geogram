@@ -7184,7 +7184,7 @@ Abstraction layer for profile storage operations that works transparently with b
 ### Classes
 
 **ProfileStorage** - Abstract interface for storage operations
-**FilesystemProfileStorage** - Wraps standard File/Directory operations
+**FilesystemProfileStorage** - Wraps FileSystemService for platform-agnostic file operations (works on native and web)
 **EncryptedProfileStorage** - Wraps EncryptedStorageService for encrypted archives
 **StorageEntry** - Directory listing entry with name, path, isDirectory, size, modified
 
