@@ -73,5 +73,8 @@
 #define SA818_PIN_PHYS_PTT1         GPIO_NUM_5
 #define SA818_PIN_PHYS_PTT2         GPIO_NUM_33
 #define SA818_VOLUME_DEFAULT        8
+#define SA818_SQUELCH_DEFAULT       4
+#define SA818_BANDWIDTH_DEFAULT     0     // 0=narrow, 1=wide
+#define SA818_APRS_FREQ_DEFAULT_MHZ 144.800f
 
 #endif // MODEL_CONFIG_H

@@ -10,6 +10,7 @@ set(CONSOLE_SRCS
     "cmd_config.c"
     "cmd_ssh.c"
     "cmd_ftp.c"
+    "cmd_radio.c"
 )
 
 # Base requirements
@@ -20,6 +21,7 @@ set(CONSOLE_REQUIRES
 
 set(CONSOLE_PRIV_REQUIRES
     geogram_model_epaper_1in54 geogram_shtc3 geogram_lvgl
+    geogram_model_kv4p geogram_sa818
 )
 
 # Add mesh commands on targets that support ESP-MESH

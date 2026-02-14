@@ -6,10 +6,16 @@
 
 static const char *TAG = "model_init";
 static sa818_handle_t s_sa818 = NULL;
+static sa818_radio_handle_t s_sa818_radio = NULL;
 
 sa818_handle_t model_get_sa818(void)
 {
     return s_sa818;
+}
+
+sa818_radio_handle_t model_get_sa818_radio(void)
+{
+    return s_sa818_radio;
 }
 
 esp_err_t model_init(void)
@@ -31,33 +37,36 @@ esp_err_t model_init(void)
     ESP_LOGI(TAG, "NVS initialized");
 
 #if HAS_SA818
-    sa818_config_t radio_cfg = {
-        .uart_port = SA818_UART_PORT,
-        .tx_pin = SA818_PIN_RF_TXD,
-        .rx_pin = SA818_PIN_RF_RXD,
-        .ptt_pin = SA818_PIN_PTT,
-        .pd_pin = SA818_PIN_PD,
-        .hl_pin = SA818_PIN_HL,
-        .baud_rate = SA818_UART_BAUD_RATE,
+    sa818_radio_config_t radio_cfg = {
+        .sa818 = {
+            .uart_port = SA818_UART_PORT,
+            .tx_pin = SA818_PIN_RF_TXD,
+            .rx_pin = SA818_PIN_RF_RXD,
+            .ptt_pin = SA818_PIN_PTT,
+            .pd_pin = SA818_PIN_PD,
+            .hl_pin = SA818_PIN_HL,
+            .baud_rate = SA818_UART_BAUD_RATE,
+        },
+        .squelch_pin = SA818_PIN_SQ,
+        .audio_in_pin = SA818_PIN_AUDIO_IN,
+        .audio_out_pin = SA818_PIN_AUDIO_OUT,
+        .bandwidth = SA818_BANDWIDTH_DEFAULT,
+        .squelch = SA818_SQUELCH_DEFAULT,
+        .volume = SA818_VOLUME_DEFAULT,
+        .high_power = true,
+        .tx_freq_mhz = SA818_APRS_FREQ_DEFAULT_MHZ,
+        .rx_freq_mhz = SA818_APRS_FREQ_DEFAULT_MHZ,
+        .aprs_freq_mhz = SA818_APRS_FREQ_DEFAULT_MHZ,
+        .audio_sample_rate_hz = 9600,
     };
 
-    ret = sa818_create(&radio_cfg, &s_sa818);
+    ret = sa818_radio_create(&radio_cfg, &s_sa818_radio);
     if (ret != ESP_OK) {
-        ESP_LOGW(TAG, "SA818 create failed: %s", esp_err_to_name(ret));
+        ESP_LOGW(TAG, "SA818 radio init failed: %s", esp_err_to_name(ret));
     } else {
-        // Basic barebones bring-up for reuse in future KV4P workflows.
-        sa818_set_tx(s_sa818, false);
-        sa818_set_high_power(s_sa818, true);
-        sa818_power(s_sa818, true);
-
-        ret = sa818_handshake(s_sa818, 2500);
-        if (ret != ESP_OK) {
-            ESP_LOGW(TAG, "SA818 handshake failed: %s", esp_err_to_name(ret));
-        } else {
-            ESP_LOGI(TAG, "SA818 handshake OK");
-            sa818_set_volume(s_sa818, SA818_VOLUME_DEFAULT, 1200);
-            sa818_set_filters(s_sa818, false, false, false, 1200);
-        }
+        s_sa818 = sa818_radio_get_modem(s_sa818_radio);
+        ESP_LOGI(TAG, "SA818 radio module ready (APRS freq %.3f MHz)",
+                 (double)sa818_radio_get_aprs_frequency(s_sa818_radio));
     }
 #endif
 
@@ -67,8 +76,9 @@ esp_err_t model_init(void)
 
 esp_err_t model_deinit(void)
 {
-    if (s_sa818 != NULL) {
-        sa818_delete(s_sa818);
+    if (s_sa818_radio != NULL) {
+        sa818_radio_delete(s_sa818_radio);
+        s_sa818_radio = NULL;
         s_sa818 = NULL;
     }
 

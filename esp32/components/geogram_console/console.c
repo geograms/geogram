@@ -161,6 +161,7 @@ esp_err_t console_init(void)
     register_config_commands();
     register_ssh_commands();
     register_ftp_commands();
+    register_radio_commands();
 #ifdef CONFIG_GEOGRAM_MESH_ENABLED
     register_mesh_commands();
 #endif
