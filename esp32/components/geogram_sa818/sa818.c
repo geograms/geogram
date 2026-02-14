@@ -357,7 +357,7 @@ esp_err_t sa818_set_volume(sa818_handle_t handle, uint8_t volume, uint32_t timeo
 
     char command[32];
     snprintf(command, sizeof(command), "AT+DMOSETVOLUME=%u", volume);
-    return sa818_command(handle, command, NULL, NULL, 0, timeout_ms);
+    return sa818_command(handle, command, ":0", NULL, 0, timeout_ms);
 }
 
 esp_err_t sa818_set_filters(sa818_handle_t handle,
@@ -375,7 +375,7 @@ esp_err_t sa818_set_filters(sa818_handle_t handle,
              pre_emphasis ? 1 : 0,
              high_pass ? 1 : 0,
              low_pass ? 1 : 0);
-    return sa818_command(handle, command, NULL, NULL, 0, timeout_ms);
+    return sa818_command(handle, command, ":0", NULL, 0, timeout_ms);
 }
 
 esp_err_t sa818_set_tail(sa818_handle_t handle, uint8_t tail, uint32_t timeout_ms)
@@ -386,7 +386,7 @@ esp_err_t sa818_set_tail(sa818_handle_t handle, uint8_t tail, uint32_t timeout_m
 
     char command[24];
     snprintf(command, sizeof(command), "AT+SETTAIL=%u", tail);
-    return sa818_command(handle, command, NULL, NULL, 0, timeout_ms);
+    return sa818_command(handle, command, ":0", NULL, 0, timeout_ms);
 }
 
 esp_err_t sa818_set_group(sa818_handle_t handle,
@@ -417,7 +417,7 @@ esp_err_t sa818_set_group(sa818_handle_t handle,
     snprintf(command, sizeof(command), "AT+DMOSETGROUP=%u,%.4f,%.4f,%s,%u,%s",
              bandwidth ? 1 : 0, tx_freq_mhz, rx_freq_mhz, tx_ctcss, squelch, rx_ctcss);
 
-    return sa818_command(handle, command, NULL, NULL, 0, timeout_ms);
+    return sa818_command(handle, command, ":0", NULL, 0, timeout_ms);
 }
 
 esp_err_t sa818_read_rssi(sa818_handle_t handle, int *rssi, uint32_t timeout_ms)

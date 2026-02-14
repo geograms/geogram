@@ -8,6 +8,7 @@
 #include "sa818_radio.h"
 #if CONFIG_IDF_TARGET_ESP32
 #include "driver/i2s.h"
+#include "driver/dac.h"
 #endif
 #include "driver/dac_oneshot.h"
 #include "driver/gpio.h"
@@ -35,8 +36,8 @@ static const char *TAG = "sa818_radio";
 #define APRS_SAMPLES_PER_BIT            8U
 #define APRS_MARK_FREQ_HZ               1200.0f
 #define APRS_SPACE_FREQ_HZ              2200.0f
-#define APRS_PREAMBLE_FLAGS             64U
-#define APRS_TAIL_FLAGS                 4U
+#define APRS_PREAMBLE_FLAGS             350U
+#define APRS_TAIL_FLAGS                 50U
 #define APRS_TX_LEAD_MS                 250U
 #define APRS_TX_TAIL_MS                 120U
 #define APRS_MAX_FRAME_BYTES            330U
@@ -371,6 +372,8 @@ static esp_err_t sa818_radio_configure_i2s_tx(sa818_radio_handle_t handle)
         return ESP_ERR_NOT_SUPPORTED;
     }
 
+    // Match APRS-ESP behavior: keep I2S in stereo framing and mirror the same
+    // sample on both channels, while enabling only the target DAC channel.
     i2s_channel_fmt_t channel_fmt = (handle->cfg.audio_out_pin == 25)
                                     ? I2S_CHANNEL_FMT_ALL_RIGHT
                                     : I2S_CHANNEL_FMT_ALL_LEFT;
@@ -416,6 +419,8 @@ static esp_err_t sa818_radio_configure_i2s_tx(sa818_radio_handle_t handle)
         i2s_driver_uninstall(I2S_NUM_0);
         return ret;
     }
+
+    dac_i2s_enable();
 
     handle->i2s_tx_ready = true;
     ESP_LOGI(TAG, "APRS TX using I2S+DAC on GPIO%d @ %u Hz", handle->cfg.audio_out_pin, APRS_I2S_SAMPLE_RATE_HZ);
@@ -735,6 +740,7 @@ typedef struct {
     uint16_t phase_acc;
     uint16_t pcm_block[APRS_I2S_TX_BLOCK_SAMPLES];
     size_t pcm_fill;
+    size_t i2s_bytes_written;
 #endif
     float phase;
     int64_t next_sample_us;
@@ -750,6 +756,7 @@ static esp_err_t aprs_tx_stream_flush(sa818_radio_handle_t handle, aprs_tx_strea
                                   stream->pcm_fill * sizeof(uint16_t),
                                   &bytes_written,
                                   portMAX_DELAY);
+        stream->i2s_bytes_written += bytes_written;
         stream->pcm_fill = 0;
         if (ret != ESP_OK) {
             return ret;
@@ -784,8 +791,10 @@ static esp_err_t aprs_tx_symbol(sa818_radio_handle_t handle,
             stream->phase_acc = (uint16_t)((stream->phase_acc + phase_inc) % APRS_I2S_SIN_LEN);
             // Match APRS-ESP RF scaling: avoid overdriving SA818 mic input.
             uint16_t pcm = (uint16_t)(((uint16_t)sample << APRS_I2S_RF_LEVEL_SHIFT) + APRS_I2S_RF_LEVEL_OFFSET);
+            // In stereo-framed I2S mode, duplicate the sample across both slots.
             stream->pcm_block[stream->pcm_fill++] = pcm;
-            if (stream->pcm_fill >= APRS_I2S_TX_BLOCK_SAMPLES) {
+            stream->pcm_block[stream->pcm_fill++] = pcm;
+            if (stream->pcm_fill >= APRS_I2S_TX_BLOCK_SAMPLES - 1U) {
                 esp_err_t ret = aprs_tx_stream_flush(handle, stream);
                 if (ret != ESP_OK) {
                     return ret;
@@ -1163,7 +1172,6 @@ esp_err_t sa818_radio_power(sa818_radio_handle_t handle, bool enabled)
         return ret;
     }
 
-    // APRS-ESP reference uses all SA818 filters enabled for RF APRS operation.
     ret = sa818_set_filters(handle->modem, true, true, true, SA818_RADIO_CMD_TIMEOUT_MS);
     if (ret != ESP_OK) {
         xSemaphoreGive(handle->lock);
@@ -1447,6 +1455,12 @@ esp_err_t sa818_radio_send_aprs_message(sa818_radio_handle_t handle,
         return ret;
     }
 
+#if CONFIG_IDF_TARGET_ESP32
+    if (handle->i2s_tx_ready) {
+        i2s_zero_dma_buffer(I2S_NUM_0);
+    }
+#endif
+
     ESP_LOGI(TAG, "APRS TX backend: %s",
              sa818_radio_is_aprs_tx_i2s(handle) ? "I2S+DAC" : "DAC oneshot");
 
@@ -1501,6 +1515,9 @@ esp_err_t sa818_radio_send_aprs_message(sa818_radio_handle_t handle,
                 break;
             }
         }
+    }
+    if (handle->i2s_tx_ready) {
+        ESP_LOGI(TAG, "APRS TX I2S bytes written: %u", (unsigned)stream.i2s_bytes_written);
     }
 #endif
 

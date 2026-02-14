@@ -68,7 +68,7 @@
 
 // Extra KV4P references for next iterations
 #define SA818_PIN_SQ                GPIO_NUM_32
-#define SA818_PIN_AUDIO_OUT         GPIO_NUM_25
+#define SA818_PIN_AUDIO_OUT         GPIO_NUM_26
 #define SA818_PIN_AUDIO_IN          GPIO_NUM_34
 #define SA818_PIN_PHYS_PTT1         GPIO_NUM_5
 #define SA818_PIN_PHYS_PTT2         GPIO_NUM_33
