@@ -8,7 +8,7 @@ import '../models/profile.dart';
 import '../services/log_service.dart';
 import '../services/config_service.dart';
 import '../services/app_service.dart';
-import '../services/encrypted_storage_service.dart';
+import '../services/encrypted_storage_stub.dart' if (dart.library.io) '../services/encrypted_storage_service.dart';
 import '../services/storage_config.dart';
 import '../services/signing_service.dart';
 import '../services/mirror_config_service.dart';

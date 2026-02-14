@@ -531,6 +531,8 @@ class ProcessStartMode {
 
 /// Stub for Socket
 class Socket {
+  final InternetAddress address = InternetAddress('0.0.0.0');
+
   static Future<Socket> connect(
     dynamic host,
     int port, {
@@ -540,6 +542,26 @@ class Socket {
   }) async {
     throw UnsupportedError('Socket is not supported on web');
   }
+
+  void destroy() {}
+}
+
+/// Stub for RawDatagramSocket
+class RawDatagramSocket {
+  final InternetAddress address = InternetAddress('0.0.0.0');
+  bool broadcastEnabled = false;
+
+  static Future<RawDatagramSocket> bind(
+    dynamic host,
+    int port, {
+    bool reuseAddress = true,
+    bool reusePort = false,
+    int ttl = 1,
+  }) async {
+    throw UnsupportedError('RawDatagramSocket is not supported on web');
+  }
+
+  void close() {}
 }
 
 /// Stub for GZipCodec

@@ -19,14 +19,14 @@ import '../util/html_utils.dart';
 import '../util/web_navigation.dart';
 import 'config_service.dart';
 import 'chat_service.dart';
-import 'encrypted_storage_service.dart';
+import 'encrypted_storage_stub.dart' if (dart.library.io) 'encrypted_storage_service.dart';
 import 'profile_service.dart';
 import 'profile_storage.dart';
 import 'storage_config.dart';
 import 'web_theme_service.dart';
 import 'blog_service.dart' hide ChatSecurity;
 import 'event_service.dart';
-import 'place_service.dart';
+
 
 /// Service for managing apps on disk (or in memory for web)
 class AppService {
