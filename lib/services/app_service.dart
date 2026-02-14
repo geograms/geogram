@@ -150,6 +150,7 @@ class AppService {
       final fs = FileSystemService.instance;
       final appsPath = '/web/devices/$sanitizedCallsign';
       await fs.createDirectory(appsPath, recursive: true);
+      _profileStorage = FilesystemProfileStorage(appsPath);
 
       stderr.writeln('AppService active callsign (web): $sanitizedCallsign');
       stderr.writeln('Virtual apps directory: $appsPath');

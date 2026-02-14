@@ -4,13 +4,13 @@
  */
 
 import 'dart:convert';
-import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:path/path.dart' as p;
 
-// Use stub for CLI/pure Dart builds, real implementation for Flutter
-import 'encrypted_storage_stub.dart' if (dart.library.ui) 'encrypted_storage_service.dart';
+import '../platform/file_system_service.dart';
+// Use stub for CLI/pure Dart builds and web, real implementation for native Flutter
+import 'encrypted_storage_stub.dart' if (dart.library.io) 'encrypted_storage_service.dart';
 import 'log_service.dart';
 
 /// Entry in a storage directory listing
@@ -121,10 +121,13 @@ abstract class ProfileStorage {
 
 /// Filesystem-based storage implementation
 ///
-/// Wraps standard File and Directory operations
+/// Wraps FileSystemService for platform-agnostic file operations.
+/// Works on native (dart:io) and web (IndexedDB via fs_shim).
 class FilesystemProfileStorage extends ProfileStorage {
   final String _basePath;
   final LogService _log = LogService();
+
+  FileSystemService get _fs => FileSystemService.instance;
 
   FilesystemProfileStorage(this._basePath);
 
@@ -142,10 +145,10 @@ class FilesystemProfileStorage extends ProfileStorage {
 
   @override
   Future<String?> readString(String relativePath) async {
-    final file = File(getAbsolutePath(relativePath));
-    if (!await file.exists()) return null;
+    final path = getAbsolutePath(relativePath);
+    if (!await _fs.exists(path)) return null;
     try {
-      return await file.readAsString();
+      return await _fs.readAsString(path);
     } catch (e) {
       _log.log('FilesystemStorage: Error reading $relativePath: $e');
       return null;
@@ -154,10 +157,11 @@ class FilesystemProfileStorage extends ProfileStorage {
 
   @override
   Future<Uint8List?> readBytes(String relativePath) async {
-    final file = File(getAbsolutePath(relativePath));
-    if (!await file.exists()) return null;
+    final path = getAbsolutePath(relativePath);
+    if (!await _fs.exists(path)) return null;
     try {
-      return await file.readAsBytes();
+      final bytes = await _fs.readAsBytes(path);
+      return Uint8List.fromList(bytes);
     } catch (e) {
       _log.log('FilesystemStorage: Error reading bytes $relativePath: $e');
       return null;
@@ -166,67 +170,70 @@ class FilesystemProfileStorage extends ProfileStorage {
 
   @override
   Future<void> writeString(String relativePath, String content) async {
-    final file = File(getAbsolutePath(relativePath));
-    await file.parent.create(recursive: true);
-    await file.writeAsString(content);
+    final path = getAbsolutePath(relativePath);
+    await _fs.createDirectory(_fs.parentPath(path), recursive: true);
+    await _fs.writeAsString(path, content);
   }
 
   @override
   Future<void> appendString(String relativePath, String content) async {
-    final file = File(getAbsolutePath(relativePath));
-    await file.parent.create(recursive: true);
-    await file.writeAsString(content, mode: FileMode.append);
+    final path = getAbsolutePath(relativePath);
+    await _fs.createDirectory(_fs.parentPath(path), recursive: true);
+    String existing = '';
+    if (await _fs.exists(path)) {
+      existing = await _fs.readAsString(path);
+    }
+    await _fs.writeAsString(path, existing + content);
   }
 
   @override
   Future<void> writeBytes(String relativePath, Uint8List bytes) async {
-    final file = File(getAbsolutePath(relativePath));
-    await file.parent.create(recursive: true);
-    await file.writeAsBytes(bytes);
+    final path = getAbsolutePath(relativePath);
+    await _fs.createDirectory(_fs.parentPath(path), recursive: true);
+    await _fs.writeAsBytes(path, bytes);
   }
 
   @override
   Future<bool> exists(String relativePath) async {
-    return File(getAbsolutePath(relativePath)).exists();
+    return _fs.exists(getAbsolutePath(relativePath));
   }
 
   @override
   Future<void> delete(String relativePath) async {
-    final file = File(getAbsolutePath(relativePath));
-    if (await file.exists()) {
-      await file.delete();
+    final path = getAbsolutePath(relativePath);
+    if (await _fs.exists(path)) {
+      await _fs.delete(path);
     }
   }
 
   @override
   Future<void> copyFromExternal(String externalPath, String relativePath) async {
-    final source = File(externalPath);
-    final dest = File(getAbsolutePath(relativePath));
-    await dest.parent.create(recursive: true);
-    await source.copy(dest.path);
+    final destPath = getAbsolutePath(relativePath);
+    await _fs.createDirectory(_fs.parentPath(destPath), recursive: true);
+    await _fs.copy(externalPath, destPath);
   }
 
   @override
   Future<void> copyToExternal(String relativePath, String externalPath) async {
-    final source = File(getAbsolutePath(relativePath));
-    final dest = File(externalPath);
-    await dest.parent.create(recursive: true);
-    await source.copy(dest.path);
+    final sourcePath = getAbsolutePath(relativePath);
+    await _fs.createDirectory(_fs.parentPath(externalPath), recursive: true);
+    await _fs.copy(sourcePath, externalPath);
   }
 
   @override
   Future<List<StorageEntry>> listDirectory(String relativePath, {bool recursive = false}) async {
-    final dir = Directory(getAbsolutePath(relativePath));
-    if (!await dir.exists()) return [];
+    final dirPath = getAbsolutePath(relativePath);
+    if (!await _fs.isDirectory(dirPath)) return [];
 
+    final entities = await _fs.list(dirPath, recursive: recursive);
     final entries = <StorageEntry>[];
-    await for (final entity in dir.list(recursive: recursive)) {
-      final stat = await entity.stat();
+    for (final entity in entities) {
+      final stat = await _fs.stat(entity.path);
       final entityRelPath = p.relative(entity.path, from: _basePath);
       entries.add(StorageEntry(
         name: p.basename(entity.path),
         path: entityRelPath,
-        isDirectory: entity is Directory,
+        isDirectory: entity.isDirectory,
         size: stat.size,
         modified: stat.modified,
       ));
@@ -236,19 +243,19 @@ class FilesystemProfileStorage extends ProfileStorage {
 
   @override
   Future<void> createDirectory(String relativePath) async {
-    await Directory(getAbsolutePath(relativePath)).create(recursive: true);
+    await _fs.createDirectory(getAbsolutePath(relativePath), recursive: true);
   }
 
   @override
   Future<bool> directoryExists(String relativePath) async {
-    return Directory(getAbsolutePath(relativePath)).exists();
+    return _fs.isDirectory(getAbsolutePath(relativePath));
   }
 
   @override
   Future<void> deleteDirectory(String relativePath, {bool recursive = false}) async {
-    final dir = Directory(getAbsolutePath(relativePath));
-    if (await dir.exists()) {
-      await dir.delete(recursive: recursive);
+    final dirPath = getAbsolutePath(relativePath);
+    if (await _fs.isDirectory(dirPath)) {
+      await _fs.delete(dirPath, recursive: recursive);
     }
   }
 }
@@ -336,9 +343,9 @@ class EncryptedProfileStorage extends ProfileStorage {
 
   @override
   Future<void> copyFromExternal(String externalPath, String relativePath) async {
-    final file = File(externalPath);
-    final bytes = await file.readAsBytes();
-    await writeBytes(relativePath, bytes);
+    final fs = FileSystemService.instance;
+    final bytes = await fs.readAsBytes(externalPath);
+    await writeBytes(relativePath, Uint8List.fromList(bytes));
   }
 
   @override
@@ -347,9 +354,9 @@ class EncryptedProfileStorage extends ProfileStorage {
     if (bytes == null) {
       throw Exception('File not found in encrypted storage: $relativePath');
     }
-    final dest = File(externalPath);
-    await dest.parent.create(recursive: true);
-    await dest.writeAsBytes(bytes);
+    final fs = FileSystemService.instance;
+    await fs.createDirectory(fs.parentPath(externalPath), recursive: true);
+    await fs.writeAsBytes(externalPath, bytes);
   }
 
   @override

@@ -14,7 +14,6 @@ permissions:
 
 jobs:
   build:
-    if: false  # Disabled: whisper_flutter_new and other packages require dart:ffi (not available on web)
     runs-on: ubuntu-latest
 
     steps:
@@ -43,18 +42,36 @@ jobs:
 
     - name: Remove native-only dependencies
       run: |
-        # Remove FFI dependency (native libopus bindings, not available on web)
+        # Remove all FFI/native-only packages that pub resolves but main_web.dart never imports
         sed -i '/^  ffi:/d' pubspec.yaml
-        # Delete lock file to ensure clean resolution without ffi
+        sed -i '/^  whisper_flutter_new:/d' pubspec.yaml
+        sed -i '/^  flutter_onnxruntime:/d' pubspec.yaml
+        sed -i '/^  tflite_flutter:/d' pubspec.yaml
+        sed -i '/^  media_kit:/d' pubspec.yaml
+        sed -i '/^  media_kit_video:/d' pubspec.yaml
+        sed -i '/^  media_kit_libs_video:/d' pubspec.yaml
+        sed -i '/^  webf:/d' pubspec.yaml
+        sed -i '/^  pdfx:/d' pubspec.yaml
+        sed -i '/^  sqlite3:/d' pubspec.yaml
+        sed -i '/^  sqlite3_flutter_libs:/d' pubspec.yaml
+        sed -i '/^  dbus:/d' pubspec.yaml
+        sed -i '/^  flutter_pty:/d' pubspec.yaml
+        sed -i '/^  flutter_blue_plus:/d' pubspec.yaml
+        sed -i '/^  ble_peripheral:/d' pubspec.yaml
+        sed -i '/^  flutter_zxing:/d' pubspec.yaml
+        sed -i '/^  flutter_contacts:/d' pubspec.yaml
+        sed -i '/^  window_manager:/d' pubspec.yaml
+        sed -i '/^  encrypted_archive:/,/^  [^ ]/{ /^  encrypted_archive:/d; /^    path:/d; }' pubspec.yaml
+        # Delete lock file to ensure clean resolution
         rm -f pubspec.lock
-        # Clear pub cache to remove cached ffi package
+        # Clear pub cache to remove cached native packages
         flutter pub cache clean --force
 
     - name: Install dependencies
       run: flutter pub get
 
     - name: Build Web Release
-      run: flutter build web --release
+      run: flutter build web --release --target=lib/main_web.dart
 
     - name: Create portable archive
       run: |

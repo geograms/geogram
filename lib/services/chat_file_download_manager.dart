@@ -7,8 +7,8 @@
  */
 
 import 'dart:async';
-import 'dart:io';
 import 'package:path/path.dart' as p;
+import '../platform/file_system_service.dart';
 import '../util/event_bus.dart';
 import 'devices_service.dart';
 import 'log_service.dart';
@@ -206,13 +206,14 @@ class ChatFileDownloadManager {
     );
 
     // Check for existing partial download
+    final fs = FileSystemService.instance;
     final tempDir = await _getTempDir();
     final tempPath = p.join(tempDir, '${id}_partial');
-    final tempFile = File(tempPath);
     int resumeFrom = 0;
 
-    if (await tempFile.exists()) {
-      resumeFrom = await tempFile.length();
+    if (await fs.exists(tempPath)) {
+      final stat = await fs.stat(tempPath);
+      resumeFrom = stat.size;
       download.bytesTransferred = resumeFrom;
       LogService().log('ChatFileDownloadManager: Resuming download from $resumeFrom bytes');
     }
@@ -259,8 +260,8 @@ class ChatFileDownloadManager {
         _notifyDownloadChanged(download);
 
         // Clean up temp file
-        if (await tempFile.exists()) {
-          await tempFile.delete();
+        if (await fs.exists(tempPath)) {
+          await fs.delete(tempPath);
         }
 
         LogService().log('ChatFileDownloadManager: Download completed: $id -> $resultPath');
@@ -296,9 +297,9 @@ class ChatFileDownloadManager {
 
     // Delete temp file
     if (download.tempPath != null) {
-      final tempFile = File(download.tempPath!);
-      if (await tempFile.exists()) {
-        await tempFile.delete();
+      final fs = FileSystemService.instance;
+      if (await fs.exists(download.tempPath!)) {
+        await fs.delete(download.tempPath!);
       }
     }
 
@@ -361,9 +362,9 @@ class ChatFileDownloadManager {
   Future<String> _getTempDir() async {
     final baseDir = StorageConfig().baseDir;
     final tempDir = p.join(baseDir, 'temp', 'downloads');
-    final dir = Directory(tempDir);
-    if (!await dir.exists()) {
-      await dir.create(recursive: true);
+    final fs = FileSystemService.instance;
+    if (!await fs.isDirectory(tempDir)) {
+      await fs.createDirectory(tempDir, recursive: true);
     }
     return tempDir;
   }

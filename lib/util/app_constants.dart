@@ -72,6 +72,9 @@ const Set<String> singleInstanceTypesConst = {
   'qr',
 };
 
+/// App types enabled on the web platform (subset — more added incrementally)
+const Set<String> webEnabledAppTypesConst = {'chat', 'log'};
+
 /// Predefined categories for stories
 const List<String> storyCategoriesConst = [
   'news',
