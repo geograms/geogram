@@ -3,6 +3,7 @@
  * License: Apache-2.0
  */
 
+import 'dart:async';
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -41,6 +42,10 @@ class _LogBrowserPageState extends State<LogBrowserPage> with SingleTickerProvid
   int _totalLogLines = 0;
   bool _logsTruncated = false;
 
+  // Debounce timer for incoming log messages
+  Timer? _updateTimer;
+  final List<String> _pendingLines = [];
+
   // Track which crash cards have expanded stack traces (by index)
   final Set<int> _expandedCrashCards = {};
 
@@ -56,6 +61,7 @@ class _LogBrowserPageState extends State<LogBrowserPage> with SingleTickerProvid
 
   @override
   void dispose() {
+    _updateTimer?.cancel();
     _tabController.removeListener(_onTabChanged);
     _i18n.languageNotifier.removeListener(_onLanguageChanged);
     _logService.removeListener(_onLogUpdate);
@@ -97,28 +103,52 @@ class _LogBrowserPageState extends State<LogBrowserPage> with SingleTickerProvid
     setState(() {});
   }
 
-  void _onLogUpdate(String message) async {
-    if (!_isPaused && mounted) {
-      // Reload logs in background
-      final result = await _logService.readTodayLogAsync(maxLines: 1000);
-      if (mounted) {
-        setState(() {
-          _logLines = result.lines;
-          _totalLogLines = result.totalLines;
-          _logsTruncated = result.truncated;
-        });
-        if (_tabController.index == 1) {
-          _scrollToBottom();
+  void _onLogUpdate(String message) {
+    if (_isPaused || !mounted || message.isEmpty) return;
+
+    _pendingLines.add(message);
+
+    // Debounce: flush pending lines every 300ms
+    _updateTimer?.cancel();
+    _updateTimer = Timer(const Duration(milliseconds: 300), () {
+      if (!mounted || _pendingLines.isEmpty) return;
+
+      setState(() {
+        _logLines.addAll(_pendingLines);
+        _pendingLines.clear();
+        // Cap at 1000 lines
+        if (_logLines.length > 1000) {
+          _logLines = _logLines.sublist(_logLines.length - 1000);
+          _logsTruncated = true;
         }
+        _totalLogLines = _logLines.length;
+      });
+
+      if (_tabController.index == 1) {
+        _scrollToBottom();
       }
-    }
+    });
   }
 
   Future<void> _loadLogFiles() async {
-    setState(() => _isLoadingLogFiles = true);
+    // Show in-memory messages instantly (no I/O, no spinner)
+    final inMemory = _logService.messages;
+    if (inMemory.isNotEmpty) {
+      setState(() {
+        _logLines = List<String>.from(inMemory);
+        _totalLogLines = inMemory.length;
+        _logsTruncated = false;
+        _isLoadingLogFiles = false;
+      });
+      if (_tabController.index == 1) {
+        _scrollToBottom();
+      }
+    } else {
+      setState(() => _isLoadingLogFiles = true);
+    }
 
+    // Load the full file in background (includes older lines from before this session)
     try {
-      // Load log lines in isolate for performance
       final result = await _logService.readTodayLogAsync(maxLines: 1000);
       final heartbeat = await _logService.readHeartbeat();
 
@@ -137,9 +167,12 @@ class _LogBrowserPageState extends State<LogBrowserPage> with SingleTickerProvid
     } catch (_) {
       if (mounted) {
         setState(() {
-          _logLines = [];
-          _totalLogLines = 0;
-          _logsTruncated = false;
+          // Keep in-memory lines on error instead of clearing
+          if (_logLines.isEmpty) {
+            _logLines = [];
+            _totalLogLines = 0;
+            _logsTruncated = false;
+          }
           _heartbeat = null;
           _isLoadingLogFiles = false;
         });
