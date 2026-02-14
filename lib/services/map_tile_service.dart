@@ -153,7 +153,8 @@ class MapTileService {
   /// Priority queue for tile downloads
   final List<_TileRequest> _downloadQueue = [];
   final Set<String> _queuedKeys = {};  // O(1) deduplication check
-  bool _queueProcessorRunning = false;
+  static const int _maxConcurrentDownloads = 4;
+  int _activeDownloads = 0;
 
   /// Tile server reachability state (replaces generic internet check)
   bool? _canReachTileServer;
@@ -232,39 +233,35 @@ class MapTileService {
       _downloadQueue.add(requestWithCompleter);
     }
 
-    // Start processor if not running
-    if (!_queueProcessorRunning) {
-      _processQueue();
-    }
+    // Start processor if capacity available
+    _processQueue();
 
     return completer.future;
   }
 
-  /// Process the download queue
-  Future<void> _processQueue() async {
-    if (_queueProcessorRunning) return;
-    _queueProcessorRunning = true;
-
-    while (_downloadQueue.isNotEmpty) {
+  /// Process the download queue with concurrent workers
+  void _processQueue() {
+    while (_activeDownloads < _maxConcurrentDownloads && _downloadQueue.isNotEmpty) {
       final request = _downloadQueue.removeAt(0);
       _queuedKeys.remove(request.key);
+      _activeDownloads++;
 
-      try {
-        final result = await _downloadAndCacheTileWithAge(
-          request.z,
-          request.x,
-          request.y,
-          request.layer,
-          maxAgeDays: request.maxAgeDays,
-        );
+      _downloadAndCacheTileWithAge(
+        request.z,
+        request.x,
+        request.y,
+        request.layer,
+        maxAgeDays: request.maxAgeDays,
+      ).then((result) {
         request.completer?.complete(result);
-      } catch (e) {
+      }).catchError((e) {
         LogService().log('MapTileService: Queue tile failed: ${request.key}: $e');
         request.completer?.complete(_TileDownloadResult.failed);
-      }
+      }).whenComplete(() {
+        _activeDownloads--;
+        _processQueue(); // Pick up next item
+      });
     }
-
-    _queueProcessorRunning = false;
   }
 
   /// Get the tiles storage path
@@ -279,12 +276,13 @@ class MapTileService {
         return _canReachTileServer!;
       }
     }
-    // If no cached result, return false and trigger async check
+    // If no cached result, return true (optimistic) and trigger async check
+    // The HTTP download already has a 10-second timeout as safety net for offline
     _checkTileServerReachability();
-    return _canReachTileServer ?? false;
+    return _canReachTileServer ?? true;
   }
 
-  bool get canUseStation => _canReachTileServer == true || _networkMonitor.hasLan;
+  bool get canUseStation => _canReachTileServer != false || _networkMonitor.hasLan;
 
   /// Check if the OSM tile server is reachable (async, updates cached state)
   Future<bool> checkTileServerReachability() async {

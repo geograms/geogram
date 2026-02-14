@@ -180,6 +180,7 @@ class _PlaceMapViewPageState extends State<PlaceMapViewPage> {
                 urlTemplate: _mapTileService.getTileUrl(layerType),
                 userAgentPackageName: 'dev.geogram',
                 subdomains: const [],
+                keepBuffer: 3,
                 tileProvider: _mapTileService.getTileProvider(layerType),
               );
             },
@@ -195,6 +196,7 @@ class _PlaceMapViewPageState extends State<PlaceMapViewPage> {
                 urlTemplate: _mapTileService.getLabelsUrl(),
                 userAgentPackageName: 'dev.geogram',
                 subdomains: const [],
+                keepBuffer: 3,
                 tileProvider: _mapTileService.getLabelsProvider(),
               );
             },

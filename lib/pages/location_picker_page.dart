@@ -465,6 +465,7 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
                                       urlTemplate: _mapTileService.getTileUrl(layerType),
                                       userAgentPackageName: 'dev.geogram',
                                       subdomains: const [], // No subdomains for station/OSM
+                                      keepBuffer: 3,
                                       tileProvider: _mapTileService.getTileProvider(layerType),
                                       errorTileCallback: (tile, error, stackTrace) {
                                         if (!_isOnline) return;
@@ -487,6 +488,7 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
                                       urlTemplate: _mapTileService.getLabelsUrl(),
                                       userAgentPackageName: 'dev.geogram',
                                       subdomains: const [],
+                                      keepBuffer: 3,
                                       tileProvider: _mapTileService.getLabelsProvider(),
                                     );
                                   },
@@ -504,6 +506,7 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
                                         urlTemplate: _mapTileService.getTransportLabelsUrl(),
                                         userAgentPackageName: 'dev.geogram',
                                         subdomains: const [],
+                                        keepBuffer: 3,
                                         tileProvider: _mapTileService.getTransportLabelsProvider(),
                                       ),
                                     );

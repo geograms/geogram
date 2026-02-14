@@ -1069,6 +1069,7 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
                   urlTemplate: _mapTileService.getTileUrl(layerType),
                   userAgentPackageName: 'dev.geogram',
                   subdomains: const [],
+                  keepBuffer: 3,
                   tileBuilder: (context, tileWidget, tile) {
                     return tileWidget;
                   },
@@ -1097,6 +1098,7 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
                     urlTemplate: _mapTileService.getBordersUrl(),
                     userAgentPackageName: 'dev.geogram',
                     subdomains: const [],
+                    keepBuffer: 3,
                     tileProvider: _mapTileService.getBordersProvider(),
                   ),
                 );
@@ -1113,6 +1115,7 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
                   urlTemplate: _mapTileService.getLabelsUrl(),
                   userAgentPackageName: 'dev.geogram',
                   subdomains: const [],
+                  keepBuffer: 3,
                   tileProvider: _mapTileService.getLabelsProvider(),
                 );
               },
@@ -1139,6 +1142,7 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
                     urlTemplate: _mapTileService.getTransportLabelsUrl(),
                     userAgentPackageName: 'dev.geogram',
                     subdomains: const [],
+                    keepBuffer: 3,
                     tileProvider: _mapTileService.getTransportLabelsProvider(),
                   ),
                 );
