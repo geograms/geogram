@@ -49,7 +49,14 @@ class MainActivity : FlutterActivity() {
     )
 
     override fun provideFlutterEngine(context: Context): FlutterEngine? {
-        return FlutterEngineCache.getInstance().get(GeogramApplication.ENGINE_ID)
+        var engine = FlutterEngineCache.getInstance().get(GeogramApplication.ENGINE_ID)
+        if (engine == null) {
+            // No cached engine (boot service didn't run) — create one via the safe path
+            // which uses automaticallyRegisterPlugins=false + try-catch(Throwable)
+            (application as? GeogramApplication)?.ensureFlutterEngine()
+            engine = FlutterEngineCache.getInstance().get(GeogramApplication.ENGINE_ID)
+        }
+        return engine
     }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
