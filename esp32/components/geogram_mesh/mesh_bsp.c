@@ -334,6 +334,11 @@ esp_err_t geogram_mesh_start(const geogram_mesh_config_t *config)
     // Configure ESP-Mesh-Lite using the default config from Kconfig
     esp_mesh_lite_config_t mesh_lite_config = ESP_MESH_LITE_DEFAULT_INIT();
 
+    // Mesh-Lite's vendor_ie module emits repetitive connect warnings in
+    // router-less mode (expected in Geogram). Keep only errors for this tag.
+    esp_log_level_set("[vendor_ie]", ESP_LOG_ERROR);
+    esp_log_level_set("vendor_ie", ESP_LOG_ERROR);
+
     // Initialize mesh-lite (returns void)
     esp_mesh_lite_init(&mesh_lite_config);
     ESP_LOGI(TAG, "[START] Mesh-lite initialized");
