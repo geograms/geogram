@@ -505,7 +505,11 @@ class MainActivity : FlutterActivity() {
         usbMethodChannel = null
         fileViewerMethodChannel = null
         recentFilesMethodChannel = null
-        super.onDestroy()
+        try {
+            super.onDestroy()
+        } catch (e: Exception) {
+            android.util.Log.e("MainActivity", "Error during activity destroy: ${e.message}")
+        }
     }
 
     /**

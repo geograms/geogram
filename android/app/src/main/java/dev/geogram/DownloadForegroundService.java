@@ -52,11 +52,8 @@ public class DownloadForegroundService extends Service {
         intent.setAction("UPDATE_PROGRESS");
         intent.putExtra("progress", progress);
         intent.putExtra("status", status);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            context.startForegroundService(intent);
-        } else {
-            context.startService(intent);
-        }
+        // Use startService (not startForegroundService) — service is already in foreground
+        context.startService(intent);
     }
 
     @Override
@@ -78,27 +75,22 @@ public class DownloadForegroundService extends Service {
             if (downloadStatus == null) {
                 downloadStatus = "Downloading update...";
             }
-            updateNotification();
-        } else {
-            // START action or null - start the service
-            Notification notification = createNotification();
-            try {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    startForeground(NOTIFICATION_ID, notification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
-                } else {
-                    startForeground(NOTIFICATION_ID, notification);
-                }
-            } catch (Exception e) {
-                // Handle ForegroundServiceStartNotAllowedException on Android 14+
-                // when dataSync time limit is exhausted
-                Log.e(TAG, "Failed to start foreground service: " + e.getMessage());
-                // Stop the service gracefully instead of crashing
-                stopSelf();
-                return START_NOT_STICKY;
-            }
         }
 
-        // Keep the service running
+        // Always call startForeground — required after startForegroundService()
+        Notification notification = createNotification();
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(NOTIFICATION_ID, notification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
+            } else {
+                startForeground(NOTIFICATION_ID, notification);
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to start foreground service: " + e.getMessage());
+            stopSelf();
+            return START_NOT_STICKY;
+        }
+
         return START_STICKY;
     }
 
