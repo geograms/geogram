@@ -142,8 +142,18 @@ esp_err_t console_init(void)
         return ret;
     }
 
-    // Configure linenoise
-    linenoiseSetMultiLine(1);
+    // Probe terminal capabilities; pio device monitor often can't answer ANSI
+    // cursor queries, so force dumb mode to keep the prompt usable.
+    int probe_status = linenoiseProbe();
+    if (probe_status != 0) {
+        ESP_LOGW(TAG, "Terminal probe failed (%d), enabling dumb mode", probe_status);
+        linenoiseSetDumbMode(1);
+        linenoiseSetMultiLine(0);
+    } else {
+        linenoiseSetMultiLine(1);
+    }
+
+    // Configure linenoise history/input behavior
     linenoiseHistorySetMaxLen(HISTORY_SIZE);
     linenoiseAllowEmpty(false);
 
