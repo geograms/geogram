@@ -34,6 +34,7 @@ static TaskHandle_t s_console_task = NULL;
 static bool s_running = false;
 static console_output_mode_t s_output_mode = CONSOLE_OUTPUT_TEXT;
 static char s_history[HISTORY_SIZE][MAX_CMDLINE_LENGTH];
+static char s_history_blob[HISTORY_BLOB_MAX];
 static size_t s_history_count = 0;
 
 static void history_append_local(const char *line, bool dedupe_last)
@@ -60,7 +61,6 @@ static void history_append_local(const char *line, bool dedupe_last)
 
 static esp_err_t history_save_nvs(void)
 {
-    char blob[HISTORY_BLOB_MAX];
     size_t blob_len = 0;
 
     for (size_t i = 0; i < s_history_count; i++) {
@@ -68,12 +68,12 @@ static esp_err_t history_save_nvs(void)
         if (line_len == 0) {
             continue;
         }
-        if (blob_len + line_len + 1 > sizeof(blob)) {
+        if (blob_len + line_len + 1 > sizeof(s_history_blob)) {
             break;
         }
-        memcpy(&blob[blob_len], s_history[i], line_len);
+        memcpy(&s_history_blob[blob_len], s_history[i], line_len);
         blob_len += line_len;
-        blob[blob_len++] = '\n';
+        s_history_blob[blob_len++] = '\n';
     }
 
     nvs_handle_t nvs = 0;
@@ -88,7 +88,7 @@ static esp_err_t history_save_nvs(void)
             ret = ESP_OK;
         }
     } else {
-        ret = nvs_set_blob(nvs, HISTORY_NVS_KEY, blob, blob_len);
+        ret = nvs_set_blob(nvs, HISTORY_NVS_KEY, s_history_blob, blob_len);
     }
 
     if (ret == ESP_OK) {
