@@ -59,9 +59,9 @@ if [ "$1" = "server" ]; then
 
     echo "▶️  Starting web server on http://localhost:$PORT ..."
     echo ""
-    "$FLUTTER_BIN" run -d web-server --web-port="$PORT" --web-hostname=0.0.0.0 --no-pub
+    "$FLUTTER_BIN" run -d web-server --web-port="$PORT" --web-hostname=0.0.0.0 --target=lib/main_web.dart --no-pub
 else
     echo "▶️  Starting app in Chrome..."
     echo ""
-    "$FLUTTER_BIN" run -d chrome --no-pub "$@"
+    "$FLUTTER_BIN" run -d chrome --target=lib/main_web.dart --no-pub "$@"
 fi
