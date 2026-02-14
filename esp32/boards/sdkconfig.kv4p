@@ -16,6 +16,9 @@ CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ=240
 # No PSRAM on KV4P ESP32-WROOM
 # CONFIG_SPIRAM is not set
 
+# Disable ANSI color escapes in logs (clean serial output in all terminals)
+# CONFIG_LOG_COLORS is not set
+
 # WiFi
 CONFIG_ESP32_WIFI_STATIC_RX_BUFFER_NUM=10
 CONFIG_ESP32_WIFI_DYNAMIC_RX_BUFFER_NUM=32
