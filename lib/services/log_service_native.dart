@@ -37,7 +37,8 @@ Future<LogReadResult> _readLogFileInIsolate(_LogReadParams params) async {
       return LogReadResult(lines: [], totalLines: 0, truncated: false);
     }
 
-    final content = await file.readAsString();
+    final bytes = await file.readAsBytes();
+    final content = utf8.decode(bytes, allowMalformed: true);
     final allLines = content.split('\n').where((l) => l.trim().isNotEmpty).toList();
     final totalLines = allLines.length;
 
@@ -323,7 +324,9 @@ class LogService {
     _logSink = null;
 
     // Read file, keep last ~20MB worth of lines
-    final content = await logFile.readAsString();
+    // Use allowMalformed to handle corrupted/non-UTF-8 bytes gracefully
+    final bytes = await logFile.readAsBytes();
+    final content = utf8.decode(bytes, allowMalformed: true);
     final lines = content.split('\n');
 
     // Estimate bytes per line and calculate how many lines to keep
