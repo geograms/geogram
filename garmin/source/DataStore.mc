@@ -20,6 +20,11 @@ module DataStore {
     const KEY_LAST_LAT = "lastLat";
     const KEY_LAST_LON = "lastLon";
     const KEY_NOTIFIED_IDS = "notifiedIds";
+    const KEY_CHAT_ROOMS = "chatRooms";
+    const KEY_STATION_URLS = "stationUrls";
+    const KEY_ALERT_COUNT = "alertCount";
+    const KEY_PLACE_COUNT = "placeCount";
+    const KEY_CHAT_ROOM_COUNT = "chatRoomCount";
 
     const DEFAULT_STATION_URL = "https://p2p.radio";
     const DEFAULT_RADIUS_KM = 50;
@@ -75,6 +80,7 @@ module DataStore {
 
     function setAlerts(alerts as Array) as Void {
         Storage.setValue(KEY_ALERTS, alerts);
+        Storage.setValue(KEY_ALERT_COUNT, alerts.size());
     }
 
     function getPlaces() as Array? {
@@ -87,6 +93,7 @@ module DataStore {
 
     function setPlaces(places as Array) as Void {
         Storage.setValue(KEY_PLACES, places);
+        Storage.setValue(KEY_PLACE_COUNT, places.size());
     }
 
     // -- GPS Position --
@@ -130,5 +137,68 @@ module DataStore {
 
     function clearNotifiedIds() as Void {
         Storage.deleteValue(KEY_NOTIFIED_IDS);
+    }
+
+    // -- Chat Rooms --
+
+    function getChatRooms() as Array? {
+        var data = Storage.getValue(KEY_CHAT_ROOMS);
+        if (data instanceof Array) {
+            return data;
+        }
+        return null;
+    }
+
+    function setChatRooms(rooms as Array) as Void {
+        Storage.setValue(KEY_CHAT_ROOMS, rooms);
+        Storage.setValue(KEY_CHAT_ROOM_COUNT, rooms.size());
+    }
+
+    // -- Station URLs (cycle list) --
+
+    function getStationUrls() as Array<String> {
+        var data = Storage.getValue(KEY_STATION_URLS);
+        if (data instanceof Array && data.size() > 0) {
+            return data as Array<String>;
+        }
+        return [DEFAULT_STATION_URL] as Array<String>;
+    }
+
+    function setStationUrls(urls as Array<String>) as Void {
+        Storage.setValue(KEY_STATION_URLS, urls);
+    }
+
+    // -- Cached counts --
+
+    function getAlertCount() as Number {
+        var c = Storage.getValue(KEY_ALERT_COUNT);
+        if (c instanceof Number) {
+            return c;
+        }
+        return 0;
+    }
+
+    function setAlertCount(count as Number) as Void {
+        Storage.setValue(KEY_ALERT_COUNT, count);
+    }
+
+    function getPlaceCount() as Number {
+        var c = Storage.getValue(KEY_PLACE_COUNT);
+        if (c instanceof Number) {
+            return c;
+        }
+        return 0;
+    }
+
+    function setPlaceCount(count as Number) as Void {
+        Storage.setValue(KEY_PLACE_COUNT, count);
+    }
+
+    function getChatRoomCount() as Number {
+        var c = Storage.getValue(KEY_CHAT_ROOM_COUNT);
+        if (c instanceof Number) {
+            return c;
+        }
+        return 0;
     }
 }

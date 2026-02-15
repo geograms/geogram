@@ -9,5 +9,14 @@
     <string id="AlertRadiusKm">Alert radius (km)</string>
     <string id="Alerts">Alerts</string>
     <string id="Places">Places</string>
+    <string id="Chat">Chat</string>
+    <string id="Rooms">Rooms</string>
+    <string id="Messages">Messages</string>
+    <string id="NoRooms">No chat rooms</string>
+    <string id="NoMessages">No messages</string>
+    <string id="NoPlaces">No places nearby</string>
+    <string id="NoAlerts">No alerts nearby</string>
+    <string id="Offline">Offline</string>
+    <string id="Station">Station</string>
     <string id="ProximityAlert" scope="background">Geogram: Alert nearby!</string>
 </resources>

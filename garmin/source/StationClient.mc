@@ -14,6 +14,8 @@ class StationClient {
 
     private var _alertsCallback as Method?;
     private var _placesCallback as Method?;
+    private var _chatRoomsCallback as Method?;
+    private var _chatMessagesCallback as Method?;
 
     function initialize() {
     }
@@ -91,6 +93,71 @@ class StationClient {
             cb.invoke(data["places"] as Array);
         } else {
             System.println("Places fetch failed: " + responseCode);
+            cb.invoke(null);
+        }
+    }
+
+    //! Fetch chat rooms from the station API
+    //! @param callback Method to call with (rooms as Array?) — null on error
+    function fetchChatRooms(callback as Method) as Void {
+        _chatRoomsCallback = callback;
+        var url = DataStore.getStationUrl() + "/api/chat/rooms";
+        var options = {
+            :method => Communications.HTTP_REQUEST_METHOD_GET,
+            :responseType => Communications.HTTP_RESPONSE_CONTENT_TYPE_JSON,
+            :headers => {
+                "Accept" => "application/json"
+            }
+        };
+        Communications.makeWebRequest(url, {}, options, method(:onChatRoomsResponse));
+    }
+
+    //! Handle chat rooms API response
+    function onChatRoomsResponse(responseCode as Number, data as Dictionary or Null) as Void {
+        var cb = _chatRoomsCallback;
+        _chatRoomsCallback = null;
+        if (cb == null) {
+            return;
+        }
+        if (responseCode == 200 && data != null && data["rooms"] instanceof Array) {
+            cb.invoke(data["rooms"] as Array);
+        } else {
+            System.println("Chat rooms fetch failed: " + responseCode);
+            cb.invoke(null);
+        }
+    }
+
+    //! Fetch messages for a specific chat room
+    //! @param roomId The room ID
+    //! @param limit Maximum number of messages
+    //! @param callback Method to call with (messages as Array?) — null on error
+    function fetchChatMessages(roomId as String, limit as Number, callback as Method) as Void {
+        _chatMessagesCallback = callback;
+        var url = DataStore.getStationUrl() + "/api/chat/" + roomId + "/messages";
+        var params = {
+            "limit" => limit
+        };
+        var options = {
+            :method => Communications.HTTP_REQUEST_METHOD_GET,
+            :responseType => Communications.HTTP_RESPONSE_CONTENT_TYPE_JSON,
+            :headers => {
+                "Accept" => "application/json"
+            }
+        };
+        Communications.makeWebRequest(url, params, options, method(:onChatMessagesResponse));
+    }
+
+    //! Handle chat messages API response
+    function onChatMessagesResponse(responseCode as Number, data as Dictionary or Null) as Void {
+        var cb = _chatMessagesCallback;
+        _chatMessagesCallback = null;
+        if (cb == null) {
+            return;
+        }
+        if (responseCode == 200 && data != null && data["messages"] instanceof Array) {
+            cb.invoke(data["messages"] as Array);
+        } else {
+            System.println("Chat messages fetch failed: " + responseCode);
             cb.invoke(null);
         }
     }

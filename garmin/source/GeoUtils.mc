@@ -65,6 +65,23 @@ module GeoUtils {
         return dirs[index];
     }
 
+    //! Format a coordinate value as degrees with direction
+    //! @param value Coordinate value in degrees
+    //! @param positive Direction label for positive values (e.g. "N" or "E")
+    //! @param negative Direction label for negative values (e.g. "S" or "W")
+    //! @return Formatted string like "38'24N"
+    function formatCoord(value as Double, positive as String, negative as String) as String {
+        var dir = positive;
+        var v = value;
+        if (v < 0.0d) {
+            dir = negative;
+            v = -v;
+        }
+        var deg = v.toNumber();
+        var min = ((v - deg) * 60.0d).toNumber();
+        return deg.toString() + "'" + min.toString() + dir;
+    }
+
     //! Format distance for display
     //! @param distKm Distance in kilometers
     //! @return Formatted string like "2.3 km" or "450 m"

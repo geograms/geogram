@@ -58,7 +58,9 @@ This document catalogs reusable UI components available in the Geogram codebase.
 - [convertNodesToSpans](#convertnodetospans) - Convert highlight.js nodes to Flutter TextSpan list
 
 ### Garmin Watch App (Monkey C)
-- [GeoUtils module](#geoutils-module) - Haversine distance, bearing, cardinal direction
+- [GeoUtils module](#geoutils-module) - Haversine distance, bearing, cardinal direction, coordinate formatting
+- [DrawUtils module](#drawutils-module) - Word wrapping, severity colors for Garmin views
+- [BaseListView](#baselistview) - Scrollable list with header, states, selection for Garmin
 - [DataStore module](#datastore-module) - Settings + cached data via Application.Storage
 - [StationClient](#stationclient-garmin) - HTTP client for station API (makeWebRequest)
 - [ProximityChecker](#proximitychecker) - Background service for geo-fence alerts
@@ -8197,9 +8199,28 @@ Reusable geographic math functions for Garmin Connect IQ apps:
 - `calculateDistance(lat1, lon1, lat2, lon2)` — Haversine distance in km
 - `calculateBearing(lat1, lon1, lat2, lon2)` — Bearing in degrees (0-360)
 - `bearingToCardinal(bearing)` — Converts bearing to "N", "NE", etc.
+- `formatCoord(value, positive, negative)` — Formats coordinate as "38'24N"
 - `formatDistance(distKm)` — Formats as "2.3 km" or "450 m"
 
 **Reuse potential**: Any Garmin app needing distance/direction calculations.
+
+### DrawUtils module
+
+**Location**: `garmin/source/BaseListView.mc`
+
+Shared drawing utilities for Garmin views:
+- `drawWrappedText(dc, x, y, font, text, maxWidth)` — Draw word-wrapped text, returns Y after last line
+- `getSeverityColor(severity)` — Map severity string ("emergency", "urgent", "attention") to Garmin color
+
+**Reuse potential**: Any Garmin view needing wrapped text or color-coded severity levels.
+
+### BaseListView
+
+**Location**: `garmin/source/BaseListView.mc`
+
+Abstract scrollable list view with header, loading/error/empty states, row selection highlight, scroll indicator, and UP/DOWN/BACK input handling. Subclasses override `getHeaderTitle()`, `getItems()`, `drawRow()`, `onItemSelect()`. Paired with `BaseListDelegate` for input handling.
+
+**Reuse potential**: Any Garmin list screen — extend BaseListView and implement 4 methods instead of rebuilding scroll/select/state logic.
 
 ### DataStore module
 

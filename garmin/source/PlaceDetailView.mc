@@ -2,8 +2,8 @@
  * Copyright (c) geogram
  * License: Apache-2.0
  *
- * Detail view for a single alert.
- * Shows title, severity/type, distance + bearing, description, coordinates.
+ * Detail view for a single place.
+ * Shows name, type, distance + bearing, description, coordinates.
  */
 
 import Toybox.Graphics;
@@ -11,7 +11,7 @@ import Toybox.Lang;
 import Toybox.System;
 import Toybox.WatchUi;
 
-class AlertDetailView extends WatchUi.View {
+class PlaceDetailView extends WatchUi.View {
 
     private var _item as Dictionary;
     private var _userLat as Double;
@@ -34,25 +34,18 @@ class AlertDetailView extends WatchUi.View {
         var y = 8 - _scrollY;
         var data = _item["data"] as Dictionary;
 
-        // Title
+        // Name
         dc.setColor(Graphics.COLOR_WHITE, Graphics.COLOR_TRANSPARENT);
         var title = _item["title"] as String;
         y = DrawUtils.drawWrappedText(dc, w / 2, y, Graphics.FONT_SMALL, title, w - 20);
 
         y += 4;
 
-        // Severity badge
-        var severity = _item["severity"] as String;
-        if (!severity.equals("")) {
-            var badgeColor = DrawUtils.getSeverityColor(severity);
-            dc.setColor(badgeColor, Graphics.COLOR_TRANSPARENT);
-            dc.drawText(w / 2, y, Graphics.FONT_XTINY, severity.toUpper(), Graphics.TEXT_JUSTIFY_CENTER);
-            y += 18;
-        }
-        // Alert type
-        if (data["type"] instanceof String) {
-            dc.setColor(Graphics.COLOR_LT_GRAY, Graphics.COLOR_TRANSPARENT);
-            dc.drawText(w / 2, y, Graphics.FONT_XTINY, data["type"] as String, Graphics.TEXT_JUSTIFY_CENTER);
+        // Place type badge
+        var placeType = _item["type"] as String;
+        if (!placeType.equals("")) {
+            dc.setColor(Graphics.COLOR_GREEN, Graphics.COLOR_TRANSPARENT);
+            dc.drawText(w / 2, y, Graphics.FONT_XTINY, placeType.toUpper(), Graphics.TEXT_JUSTIFY_CENTER);
             y += 18;
         }
 
@@ -86,6 +79,16 @@ class AlertDetailView extends WatchUi.View {
             y += 4;
         }
 
+        // Address
+        if (data["address"] instanceof String) {
+            var address = data["address"] as String;
+            if (!address.equals("")) {
+                dc.setColor(Graphics.COLOR_LT_GRAY, Graphics.COLOR_TRANSPARENT);
+                y = DrawUtils.drawWrappedText(dc, 12, y, Graphics.FONT_XTINY, address, w - 24);
+                y += 4;
+            }
+        }
+
         // Coordinates
         dc.setColor(Graphics.COLOR_DK_GRAY, Graphics.COLOR_TRANSPARENT);
         var coordStr = GeoUtils.formatCoord(itemLat, "N", "S") + " " + GeoUtils.formatCoord(itemLon, "E", "W");
@@ -106,18 +109,14 @@ class AlertDetailView extends WatchUi.View {
         _scrollY += 30;
         WatchUi.requestUpdate();
     }
-
-    function getItem() as Dictionary {
-        return _item;
-    }
 }
 
-//! Input delegate for alert detail view
-class AlertDetailDelegate extends WatchUi.BehaviorDelegate {
+//! Input delegate for place detail view
+class PlaceDetailDelegate extends WatchUi.BehaviorDelegate {
 
-    private var _view as AlertDetailView;
+    private var _view as PlaceDetailView;
 
-    function initialize(view as AlertDetailView) {
+    function initialize(view as PlaceDetailView) {
         BehaviorDelegate.initialize();
         _view = view;
     }
