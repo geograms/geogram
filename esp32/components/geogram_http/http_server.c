@@ -36,7 +36,7 @@ static wifi_config_callback_t s_config_callback = NULL;
 static bool s_station_api_enabled = false;
 
 // File transfer relay state
-#define FILE_CHUNK_SIZE 16384  // 16KB chunks
+#define FILE_CHUNK_SIZE 12288  // 12KB chunks
 #define FILE_TRANSFER_TIMEOUT_MS 60000  // 60 second timeout
 
 typedef struct {
@@ -1663,9 +1663,10 @@ esp_err_t http_server_start_ex(wifi_config_callback_t callback, bool enable_stat
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.lru_purge_enable = true;
-    config.stack_size = 32768;
-    config.max_uri_handlers = 20;
-    config.max_open_sockets = 13;  // Increased for mesh + multiple clients
+    // Keep HTTP server footprint low on no-PSRAM targets (ESP32-C3/KV4P).
+    config.stack_size = 12288;
+    config.max_uri_handlers = 16;
+    config.max_open_sockets = 5;
     config.recv_wait_timeout = 5;  // Shorter timeout to free sockets faster
     config.send_wait_timeout = 5;
 

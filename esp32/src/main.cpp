@@ -120,22 +120,35 @@ static void start_mesh_services(void)
 
     uint32_t ap_ip = 0;
     if (geogram_mesh_get_external_ap_ip_addr(&ap_ip) == ESP_OK) {
-        dns_server_start(ap_ip);
+        esp_err_t dns_ret = dns_server_start(ap_ip);
+        if (dns_ret != ESP_OK) {
+            ESP_LOGW(TAG, "DNS server start failed on mesh AP: %s", esp_err_to_name(dns_ret));
+        }
     }
 
     // Only start HTTP server if not already started early
     if (!s_http_server_started) {
         station_init();
-        http_server_start_ex(NULL, true);
-        s_http_server_started = true;
-        ESP_LOGI(TAG, "Station API started on mesh node");
+        esp_err_t http_ret = http_server_start_ex(NULL, true);
+        if (http_ret == ESP_OK) {
+            s_http_server_started = true;
+            ESP_LOGI(TAG, "Station API started on mesh node");
+        } else {
+            ESP_LOGE(TAG, "Failed to start Station API on mesh node: %s", esp_err_to_name(http_ret));
+        }
     } else {
         ESP_LOGI(TAG, "HTTP server already running (started early)");
     }
 
+#if BOARD_MODEL == MODEL_KV4P
+    // KV4P runs mesh + BLE + SA818 APRS on no-PSRAM ESP32; keep telnet off by default
+    // to preserve heap for radio and BLE operation.
+    ESP_LOGI(TAG, "Telnet auto-start disabled on KV4P (serial console remains available)");
+#else
     if (telnet_server_start(TELNET_DEFAULT_PORT) == ESP_OK) {
         ESP_LOGI(TAG, "Telnet server started on port %d", TELNET_DEFAULT_PORT);
     }
+#endif
 
     s_mesh_services_started = true;
 }
@@ -257,8 +270,12 @@ static void start_mesh_mode(void)
 
             // Start DNS server immediately for captive portal
             // All DNS queries will resolve to the SoftAP IP
-            dns_server_start(ip_info.ip.addr);
-            ESP_LOGI(TAG, "DNS server started for captive portal");
+            esp_err_t dns_ret = dns_server_start(ip_info.ip.addr);
+            if (dns_ret == ESP_OK) {
+                ESP_LOGI(TAG, "DNS server started for captive portal");
+            } else {
+                ESP_LOGW(TAG, "Failed to start DNS server for captive portal: %s", esp_err_to_name(dns_ret));
+            }
         }
     } else {
         ESP_LOGW(TAG, "Could not get SoftAP netif handle");

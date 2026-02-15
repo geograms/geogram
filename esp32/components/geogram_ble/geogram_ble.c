@@ -52,7 +52,7 @@ typedef struct {
     bool subscribed;
     uint16_t conn_handle;
     char callsign[STATION_CALLSIGN_LEN];
-    uint8_t rx_buffer[GEOGRAM_BLE_RX_BUFFER_SIZE];
+    uint8_t *rx_buffer;
     size_t rx_len;
 } geogram_ble_peer_t;
 
@@ -80,6 +80,7 @@ static const ble_uuid16_t s_status_uuid = BLE_UUID16_INIT(GEOGRAM_BLE_CHAR_STATU
 
 static void ble_host_task(void *param);
 static void ble_advertise_start(void);
+static void ble_reset_all_peers(void);
 
 static geogram_ble_peer_t *ble_find_peer(uint16_t conn_handle)
 {
@@ -101,6 +102,12 @@ static geogram_ble_peer_t *ble_alloc_peer(uint16_t conn_handle)
     for (size_t i = 0; i < GEOGRAM_BLE_MAX_CONNECTIONS; i++) {
         if (!s_peers[i].active) {
             memset(&s_peers[i], 0, sizeof(s_peers[i]));
+            s_peers[i].rx_buffer = (uint8_t *)malloc(GEOGRAM_BLE_RX_BUFFER_SIZE);
+            if (!s_peers[i].rx_buffer) {
+                ESP_LOGW(TAG, "Failed to allocate BLE RX buffer");
+                memset(&s_peers[i], 0, sizeof(s_peers[i]));
+                return NULL;
+            }
             s_peers[i].active = true;
             s_peers[i].conn_handle = conn_handle;
             return &s_peers[i];
@@ -116,7 +123,16 @@ static void ble_free_peer(uint16_t conn_handle)
     if (!peer) {
         return;
     }
+    free(peer->rx_buffer);
     memset(peer, 0, sizeof(*peer));
+}
+
+static void ble_reset_all_peers(void)
+{
+    for (size_t i = 0; i < GEOGRAM_BLE_MAX_CONNECTIONS; i++) {
+        free(s_peers[i].rx_buffer);
+        memset(&s_peers[i], 0, sizeof(s_peers[i]));
+    }
 }
 
 static uint8_t ble_compute_device_id(void)
@@ -1441,7 +1457,7 @@ static void ble_handle_message(uint16_t conn_handle,
 
 static void ble_process_peer_buffer(geogram_ble_peer_t *peer)
 {
-    if (!peer || !peer->active) {
+    if (!peer || !peer->active || !peer->rx_buffer) {
         return;
     }
 
@@ -1533,13 +1549,18 @@ static int ble_gatt_access_cb(uint16_t conn_handle, uint16_t attr_handle,
             return BLE_ATT_ERR_UNLIKELY;
         }
 
-        if (incoming_len > sizeof(peer->rx_buffer)) {
+        if (!peer->rx_buffer) {
+            free(incoming);
+            return BLE_ATT_ERR_UNLIKELY;
+        }
+
+        if (incoming_len > GEOGRAM_BLE_RX_BUFFER_SIZE) {
             peer->rx_len = 0;
             free(incoming);
             return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
         }
 
-        if (peer->rx_len + incoming_len > sizeof(peer->rx_buffer)) {
+        if (peer->rx_len + incoming_len > GEOGRAM_BLE_RX_BUFFER_SIZE) {
             peer->rx_len = 0;
         }
 
@@ -1781,7 +1802,7 @@ esp_err_t geogram_ble_init(void)
         return ESP_FAIL;
     }
 
-    memset(s_peers, 0, sizeof(s_peers));
+    ble_reset_all_peers();
     s_initialized = true;
 
     nimble_port_freertos_init(ble_host_task);
@@ -1828,7 +1849,7 @@ esp_err_t geogram_ble_stop(void)
         ESP_LOGW(TAG, "nimble_port_deinit failed: %s", esp_err_to_name(ret));
     }
 
-    memset(s_peers, 0, sizeof(s_peers));
+    ble_reset_all_peers();
     s_initialized = false;
     s_running = false;
 
