@@ -33,6 +33,7 @@ static const char *TAG = "sa818_radio";
 #define SA818_RADIO_RX_TASK_PRIO        4
 #define SA818_RADIO_AUDIO_BLOCK_SAMPLES 160
 #define SA818_RADIO_RX_STATS_LOG        0
+#define SA818_RADIO_IDLE_YIELD_US       1000000LL
 #define APRS_HDLC_FLAG                  0x7EU
 #define APRS_HDLC_RESET                 0x7FU
 #define APRS_AX25_ESC                   0x1BU
@@ -928,6 +929,7 @@ static void sa818_radio_rx_task(void *arg)
     const uint32_t interval_remainder = (sample_rate > 0U) ? (1000000U % sample_rate) : 0U;
     uint32_t interval_err = 0U;
     int64_t next_sample_us = esp_timer_get_time();
+    int64_t idle_yield_at_us = next_sample_us + SA818_RADIO_IDLE_YIELD_US;
 #if SA818_RADIO_RX_STATS_LOG
     int64_t stats_next_us = next_sample_us + 1000000LL;
 
@@ -1044,6 +1046,14 @@ static void sa818_radio_rx_task(void *arg)
         } else if ((now_us - next_sample_us) > 500000LL) {
             // Recover from long scheduler stalls.
             next_sample_us = now_us;
+        }
+
+        if (now_us >= idle_yield_at_us) {
+            // Allow IDLE task to run so task watchdog does not trigger while
+            // we keep this high-rate sampling loop active.
+            vTaskDelay(pdMS_TO_TICKS(1));
+            next_sample_us = esp_timer_get_time();
+            idle_yield_at_us = next_sample_us + SA818_RADIO_IDLE_YIELD_US;
         }
     }
 
