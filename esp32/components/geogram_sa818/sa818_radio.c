@@ -1,4 +1,5 @@
 #include <ctype.h>
+#include <limits.h>
 #include <math.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -28,19 +29,27 @@ static const char *TAG = "sa818_radio";
 #endif
 
 #define SA818_RADIO_CMD_TIMEOUT_MS      1500
-#define SA818_RADIO_RX_TASK_STACK       4096
+#define SA818_RADIO_RX_TASK_STACK       8192
 #define SA818_RADIO_RX_TASK_PRIO        4
 #define SA818_RADIO_AUDIO_BLOCK_SAMPLES 160
 
 #define APRS_SAMPLE_RATE_HZ             9600U
-#define APRS_SAMPLES_PER_BIT            8U
+#define APRS_SAMPLES_PER_BIT            (APRS_SAMPLE_RATE_HZ / APRS_BITRATE_BPS)
 #define APRS_MARK_FREQ_HZ               1200.0f
 #define APRS_SPACE_FREQ_HZ              2200.0f
+#define APRS_BITRATE_BPS                1200U
+#define APRS_DEMOD_DELAY_SAMPLES        ((APRS_SAMPLE_RATE_HZ + APRS_BITRATE_BPS) / (2U * APRS_BITRATE_BPS))
+#define APRS_FIR_TAPS                   31U
+#define APRS_PHASE_BITS                 8
+#define APRS_PHASE_INC                  1
+#define APRS_PHASE_MAX                  ((APRS_SAMPLE_RATE_HZ / APRS_BITRATE_BPS) * APRS_PHASE_BITS)
+#define APRS_PHASE_THRESHOLD            (APRS_PHASE_MAX / 2)
 #define APRS_PREAMBLE_FLAGS             350U
 #define APRS_TAIL_FLAGS                 50U
 #define APRS_TX_LEAD_MS                 250U
 #define APRS_TX_TAIL_MS                 120U
 #define APRS_MAX_FRAME_BYTES            330U
+#define APRS_MAX_RAW_BITS               (APRS_MAX_FRAME_BYTES * 12U)
 #define APRS_MAX_INFO_BYTES             120U
 #define APRS_MAX_MESSAGE_SEQ            999U
 
@@ -84,16 +93,34 @@ static inline uint8_t aprs_sin_sample(uint16_t phase)
 typedef struct {
     uint8_t frame[APRS_MAX_FRAME_BYTES];
     size_t frame_len;
-    uint8_t current_byte;
-    uint8_t bit_index;
-    uint8_t ones_count;
-    bool in_frame;
+    uint8_t hdlc_demod_bits;
+    uint8_t hdlc_bit_index;
+    uint8_t hdlc_current_byte;
+    bool hdlc_receiving;
+    uint8_t probe_normal_bits;
+    uint8_t probe_inverted_bits;
+    bool polarity_locked;
+    bool invert_nrzi_bits;
+    uint8_t raw_bits[APRS_MAX_RAW_BITS];
+    size_t raw_bits_len;
 
-    int16_t symbol_samples[APRS_SAMPLES_PER_BIT];
-    size_t symbol_fill;
-    int prev_tone;
-    float coeff_mark;
-    float coeff_space;
+    int16_t delay_line[APRS_DEMOD_DELAY_SAMPLES];
+    size_t delay_idx;
+
+    int16_t lpf_coeff[APRS_FIR_TAPS];
+    int16_t lpf_hist[APRS_FIR_TAPS];
+    size_t lpf_index;
+    int32_t discriminator_dc_q8;
+
+    uint16_t sampled_bits;
+    uint8_t actual_bits;
+    int16_t current_phase;
+
+    uint32_t nrzi_bits;
+    uint32_t flag_seen;
+    uint32_t frame_candidates;
+    uint32_t crc_ok;
+    uint32_t crc_fail;
 } aprs_decoder_state_t;
 
 struct sa818_radio_dev {
@@ -348,7 +375,7 @@ static esp_err_t sa818_radio_configure_adc(sa818_radio_handle_t handle)
 
     adc_oneshot_chan_cfg_t chan_cfg = {
         .bitwidth = ADC_BITWIDTH_12,
-        .atten = ADC_ATTEN_DB_12,
+        .atten = ADC_ATTEN_DB_0,
     };
     ret = adc_oneshot_config_channel(handle->adc_unit, channel, &chan_cfg);
     if (ret != ESP_OK) {
@@ -462,49 +489,106 @@ static esp_err_t sa818_radio_configure_dac(sa818_radio_handle_t handle)
     return ESP_OK;
 }
 
-static float goertzel_energy(const int16_t *samples, size_t count, float coeff)
+static uint8_t aprs_count_ones_u8(uint8_t value)
 {
-    float q0 = 0.0f;
-    float q1 = 0.0f;
-    float q2 = 0.0f;
+    uint8_t count = 0;
+    while (value != 0U) {
+        value &= (uint8_t)(value - 1U);
+        count++;
+    }
+    return count;
+}
 
-    for (size_t i = 0; i < count; i++) {
-        q0 = coeff * q1 - q2 + (float)samples[i];
-        q2 = q1;
-        q1 = q0;
+static inline bool aprs_signal_transitioned(uint16_t bits)
+{
+    return ((((bits) ^ (bits >> 2)) & 0x03U) == 0x03U);
+}
+
+static inline bool aprs_transition_found(uint8_t bits)
+{
+    return (((bits) ^ (bits >> 1)) & 0x01U) != 0U;
+}
+
+static float aprs_sinc(float x)
+{
+    if (fabsf(x) < 1e-6f) {
+        return 1.0f;
+    }
+    return sinf(x) / x;
+}
+
+static float aprs_windowf(float x)
+{
+    return 0.54f + 0.46f * cosf(x);
+}
+
+static void aprs_design_fir_bandpass(int16_t coeffs[APRS_FIR_TAPS], float pass_hz, float cutoff_hz)
+{
+    const int taps = (int)APRS_FIR_TAPS;
+    const int mid = (taps - 1) / 2;
+    const float rp = pass_hz / (float)APRS_SAMPLE_RATE_HZ;
+    const float rc = cutoff_hz / (float)APRS_SAMPLE_RATE_HZ;
+    const float amplitude = 32767.0f;
+
+    for (int n = -mid; n <= mid; n++) {
+        float coeff = amplitude * 2.0f
+                      * ((rc * aprs_sinc(2.0f * (float)M_PI * rc * (float)n))
+                         - (rp * aprs_sinc(2.0f * (float)M_PI * rp * (float)n)))
+                      * aprs_windowf((float)M_PI * (float)n / (float)mid);
+        coeffs[n + mid] = (int16_t)lrintf(coeff);
+    }
+}
+
+static void aprs_decoder_init_demod(aprs_decoder_state_t *dec)
+{
+    if (!dec) {
+        return;
     }
 
-    return q1 * q1 + q2 * q2 - coeff * q1 * q2;
+    memset(dec->delay_line, 0, sizeof(dec->delay_line));
+    dec->delay_idx = 0;
+    memset(dec->lpf_hist, 0, sizeof(dec->lpf_hist));
+    dec->lpf_index = 0;
+    dec->discriminator_dc_q8 = 0;
+    dec->sampled_bits = 0;
+    dec->actual_bits = 0;
+    dec->current_phase = 0;
+    dec->probe_normal_bits = 0U;
+    dec->probe_inverted_bits = 0U;
+    dec->polarity_locked = false;
+    dec->invert_nrzi_bits = false;
+    dec->raw_bits_len = 0U;
+    dec->nrzi_bits = 0;
+    dec->flag_seen = 0;
+    dec->frame_candidates = 0;
+    dec->crc_ok = 0;
+    dec->crc_fail = 0;
+
+    aprs_design_fir_bandpass(dec->lpf_coeff, 0.0f, 1200.0f);
+}
+
+static int16_t aprs_decoder_filter_core(const int16_t coeffs[APRS_FIR_TAPS],
+                                        int16_t hist[APRS_FIR_TAPS],
+                                        size_t *index,
+                                        int16_t sample)
+{
+    hist[*index] = sample;
+
+    int32_t sum = 0;
+    for (size_t i = 0; i < APRS_FIR_TAPS; i++) {
+        size_t idx = (*index + i) % APRS_FIR_TAPS;
+        sum += (int32_t)coeffs[i] * (int32_t)hist[idx];
+    }
+
+    *index = (*index + APRS_FIR_TAPS - 1U) % APRS_FIR_TAPS;
+    return (int16_t)(sum >> 16);
 }
 
 static void aprs_decoder_reset_frame(aprs_decoder_state_t *dec)
 {
     dec->frame_len = 0;
-    dec->current_byte = 0;
-    dec->bit_index = 0;
-}
-
-static void aprs_decoder_emit_bit(aprs_decoder_state_t *dec, uint8_t bit)
-{
-    if (dec->frame_len >= sizeof(dec->frame)) {
-        aprs_decoder_reset_frame(dec);
-        dec->in_frame = false;
-        dec->ones_count = 0;
-        return;
-    }
-
-    dec->current_byte |= (uint8_t)((bit & 0x01U) << dec->bit_index);
-    dec->bit_index++;
-
-    if (dec->bit_index == 8) {
-        if (dec->frame_len < sizeof(dec->frame)) {
-            dec->frame[dec->frame_len++] = dec->current_byte;
-        } else {
-            dec->in_frame = false;
-        }
-        dec->current_byte = 0;
-        dec->bit_index = 0;
-    }
+    dec->hdlc_current_byte = 0;
+    dec->hdlc_bit_index = 0;
 }
 
 typedef struct {
@@ -575,20 +659,20 @@ static bool aprs_decode_ax25_frame(const uint8_t *frame, size_t frame_len, aprs_
     return true;
 }
 
-static void aprs_decoder_handle_complete_frame(sa818_radio_handle_t handle)
+static bool aprs_decoder_handle_complete_frame(sa818_radio_handle_t handle)
 {
     if (!handle) {
-        return;
+        return false;
     }
 
     aprs_decoder_state_t *dec = &handle->aprs_dec;
-    if (dec->frame_len < 18 || dec->bit_index != 0) {
-        return;
+    if (dec->frame_len < 18 || dec->hdlc_bit_index != 0) {
+        return false;
     }
 
     aprs_packet_t packet;
     if (!aprs_decode_ax25_frame(dec->frame, dec->frame_len, &packet)) {
-        return;
+        return false;
     }
 
     char to_callsign[16];
@@ -619,50 +703,189 @@ static void aprs_decoder_handle_complete_frame(sa818_radio_handle_t handle)
     if (cb != NULL) {
         cb(packet.src, to_callsign, message, raw_tnc2, handle->aprs_rx_ctx);
     }
+    return true;
+}
+
+static uint8_t aprs_decoder_resolve_nrzi_polarity(aprs_decoder_state_t *dec, uint8_t raw_bit)
+{
+    uint8_t bit = (raw_bit != 0U) ? 1U : 0U;
+    if (!dec->polarity_locked) {
+        dec->probe_normal_bits = (uint8_t)((dec->probe_normal_bits << 1) | bit);
+        dec->probe_inverted_bits = (uint8_t)((dec->probe_inverted_bits << 1) | (bit ^ 1U));
+        if (dec->probe_normal_bits == 0x7EU) {
+            dec->polarity_locked = true;
+            dec->invert_nrzi_bits = false;
+            dec->hdlc_demod_bits = 0U;
+        } else if (dec->probe_inverted_bits == 0x7EU) {
+            dec->polarity_locked = true;
+            dec->invert_nrzi_bits = true;
+            dec->hdlc_demod_bits = 0U;
+        }
+    }
+    return dec->invert_nrzi_bits ? (uint8_t)(bit ^ 1U) : bit;
+}
+
+static bool aprs_decoder_try_raw_bits(sa818_radio_handle_t handle)
+{
+    if (!handle) {
+        return false;
+    }
+
+    aprs_decoder_state_t *dec = &handle->aprs_dec;
+    if (dec->raw_bits_len < 18U * 8U) {
+        return false;
+    }
+
+    static uint8_t destuffed[APRS_MAX_FRAME_BYTES * 8U];
+    static uint8_t frame_bytes[APRS_MAX_FRAME_BYTES];
+    aprs_packet_t packet;
+
+    for (uint8_t invert = 0; invert < 2U; invert++) {
+        for (uint8_t shift = 0; shift < 8U && shift < dec->raw_bits_len; shift++) {
+            size_t destuffed_len = 0;
+            uint8_t ones = 0;
+            bool invalid = false;
+
+            for (size_t i = shift; i < dec->raw_bits_len; i++) {
+                uint8_t bit = (uint8_t)(dec->raw_bits[i] ^ invert);
+                if (bit != 0U) {
+                    ones++;
+                    if (ones > 6U || destuffed_len >= sizeof(destuffed)) {
+                        invalid = true;
+                        break;
+                    }
+                    destuffed[destuffed_len++] = 1U;
+                } else {
+                    if (ones == 5U) {
+                        ones = 0U;
+                        continue;
+                    }
+                    ones = 0U;
+                    if (destuffed_len >= sizeof(destuffed)) {
+                        invalid = true;
+                        break;
+                    }
+                    destuffed[destuffed_len++] = 0U;
+                }
+            }
+
+            if (invalid || destuffed_len < 18U * 8U) {
+                continue;
+            }
+
+            size_t max_bytes = destuffed_len / 8U;
+            if (max_bytes > APRS_MAX_FRAME_BYTES) {
+                max_bytes = APRS_MAX_FRAME_BYTES;
+            }
+
+            for (size_t trim = 0; trim < 4U && max_bytes > (18U + trim); trim++) {
+                size_t use_bytes = max_bytes - trim;
+                for (size_t b = 0; b < use_bytes; b++) {
+                    uint8_t v = 0U;
+                    for (uint8_t k = 0; k < 8U; k++) {
+                        if (destuffed[b * 8U + k] != 0U) {
+                            v |= (uint8_t)(1U << k);
+                        }
+                    }
+                    frame_bytes[b] = v;
+                }
+
+                if (aprs_decode_ax25_frame(frame_bytes, use_bytes, &packet)) {
+                    memcpy(dec->frame, frame_bytes, use_bytes);
+                    dec->frame_len = use_bytes;
+                    dec->hdlc_bit_index = 0U;
+                    return true;
+                }
+            }
+        }
+    }
+
+    return false;
 }
 
 static void aprs_decoder_process_nrzi_bit(sa818_radio_handle_t handle, uint8_t bit)
 {
     aprs_decoder_state_t *dec = &handle->aprs_dec;
-
-    if (bit != 0U) {
-        dec->ones_count++;
-        if (dec->ones_count > 6) {
-            dec->in_frame = false;
-            dec->ones_count = 0;
-            aprs_decoder_reset_frame(dec);
-        }
+    dec->nrzi_bits++;
+    bit = aprs_decoder_resolve_nrzi_polarity(dec, bit);
+    if (!dec->polarity_locked) {
         return;
     }
 
-    if (dec->ones_count == 6) {
-        if (dec->in_frame && dec->frame_len > 0) {
-            aprs_decoder_handle_complete_frame(handle);
+    dec->hdlc_demod_bits <<= 1;
+    dec->hdlc_demod_bits |= (bit != 0U) ? 1U : 0U;
+
+    if (dec->hdlc_demod_bits == 0x7EU) {
+        dec->flag_seen++;
+        if (dec->hdlc_receiving && dec->raw_bits_len >= (18U * 8U)) {
+            dec->frame_candidates++;
+            bool ok = false;
+            if (dec->frame_len >= 18U && dec->hdlc_bit_index == 0U) {
+                ok = aprs_decoder_handle_complete_frame(handle);
+            }
+            if (!ok && aprs_decoder_try_raw_bits(handle)) {
+                ok = aprs_decoder_handle_complete_frame(handle);
+            }
+            if (ok) {
+                dec->crc_ok++;
+            } else {
+                dec->crc_fail++;
+            }
         }
-        dec->in_frame = true;
-        dec->ones_count = 0;
+        dec->hdlc_receiving = true;
+        dec->raw_bits_len = 0U;
         aprs_decoder_reset_frame(dec);
         return;
     }
 
-    if (!dec->in_frame) {
-        dec->ones_count = 0;
+    // RESET pattern (continuous ones / invalid run)
+    if ((dec->hdlc_demod_bits & 0x7FU) == 0x7FU) {
+        dec->hdlc_receiving = false;
+        dec->raw_bits_len = 0U;
+        aprs_decoder_reset_frame(dec);
+        dec->polarity_locked = false;
+        dec->invert_nrzi_bits = false;
+        dec->probe_normal_bits = 0U;
+        dec->probe_inverted_bits = 0U;
         return;
     }
 
-    if (dec->ones_count == 5) {
-        for (int i = 0; i < 5; i++) {
-            aprs_decoder_emit_bit(dec, 1);
+    if (!dec->hdlc_receiving) {
+        return;
+    }
+
+    if (dec->raw_bits_len < APRS_MAX_RAW_BITS) {
+        dec->raw_bits[dec->raw_bits_len++] = bit ? 1U : 0U;
+    } else {
+        dec->hdlc_receiving = false;
+        dec->raw_bits_len = 0U;
+        aprs_decoder_reset_frame(dec);
+        return;
+    }
+
+    // Stuffed zero after five consecutive ones.
+    if ((dec->hdlc_demod_bits & 0x3FU) == 0x3EU) {
+        return;
+    }
+
+    if ((dec->hdlc_demod_bits & 0x01U) != 0U) {
+        dec->hdlc_current_byte |= 0x80U;
+    }
+
+    if (++dec->hdlc_bit_index >= 8U) {
+        if (dec->frame_len < sizeof(dec->frame)) {
+            dec->frame[dec->frame_len++] = dec->hdlc_current_byte;
+        } else {
+            dec->hdlc_receiving = false;
+            dec->raw_bits_len = 0U;
+            aprs_decoder_reset_frame(dec);
+            return;
         }
-        dec->ones_count = 0;
-        return;
+        dec->hdlc_current_byte = 0U;
+        dec->hdlc_bit_index = 0U;
+    } else {
+        dec->hdlc_current_byte >>= 1;
     }
-
-    for (uint8_t i = 0; i < dec->ones_count; i++) {
-        aprs_decoder_emit_bit(dec, 1);
-    }
-    aprs_decoder_emit_bit(dec, 0);
-    dec->ones_count = 0;
 }
 
 static void aprs_decoder_feed_sample(sa818_radio_handle_t handle, int16_t sample)
@@ -672,26 +895,41 @@ static void aprs_decoder_feed_sample(sa818_radio_handle_t handle, int16_t sample
     }
 
     aprs_decoder_state_t *dec = &handle->aprs_dec;
-    dec->symbol_samples[dec->symbol_fill++] = sample;
-    if (dec->symbol_fill < APRS_SAMPLES_PER_BIT) {
+    int16_t delayed = dec->delay_line[dec->delay_idx];
+    dec->delay_line[dec->delay_idx] = sample;
+    dec->delay_idx = (dec->delay_idx + 1U) % APRS_DEMOD_DELAY_SAMPLES;
+
+    int32_t mixed = (int32_t)sample * (int32_t)delayed;
+    int16_t discriminator = aprs_decoder_filter_core(dec->lpf_coeff, dec->lpf_hist, &dec->lpf_index, (int16_t)(mixed >> 7));
+    int32_t discriminator_q8 = (int32_t)discriminator << 8;
+    dec->discriminator_dc_q8 += (discriminator_q8 - dec->discriminator_dc_q8) >> 6;
+    int16_t discriminator_centered = (int16_t)(discriminator - (int16_t)(dec->discriminator_dc_q8 >> 8));
+
+    dec->sampled_bits <<= 1;
+    dec->sampled_bits |= (discriminator_centered > 0) ? 1U : 0U;
+
+    if (aprs_signal_transitioned(dec->sampled_bits)) {
+        if (dec->current_phase < APRS_PHASE_THRESHOLD) {
+            dec->current_phase += APRS_PHASE_INC;
+        } else {
+            dec->current_phase -= APRS_PHASE_INC;
+        }
+    }
+
+    dec->current_phase += APRS_PHASE_BITS;
+    if (dec->current_phase < APRS_PHASE_MAX) {
         return;
     }
-    dec->symbol_fill = 0;
 
-    float mark_energy = goertzel_energy(dec->symbol_samples, APRS_SAMPLES_PER_BIT, dec->coeff_mark);
-    float space_energy = goertzel_energy(dec->symbol_samples, APRS_SAMPLES_PER_BIT, dec->coeff_space);
-    if ((mark_energy + space_energy) < 1000000.0f) {
-        return;
+    dec->current_phase %= APRS_PHASE_MAX;
+    dec->actual_bits <<= 1;
+
+    uint8_t bit_window = (uint8_t)(dec->sampled_bits & 0x1FU);
+    if (aprs_count_ones_u8(bit_window) >= 3U) {
+        dec->actual_bits |= 1U;
     }
 
-    int tone = (space_energy > mark_energy) ? 1 : 0;
-    if (dec->prev_tone < 0) {
-        dec->prev_tone = tone;
-        return;
-    }
-
-    uint8_t nrzi_bit = (tone == dec->prev_tone) ? 1U : 0U;
-    dec->prev_tone = tone;
+    uint8_t nrzi_bit = (uint8_t)(!aprs_transition_found(dec->actual_bits));
     aprs_decoder_process_nrzi_bit(handle, nrzi_bit);
 }
 
@@ -699,36 +937,120 @@ static void sa818_radio_rx_task(void *arg)
 {
     sa818_radio_handle_t handle = (sa818_radio_handle_t)arg;
     const uint32_t sample_rate = handle->cfg.audio_sample_rate_hz;
-    uint32_t samples_per_tick = sample_rate / 1000U;
-    if (samples_per_tick == 0) {
-        samples_per_tick = 1;
-    }
-    if (samples_per_tick > 32) {
-        samples_per_tick = 32;
-    }
+    const uint32_t base_interval_us = (sample_rate > 0U) ? (1000000U / sample_rate) : 0U;
+    const uint32_t interval_remainder = (sample_rate > 0U) ? (1000000U % sample_rate) : 0U;
+    uint32_t interval_err = 0U;
+    int64_t next_sample_us = esp_timer_get_time();
+    int64_t stats_next_us = next_sample_us + 1000000LL;
+
+    int32_t dc_estimate_q8 = 0;
+    bool dc_initialized = false;
+    uint32_t samples_this_second = 0U;
+    int16_t min_demod_sample = INT16_MAX;
+    int16_t max_demod_sample = INT16_MIN;
+    uint32_t prev_nrzi_bits = 0U;
+    uint32_t prev_flags = 0U;
+    uint32_t prev_frames = 0U;
+    uint32_t prev_crc_ok = 0U;
+    uint32_t prev_crc_fail = 0U;
 
     int16_t block[SA818_RADIO_AUDIO_BLOCK_SAMPLES];
     size_t block_fill = 0;
 
     while (handle->rx_task_running) {
-        for (uint32_t i = 0; i < samples_per_tick && handle->rx_task_running; i++) {
-            int raw = 0;
-            esp_err_t ret = adc_oneshot_read(handle->adc_unit, handle->adc_channel, &raw);
-            if (ret == ESP_OK) {
-                int16_t sample = (int16_t)((raw - 2048) << 4);
-                aprs_decoder_feed_sample(handle, sample);
+        int raw = 0;
+        esp_err_t ret = adc_oneshot_read(handle->adc_unit, handle->adc_channel, &raw);
+        if (ret == ESP_OK) {
+            if (!dc_initialized) {
+                dc_estimate_q8 = ((int32_t)raw << 8);
+                dc_initialized = true;
+            }
+            int32_t raw_q8 = (int32_t)raw << 8;
+            dc_estimate_q8 += (raw_q8 - dc_estimate_q8) >> 7;
 
-                sa818_radio_audio_rx_cb_t cb = handle->audio_rx_cb;
-                if (cb != NULL) {
-                    block[block_fill++] = sample;
-                    if (block_fill >= SA818_RADIO_AUDIO_BLOCK_SAMPLES) {
-                        cb(block, block_fill, handle->audio_rx_ctx);
-                        block_fill = 0;
-                    }
+            int centered = raw - (int)(dc_estimate_q8 >> 8);
+            int demod_scaled = centered >> 4;
+            if (demod_scaled > 127) {
+                demod_scaled = 127;
+            } else if (demod_scaled < -128) {
+                demod_scaled = -128;
+            }
+            int16_t demod_sample = (int16_t)demod_scaled;
+            int audio_scaled = centered << 4;
+            if (audio_scaled > 32767) {
+                audio_scaled = 32767;
+            } else if (audio_scaled < -32768) {
+                audio_scaled = -32768;
+            }
+            int16_t audio_sample = (int16_t)audio_scaled;
+            aprs_decoder_feed_sample(handle, demod_sample);
+            samples_this_second++;
+            if (demod_sample < min_demod_sample) {
+                min_demod_sample = demod_sample;
+            }
+            if (demod_sample > max_demod_sample) {
+                max_demod_sample = demod_sample;
+            }
+
+            sa818_radio_audio_rx_cb_t cb = handle->audio_rx_cb;
+            if (cb != NULL) {
+                block[block_fill++] = audio_sample;
+                if (block_fill >= SA818_RADIO_AUDIO_BLOCK_SAMPLES) {
+                    cb(block, block_fill, handle->audio_rx_ctx);
+                    block_fill = 0;
                 }
             }
         }
-        vTaskDelay(pdMS_TO_TICKS(1));
+
+        if (base_interval_us == 0U) {
+            vTaskDelay(pdMS_TO_TICKS(1));
+            continue;
+        }
+
+        uint32_t wait_us = base_interval_us;
+        interval_err += interval_remainder;
+        if (interval_err >= sample_rate) {
+            interval_err -= sample_rate;
+            wait_us += 1U;
+        }
+
+        next_sample_us += (int64_t)wait_us;
+        int64_t now_us = esp_timer_get_time();
+        if (now_us >= stats_next_us) {
+            aprs_decoder_state_t *dec = &handle->aprs_dec;
+            uint32_t bits_delta = dec->nrzi_bits - prev_nrzi_bits;
+            uint32_t flags_delta = dec->flag_seen - prev_flags;
+            uint32_t frames_delta = dec->frame_candidates - prev_frames;
+            uint32_t crc_ok_delta = dec->crc_ok - prev_crc_ok;
+            uint32_t crc_fail_delta = dec->crc_fail - prev_crc_fail;
+            prev_nrzi_bits = dec->nrzi_bits;
+            prev_flags = dec->flag_seen;
+            prev_frames = dec->frame_candidates;
+            prev_crc_ok = dec->crc_ok;
+            prev_crc_fail = dec->crc_fail;
+
+            ESP_LOGI(TAG, "APRS RX stats: %u sps demod=[%d,%d] offset=%d bits=%u flags=%u frames=%u ok=%u fail=%u",
+                     (unsigned)samples_this_second,
+                     (int)min_demod_sample,
+                     (int)max_demod_sample,
+                     (int)(dc_estimate_q8 >> 8),
+                     (unsigned)bits_delta,
+                     (unsigned)flags_delta,
+                     (unsigned)frames_delta,
+                     (unsigned)crc_ok_delta,
+                     (unsigned)crc_fail_delta);
+            samples_this_second = 0U;
+            min_demod_sample = INT16_MAX;
+            max_demod_sample = INT16_MIN;
+            stats_next_us = now_us + 1000000LL;
+        }
+
+        if (next_sample_us > now_us) {
+            esp_rom_delay_us((uint32_t)(next_sample_us - now_us));
+        } else if ((now_us - next_sample_us) > 500000LL) {
+            // Recover from long scheduler stalls.
+            next_sample_us = now_us;
+        }
     }
 
     handle->rx_task = NULL;
@@ -1045,9 +1367,10 @@ esp_err_t sa818_radio_create(const sa818_radio_config_t *config, sa818_radio_han
         }
     }
 
-    dev->aprs_dec.prev_tone = -1;
-    dev->aprs_dec.coeff_mark = 2.0f * cosf(2.0f * (float)M_PI * APRS_MARK_FREQ_HZ / (float)APRS_SAMPLE_RATE_HZ);
-    dev->aprs_dec.coeff_space = 2.0f * cosf(2.0f * (float)M_PI * APRS_SPACE_FREQ_HZ / (float)APRS_SAMPLE_RATE_HZ);
+    aprs_decoder_reset_frame(&dev->aprs_dec);
+    dev->aprs_dec.hdlc_demod_bits = 0;
+    dev->aprs_dec.hdlc_receiving = false;
+    aprs_decoder_init_demod(&dev->aprs_dec);
 
     ret = sa818_radio_power(dev, true);
     if (ret != ESP_OK) {
@@ -1317,6 +1640,11 @@ esp_err_t sa818_radio_start_audio_rx(sa818_radio_handle_t handle,
     if (handle->rx_task_running) {
         return ESP_ERR_INVALID_STATE;
     }
+
+    aprs_decoder_reset_frame(&handle->aprs_dec);
+    handle->aprs_dec.hdlc_demod_bits = 0;
+    handle->aprs_dec.hdlc_receiving = false;
+    aprs_decoder_init_demod(&handle->aprs_dec);
 
     handle->audio_rx_cb = callback;
     handle->audio_rx_ctx = user_ctx;
