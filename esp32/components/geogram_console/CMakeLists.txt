@@ -17,6 +17,7 @@ set(CONSOLE_SRCS
 set(CONSOLE_REQUIRES
     console esp_system driver nvs_flash log vfs
     geogram_station geogram_wifi geogram_json geogram_sdcard geogram_ssh geogram_ftp
+    geogram_ble
 )
 
 set(CONSOLE_PRIV_REQUIRES

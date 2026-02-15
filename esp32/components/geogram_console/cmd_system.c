@@ -18,6 +18,7 @@
 #include "model_init.h"
 #include "app_config.h"
 #include "wifi_bsp.h"
+#include "geogram_ble.h"
 
 #if BOARD_MODEL == MODEL_ESP32S3_EPAPER_1IN54
 #include "sdcard.h"
@@ -69,6 +70,8 @@ static int cmd_status(int argc, char **argv)
         } else {
             printf("\nWiFi: Disconnected\n");
         }
+
+        printf("BLE: %s\n", geogram_ble_is_running() ? "Advertising" : "Stopped");
 
         // Sensor data
 #if BOARD_MODEL == MODEL_ESP32S3_EPAPER_1IN54

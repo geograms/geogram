@@ -10,6 +10,7 @@
 
 // Station API
 #include "station.h"
+#include "geogram_ble.h"
 
 // NOSTR keys (for callsign)
 #include "nostr_keys.h"
@@ -805,6 +806,21 @@ extern "C" void app_main(void)
     } else {
         ESP_LOGI(TAG, "Serial console initialized");
     }
+
+#if BOARD_MODEL == MODEL_ESP32C3_MINI || BOARD_MODEL == MODEL_KV4P
+    // Ensure station identity is available for BLE handshakes.
+    station_init();
+
+    ret = geogram_ble_init();
+    if (ret == ESP_OK) {
+        geogram_ble_start();
+        ESP_LOGI(TAG, "BLE service initialized");
+    } else if (ret == ESP_ERR_NOT_SUPPORTED) {
+        ESP_LOGW(TAG, "BLE is disabled in this firmware configuration");
+    } else {
+        ESP_LOGW(TAG, "BLE init failed: %s", esp_err_to_name(ret));
+    }
+#endif
 
 #ifdef CONFIG_GEOGRAM_MESH_ENABLED
     geogram_log_plain(TAG, "Mesh support: ENABLED");
