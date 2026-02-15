@@ -32,6 +32,7 @@ static const char *TAG = "sa818_radio";
 #define SA818_RADIO_RX_TASK_STACK       8192
 #define SA818_RADIO_RX_TASK_PRIO        4
 #define SA818_RADIO_AUDIO_BLOCK_SAMPLES 160
+#define SA818_RADIO_RX_STATS_LOG        0
 #define APRS_HDLC_FLAG                  0x7EU
 #define APRS_HDLC_RESET                 0x7FU
 #define APRS_AX25_ESC                   0x1BU
@@ -927,6 +928,7 @@ static void sa818_radio_rx_task(void *arg)
     const uint32_t interval_remainder = (sample_rate > 0U) ? (1000000U % sample_rate) : 0U;
     uint32_t interval_err = 0U;
     int64_t next_sample_us = esp_timer_get_time();
+#if SA818_RADIO_RX_STATS_LOG
     int64_t stats_next_us = next_sample_us + 1000000LL;
 
     int32_t dc_estimate_q8 = 0;
@@ -940,6 +942,10 @@ static void sa818_radio_rx_task(void *arg)
     uint32_t prev_crc_ok = 0U;
     uint32_t prev_crc_fail = 0U;
     uint32_t prev_fifo_overflow = 0U;
+#else
+    int32_t dc_estimate_q8 = 0;
+    bool dc_initialized = false;
+#endif
 
     int16_t block[SA818_RADIO_AUDIO_BLOCK_SAMPLES];
     size_t block_fill = 0;
@@ -965,6 +971,7 @@ static void sa818_radio_rx_task(void *arg)
             }
             int16_t audio_sample = (int16_t)audio_scaled;
             aprs_decoder_feed_sample(handle, demod_sample);
+#if SA818_RADIO_RX_STATS_LOG
             samples_this_second++;
             if (demod_sample < min_demod_sample) {
                 min_demod_sample = demod_sample;
@@ -972,6 +979,7 @@ static void sa818_radio_rx_task(void *arg)
             if (demod_sample > max_demod_sample) {
                 max_demod_sample = demod_sample;
             }
+#endif
 
             sa818_radio_audio_rx_cb_t cb = handle->audio_rx_cb;
             if (cb != NULL) {
@@ -997,6 +1005,7 @@ static void sa818_radio_rx_task(void *arg)
 
         next_sample_us += (int64_t)wait_us;
         int64_t now_us = esp_timer_get_time();
+#if SA818_RADIO_RX_STATS_LOG
         if (now_us >= stats_next_us) {
             aprs_decoder_state_t *dec = &handle->aprs_dec;
             uint32_t bits_delta = dec->nrzi_bits - prev_nrzi_bits;
@@ -1028,6 +1037,7 @@ static void sa818_radio_rx_task(void *arg)
             max_demod_sample = INT16_MIN;
             stats_next_us = now_us + 1000000LL;
         }
+#endif
 
         if (next_sample_us > now_us) {
             esp_rom_delay_us((uint32_t)(next_sample_us - now_us));
