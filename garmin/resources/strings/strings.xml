@@ -1,0 +1,13 @@
+<resources xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://developer.garmin.com/downloads/connect-iq/resources.xsd">
+    <string id="AppName">Geogram</string>
+    <string id="Loading">Loading...</string>
+    <string id="NoConnection">No connection</string>
+    <string id="NoItems">No items nearby</string>
+    <string id="Settings">Settings</string>
+    <string id="StationUrl">Station URL</string>
+    <string id="RadiusKm">Radius (km)</string>
+    <string id="AlertRadiusKm">Alert radius (km)</string>
+    <string id="Alerts">Alerts</string>
+    <string id="Places">Places</string>
+    <string id="ProximityAlert" scope="background">Geogram: Alert nearby!</string>
+</resources>

@@ -1,0 +1,7 @@
+<resources xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://developer.garmin.com/downloads/connect-iq/resources.xsd">
+    <menu id="SettingsMenu">
+        <menu-item id="menuStationUrl" label="@Strings.StationUrl" />
+        <menu-item id="menuRadius" label="@Strings.RadiusKm" />
+        <menu-item id="menuAlertRadius" label="@Strings.AlertRadiusKm" />
+    </menu>
+</resources>

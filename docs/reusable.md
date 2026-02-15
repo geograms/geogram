@@ -57,6 +57,12 @@ This document catalogs reusable UI components available in the Geogram codebase.
 - [SyntaxHighlightController](#syntaxhighlightcontroller) - TextEditingController with live syntax coloring
 - [convertNodesToSpans](#convertnodetospans) - Convert highlight.js nodes to Flutter TextSpan list
 
+### Garmin Watch App (Monkey C)
+- [GeoUtils module](#geoutils-module) - Haversine distance, bearing, cardinal direction
+- [DataStore module](#datastore-module) - Settings + cached data via Application.Storage
+- [StationClient](#stationclient-garmin) - HTTP client for station API (makeWebRequest)
+- [ProximityChecker](#proximitychecker) - Background service for geo-fence alerts
+
 ### QR Code Widgets
 - [QrPreviewWidget](#qrpreviewwidget) - QR code preview with customizations
 
@@ -8178,3 +8184,43 @@ bool _isSupportedPlatform() {
 ```
 
 **Reuse potential**: Any service that should run on all native platforms (not just mobile) should use `_isSupportedPlatform()`. For desktop-only features, use `_isDesktopPlatform()`.
+
+---
+
+## Garmin Watch App (Monkey C)
+
+### GeoUtils module
+
+**Location**: `garmin/source/GeoUtils.mc`
+
+Reusable geographic math functions for Garmin Connect IQ apps:
+- `calculateDistance(lat1, lon1, lat2, lon2)` — Haversine distance in km
+- `calculateBearing(lat1, lon1, lat2, lon2)` — Bearing in degrees (0-360)
+- `bearingToCardinal(bearing)` — Converts bearing to "N", "NE", etc.
+- `formatDistance(distKm)` — Formats as "2.3 km" or "450 m"
+
+**Reuse potential**: Any Garmin app needing distance/direction calculations.
+
+### DataStore module
+
+**Location**: `garmin/source/DataStore.mc`
+
+Wraps `Application.Storage` for typed settings and cached data access with defaults. Pattern: each setting has a `get` + `set` function that handles type checking and default values.
+
+**Reuse potential**: Pattern can be reused for any Garmin app that needs persistent settings.
+
+### StationClient (Garmin)
+
+**Location**: `garmin/source/StationClient.mc`
+
+HTTP client pattern using `Communications.makeWebRequest()` with callback methods. Handles JSON response parsing and error reporting.
+
+**Reuse potential**: Pattern for any Garmin HTTP API client.
+
+### ProximityChecker
+
+**Location**: `garmin/source/ProximityChecker.mc`
+
+Background `ServiceDelegate` that runs on a temporal event (every 5 minutes), checks proximity to stored locations, and fires `requestApplicationWake()` notifications. Includes deduplication to avoid repeat alerts.
+
+**Reuse potential**: Pattern for any Garmin geo-fence or location-based background alerting.

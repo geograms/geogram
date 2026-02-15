@@ -1,0 +1,15 @@
+<iq:manifest xmlns:iq="http://www.garmin.com/xml/connectiq" version="1">
+    <iq:application entry="GeogramApp" id="b7e2a1c3d4f5068792e1ab3c4d5e6f70" launcherIcon="@Drawables.LauncherIcon" minSdkVersion="4.2.0" name="@Strings.AppName" type="watch-app">
+        <iq:products>
+            <iq:product id="fenix7pro"/>
+        </iq:products>
+        <iq:permissions>
+            <iq:uses-permission id="Communications"/>
+            <iq:uses-permission id="Positioning"/>
+            <iq:uses-permission id="Background"/>
+        </iq:permissions>
+        <iq:languages>
+            <iq:language>eng</iq:language>
+        </iq:languages>
+    </iq:application>
+</iq:manifest>
