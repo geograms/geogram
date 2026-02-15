@@ -31,7 +31,9 @@ class ChatRoomsView extends BaseListView {
 
     function onLayout(dc as Dc) as Void {
         loadCachedData();
-        refreshData();
+        if (!MockData.DEBUG_MOCK) {
+            refreshData();
+        }
     }
 
     function loadCachedData() as Void {
@@ -134,7 +136,12 @@ class ChatMessagesView extends WatchUi.View {
     }
 
     function onLayout(dc as Dc) as Void {
-        _client.fetchChatMessages(_roomId, MSG_LIMIT, method(:onMessagesResult));
+        if (MockData.DEBUG_MOCK) {
+            _messages = MockData.getChatMessages(_roomId);
+            _state = :ready;
+        } else {
+            _client.fetchChatMessages(_roomId, MSG_LIMIT, method(:onMessagesResult));
+        }
     }
 
     function onMessagesResult(messages as Array?) as Void {

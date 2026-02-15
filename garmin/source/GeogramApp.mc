@@ -21,6 +21,9 @@ class GeogramApp extends Application.AppBase {
     }
 
     function onStart(state as Dictionary?) as Void {
+        // Load mock data for simulator testing (disable before device build)
+        MockData.load();
+
         // Centralized GPS — all views read from DataStore
         Position.enableLocationEvents(Position.LOCATION_CONTINUOUS, method(:onPosition));
     }

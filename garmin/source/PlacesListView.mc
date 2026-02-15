@@ -30,7 +30,9 @@ class PlacesListView extends BaseListView {
 
     function onLayout(dc as Dc) as Void {
         loadCachedData();
-        refreshData();
+        if (!MockData.DEBUG_MOCK) {
+            refreshData();
+        }
     }
 
     function loadCachedData() as Void {
