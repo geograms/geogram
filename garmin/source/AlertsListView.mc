@@ -138,26 +138,28 @@ class AlertsListView extends BaseListView {
         }
     }
 
-    function drawRow(dc as Dc, item, y as Number, w as Number, isSelected as Boolean) as Void {
+    function drawRow(dc as Dc, item, y as Number, w as Number, isSelected as Boolean, inset as Number) as Void {
         var dict = item as Dictionary;
         // Severity color dot
         var severity = dict["severity"] as String;
         var dotColor = severity.equals("") ? Graphics.COLOR_BLUE : DrawUtils.getSeverityColor(severity);
         dc.setColor(dotColor, Graphics.COLOR_TRANSPARENT);
-        dc.fillCircle(16, y + ROW_HEIGHT / 2, DOT_RADIUS);
+        dc.fillCircle(inset + 10, y + ROW_HEIGHT / 2, DOT_RADIUS);
 
         // Title
         dc.setColor(Graphics.COLOR_WHITE, Graphics.COLOR_TRANSPARENT);
         var title = dict["title"] as String;
-        if (title.length() > 16) {
-            title = title.substring(0, 15) + "..";
+        var maxChars = (w - inset * 2 - 70) / 8;
+        if (maxChars < 6) { maxChars = 6; }
+        if (title.length() > maxChars) {
+            title = title.substring(0, maxChars - 1) + "..";
         }
-        dc.drawText(28, y + 2, Graphics.FONT_TINY, title, Graphics.TEXT_JUSTIFY_LEFT);
+        dc.drawText(inset + 22, y + 2, Graphics.FONT_TINY, title, Graphics.TEXT_JUSTIFY_LEFT);
 
         // Distance
         var dist = dict["distance"] as Double;
         dc.setColor(Graphics.COLOR_LT_GRAY, Graphics.COLOR_TRANSPARENT);
-        dc.drawText(w - 8, y + 2, Graphics.FONT_XTINY, GeoUtils.formatDistance(dist), Graphics.TEXT_JUSTIFY_RIGHT);
+        dc.drawText(w - inset - 4, y + 2, Graphics.FONT_XTINY, GeoUtils.formatDistance(dist), Graphics.TEXT_JUSTIFY_RIGHT);
     }
 
     function onItemSelect(index as Number) as Void {

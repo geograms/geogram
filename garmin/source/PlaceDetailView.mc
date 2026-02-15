@@ -3,6 +3,7 @@
  * License: Apache-2.0
  *
  * Detail view for a single place.
+ * Designed for round watch display.
  * Shows name, type, distance + bearing, description, coordinates.
  */
 
@@ -27,17 +28,18 @@ class PlaceDetailView extends WatchUi.View {
 
     function onUpdate(dc as Dc) as Void {
         var w = dc.getWidth();
+        var h = dc.getHeight();
 
         dc.setColor(Graphics.COLOR_BLACK, Graphics.COLOR_BLACK);
         dc.clear();
 
-        var y = 8 - _scrollY;
+        var y = 24 - _scrollY;
         var data = _item["data"] as Dictionary;
 
-        // Name
+        // Name — circle-aware wrapping
         dc.setColor(Graphics.COLOR_WHITE, Graphics.COLOR_TRANSPARENT);
         var title = _item["title"] as String;
-        y = DrawUtils.drawWrappedText(dc, w / 2, y, Graphics.FONT_SMALL, title, w - 20);
+        y = DrawUtils.drawWrappedTextRound(dc, y, Graphics.FONT_SMALL, title, w);
 
         y += 4;
 
@@ -63,19 +65,20 @@ class PlaceDetailView extends WatchUi.View {
         dc.drawText(w / 2, y, Graphics.FONT_SMALL, distStr, Graphics.TEXT_JUSTIFY_CENTER);
         y += 24;
 
-        // Separator
+        // Separator — circle-aware
+        var sepInset = DrawUtils.circleInset(y, h);
         dc.setColor(Graphics.COLOR_DK_GRAY, Graphics.COLOR_TRANSPARENT);
-        dc.drawLine(20, y, w - 20, y);
+        dc.drawLine(sepInset, y, w - sepInset, y);
         y += 6;
 
-        // Description
+        // Description — circle-aware wrapping
         var desc = "";
         if (data["description"] instanceof String) {
             desc = data["description"] as String;
         }
         if (!desc.equals("")) {
             dc.setColor(Graphics.COLOR_LT_GRAY, Graphics.COLOR_TRANSPARENT);
-            y = DrawUtils.drawWrappedText(dc, 12, y, Graphics.FONT_XTINY, desc, w - 24);
+            y = DrawUtils.drawWrappedTextRound(dc, y, Graphics.FONT_XTINY, desc, w);
             y += 4;
         }
 
@@ -84,7 +87,7 @@ class PlaceDetailView extends WatchUi.View {
             var address = data["address"] as String;
             if (!address.equals("")) {
                 dc.setColor(Graphics.COLOR_LT_GRAY, Graphics.COLOR_TRANSPARENT);
-                y = DrawUtils.drawWrappedText(dc, 12, y, Graphics.FONT_XTINY, address, w - 24);
+                y = DrawUtils.drawWrappedTextRound(dc, y, Graphics.FONT_XTINY, address, w);
                 y += 4;
             }
         }

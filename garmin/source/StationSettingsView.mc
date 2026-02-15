@@ -3,7 +3,7 @@
  * License: Apache-2.0
  *
  * Station settings view — cycle URL, search radius, alert radius.
- * Custom-drawn with 3 selectable fields.
+ * Designed for round watch display. 3 selectable fields centered vertically.
  */
 
 import Toybox.Graphics;
@@ -17,6 +17,7 @@ class StationSettingsView extends WatchUi.View {
     private const FIELD_URL = 0;
     private const FIELD_RADIUS = 1;
     private const FIELD_ALERT_RADIUS = 2;
+    private const ROW_H = 44;
 
     function initialize() {
         View.initialize();
@@ -29,51 +30,57 @@ class StationSettingsView extends WatchUi.View {
         dc.setColor(Graphics.COLOR_BLACK, Graphics.COLOR_BLACK);
         dc.clear();
 
-        // Header
+        // Header — pushed down for round display
         dc.setColor(Graphics.COLOR_WHITE, Graphics.COLOR_TRANSPARENT);
-        dc.drawText(w / 2, 8, Graphics.FONT_SMALL, "Station", Graphics.TEXT_JUSTIFY_CENTER);
+        dc.drawText(w / 2, 20, Graphics.FONT_SMALL, "Station", Graphics.TEXT_JUSTIFY_CENTER);
+        var lineInset = DrawUtils.circleInset(48, h);
         dc.setColor(Graphics.COLOR_DK_GRAY, Graphics.COLOR_TRANSPARENT);
-        dc.drawLine(10, 36, w - 10, 36);
+        dc.drawLine(lineInset, 48, w - lineInset, 48);
 
-        var rowH = 44;
-        var startY = 44;
+        // Vertically center the 3 fields: total = 3 * 44 = 132
+        var startY = (h - FIELD_COUNT * ROW_H) / 2;
+        if (startY < 52) { startY = 52; }
 
         // URL field
-        drawField(dc, startY, w, rowH, "URL", getDisplayUrl(), _selectedField == FIELD_URL);
+        drawField(dc, startY, w, h, "URL", getDisplayUrl(), _selectedField == FIELD_URL);
 
         // Search radius
         var radiusStr = DataStore.getRadiusKm().toString() + " km";
-        drawField(dc, startY + rowH, w, rowH, "Search Radius", radiusStr, _selectedField == FIELD_RADIUS);
+        drawField(dc, startY + ROW_H, w, h, "Search Radius", radiusStr, _selectedField == FIELD_RADIUS);
 
         // Alert radius
         var alertRadiusStr = DataStore.getAlertRadiusKm().toString() + " km";
-        drawField(dc, startY + rowH * 2, w, rowH, "Alert Radius", alertRadiusStr, _selectedField == FIELD_ALERT_RADIUS);
+        drawField(dc, startY + ROW_H * 2, w, h, "Alert Radius", alertRadiusStr, _selectedField == FIELD_ALERT_RADIUS);
 
-        // Hint at bottom
+        // Hint at bottom — pushed up for round display
         dc.setColor(Graphics.COLOR_DK_GRAY, Graphics.COLOR_TRANSPARENT);
-        dc.drawText(w / 2, h - 28, Graphics.FONT_XTINY, "SELECT to cycle", Graphics.TEXT_JUSTIFY_CENTER);
+        dc.drawText(w / 2, h - 36, Graphics.FONT_XTINY, "SELECT to cycle", Graphics.TEXT_JUSTIFY_CENTER);
     }
 
     function drawField(dc as Dc, y as Number, w as Number, h as Number, label as String, value as String, selected as Boolean) as Void {
+        var rowMid = y + ROW_H / 2;
+        var inset = DrawUtils.circleInset(rowMid, h);
+
         if (selected) {
             dc.setColor(Graphics.COLOR_DK_BLUE, Graphics.COLOR_DK_BLUE);
-            dc.fillRectangle(0, y, w, h);
+            dc.fillRectangle(inset, y, w - inset * 2, ROW_H);
         }
 
         dc.setColor(Graphics.COLOR_LT_GRAY, Graphics.COLOR_TRANSPARENT);
-        dc.drawText(14, y + 2, Graphics.FONT_XTINY, label, Graphics.TEXT_JUSTIFY_LEFT);
+        dc.drawText(inset + 8, y + 2, Graphics.FONT_XTINY, label, Graphics.TEXT_JUSTIFY_LEFT);
 
         dc.setColor(Graphics.COLOR_WHITE, Graphics.COLOR_TRANSPARENT);
         var displayVal = value;
-        if (displayVal.length() > 22) {
-            displayVal = displayVal.substring(0, 21) + "..";
+        var maxChars = (w - inset * 2 - 16) / 8;
+        if (maxChars < 10) { maxChars = 10; }
+        if (displayVal.length() > maxChars) {
+            displayVal = displayVal.substring(0, maxChars - 1) + "..";
         }
-        dc.drawText(14, y + 20, Graphics.FONT_TINY, displayVal, Graphics.TEXT_JUSTIFY_LEFT);
+        dc.drawText(inset + 8, y + 20, Graphics.FONT_TINY, displayVal, Graphics.TEXT_JUSTIFY_LEFT);
     }
 
     function getDisplayUrl() as String {
         var url = DataStore.getStationUrl();
-        // Strip protocol for display
         if (url.length() > 8 && url.substring(0, 8).equals("https://")) {
             return url.substring(8, url.length());
         }

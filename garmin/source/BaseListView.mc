@@ -3,17 +3,36 @@
  * License: Apache-2.0
  *
  * Shared base list view and drawing utilities.
+ * Designed for round watch displays (e.g. Fenix 7 Pro, 260x260).
  * Subclasses implement drawRow(), getItems(), onItemSelect().
  */
 
 import Toybox.Graphics;
 import Toybox.Lang;
+import Toybox.Math;
 import Toybox.WatchUi;
 
 //! Shared drawing utilities used by multiple views
 module DrawUtils {
 
-    //! Draw text with word wrapping, return Y position after last line
+    //! Calculate horizontal inset for a Y position on a round screen.
+    //! Returns the left margin needed so content stays inside the circle.
+    //! @param yMid The vertical center of the element
+    //! @param screenSize The screen diameter (width == height on round)
+    //! @return Pixel inset from left (and right) edge
+    function circleInset(yMid as Number, screenSize as Number) as Number {
+        var r = screenSize / 2;
+        var dy = yMid - r;
+        if (dy < 0) { dy = -dy; }
+        if (dy >= r) { return r; }
+        var s = Math.sqrt((r * r - dy * dy).toFloat()).toNumber();
+        var inset = r - s + 6;
+        if (inset < 6) { inset = 6; }
+        return inset;
+    }
+
+    //! Draw text with word wrapping, return Y position after last line.
+    //! Uses circle insets when screenSize > 0 (round display).
     function drawWrappedText(dc as Dc, x as Number, y as Number, font as Graphics.FontDefinition, text as String, maxWidth as Number) as Number {
         var charWidth = dc.getTextWidthInPixels("M", font);
         var charsPerLine = maxWidth / charWidth;
@@ -56,6 +75,49 @@ module DrawUtils {
         return y;
     }
 
+    //! Draw circle-aware wrapped text — adjusts width per line for round display
+    function drawWrappedTextRound(dc as Dc, y as Number, font as Graphics.FontDefinition, text as String, screenSize as Number) as Number {
+        var charWidth = dc.getTextWidthInPixels("M", font);
+        var lineHeight = dc.getFontHeight(font) + 2;
+
+        var pos = 0;
+        while (pos < text.length()) {
+            var inset = circleInset(y + lineHeight / 2, screenSize);
+            var availWidth = screenSize - inset * 2;
+            if (availWidth < charWidth * 5) { availWidth = charWidth * 5; }
+            var charsPerLine = availWidth / charWidth;
+            if (charsPerLine < 5) { charsPerLine = 5; }
+
+            var end = pos + charsPerLine;
+            if (end >= text.length()) {
+                end = text.length();
+            } else {
+                var spacePos = end;
+                while (spacePos > pos) {
+                    var ch = text.substring(spacePos - 1, spacePos);
+                    if (ch.equals(" ")) {
+                        break;
+                    }
+                    spacePos--;
+                }
+                if (spacePos > pos) {
+                    end = spacePos;
+                }
+            }
+            var line = text.substring(pos, end);
+            dc.drawText(inset + 4, y, font, line, Graphics.TEXT_JUSTIFY_LEFT);
+            y += lineHeight;
+            pos = end;
+            if (pos < text.length()) {
+                var nextCh = text.substring(pos, pos + 1);
+                if (nextCh.equals(" ")) {
+                    pos++;
+                }
+            }
+        }
+        return y;
+    }
+
     //! Get color for severity level
     function getSeverityColor(severity as String) as Number {
         if (severity.equals("emergency")) {
@@ -70,6 +132,7 @@ module DrawUtils {
 }
 
 //! Abstract base list view with header, scrollable rows, and state management.
+//! Round-display aware: uses circle insets for positioning.
 //! Subclasses must override: getHeaderTitle(), getItems(), drawRow(), onItemSelect().
 class BaseListView extends WatchUi.View {
 
@@ -80,7 +143,7 @@ class BaseListView extends WatchUi.View {
 
     // Layout constants
     const ROW_HEIGHT = 36;
-    const HEADER_HEIGHT = 40;
+    const HEADER_HEIGHT = 48;
     const DOT_RADIUS = 6;
 
     function initialize() {
@@ -97,8 +160,8 @@ class BaseListView extends WatchUi.View {
         return [];
     }
 
-    //! Override: draw a single row
-    function drawRow(dc as Dc, item, y as Number, w as Number, isSelected as Boolean) as Void {
+    //! Override: draw a single row. inset = left margin for this row's Y.
+    function drawRow(dc as Dc, item, y as Number, w as Number, isSelected as Boolean, inset as Number) as Void {
     }
 
     //! Override: handle item selection
@@ -131,14 +194,16 @@ class BaseListView extends WatchUi.View {
             return;
         }
 
-        // Draw header
+        // Draw header — pushed down for round display
         dc.setColor(Graphics.COLOR_WHITE, Graphics.COLOR_TRANSPARENT);
-        dc.drawText(w / 2, 6, Graphics.FONT_SMALL, getHeaderTitle() + " (" + items.size() + ")", Graphics.TEXT_JUSTIFY_CENTER);
+        dc.drawText(w / 2, 18, Graphics.FONT_SMALL, getHeaderTitle() + " (" + items.size() + ")", Graphics.TEXT_JUSTIFY_CENTER);
+        var lineInset = DrawUtils.circleInset(HEADER_HEIGHT - 2, h);
         dc.setColor(Graphics.COLOR_DK_GRAY, Graphics.COLOR_TRANSPARENT);
-        dc.drawLine(10, HEADER_HEIGHT - 2, w - 10, HEADER_HEIGHT - 2);
+        dc.drawLine(lineInset, HEADER_HEIGHT - 2, w - lineInset, HEADER_HEIGHT - 2);
 
-        // Calculate visible rows
-        var visibleRows = (h - HEADER_HEIGHT) / ROW_HEIGHT;
+        // Calculate visible rows (leave bottom margin for round display)
+        var usableH = h - HEADER_HEIGHT - 20;
+        var visibleRows = usableH / ROW_HEIGHT;
 
         // Adjust scroll offset to keep selected item visible
         if (_selectedIndex < _scrollOffset) {
@@ -154,23 +219,28 @@ class BaseListView extends WatchUi.View {
             var item = items[idx];
             var y = HEADER_HEIGHT + (i * ROW_HEIGHT);
             var isSelected = (idx == _selectedIndex);
+            var rowMid = y + ROW_HEIGHT / 2;
+            var inset = DrawUtils.circleInset(rowMid, h);
 
             if (isSelected) {
                 dc.setColor(Graphics.COLOR_DK_BLUE, Graphics.COLOR_DK_BLUE);
-                dc.fillRectangle(0, y, w, ROW_HEIGHT);
+                dc.fillRectangle(inset, y, w - inset * 2, ROW_HEIGHT);
             }
 
-            drawRow(dc, item, y, w, isSelected);
+            drawRow(dc, item, y, w, isSelected, inset);
         }
 
-        // Scroll indicator
+        // Scroll indicator — positioned inside the circle
         if (items.size() > visibleRows) {
-            var barH = h - HEADER_HEIGHT;
+            var barTop = HEADER_HEIGHT;
+            var barH = usableH;
             var thumbH = (barH * visibleRows) / items.size();
             if (thumbH < 10) { thumbH = 10; }
-            var thumbY = HEADER_HEIGHT + (barH * _scrollOffset) / items.size();
+            var thumbY = barTop + (barH * _scrollOffset) / items.size();
+            var thumbMid = thumbY + thumbH / 2;
+            var scrollInset = DrawUtils.circleInset(thumbMid, h);
             dc.setColor(Graphics.COLOR_DK_GRAY, Graphics.COLOR_TRANSPARENT);
-            dc.fillRectangle(w - 3, thumbY, 3, thumbH);
+            dc.fillRectangle(w - scrollInset + 2, thumbY, 3, thumbH);
         }
     }
 

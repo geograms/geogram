@@ -70,12 +70,12 @@ class ChatRoomsView extends BaseListView {
         WatchUi.requestUpdate();
     }
 
-    function drawRow(dc as Dc, item, y as Number, w as Number, isSelected as Boolean) as Void {
+    function drawRow(dc as Dc, item, y as Number, w as Number, isSelected as Boolean, inset as Number) as Void {
         var dict = item as Dictionary;
 
         // Blue dot for chat
         dc.setColor(Graphics.COLOR_BLUE, Graphics.COLOR_TRANSPARENT);
-        dc.fillCircle(16, y + ROW_HEIGHT / 2, DOT_RADIUS);
+        dc.fillCircle(inset + 10, y + ROW_HEIGHT / 2, DOT_RADIUS);
 
         // Room name
         dc.setColor(Graphics.COLOR_WHITE, Graphics.COLOR_TRANSPARENT);
@@ -83,16 +83,18 @@ class ChatRoomsView extends BaseListView {
         if (dict["name"] instanceof String) {
             name = dict["name"] as String;
         }
-        if (name.length() > 18) {
-            name = name.substring(0, 17) + "..";
+        var maxChars = (w - inset * 2 - 60) / 8;
+        if (maxChars < 6) { maxChars = 6; }
+        if (name.length() > maxChars) {
+            name = name.substring(0, maxChars - 1) + "..";
         }
-        dc.drawText(28, y + 2, Graphics.FONT_TINY, name, Graphics.TEXT_JUSTIFY_LEFT);
+        dc.drawText(inset + 22, y + 2, Graphics.FONT_TINY, name, Graphics.TEXT_JUSTIFY_LEFT);
 
         // Message count
         if (dict["messageCount"] instanceof Number) {
             var count = dict["messageCount"] as Number;
             dc.setColor(Graphics.COLOR_LT_GRAY, Graphics.COLOR_TRANSPARENT);
-            dc.drawText(w - 8, y + 2, Graphics.FONT_XTINY, count.toString(), Graphics.TEXT_JUSTIFY_RIGHT);
+            dc.drawText(w - inset - 4, y + 2, Graphics.FONT_XTINY, count.toString(), Graphics.TEXT_JUSTIFY_RIGHT);
         }
     }
 
@@ -181,18 +183,19 @@ class ChatMessagesView extends WatchUi.View {
             return;
         }
 
-        // Header
+        // Header — pushed down for round display
         dc.setColor(Graphics.COLOR_WHITE, Graphics.COLOR_TRANSPARENT);
         var headerText = _roomName;
         if (headerText.length() > 20) {
             headerText = headerText.substring(0, 19) + "..";
         }
-        dc.drawText(w / 2, 6, Graphics.FONT_SMALL, headerText, Graphics.TEXT_JUSTIFY_CENTER);
+        dc.drawText(w / 2, 18, Graphics.FONT_SMALL, headerText, Graphics.TEXT_JUSTIFY_CENTER);
+        var lineInset = DrawUtils.circleInset(46, h);
         dc.setColor(Graphics.COLOR_DK_GRAY, Graphics.COLOR_TRANSPARENT);
-        dc.drawLine(10, 38, w - 10, 38);
+        dc.drawLine(lineInset, 46, w - lineInset, 46);
 
         // Messages
-        var y = 42 - _scrollY;
+        var y = 50 - _scrollY;
         var lineHeight = dc.getFontHeight(Graphics.FONT_XTINY) + 2;
 
         for (var i = 0; i < _messages.size(); i++) {
@@ -211,19 +214,21 @@ class ChatMessagesView extends WatchUi.View {
                 content = dict["content"] as String;
             }
 
-            // Author in blue
+            // Author in blue — use circle inset
+            var authorInset = DrawUtils.circleInset(y + lineHeight / 2, h);
             dc.setColor(Graphics.COLOR_BLUE, Graphics.COLOR_TRANSPARENT);
-            dc.drawText(8, y, Graphics.FONT_XTINY, author + ":", Graphics.TEXT_JUSTIFY_LEFT);
+            dc.drawText(authorInset + 4, y, Graphics.FONT_XTINY, author + ":", Graphics.TEXT_JUSTIFY_LEFT);
             y += lineHeight;
 
-            // Content wrapped
+            // Content wrapped — circle-aware
             dc.setColor(Graphics.COLOR_WHITE, Graphics.COLOR_TRANSPARENT);
-            y = DrawUtils.drawWrappedText(dc, 12, y, Graphics.FONT_XTINY, content, w - 24);
+            y = DrawUtils.drawWrappedTextRound(dc, y, Graphics.FONT_XTINY, content, w);
             y += 4;
 
             // Separator
+            var sepInset = DrawUtils.circleInset(y, h);
             dc.setColor(0x333333, Graphics.COLOR_TRANSPARENT);
-            dc.drawLine(12, y, w - 12, y);
+            dc.drawLine(sepInset, y, w - sepInset, y);
             y += 4;
         }
     }
