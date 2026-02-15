@@ -32,6 +32,11 @@ static const char *TAG = "sa818_radio";
 #define SA818_RADIO_RX_TASK_STACK       8192
 #define SA818_RADIO_RX_TASK_PRIO        4
 #define SA818_RADIO_AUDIO_BLOCK_SAMPLES 160
+#define APRS_HDLC_FLAG                  0x7EU
+#define APRS_HDLC_RESET                 0x7FU
+#define APRS_AX25_ESC                   0x1BU
+#define APRS_AX25_CRC_CORRECT           0xF0B8U
+#define APRS_RX_FIFO_SIZE               768U
 
 #define APRS_SAMPLE_RATE_HZ             9600U
 #define APRS_SAMPLES_PER_BIT            (APRS_SAMPLE_RATE_HZ / APRS_BITRATE_BPS)
@@ -91,18 +96,20 @@ static inline uint8_t aprs_sin_sample(uint16_t phase)
 #endif
 
 typedef struct {
+    uint8_t rx_fifo[APRS_RX_FIFO_SIZE];
+    size_t fifo_head;
+    size_t fifo_tail;
+
     uint8_t frame[APRS_MAX_FRAME_BYTES];
-    size_t frame_len;
+    size_t ax25_frame_len;
+    bool ax25_sync;
+    bool ax25_escape;
+    uint16_t ax25_crc_in;
+
     uint8_t hdlc_demod_bits;
     uint8_t hdlc_bit_index;
     uint8_t hdlc_current_byte;
     bool hdlc_receiving;
-    uint8_t probe_normal_bits;
-    uint8_t probe_inverted_bits;
-    bool polarity_locked;
-    bool invert_nrzi_bits;
-    uint8_t raw_bits[APRS_MAX_RAW_BITS];
-    size_t raw_bits_len;
 
     int16_t delay_line[APRS_DEMOD_DELAY_SAMPLES];
     size_t delay_idx;
@@ -121,6 +128,7 @@ typedef struct {
     uint32_t frame_candidates;
     uint32_t crc_ok;
     uint32_t crc_fail;
+    uint32_t fifo_overflow;
 } aprs_decoder_state_t;
 
 struct sa818_radio_dev {
@@ -375,7 +383,7 @@ static esp_err_t sa818_radio_configure_adc(sa818_radio_handle_t handle)
 
     adc_oneshot_chan_cfg_t chan_cfg = {
         .bitwidth = ADC_BITWIDTH_12,
-        .atten = ADC_ATTEN_DB_0,
+        .atten = ADC_ATTEN_DB_12,
     };
     ret = adc_oneshot_config_channel(handle->adc_unit, channel, &chan_cfg);
     if (ret != ESP_OK) {
@@ -545,6 +553,21 @@ static void aprs_decoder_init_demod(aprs_decoder_state_t *dec)
         return;
     }
 
+    memset(dec->rx_fifo, 0, sizeof(dec->rx_fifo));
+    dec->fifo_head = 0U;
+    dec->fifo_tail = 0U;
+
+    memset(dec->frame, 0, sizeof(dec->frame));
+    dec->ax25_frame_len = 0U;
+    dec->ax25_sync = false;
+    dec->ax25_escape = false;
+    dec->ax25_crc_in = 0xFFFFU;
+
+    dec->hdlc_demod_bits = 0U;
+    dec->hdlc_bit_index = 0U;
+    dec->hdlc_current_byte = 0U;
+    dec->hdlc_receiving = false;
+
     memset(dec->delay_line, 0, sizeof(dec->delay_line));
     dec->delay_idx = 0;
     memset(dec->lpf_hist, 0, sizeof(dec->lpf_hist));
@@ -553,16 +576,12 @@ static void aprs_decoder_init_demod(aprs_decoder_state_t *dec)
     dec->sampled_bits = 0;
     dec->actual_bits = 0;
     dec->current_phase = 0;
-    dec->probe_normal_bits = 0U;
-    dec->probe_inverted_bits = 0U;
-    dec->polarity_locked = false;
-    dec->invert_nrzi_bits = false;
-    dec->raw_bits_len = 0U;
     dec->nrzi_bits = 0;
     dec->flag_seen = 0;
     dec->frame_candidates = 0;
     dec->crc_ok = 0;
     dec->crc_fail = 0;
+    dec->fifo_overflow = 0;
 
     aprs_design_fir_bandpass(dec->lpf_coeff, 0.0f, 1200.0f);
 }
@@ -582,13 +601,6 @@ static int16_t aprs_decoder_filter_core(const int16_t coeffs[APRS_FIR_TAPS],
 
     *index = (*index + APRS_FIR_TAPS - 1U) % APRS_FIR_TAPS;
     return (int16_t)(sum >> 16);
-}
-
-static void aprs_decoder_reset_frame(aprs_decoder_state_t *dec)
-{
-    dec->frame_len = 0;
-    dec->hdlc_current_byte = 0;
-    dec->hdlc_bit_index = 0;
 }
 
 typedef struct {
@@ -659,19 +671,16 @@ static bool aprs_decode_ax25_frame(const uint8_t *frame, size_t frame_len, aprs_
     return true;
 }
 
-static bool aprs_decoder_handle_complete_frame(sa818_radio_handle_t handle)
+static bool aprs_decoder_emit_frame(sa818_radio_handle_t handle,
+                                    const uint8_t *frame,
+                                    size_t frame_len)
 {
-    if (!handle) {
-        return false;
-    }
-
-    aprs_decoder_state_t *dec = &handle->aprs_dec;
-    if (dec->frame_len < 18 || dec->hdlc_bit_index != 0) {
+    if (!handle || !frame) {
         return false;
     }
 
     aprs_packet_t packet;
-    if (!aprs_decode_ax25_frame(dec->frame, dec->frame_len, &packet)) {
+    if (!aprs_decode_ax25_frame(frame, frame_len, &packet)) {
         return false;
     }
 
@@ -706,166 +715,122 @@ static bool aprs_decoder_handle_complete_frame(sa818_radio_handle_t handle)
     return true;
 }
 
-static uint8_t aprs_decoder_resolve_nrzi_polarity(aprs_decoder_state_t *dec, uint8_t raw_bit)
+static inline bool aprs_decoder_fifo_is_empty(const aprs_decoder_state_t *dec)
 {
-    uint8_t bit = (raw_bit != 0U) ? 1U : 0U;
-    if (!dec->polarity_locked) {
-        dec->probe_normal_bits = (uint8_t)((dec->probe_normal_bits << 1) | bit);
-        dec->probe_inverted_bits = (uint8_t)((dec->probe_inverted_bits << 1) | (bit ^ 1U));
-        if (dec->probe_normal_bits == 0x7EU) {
-            dec->polarity_locked = true;
-            dec->invert_nrzi_bits = false;
-            dec->hdlc_demod_bits = 0U;
-        } else if (dec->probe_inverted_bits == 0x7EU) {
-            dec->polarity_locked = true;
-            dec->invert_nrzi_bits = true;
-            dec->hdlc_demod_bits = 0U;
-        }
-    }
-    return dec->invert_nrzi_bits ? (uint8_t)(bit ^ 1U) : bit;
+    return dec->fifo_head == dec->fifo_tail;
 }
 
-static bool aprs_decoder_try_raw_bits(sa818_radio_handle_t handle)
+static inline bool aprs_decoder_fifo_is_full(const aprs_decoder_state_t *dec)
 {
-    if (!handle) {
+    return ((dec->fifo_tail + 1U) % APRS_RX_FIFO_SIZE) == dec->fifo_head;
+}
+
+static void aprs_decoder_fifo_flush(aprs_decoder_state_t *dec)
+{
+    dec->fifo_head = 0U;
+    dec->fifo_tail = 0U;
+}
+
+static bool aprs_decoder_fifo_push(aprs_decoder_state_t *dec, uint8_t c)
+{
+    if (aprs_decoder_fifo_is_full(dec)) {
+        dec->fifo_overflow++;
         return false;
     }
+    dec->rx_fifo[dec->fifo_tail] = c;
+    dec->fifo_tail = (dec->fifo_tail + 1U) % APRS_RX_FIFO_SIZE;
+    return true;
+}
 
+static int aprs_decoder_fifo_pop(aprs_decoder_state_t *dec)
+{
+    if (aprs_decoder_fifo_is_empty(dec)) {
+        return -1;
+    }
+    uint8_t c = dec->rx_fifo[dec->fifo_head];
+    dec->fifo_head = (dec->fifo_head + 1U) % APRS_RX_FIFO_SIZE;
+    return (int)c;
+}
+
+static void aprs_decoder_poll_ax25(sa818_radio_handle_t handle)
+{
     aprs_decoder_state_t *dec = &handle->aprs_dec;
-    if (dec->raw_bits_len < 18U * 8U) {
-        return false;
-    }
+    int c = 0;
 
-    static uint8_t destuffed[APRS_MAX_FRAME_BYTES * 8U];
-    static uint8_t frame_bytes[APRS_MAX_FRAME_BYTES];
-    aprs_packet_t packet;
-
-    for (uint8_t invert = 0; invert < 2U; invert++) {
-        for (uint8_t shift = 0; shift < 8U && shift < dec->raw_bits_len; shift++) {
-            size_t destuffed_len = 0;
-            uint8_t ones = 0;
-            bool invalid = false;
-
-            for (size_t i = shift; i < dec->raw_bits_len; i++) {
-                uint8_t bit = (uint8_t)(dec->raw_bits[i] ^ invert);
-                if (bit != 0U) {
-                    ones++;
-                    if (ones > 6U || destuffed_len >= sizeof(destuffed)) {
-                        invalid = true;
-                        break;
-                    }
-                    destuffed[destuffed_len++] = 1U;
+    while ((c = aprs_decoder_fifo_pop(dec)) >= 0) {
+        if (!dec->ax25_escape && (uint8_t)c == APRS_HDLC_FLAG) {
+            if (dec->ax25_frame_len >= 18U) {
+                dec->frame_candidates++;
+                if (dec->ax25_crc_in == APRS_AX25_CRC_CORRECT &&
+                    aprs_decoder_emit_frame(handle, dec->frame, dec->ax25_frame_len)) {
+                    dec->crc_ok++;
                 } else {
-                    if (ones == 5U) {
-                        ones = 0U;
-                        continue;
-                    }
-                    ones = 0U;
-                    if (destuffed_len >= sizeof(destuffed)) {
-                        invalid = true;
-                        break;
-                    }
-                    destuffed[destuffed_len++] = 0U;
+                    dec->crc_fail++;
                 }
             }
 
-            if (invalid || destuffed_len < 18U * 8U) {
-                continue;
-            }
+            dec->ax25_sync = true;
+            dec->ax25_crc_in = 0xFFFFU;
+            dec->ax25_frame_len = 0U;
+            continue;
+        }
 
-            size_t max_bytes = destuffed_len / 8U;
-            if (max_bytes > APRS_MAX_FRAME_BYTES) {
-                max_bytes = APRS_MAX_FRAME_BYTES;
-            }
+        if (!dec->ax25_escape && (uint8_t)c == APRS_HDLC_RESET) {
+            dec->ax25_sync = false;
+            dec->ax25_frame_len = 0U;
+            continue;
+        }
 
-            for (size_t trim = 0; trim < 4U && max_bytes > (18U + trim); trim++) {
-                size_t use_bytes = max_bytes - trim;
-                for (size_t b = 0; b < use_bytes; b++) {
-                    uint8_t v = 0U;
-                    for (uint8_t k = 0; k < 8U; k++) {
-                        if (destuffed[b * 8U + k] != 0U) {
-                            v |= (uint8_t)(1U << k);
-                        }
-                    }
-                    frame_bytes[b] = v;
-                }
+        if (!dec->ax25_escape && (uint8_t)c == APRS_AX25_ESC) {
+            dec->ax25_escape = true;
+            continue;
+        }
 
-                if (aprs_decode_ax25_frame(frame_bytes, use_bytes, &packet)) {
-                    memcpy(dec->frame, frame_bytes, use_bytes);
-                    dec->frame_len = use_bytes;
-                    dec->hdlc_bit_index = 0U;
-                    return true;
-                }
+        if (dec->ax25_sync) {
+            if (dec->ax25_frame_len < APRS_MAX_FRAME_BYTES) {
+                dec->frame[dec->ax25_frame_len++] = (uint8_t)c;
+                dec->ax25_crc_in = aprs_crc16_update(dec->ax25_crc_in, (uint8_t)c);
+            } else {
+                dec->ax25_sync = false;
+                dec->ax25_frame_len = 0U;
             }
         }
-    }
 
-    return false;
+        dec->ax25_escape = false;
+    }
 }
 
-static void aprs_decoder_process_nrzi_bit(sa818_radio_handle_t handle, uint8_t bit)
+static bool aprs_decoder_hdlc_parse(aprs_decoder_state_t *dec, bool bit)
 {
-    aprs_decoder_state_t *dec = &handle->aprs_dec;
-    dec->nrzi_bits++;
-    bit = aprs_decoder_resolve_nrzi_polarity(dec, bit);
-    if (!dec->polarity_locked) {
-        return;
-    }
+    bool ret = true;
 
     dec->hdlc_demod_bits <<= 1;
-    dec->hdlc_demod_bits |= (bit != 0U) ? 1U : 0U;
+    dec->hdlc_demod_bits |= bit ? 1U : 0U;
 
-    if (dec->hdlc_demod_bits == 0x7EU) {
-        dec->flag_seen++;
-        if (dec->hdlc_receiving && dec->raw_bits_len >= (18U * 8U)) {
-            dec->frame_candidates++;
-            bool ok = false;
-            if (dec->frame_len >= 18U && dec->hdlc_bit_index == 0U) {
-                ok = aprs_decoder_handle_complete_frame(handle);
-            }
-            if (!ok && aprs_decoder_try_raw_bits(handle)) {
-                ok = aprs_decoder_handle_complete_frame(handle);
-            }
-            if (ok) {
-                dec->crc_ok++;
-            } else {
-                dec->crc_fail++;
-            }
+    if (dec->hdlc_demod_bits == APRS_HDLC_FLAG) {
+        if (!aprs_decoder_fifo_push(dec, APRS_HDLC_FLAG)) {
+            ret = false;
+            dec->hdlc_receiving = false;
+        } else {
+            dec->hdlc_receiving = true;
+            dec->flag_seen++;
         }
-        dec->hdlc_receiving = true;
-        dec->raw_bits_len = 0U;
-        aprs_decoder_reset_frame(dec);
-        return;
+        dec->hdlc_current_byte = 0U;
+        dec->hdlc_bit_index = 0U;
+        return ret;
     }
 
-    // RESET pattern (continuous ones / invalid run)
-    if ((dec->hdlc_demod_bits & 0x7FU) == 0x7FU) {
+    if ((dec->hdlc_demod_bits & APRS_HDLC_RESET) == APRS_HDLC_RESET) {
         dec->hdlc_receiving = false;
-        dec->raw_bits_len = 0U;
-        aprs_decoder_reset_frame(dec);
-        dec->polarity_locked = false;
-        dec->invert_nrzi_bits = false;
-        dec->probe_normal_bits = 0U;
-        dec->probe_inverted_bits = 0U;
-        return;
+        return ret;
     }
 
     if (!dec->hdlc_receiving) {
-        return;
+        return ret;
     }
 
-    if (dec->raw_bits_len < APRS_MAX_RAW_BITS) {
-        dec->raw_bits[dec->raw_bits_len++] = bit ? 1U : 0U;
-    } else {
-        dec->hdlc_receiving = false;
-        dec->raw_bits_len = 0U;
-        aprs_decoder_reset_frame(dec);
-        return;
-    }
-
-    // Stuffed zero after five consecutive ones.
     if ((dec->hdlc_demod_bits & 0x3FU) == 0x3EU) {
-        return;
+        return ret;
     }
 
     if ((dec->hdlc_demod_bits & 0x01U) != 0U) {
@@ -873,19 +838,40 @@ static void aprs_decoder_process_nrzi_bit(sa818_radio_handle_t handle, uint8_t b
     }
 
     if (++dec->hdlc_bit_index >= 8U) {
-        if (dec->frame_len < sizeof(dec->frame)) {
-            dec->frame[dec->frame_len++] = dec->hdlc_current_byte;
-        } else {
+        if (dec->hdlc_current_byte == APRS_HDLC_FLAG ||
+            dec->hdlc_current_byte == APRS_HDLC_RESET ||
+            dec->hdlc_current_byte == APRS_AX25_ESC) {
+            if (!aprs_decoder_fifo_push(dec, APRS_AX25_ESC)) {
+                dec->hdlc_receiving = false;
+                ret = false;
+            }
+        }
+
+        if (!aprs_decoder_fifo_push(dec, dec->hdlc_current_byte)) {
             dec->hdlc_receiving = false;
-            dec->raw_bits_len = 0U;
-            aprs_decoder_reset_frame(dec);
-            return;
+            ret = false;
         }
         dec->hdlc_current_byte = 0U;
         dec->hdlc_bit_index = 0U;
     } else {
         dec->hdlc_current_byte >>= 1;
     }
+
+    return ret;
+}
+
+static void aprs_decoder_process_nrzi_bit(sa818_radio_handle_t handle, uint8_t bit)
+{
+    aprs_decoder_state_t *dec = &handle->aprs_dec;
+    dec->nrzi_bits++;
+    if (!aprs_decoder_hdlc_parse(dec, bit != 0U)) {
+        aprs_decoder_fifo_flush(dec);
+        dec->ax25_sync = false;
+        dec->ax25_escape = false;
+        dec->ax25_crc_in = 0xFFFFU;
+        dec->ax25_frame_len = 0U;
+    }
+    aprs_decoder_poll_ax25(handle);
 }
 
 static void aprs_decoder_feed_sample(sa818_radio_handle_t handle, int16_t sample)
@@ -953,6 +939,7 @@ static void sa818_radio_rx_task(void *arg)
     uint32_t prev_frames = 0U;
     uint32_t prev_crc_ok = 0U;
     uint32_t prev_crc_fail = 0U;
+    uint32_t prev_fifo_overflow = 0U;
 
     int16_t block[SA818_RADIO_AUDIO_BLOCK_SAMPLES];
     size_t block_fill = 0;
@@ -969,13 +956,7 @@ static void sa818_radio_rx_task(void *arg)
             dc_estimate_q8 += (raw_q8 - dc_estimate_q8) >> 7;
 
             int centered = raw - (int)(dc_estimate_q8 >> 8);
-            int demod_scaled = centered >> 4;
-            if (demod_scaled > 127) {
-                demod_scaled = 127;
-            } else if (demod_scaled < -128) {
-                demod_scaled = -128;
-            }
-            int16_t demod_sample = (int16_t)demod_scaled;
+            int16_t demod_sample = (int16_t)centered;
             int audio_scaled = centered << 4;
             if (audio_scaled > 32767) {
                 audio_scaled = 32767;
@@ -1023,13 +1004,15 @@ static void sa818_radio_rx_task(void *arg)
             uint32_t frames_delta = dec->frame_candidates - prev_frames;
             uint32_t crc_ok_delta = dec->crc_ok - prev_crc_ok;
             uint32_t crc_fail_delta = dec->crc_fail - prev_crc_fail;
+            uint32_t fifo_overflow_delta = dec->fifo_overflow - prev_fifo_overflow;
             prev_nrzi_bits = dec->nrzi_bits;
             prev_flags = dec->flag_seen;
             prev_frames = dec->frame_candidates;
             prev_crc_ok = dec->crc_ok;
             prev_crc_fail = dec->crc_fail;
+            prev_fifo_overflow = dec->fifo_overflow;
 
-            ESP_LOGI(TAG, "APRS RX stats: %u sps demod=[%d,%d] offset=%d bits=%u flags=%u frames=%u ok=%u fail=%u",
+            ESP_LOGI(TAG, "APRS RX stats: %u sps demod=[%d,%d] offset=%d bits=%u flags=%u frames=%u ok=%u fail=%u ovf=%u",
                      (unsigned)samples_this_second,
                      (int)min_demod_sample,
                      (int)max_demod_sample,
@@ -1038,7 +1021,8 @@ static void sa818_radio_rx_task(void *arg)
                      (unsigned)flags_delta,
                      (unsigned)frames_delta,
                      (unsigned)crc_ok_delta,
-                     (unsigned)crc_fail_delta);
+                     (unsigned)crc_fail_delta,
+                     (unsigned)fifo_overflow_delta);
             samples_this_second = 0U;
             min_demod_sample = INT16_MAX;
             max_demod_sample = INT16_MIN;
@@ -1367,9 +1351,6 @@ esp_err_t sa818_radio_create(const sa818_radio_config_t *config, sa818_radio_han
         }
     }
 
-    aprs_decoder_reset_frame(&dev->aprs_dec);
-    dev->aprs_dec.hdlc_demod_bits = 0;
-    dev->aprs_dec.hdlc_receiving = false;
     aprs_decoder_init_demod(&dev->aprs_dec);
 
     ret = sa818_radio_power(dev, true);
@@ -1641,9 +1622,6 @@ esp_err_t sa818_radio_start_audio_rx(sa818_radio_handle_t handle,
         return ESP_ERR_INVALID_STATE;
     }
 
-    aprs_decoder_reset_frame(&handle->aprs_dec);
-    handle->aprs_dec.hdlc_demod_bits = 0;
-    handle->aprs_dec.hdlc_receiving = false;
     aprs_decoder_init_demod(&handle->aprs_dec);
 
     handle->audio_rx_cb = callback;
