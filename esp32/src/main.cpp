@@ -873,9 +873,13 @@ extern "C" void app_main(void)
     geogram_log_plain(TAG, "Mesh support: DISABLED in this build");
 #endif
 
-#if defined(CONFIG_GEOGRAM_MESH_ENABLED) && (BOARD_MODEL == MODEL_ESP32C3_MINI || BOARD_MODEL == MODEL_KV4P)
+#if defined(CONFIG_GEOGRAM_MESH_ENABLED) && (BOARD_MODEL == MODEL_ESP32C3_MINI)
     geogram_log_plain(TAG, "Starting mesh mode by default");
     start_mesh_mode();
+#endif
+
+#if defined(CONFIG_GEOGRAM_MESH_ENABLED) && (BOARD_MODEL == MODEL_KV4P)
+    geogram_log_plain(TAG, "KV4P: mesh auto-start disabled (using standalone AP mode)");
 #endif
 
 #if BOARD_MODEL == MODEL_ESP32S3_EPAPER_1IN54
@@ -962,9 +966,9 @@ extern "C" void app_main(void)
 
 #endif  // BOARD_MODEL == MODEL_ESP32S3_EPAPER_1IN54
 
-#if (BOARD_MODEL == MODEL_ESP32C3_MINI || BOARD_MODEL == MODEL_KV4P) && !defined(CONFIG_GEOGRAM_MESH_ENABLED)
-    // Standalone WiFi AP mode for minimal ESP32 boards when mesh is disabled
-    // When mesh is enabled, mesh_bsp handles all WiFi/netif initialization
+#if ((BOARD_MODEL == MODEL_ESP32C3_MINI) && !defined(CONFIG_GEOGRAM_MESH_ENABLED)) || (BOARD_MODEL == MODEL_KV4P)
+    // Standalone WiFi AP mode for KV4P and for minimal ESP32 boards when mesh
+    // is disabled. KV4P runs out of heap with mesh+BLE+APRS enabled together.
 
     // Initialize NOSTR keys (needed for AP SSID with callsign)
     ret = nostr_keys_init();

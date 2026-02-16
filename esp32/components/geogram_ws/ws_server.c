@@ -527,7 +527,6 @@ esp_err_t ws_server_register(httpd_handle_t server)
     if (!s_mutex) {
         s_mutex = xSemaphoreCreateMutex();
         if (!s_mutex) {
-            ESP_LOGE(TAG, "Failed to create mutex");
             return ESP_ERR_NO_MEM;
         }
     }

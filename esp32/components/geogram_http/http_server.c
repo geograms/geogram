@@ -1744,11 +1744,17 @@ esp_err_t http_server_start_ex(wifi_config_callback_t callback, bool enable_stat
         httpd_register_uri_handler(s_server, &uri_api_file_download);
         httpd_register_uri_handler(s_server, &uri_api_file_status);
 
-        // Register WebSocket handler
+        // Register WebSocket handler.
+        // KV4P runs close to heap limits during early mesh startup; skip WS there
+        // to keep captive portal and HTTP API startup deterministic.
+#if BOARD_MODEL == MODEL_KV4P
+        ESP_LOGI(TAG, "WebSocket handler disabled on KV4P");
+#else
         ret = ws_server_register(s_server);
         if (ret != ESP_OK) {
             ESP_LOGW(TAG, "Failed to register WebSocket handler: %s", esp_err_to_name(ret));
         }
+#endif
 
 #if BOARD_MODEL == MODEL_ESP32S3_EPAPER_1IN54
         // Register tile server handler if SD card is available
