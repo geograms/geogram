@@ -38,8 +38,10 @@ static const char *TAG = "geogram_ble";
 #define GEOGRAM_BLE_MARKER                  0x3E
 #define GEOGRAM_BLE_COMPANY_ID              0xFFFF
 
-#define GEOGRAM_BLE_MAX_CONNECTIONS         6
-#define GEOGRAM_BLE_RX_BUFFER_SIZE          4096
+// KV4P runs close to heap limits with mesh+radio+BLE active.
+// Keep BLE peer buffers lean to preserve at least one stable connection.
+#define GEOGRAM_BLE_MAX_CONNECTIONS         2
+#define GEOGRAM_BLE_RX_BUFFER_SIZE          1024
 #define GEOGRAM_BLE_MAX_PATH_LEN            192
 #define GEOGRAM_BLE_MAX_QUERY_LEN           192
 #define GEOGRAM_BLE_MAX_ROOM_LEN            48
@@ -1172,29 +1174,31 @@ static void ble_send_hello_ack_legacy(uint16_t conn_handle)
 static void ble_send_api_response(uint16_t conn_handle, const char *request_id,
                                   int status_code, const char *body)
 {
-    cJSON *response = cJSON_CreateObject();
-    if (!response) {
+    const char *id = request_id ? request_id : "unknown";
+    const char *body_str = body ? body : "{}";
+
+    // Build api_response directly to avoid cJSON allocation churn in the
+    // NimBLE host callback path under constrained heap conditions.
+    size_t id_len = strlen(id);
+    size_t body_len = strlen(body_str);
+    size_t capacity = id_len + body_len + 96;
+    char *json = (char *)malloc(capacity);
+    if (!json) {
         return;
     }
 
-    cJSON_AddStringToObject(response, "type", "api_response");
-    cJSON_AddStringToObject(response, "id", request_id ? request_id : "unknown");
-    cJSON_AddNumberToObject(response, "statusCode", status_code);
-    const char *body_str = body ? body : "{}";
-    cJSON *body_json = cJSON_Parse(body_str);
-    if (body_json) {
-        cJSON_AddItemToObject(response, "body", body_json);
-    } else {
-        cJSON_AddStringToObject(response, "body", body_str);
-    }
-
-    char *json = ble_json_to_string(response);
-    if (json) {
+    int written = snprintf(
+        json,
+        capacity,
+        "{\"type\":\"api_response\",\"id\":\"%s\",\"statusCode\":%d,\"body\":%s}",
+        id,
+        status_code,
+        body_str
+    );
+    if (written > 0) {
         ble_notify_json(conn_handle, json);
-        free(json);
     }
-
-    cJSON_Delete(response);
+    free(json);
 }
 #endif
 
@@ -1362,12 +1366,15 @@ static void ble_handle_chat(uint16_t conn_handle,
         strlcpy(peer->callsign, effective_author, sizeof(peer->callsign));
     }
 
-    ble_send_chat_ack(conn_handle, request_id, true, NULL);
-
     if (strcmp(channel, "_api") == 0) {
+        // API-over-chat is treated as RPC: reply only with api_response.
+        // Sending an additional chat_ack triggers back-to-back notifications
+        // and can crash NimBLE on ESP32.
         ble_handle_api_request(conn_handle, effective_author, content);
         return;
     }
+
+    ble_send_chat_ack(conn_handle, request_id, true, NULL);
 
     if (content[0] == '\0') {
         return;
