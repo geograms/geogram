@@ -90,6 +90,7 @@ Folder: `tests/geoblue`
 - executable runner: `tests/geoblue/run_hello_test.sh`
 - large unicast runner: `tests/geoblue/run_unicast_large_test.sh`
 - reverse unicast runner: `tests/geoblue/run_unicast_reverse_test.sh`
+- broadcast runner: `tests/geoblue/run_broadcast_test.sh`
 
 Run:
 
@@ -98,6 +99,7 @@ cd tests/geoblue
 ./run_hello_test.sh
 ./run_unicast_large_test.sh
 ./run_unicast_reverse_test.sh
+./run_broadcast_test.sh
 ```
 
 This first test is successful only when:
@@ -111,6 +113,11 @@ Forward/Reverse large unicast tests are successful only when:
 1. A 1000-byte payload is transferred with exact content match.
 2. Timing is printed for transfer and roundtrip phases.
 3. Reverse mode returns explicit ESP32 validation result `ok`.
+
+Broadcast test is successful when:
+
+1. Desktop sends a BLE `broadcast` frame with a unique token.
+2. ESP32 listener returns a BLE `data` receipt on `geoblue_broadcast_receipt`.
 
 ---
 

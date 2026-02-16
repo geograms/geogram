@@ -27,6 +27,12 @@ Reverse unicast round-trip integrity/timing test (~1000-byte text payload):
 ./run_unicast_reverse_test.sh
 ```
 
+Broadcast distribution test (desktop sender -> ESP32 listener receipt over BLE):
+
+```bash
+./run_broadcast_test.sh
+```
+
 All scripts accept `--address AA:BB:CC:DD:EE:FF` to force one target device.
 
 ## What Each Script Validates
@@ -53,3 +59,9 @@ For `run_unicast_reverse_test.sh`:
 3. Verifies payload matches `tests/geoblue/data/payload_1000.txt`.
 4. Echoes it back on `geoblue_reverse_unicast_test_echo`.
 5. Waits for ESP32 validation result on `geoblue_reverse_unicast_test_result`.
+
+For `run_broadcast_test.sh`:
+
+1. Sends one BLE `broadcast` frame from desktop with a unique token.
+2. Waits for ESP32 to confirm listener delivery on channel `geoblue_broadcast_receipt`.
+3. Prints pass/fail with delivery timing.

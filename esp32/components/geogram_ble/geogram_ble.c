@@ -59,6 +59,7 @@ static const char *TAG = "geogram_ble";
 #define GEOBLUE_CH_REVERSE_TEST             "geoblue_reverse_unicast_test"
 #define GEOBLUE_CH_REVERSE_ECHO             "geoblue_reverse_unicast_test_echo"
 #define GEOBLUE_CH_REVERSE_RESULT           "geoblue_reverse_unicast_test_result"
+#define GEOBLUE_CH_BROADCAST_RECEIPT        "geoblue_broadcast_receipt"
 #define GEOBLUE_TEST_PAYLOAD_LEN            1000
 
 typedef struct {
@@ -360,6 +361,36 @@ static void ble_send_reverse_test_result(uint16_t conn_handle, const char *to_ca
     int rc = ble_notify_json(conn_handle, json);
     if (rc != 0) {
         ESP_LOGW(TAG, "reverse test result notify failed (rc=%d)", rc);
+    }
+    free(json);
+}
+
+static void ble_send_broadcast_receipt(uint16_t conn_handle,
+                                       const char *to_callsign,
+                                       const char *content)
+{
+    if (!to_callsign || to_callsign[0] == '\0' || !content || content[0] == '\0') {
+        return;
+    }
+
+    char message_id[48] = {0};
+    snprintf(message_id, sizeof(message_id), "broadcast-receipt-%lu",
+             (unsigned long)esp_log_timestamp());
+
+    char *json = geoblue_build_data_frame(
+        message_id,
+        ble_station_callsign(),
+        to_callsign,
+        GEOBLUE_CH_BROADCAST_RECEIPT,
+        content,
+        (int64_t)time(NULL));
+    if (!json) {
+        return;
+    }
+
+    int rc = ble_notify_json(conn_handle, json);
+    if (rc != 0) {
+        ESP_LOGW(TAG, "broadcast receipt notify failed (rc=%d)", rc);
     }
     free(json);
 }
@@ -1930,6 +1961,9 @@ static void ble_handle_broadcast(uint16_t conn_handle,
         char line[GEOGRAM_BLE_MAX_MESSAGE_LEN + 1] = {0};
         snprintf(line, sizeof(line), "[%s] %s", topic, content);
         mesh_chat_add_local_message_with_timestamp(from, line, timestamp);
+
+        // Confirm delivery to the broadcast sender over BLE.
+        ble_send_broadcast_receipt(conn_handle, from, content);
     }
 
     char *json = cJSON_PrintUnformatted(message);
