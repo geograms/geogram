@@ -569,12 +569,57 @@ class BLEDiscoveryService {
     if (mfgData.isNotEmpty) {
       // Check each manufacturer entry
       for (final entry in mfgData.entries) {
-        final mfgBytes = entry.value;
-        if (mfgBytes.isNotEmpty && mfgBytes[0] == geogramMarker) {
+        final raw = entry.value;
+        if (raw.isEmpty) continue;
+
+        // Normal case: marker at index 0
+        if (raw[0] == geogramMarker) {
           LogService().log(
             'BLEDiscovery: Found Geogram device via manufacturer data: ${result.device.remoteId.str}',
           );
-          _addOrUpdateDevice(result, mfgBytes);
+          _addOrUpdateDevice(result, raw);
+          return;
+        }
+
+        // BlueZ variants sometimes prepend bytes before payload; recover marker.
+        final markerIndex = raw.indexOf(geogramMarker);
+        if (markerIndex > 0) {
+          final recovered = raw.sublist(markerIndex);
+          LogService().log(
+            'BLEDiscovery: Recovered Geogram marker at offset $markerIndex for ${result.device.remoteId.str}',
+          );
+          _addOrUpdateDevice(result, recovered);
+          return;
+        }
+
+        // Fallback for payloads missing marker but still in Geogram format:
+        // [device_id][callsign...], typically under manufacturer 0xFFFF.
+        if (entry.key == 0xFFFF &&
+            raw.length >= 2 &&
+            raw[0] >= 1 &&
+            raw[0] <= 15) {
+          final firstCallsignByte = raw[1];
+          final looksAsciiCallsign =
+              (firstCallsignByte >= 0x30 && firstCallsignByte <= 0x39) ||
+              (firstCallsignByte >= 0x41 && firstCallsignByte <= 0x5A);
+          if (looksAsciiCallsign) {
+            final synthesized = <int>[geogramMarker, ...raw];
+            LogService().log(
+              'BLEDiscovery: Recovered Geogram payload without marker for ${result.device.remoteId.str}',
+            );
+            _addOrUpdateDevice(result, synthesized);
+            return;
+          }
+        }
+
+        // Also accept explicit Geogram local name for devices with malformed payloads.
+        if (entry.key == 0xFFFF &&
+            (result.advertisementData.advName == 'Geogram' ||
+                result.device.platformName == 'Geogram')) {
+          LogService().log(
+            'BLEDiscovery: Accepting Geogram-name device with non-standard manufacturer payload: ${result.device.remoteId.str}',
+          );
+          _addOrUpdateDevice(result, raw);
           return;
         }
       }
@@ -970,8 +1015,9 @@ class BLEDiscoveryService {
           final chunk = bytes.sublist(i, end);
 
           try {
-            // For parcelized writes, use write-without-response per BLE.md.
-            await char.write(chunk, withoutResponse: true);
+            // Use write-with-response for parcel chunks to avoid dropped bytes on
+            // Linux -> ESP32 links where large fire-and-forget writes can corrupt payloads.
+            await char.write(chunk, withoutResponse: false);
             // Small delay between chunks within a parcel
             await Future.delayed(const Duration(milliseconds: 30));
           } catch (e) {
@@ -1267,8 +1313,9 @@ class BLEDiscoveryService {
       await connection.sendOnly(messageJson);
       LogService().log('BLEDiscovery: Async message sent successfully');
 
-      // Schedule disconnect after a longer timeout for async responses
-      connection.scheduleDisconnect(const Duration(seconds: 60));
+      // Keep the link warm for interactive chat/app browsing to reduce
+      // reconnect churn and BlueZ stale-handle failures.
+      connection.scheduleDisconnect(const Duration(minutes: 5));
 
       return true;
     } catch (e) {
@@ -1374,9 +1421,7 @@ class BLEDiscoveryService {
           if (attempt > 1) {
             // Reset any half-open link before retrying.
             try {
-              await bleDevice.disconnect().timeout(
-                const Duration(seconds: 2),
-              );
+              await bleDevice.disconnect().timeout(const Duration(seconds: 2));
             } catch (_) {}
             await Future.delayed(const Duration(milliseconds: 150));
           }
@@ -1906,8 +1951,9 @@ class _BLEConnection {
           final chunk = bytes.sublist(i, end);
 
           try {
-            // For parcelized writes, use write-without-response per BLE.md.
-            await writeChar.write(chunk, withoutResponse: true);
+            // Use write-with-response for parcel chunks to avoid dropped bytes on
+            // Linux -> ESP32 links where large fire-and-forget writes can corrupt payloads.
+            await writeChar.write(chunk, withoutResponse: false);
             // Small delay between chunks within a parcel
             await Future.delayed(const Duration(milliseconds: 30));
           } catch (e) {
