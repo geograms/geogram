@@ -1,12 +1,8 @@
 name: Build Web
 
+# Disabled: web build is too buggy with native dependency stripping.
+# Keep workflow_dispatch so it can be triggered manually for testing.
 on:
-  push:
-    branches: [ main ]
-    tags:
-      - 'v*'
-  pull_request:
-    branches: [ main ]
   workflow_dispatch:
 
 permissions:

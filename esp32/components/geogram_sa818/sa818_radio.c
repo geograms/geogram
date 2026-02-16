@@ -7,11 +7,14 @@
 #include <stdlib.h>
 #include <string.h>
 #include "sa818_radio.h"
+#include "soc/soc_caps.h"
 #if CONFIG_IDF_TARGET_ESP32
 #include "driver/i2s.h"
 #include "driver/dac.h"
 #endif
+#if SOC_DAC_SUPPORTED
 #include "driver/dac_oneshot.h"
+#endif
 #include "driver/gpio.h"
 #include "esp_adc/adc_oneshot.h"
 #include "esp_idf_version.h"
@@ -150,8 +153,10 @@ struct sa818_radio_dev {
     adc_oneshot_unit_handle_t adc_unit;
     adc_channel_t adc_channel;
 
+#if SOC_DAC_SUPPORTED
     bool dac_ready;
     dac_oneshot_handle_t dac_handle;
+#endif
 #if CONFIG_IDF_TARGET_ESP32
     bool i2s_tx_ready;
 #endif
@@ -465,6 +470,7 @@ static esp_err_t sa818_radio_configure_i2s_tx(sa818_radio_handle_t handle)
 }
 #endif
 
+#if SOC_DAC_SUPPORTED
 static esp_err_t sa818_radio_configure_dac(sa818_radio_handle_t handle)
 {
     if (!handle) {
@@ -498,6 +504,7 @@ static esp_err_t sa818_radio_configure_dac(sa818_radio_handle_t handle)
     dac_oneshot_output_voltage(handle->dac_handle, 128);
     return ESP_OK;
 }
+#endif
 
 static uint8_t aprs_count_ones_u8(uint8_t value)
 {
@@ -1098,9 +1105,14 @@ static esp_err_t aprs_tx_stream_flush(sa818_radio_handle_t handle, aprs_tx_strea
 static void aprs_tx_stream_init(sa818_radio_handle_t handle, aprs_tx_stream_t *stream)
 {
     memset(stream, 0, sizeof(*stream));
+#if SOC_DAC_SUPPORTED
     if (!handle->dac_ready) {
         return;
     }
+#else
+    (void)handle;
+    return;
+#endif
     stream->phase = 0.0f;
     stream->next_sample_us = esp_timer_get_time();
 }
@@ -1131,6 +1143,7 @@ static esp_err_t aprs_tx_symbol(sa818_radio_handle_t handle,
     }
 #endif
 
+#if SOC_DAC_SUPPORTED
     const float freq = mark_tone ? APRS_MARK_FREQ_HZ : APRS_SPACE_FREQ_HZ;
     const float step = (float)(2.0 * M_PI * freq / (double)APRS_SAMPLE_RATE_HZ);
 
@@ -1162,6 +1175,9 @@ static esp_err_t aprs_tx_symbol(sa818_radio_handle_t handle,
     }
 
     return ESP_OK;
+#else
+    return ESP_ERR_NOT_SUPPORTED;
+#endif
 }
 
 static esp_err_t aprs_tx_nrzi_bit(sa818_radio_handle_t handle,
@@ -1360,6 +1376,7 @@ esp_err_t sa818_radio_create(const sa818_radio_config_t *config, sa818_radio_han
     }
 #endif
 
+#if SOC_DAC_SUPPORTED
     if (
 #if CONFIG_IDF_TARGET_ESP32
         !dev->i2s_tx_ready &&
@@ -1370,6 +1387,7 @@ esp_err_t sa818_radio_create(const sa818_radio_config_t *config, sa818_radio_han
             ESP_LOGW(TAG, "APRS AFSK TX disabled: %s", esp_err_to_name(ret));
         }
     }
+#endif
 
     aprs_decoder_init_demod(&dev->aprs_dec);
 
@@ -1384,9 +1402,11 @@ esp_err_t sa818_radio_create(const sa818_radio_config_t *config, sa818_radio_han
             dev->i2s_tx_ready = false;
         }
 #endif
+#if SOC_DAC_SUPPORTED
         if (dev->dac_ready && dev->dac_handle) {
             dac_oneshot_del_channel(dev->dac_handle);
         }
+#endif
         sa818_delete(dev->modem);
         vSemaphoreDelete(dev->lock);
         free(dev);
@@ -1412,11 +1432,13 @@ esp_err_t sa818_radio_delete(sa818_radio_handle_t handle)
         handle->adc_ready = false;
     }
 
+#if SOC_DAC_SUPPORTED
     if (handle->dac_ready && handle->dac_handle != NULL) {
         dac_oneshot_del_channel(handle->dac_handle);
         handle->dac_handle = NULL;
         handle->dac_ready = false;
     }
+#endif
 #if CONFIG_IDF_TARGET_ESP32
     if (handle->i2s_tx_ready) {
         i2s_driver_uninstall(I2S_NUM_0);
@@ -1847,9 +1869,11 @@ esp_err_t sa818_radio_send_aprs_message(sa818_radio_handle_t handle,
     }
 #endif
 
+#if SOC_DAC_SUPPORTED
     if (handle->dac_ready) {
         dac_oneshot_output_voltage(handle->dac_handle, 128);
     }
+#endif
     vTaskDelay(pdMS_TO_TICKS(APRS_TX_TAIL_MS));
     sa818_radio_set_ptt(handle, false);
 

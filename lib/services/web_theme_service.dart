@@ -1,7 +1,5 @@
 import 'dart:async';
 import 'dart:io';
-import 'package:flutter/foundation.dart' show kIsWeb;
-import 'package:flutter/services.dart' show rootBundle;
 import 'storage_config.dart';
 import 'config_service.dart';
 import 'log_service.dart';
@@ -52,11 +50,7 @@ class WebThemeService {
   /// Initialize the theme service and extract bundled themes if needed
   Future<void> init() async {
     if (_initialized) return;
-    if (kIsWeb) {
-      // Web platform doesn't need theme extraction
-      _initialized = true;
-      return;
-    }
+    // dart:io is imported, so this file is never compiled for web
 
     final storageConfig = StorageConfig();
     if (!storageConfig.isInitialized) {
@@ -88,7 +82,14 @@ class WebThemeService {
 
     for (final assetPath in _bundledAssets) {
       try {
-        final content = await rootBundle.loadString(assetPath);
+        final exeDir = File(Platform.resolvedExecutable).parent.path;
+        // Try Flutter asset bundle path first, then fallback to exe-relative
+        final assetFile = File('$exeDir/data/flutter_assets/$assetPath');
+        if (!await assetFile.exists()) {
+          LogService().log('Skipping missing bundled asset: $assetPath');
+          continue;
+        }
+        final content = await assetFile.readAsString();
         final targetPath = '$_themesDir/${assetPath.substring(7)}'; // Remove 'themes/' prefix
 
         final file = File(targetPath);
@@ -109,7 +110,7 @@ class WebThemeService {
 
   /// Get list of available themes
   Future<List<String>> getAvailableThemes() async {
-    if (kIsWeb || _themesDir == null) {
+    if (_themesDir == null) {
       return [_defaultTheme];
     }
 
@@ -155,7 +156,7 @@ class WebThemeService {
 
   /// Get the global styles.css content for a theme
   Future<String?> getGlobalStyles([String? themeName]) async {
-    if (kIsWeb || _themesDir == null) return null;
+    if (_themesDir == null) return null;
 
     final theme = themeName ?? getCurrentTheme();
     final file = File('$_themesDir/$theme/styles.css');
@@ -168,7 +169,7 @@ class WebThemeService {
 
   /// Get app-specific styles.css content for a theme
   Future<String?> getAppStyles(String appType, [String? themeName]) async {
-    if (kIsWeb || _themesDir == null) return null;
+    if (_themesDir == null) return null;
 
     final theme = themeName ?? getCurrentTheme();
     final file = File('$_themesDir/$theme/$appType/styles.css');
@@ -189,7 +190,7 @@ class WebThemeService {
 
   /// Get the index.html template for an app type
   Future<String?> getTemplate(String appType, [String? themeName]) async {
-    if (kIsWeb || _themesDir == null) return null;
+    if (_themesDir == null) return null;
 
     final theme = themeName ?? getCurrentTheme();
     final file = File('$_themesDir/$theme/$appType/index.html');
@@ -211,7 +212,7 @@ class WebThemeService {
 
   /// Check if a theme exists
   Future<bool> themeExists(String themeName) async {
-    if (kIsWeb || _themesDir == null) return themeName == _defaultTheme;
+    if (_themesDir == null) return themeName == _defaultTheme;
 
     final themeDir = Directory('$_themesDir/$themeName');
     final stylesFile = File('$_themesDir/$themeName/styles.css');
@@ -221,7 +222,7 @@ class WebThemeService {
 
   /// Copy a theme to create a new one
   Future<bool> duplicateTheme(String sourceName, String newName) async {
-    if (kIsWeb || _themesDir == null) return false;
+    if (_themesDir == null) return false;
 
     final sourceDir = Directory('$_themesDir/$sourceName');
     final targetDir = Directory('$_themesDir/$newName');
@@ -263,7 +264,7 @@ class WebThemeService {
 
   /// Delete a theme (cannot delete 'default')
   Future<bool> deleteTheme(String themeName) async {
-    if (kIsWeb || _themesDir == null) return false;
+    if (_themesDir == null) return false;
     if (themeName == _defaultTheme) {
       LogService().log('Cannot delete the default theme');
       return false;
@@ -293,7 +294,7 @@ class WebThemeService {
 
   /// Re-extract bundled themes (useful for updates)
   Future<void> resetBundledThemes() async {
-    if (kIsWeb || _themesDir == null) return;
+    if (_themesDir == null) return;
     await _extractBundledThemes();
   }
 
