@@ -1697,7 +1697,7 @@ static void ble_advertise_start(void)
     struct ble_hs_adv_fields fields;
     memset(&fields, 0, sizeof(fields));
 
-    uint8_t adv_payload[32] = {0};
+    uint8_t adv_payload[34] = {0};
     const char *callsign = ble_station_callsign();
     uint8_t device_id = ble_compute_device_id();
     size_t callsign_len = strlen(callsign);
@@ -1705,9 +1705,14 @@ static void ble_advertise_start(void)
         callsign_len = 18;
     }
 
-    adv_payload[0] = GEOGRAM_BLE_MARKER;
-    adv_payload[1] = device_id;
-    memcpy(&adv_payload[2], callsign, callsign_len);
+    // Manufacturer data layout expected by Geogram clients:
+    // [company_id_le(0xFFFF)][marker(0x3E)][device_id][callsign...]
+    // NimBLE expects company ID embedded in mfg_data bytes.
+    adv_payload[0] = 0xFF;
+    adv_payload[1] = 0xFF;
+    adv_payload[2] = GEOGRAM_BLE_MARKER;
+    adv_payload[3] = device_id;
+    memcpy(&adv_payload[4], callsign, callsign_len);
 
     fields.flags = BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP;
 
@@ -1717,7 +1722,7 @@ static void ble_advertise_start(void)
     fields.uuids16_is_complete = 1;
 
     fields.mfg_data = adv_payload;
-    fields.mfg_data_len = (uint8_t)(2 + callsign_len);
+    fields.mfg_data_len = (uint8_t)(4 + callsign_len);
 
     fields.tx_pwr_lvl_is_present = 1;
     fields.tx_pwr_lvl = BLE_HS_ADV_TX_PWR_LVL_AUTO;
