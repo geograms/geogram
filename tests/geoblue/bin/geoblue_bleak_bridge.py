@@ -164,6 +164,11 @@ async def cmd_connect(request_id: str, req: Dict[str, Any]) -> None:
 
     client = BleakClient(str(address))
     await client.connect(timeout=15.0)
+    if hasattr(client, "_acquire_mtu"):
+        try:
+            await client._acquire_mtu()  # type: ignore[attr-defined]
+        except Exception:
+            pass
 
     services = None
     if hasattr(client, "get_services"):
@@ -205,6 +210,7 @@ async def cmd_connect(request_id: str, req: Dict[str, Any]) -> None:
         address=address,
         write_uuid=write_uuid,
         notify_uuid=notify_uuid,
+        mtu_size=getattr(client, "mtu_size", 23),
         service_hint=SERVICE_UUID_HINT,
     )
 

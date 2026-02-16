@@ -43,7 +43,7 @@ static const char *TAG = "geogram_ble";
 // KV4P runs close to heap limits with mesh+radio+BLE active.
 // Keep BLE peer buffers lean to preserve at least one stable connection.
 #define GEOGRAM_BLE_MAX_CONNECTIONS         2
-#define GEOGRAM_BLE_RX_BUFFER_SIZE          1024
+#define GEOGRAM_BLE_RX_BUFFER_SIZE          4096
 #define GEOGRAM_BLE_MAX_PATH_LEN            192
 #define GEOGRAM_BLE_MAX_QUERY_LEN           192
 #define GEOGRAM_BLE_MAX_ROOM_LEN            48
@@ -1641,13 +1641,13 @@ static void ble_handle_data(uint16_t conn_handle,
                             cJSON *message)
 {
 #if CONFIG_BT_ENABLED
-    (void)conn_handle;
     cJSON *payload = cJSON_GetObjectItemCaseSensitive(message, "payload");
     if (!cJSON_IsObject(payload)) {
         return;
     }
 
     const char *from = NULL;
+    const char *to = NULL;
     const char *content = NULL;
     const char *channel = "main";
     uint32_t timestamp = (uint32_t)time(NULL);
@@ -1660,6 +1660,11 @@ static void ble_handle_data(uint16_t conn_handle,
     cJSON *content_item = cJSON_GetObjectItemCaseSensitive(payload, "content");
     if (cJSON_IsString(content_item) && content_item->valuestring) {
         content = content_item->valuestring;
+    }
+
+    cJSON *to_item = cJSON_GetObjectItemCaseSensitive(payload, "to");
+    if (cJSON_IsString(to_item) && to_item->valuestring) {
+        to = to_item->valuestring;
     }
 
     cJSON *channel_item = cJSON_GetObjectItemCaseSensitive(payload, "channel");
@@ -1680,9 +1685,35 @@ static void ble_handle_data(uint16_t conn_handle,
         }
     }
 
-    ESP_LOGI(TAG, "BLE DATA from %s channel=%s", from, channel);
+    ESP_LOGI(TAG, "BLE DATA from %s to=%s channel=%s",
+             from,
+             (to && to[0] != '\0') ? to : "-",
+             channel);
     if (content && content[0] != '\0') {
         mesh_chat_add_local_message_with_timestamp(from, content, timestamp);
+    }
+
+    if (content && content[0] != '\0' && strcmp(channel, "geoblue_unicast_test") == 0) {
+        char response_id[48] = {0};
+        snprintf(response_id, sizeof(response_id), "echo-%lu",
+                 (unsigned long)esp_log_timestamp());
+
+        char *echo = geoblue_build_data_frame(
+            response_id,
+            ble_station_callsign(),
+            from,
+            channel,
+            content,
+            (int64_t)time(NULL));
+        if (echo) {
+            int rc = ble_notify_json(conn_handle, echo);
+            if (rc != 0) {
+                ESP_LOGW(TAG, "unicast echo notify failed (rc=%d)", rc);
+            } else {
+                ESP_LOGI(TAG, "unicast echo sent (len=%u)", (unsigned)strlen(content));
+            }
+            free(echo);
+        }
     }
 #else
     (void)conn_handle;

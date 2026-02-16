@@ -98,11 +98,14 @@ class BleakBridge {
     return _command('disconnect', const <String, dynamic>{});
   }
 
-  Future<Map<String, dynamic>> sendFrame(GeoBlueFrame frame) {
+  Future<Map<String, dynamic>> sendFrame(
+    GeoBlueFrame frame, {
+    Duration? timeout,
+  }) {
     return _command(
       'send',
       <String, dynamic>{'frame': frame.toJson()},
-      timeout: const Duration(seconds: 15),
+      timeout: timeout ?? const Duration(seconds: 15),
     );
   }
 
