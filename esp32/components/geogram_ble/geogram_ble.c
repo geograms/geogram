@@ -855,7 +855,7 @@ static char *ble_build_chat_rooms_body(void)
     return out;
 }
 
-static char *ble_build_chat_messages_body(const char *room, long since_ts, long limit, bool compact)
+static char *ble_build_chat_messages_body(const char *room, long since_ts, long limit)
 {
     size_t max_messages = GEOGRAM_BLE_CHAT_FETCH_MAX;
     if (limit > 0 && (size_t)limit < max_messages) {
@@ -888,11 +888,10 @@ static char *ble_build_chat_messages_body(const char *room, long since_ts, long 
     }
 
     const char *effective_room = (room && room[0] != '\0') ? room : "general";
-    ESP_LOGI(TAG, "chat messages GET room=%s since=%ld limit=%ld compact=%d history=%u selected=%u",
+    ESP_LOGI(TAG, "chat messages GET room=%s since=%ld limit=%ld history=%u selected=%u",
              effective_room,
              since_ts,
              limit,
-             compact ? 1 : 0,
              (unsigned)count,
              (unsigned)selected_count);
 
@@ -909,10 +908,7 @@ static char *ble_build_chat_messages_body(const char *room, long since_ts, long 
     }
     response[0] = '\0';
 
-    if (!ble_json_buffer_appendf(response,
-                                 GEOGRAM_BLE_CHAT_JSON_MAX_LEN,
-                                 &pos,
-                                 compact ? "{\"m\":[" : "{\"messages\":[")) {
+    if (!ble_json_buffer_appendf(response, GEOGRAM_BLE_CHAT_JSON_MAX_LEN, &pos, "{\"messages\":[")) {
         free(messages);
         free(response);
         return ble_strdup_local("{\"messages\":[]}");
@@ -930,78 +926,45 @@ static char *ble_build_chat_messages_body(const char *room, long since_ts, long 
             }
         }
 
-        if (compact) {
-            if (!ble_json_buffer_appendf(response,
-                                         GEOGRAM_BLE_CHAT_JSON_MAX_LEN,
-                                         &pos,
-                                         "{\"i\":\"%lu\",\"t\":%lu,\"a\":\"",
-                                         (unsigned long)msg->id,
-                                         (unsigned long)msg->timestamp)) {
-                free(messages);
-                free(response);
-                return ble_strdup_local("{\"messages\":[]}");
-            }
-            if (!ble_json_buffer_append_escaped(response, GEOGRAM_BLE_CHAT_JSON_MAX_LEN, &pos, msg->callsign)) {
-                free(messages);
-                free(response);
-                return ble_strdup_local("{\"messages\":[]}");
-            }
-            if (!ble_json_buffer_appendf(response, GEOGRAM_BLE_CHAT_JSON_MAX_LEN, &pos, "\",\"c\":\"")) {
-                free(messages);
-                free(response);
-                return ble_strdup_local("{\"messages\":[]}");
-            }
-            if (!ble_json_buffer_append_escaped(response, GEOGRAM_BLE_CHAT_JSON_MAX_LEN, &pos, msg->text)) {
-                free(messages);
-                free(response);
-                return ble_strdup_local("{\"messages\":[]}");
-            }
-            if (!ble_json_buffer_appendf(response, GEOGRAM_BLE_CHAT_JSON_MAX_LEN, &pos, "\"")) {
-                free(messages);
-                free(response);
-                return ble_strdup_local("{\"messages\":[]}");
-            }
-        } else {
-            if (!ble_json_buffer_appendf(response, GEOGRAM_BLE_CHAT_JSON_MAX_LEN, &pos,
-                                         "{\"id\":\"%lu\",\"content\":\"",
-                                         (unsigned long)msg->id)) {
-                free(messages);
-                free(response);
-                return ble_strdup_local("{\"messages\":[]}");
-            }
-            if (!ble_json_buffer_append_escaped(response, GEOGRAM_BLE_CHAT_JSON_MAX_LEN, &pos, msg->text)) {
-                free(messages);
-                free(response);
-                return ble_strdup_local("{\"messages\":[]}");
-            }
-            if (!ble_json_buffer_appendf(response, GEOGRAM_BLE_CHAT_JSON_MAX_LEN, &pos,
-                                         "\",\"author\":\"")) {
-                free(messages);
-                free(response);
-                return ble_strdup_local("{\"messages\":[]}");
-            }
-            if (!ble_json_buffer_append_escaped(response, GEOGRAM_BLE_CHAT_JSON_MAX_LEN, &pos, msg->callsign)) {
-                free(messages);
-                free(response);
-                return ble_strdup_local("{\"messages\":[]}");
-            }
-            if (!ble_json_buffer_appendf(response, GEOGRAM_BLE_CHAT_JSON_MAX_LEN, &pos,
-                                         "\",\"timestamp\":%lu,\"isEdited\":false,\"roomId\":\"",
-                                         (unsigned long)msg->timestamp)) {
-                free(messages);
-                free(response);
-                return ble_strdup_local("{\"messages\":[]}");
-            }
-            if (!ble_json_buffer_append_escaped(response, GEOGRAM_BLE_CHAT_JSON_MAX_LEN, &pos, effective_room)) {
-                free(messages);
-                free(response);
-                return ble_strdup_local("{\"messages\":[]}");
-            }
-            if (!ble_json_buffer_appendf(response, GEOGRAM_BLE_CHAT_JSON_MAX_LEN, &pos, "\"")) {
-                free(messages);
-                free(response);
-                return ble_strdup_local("{\"messages\":[]}");
-            }
+        if (!ble_json_buffer_appendf(response, GEOGRAM_BLE_CHAT_JSON_MAX_LEN, &pos,
+                                     "{\"id\":\"%lu\",\"content\":\"",
+                                     (unsigned long)msg->id)) {
+            free(messages);
+            free(response);
+            return ble_strdup_local("{\"messages\":[]}");
+        }
+        if (!ble_json_buffer_append_escaped(response, GEOGRAM_BLE_CHAT_JSON_MAX_LEN, &pos, msg->text)) {
+            free(messages);
+            free(response);
+            return ble_strdup_local("{\"messages\":[]}");
+        }
+        if (!ble_json_buffer_appendf(response, GEOGRAM_BLE_CHAT_JSON_MAX_LEN, &pos,
+                                     "\",\"author\":\"")) {
+            free(messages);
+            free(response);
+            return ble_strdup_local("{\"messages\":[]}");
+        }
+        if (!ble_json_buffer_append_escaped(response, GEOGRAM_BLE_CHAT_JSON_MAX_LEN, &pos, msg->callsign)) {
+            free(messages);
+            free(response);
+            return ble_strdup_local("{\"messages\":[]}");
+        }
+        if (!ble_json_buffer_appendf(response, GEOGRAM_BLE_CHAT_JSON_MAX_LEN, &pos,
+                                     "\",\"timestamp\":%lu,\"isEdited\":false,\"roomId\":\"",
+                                     (unsigned long)msg->timestamp)) {
+            free(messages);
+            free(response);
+            return ble_strdup_local("{\"messages\":[]}");
+        }
+        if (!ble_json_buffer_append_escaped(response, GEOGRAM_BLE_CHAT_JSON_MAX_LEN, &pos, effective_room)) {
+            free(messages);
+            free(response);
+            return ble_strdup_local("{\"messages\":[]}");
+        }
+        if (!ble_json_buffer_appendf(response, GEOGRAM_BLE_CHAT_JSON_MAX_LEN, &pos, "\"")) {
+            free(messages);
+            free(response);
+            return ble_strdup_local("{\"messages\":[]}");
         }
 
         if (msg->msg_type == MESH_CHAT_MSG_FILE) {
@@ -1010,73 +973,35 @@ static char *ble_build_chat_messages_body(const char *room, long since_ts, long 
                 snprintf(sha1_hex + j * 2, sizeof(sha1_hex) - (j * 2), "%02x", msg->file.sha1[j]);
             }
 
-            if (compact) {
-                if (!ble_json_buffer_appendf(response,
-                                             GEOGRAM_BLE_CHAT_JSON_MAX_LEN,
-                                             &pos,
-                                             ",\"f\":{\"s\":\"%s\",\"n\":\"",
-                                             sha1_hex)) {
-                    free(messages);
-                    free(response);
-                    return ble_strdup_local("{\"messages\":[]}");
-                }
-                if (!ble_json_buffer_append_escaped(response, GEOGRAM_BLE_CHAT_JSON_MAX_LEN, &pos,
-                                                    msg->file.filename)) {
-                    free(messages);
-                    free(response);
-                    return ble_strdup_local("{\"messages\":[]}");
-                }
-                if (!ble_json_buffer_appendf(response,
-                                             GEOGRAM_BLE_CHAT_JSON_MAX_LEN,
-                                             &pos,
-                                             "\",\"z\":%lu,\"m\":\"",
-                                             (unsigned long)msg->file.size)) {
-                    free(messages);
-                    free(response);
-                    return ble_strdup_local("{\"messages\":[]}");
-                }
-                if (!ble_json_buffer_append_escaped(response, GEOGRAM_BLE_CHAT_JSON_MAX_LEN, &pos,
-                                                    msg->file.mime_type)) {
-                    free(messages);
-                    free(response);
-                    return ble_strdup_local("{\"messages\":[]}");
-                }
-                if (!ble_json_buffer_appendf(response, GEOGRAM_BLE_CHAT_JSON_MAX_LEN, &pos, "\"}")) {
-                    free(messages);
-                    free(response);
-                    return ble_strdup_local("{\"messages\":[]}");
-                }
-            } else {
-                if (!ble_json_buffer_appendf(response, GEOGRAM_BLE_CHAT_JSON_MAX_LEN, &pos,
-                                             ",\"file\":{\"sha1\":\"%s\",\"name\":\"", sha1_hex)) {
-                    free(messages);
-                    free(response);
-                    return ble_strdup_local("{\"messages\":[]}");
-                }
-                if (!ble_json_buffer_append_escaped(response, GEOGRAM_BLE_CHAT_JSON_MAX_LEN, &pos,
-                                                    msg->file.filename)) {
-                    free(messages);
-                    free(response);
-                    return ble_strdup_local("{\"messages\":[]}");
-                }
-                if (!ble_json_buffer_appendf(response, GEOGRAM_BLE_CHAT_JSON_MAX_LEN, &pos,
-                                             "\",\"size\":%lu,\"mime\":\"",
-                                             (unsigned long)msg->file.size)) {
-                    free(messages);
-                    free(response);
-                    return ble_strdup_local("{\"messages\":[]}");
-                }
-                if (!ble_json_buffer_append_escaped(response, GEOGRAM_BLE_CHAT_JSON_MAX_LEN, &pos,
-                                                    msg->file.mime_type)) {
-                    free(messages);
-                    free(response);
-                    return ble_strdup_local("{\"messages\":[]}");
-                }
-                if (!ble_json_buffer_appendf(response, GEOGRAM_BLE_CHAT_JSON_MAX_LEN, &pos, "\"}")) {
-                    free(messages);
-                    free(response);
-                    return ble_strdup_local("{\"messages\":[]}");
-                }
+            if (!ble_json_buffer_appendf(response, GEOGRAM_BLE_CHAT_JSON_MAX_LEN, &pos,
+                                         ",\"file\":{\"sha1\":\"%s\",\"name\":\"", sha1_hex)) {
+                free(messages);
+                free(response);
+                return ble_strdup_local("{\"messages\":[]}");
+            }
+            if (!ble_json_buffer_append_escaped(response, GEOGRAM_BLE_CHAT_JSON_MAX_LEN, &pos,
+                                                msg->file.filename)) {
+                free(messages);
+                free(response);
+                return ble_strdup_local("{\"messages\":[]}");
+            }
+            if (!ble_json_buffer_appendf(response, GEOGRAM_BLE_CHAT_JSON_MAX_LEN, &pos,
+                                         "\",\"size\":%lu,\"mime\":\"",
+                                         (unsigned long)msg->file.size)) {
+                free(messages);
+                free(response);
+                return ble_strdup_local("{\"messages\":[]}");
+            }
+            if (!ble_json_buffer_append_escaped(response, GEOGRAM_BLE_CHAT_JSON_MAX_LEN, &pos,
+                                                msg->file.mime_type)) {
+                free(messages);
+                free(response);
+                return ble_strdup_local("{\"messages\":[]}");
+            }
+            if (!ble_json_buffer_appendf(response, GEOGRAM_BLE_CHAT_JSON_MAX_LEN, &pos, "\"}")) {
+                free(messages);
+                free(response);
+                return ble_strdup_local("{\"messages\":[]}");
             }
         }
 
@@ -1088,18 +1013,9 @@ static char *ble_build_chat_messages_body(const char *room, long since_ts, long 
         first = false;
     }
 
-    uint32_t latest_ts = 0;
-    if (selected_count > 0) {
-        const mesh_chat_message_t *latest_msg = &messages[selected_indices[selected_count - 1]];
-        latest_ts = latest_msg->timestamp;
-    }
-
     if (!ble_json_buffer_appendf(response, GEOGRAM_BLE_CHAT_JSON_MAX_LEN, &pos,
-                                 compact
-                                     ? "],\"li\":%lu,\"lt\":%lu,\"r\":\""
-                                     : "],\"latest_id\":%lu,\"latest_timestamp\":%lu,\"room\":\"",
-                                 (unsigned long)latest_id,
-                                 (unsigned long)latest_ts)) {
+                                 "],\"latest_id\":%lu,\"room\":\"",
+                                 (unsigned long)latest_id)) {
         free(messages);
         free(response);
         return ble_strdup_local("{\"messages\":[]}");
@@ -1109,10 +1025,7 @@ static char *ble_build_chat_messages_body(const char *room, long since_ts, long 
         free(response);
         return ble_strdup_local("{\"messages\":[]}");
     }
-    if (!ble_json_buffer_appendf(response,
-                                 GEOGRAM_BLE_CHAT_JSON_MAX_LEN,
-                                 &pos,
-                                 compact ? "\",\"compact\":1}" : "\"}")) {
+    if (!ble_json_buffer_appendf(response, GEOGRAM_BLE_CHAT_JSON_MAX_LEN, &pos, "\"}")) {
         free(messages);
         free(response);
         return ble_strdup_local("{\"messages\":[]}");
@@ -1350,11 +1263,9 @@ static geogram_ble_api_result_t ble_dispatch_api_request(const char *method,
     if (strcmp(method, "GET") == 0 && ble_parse_messages_path(path, room, sizeof(room))) {
         long since_ts = 0;
         long limit = 50;
-        long compact = 0;
         ble_query_get_long(query, "since", &since_ts);
         ble_query_get_long(query, "limit", &limit);
-        ble_query_get_long(query, "compact", &compact);
-        return ble_api_result_make(200, ble_build_chat_messages_body(room, since_ts, limit, compact > 0));
+        return ble_api_result_make(200, ble_build_chat_messages_body(room, since_ts, limit));
     }
 
     if ((strcmp(method, "POST") == 0 || strcmp(method, "PUT") == 0) &&

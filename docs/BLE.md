@@ -72,20 +72,6 @@ Both implementations:
 - detect nested JSON object boundaries with quote/escape safety,
 - preserve incomplete trailing fragments until the next chunk.
 
-### Chat Sync Optimization (Transport-Agnostic)
-
-For chat APIs over BLE (and any other constrained transport), use incremental sync and compact payloads:
-
-- Request:
-  - `GET /api/chat/{roomId}/messages?since=<unix_seconds>&limit=<n>&compact=1`
-- Response:
-  - `m`: compact message array/object list
-  - `li`: latest message id when available
-  - `lt`: latest message timestamp (unix seconds)
-  - `compact: 1`
-
-This contract reduces payload size and allows clients to keep a local cache with a room sync cursor, so room open only transfers deltas instead of full history.
-
 ### ESP32 Integration Notes
 
 `geogram_ble` now uses the shared `geoblue` component and performs:

@@ -2649,64 +2649,6 @@ class LogApiService {
     }
   }
 
-  int? _parseChatEpochSeconds(dynamic raw) {
-    if (raw == null) return null;
-    if (raw is num) {
-      var value = raw.toInt();
-      if (value > 1000000000000) {
-        value = (value / 1000).round();
-      }
-      return value > 0 ? value : null;
-    }
-    if (raw is! String) return null;
-    final value = raw.trim();
-    if (value.isEmpty) return null;
-    final asInt = int.tryParse(value);
-    if (asInt != null) {
-      return _parseChatEpochSeconds(asInt);
-    }
-    final normalized = value.replaceFirst('_', ':');
-    final iso = normalized.contains(' ') && !normalized.contains('T')
-        ? normalized.replaceFirst(' ', 'T')
-        : normalized;
-    final dt = DateTime.tryParse(iso);
-    if (dt == null) return null;
-    return dt.millisecondsSinceEpoch ~/ 1000;
-  }
-
-  int? _parseMessageId(dynamic raw) {
-    if (raw is int) return raw;
-    if (raw is num) return raw.toInt();
-    if (raw is String) return int.tryParse(raw);
-    return null;
-  }
-
-  Map<String, dynamic> _toCompactChatMessage(Map<String, dynamic> msg) {
-    final compact = <String, dynamic>{
-      'i': msg['id'] ?? msg['event_id'],
-      'a': msg['author'] ?? msg['callsign'],
-      'c': msg['content'] ?? msg['text'] ?? '',
-      't': msg['timestamp'],
-    };
-
-    final reactions = msg['reactions'];
-    if (reactions is Map && reactions.isNotEmpty) {
-      compact['x'] = reactions;
-    }
-
-    final file = msg['file'];
-    if (file is Map) {
-      compact['f'] = {
-        's': file['sha1'],
-        'n': file['name'] ?? file['filename'],
-        'z': file['size'],
-        'm': file['mime'] ?? file['mime_type'],
-      };
-    }
-
-    return compact;
-  }
-
   /// Handle chat messages request for a remote device (via X-Device-Callsign header)
   Future<shelf.Response> _handleRemoteDeviceChatMessages(
     String deviceCallsign,
@@ -2739,25 +2681,18 @@ class LogApiService {
       // Parse query parameters
       final queryParams = request.url.queryParameters;
       final limitParam = queryParams['limit'];
-      final sinceParam = queryParams['since'];
-      final compactParam = queryParams['compact'];
       int limit = 100;
       if (limitParam != null) {
         limit = int.tryParse(limitParam) ?? 100;
         limit = limit.clamp(1, 500);
       }
-      final sinceEpoch = sinceParam != null ? int.tryParse(sinceParam) : null;
-      final compact = compactParam == '1' || compactParam == 'true';
 
       // Read messages from disk
       final messages = <Map<String, dynamic>>[];
       final messageFiles = <io.File>[];
 
       await for (final entity in roomDir.list()) {
-        if (entity is io.File &&
-            entity.path.endsWith('.json') &&
-            !entity.path.endsWith('config.json') &&
-            !entity.path.endsWith('.sync.json')) {
+        if (entity is io.File && entity.path.endsWith('.json') && !entity.path.endsWith('config.json')) {
           messageFiles.add(entity);
         }
       }
@@ -2766,49 +2701,14 @@ class LogApiService {
       messageFiles.sort((a, b) => b.path.compareTo(a.path)); // Newest first
 
       // Read message files
-      for (final file in messageFiles) {
-        if (messages.length >= limit) break;
+      for (final file in messageFiles.take(limit)) {
         try {
           final content = await file.readAsString();
           final msgData = json.decode(content) as Map<String, dynamic>;
-          if (sinceEpoch != null) {
-            final ts = _parseChatEpochSeconds(msgData['timestamp']);
-            if (ts != null && ts <= sinceEpoch) {
-              continue;
-            }
-          }
           messages.add(msgData);
         } catch (e) {
           LogService().log('Error reading message file ${file.path}: $e');
         }
-      }
-
-      int? latestId;
-      int? latestTimestamp;
-      for (final msg in messages) {
-        final msgId = _parseMessageId(msg['id'] ?? msg['event_id']);
-        if (msgId != null && (latestId == null || msgId > latestId)) {
-          latestId = msgId;
-        }
-        final ts = _parseChatEpochSeconds(msg['timestamp']);
-        if (ts != null && (latestTimestamp == null || ts > latestTimestamp)) {
-          latestTimestamp = ts;
-        }
-      }
-
-      if (compact) {
-        final compactMessages = messages.map(_toCompactChatMessage).toList();
-        return shelf.Response.ok(
-          jsonEncode({
-            'm': compactMessages,
-            'count': compactMessages.length,
-            'li': latestId,
-            'lt': latestTimestamp,
-            'compact': 1,
-            'room': roomId,
-          }),
-          headers: headers,
-        );
       }
 
       return shelf.Response.ok(
@@ -2846,24 +2746,19 @@ class LogApiService {
       // Geogram callsigns start with 'X' followed by alphanumerics (e.g., X1ABC)
       // This prevents words like 'GENERAL' from being misinterpreted as callsigns
       final isCallsignLike = RegExp(r'^X[A-Z0-9]{2,}$').hasMatch(roomId.toUpperCase());
-      final queryParams = request.url.queryParameters;
-      final limitParam = queryParams['limit'];
-      final beforeParam = queryParams['before'];
-      final afterParam = queryParams['after'];
-      final sinceParam = queryParams['since'];
-      final compactParam = queryParams['compact'];
-      final compact = compactParam == '1' || compactParam == 'true';
-
-      int limit = 50;
-      if (limitParam != null) {
-        limit = int.tryParse(limitParam) ?? 50;
-        limit = limit.clamp(1, 500);
-      }
-      final sinceEpoch = sinceParam != null ? int.tryParse(sinceParam) : null;
 
       if (channel == null && isCallsignLike) {
         final dmService = DirectMessageService();
         await dmService.initialize();
+
+        // Parse query parameters
+        final queryParams = request.url.queryParameters;
+        final limitParam = queryParams['limit'];
+        int limit = 50;
+        if (limitParam != null) {
+          limit = int.tryParse(limitParam) ?? 50;
+          limit = limit.clamp(1, 500);
+        }
 
         final messages = await dmService.loadMessages(roomId.toUpperCase(), limit: limit);
 
@@ -2878,28 +2773,6 @@ class LogApiService {
             'reactions': msg.reactions,
           };
         }).toList();
-
-        if (compact) {
-          final compactMessages = messageList.map(_toCompactChatMessage).toList();
-          int? latestTimestamp;
-          for (final msg in messageList) {
-            final ts = _parseChatEpochSeconds(msg['timestamp']);
-            if (ts != null && (latestTimestamp == null || ts > latestTimestamp)) {
-              latestTimestamp = ts;
-            }
-          }
-          return shelf.Response.ok(
-            jsonEncode({
-              'm': compactMessages,
-              'count': compactMessages.length,
-              'li': null,
-              'lt': latestTimestamp,
-              'compact': 1,
-              'room': roomId.toUpperCase(),
-            }),
-            headers: headers,
-          );
-        }
 
         return shelf.Response.ok(
           jsonEncode({
@@ -2937,13 +2810,22 @@ class LogApiService {
         );
       }
 
+      // Parse query parameters
+      final queryParams = request.url.queryParameters;
+      final limitParam = queryParams['limit'];
+      final beforeParam = queryParams['before'];
+      final afterParam = queryParams['after'];
+
+      int limit = 50;
+      if (limitParam != null) {
+        limit = int.tryParse(limitParam) ?? 50;
+        limit = limit.clamp(1, 500);
+      }
+
       DateTime? startDate;
       DateTime? endDate;
       if (afterParam != null) {
         startDate = DateTime.tryParse(afterParam);
-      }
-      if (startDate == null && sinceEpoch != null && sinceEpoch > 0) {
-        startDate = DateTime.fromMillisecondsSinceEpoch(sinceEpoch * 1000);
       }
       if (beforeParam != null) {
         endDate = DateTime.tryParse(beforeParam);
@@ -2963,7 +2845,6 @@ class LogApiService {
       // Convert to JSON-friendly format
       final messageList = returnMessages.map((msg) {
         return {
-          'id': msg.getMeta('id') ?? msg.getMeta('event_id'),
           'author': msg.author,
           'timestamp': msg.timestamp,
           'content': msg.content,
@@ -2979,36 +2860,6 @@ class LogApiService {
           'reactions': msg.reactions,
         };
       }).toList();
-
-      int? latestId;
-      int? latestTimestamp;
-      for (final msg in messageList) {
-        final msgId = _parseMessageId(msg['id']);
-        if (msgId != null && (latestId == null || msgId > latestId)) {
-          latestId = msgId;
-        }
-        final ts = _parseChatEpochSeconds(msg['timestamp']);
-        if (ts != null && (latestTimestamp == null || ts > latestTimestamp)) {
-          latestTimestamp = ts;
-        }
-      }
-
-      if (compact) {
-        final compactMessages = messageList.map(_toCompactChatMessage).toList();
-        return shelf.Response.ok(
-          jsonEncode({
-            'm': compactMessages,
-            'count': compactMessages.length,
-            'li': latestId,
-            'lt': latestTimestamp,
-            'compact': 1,
-            'room': roomId,
-            'hasMore': hasMore,
-            'limit': limit,
-          }),
-          headers: headers,
-        );
-      }
 
       return shelf.Response.ok(
         jsonEncode({
