@@ -1,0 +1,15 @@
+name: geoblue_test
+description: Command-line GeoBlue BLE interoperability tests
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: ^3.10.0
+
+dependencies:
+  args: ^2.5.0
+  geoblue:
+    path: ../../packages/geoblue
+
+dev_dependencies:
+  lints: ^6.0.0

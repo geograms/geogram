@@ -1,6 +1,7 @@
 #include "geogram_ble.h"
 
 #include <ctype.h>
+#include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -13,6 +14,7 @@
 #include "esp_mac.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "geoblue.h"
 #include "mesh_chat.h"
 #include "nostr_keys.h"
 #include "station.h"
@@ -48,6 +50,9 @@ static const char *TAG = "geogram_ble";
 #define GEOGRAM_BLE_MAX_AUTHOR_LEN          24
 #define GEOGRAM_BLE_MAX_MESSAGE_LEN         MESH_CHAT_MAX_MESSAGE_LEN
 #define GEOGRAM_BLE_MAX_NOTIFY_CHUNK        180
+// Avoid large heap allocations on low-memory boards (KV4P).
+#define GEOGRAM_BLE_CHAT_FETCH_MAX          2
+#define GEOGRAM_BLE_CHAT_JSON_MAX_LEN       1024
 
 typedef struct {
     bool active;
@@ -72,6 +77,7 @@ static uint16_t s_notify_val_handle = 0;
 static uint16_t s_status_val_handle = 0;
 
 static geogram_ble_peer_t s_peers[GEOGRAM_BLE_MAX_CONNECTIONS];
+static const char *s_geoblue_caps[] = {"chat", "hello", "data", "broadcast"};
 
 #if CONFIG_BT_ENABLED
 static const ble_uuid16_t s_service_uuid = BLE_UUID16_INIT(GEOGRAM_BLE_SERVICE_UUID16);
@@ -193,19 +199,23 @@ static char *ble_json_to_string(cJSON *json)
 
 static char *ble_build_status_body(void)
 {
-    char buffer[768] = {0};
-    size_t len = station_build_status_json(buffer, sizeof(buffer));
-    if (len == 0 || len >= sizeof(buffer)) {
-        return ble_strdup_local("{}");
+    const char *callsign = ble_station_callsign();
+    if (!callsign || callsign[0] == '\0') {
+        callsign = "ESP32";
     }
 
-    char *out = (char *)malloc(len + 1);
-    if (!out) {
-        return NULL;
+    char buffer[192] = {0};
+    int written = snprintf(
+        buffer,
+        sizeof(buffer),
+        "{\"service\":\"geogram-esp32\",\"status\":\"online\",\"callsign\":\"%s\",\"board\":\"%s\"}",
+        callsign,
+        BOARD_NAME
+    );
+    if (written <= 0 || (size_t)written >= sizeof(buffer)) {
+        return ble_strdup_local("{\"status\":\"online\"}");
     }
-    memcpy(out, buffer, len);
-    out[len] = '\0';
-    return out;
+    return ble_strdup_local(buffer);
 }
 
 static bool ble_parse_sha1_hex(const char *hex, uint8_t *out)
@@ -554,14 +564,28 @@ static bool ble_extract_message_from_event(cJSON *event,
     return text[0] != '\0';
 }
 
-static cJSON *ble_parse_body_object(cJSON *body_item)
+static cJSON *ble_parse_body_object(cJSON *body_item, bool *borrowed_out)
 {
+    if (borrowed_out) {
+        *borrowed_out = false;
+    }
+
     if (!body_item) {
         return NULL;
     }
 
     if (cJSON_IsObject(body_item) || cJSON_IsArray(body_item)) {
-        return cJSON_Duplicate(body_item, true);
+        cJSON *dup = cJSON_Duplicate(body_item, true);
+        if (dup) {
+            return dup;
+        }
+
+        // Under memory pressure, operate directly on the original request body.
+        // Callers must avoid cJSON_Delete on borrowed objects.
+        if (borrowed_out) {
+            *borrowed_out = true;
+        }
+        return body_item;
     }
 
     if (cJSON_IsString(body_item) && body_item->valuestring) {
@@ -581,6 +605,76 @@ static geogram_ble_api_result_t ble_api_result_make(int status_code, char *body)
         result.body = ble_strdup_local("{}");
     }
     return result;
+}
+
+static bool ble_json_buffer_appendf(char *buffer, size_t buffer_len, size_t *pos, const char *fmt, ...)
+{
+    if (!buffer || buffer_len == 0 || !pos || !fmt || *pos >= buffer_len) {
+        return false;
+    }
+
+    va_list args;
+    va_start(args, fmt);
+    int written = vsnprintf(buffer + *pos, buffer_len - *pos, fmt, args);
+    va_end(args);
+
+    if (written < 0 || (size_t)written >= (buffer_len - *pos)) {
+        return false;
+    }
+
+    *pos += (size_t)written;
+    return true;
+}
+
+static bool ble_json_buffer_append_escaped(char *buffer, size_t buffer_len, size_t *pos, const char *input)
+{
+    if (!buffer || buffer_len == 0 || !pos) {
+        return false;
+    }
+
+    if (!input) {
+        input = "";
+    }
+
+    for (size_t i = 0; input[i] != '\0'; i++) {
+        unsigned char c = (unsigned char)input[i];
+        const char *replacement = NULL;
+
+        switch (c) {
+            case '\"':
+                replacement = "\\\"";
+                break;
+            case '\\':
+                replacement = "\\\\";
+                break;
+            case '\n':
+                replacement = "\\n";
+                break;
+            case '\r':
+                replacement = "\\r";
+                break;
+            case '\t':
+                replacement = "\\t";
+                break;
+            default:
+                break;
+        }
+
+        if (replacement) {
+            if (!ble_json_buffer_appendf(buffer, buffer_len, pos, "%s", replacement)) {
+                return false;
+            }
+        } else if (c >= 0x20) {
+            if (*pos + 1 >= buffer_len) {
+                return false;
+            }
+            buffer[*pos] = (char)c;
+            (*pos)++;
+            buffer[*pos] = '\0';
+        }
+    }
+
+    return true;
 }
 
 static char *ble_build_chat_rooms_body(void)
@@ -613,83 +707,182 @@ static char *ble_build_chat_rooms_body(void)
 
 static char *ble_build_chat_messages_body(const char *room, long since_ts, long limit)
 {
-    size_t max_messages = MESH_CHAT_HISTORY_SIZE;
+    size_t max_messages = GEOGRAM_BLE_CHAT_FETCH_MAX;
+    if (limit > 0 && (size_t)limit < max_messages) {
+        max_messages = (size_t)limit;
+    }
+    if (max_messages == 0) {
+        max_messages = 1;
+    }
+
+    uint32_t latest_id = mesh_chat_get_latest_id();
+    uint32_t since_id = 0;
+    if (latest_id > max_messages) {
+        since_id = latest_id - (uint32_t)max_messages;
+    }
+
     mesh_chat_message_t *messages = calloc(max_messages, sizeof(mesh_chat_message_t));
     if (!messages) {
         return ble_strdup_local("{\"messages\":[]}");
     }
 
-    size_t count = mesh_chat_get_history(messages, max_messages, 0);
-    size_t selected_indices[MESH_CHAT_HISTORY_SIZE] = {0};
+    size_t count = mesh_chat_get_history(messages, max_messages, since_id);
+    size_t selected_indices[GEOGRAM_BLE_CHAT_FETCH_MAX] = {0};
     size_t selected_count = 0;
 
-    for (size_t i = 0; i < count && selected_count < MESH_CHAT_HISTORY_SIZE; i++) {
+    for (size_t i = 0; i < count && selected_count < GEOGRAM_BLE_CHAT_FETCH_MAX; i++) {
         if (since_ts > 0 && (long)messages[i].timestamp <= since_ts) {
             continue;
         }
         selected_indices[selected_count++] = i;
     }
 
+    const char *effective_room = (room && room[0] != '\0') ? room : "general";
+    ESP_LOGI(TAG, "chat messages GET room=%s since=%ld limit=%ld history=%u selected=%u",
+             effective_room,
+             since_ts,
+             limit,
+             (unsigned)count,
+             (unsigned)selected_count);
+
     size_t start_index = 0;
     if (limit > 0 && selected_count > (size_t)limit) {
         start_index = selected_count - (size_t)limit;
     }
 
-    cJSON *root = cJSON_CreateObject();
-    cJSON *array = cJSON_CreateArray();
-
-    if (!root || !array) {
-        cJSON_Delete(root);
-        cJSON_Delete(array);
+    size_t pos = 0;
+    char *response = malloc(GEOGRAM_BLE_CHAT_JSON_MAX_LEN);
+    if (!response) {
         free(messages);
         return ble_strdup_local("{\"messages\":[]}");
     }
+    response[0] = '\0';
 
+    if (!ble_json_buffer_appendf(response, GEOGRAM_BLE_CHAT_JSON_MAX_LEN, &pos, "{\"messages\":[")) {
+        free(messages);
+        free(response);
+        return ble_strdup_local("{\"messages\":[]}");
+    }
+
+    bool first = true;
     for (size_t idx = start_index; idx < selected_count; idx++) {
         const mesh_chat_message_t *msg = &messages[selected_indices[idx]];
 
-        cJSON *item = cJSON_CreateObject();
-        if (!item) {
-            continue;
-        }
-
-        char id_str[24] = {0};
-        snprintf(id_str, sizeof(id_str), "%lu", (unsigned long)msg->id);
-
-        cJSON_AddStringToObject(item, "id", id_str);
-        cJSON_AddStringToObject(item, "content", msg->text);
-        cJSON_AddStringToObject(item, "author", msg->callsign);
-        cJSON_AddNumberToObject(item, "timestamp", (double)msg->timestamp);
-        cJSON_AddBoolToObject(item, "isEdited", false);
-        ble_add_string_if_not_empty(item, "roomId", room);
-
-        if (msg->msg_type == MESH_CHAT_MSG_FILE) {
-            cJSON *file = cJSON_CreateObject();
-            if (file) {
-                char sha1_hex[41] = {0};
-                for (int j = 0; j < 20; j++) {
-                    snprintf(sha1_hex + j * 2, sizeof(sha1_hex) - (j * 2), "%02x", msg->file.sha1[j]);
-                }
-                cJSON_AddStringToObject(file, "sha1", sha1_hex);
-                cJSON_AddStringToObject(file, "name", msg->file.filename);
-                cJSON_AddNumberToObject(file, "size", (double)msg->file.size);
-                cJSON_AddStringToObject(file, "mime", msg->file.mime_type);
-                cJSON_AddItemToObject(item, "file", file);
+        if (!first) {
+            if (!ble_json_buffer_appendf(response, GEOGRAM_BLE_CHAT_JSON_MAX_LEN, &pos, ",")) {
+                free(messages);
+                free(response);
+                return ble_strdup_local("{\"messages\":[]}");
             }
         }
 
-        cJSON_AddItemToArray(array, item);
+        if (!ble_json_buffer_appendf(response, GEOGRAM_BLE_CHAT_JSON_MAX_LEN, &pos,
+                                     "{\"id\":\"%lu\",\"content\":\"",
+                                     (unsigned long)msg->id)) {
+            free(messages);
+            free(response);
+            return ble_strdup_local("{\"messages\":[]}");
+        }
+        if (!ble_json_buffer_append_escaped(response, GEOGRAM_BLE_CHAT_JSON_MAX_LEN, &pos, msg->text)) {
+            free(messages);
+            free(response);
+            return ble_strdup_local("{\"messages\":[]}");
+        }
+        if (!ble_json_buffer_appendf(response, GEOGRAM_BLE_CHAT_JSON_MAX_LEN, &pos,
+                                     "\",\"author\":\"")) {
+            free(messages);
+            free(response);
+            return ble_strdup_local("{\"messages\":[]}");
+        }
+        if (!ble_json_buffer_append_escaped(response, GEOGRAM_BLE_CHAT_JSON_MAX_LEN, &pos, msg->callsign)) {
+            free(messages);
+            free(response);
+            return ble_strdup_local("{\"messages\":[]}");
+        }
+        if (!ble_json_buffer_appendf(response, GEOGRAM_BLE_CHAT_JSON_MAX_LEN, &pos,
+                                     "\",\"timestamp\":%lu,\"isEdited\":false,\"roomId\":\"",
+                                     (unsigned long)msg->timestamp)) {
+            free(messages);
+            free(response);
+            return ble_strdup_local("{\"messages\":[]}");
+        }
+        if (!ble_json_buffer_append_escaped(response, GEOGRAM_BLE_CHAT_JSON_MAX_LEN, &pos, effective_room)) {
+            free(messages);
+            free(response);
+            return ble_strdup_local("{\"messages\":[]}");
+        }
+        if (!ble_json_buffer_appendf(response, GEOGRAM_BLE_CHAT_JSON_MAX_LEN, &pos, "\"")) {
+            free(messages);
+            free(response);
+            return ble_strdup_local("{\"messages\":[]}");
+        }
+
+        if (msg->msg_type == MESH_CHAT_MSG_FILE) {
+            char sha1_hex[41] = {0};
+            for (int j = 0; j < 20; j++) {
+                snprintf(sha1_hex + j * 2, sizeof(sha1_hex) - (j * 2), "%02x", msg->file.sha1[j]);
+            }
+
+            if (!ble_json_buffer_appendf(response, GEOGRAM_BLE_CHAT_JSON_MAX_LEN, &pos,
+                                         ",\"file\":{\"sha1\":\"%s\",\"name\":\"", sha1_hex)) {
+                free(messages);
+                free(response);
+                return ble_strdup_local("{\"messages\":[]}");
+            }
+            if (!ble_json_buffer_append_escaped(response, GEOGRAM_BLE_CHAT_JSON_MAX_LEN, &pos,
+                                                msg->file.filename)) {
+                free(messages);
+                free(response);
+                return ble_strdup_local("{\"messages\":[]}");
+            }
+            if (!ble_json_buffer_appendf(response, GEOGRAM_BLE_CHAT_JSON_MAX_LEN, &pos,
+                                         "\",\"size\":%lu,\"mime\":\"",
+                                         (unsigned long)msg->file.size)) {
+                free(messages);
+                free(response);
+                return ble_strdup_local("{\"messages\":[]}");
+            }
+            if (!ble_json_buffer_append_escaped(response, GEOGRAM_BLE_CHAT_JSON_MAX_LEN, &pos,
+                                                msg->file.mime_type)) {
+                free(messages);
+                free(response);
+                return ble_strdup_local("{\"messages\":[]}");
+            }
+            if (!ble_json_buffer_appendf(response, GEOGRAM_BLE_CHAT_JSON_MAX_LEN, &pos, "\"}")) {
+                free(messages);
+                free(response);
+                return ble_strdup_local("{\"messages\":[]}");
+            }
+        }
+
+        if (!ble_json_buffer_appendf(response, GEOGRAM_BLE_CHAT_JSON_MAX_LEN, &pos, "}")) {
+            free(messages);
+            free(response);
+            return ble_strdup_local("{\"messages\":[]}");
+        }
+        first = false;
     }
 
-    cJSON_AddItemToObject(root, "messages", array);
-    cJSON_AddNumberToObject(root, "latest_id", (double)mesh_chat_get_latest_id());
-    cJSON_AddStringToObject(root, "room", room ? room : "general");
+    if (!ble_json_buffer_appendf(response, GEOGRAM_BLE_CHAT_JSON_MAX_LEN, &pos,
+                                 "],\"latest_id\":%lu,\"room\":\"",
+                                 (unsigned long)latest_id)) {
+        free(messages);
+        free(response);
+        return ble_strdup_local("{\"messages\":[]}");
+    }
+    if (!ble_json_buffer_append_escaped(response, GEOGRAM_BLE_CHAT_JSON_MAX_LEN, &pos, effective_room)) {
+        free(messages);
+        free(response);
+        return ble_strdup_local("{\"messages\":[]}");
+    }
+    if (!ble_json_buffer_appendf(response, GEOGRAM_BLE_CHAT_JSON_MAX_LEN, &pos, "\"}")) {
+        free(messages);
+        free(response);
+        return ble_strdup_local("{\"messages\":[]}");
+    }
 
-    char *out = ble_json_to_string(root);
-
-    cJSON_Delete(root);
     free(messages);
-    return out;
+    return response;
 }
 
 static geogram_ble_api_result_t ble_handle_chat_message_post(cJSON *body,
@@ -704,7 +897,21 @@ static geogram_ble_api_result_t ble_handle_chat_message_post(cJSON *body,
         strlcpy(author, fallback_author, sizeof(author));
     }
 
-    cJSON *body_obj = ble_parse_body_object(body);
+    bool body_obj_borrowed = false;
+    cJSON *body_obj = ble_parse_body_object(body, &body_obj_borrowed);
+    if (!body_obj) {
+        if (cJSON_IsString(body) && body->valuestring) {
+            size_t preview = strlen(body->valuestring);
+            if (preview > 180) {
+                preview = 180;
+            }
+            ESP_LOGW(TAG, "chat post: body parse failed, raw body preview: %.*s",
+                     (int)preview, body->valuestring);
+        } else {
+            ESP_LOGW(TAG, "chat post: missing/invalid body (type=%d)",
+                     body ? body->type : -1);
+        }
+    }
     if (body_obj) {
         cJSON *callsign = cJSON_GetObjectItemCaseSensitive(body_obj, "callsign");
         if (cJSON_IsString(callsign) && callsign->valuestring) {
@@ -748,19 +955,34 @@ static geogram_ble_api_result_t ble_handle_chat_message_post(cJSON *body,
     }
 
     if (text[0] == '\0') {
-        cJSON_Delete(body_obj);
+        char *debug_body = body_obj ? cJSON_PrintUnformatted(body_obj) : NULL;
+        if (debug_body) {
+            ESP_LOGW(TAG, "chat post: missing content after parse (room=%s, body=%s)",
+                     room ? room : "general", debug_body);
+            free(debug_body);
+        } else {
+            ESP_LOGW(TAG, "chat post: missing content after parse (room=%s)",
+                     room ? room : "general");
+        }
+        if (body_obj && !body_obj_borrowed) {
+            cJSON_Delete(body_obj);
+        }
         return ble_api_result_make(400, ble_strdup_local("{\"error\":\"missing message content\"}"));
     }
 
     esp_err_t ret = mesh_chat_add_local_message_with_timestamp(author, text, timestamp);
     if (ret != ESP_OK) {
-        cJSON_Delete(body_obj);
+        if (body_obj && !body_obj_borrowed) {
+            cJSON_Delete(body_obj);
+        }
         return ble_api_result_make(500, ble_strdup_local("{\"error\":\"failed to store message\"}"));
     }
 
     cJSON *response = cJSON_CreateObject();
     if (!response) {
-        cJSON_Delete(body_obj);
+        if (body_obj && !body_obj_borrowed) {
+            cJSON_Delete(body_obj);
+        }
         return ble_api_result_make(200, ble_strdup_local("{\"ok\":true}"));
     }
 
@@ -775,14 +997,17 @@ static geogram_ble_api_result_t ble_handle_chat_message_post(cJSON *body,
 
     char *out = ble_json_to_string(response);
     cJSON_Delete(response);
-    cJSON_Delete(body_obj);
+    if (body_obj && !body_obj_borrowed) {
+        cJSON_Delete(body_obj);
+    }
 
     return ble_api_result_make(201, out);
 }
 
 static geogram_ble_api_result_t ble_handle_chat_file_post(cJSON *body, const char *fallback_author)
 {
-    cJSON *body_obj = ble_parse_body_object(body);
+    bool body_obj_borrowed = false;
+    cJSON *body_obj = ble_parse_body_object(body, &body_obj_borrowed);
     if (!body_obj) {
         return ble_api_result_make(400, ble_strdup_local("{\"error\":\"invalid body\"}"));
     }
@@ -808,13 +1033,17 @@ static geogram_ble_api_result_t ble_handle_chat_file_post(cJSON *body, const cha
     }
 
     if (!sha1_hex) {
-        cJSON_Delete(body_obj);
+        if (!body_obj_borrowed) {
+            cJSON_Delete(body_obj);
+        }
         return ble_api_result_make(400, ble_strdup_local("{\"error\":\"missing sha1\"}"));
     }
 
     uint8_t sha1_bytes[20] = {0};
     if (!ble_parse_sha1_hex(sha1_hex, sha1_bytes)) {
-        cJSON_Delete(body_obj);
+        if (!body_obj_borrowed) {
+            cJSON_Delete(body_obj);
+        }
         return ble_api_result_make(400, ble_strdup_local("{\"error\":\"invalid sha1\"}"));
     }
 
@@ -825,7 +1054,9 @@ static geogram_ble_api_result_t ble_handle_chat_file_post(cJSON *body, const cha
     }
 
     if (size == 0) {
-        cJSON_Delete(body_obj);
+        if (!body_obj_borrowed) {
+            cJSON_Delete(body_obj);
+        }
         return ble_api_result_make(400, ble_strdup_local("{\"error\":\"invalid file size\"}"));
     }
 
@@ -848,7 +1079,9 @@ static geogram_ble_api_result_t ble_handle_chat_file_post(cJSON *body, const cha
     }
 
     esp_err_t ret = mesh_chat_add_local_file_message(author, text, sha1_bytes, size, filename, mime);
-    cJSON_Delete(body_obj);
+    if (!body_obj_borrowed) {
+        cJSON_Delete(body_obj);
+    }
 
     if (ret != ESP_OK) {
         return ble_api_result_make(500, ble_strdup_local("{\"error\":\"failed to store file metadata\"}"));
@@ -920,68 +1153,13 @@ static bool ble_find_json_bounds(const uint8_t *buffer,
                                  size_t *discard_prefix,
                                  bool *incomplete)
 {
-    if (!buffer || len == 0 || !json_start || !json_end || !discard_prefix || !incomplete) {
-        return false;
-    }
-
-    *discard_prefix = 0;
-    *incomplete = false;
-
-    size_t start = SIZE_MAX;
-    for (size_t i = 0; i < len; i++) {
-        if (buffer[i] == '{') {
-            start = i;
-            break;
-        }
-    }
-
-    if (start == SIZE_MAX) {
-        *discard_prefix = len;
-        return false;
-    }
-
-    int depth = 0;
-    bool in_string = false;
-    bool escaped = false;
-
-    for (size_t i = start; i < len; i++) {
-        char c = (char)buffer[i];
-
-        if (escaped) {
-            escaped = false;
-            continue;
-        }
-
-        if (in_string && c == '\\') {
-            escaped = true;
-            continue;
-        }
-
-        if (c == '"') {
-            in_string = !in_string;
-            continue;
-        }
-
-        if (in_string) {
-            continue;
-        }
-
-        if (c == '{') {
-            depth++;
-        } else if (c == '}') {
-            depth--;
-            if (depth == 0) {
-                *json_start = start;
-                *json_end = i;
-                *discard_prefix = start;
-                return true;
-            }
-        }
-    }
-
-    *discard_prefix = start;
-    *incomplete = true;
-    return false;
+    return geoblue_find_json_object_bounds(
+        buffer,
+        len,
+        json_start,
+        json_end,
+        discard_prefix,
+        incomplete);
 }
 
 #if CONFIG_BT_ENABLED
@@ -997,6 +1175,7 @@ static int ble_notify_json(uint16_t conn_handle, const char *json)
     }
 
     if (!peer->subscribed) {
+        ESP_LOGW(TAG, "BLE notify skipped (conn=%u not subscribed)", conn_handle);
         return BLE_HS_EBUSY;
     }
 
@@ -1030,6 +1209,8 @@ static int ble_notify_json(uint16_t conn_handle, const char *json)
 
         int rc = ble_gatts_notify_custom(conn_handle, s_notify_val_handle, om);
         if (rc != 0) {
+            ESP_LOGW(TAG, "BLE notify failed (conn=%u rc=%d offset=%u/%u)",
+                     conn_handle, rc, (unsigned)offset, (unsigned)len);
             return rc;
         }
 
@@ -1103,41 +1284,89 @@ static void ble_send_chat_ack(uint16_t conn_handle, const char *request_id, bool
     cJSON_Delete(envelope);
 }
 
-static void ble_send_hello_ack(uint16_t conn_handle, const char *request_id)
+static void ble_send_hello_proactive(uint16_t conn_handle)
 {
-    cJSON *payload = cJSON_CreateObject();
-    cJSON *envelope = cJSON_CreateObject();
-    cJSON *caps = cJSON_CreateArray();
-    cJSON *event = ble_build_hello_event();
+    char request_id[48] = {0};
+    snprintf(request_id, sizeof(request_id), "hello-%lu", (unsigned long)esp_log_timestamp());
 
-    if (!payload || !envelope || !caps || !event) {
-        cJSON_Delete(payload);
-        cJSON_Delete(envelope);
-        cJSON_Delete(caps);
-        cJSON_Delete(event);
+    const char *callsign = ble_station_callsign();
+    const char *npub = nostr_keys_get_npub();
+    char *json = geoblue_build_hello_frame(
+        request_id,
+        callsign,
+        npub,
+        BOARD_NAME,
+        s_geoblue_caps,
+        sizeof(s_geoblue_caps) / sizeof(s_geoblue_caps[0]));
+    if (!json) {
         return;
     }
 
-    cJSON_AddBoolToObject(payload, "success", true);
-    cJSON_AddItemToObject(payload, "event", event);
+    int rc = ble_notify_json(conn_handle, json);
+    if (rc != 0) {
+        ESP_LOGW(TAG, "proactive hello notify failed (conn=%u rc=%d)", conn_handle, rc);
+    } else {
+        ESP_LOGI(TAG, "proactive hello sent (conn=%u id=%s)", conn_handle, request_id);
+    }
+    free(json);
+}
 
-    cJSON_AddItemToArray(caps, cJSON_CreateString("chat"));
-    cJSON_AddItemToObject(payload, "capabilities", caps);
+static void ble_send_hello_compact(uint16_t conn_handle)
+{
+    char request_id[40] = {0};
+    snprintf(request_id, sizeof(request_id), "hello-%lu", (unsigned long)esp_log_timestamp());
 
-    cJSON_AddNumberToObject(envelope, "v", 1);
-    cJSON_AddStringToObject(envelope, "id", request_id ? request_id : "unknown");
-    cJSON_AddStringToObject(envelope, "type", "hello_ack");
-    cJSON_AddNumberToObject(envelope, "seq", 0);
-    cJSON_AddNumberToObject(envelope, "total", 1);
-    cJSON_AddItemToObject(envelope, "payload", payload);
-
-    char *json = ble_json_to_string(envelope);
-    if (json) {
-        ble_notify_json(conn_handle, json);
-        free(json);
+    const char *callsign = ble_station_callsign();
+    if (!callsign || callsign[0] == '\0') {
+        callsign = "NOCALL";
     }
 
-    cJSON_Delete(envelope);
+    char json[240] = {0};
+    int written = snprintf(
+        json,
+        sizeof(json),
+        "{\"v\":1,\"id\":\"%s\",\"type\":\"hello\",\"seq\":0,\"total\":1,"
+        "\"payload\":{\"callsign\":\"%s\",\"capabilities\":[\"hello\",\"data\",\"broadcast\"]}}",
+        request_id,
+        callsign);
+    if (written <= 0 || (size_t)written >= sizeof(json)) {
+        return;
+    }
+
+    int rc = ble_notify_json(conn_handle, json);
+    if (rc != 0) {
+        ESP_LOGW(TAG, "compact hello notify failed (conn=%u rc=%d)", conn_handle, rc);
+    }
+}
+
+static void ble_send_hello_ack(uint16_t conn_handle, const char *request_id)
+{
+    const char *id = (request_id && request_id[0] != '\0') ? request_id : "unknown";
+    const char *callsign = ble_station_callsign();
+    if (!callsign || callsign[0] == '\0') {
+        callsign = "NOCALL";
+    }
+
+    char json[240] = {0};
+    int written = snprintf(
+        json,
+        sizeof(json),
+        "{\"v\":1,\"id\":\"%s\",\"type\":\"hello_ack\",\"seq\":0,\"total\":1,"
+        "\"payload\":{\"success\":true,\"callsign\":\"%s\"}}",
+        id,
+        callsign);
+
+    if (written <= 0 || (size_t)written >= sizeof(json)) {
+        ESP_LOGW(TAG, "hello_ack build failed (id=%s)", id);
+        return;
+    }
+
+    int rc = ble_notify_json(conn_handle, json);
+    if (rc != 0) {
+        ESP_LOGW(TAG, "hello_ack notify failed (id=%s rc=%d)", id, rc);
+    } else {
+        ESP_LOGI(TAG, "hello_ack sent (id=%s)", id);
+    }
 }
 
 static void ble_send_hello_ack_legacy(uint16_t conn_handle)
@@ -1161,7 +1390,10 @@ static void ble_send_hello_ack_legacy(uint16_t conn_handle)
 
     char *json = ble_json_to_string(response);
     if (json) {
-        ble_notify_json(conn_handle, json);
+        int rc = ble_notify_json(conn_handle, json);
+        if (rc != 0) {
+            ESP_LOGW(TAG, "legacy hello_ack notify failed (rc=%d)", rc);
+        }
         free(json);
     }
 
@@ -1196,25 +1428,29 @@ static void ble_send_api_response(uint16_t conn_handle, const char *request_id,
         body_str
     );
     if (written > 0) {
-        ble_notify_json(conn_handle, json);
+        int rc = ble_notify_json(conn_handle, json);
+        if (rc != 0) {
+            ESP_LOGW(TAG, "api_response notify failed (id=%s status=%d rc=%d)",
+                     id, status_code, rc);
+        } else {
+            ESP_LOGI(TAG, "api_response sent (id=%s status=%d body_len=%u)",
+                     id, status_code, (unsigned)body_len);
+        }
     }
     free(json);
 }
 #endif
 
-static void ble_handle_api_request(uint16_t conn_handle,
-                                   const char *peer_callsign,
-                                   const char *content)
+static void ble_handle_api_request_object(uint16_t conn_handle,
+                                          const char *peer_callsign,
+                                          cJSON *request,
+                                          const char *fallback_request_id)
 {
 #if CONFIG_BT_ENABLED
-    cJSON *request = NULL;
-    if (content && content[0] != '\0') {
-        request = cJSON_Parse(content);
-    }
-
     if (!request || !cJSON_IsObject(request)) {
-        cJSON_Delete(request);
-        ble_send_api_response(conn_handle, "unknown", 400,
+        ble_send_api_response(conn_handle,
+                              fallback_request_id ? fallback_request_id : "unknown",
+                              400,
                               "{\"error\":\"invalid api_request payload\"}");
         return;
     }
@@ -1226,11 +1462,11 @@ static void ble_handle_api_request(uint16_t conn_handle,
     cJSON *body_item = cJSON_GetObjectItemCaseSensitive(request, "body");
 
     const char *request_id = cJSON_IsString(id_item) && id_item->valuestring ?
-        id_item->valuestring : "unknown";
+        id_item->valuestring :
+        (fallback_request_id ? fallback_request_id : "unknown");
 
     if (!cJSON_IsString(type_item) || !type_item->valuestring ||
         strcmp(type_item->valuestring, "api_request") != 0) {
-        cJSON_Delete(request);
         ble_send_api_response(conn_handle, request_id, 400,
                               "{\"error\":\"invalid api request type\"}");
         return;
@@ -1250,6 +1486,11 @@ static void ble_handle_api_request(uint16_t conn_handle,
     char query[GEOGRAM_BLE_MAX_QUERY_LEN] = {0};
     ble_split_path_query(path_raw, normalized_path, sizeof(normalized_path), query, sizeof(query));
 
+    ESP_LOGI(TAG, "api request from %s: %s %s",
+             peer_callsign ? peer_callsign : "BLE",
+             method,
+             normalized_path);
+
     geogram_ble_api_result_t result = ble_dispatch_api_request(
         method,
         normalized_path,
@@ -1264,11 +1505,50 @@ static void ble_handle_api_request(uint16_t conn_handle,
         free(result.body);
     }
 
+    return;
+#else
+    (void)conn_handle;
+    (void)peer_callsign;
+    (void)request;
+    (void)fallback_request_id;
+#endif
+}
+
+static void ble_handle_api_request(uint16_t conn_handle,
+                                   const char *peer_callsign,
+                                   const char *content,
+                                   const char *fallback_request_id)
+{
+#if CONFIG_BT_ENABLED
+    cJSON *request = NULL;
+    if (content && content[0] != '\0') {
+        request = cJSON_Parse(content);
+    }
+
+    if (!request || !cJSON_IsObject(request)) {
+        size_t content_len = content ? strlen(content) : 0;
+        if (content_len > 0) {
+            size_t preview = content_len > 220 ? 220 : content_len;
+            ESP_LOGW(TAG, "api_request parse failed (len=%u): %.*s",
+                     (unsigned)content_len, (int)preview, content);
+        } else {
+            ESP_LOGW(TAG, "api_request parse failed: empty content");
+        }
+        cJSON_Delete(request);
+        ble_send_api_response(conn_handle,
+                              fallback_request_id ? fallback_request_id : "unknown",
+                              400,
+                              "{\"error\":\"invalid api_request payload\"}");
+        return;
+    }
+
+    ble_handle_api_request_object(conn_handle, peer_callsign, request, fallback_request_id);
     cJSON_Delete(request);
 #else
     (void)conn_handle;
     (void)peer_callsign;
     (void)content;
+    (void)fallback_request_id;
 #endif
 }
 
@@ -1305,6 +1585,184 @@ static void ble_handle_hello(uint16_t conn_handle,
         ble_send_hello_ack(conn_handle, request_id);
     } else {
         ble_send_hello_ack_legacy(conn_handle);
+    }
+
+    // Symmetric geoblue handshake: after acknowledging peer HELLO,
+    // also announce our own HELLO in compact single-frame form.
+    ble_send_hello_compact(conn_handle);
+#else
+    (void)conn_handle;
+    (void)peer;
+    (void)message;
+#endif
+}
+
+static void ble_handle_hello_ack(uint16_t conn_handle,
+                                 geogram_ble_peer_t *peer,
+                                 cJSON *message)
+{
+#if CONFIG_BT_ENABLED
+    cJSON *payload = cJSON_GetObjectItemCaseSensitive(message, "payload");
+    if (!cJSON_IsObject(payload)) {
+        payload = NULL;
+    }
+
+    char extracted_callsign[STATION_CALLSIGN_LEN] = {0};
+    cJSON *profile = payload ? cJSON_GetObjectItemCaseSensitive(payload, "profile") : NULL;
+    if (cJSON_IsObject(profile)) {
+        cJSON *callsign_item = cJSON_GetObjectItemCaseSensitive(profile, "callsign");
+        if (cJSON_IsString(callsign_item) && callsign_item->valuestring) {
+            strlcpy(extracted_callsign, callsign_item->valuestring, sizeof(extracted_callsign));
+        }
+    }
+
+    cJSON *event = payload ? cJSON_GetObjectItemCaseSensitive(payload, "event") : NULL;
+    if (extracted_callsign[0] == '\0' && event) {
+        ble_extract_callsign_from_event(event, extracted_callsign, sizeof(extracted_callsign));
+    }
+
+    if (peer && extracted_callsign[0] != '\0') {
+        strlcpy(peer->callsign, extracted_callsign, sizeof(peer->callsign));
+    }
+
+    ESP_LOGI(TAG, "BLE HELLO_ACK from %s (conn=%u)",
+             (peer && peer->callsign[0] != '\0') ? peer->callsign :
+             (extracted_callsign[0] != '\0' ? extracted_callsign : "unknown"),
+             conn_handle);
+#else
+    (void)conn_handle;
+    (void)peer;
+    (void)message;
+#endif
+}
+
+static void ble_handle_data(uint16_t conn_handle,
+                            geogram_ble_peer_t *peer,
+                            cJSON *message)
+{
+#if CONFIG_BT_ENABLED
+    (void)conn_handle;
+    cJSON *payload = cJSON_GetObjectItemCaseSensitive(message, "payload");
+    if (!cJSON_IsObject(payload)) {
+        return;
+    }
+
+    const char *from = NULL;
+    const char *content = NULL;
+    const char *channel = "main";
+    uint32_t timestamp = (uint32_t)time(NULL);
+
+    cJSON *from_item = cJSON_GetObjectItemCaseSensitive(payload, "from");
+    if (cJSON_IsString(from_item) && from_item->valuestring) {
+        from = from_item->valuestring;
+    }
+
+    cJSON *content_item = cJSON_GetObjectItemCaseSensitive(payload, "content");
+    if (cJSON_IsString(content_item) && content_item->valuestring) {
+        content = content_item->valuestring;
+    }
+
+    cJSON *channel_item = cJSON_GetObjectItemCaseSensitive(payload, "channel");
+    if (cJSON_IsString(channel_item) && channel_item->valuestring) {
+        channel = channel_item->valuestring;
+    }
+
+    cJSON *timestamp_item = cJSON_GetObjectItemCaseSensitive(payload, "timestamp");
+    if (cJSON_IsNumber(timestamp_item) && timestamp_item->valuedouble > 0) {
+        timestamp = (uint32_t)timestamp_item->valuedouble;
+    }
+
+    if (!from || from[0] == '\0') {
+        if (peer && peer->callsign[0] != '\0') {
+            from = peer->callsign;
+        } else {
+            from = "BLE";
+        }
+    }
+
+    ESP_LOGI(TAG, "BLE DATA from %s channel=%s", from, channel);
+    if (content && content[0] != '\0') {
+        mesh_chat_add_local_message_with_timestamp(from, content, timestamp);
+    }
+#else
+    (void)conn_handle;
+    (void)peer;
+    (void)message;
+#endif
+}
+
+static void ble_forward_broadcast(uint16_t source_conn_handle, const char *json)
+{
+#if CONFIG_BT_ENABLED
+    if (!json || json[0] == '\0') {
+        return;
+    }
+
+    for (size_t i = 0; i < GEOGRAM_BLE_MAX_CONNECTIONS; i++) {
+        geogram_ble_peer_t *peer = &s_peers[i];
+        if (!peer->active || !peer->subscribed) {
+            continue;
+        }
+        if (peer->conn_handle == source_conn_handle) {
+            continue;
+        }
+        ble_notify_json(peer->conn_handle, json);
+    }
+#else
+    (void)source_conn_handle;
+    (void)json;
+#endif
+}
+
+static void ble_handle_broadcast(uint16_t conn_handle,
+                                 geogram_ble_peer_t *peer,
+                                 cJSON *message)
+{
+#if CONFIG_BT_ENABLED
+    cJSON *payload = cJSON_GetObjectItemCaseSensitive(message, "payload");
+    if (!cJSON_IsObject(payload)) {
+        return;
+    }
+
+    const char *from = NULL;
+    const char *topic = "general";
+    const char *content = NULL;
+    uint32_t timestamp = (uint32_t)time(NULL);
+
+    cJSON *from_item = cJSON_GetObjectItemCaseSensitive(payload, "from");
+    if (cJSON_IsString(from_item) && from_item->valuestring) {
+        from = from_item->valuestring;
+    } else if (peer && peer->callsign[0] != '\0') {
+        from = peer->callsign;
+    } else {
+        from = "BLE";
+    }
+
+    cJSON *topic_item = cJSON_GetObjectItemCaseSensitive(payload, "topic");
+    if (cJSON_IsString(topic_item) && topic_item->valuestring) {
+        topic = topic_item->valuestring;
+    }
+
+    cJSON *content_item = cJSON_GetObjectItemCaseSensitive(payload, "content");
+    if (cJSON_IsString(content_item) && content_item->valuestring) {
+        content = content_item->valuestring;
+    }
+
+    cJSON *timestamp_item = cJSON_GetObjectItemCaseSensitive(payload, "timestamp");
+    if (cJSON_IsNumber(timestamp_item) && timestamp_item->valuedouble > 0) {
+        timestamp = (uint32_t)timestamp_item->valuedouble;
+    }
+
+    if (content && content[0] != '\0') {
+        char line[GEOGRAM_BLE_MAX_MESSAGE_LEN + 1] = {0};
+        snprintf(line, sizeof(line), "[%s] %s", topic, content);
+        mesh_chat_add_local_message_with_timestamp(from, line, timestamp);
+    }
+
+    char *json = cJSON_PrintUnformatted(message);
+    if (json) {
+        ble_forward_broadcast(conn_handle, json);
+        free(json);
     }
 #else
     (void)conn_handle;
@@ -1367,10 +1825,18 @@ static void ble_handle_chat(uint16_t conn_handle,
     }
 
     if (strcmp(channel, "_api") == 0) {
+        cJSON *api_item = cJSON_GetObjectItemCaseSensitive(payload, "api");
+        if (cJSON_IsObject(api_item)) {
+            // Compact API payload mode: parse structured object directly to
+            // avoid nested JSON-string escaping/fragmentation issues.
+            ble_handle_api_request_object(conn_handle, effective_author, api_item, request_id);
+            return;
+        }
+
         // API-over-chat is treated as RPC: reply only with api_response.
         // Sending an additional chat_ack triggers back-to-back notifications
         // and can crash NimBLE on ESP32.
-        ble_handle_api_request(conn_handle, effective_author, content);
+        ble_handle_api_request(conn_handle, effective_author, content, request_id);
         return;
     }
 
@@ -1440,9 +1906,24 @@ static void ble_handle_message(uint16_t conn_handle,
         return;
     }
 
-    if (strcmp(type, "hello") == 0) {
-        ble_handle_hello(conn_handle, peer, message);
-        return;
+    geoblue_frame_type_t frame_type = geoblue_frame_type_from_name(type);
+    switch (frame_type) {
+        case GEOBLUE_FRAME_HELLO:
+            ble_handle_hello(conn_handle, peer, message);
+            return;
+        case GEOBLUE_FRAME_HELLO_ACK:
+            ble_handle_hello_ack(conn_handle, peer, message);
+            return;
+        case GEOBLUE_FRAME_DATA:
+            ble_handle_data(conn_handle, peer, message);
+            return;
+        case GEOBLUE_FRAME_BROADCAST:
+            ble_handle_broadcast(conn_handle, peer, message);
+            return;
+        case GEOBLUE_FRAME_UNKNOWN:
+        case GEOBLUE_FRAME_ERROR:
+        default:
+            break;
     }
 
     if (strcmp(type, "chat") == 0) {
@@ -1562,12 +2043,17 @@ static int ble_gatt_access_cb(uint16_t conn_handle, uint16_t attr_handle,
         }
 
         if (incoming_len > GEOGRAM_BLE_RX_BUFFER_SIZE) {
+            ESP_LOGW(TAG, "BLE write chunk too large (%u > %u), dropping buffer",
+                     (unsigned)incoming_len, (unsigned)GEOGRAM_BLE_RX_BUFFER_SIZE);
             peer->rx_len = 0;
             free(incoming);
             return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
         }
 
         if (peer->rx_len + incoming_len > GEOGRAM_BLE_RX_BUFFER_SIZE) {
+            ESP_LOGW(TAG, "BLE RX buffer overflow (%u + %u > %u), resetting buffer",
+                     (unsigned)peer->rx_len, (unsigned)incoming_len,
+                     (unsigned)GEOGRAM_BLE_RX_BUFFER_SIZE);
             peer->rx_len = 0;
         }
 
@@ -1651,7 +2137,11 @@ static int ble_gap_event_cb(struct ble_gap_event *event, void *arg)
                 peer = ble_alloc_peer(event->subscribe.conn_handle);
             }
             if (peer && event->subscribe.attr_handle == s_notify_val_handle) {
+                bool became_subscribed = (!peer->subscribed && event->subscribe.cur_notify);
                 peer->subscribed = event->subscribe.cur_notify;
+                if (became_subscribed) {
+                    ble_send_hello_proactive(event->subscribe.conn_handle);
+                }
             }
             return 0;
         }

@@ -1,0 +1,14 @@
+name: geoblue
+description: GeoBlue BLE protocol library (pure Dart, no Flutter dependency)
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: ^3.10.0
+
+dependencies:
+  meta: ^1.12.0
+
+dev_dependencies:
+  lints: ^6.0.0
+  test: ^1.25.0

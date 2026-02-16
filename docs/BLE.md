@@ -4,6 +4,105 @@ This document covers BLE architecture, lessons learned, and the reliable transmi
 
 ---
 
+## GeoBlue Shared Library (New Baseline)
+
+`geoblue` is now the shared BLE protocol layer intended to become the default BLE contract across ESP32 firmware and Dart clients.
+
+### Source Locations
+
+- Dart library (pure Dart, no Flutter dependency): `packages/geoblue`
+- ESP32 reusable component: `esp32/components/geoblue`
+- Linux CLI interop test project: `tests/geoblue`
+
+### GeoBlue Protocol Envelope
+
+Every frame uses the same envelope:
+
+```json
+{
+  "v": 1,
+  "id": "gb-<timestamp>-<counter>",
+  "type": "hello|hello_ack|data|broadcast|error",
+  "seq": 0,
+  "total": 1,
+  "payload": { ... }
+}
+```
+
+### Mandatory Frame Types
+
+1. `hello`
+- Announces local profile and capabilities.
+- Payload includes both `profile` and `event` (for compatibility with existing geogram BLE behavior).
+
+2. `hello_ack`
+- Acknowledges `hello`.
+- Uses the same `id` as the incoming `hello` request.
+
+3. `data`
+- Point-to-point data transfer between two devices.
+- Payload fields: `from`, `to` (optional), `channel`, `content`, `timestamp`.
+
+4. `broadcast`
+- One-to-many message for all listening peers.
+- Payload fields: `from`, `topic`, `content`, `timestamp`.
+
+5. `error`
+- Standard error envelope for malformed or unsupported requests.
+
+### Capabilities Negotiated in HELLO
+
+Current baseline capability list:
+
+- `hello`
+- `data`
+- `broadcast`
+- `chat` (kept for backward compatibility with existing geogram chat behavior)
+
+### Stream Framing / Parcel Handling
+
+BLE notifications can arrive fragmented or concatenated; neither side can assume one notification equals one JSON frame.
+
+- Dart: `GeoBlueJsonStreamDecoder` in `packages/geoblue/lib/src/json_stream_decoder.dart`
+- ESP32: `geoblue_find_json_object_bounds()` in `esp32/components/geoblue/geoblue.c`
+
+Both implementations:
+- discard non-JSON prefix noise,
+- detect nested JSON object boundaries with quote/escape safety,
+- preserve incomplete trailing fragments until the next chunk.
+
+### ESP32 Integration Notes
+
+`geogram_ble` now uses the shared `geoblue` component and performs:
+
+- proactive `hello` after notify subscription,
+- `hello_ack` processing,
+- `data` frame ingestion,
+- `broadcast` forwarding to all subscribed peers except the source.
+
+### Linux CLI Test Harness (No Flutter Dependency)
+
+Folder: `tests/geoblue`
+
+- Dart app: `tests/geoblue/bin/geoblue_console.dart`
+- bridge script (BLE I/O via bleak): `tests/geoblue/bin/geoblue_bleak_bridge.py`
+- executable runner: `tests/geoblue/run_hello_test.sh`
+
+Run:
+
+```bash
+cd tests/geoblue
+./run_hello_test.sh
+```
+
+This first test is successful only when:
+
+1. Linux sends `hello` to ESP32 and receives `hello_ack`.
+2. Linux also receives ESP32 proactive `hello`.
+3. Linux automatically responds with `hello_ack` to ESP32.
+
+---
+
 ## Part 1: Understanding GATT (Why It Matters)
 
 ### What is GATT?
