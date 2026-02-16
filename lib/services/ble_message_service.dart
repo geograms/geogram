@@ -8,6 +8,7 @@ import 'dart:convert';
 import 'dart:io' show Platform;
 import 'dart:typed_data';
 import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import '../models/ble_message.dart';
 import '../models/ble_parcel.dart';
 import 'app_args.dart';
@@ -736,25 +737,41 @@ class BLEMessageService {
       final services = await device.bleDevice!.discoverServices();
 
       // Find Geogram service (0xFFE0)
-      final geogramService = services.firstWhere(
-        (s) {
-          final uuid = s.uuid.toString().toLowerCase();
-          return uuid.contains('ffe0');
-        },
-        orElse: () => throw Exception('Geogram service not found'),
-      );
+      BluetoothService? geogramService;
+      for (final service in services) {
+        final uuid = service.uuid.toString().toLowerCase();
+        if (uuid.contains('ffe0')) {
+          geogramService = service;
+          break;
+        }
+      }
+      if (geogramService == null) {
+        throw Exception('Geogram service not found');
+      }
 
       // Find write characteristic
-      final writeChar = geogramService.characteristics.firstWhere(
-        (c) => c.uuid.toString().toLowerCase().contains('fff1'),
-        orElse: () => throw Exception('Write characteristic not found'),
-      );
+      BluetoothCharacteristic? writeChar;
+      for (final characteristic in geogramService.characteristics) {
+        if (characteristic.uuid.toString().toLowerCase().contains('fff1')) {
+          writeChar = characteristic;
+          break;
+        }
+      }
+      if (writeChar == null) {
+        throw Exception('Write characteristic not found');
+      }
 
       // Find notify characteristic
-      final notifyChar = geogramService.characteristics.firstWhere(
-        (c) => c.uuid.toString().toLowerCase().contains('fff2'),
-        orElse: () => throw Exception('Notify characteristic not found'),
-      );
+      BluetoothCharacteristic? notifyChar;
+      for (final characteristic in geogramService.characteristics) {
+        if (characteristic.uuid.toString().toLowerCase().contains('fff2')) {
+          notifyChar = characteristic;
+          break;
+        }
+      }
+      if (notifyChar == null) {
+        throw Exception('Notify characteristic not found');
+      }
 
       // Request higher MTU
       try {

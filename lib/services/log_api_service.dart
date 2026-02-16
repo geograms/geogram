@@ -8496,8 +8496,17 @@ class LogApiService {
 
           LogService().log('LogApiService: Created signed event id=${signedEvent.id}');
 
-          // Send to remote device
-          final payload = {'event': signedEvent.toJson()};
+          // Match the same compact payload shape used by RemoteChatRoomPage
+          // to keep BLE message size and server parsing behavior consistent.
+          final payload = {
+            'callsign': profile.callsign,
+            'content': content,
+            'npub': profile.npub,
+            'pubkey': signedEvent.pubkey,
+            'event_id': signedEvent.id,
+            'signature': signedEvent.sig,
+            'created_at': signedEvent.createdAt,
+          };
           final response = await devicesService.makeDeviceApiRequest(
             callsign: callsign,
             method: 'POST',

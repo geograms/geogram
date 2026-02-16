@@ -8,6 +8,7 @@ import '../../services/log_service.dart';
 import '../../services/station_service.dart';
 import '../../services/security_service.dart';
 import '../../services/websocket_service.dart';
+import '../../services/devices_service.dart';
 import '../../api/endpoints/dm_api.dart';
 import '../transport.dart';
 import '../transport_message.dart';
@@ -40,13 +41,12 @@ class StationTransport extends Transport with TransportMixin {
 
   final StationService _stationService = StationService();
   final WebSocketService _wsService = WebSocketService();
+  final DevicesService _devicesService = DevicesService();
 
   /// HTTP timeout for requests
   final Duration timeout;
 
-  StationTransport({
-    this.timeout = const Duration(seconds: 30),
-  });
+  StationTransport({this.timeout = const Duration(seconds: 30)});
 
   @override
   Future<void> initialize() async {
@@ -68,6 +68,13 @@ class StationTransport extends Transport with TransportMixin {
 
   @override
   Future<bool> canReach(String callsign) async {
+    final normalizedCallsign = callsign.toUpperCase();
+
+    // Skip station attempts when device is currently known as BLE-only.
+    if (_isBleOnlyDevice(normalizedCallsign)) {
+      return false;
+    }
+
     // Station transport can potentially reach any device if we're connected to a station
     // The actual delivery depends on whether the target device is also connected
     // We return true if we have a station connection, and let the send() handle failures
@@ -77,6 +84,24 @@ class StationTransport extends Transport with TransportMixin {
     // If we're connected to a station, we can attempt to reach any device
     // The station will return 404 if the device isn't connected
     return true;
+  }
+
+  bool _isBleOnlyDevice(String callsign) {
+    final device = _devicesService.getDevice(callsign);
+    if (device == null || device.connectionMethods.isEmpty) {
+      return false;
+    }
+
+    final methods = device.connectionMethods
+        .map((m) => m.toLowerCase())
+        .toSet();
+    final hasBle = methods.any(
+      (m) => m == 'bluetooth' || m == 'ble' || m == 'ble+' || m == 'ble_plus',
+    );
+    final hasNonBle = methods.any(
+      (m) => m != 'bluetooth' && m != 'ble' && m != 'ble+' && m != 'ble_plus',
+    );
+    return hasBle && !hasNonBle;
   }
 
   @override
@@ -120,16 +145,35 @@ class StationTransport extends Transport with TransportMixin {
       // Handle based on message type
       switch (message.type) {
         case TransportMessageType.apiRequest:
-          return await _handleApiRequest(message, station.url, effectiveTimeout, stopwatch);
+          return await _handleApiRequest(
+            message,
+            station.url,
+            effectiveTimeout,
+            stopwatch,
+          );
 
         case TransportMessageType.directMessage:
-          return await _handleDMViaProxy(message, station.url, effectiveTimeout, stopwatch);
+          return await _handleDMViaProxy(
+            message,
+            station.url,
+            effectiveTimeout,
+            stopwatch,
+          );
 
         case TransportMessageType.chatMessage:
-          return await _handleMessageRelay(message, effectiveTimeout, stopwatch);
+          return await _handleMessageRelay(
+            message,
+            effectiveTimeout,
+            stopwatch,
+          );
 
         case TransportMessageType.sync:
-          return await _handleSync(message, station.url, effectiveTimeout, stopwatch);
+          return await _handleSync(
+            message,
+            station.url,
+            effectiveTimeout,
+            stopwatch,
+          );
 
         default:
           return TransportResult.failure(
@@ -174,15 +218,21 @@ class StationTransport extends Transport with TransportMixin {
       }
     }
 
-    LogService().log('StationTransport: $method ${message.path} to $targetCallsign via station');
+    LogService().log(
+      'StationTransport: $method ${message.path} to $targetCallsign via station',
+    );
 
     http.Response response;
     switch (method) {
       case 'POST':
-        response = await http.post(uri, headers: headers, body: body).timeout(timeout);
+        response = await http
+            .post(uri, headers: headers, body: body)
+            .timeout(timeout);
         break;
       case 'PUT':
-        response = await http.put(uri, headers: headers, body: body).timeout(timeout);
+        response = await http
+            .put(uri, headers: headers, body: body)
+            .timeout(timeout);
         break;
       case 'DELETE':
         response = await http.delete(uri, headers: headers).timeout(timeout);
@@ -192,6 +242,24 @@ class StationTransport extends Transport with TransportMixin {
     }
 
     stopwatch.stop();
+
+    final responseBodyLower = response.body.toLowerCase();
+
+    // Station proxy may return 404 when the target device is not connected.
+    // Treat that as transport failure so ConnectionManager can fall back.
+    final targetNotConnected =
+        response.statusCode == 404 &&
+        (responseBodyLower.contains('device not connected') ||
+            responseBodyLower.contains('target device not connected'));
+    if (targetNotConnected) {
+      final result = TransportResult.failure(
+        error: 'Target not connected on station',
+        statusCode: response.statusCode,
+        transportUsed: id,
+      );
+      recordMetrics(result);
+      return result;
+    }
 
     // Check if response indicates success (2xx) or client handled error (4xx)
     // 5xx errors should be treated as transport failures to try next transport
@@ -250,13 +318,13 @@ class StationTransport extends Transport with TransportMixin {
     final uri = Uri.parse('$httpUrl/$targetCallsign$path');
     final body = jsonEncode({'event': message.signedEvent});
 
-    LogService().log('StationTransport: POST $path to $targetCallsign via station proxy');
+    LogService().log(
+      'StationTransport: POST $path to $targetCallsign via station proxy',
+    );
 
-    final response = await http.post(
-      uri,
-      headers: {'Content-Type': 'application/json'},
-      body: body,
-    ).timeout(timeout);
+    final response = await http
+        .post(uri, headers: {'Content-Type': 'application/json'}, body: body)
+        .timeout(timeout);
 
     stopwatch.stop();
 
@@ -336,13 +404,12 @@ class StationTransport extends Transport with TransportMixin {
       );
     }
 
-    LogService().log('StationTransport: Relaying ${message.type} to ${message.targetCallsign}');
+    LogService().log(
+      'StationTransport: Relaying ${message.type} to ${message.targetCallsign}',
+    );
 
     // Send via WebSocket and wait for OK
-    final wsMessage = {
-      'type': 'EVENT',
-      'event': message.signedEvent,
-    };
+    final wsMessage = {'type': 'EVENT', 'event': message.signedEvent};
 
     final okResult = await _wsService.sendEventAndWaitForOk(
       wsMessage,
@@ -380,14 +447,15 @@ class StationTransport extends Transport with TransportMixin {
     final targetCallsign = message.targetCallsign.toUpperCase();
 
     // Use station proxy for sync
-    final uri = Uri.parse('$httpUrl${DmApi.remoteSyncPath(targetCallsign, message.targetCallsign)}');
+    final uri = Uri.parse(
+      '$httpUrl${DmApi.remoteSyncPath(targetCallsign, message.targetCallsign)}',
+    );
 
     LogService().log('StationTransport: Sync from $targetCallsign via station');
 
-    final response = await http.get(
-      uri,
-      headers: {'Content-Type': 'application/json'},
-    ).timeout(timeout);
+    final response = await http
+        .get(uri, headers: {'Content-Type': 'application/json'})
+        .timeout(timeout);
 
     stopwatch.stop();
 
@@ -416,10 +484,7 @@ class StationTransport extends Transport with TransportMixin {
   Future<void> sendAsync(TransportMessage message) async {
     // Fire and forget via WebSocket
     if (_wsService.isConnected && message.signedEvent != null) {
-      _wsService.send({
-        'type': 'EVENT',
-        'event': message.signedEvent,
-      });
+      _wsService.send({'type': 'EVENT', 'event': message.signedEvent});
     }
   }
 
@@ -447,7 +512,9 @@ class StationTransport extends Transport with TransportMixin {
 
         if (senderCallsign != null) {
           final message = TransportMessage(
-            id: event['id'] as String? ?? DateTime.now().millisecondsSinceEpoch.toString(),
+            id:
+                event['id'] as String? ??
+                DateTime.now().millisecondsSinceEpoch.toString(),
             targetCallsign: senderCallsign,
             type: _determineMessageType(event),
             signedEvent: event,
@@ -462,11 +529,15 @@ class StationTransport extends Transport with TransportMixin {
         final callsign = wsMessage['callsign'] as String?;
         final connected = wsMessage['connected'] as bool?;
         if (callsign != null && connected != null) {
-          LogService().log('StationTransport: Device $callsign ${connected ? "connected" : "disconnected"}');
+          LogService().log(
+            'StationTransport: Device $callsign ${connected ? "connected" : "disconnected"}',
+          );
         }
       }
     } catch (e) {
-      LogService().log('StationTransport: Error handling WebSocket message: $e');
+      LogService().log(
+        'StationTransport: Error handling WebSocket message: $e',
+      );
     }
   }
 
@@ -497,7 +568,8 @@ class StationTransport extends Transport with TransportMixin {
 
   /// Check if connected to a station
   bool get isConnectedToStation {
-    return _stationService.getConnectedStation() != null && _wsService.isConnected;
+    return _stationService.getConnectedStation() != null &&
+        _wsService.isConnected;
   }
 
   /// Get the currently connected station

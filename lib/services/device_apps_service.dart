@@ -5,7 +5,6 @@
 
 import 'dart:convert';
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
-import 'package:http/http.dart' as http;
 import '../services/log_service.dart';
 import '../services/devices_service.dart';
 import '../services/storage_config.dart';
@@ -29,7 +28,9 @@ class DeviceAppsService {
     bool useCache = true,
     bool refreshInBackground = true,
   }) async {
-    LogService().log('DeviceAppsService.discoverApps: START for $callsign, useCache=$useCache');
+    LogService().log(
+      'DeviceAppsService.discoverApps: START for $callsign, useCache=$useCache',
+    );
     // Try to load from cache first for instant response
     if (useCache) {
       final cachedApps = await _loadFromCache(callsign);
@@ -43,7 +44,9 @@ class DeviceAppsService {
 
         return cachedApps;
       }
-      LogService().log('DeviceAppsService: No usable cache for $callsign, fetching from API');
+      LogService().log(
+        'DeviceAppsService: No usable cache for $callsign, fetching from API',
+      );
     }
 
     // No cache or cache disabled - fetch from API
@@ -75,7 +78,9 @@ class DeviceAppsService {
         try {
           final metaJson = await metaFile.readAsString();
           final meta = json.decode(metaJson) as Map<String, dynamic>;
-          LogService().log('DeviceAppsService: Loaded apps_meta.json for $callsign');
+          LogService().log(
+            'DeviceAppsService: Loaded apps_meta.json for $callsign',
+          );
 
           for (final appType in ['blog', 'chat', 'events', 'alerts']) {
             if (meta.containsKey(appType)) {
@@ -92,7 +97,9 @@ class DeviceAppsService {
 
           return apps;
         } catch (e) {
-          LogService().log('DeviceAppsService: Error reading apps_meta.json: $e');
+          LogService().log(
+            'DeviceAppsService: Error reading apps_meta.json: $e',
+          );
         }
       }
 
@@ -106,7 +113,11 @@ class DeviceAppsService {
             blogCount++;
           }
         }
-        apps['blog'] = DeviceAppInfo(type: 'blog', isAvailable: blogCount > 0, itemCount: blogCount);
+        apps['blog'] = DeviceAppInfo(
+          type: 'blog',
+          isAvailable: blogCount > 0,
+          itemCount: blogCount,
+        );
       } else {
         apps['blog'] = DeviceAppInfo(type: 'blog', isAvailable: false);
       }
@@ -120,7 +131,11 @@ class DeviceAppsService {
             roomCount++;
           }
         }
-        apps['chat'] = DeviceAppInfo(type: 'chat', isAvailable: roomCount > 0, itemCount: roomCount);
+        apps['chat'] = DeviceAppInfo(
+          type: 'chat',
+          isAvailable: roomCount > 0,
+          itemCount: roomCount,
+        );
       } else {
         apps['chat'] = DeviceAppInfo(type: 'chat', isAvailable: false);
       }
@@ -128,9 +143,10 @@ class DeviceAppsService {
       // Events and alerts not commonly cached yet
       apps['events'] = DeviceAppInfo(type: 'events', isAvailable: false);
       apps['alerts'] = DeviceAppInfo(type: 'alerts', isAvailable: false);
-
     } catch (e) {
-      LogService().log('DeviceAppsService: Error loading cache for $callsign: $e');
+      LogService().log(
+        'DeviceAppsService: Error loading cache for $callsign: $e',
+      );
       return {
         'blog': DeviceAppInfo(type: 'blog', isAvailable: false),
         'chat': DeviceAppInfo(type: 'chat', isAvailable: false),
@@ -143,7 +159,10 @@ class DeviceAppsService {
   }
 
   /// Save app availability metadata to disk
-  Future<void> _saveToCache(String callsign, Map<String, DeviceAppInfo> apps) async {
+  Future<void> _saveToCache(
+    String callsign,
+    Map<String, DeviceAppInfo> apps,
+  ) async {
     try {
       final dataDir = StorageConfig().baseDir;
       final devicePath = '$dataDir/devices/$callsign';
@@ -166,7 +185,9 @@ class DeviceAppsService {
       await metaFile.writeAsString(json.encode(meta));
       LogService().log('DeviceAppsService: Saved apps_meta.json for $callsign');
     } catch (e) {
-      LogService().log('DeviceAppsService: Error saving cache for $callsign: $e');
+      LogService().log(
+        'DeviceAppsService: Error saving cache for $callsign: $e',
+      );
     }
   }
 
@@ -174,20 +195,15 @@ class DeviceAppsService {
   Future<Map<String, DeviceAppInfo>> _fetchFromApi(String callsign) async {
     final Map<String, DeviceAppInfo> apps = {};
 
-    // Check each app type in parallel
-    final futures = await Future.wait([
-      _checkBlogAvailable(callsign),
-      _checkChatAvailable(callsign),
-      _checkEventsAvailable(callsign),
-      _checkAlertsAvailable(callsign),
-    ]);
+    // Keep requests serialized to avoid flooding low-bandwidth transports (BLE).
+    apps['blog'] = await _checkBlogAvailable(callsign);
+    apps['chat'] = await _checkChatAvailable(callsign);
+    apps['events'] = await _checkEventsAvailable(callsign);
+    apps['alerts'] = await _checkAlertsAvailable(callsign);
 
-    apps['blog'] = futures[0];
-    apps['chat'] = futures[1];
-    apps['events'] = futures[2];
-    apps['alerts'] = futures[3];
-
-    LogService().log('DeviceAppsService: Fetched apps from API for $callsign: ${apps.entries.where((e) => e.value.isAvailable).map((e) => e.key).toList()}');
+    LogService().log(
+      'DeviceAppsService: Fetched apps from API for $callsign: ${apps.entries.where((e) => e.value.isAvailable).map((e) => e.key).toList()}',
+    );
 
     // Cache the result if any app is available
     if (apps.values.any((app) => app.isAvailable)) {
@@ -199,17 +215,25 @@ class DeviceAppsService {
 
   /// Refresh apps in background (fire and forget)
   void _refreshApps(String callsign) {
-    _fetchFromApi(callsign).then((apps) {
-      LogService().log('DeviceAppsService: Background refresh complete for $callsign');
-      // Apps are now cached by the API responses, next load will be faster
-    }).catchError((e) {
-      LogService().log('DeviceAppsService: Background refresh failed for $callsign: $e');
-    });
+    _fetchFromApi(callsign)
+        .then((apps) {
+          LogService().log(
+            'DeviceAppsService: Background refresh complete for $callsign',
+          );
+          // Apps are now cached by the API responses, next load will be faster
+        })
+        .catchError((e) {
+          LogService().log(
+            'DeviceAppsService: Background refresh failed for $callsign: $e',
+          );
+        });
   }
 
   /// Check if blog app is available
   Future<DeviceAppInfo> _checkBlogAvailable(String callsign) async {
-    LogService().log('DeviceAppsService._checkBlogAvailable: START for $callsign');
+    LogService().log(
+      'DeviceAppsService._checkBlogAvailable: START for $callsign',
+    );
     try {
       final response = await _devicesService.makeDeviceApiRequest(
         callsign: callsign,
@@ -217,12 +241,16 @@ class DeviceAppsService {
         path: '/api/blog',
       );
 
-      LogService().log('DeviceAppsService._checkBlogAvailable: Response for $callsign: statusCode=${response?.statusCode}');
+      LogService().log(
+        'DeviceAppsService._checkBlogAvailable: Response for $callsign: statusCode=${response?.statusCode}',
+      );
 
       if (response != null && response.statusCode == 200) {
         final data = json.decode(response.body) as Map<String, dynamic>;
         final posts = data['posts'] as List? ?? [];
-        LogService().log('DeviceAppsService._checkBlogAvailable: Blog for $callsign has ${posts.length} posts');
+        LogService().log(
+          'DeviceAppsService._checkBlogAvailable: Blog for $callsign has ${posts.length} posts',
+        );
         return DeviceAppInfo(
           type: 'blog',
           isAvailable: posts.length > 0,
@@ -230,63 +258,91 @@ class DeviceAppsService {
         );
       }
     } catch (e) {
-      LogService().log('DeviceAppsService._checkBlogAvailable: ERROR for $callsign: $e');
+      LogService().log(
+        'DeviceAppsService._checkBlogAvailable: ERROR for $callsign: $e',
+      );
     }
 
-    LogService().log('DeviceAppsService._checkBlogAvailable: Blog not available for $callsign');
+    LogService().log(
+      'DeviceAppsService._checkBlogAvailable: Blog not available for $callsign',
+    );
     return DeviceAppInfo(type: 'blog', isAvailable: false);
   }
 
   /// Check if chat app is available
   Future<DeviceAppInfo> _checkChatAvailable(String callsign) async {
-    LogService().log('DeviceAppsService._checkChatAvailable: START for $callsign');
+    LogService().log(
+      'DeviceAppsService._checkChatAvailable: START for $callsign',
+    );
     try {
-      LogService().log('DeviceAppsService._checkChatAvailable: Calling makeDeviceApiRequest for $callsign');
+      LogService().log(
+        'DeviceAppsService._checkChatAvailable: Calling makeDeviceApiRequest for $callsign',
+      );
       final response = await _devicesService.makeDeviceApiRequest(
         callsign: callsign,
         method: 'GET',
         path: '/api/chat/rooms',
       );
 
-      LogService().log('DeviceAppsService._checkChatAvailable: Response for $callsign: statusCode=${response?.statusCode}, body=${response?.body}');
+      LogService().log(
+        'DeviceAppsService._checkChatAvailable: Response for $callsign: statusCode=${response?.statusCode}, body=${response?.body}',
+      );
 
       if (response != null && response.statusCode == 200) {
         final data = json.decode(response.body);
-        LogService().log('DeviceAppsService._checkChatAvailable: Decoded data type: ${data.runtimeType}, data=$data');
+        LogService().log(
+          'DeviceAppsService._checkChatAvailable: Decoded data type: ${data.runtimeType}, data=$data',
+        );
         List<dynamic> rooms;
 
         // Handle both response formats: direct list or {"rooms": [...]}
         if (data is List) {
           rooms = data;
-          LogService().log('DeviceAppsService._checkChatAvailable: Data is List, rooms count=${rooms.length}');
+          LogService().log(
+            'DeviceAppsService._checkChatAvailable: Data is List, rooms count=${rooms.length}',
+          );
         } else if (data is Map<String, dynamic> && data['rooms'] != null) {
           rooms = data['rooms'] as List;
-          LogService().log('DeviceAppsService._checkChatAvailable: Data is Map with rooms key, rooms count=${rooms.length}');
+          LogService().log(
+            'DeviceAppsService._checkChatAvailable: Data is Map with rooms key, rooms count=${rooms.length}',
+          );
         } else {
           rooms = [];
-          LogService().log('DeviceAppsService._checkChatAvailable: Data format not recognized, returning empty');
+          LogService().log(
+            'DeviceAppsService._checkChatAvailable: Data format not recognized, returning empty',
+          );
         }
 
-        LogService().log('DeviceAppsService._checkChatAvailable: Chat for $callsign has ${rooms.length} rooms, isAvailable=${rooms.length > 0}');
+        LogService().log(
+          'DeviceAppsService._checkChatAvailable: Chat for $callsign has ${rooms.length} rooms, isAvailable=${rooms.length > 0}',
+        );
         return DeviceAppInfo(
           type: 'chat',
           isAvailable: rooms.length > 0,
           itemCount: rooms.length,
         );
       } else {
-        LogService().log('DeviceAppsService._checkChatAvailable: Response was null or not 200, returning unavailable');
+        LogService().log(
+          'DeviceAppsService._checkChatAvailable: Response was null or not 200, returning unavailable',
+        );
       }
     } catch (e) {
-      LogService().log('DeviceAppsService._checkChatAvailable: ERROR for $callsign: $e');
+      LogService().log(
+        'DeviceAppsService._checkChatAvailable: ERROR for $callsign: $e',
+      );
     }
 
-    LogService().log('DeviceAppsService._checkChatAvailable: Chat not available for $callsign');
+    LogService().log(
+      'DeviceAppsService._checkChatAvailable: Chat not available for $callsign',
+    );
     return DeviceAppInfo(type: 'chat', isAvailable: false);
   }
 
   /// Check if events app is available
   Future<DeviceAppInfo> _checkEventsAvailable(String callsign) async {
-    LogService().log('DeviceAppsService._checkEventsAvailable: START for $callsign');
+    LogService().log(
+      'DeviceAppsService._checkEventsAvailable: START for $callsign',
+    );
     try {
       final response = await _devicesService.makeDeviceApiRequest(
         callsign: callsign,
@@ -294,7 +350,9 @@ class DeviceAppsService {
         path: '/api/events',
       );
 
-      LogService().log('DeviceAppsService._checkEventsAvailable: Response for $callsign: statusCode=${response?.statusCode}');
+      LogService().log(
+        'DeviceAppsService._checkEventsAvailable: Response for $callsign: statusCode=${response?.statusCode}',
+      );
 
       if (response != null && response.statusCode == 200) {
         final data = json.decode(response.body);
@@ -309,7 +367,9 @@ class DeviceAppsService {
           events = [];
         }
 
-        LogService().log('DeviceAppsService._checkEventsAvailable: Events for $callsign has ${events.length} events');
+        LogService().log(
+          'DeviceAppsService._checkEventsAvailable: Events for $callsign has ${events.length} events',
+        );
         return DeviceAppInfo(
           type: 'events',
           isAvailable: events.length > 0,
@@ -317,16 +377,22 @@ class DeviceAppsService {
         );
       }
     } catch (e) {
-      LogService().log('DeviceAppsService._checkEventsAvailable: ERROR for $callsign: $e');
+      LogService().log(
+        'DeviceAppsService._checkEventsAvailable: ERROR for $callsign: $e',
+      );
     }
 
-    LogService().log('DeviceAppsService._checkEventsAvailable: Events not available for $callsign');
+    LogService().log(
+      'DeviceAppsService._checkEventsAvailable: Events not available for $callsign',
+    );
     return DeviceAppInfo(type: 'events', isAvailable: false);
   }
 
   /// Check if alerts/reports app is available
   Future<DeviceAppInfo> _checkAlertsAvailable(String callsign) async {
-    LogService().log('DeviceAppsService._checkAlertsAvailable: START for $callsign');
+    LogService().log(
+      'DeviceAppsService._checkAlertsAvailable: START for $callsign',
+    );
     try {
       final response = await _devicesService.makeDeviceApiRequest(
         callsign: callsign,
@@ -334,7 +400,9 @@ class DeviceAppsService {
         path: '/api/alerts',
       );
 
-      LogService().log('DeviceAppsService._checkAlertsAvailable: Response for $callsign: statusCode=${response?.statusCode}');
+      LogService().log(
+        'DeviceAppsService._checkAlertsAvailable: Response for $callsign: statusCode=${response?.statusCode}',
+      );
 
       if (response != null && response.statusCode == 200) {
         final data = json.decode(response.body);
@@ -349,7 +417,9 @@ class DeviceAppsService {
           alerts = [];
         }
 
-        LogService().log('DeviceAppsService._checkAlertsAvailable: Alerts for $callsign has ${alerts.length} alerts');
+        LogService().log(
+          'DeviceAppsService._checkAlertsAvailable: Alerts for $callsign has ${alerts.length} alerts',
+        );
         return DeviceAppInfo(
           type: 'alerts',
           isAvailable: alerts.length > 0,
@@ -357,10 +427,14 @@ class DeviceAppsService {
         );
       }
     } catch (e) {
-      LogService().log('DeviceAppsService._checkAlertsAvailable: ERROR for $callsign: $e');
+      LogService().log(
+        'DeviceAppsService._checkAlertsAvailable: ERROR for $callsign: $e',
+      );
     }
 
-    LogService().log('DeviceAppsService._checkAlertsAvailable: Alerts not available for $callsign');
+    LogService().log(
+      'DeviceAppsService._checkAlertsAvailable: Alerts not available for $callsign',
+    );
     return DeviceAppInfo(type: 'alerts', isAvailable: false);
   }
 }

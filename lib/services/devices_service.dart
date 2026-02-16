@@ -1542,11 +1542,21 @@ class DevicesService {
       LogService().log(
         'DevicesService: [API] SUCCESS via ${result.transportUsed} (${result.latency?.inMilliseconds ?? "?"}ms)',
       );
-      // Convert TransportResult to http.Response for backward compatibility
-      return http.Response(
-        result.responseData?.toString() ?? '',
-        result.statusCode ?? 200,
-      );
+      // Convert TransportResult to http.Response for backward compatibility.
+      // Preserve JSON structures by encoding Map/List payloads instead of toString().
+      String responseBody;
+      final responseData = result.responseData;
+      if (responseData == null) {
+        responseBody = '';
+      } else if (responseData is String) {
+        responseBody = responseData;
+      } else if (responseData is List<int>) {
+        responseBody = utf8.decode(responseData, allowMalformed: true);
+      } else {
+        responseBody = jsonEncode(responseData);
+      }
+
+      return http.Response(responseBody, result.statusCode ?? 200);
     } else {
       LogService().log('DevicesService: [API] FAILED: ${result.error}');
       return null;

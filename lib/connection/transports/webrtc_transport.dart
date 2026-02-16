@@ -5,6 +5,7 @@ import 'dart:async';
 import '../../services/log_service.dart';
 import '../../services/station_service.dart';
 import '../../services/security_service.dart';
+import '../../services/devices_service.dart';
 import '../../services/webrtc_peer_manager.dart';
 import '../transport.dart';
 import '../transport_message.dart';
@@ -38,6 +39,7 @@ class WebRTCTransport extends Transport with TransportMixin {
 
   final WebRTCPeerManager _peerManager = WebRTCPeerManager();
   final StationService _stationService = StationService();
+  final DevicesService _devicesService = DevicesService();
 
   /// Timeout for connection establishment
   final Duration connectionTimeout;
@@ -82,6 +84,11 @@ class WebRTCTransport extends Transport with TransportMixin {
   Future<bool> canReach(String callsign) async {
     final normalizedCallsign = callsign.toUpperCase();
 
+    // Skip WebRTC attempts when device is currently known as BLE-only.
+    if (_isBleOnlyDevice(normalizedCallsign)) {
+      return false;
+    }
+
     // Check if we already have an active WebRTC connection
     if (_peerManager.hasActiveConnection(normalizedCallsign)) {
       return true;
@@ -97,6 +104,24 @@ class WebRTCTransport extends Transport with TransportMixin {
     // We can attempt WebRTC if we're connected to a station
     // The actual connection will be established on first send
     return true;
+  }
+
+  bool _isBleOnlyDevice(String callsign) {
+    final device = _devicesService.getDevice(callsign);
+    if (device == null || device.connectionMethods.isEmpty) {
+      return false;
+    }
+
+    final methods = device.connectionMethods
+        .map((m) => m.toLowerCase())
+        .toSet();
+    final hasBle = methods.any(
+      (m) => m == 'bluetooth' || m == 'ble' || m == 'ble+' || m == 'ble_plus',
+    );
+    final hasNonBle = methods.any(
+      (m) => m != 'bluetooth' && m != 'ble' && m != 'ble+' && m != 'ble_plus',
+    );
+    return hasBle && !hasNonBle;
   }
 
   @override
@@ -144,10 +169,9 @@ class WebRTCTransport extends Transport with TransportMixin {
       }
 
       // Ensure we have a WebRTC connection
-      final connected = await _peerManager.ensureConnection(callsign).timeout(
-        connectionTimeout,
-        onTimeout: () => false,
-      );
+      final connected = await _peerManager
+          .ensureConnection(callsign)
+          .timeout(connectionTimeout, onTimeout: () => false);
 
       if (!connected) {
         stopwatch.stop();
@@ -192,13 +216,17 @@ class WebRTCTransport extends Transport with TransportMixin {
       );
       recordMetrics(result);
 
-      LogService().log('WebRTCTransport: Sent ${message.type} to $callsign '
-          '(${stopwatch.elapsed.inMilliseconds}ms)');
+      LogService().log(
+        'WebRTCTransport: Sent ${message.type} to $callsign '
+        '(${stopwatch.elapsed.inMilliseconds}ms)',
+      );
 
       return result;
     } catch (e) {
       stopwatch.stop();
-      LogService().log('WebRTCTransport: Error sending to ${message.targetCallsign}: $e');
+      LogService().log(
+        'WebRTCTransport: Error sending to ${message.targetCallsign}: $e',
+      );
 
       final result = TransportResult.failure(
         error: e.toString(),
@@ -216,7 +244,9 @@ class WebRTCTransport extends Transport with TransportMixin {
 
     // Try to use existing connection, don't wait for new connection
     if (!_peerManager.hasActiveConnection(callsign)) {
-      LogService().log('WebRTCTransport: No active connection for async send to $callsign');
+      LogService().log(
+        'WebRTCTransport: No active connection for async send to $callsign',
+      );
       return;
     }
 
@@ -231,9 +261,7 @@ class WebRTCTransport extends Transport with TransportMixin {
 
   /// Build payload for WebRTC message from TransportMessage
   Map<String, dynamic> _buildPayload(TransportMessage message) {
-    final payload = <String, dynamic>{
-      'message_type': message.type.name,
-    };
+    final payload = <String, dynamic>{'message_type': message.type.name};
 
     switch (message.type) {
       case TransportMessageType.apiRequest:
@@ -270,7 +298,8 @@ class WebRTCTransport extends Transport with TransportMixin {
       final payload = message.payload as Map<String, dynamic>?;
       if (payload == null) return;
 
-      final messageTypeName = payload['message_type'] as String? ?? message.type;
+      final messageTypeName =
+          payload['message_type'] as String? ?? message.type;
       final messageType = TransportMessageType.values.firstWhere(
         (t) => t.name == messageTypeName,
         orElse: () => TransportMessageType.apiRequest,
@@ -284,7 +313,8 @@ class WebRTCTransport extends Transport with TransportMixin {
             targetCallsign: message.fromCallsign,
             method: payload['method'] as String? ?? 'GET',
             path: payload['path'] as String? ?? '/',
-            headers: (payload['headers'] as Map<String, dynamic>?)?.cast<String, String>(),
+            headers: (payload['headers'] as Map<String, dynamic>?)
+                ?.cast<String, String>(),
             body: payload['body'],
           );
           break;
@@ -304,7 +334,9 @@ class WebRTCTransport extends Transport with TransportMixin {
         case TransportMessageType.chatMessage:
           final chatEvent = payload['signed_event'] as Map<String, dynamic>?;
           if (chatEvent == null) {
-            LogService().log('WebRTCTransport: Chat message missing signed_event');
+            LogService().log(
+              'WebRTCTransport: Chat message missing signed_event',
+            );
             return;
           }
           transportMessage = TransportMessage.chatMessage(
@@ -317,7 +349,9 @@ class WebRTCTransport extends Transport with TransportMixin {
         default:
           // Create a generic message using the base constructor
           transportMessage = TransportMessage(
-            id: message.messageId ?? DateTime.now().millisecondsSinceEpoch.toString(),
+            id:
+                message.messageId ??
+                DateTime.now().millisecondsSinceEpoch.toString(),
             targetCallsign: message.fromCallsign,
             type: messageType,
             payload: payload,
@@ -330,7 +364,9 @@ class WebRTCTransport extends Transport with TransportMixin {
             ? transportMessage.copyWith(sourceTransportId: id)
             : transportMessage,
       );
-      LogService().log('WebRTCTransport: Received ${messageType.name} from ${message.fromCallsign}');
+      LogService().log(
+        'WebRTCTransport: Received ${messageType.name} from ${message.fromCallsign}',
+      );
     } catch (e) {
       LogService().log('WebRTCTransport: Error handling incoming message: $e');
     }
