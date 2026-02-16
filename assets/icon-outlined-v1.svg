@@ -1,0 +1,11 @@
+<svg width="512" height="512" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Black outline layer (drawn first, slightly thicker) -->
+  <line x1="35" y1="22" x2="35" y2="48" stroke="black" stroke-width="12" stroke-linecap="round"/>
+  <line x1="65" y1="22" x2="65" y2="48" stroke="black" stroke-width="12" stroke-linecap="round"/>
+  <path d="M18 55 L18 62 C18 82, 82 82, 82 62 L82 55" stroke="black" stroke-width="12" stroke-linecap="round" fill="none"/>
+  
+  <!-- White foreground layer -->
+  <line x1="35" y1="22" x2="35" y2="48" stroke="white" stroke-width="8" stroke-linecap="round"/>
+  <line x1="65" y1="22" x2="65" y2="48" stroke="white" stroke-width="8" stroke-linecap="round"/>
+  <path d="M18 55 L18 62 C18 82, 82 82, 82 62 L82 55" stroke="white" stroke-width="8" stroke-linecap="round" fill="none"/>
+</svg>
