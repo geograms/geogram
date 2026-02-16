@@ -8550,6 +8550,140 @@ class LogApiService {
             );
           }
 
+        case 'device_api_request':
+          // Generic remote device API request (for transport debugging/automation)
+          final callsign = params['callsign'] as String?;
+          final path = params['path'] as String?;
+          final method = (params['method'] as String? ?? 'GET').toUpperCase();
+          final transport = params['transport'] as String? ?? 'all';
+          final rawHeaders = params['headers'];
+          final rawBody = params['body'];
+
+          if (callsign == null || callsign.isEmpty) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Missing callsign parameter',
+              }),
+              headers: headers,
+            );
+          }
+
+          if (path == null || path.isEmpty) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Missing path parameter',
+              }),
+              headers: headers,
+            );
+          }
+
+          final normalizedCallsign = callsign.toUpperCase();
+
+          final devicesService = DevicesService();
+          final device = devicesService.getDevice(normalizedCallsign);
+          if (device == null) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Device not found: $normalizedCallsign',
+              }),
+              headers: headers,
+            );
+          }
+
+          Map<String, String>? requestHeaders;
+          if (rawHeaders is Map) {
+            requestHeaders = rawHeaders.map(
+              (k, v) => MapEntry(k.toString(), v.toString()),
+            );
+          }
+
+          String? requestBody;
+          if (rawBody != null) {
+            requestBody = rawBody is String ? rawBody : jsonEncode(rawBody);
+          }
+
+          devicesService.syncDeviceToConnectionManager(normalizedCallsign);
+
+          final connectionManager = ConnectionManager();
+          if (!connectionManager.isInitialized) {
+            return shelf.Response.ok(
+              jsonEncode({
+                'success': false,
+                'error': 'ConnectionManager not initialized',
+              }),
+              headers: headers,
+            );
+          }
+
+          // Force specific transport by excluding all others
+          final allIds = {'lan', 'ble', 'station', 'webrtc', 'bluetooth_classic', 'usb_aoa'};
+          Set<String>? excludeTransports;
+          if (transport != 'all') {
+            if (!allIds.contains(transport)) {
+              return shelf.Response.badRequest(
+                body: jsonEncode({
+                  'success': false,
+                  'error': 'Invalid transport: $transport',
+                }),
+                headers: headers,
+              );
+            }
+            excludeTransports = allIds.difference({transport});
+          }
+
+          final stopwatch = Stopwatch()..start();
+          final result = await connectionManager.apiRequest(
+            callsign: normalizedCallsign,
+            method: method,
+            path: path,
+            headers: requestHeaders,
+            body: requestBody,
+            excludeTransports: excludeTransports,
+          );
+          stopwatch.stop();
+
+          final availableTransportIds = await connectionManager.getAvailableTransports(normalizedCallsign);
+
+          String responseBody = '';
+          final responseData = result.responseData;
+          if (responseData is String) {
+            responseBody = responseData;
+          } else if (responseData is List<int>) {
+            responseBody = utf8.decode(responseData, allowMalformed: true);
+          } else if (responseData != null) {
+            responseBody = jsonEncode(responseData);
+          }
+
+          dynamic parsedBody;
+          try {
+            if (responseBody.isNotEmpty) {
+              parsedBody = jsonDecode(responseBody);
+            }
+          } catch (_) {
+            parsedBody = null;
+          }
+
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': result.success,
+              'callsign': normalizedCallsign,
+              'method': method,
+              'path': path,
+              'transport_requested': transport,
+              'transport_used': result.transportUsed,
+              'available_transports': availableTransportIds,
+              'latency_ms': stopwatch.elapsedMilliseconds,
+              'status_code': result.statusCode,
+              'error': result.error,
+              'body': responseBody,
+              if (parsedBody != null) 'parsed_body': parsedBody,
+            }),
+            headers: headers,
+          );
+
         case 'device_ping':
           final callsign = params['callsign'] as String?;
           if (callsign == null || callsign.isEmpty) {
@@ -8617,7 +8751,7 @@ class LogApiService {
             body: jsonEncode({
               'success': false,
               'error': 'Unknown device action: $action',
-              'available': ['device_browse_apps', 'device_open_detail', 'device_test_remote_chat', 'device_send_remote_chat', 'device_ping'],
+              'available': ['device_browse_apps', 'device_open_detail', 'device_test_remote_chat', 'device_send_remote_chat', 'device_api_request', 'device_ping'],
             }),
             headers: headers,
           );
