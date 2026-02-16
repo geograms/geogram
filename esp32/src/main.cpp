@@ -108,6 +108,30 @@ static bool s_mesh_connected = false;
 static bool s_mesh_services_started = false;
 static bool s_http_server_started = false;  // Track if HTTP server started early
 
+static esp_err_t start_dns_for_softap(const char *context)
+{
+    esp_netif_t *ap_netif = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
+    if (!ap_netif) {
+        ESP_LOGW(TAG, "DNS start skipped (%s): SoftAP netif not available", context);
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    esp_netif_ip_info_t ip_info;
+    esp_err_t ip_ret = esp_netif_get_ip_info(ap_netif, &ip_info);
+    if (ip_ret != ESP_OK || ip_info.ip.addr == 0) {
+        ESP_LOGW(TAG, "DNS start skipped (%s): SoftAP IP not ready (%s)",
+                 context,
+                 ip_ret == ESP_OK ? "invalid state" : esp_err_to_name(ip_ret));
+        return ip_ret == ESP_OK ? ESP_ERR_INVALID_STATE : ip_ret;
+    }
+
+    esp_err_t dns_ret = dns_server_start(ip_info.ip.addr);
+    if (dns_ret != ESP_OK) {
+        ESP_LOGW(TAG, "DNS server start failed (%s): %s", context, esp_err_to_name(dns_ret));
+    }
+    return dns_ret;
+}
+
 static void start_mesh_services(void)
 {
     if (s_mesh_services_started) {
@@ -115,16 +139,16 @@ static void start_mesh_services(void)
     }
 
     const char *ap_ssid = "geogram";
-    geogram_mesh_start_external_ap(ap_ssid, "", CONFIG_GEOGRAM_MESH_EXTERNAL_AP_MAX_CONN);
+    esp_err_t ap_ret = geogram_mesh_start_external_ap(
+        ap_ssid, "", CONFIG_GEOGRAM_MESH_EXTERNAL_AP_MAX_CONN);
+    if (ap_ret != ESP_OK) {
+        ESP_LOGW(TAG, "Deferring mesh services, external AP not ready: %s", esp_err_to_name(ap_ret));
+        return;
+    }
     ESP_LOGI(TAG, "External AP: %s (open)", ap_ssid);
 
-    uint32_t ap_ip = 0;
-    if (geogram_mesh_get_external_ap_ip_addr(&ap_ip) == ESP_OK) {
-        esp_err_t dns_ret = dns_server_start(ap_ip);
-        if (dns_ret != ESP_OK) {
-            ESP_LOGW(TAG, "DNS server start failed on mesh AP: %s", esp_err_to_name(dns_ret));
-        }
-    }
+    // Always derive DNS response IP from the live SoftAP netif.
+    start_dns_for_softap("mesh services");
 
     // Only start HTTP server if not already started early
     if (!s_http_server_started) {
@@ -256,6 +280,12 @@ static void start_mesh_mode(void)
     s_mesh_mode = true;
     ESP_LOGI(TAG, "Mesh mode started, scanning for network...");
 
+    // Mesh CONNECTED event can arrive before geogram_mesh_start() finishes.
+    // If services were deferred, start them now that mesh startup returned.
+    if (s_mesh_connected && !s_mesh_services_started) {
+        start_mesh_services();
+    }
+
     // Start HTTP server immediately for SoftAP clients
     // (Don't wait for mesh NODE_JOIN event which may never fire for root-only nodes)
     station_init();
@@ -270,11 +300,9 @@ static void start_mesh_mode(void)
 
             // Start DNS server immediately for captive portal
             // All DNS queries will resolve to the SoftAP IP
-            esp_err_t dns_ret = dns_server_start(ip_info.ip.addr);
+            esp_err_t dns_ret = start_dns_for_softap("mesh mode early start");
             if (dns_ret == ESP_OK) {
                 ESP_LOGI(TAG, "DNS server started for captive portal");
-            } else {
-                ESP_LOGW(TAG, "Failed to start DNS server for captive portal: %s", esp_err_to_name(dns_ret));
             }
         }
     } else {

@@ -9,6 +9,7 @@
 #include "esp_http_server.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "esp_netif.h"
 #include "nvs_flash.h"
 #include "nvs.h"
 #include "station.h"
@@ -795,10 +796,44 @@ static bool parse_sha1_hex(const char *hex, uint8_t *out)
 /**
  * @brief Handler for captive portal detection - redirect to main page
  */
+static bool get_softap_ip_string(char *out, size_t out_len)
+{
+    if (!out || out_len < 16) {
+        return false;
+    }
+
+    esp_netif_t *ap_netif = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
+    if (!ap_netif) {
+        return false;
+    }
+
+    esp_netif_ip_info_t ip_info;
+    if (esp_netif_get_ip_info(ap_netif, &ip_info) != ESP_OK || ip_info.ip.addr == 0) {
+        return false;
+    }
+
+    snprintf(out, out_len, IPSTR, IP2STR(&ip_info.ip));
+    return true;
+}
+
+static void set_captive_redirect_headers(httpd_req_t *req)
+{
+    char ap_ip[16] = {0};
+    char location[40] = "/";
+    if (get_softap_ip_string(ap_ip, sizeof(ap_ip))) {
+        snprintf(location, sizeof(location), "http://%s/", ap_ip);
+    }
+
+    httpd_resp_set_status(req, "302 Found");
+    httpd_resp_set_hdr(req, "Location", location);
+    httpd_resp_set_hdr(req, "Cache-Control", "no-cache, no-store, must-revalidate");
+    httpd_resp_set_hdr(req, "Pragma", "no-cache");
+    httpd_resp_set_hdr(req, "Expires", "0");
+}
+
 static esp_err_t captive_portal_handler(httpd_req_t *req)
 {
-    httpd_resp_set_status(req, "302 Found");
-    httpd_resp_set_hdr(req, "Location", "http://192.168.5.1/");
+    set_captive_redirect_headers(req);
     httpd_resp_send(req, NULL, 0);
     return ESP_OK;
 }
@@ -808,8 +843,7 @@ static esp_err_t captive_portal_handler(httpd_req_t *req)
  */
 static esp_err_t http_404_redirect_handler(httpd_req_t *req, httpd_err_code_t err)
 {
-    httpd_resp_set_status(req, "302 Found");
-    httpd_resp_set_hdr(req, "Location", "http://192.168.5.1/");
+    set_captive_redirect_headers(req);
     httpd_resp_send(req, NULL, 0);
     return ESP_FAIL;  // Close socket after redirect
 }
@@ -1703,14 +1737,12 @@ esp_err_t http_server_start_ex(wifi_config_callback_t callback, bool enable_stat
 
         // Initialize chat system
         mesh_chat_init();
-        ESP_LOGI(TAG, "Chat API endpoints registered");
 #endif
 
         // Register file transfer relay handlers
         httpd_register_uri_handler(s_server, &uri_api_file_upload);
         httpd_register_uri_handler(s_server, &uri_api_file_download);
         httpd_register_uri_handler(s_server, &uri_api_file_status);
-        ESP_LOGI(TAG, "File transfer API endpoints registered");
 
         // Register WebSocket handler
         ret = ws_server_register(s_server);

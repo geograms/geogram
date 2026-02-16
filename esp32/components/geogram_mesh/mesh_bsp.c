@@ -572,7 +572,20 @@ esp_err_t geogram_mesh_get_external_ap_ip(char *ip_str, size_t len)
     if (!ip_str || len < 16) return ESP_ERR_INVALID_ARG;
     if (!s_external_ap_running) return ESP_ERR_INVALID_STATE;
 
-    snprintf(ip_str, len, "192.168.4.1");
+    esp_netif_t *ap_netif = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
+    if (!ap_netif) {
+        ip_str[0] = '\0';
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    esp_netif_ip_info_t ip_info;
+    esp_err_t ret = esp_netif_get_ip_info(ap_netif, &ip_info);
+    if (ret != ESP_OK || ip_info.ip.addr == 0) {
+        ip_str[0] = '\0';
+        return ret == ESP_OK ? ESP_ERR_INVALID_STATE : ret;
+    }
+
+    snprintf(ip_str, len, IPSTR, IP2STR(&ip_info.ip));
     return ESP_OK;
 }
 
@@ -581,9 +594,20 @@ esp_err_t geogram_mesh_get_external_ap_ip_addr(uint32_t *ip)
     if (!ip) return ESP_ERR_INVALID_ARG;
     if (!s_external_ap_running) return ESP_ERR_INVALID_STATE;
 
-    ip4_addr_t addr;
-    IP4_ADDR(&addr, 192, 168, 4, 1);
-    *ip = addr.addr;
+    esp_netif_t *ap_netif = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
+    if (!ap_netif) {
+        *ip = 0;
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    esp_netif_ip_info_t ip_info;
+    esp_err_t ret = esp_netif_get_ip_info(ap_netif, &ip_info);
+    if (ret != ESP_OK || ip_info.ip.addr == 0) {
+        *ip = 0;
+        return ret == ESP_OK ? ESP_ERR_INVALID_STATE : ret;
+    }
+
+    *ip = ip_info.ip.addr;
     return ESP_OK;
 }
 

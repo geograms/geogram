@@ -169,8 +169,20 @@ static void dns_server_task(void *pvParameters)
 
 esp_err_t dns_server_start(uint32_t ap_ip)
 {
+    if (ap_ip == 0) {
+        ESP_LOGW(TAG, "Refusing to start DNS server with invalid AP IP 0.0.0.0");
+        return ESP_ERR_INVALID_ARG;
+    }
+
     if (s_running) {
-        ESP_LOGW(TAG, "DNS server already running");
+        if (s_ap_ip != ap_ip) {
+            s_ap_ip = ap_ip;
+            ESP_LOGI(TAG, "DNS server already running, updated AP IP to %d.%d.%d.%d",
+                     (uint8_t)(ap_ip), (uint8_t)(ap_ip >> 8),
+                     (uint8_t)(ap_ip >> 16), (uint8_t)(ap_ip >> 24));
+        } else {
+            ESP_LOGW(TAG, "DNS server already running");
+        }
         return ESP_OK;
     }
 
