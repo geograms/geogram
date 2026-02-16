@@ -10,24 +10,29 @@ import 'dart:typed_data';
 import 'package:dbus/dbus.dart';
 import 'package:flutter/foundation.dart';
 import 'package:image/image.dart' as img;
+import 'package:tray_manager/tray_manager.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'notification_service.dart';
 import 'log_service.dart';
 
-/// System tray service for Linux desktop using pure D-Bus StatusNotifierItem.
-/// Zero system dependencies — no libayatana-appindicator needed.
+/// System tray service for desktop platforms.
 ///
-/// On non-Linux desktops, [isSupported] returns false and all operations
+/// - **Linux**: Pure D-Bus StatusNotifierItem (zero system dependencies).
+/// - **Windows**: `tray_manager` package for native tray icon + menu.
+///
+/// On unsupported platforms, [isSupported] returns false and all operations
 /// are no-ops — the window closes normally instead of hiding to tray.
-class TrayService {
+class TrayService with TrayListener {
   static final TrayService _instance = TrayService._internal();
   factory TrayService() => _instance;
   TrayService._internal();
 
   bool _initialized = false;
   bool _windowHidden = false;
+  bool _trayManagerInitialized = false;
 
+  // Linux D-Bus fields
   DBusClient? _client;
   _StatusNotifierItemObject? _sniObject;
   _DBusMenuObject? _menuObject;
@@ -36,11 +41,13 @@ class TrayService {
   /// Whether the window is currently hidden to the tray
   bool get isWindowHidden => _windowHidden;
 
-  /// Whether this platform supports system tray (Linux only — D-Bus SNI)
+  /// Whether this platform supports system tray
   bool get isSupported =>
-      !kIsWeb && defaultTargetPlatform == TargetPlatform.linux;
+      !kIsWeb &&
+      (defaultTargetPlatform == TargetPlatform.linux ||
+       defaultTargetPlatform == TargetPlatform.windows);
 
-  /// Initialize system tray icon and context menu via D-Bus StatusNotifierItem
+  /// Initialize system tray icon and context menu
   Future<void> initialize() async {
     if (_initialized) return;
     if (!isSupported) {
@@ -48,6 +55,81 @@ class TrayService {
       return;
     }
 
+    if (defaultTargetPlatform == TargetPlatform.linux) {
+      await _initializeLinux();
+    } else if (defaultTargetPlatform == TargetPlatform.windows) {
+      await _initializeWindows();
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Windows — tray_manager
+  // ---------------------------------------------------------------------------
+
+  Future<void> _initializeWindows() async {
+    try {
+      final iconPath = _resolveWindowsIconPath();
+      await trayManager.setIcon(iconPath);
+      await trayManager.setToolTip('Geogram');
+
+      final menu = Menu(items: [
+        MenuItem(key: 'show', label: 'Show Geogram'),
+        MenuItem.separator(),
+        MenuItem(key: 'quit', label: 'Quit'),
+      ]);
+      await trayManager.setContextMenu(menu);
+
+      trayManager.addListener(this);
+      _trayManagerInitialized = true;
+      _initialized = true;
+      LogService().log('TrayService: Initialized tray_manager (Windows)');
+    } catch (e) {
+      LogService().log('TrayService: Failed to initialize tray_manager: $e');
+      _initialized = true; // Avoid retries — app works without tray
+    }
+  }
+
+  /// Resolve the .ico path for the Windows tray icon
+  String _resolveWindowsIconPath() {
+    final exeDir = File(Platform.resolvedExecutable).parent.path;
+    final candidates = [
+      '$exeDir/data/tray_icon.ico',
+      '$exeDir/data/flutter_assets/assets/geogram_icon_transparent.png',
+    ];
+    for (final path in candidates) {
+      if (File(path).existsSync()) return path;
+    }
+    return candidates.first;
+  }
+
+  // TrayListener callbacks (Windows)
+
+  @override
+  void onTrayIconMouseDown() {
+    if (_windowHidden) {
+      restoreFromTray();
+    } else {
+      hideToTray();
+    }
+  }
+
+  @override
+  void onTrayMenuItemClick(MenuItem menuItem) {
+    switch (menuItem.key) {
+      case 'show':
+        restoreFromTray();
+        break;
+      case 'quit':
+        _quit();
+        break;
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Linux — D-Bus StatusNotifierItem
+  // ---------------------------------------------------------------------------
+
+  Future<void> _initializeLinux() async {
     try {
       // 1. Open session bus
       _client = DBusClient.session();
@@ -101,10 +183,10 @@ class TrayService {
 
   /// Load icon PNG and convert to ARGB pixel data (48×48)
   Future<Uint8List?> _loadIconBytes() {
-    return compute(_decodeIcon, _resolveIconPath());
+    return compute(_decodeIcon, _resolveLinuxIconPath());
   }
 
-  String _resolveIconPath() {
+  String _resolveLinuxIconPath() {
     final exeDir = File(Platform.resolvedExecutable).parent.path;
     final candidates = [
       '$exeDir/data/tray_icon.png',
@@ -202,6 +284,10 @@ class TrayService {
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // Shared public API
+  // ---------------------------------------------------------------------------
+
   /// Hide the window to the system tray
   Future<void> hideToTray() async {
     if (!_initialized || !isSupported) return;
@@ -263,7 +349,15 @@ class TrayService {
   }
 
   void dispose() {
-    if (_initialized && isSupported) {
+    // Clean up Windows tray_manager
+    if (_trayManagerInitialized) {
+      trayManager.removeListener(this);
+      trayManager.destroy();
+      _trayManagerInitialized = false;
+    }
+
+    // Clean up Linux D-Bus
+    if (_initialized && defaultTargetPlatform == TargetPlatform.linux) {
       _watcherSubscription?.cancel();
       _watcherSubscription = null;
       try {
@@ -277,7 +371,7 @@ class TrayService {
 }
 
 // =============================================================================
-// D-Bus objects for StatusNotifierItem protocol
+// D-Bus objects for StatusNotifierItem protocol (Linux only)
 // =============================================================================
 
 /// org.kde.StatusNotifierItem — the tray icon itself

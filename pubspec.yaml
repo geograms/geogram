@@ -52,6 +52,7 @@ dependencies:
   html: ^0.15.4              # HTML parsing for web snapshot capture
   async: ^2.11.0             # Stream utilities (StreamGroup for ConnectionManager)
   window_manager: ^0.4.3
+  tray_manager: ^0.5.2               # Windows system tray support
   shelf: ^1.4.0
   flutter_markdown: ^0.7.4+1
   markdown: ^7.2.2          # Server-side markdown to HTML conversion
