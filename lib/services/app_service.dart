@@ -19,7 +19,7 @@ import '../util/html_utils.dart';
 import '../util/web_navigation.dart';
 import 'config_service.dart';
 import 'chat_service.dart';
-import 'encrypted_storage_stub.dart' if (dart.library.io) 'encrypted_storage_service.dart';
+import 'encrypted_storage_stub.dart' if (dart.library.ui) 'encrypted_storage_service.dart';
 import 'profile_service.dart';
 import 'profile_storage.dart';
 import 'storage_config.dart';

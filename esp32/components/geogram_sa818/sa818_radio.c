@@ -1739,7 +1739,10 @@ bool sa818_radio_is_aprs_tx_supported(sa818_radio_handle_t handle)
         return false;
     }
 
-    bool supported = handle->dac_ready;
+    bool supported = false;
+#if SOC_DAC_SUPPORTED
+    supported = handle->dac_ready;
+#endif
 #if CONFIG_IDF_TARGET_ESP32
     supported = supported || handle->i2s_tx_ready;
 #endif

@@ -6,4 +6,4 @@
  * - Pure Dart/CLI builds load bundled native libs from third_party/sqlite or libs/.
  */
 export 'sqlite_loader_pure.dart'
-    if (dart.library.io) 'sqlite_loader_flutter.dart';
+    if (dart.library.ui) 'sqlite_loader_flutter.dart';

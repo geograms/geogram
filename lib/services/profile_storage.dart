@@ -10,7 +10,8 @@ import 'package:path/path.dart' as p;
 
 import '../platform/file_system_service.dart';
 // Use stub for CLI/pure Dart builds and web, real implementation for native Flutter
-import 'encrypted_storage_stub.dart' if (dart.library.io) 'encrypted_storage_service.dart';
+// dart.library.ui is only available in Flutter apps (not pure Dart CLI or web)
+import 'encrypted_storage_stub.dart' if (dart.library.ui) 'encrypted_storage_service.dart';
 import 'log_service.dart';
 
 /// Entry in a storage directory listing

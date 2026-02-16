@@ -9,7 +9,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/services.dart';
 import 'log_service.dart';
 import 'app_args.dart';
-import 'usb_aoa_linux_stub.dart' if (dart.library.io) 'usb_aoa_linux.dart';
+import 'usb_aoa_linux_stub.dart' if (dart.library.ui) 'usb_aoa_linux.dart';
 
 /// Connection state for USB AOA connections
 enum UsbAoaConnectionState {
