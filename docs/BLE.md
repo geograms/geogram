@@ -58,6 +58,7 @@ Current baseline capability list:
 - `data`
 - `broadcast`
 - `chat` (kept for backward compatibility with existing geogram chat behavior)
+- `geoblue_reverse_unicast_test` (used by reverse large-payload unicast test)
 
 ### Stream Framing / Parcel Handling
 
@@ -87,12 +88,16 @@ Folder: `tests/geoblue`
 - Dart app: `tests/geoblue/bin/geoblue_console.dart`
 - bridge script (BLE I/O via bleak): `tests/geoblue/bin/geoblue_bleak_bridge.py`
 - executable runner: `tests/geoblue/run_hello_test.sh`
+- large unicast runner: `tests/geoblue/run_unicast_large_test.sh`
+- reverse unicast runner: `tests/geoblue/run_unicast_reverse_test.sh`
 
 Run:
 
 ```bash
 cd tests/geoblue
 ./run_hello_test.sh
+./run_unicast_large_test.sh
+./run_unicast_reverse_test.sh
 ```
 
 This first test is successful only when:
@@ -100,6 +105,12 @@ This first test is successful only when:
 1. Linux sends `hello` to ESP32 and receives `hello_ack`.
 2. Linux also receives ESP32 proactive `hello`.
 3. Linux automatically responds with `hello_ack` to ESP32.
+
+Forward/Reverse large unicast tests are successful only when:
+
+1. A 1000-byte payload is transferred with exact content match.
+2. Timing is printed for transfer and roundtrip phases.
+3. Reverse mode returns explicit ESP32 validation result `ok`.
 
 ---
 

@@ -6,12 +6,15 @@ import 'package:geoblue/geoblue.dart';
 
 import '../lib/bleak_bridge.dart';
 
-// Forward unicast integrity test:
-// 1) Perform HELLO handshake.
-// 2) Send deterministic 1000-byte payload desktop -> ESP32.
-// 3) Receive echo on same channel and verify exact byte-for-byte match.
-// 4) Print send and roundtrip timing.
-const _testChannel = 'geoblue_unicast_test';
+// Reverse unicast integrity test:
+// 1) Desktop requests reverse mode in HELLO capability list.
+// 2) ESP32 sends deterministic 1000-byte payload to desktop.
+// 3) Desktop validates content and echoes it back.
+// 4) ESP32 validates echoed content and sends final pass/fail result.
+const _reverseCapability = 'geoblue_reverse_unicast_test';
+const _reverseTestChannel = 'geoblue_reverse_unicast_test';
+const _reverseEchoChannel = 'geoblue_reverse_unicast_test_echo';
+const _reverseResultChannel = 'geoblue_reverse_unicast_test_result';
 
 Future<int> main(List<String> args) async {
   final parser = ArgParser()
@@ -21,7 +24,7 @@ Future<int> main(List<String> args) async {
     ..addOption('address', help: 'Target BLE MAC address (optional)')
     ..addOption('scan-seconds', defaultsTo: '8')
     ..addOption('hello-timeout', defaultsTo: '20')
-    ..addOption('echo-timeout', defaultsTo: '60')
+    ..addOption('test-timeout', defaultsTo: '60')
     ..addOption('payload-file', defaultsTo: 'data/payload_1000.txt')
     ..addOption('bridge-script', defaultsTo: 'bin/geoblue_bleak_bridge.py');
 
@@ -44,7 +47,7 @@ Future<int> main(List<String> args) async {
   final forcedAddress = parsed['address']?.toString();
   final scanSeconds = int.tryParse(parsed['scan-seconds']!.toString()) ?? 8;
   final helloTimeout = int.tryParse(parsed['hello-timeout']!.toString()) ?? 20;
-  final echoTimeout = int.tryParse(parsed['echo-timeout']!.toString()) ?? 60;
+  final testTimeout = int.tryParse(parsed['test-timeout']!.toString()) ?? 60;
 
   final payloadPath = _resolveLocalPath(parsed['payload-file']!.toString());
   final payloadFile = File(payloadPath);
@@ -72,6 +75,12 @@ Future<int> main(List<String> args) async {
 
   final session = GeoBlueSession(
     localProfile: localProfile,
+    localCapabilities: const <String>[
+      'hello',
+      'data',
+      'broadcast',
+      _reverseCapability,
+    ],
     send: (frame) async {
       await bridge.sendFrame(frame, timeout: const Duration(seconds: 60));
       stdout.writeln('TX ${frame.type.wireName} id=${frame.id}');
@@ -83,7 +92,8 @@ Future<int> main(List<String> args) async {
   var peerCallsign = '';
   var shuttingDown = false;
   final ackedHelloIds = <String>{};
-  final echoCompleter = Completer<GeoBlueFrame>();
+  final reverseDataCompleter = Completer<GeoBlueFrame>();
+  final reverseResultCompleter = Completer<GeoBlueFrame>();
 
   Future<void> sendHelloAckIfNeeded(GeoBlueFrame frame) async {
     if (frame.type != GeoBlueFrameType.hello) {
@@ -99,6 +109,12 @@ Future<int> main(List<String> args) async {
     final ack = GeoBlueFrameBuilder.helloAck(
       requestId: frame.id,
       profile: localProfile,
+      capabilities: const <String>[
+        'hello',
+        'data',
+        'broadcast',
+        _reverseCapability,
+      ],
     );
     await bridge.sendFrame(ack, timeout: const Duration(seconds: 30));
     stdout.writeln('TX ${ack.type.wireName} id=${ack.id}');
@@ -122,11 +138,18 @@ Future<int> main(List<String> args) async {
       }
     }
 
-    if (!echoCompleter.isCompleted && frame.type == GeoBlueFrameType.data) {
-      final channel = frame.payload['channel']?.toString();
-      if (channel == _testChannel) {
-        echoCompleter.complete(frame);
-      }
+    if (frame.type != GeoBlueFrameType.data) {
+      return;
+    }
+
+    final channel = frame.payload['channel']?.toString();
+    if (!reverseDataCompleter.isCompleted && channel == _reverseTestChannel) {
+      reverseDataCompleter.complete(frame);
+      return;
+    }
+    if (!reverseResultCompleter.isCompleted &&
+        channel == _reverseResultChannel) {
+      reverseResultCompleter.complete(frame);
     }
   });
 
@@ -183,7 +206,7 @@ Future<int> main(List<String> args) async {
       }
     });
 
-    stdout.writeln('Running HELLO handshake...');
+    stdout.writeln('Running HELLO handshake (reverse capability enabled)...');
     final helloAck = await session.sendHelloAndWaitAck(
       timeout: Duration(seconds: helloTimeout),
     );
@@ -196,42 +219,63 @@ Future<int> main(List<String> args) async {
       'HELLO OK with ${peerCallsign.isEmpty ? 'peer' : peerCallsign}',
     );
 
-    final frame = GeoBlueFrameBuilder.data(
+    final waitReverseStopwatch = Stopwatch()..start();
+    final reverseFrame = await reverseDataCompleter.future.timeout(
+      Duration(seconds: testTimeout),
+    );
+    final waitReverseMs = waitReverseStopwatch.elapsedMilliseconds;
+    waitReverseStopwatch.stop();
+
+    final reverseContent = reverseFrame.payload['content']?.toString() ?? '';
+    final reverseFrom = reverseFrame.payload['from']?.toString();
+    if (reverseFrom != null && reverseFrom.isNotEmpty) {
+      peerCallsign = reverseFrom;
+    }
+
+    final sameContent = reverseContent == payloadText;
+    if (!sameContent) {
+      final firstDiff = _firstDiffIndex(payloadText, reverseContent);
+      stderr.writeln('Reverse payload mismatch at index: $firstDiff');
+      return 1;
+    }
+
+    final echoFrame = GeoBlueFrameBuilder.data(
       from: callsign,
       to: peerCallsign.isEmpty ? null : peerCallsign,
-      channel: _testChannel,
-      content: payloadText,
+      channel: _reverseEchoChannel,
+      content: reverseContent,
     );
 
-    final stopwatch = Stopwatch()..start();
-    await bridge.sendFrame(frame, timeout: Duration(seconds: echoTimeout));
-    final desktopToEspMs = stopwatch.elapsedMilliseconds;
+    final echoStopwatch = Stopwatch()..start();
+    await bridge.sendFrame(echoFrame, timeout: Duration(seconds: testTimeout));
+    final echoSendMs = echoStopwatch.elapsedMilliseconds;
 
-    final echo = await echoCompleter.future.timeout(
-      Duration(seconds: echoTimeout),
+    final resultFrame = await reverseResultCompleter.future.timeout(
+      Duration(seconds: testTimeout),
     );
-    final roundTripMs = stopwatch.elapsedMilliseconds;
-    stopwatch.stop();
+    final echoRoundTripMs = echoStopwatch.elapsedMilliseconds;
+    echoStopwatch.stop();
 
-    final echoContent = echo.payload['content']?.toString() ?? '';
-    final sameContent = echoContent == payloadText;
+    final resultContent = resultFrame.payload['content']?.toString() ?? '';
+    final resultOk = resultContent == 'ok';
 
-    stdout.writeln('Unicast send bytes: ${payloadBytes.length}');
-    stdout.writeln('Desktop -> ESP32 send time: ${desktopToEspMs} ms');
+    stdout.writeln('Reverse receive bytes: ${reverseContent.length}');
+    stdout.writeln('ESP32 -> Desktop reverse wait: ${waitReverseMs} ms');
+    stdout.writeln('Desktop -> ESP32 echo send time: ${echoSendMs} ms');
     stdout.writeln(
-      'Desktop -> ESP32 -> Desktop roundtrip time: ${roundTripMs} ms',
+      'Desktop -> ESP32 echo + validation result time: ${echoRoundTripMs} ms',
     );
     stdout.writeln('Content preserved: $sameContent');
+    stdout.writeln('ESP32 validation result: $resultContent');
 
-    if (!sameContent) {
-      final firstDiff = _firstDiffIndex(payloadText, echoContent);
-      stderr.writeln('Payload mismatch at index: $firstDiff');
+    if (!resultOk) {
+      stderr.writeln('ESP32 reported reverse validation failure.');
       return 1;
     }
 
     return 0;
   } catch (e, st) {
-    stderr.writeln('GeoBlue unicast test failed: $e');
+    stderr.writeln('GeoBlue reverse unicast test failed: $e');
     stderr.writeln(st);
     return 1;
   } finally {

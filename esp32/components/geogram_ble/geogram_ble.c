@@ -54,6 +54,13 @@ static const char *TAG = "geogram_ble";
 #define GEOGRAM_BLE_CHAT_FETCH_MAX          2
 #define GEOGRAM_BLE_CHAT_JSON_MAX_LEN       1024
 
+#define GEOBLUE_TEST_CAP_REVERSE            "geoblue_reverse_unicast_test"
+#define GEOBLUE_CH_UNICAST_TEST             "geoblue_unicast_test"
+#define GEOBLUE_CH_REVERSE_TEST             "geoblue_reverse_unicast_test"
+#define GEOBLUE_CH_REVERSE_ECHO             "geoblue_reverse_unicast_test_echo"
+#define GEOBLUE_CH_REVERSE_RESULT           "geoblue_reverse_unicast_test_result"
+#define GEOBLUE_TEST_PAYLOAD_LEN            1000
+
 typedef struct {
     bool active;
     bool subscribed;
@@ -77,7 +84,13 @@ static uint16_t s_notify_val_handle = 0;
 static uint16_t s_status_val_handle = 0;
 
 static geogram_ble_peer_t s_peers[GEOGRAM_BLE_MAX_CONNECTIONS];
-static const char *s_geoblue_caps[] = {"chat", "hello", "data", "broadcast"};
+static const char *s_geoblue_caps[] = {
+    "chat",
+    "hello",
+    "data",
+    "broadcast",
+    GEOBLUE_TEST_CAP_REVERSE,
+};
 
 #if CONFIG_BT_ENABLED
 static const ble_uuid16_t s_service_uuid = BLE_UUID16_INIT(GEOGRAM_BLE_SERVICE_UUID16);
@@ -89,6 +102,7 @@ static const ble_uuid16_t s_status_uuid = BLE_UUID16_INIT(GEOGRAM_BLE_CHAR_STATU
 static void ble_host_task(void *param);
 static void ble_advertise_start(void);
 static void ble_reset_all_peers(void);
+static int ble_notify_json(uint16_t conn_handle, const char *json);
 
 static geogram_ble_peer_t *ble_find_peer(uint16_t conn_handle)
 {
@@ -243,6 +257,111 @@ static void ble_add_string_if_not_empty(cJSON *obj, const char *key, const char 
         return;
     }
     cJSON_AddStringToObject(obj, key, value);
+}
+
+static bool ble_payload_has_capability(cJSON *message, const char *capability)
+{
+    if (!message || !capability || capability[0] == '\0') {
+        return false;
+    }
+
+    cJSON *payload = cJSON_GetObjectItemCaseSensitive(message, "payload");
+    if (!cJSON_IsObject(payload)) {
+        return false;
+    }
+
+    cJSON *caps = cJSON_GetObjectItemCaseSensitive(payload, "capabilities");
+    if (!cJSON_IsArray(caps)) {
+        return false;
+    }
+
+    cJSON *item = NULL;
+    cJSON_ArrayForEach(item, caps) {
+        if (cJSON_IsString(item) && item->valuestring &&
+            strcmp(item->valuestring, capability) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void ble_build_test_payload(char *out, size_t payload_len)
+{
+    if (!out || payload_len == 0) {
+        return;
+    }
+
+    const char *prefix = "GEOBLUE-UNICAST-ROUNDTRIP-";
+    size_t pos = 0;
+
+    for (size_t i = 0; prefix[i] != '\0' && pos < payload_len; i++) {
+        out[pos++] = prefix[i];
+    }
+
+    for (int seg = 1; pos < payload_len; seg++) {
+        char token[16] = {0};
+        int written = snprintf(token, sizeof(token), "SEG%03d|", seg);
+        if (written <= 0) {
+            break;
+        }
+        for (int i = 0; i < written && pos < payload_len; i++) {
+            out[pos++] = token[i];
+        }
+    }
+
+    out[payload_len] = '\0';
+}
+
+static void ble_send_reverse_test_data(uint16_t conn_handle, const char *to_callsign)
+{
+    char payload[GEOBLUE_TEST_PAYLOAD_LEN + 1] = {0};
+    ble_build_test_payload(payload, GEOBLUE_TEST_PAYLOAD_LEN);
+
+    char message_id[48] = {0};
+    snprintf(message_id, sizeof(message_id), "reverse-%lu", (unsigned long)esp_log_timestamp());
+
+    char *json = geoblue_build_data_frame(
+        message_id,
+        ble_station_callsign(),
+        to_callsign,
+        GEOBLUE_CH_REVERSE_TEST,
+        payload,
+        (int64_t)time(NULL));
+    if (!json) {
+        return;
+    }
+
+    int rc = ble_notify_json(conn_handle, json);
+    if (rc != 0) {
+        ESP_LOGW(TAG, "reverse test data notify failed (rc=%d)", rc);
+    } else {
+        ESP_LOGI(TAG, "reverse test data sent (%u bytes)", (unsigned)strlen(payload));
+    }
+    free(json);
+}
+
+static void ble_send_reverse_test_result(uint16_t conn_handle, const char *to_callsign, bool ok)
+{
+    char message_id[48] = {0};
+    snprintf(message_id, sizeof(message_id), "reverse-result-%lu", (unsigned long)esp_log_timestamp());
+
+    const char *result = ok ? "ok" : "mismatch";
+    char *json = geoblue_build_data_frame(
+        message_id,
+        ble_station_callsign(),
+        to_callsign,
+        GEOBLUE_CH_REVERSE_RESULT,
+        result,
+        (int64_t)time(NULL));
+    if (!json) {
+        return;
+    }
+
+    int rc = ble_notify_json(conn_handle, json);
+    if (rc != 0) {
+        ESP_LOGW(TAG, "reverse test result notify failed (rc=%d)", rc);
+    }
+    free(json);
 }
 
 static cJSON *ble_build_hello_event(void)
@@ -1326,9 +1445,10 @@ static void ble_send_hello_compact(uint16_t conn_handle)
         json,
         sizeof(json),
         "{\"v\":1,\"id\":\"%s\",\"type\":\"hello\",\"seq\":0,\"total\":1,"
-        "\"payload\":{\"callsign\":\"%s\",\"capabilities\":[\"hello\",\"data\",\"broadcast\"]}}",
+        "\"payload\":{\"callsign\":\"%s\",\"capabilities\":[\"hello\",\"data\",\"broadcast\",\"%s\"]}}",
         request_id,
-        callsign);
+        callsign,
+        GEOBLUE_TEST_CAP_REVERSE);
     if (written <= 0 || (size_t)written >= sizeof(json)) {
         return;
     }
@@ -1590,6 +1710,14 @@ static void ble_handle_hello(uint16_t conn_handle,
     // Symmetric geoblue handshake: after acknowledging peer HELLO,
     // also announce our own HELLO in compact single-frame form.
     ble_send_hello_compact(conn_handle);
+
+    // Reverse unicast test mode: peer advertises the dedicated capability in
+    // HELLO so ESP32 starts a deterministic 1000-byte data transfer.
+    if (ble_payload_has_capability(message, GEOBLUE_TEST_CAP_REVERSE)) {
+        const char *peer_callsign =
+            (peer && peer->callsign[0] != '\0') ? peer->callsign : NULL;
+        ble_send_reverse_test_data(conn_handle, peer_callsign);
+    }
 #else
     (void)conn_handle;
     (void)peer;
@@ -1693,7 +1821,7 @@ static void ble_handle_data(uint16_t conn_handle,
         mesh_chat_add_local_message_with_timestamp(from, content, timestamp);
     }
 
-    if (content && content[0] != '\0' && strcmp(channel, "geoblue_unicast_test") == 0) {
+    if (content && content[0] != '\0' && strcmp(channel, GEOBLUE_CH_UNICAST_TEST) == 0) {
         char response_id[48] = {0};
         snprintf(response_id, sizeof(response_id), "echo-%lu",
                  (unsigned long)esp_log_timestamp());
@@ -1714,6 +1842,20 @@ static void ble_handle_data(uint16_t conn_handle,
             }
             free(echo);
         }
+    }
+
+    if (strcmp(channel, GEOBLUE_CH_REVERSE_ECHO) == 0) {
+        char expected[GEOBLUE_TEST_PAYLOAD_LEN + 1] = {0};
+        ble_build_test_payload(expected, GEOBLUE_TEST_PAYLOAD_LEN);
+
+        bool ok = false;
+        if (content) {
+            ok = (strlen(content) == GEOBLUE_TEST_PAYLOAD_LEN &&
+                  memcmp(content, expected, GEOBLUE_TEST_PAYLOAD_LEN) == 0);
+        }
+
+        ble_send_reverse_test_result(conn_handle, from, ok);
+        ESP_LOGI(TAG, "reverse echo validation %s", ok ? "ok" : "mismatch");
     }
 #else
     (void)conn_handle;
