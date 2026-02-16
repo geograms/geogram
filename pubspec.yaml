@@ -111,6 +111,8 @@ dependencies:
     path: packages/encrypted_archive
   nntp:                          # NNTP/Usenet client protocol
     path: packages/nntp
+  geoblue:
+    path: packages/geoblue
   # USB serial is implemented natively without external dependencies:
   # - Android: android.hardware.usb.* (built-in USB Host API)
   # - Linux: libc termios (built-in kernel interface)

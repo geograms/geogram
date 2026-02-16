@@ -1494,25 +1494,24 @@ static void ble_send_hello_ack(uint16_t conn_handle, const char *request_id)
 {
     const char *id = (request_id && request_id[0] != '\0') ? request_id : "unknown";
     const char *callsign = ble_station_callsign();
-    if (!callsign || callsign[0] == '\0') {
-        callsign = "NOCALL";
-    }
+    const char *npub = nostr_keys_get_npub();
 
-    char json[240] = {0};
-    int written = snprintf(
-        json,
-        sizeof(json),
-        "{\"v\":1,\"id\":\"%s\",\"type\":\"hello_ack\",\"seq\":0,\"total\":1,"
-        "\"payload\":{\"success\":true,\"callsign\":\"%s\"}}",
+    char *json = geoblue_build_hello_ack_frame(
         id,
-        callsign);
-
-    if (written <= 0 || (size_t)written >= sizeof(json)) {
+        true,
+        callsign,
+        npub,
+        BOARD_NAME,
+        s_geoblue_caps,
+        sizeof(s_geoblue_caps) / sizeof(s_geoblue_caps[0]),
+        NULL);
+    if (!json) {
         ESP_LOGW(TAG, "hello_ack build failed (id=%s)", id);
         return;
     }
 
     int rc = ble_notify_json(conn_handle, json);
+    free(json);
     if (rc != 0) {
         ESP_LOGW(TAG, "hello_ack notify failed (id=%s rc=%d)", id, rc);
     } else {
@@ -1800,6 +1799,10 @@ static void ble_handle_data(uint16_t conn_handle,
                             cJSON *message)
 {
 #if CONFIG_BT_ENABLED
+    cJSON *id_item = cJSON_GetObjectItemCaseSensitive(message, "id");
+    const char *request_id = cJSON_IsString(id_item) && id_item->valuestring ?
+        id_item->valuestring : "unknown";
+
     cJSON *payload = cJSON_GetObjectItemCaseSensitive(message, "payload");
     if (!cJSON_IsObject(payload)) {
         return;
@@ -1848,6 +1851,17 @@ static void ble_handle_data(uint16_t conn_handle,
              from,
              (to && to[0] != '\0') ? to : "-",
              channel);
+
+    if (strcmp(channel, "_api") == 0) {
+        cJSON *api_item = cJSON_GetObjectItemCaseSensitive(payload, "api");
+        if (cJSON_IsObject(api_item)) {
+            ble_handle_api_request_object(conn_handle, from, api_item, request_id);
+        } else {
+            ble_handle_api_request(conn_handle, from, content, request_id);
+        }
+        return;
+    }
+
     if (content && content[0] != '\0') {
         mesh_chat_add_local_message_with_timestamp(from, content, timestamp);
     }

@@ -9,6 +9,7 @@ import 'dart:io' show Platform;
 import 'dart:typed_data';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
+import 'package:geoblue/geoblue.dart';
 import '../models/ble_message.dart';
 import '../models/ble_parcel.dart';
 import 'app_args.dart';
@@ -72,13 +73,18 @@ class BLEMessageService {
 
   /// Our supported capabilities
   static const List<String> _baseCapabilities = [
+    'hello',
+    'data',
+    'broadcast',
     'chat',
     'compression:deflate',
   ];
 
   static const String _blePlusPairChannel = '_ble_plus';
 
-  static final RegExp _macPattern = RegExp(r'^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$');
+  static final RegExp _macPattern = RegExp(
+    r'^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$',
+  );
 
   List<String> get _ourCapabilities {
     final capabilities = [..._baseCapabilities];
@@ -86,6 +92,63 @@ class BLEMessageService {
       capabilities.add('bluetooth_classic:spp');
     }
     return capabilities;
+  }
+
+  GeoBlueProfile get _localGeoBlueProfile => GeoBlueProfile(
+    callsign: _ourCallsign ?? 'NOCALL',
+    nickname: _ourCallsign,
+    npub: _ourEvent?['pubkey']?.toString(),
+    board: Platform.operatingSystem,
+    platform: Platform.operatingSystem,
+  );
+
+  bool _isGeoBlueType(String? type) {
+    return GeoBlueFrameTypeWire.fromWire(type) != null;
+  }
+
+  GeoBlueFrame? _tryParseGeoBlueFrame(Map<String, dynamic> message) {
+    final type = message['type']?.toString();
+    if (!_isGeoBlueType(type)) {
+      return null;
+    }
+
+    try {
+      return GeoBlueFrame.fromJson(message);
+    } catch (e) {
+      LogService().log('BLEMessageService: Failed to parse geoblue frame: $e');
+      return null;
+    }
+  }
+
+  int _timestampSeconds(dynamic value) {
+    if (value is int) return value;
+    if (value is num) return value.toInt();
+    if (value is String) return int.tryParse(value) ?? 0;
+    return 0;
+  }
+
+  String _stringContent(dynamic value) {
+    if (value == null) return '';
+    if (value is String) return value;
+    try {
+      return json.encode(value);
+    } catch (_) {
+      return value.toString();
+    }
+  }
+
+  String? _callsignFromEvent(Map<String, dynamic>? event) {
+    final tags = event?['tags'];
+    if (tags is! List) return null;
+    for (final tag in tags) {
+      if (tag is List &&
+          tag.length >= 2 &&
+          tag[0]?.toString() == 'callsign' &&
+          tag[1] != null) {
+        return tag[1].toString();
+      }
+    }
+    return null;
   }
 
   /// Stream controllers
@@ -126,7 +189,9 @@ class BLEMessageService {
       return;
     }
 
-    LogService().log('BLEMessageService: Starting initialization for callsign: $callsign');
+    LogService().log(
+      'BLEMessageService: Starting initialization for callsign: $callsign',
+    );
 
     _ourEvent = event;
     _ourCallsign = callsign;
@@ -134,7 +199,9 @@ class BLEMessageService {
     try {
       // Initialize identity service (generates device ID on first run)
       await _identityService.initialize();
-      LogService().log('BLEMessageService: Identity service initialized (device: ${_identityService.deviceId})');
+      LogService().log(
+        'BLEMessageService: Identity service initialized (device: ${_identityService.deviceId})',
+      );
 
       // BLE+ (Bluetooth Classic) disabled - use pure BLE without pairing
       // if (BluetoothClassicService.isAvailable) {
@@ -151,7 +218,9 @@ class BLEMessageService {
 
       // Initialize GATT server
       if (Platform.isLinux) {
-        LogService().log('BLEMessageService: Platform can be server - initializing BlueZ peripheral');
+        LogService().log(
+          'BLEMessageService: Platform can be server - initializing BlueZ peripheral',
+        );
         await _linuxPeripheral.initialize(
           callsign: callsign,
           deviceId: _identityService.deviceId,
@@ -161,19 +230,27 @@ class BLEMessageService {
         LogService().log('BLEMessageService: BlueZ peripheral started');
         _identityService.startPeriodicAdvertisement();
       } else if (canBeServer) {
-        LogService().log('BLEMessageService: Platform can be server - initializing GATT server');
+        LogService().log(
+          'BLEMessageService: Platform can be server - initializing GATT server',
+        );
         await _gattServer.initialize();
         LogService().log('BLEMessageService: GATT server initialized');
         _gattServer.setMessageHandler(_handleIncomingMessage);
         LogService().log('BLEMessageService: Message handler set');
         await _gattServer.startServer(callsign);
-        LogService().log('BLEMessageService: GATT server started (isRunning: ${_gattServer.isRunning})');
+        LogService().log(
+          'BLEMessageService: GATT server started (isRunning: ${_gattServer.isRunning})',
+        );
 
         // Start periodic advertisement on Android/iOS (every 30 seconds)
         _identityService.startPeriodicAdvertisement();
-        LogService().log('BLEMessageService: Periodic identity advertisement started');
+        LogService().log(
+          'BLEMessageService: Periodic identity advertisement started',
+        );
       } else {
-        LogService().log('BLEMessageService: Platform cannot be server - client mode only');
+        LogService().log(
+          'BLEMessageService: Platform cannot be server - client mode only',
+        );
       }
 
       // Start periodic scanning for peer discovery (every 45 seconds, 8 second duration)
@@ -181,8 +258,10 @@ class BLEMessageService {
       LogService().log('BLEMessageService: Periodic peer scanning started');
 
       _isInitialized = true;
-      LogService().log('BLEMessageService: Initialized successfully '
-          '(identity: ${_identityService.fullIdentity}, server: $canBeServer, client: $canBeClient)');
+      LogService().log(
+        'BLEMessageService: Initialized successfully '
+        '(identity: ${_identityService.fullIdentity}, server: $canBeServer, client: $canBeClient)',
+      );
     } catch (e, stackTrace) {
       LogService().log('BLEMessageService: Initialization error: $e');
       LogService().log('BLEMessageService: Stack trace: $stackTrace');
@@ -195,9 +274,32 @@ class BLEMessageService {
     String deviceId,
     Map<String, dynamic> rawMessage,
   ) async {
+    final geoblueFrame = _tryParseGeoBlueFrame(rawMessage);
+    if (geoblueFrame != null) {
+      LogService().log(
+        'BLEMessageService: Received geoblue ${geoblueFrame.type.wireName} from $deviceId',
+      );
+
+      switch (geoblueFrame.type) {
+        case GeoBlueFrameType.hello:
+          return _handleGeoBlueHello(deviceId, geoblueFrame);
+        case GeoBlueFrameType.data:
+          _handleGeoBlueData(deviceId, geoblueFrame);
+          return null;
+        case GeoBlueFrameType.broadcast:
+          _handleGeoBlueBroadcast(deviceId, geoblueFrame);
+          return null;
+        case GeoBlueFrameType.helloAck:
+        case GeoBlueFrameType.error:
+          return null;
+      }
+    }
+
     try {
       final message = BLEMessage.fromJson(rawMessage);
-      LogService().log('BLEMessageService: Received ${message.type.value} from $deviceId');
+      LogService().log(
+        'BLEMessageService: Received ${message.type.value} from $deviceId',
+      );
 
       switch (message.type) {
         case BLEMessageType.hello:
@@ -222,10 +324,122 @@ class BLEMessageService {
     }
   }
 
+  Map<String, dynamic> _handleGeoBlueHello(
+    String deviceId,
+    GeoBlueFrame frame,
+  ) {
+    final payload = frame.payload;
+    final profile = payload['profile'];
+    final event = payload['event'];
+
+    String? callsign;
+    if (profile is Map) {
+      callsign = profile['callsign']?.toString();
+    }
+    if ((callsign == null || callsign.isEmpty) && event is Map) {
+      callsign = _callsignFromEvent(event.cast<String, dynamic>());
+    }
+
+    if (callsign != null && callsign.isNotEmpty) {
+      _gattServer.registerClientCallsign(deviceId, callsign);
+      if (Platform.isLinux) {
+        _linuxPeripheral.registerClientCallsign(deviceId, callsign);
+      }
+    }
+
+    final peerCaps =
+        (payload['capabilities'] as List?)?.map((e) => e.toString()).toList() ??
+        const <String>['chat'];
+    _peerCapabilities[deviceId] = peerCaps.toSet();
+    LogService().log(
+      'BLEMessageService: Geoblue HELLO from ${callsign ?? deviceId} caps=$peerCaps',
+    );
+
+    final ack = GeoBlueFrameBuilder.helloAck(
+      requestId: frame.id,
+      profile: _localGeoBlueProfile,
+      capabilities: _ourCapabilities,
+      success: true,
+    );
+    final response = ack.toJson();
+    final ackPayload = (response['payload'] as Map).cast<String, dynamic>();
+    if (_ourEvent != null) {
+      ackPayload['event'] = _ourEvent;
+    }
+    if (_ourCallsign != null && _ourCallsign!.isNotEmpty) {
+      // Compatibility with existing test tools that still inspect payload.callsign.
+      ackPayload['callsign'] = _ourCallsign;
+    }
+    if (_localClassicMac != null) {
+      ackPayload['classic_mac'] = _localClassicMac;
+    }
+
+    return response;
+  }
+
+  void _handleGeoBlueData(String deviceId, GeoBlueFrame frame) {
+    final payload = frame.payload;
+    final channel = payload['channel']?.toString() ?? 'main';
+    final author = payload['from']?.toString() ?? deviceId;
+    var content = _stringContent(payload['content']);
+    if (channel == '_api' && content.isEmpty && payload['api'] is Map) {
+      content = json.encode(payload['api']);
+    }
+
+    if (author.isNotEmpty) {
+      _gattServer.registerClientCallsign(deviceId, author);
+      if (Platform.isLinux) {
+        _linuxPeripheral.registerClientCallsign(deviceId, author);
+      }
+    }
+
+    var timestamp = _timestampSeconds(payload['timestamp']);
+    if (timestamp <= 0) {
+      timestamp = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    }
+
+    _incomingChatsController.add(
+      BLEChatMessage(
+        deviceId: deviceId,
+        author: author,
+        content: content,
+        channel: channel,
+        timestamp: DateTime.fromMillisecondsSinceEpoch(timestamp * 1000),
+        signature: payload['signature']?.toString(),
+        npub: payload['npub']?.toString(),
+      ),
+    );
+  }
+
+  void _handleGeoBlueBroadcast(String deviceId, GeoBlueFrame frame) {
+    final payload = frame.payload;
+    final author = payload['from']?.toString() ?? deviceId;
+    final channel = payload['topic']?.toString() ?? 'general';
+    final content = _stringContent(payload['content']);
+    var timestamp = _timestampSeconds(payload['timestamp']);
+    if (timestamp <= 0) {
+      timestamp = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    }
+
+    _incomingChatsController.add(
+      BLEChatMessage(
+        deviceId: deviceId,
+        author: author,
+        content: content,
+        channel: channel,
+        timestamp: DateTime.fromMillisecondsSinceEpoch(timestamp * 1000),
+        signature: payload['signature']?.toString(),
+        npub: payload['npub']?.toString(),
+      ),
+    );
+  }
+
   /// Handle HELLO message
   Map<String, dynamic> _handleHello(String deviceId, BLEMessage message) {
     final payload = BLEHelloPayload.fromJson(message.payload);
-    LogService().log('BLEMessageService: HELLO from ${payload.callsign ?? deviceId}');
+    LogService().log(
+      'BLEMessageService: HELLO from ${payload.callsign ?? deviceId}',
+    );
 
     // Register the client's callsign for server-side responses
     if (payload.callsign != null && payload.callsign!.isNotEmpty) {
@@ -239,7 +453,9 @@ class BLEMessageService {
     // Store peer capabilities
     final peerCaps = payload.capabilities;
     _peerCapabilities[deviceId] = peerCaps.toSet();
-    LogService().log('BLEMessageService: Peer $deviceId capabilities: $peerCaps');
+    LogService().log(
+      'BLEMessageService: Peer $deviceId capabilities: $peerCaps',
+    );
 
     // Build HELLO_ACK response with our capabilities
     final response = BLEMessageBuilder.helloAck(
@@ -250,13 +466,22 @@ class BLEMessageService {
       classicMac: _localClassicMac,
     ).toJson();
 
-    LogService().log('BLEMessageService: Sending HELLO_ACK to $deviceId (${json.encode(response).length} bytes)');
+    LogService().log(
+      'BLEMessageService: Sending HELLO_ACK to $deviceId (${json.encode(response).length} bytes)',
+    );
     return response;
   }
 
   /// Handle CHAT message
   Map<String, dynamic> _handleChat(String deviceId, BLEMessage message) {
     final payload = BLEChatPayload.fromJson(message.payload);
+    var incomingContent = payload.content;
+    if (payload.channel == '_api' && incomingContent.isEmpty) {
+      final api = message.payload['api'];
+      if (api is Map<String, dynamic>) {
+        incomingContent = json.encode(api);
+      }
+    }
 
     // Register the client's callsign for server-side responses
     if (payload.author.isNotEmpty) {
@@ -275,17 +500,23 @@ class BLEMessageService {
     }
 
     // Emit chat to stream
-    _incomingChatsController.add(BLEChatMessage(
-      deviceId: deviceId,
-      author: payload.author,
-      content: payload.content,
-      channel: payload.channel,
-      timestamp: DateTime.fromMillisecondsSinceEpoch(payload.timestamp * 1000),
-      signature: payload.signature,
-      npub: payload.npub,
-    ));
+    _incomingChatsController.add(
+      BLEChatMessage(
+        deviceId: deviceId,
+        author: payload.author,
+        content: incomingContent,
+        channel: payload.channel,
+        timestamp: DateTime.fromMillisecondsSinceEpoch(
+          payload.timestamp * 1000,
+        ),
+        signature: payload.signature,
+        npub: payload.npub,
+      ),
+    );
 
-    LogService().log('BLEMessageService: Chat from ${payload.author}: ${payload.content}');
+    LogService().log(
+      'BLEMessageService: Chat from ${payload.author}: ${payload.content}',
+    );
 
     // Send CHAT_ACK
     return BLEMessageBuilder.chatAck(
@@ -297,26 +528,37 @@ class BLEMessageService {
   bool _handleBlePlusPairRequest(String deviceId, BLEChatPayload payload) {
     // BLE+ pairing disabled - using pure BLE without pairing
     if (payload.channel != _blePlusPairChannel) return false;
-    LogService().log('BLEMessageService: BLE+ pair request ignored (feature disabled)');
+    LogService().log(
+      'BLEMessageService: BLE+ pair request ignored (feature disabled)',
+    );
     return false; // Don't process pair requests
   }
 
   /// Send HELLO to a discovered device (client mode)
   Future<bool> sendHello(BLEDevice device) async {
     if (!canBeClient || _ourEvent == null) {
-      LogService().log('BLEMessageService: Cannot send HELLO - not initialized or not a client');
+      LogService().log(
+        'BLEMessageService: Cannot send HELLO - not initialized or not a client',
+      );
       return false;
     }
 
     try {
-      final helloMessage = BLEMessageBuilder.hello(
-        event: _ourEvent!,
+      final helloMessage = GeoBlueFrameBuilder.hello(
+        profile: _localGeoBlueProfile,
         capabilities: _ourCapabilities,
       );
+      final helloJson = helloMessage.toJson();
+      final helloPayload = (helloJson['payload'] as Map)
+          .cast<String, dynamic>();
+      helloPayload['event'] = _ourEvent;
+      if (_ourCallsign != null && _ourCallsign!.isNotEmpty) {
+        helloPayload['callsign'] = _ourCallsign;
+      }
 
       final response = await _discoveryService.sendMessage(
         device,
-        helloMessage.toJson(),
+        helloJson,
         timeout: const Duration(seconds: 10),
       );
 
@@ -325,29 +567,82 @@ class BLEMessageService {
         return false;
       }
 
+      final geoblueAck = _tryParseGeoBlueFrame(response);
+      if (geoblueAck != null && geoblueAck.type == GeoBlueFrameType.helloAck) {
+        final payload = geoblueAck.payload;
+        final success = payload['success'] as bool? ?? true;
+        if (!success) {
+          return false;
+        }
+
+        final peerCaps =
+            (payload['capabilities'] as List?)
+                ?.map((e) => e.toString())
+                .toList() ??
+            const <String>['chat'];
+        _peerCapabilities[device.deviceId] = peerCaps.toSet();
+
+        final ackEvent = payload['event'];
+        if (ackEvent is Map<String, dynamic>) {
+          _discoveryService.updateFromHelloEvent(device.deviceId, ackEvent);
+        }
+
+        final ackProfile = payload['profile'];
+        if (ackProfile is Map) {
+          final callsign = ackProfile['callsign']?.toString();
+          if (callsign != null && callsign.isNotEmpty) {
+            device.callsign = callsign;
+          }
+          final npub = ackProfile['npub']?.toString();
+          if (npub != null && npub.isNotEmpty) {
+            device.npub = npub;
+          }
+          final nickname = ackProfile['nickname']?.toString();
+          if (nickname != null && nickname.isNotEmpty) {
+            device.nickname = nickname;
+          }
+        }
+
+        final classicMac = payload['classic_mac']?.toString();
+        if (classicMac != null && classicMac.isNotEmpty) {
+          _discoveryService.updateClassicMac(device.deviceId, classicMac);
+        }
+
+        LogService().log(
+          'BLEMessageService: HELLO handshake successful with ${device.callsign ?? device.deviceId}',
+        );
+        LogService().log(
+          'BLEMessageService: Peer ${device.deviceId} capabilities: $peerCaps',
+        );
+        return true;
+      }
+
       final ackMessage = BLEMessage.fromJson(response);
       if (ackMessage.type == BLEMessageType.helloAck) {
         final ack = BLEHelloAckPayload.fromJson(ackMessage.payload);
-        if (ack.success) {
-          // Store peer capabilities from HELLO_ACK
-          final peerCaps = ack.capabilities;
-          _peerCapabilities[device.deviceId] = peerCaps.toSet();
-          if (ack.event != null) {
-            _discoveryService.updateFromHelloEvent(
-              device.deviceId,
-              ack.event!,
-            );
-          }
-          if (ack.classicMac != null) {
-            _discoveryService.updateClassicMac(device.deviceId, ack.classicMac!);
-            LogService().log(
-              'BLEMessageService: Stored BLE+ MAC for ${device.callsign ?? device.deviceId} (${ack.classicMac})',
-            );
-          }
-          LogService().log('BLEMessageService: HELLO handshake successful with ${device.callsign ?? device.deviceId}');
-          LogService().log('BLEMessageService: Peer ${device.deviceId} capabilities: $peerCaps');
-          return true;
+        if (!ack.success) {
+          return false;
         }
+
+        // Legacy HELLO_ACK fallback
+        final peerCaps = ack.capabilities;
+        _peerCapabilities[device.deviceId] = peerCaps.toSet();
+        if (ack.event != null) {
+          _discoveryService.updateFromHelloEvent(device.deviceId, ack.event!);
+        }
+        if (ack.classicMac != null) {
+          _discoveryService.updateClassicMac(device.deviceId, ack.classicMac!);
+          LogService().log(
+            'BLEMessageService: Stored BLE+ MAC for ${device.callsign ?? device.deviceId} (${ack.classicMac})',
+          );
+        }
+        LogService().log(
+          'BLEMessageService: HELLO handshake successful with ${device.callsign ?? device.deviceId}',
+        );
+        LogService().log(
+          'BLEMessageService: Peer ${device.deviceId} capabilities: $peerCaps',
+        );
+        return true;
       }
 
       return false;
@@ -370,33 +665,86 @@ class BLEMessageService {
     bool waitForAck = true,
   }) async {
     if (!canBeClient || _ourCallsign == null) {
-      LogService().log('BLEMessageService: Cannot send chat - not initialized or not a client');
+      LogService().log(
+        'BLEMessageService: Cannot send chat - not initialized or not a client',
+      );
       return false;
     }
 
     try {
-      final chatMessage = BLEMessageBuilder.chat(
-        author: _ourCallsign!,
-        content: content,
-        channel: channel,
-        signature: signature,
-        npub: npub,
-      );
+      Map<String, dynamic>? apiPayload;
+      if (channel == '_api') {
+        try {
+          final decoded = json.decode(content);
+          if (decoded is Map<String, dynamic>) {
+            apiPayload = decoded;
+          }
+        } catch (_) {
+          // Fall back to legacy content-string mode if content isn't JSON.
+        }
+      }
 
       // Fire-and-forget mode: just send the message, don't wait for ack
-      // Used for API requests where we wait for the actual api_response instead
+      // Geoblue DATA is the default async path and carries all command traffic.
       if (!waitForAck) {
-        LogService().log('BLEMessageService: Sending in fire-and-forget mode (no ack wait)');
-        final sent = await _discoveryService.sendMessageAsync(
-          device,
-          chatMessage.toJson(),
+        final frame = GeoBlueFrameBuilder.data(
+          from: _ourCallsign!,
+          to: device.callsign,
+          channel: channel,
+          content: content,
+        ).toJson();
+        final payload = (frame['payload'] as Map).cast<String, dynamic>();
+        if (apiPayload != null) {
+          // Compact API mode keeps request structured in payload["api"] so the
+          // receiver doesn't need to re-parse escaped nested JSON.
+          payload['api'] = apiPayload;
+          payload['content'] = '';
+        }
+        if (signature != null) payload['signature'] = signature;
+        if (npub != null) payload['npub'] = npub;
+
+        LogService().log(
+          'BLEMessageService: Sending in fire-and-forget mode (no ack wait)',
         );
+        final sent = await _discoveryService.sendMessageAsync(device, frame);
         if (sent) {
-          LogService().log('BLEMessageService: Message sent (fire-and-forget) to ${device.callsign ?? device.deviceId}');
+          LogService().log(
+            'BLEMessageService: Geoblue DATA sent to ${device.callsign ?? device.deviceId}',
+          );
         } else {
-          LogService().log('BLEMessageService: Failed to send message (fire-and-forget)');
+          LogService().log(
+            'BLEMessageService: Failed to send message (fire-and-forget)',
+          );
         }
         return sent;
+      }
+
+      // Legacy reliable mode for peers that still require chat_ack semantics.
+      BLEMessage chatMessage;
+      if (apiPayload != null) {
+        final payload = <String, dynamic>{
+          'channel': channel,
+          'author': _ourCallsign!,
+          'content': '',
+          'timestamp': DateTime.now().millisecondsSinceEpoch ~/ 1000,
+          'api': apiPayload,
+        };
+        if (signature != null) payload['signature'] = signature;
+        if (npub != null) payload['npub'] = npub;
+
+        chatMessage = BLEMessage(
+          id: BLEMessageId.generate(),
+          type: BLEMessageType.chat,
+          payload: payload,
+        );
+      } else {
+        chatMessage = BLEMessageBuilder.chat(
+          author: _ourCallsign!,
+          content: content,
+          channel: channel,
+          signature: signature,
+          npub: npub,
+        );
       }
 
       // Normal mode: wait for chat_ack
@@ -415,7 +763,9 @@ class BLEMessageService {
       if (ackMessage.type == BLEMessageType.chatAck) {
         final ack = BLEChatAckPayload.fromJson(ackMessage.payload);
         if (ack.success) {
-          LogService().log('BLEMessageService: Chat delivered to ${device.callsign ?? device.deviceId}');
+          LogService().log(
+            'BLEMessageService: Chat delivered to ${device.callsign ?? device.deviceId}',
+          );
           return true;
         } else {
           LogService().log('BLEMessageService: Chat rejected: ${ack.error}');
@@ -457,36 +807,43 @@ class BLEMessageService {
     bool? waitForAck,
   }) async {
     final target = targetCallsign.toUpperCase();
-    // For API requests (_api channel), use fire-and-forget mode by default
-    final shouldWaitForAck = waitForAck ?? (channel != '_api');
-    LogService().log('BLEMessageService: [SEND] sendChatToCallsign to $target, channel=$channel, waitForAck=$shouldWaitForAck');
+    // API channels are RPC-style and should not block waiting for chat_ack.
+    final shouldWaitForAck =
+        waitForAck ?? (channel != '_api' && channel != '_api_response');
+    LogService().log(
+      'BLEMessageService: [SEND] sendChatToCallsign to $target, channel=$channel, waitForAck=$shouldWaitForAck',
+    );
 
     // First, check if target is a connected client (server mode)
     // This is preferred because it uses the existing connection
     if (canBeServer && _ourCallsign != null) {
-      LogService().log('BLEMessageService: [SEND] Checking if $target is connected client (we are server)');
+      LogService().log(
+        'BLEMessageService: [SEND] Checking if $target is connected client (we are server)',
+      );
       final clientDeviceId = _gattServer.getDeviceIdForCallsign(target);
       if (clientDeviceId != null) {
-        LogService().log('BLEMessageService: [SEND] Found $target as connected client: $clientDeviceId');
-
-        // For API responses, send raw JSON to preserve request ID
-        if (channel == '_api_response') {
-          try {
-            final rawData = json.decode(content) as Map<String, dynamic>;
-            LogService().log('BLEMessageService: [SEND] Sending raw API response to client');
-            await sendRawToClient(deviceId: clientDeviceId, data: rawData);
-            return true;
-          } catch (e) {
-            LogService().log('BLEMessageService: [SEND] Failed to parse API response as JSON: $e');
-          }
-        }
+        LogService().log(
+          'BLEMessageService: [SEND] Found $target as connected client: $clientDeviceId',
+        );
 
         if (!shouldWaitForAck) {
           // Fire-and-forget: use server notification (fast, no confirmation)
-          LogService().log('BLEMessageService: [SEND] Sending wrapped chat to client (fire-and-forget)');
+          LogService().log(
+            'BLEMessageService: [SEND] Sending geoblue DATA to client (fire-and-forget)',
+          );
+          var outgoingContent = content;
+          if (channel == '_api_response') {
+            try {
+              // Normalize to canonical JSON so receiver can parse consistently.
+              final parsed = json.decode(content);
+              outgoingContent = json.encode(parsed);
+            } catch (_) {
+              // Keep original text body.
+            }
+          }
           await sendChatToClient(
             deviceId: clientDeviceId,
-            content: content,
+            content: outgoingContent,
             channel: channel,
             signature: signature,
             npub: npub,
@@ -494,20 +851,30 @@ class BLEMessageService {
           return true;
         }
         // For reliable delivery (DMs), fall through to client mode with ack
-        LogService().log('BLEMessageService: [SEND] Skipping server path for $target (waitForAck=true), using client mode');
+        LogService().log(
+          'BLEMessageService: [SEND] Skipping server path for $target (waitForAck=true), using client mode',
+        );
       } else {
-        LogService().log('BLEMessageService: [SEND] $target is NOT a connected client');
+        LogService().log(
+          'BLEMessageService: [SEND] $target is NOT a connected client',
+        );
       }
     } else {
-      LogService().log('BLEMessageService: [SEND] We are not server (canBeServer=$canBeServer, ourCallsign=$_ourCallsign)');
+      LogService().log(
+        'BLEMessageService: [SEND] We are not server (canBeServer=$canBeServer, ourCallsign=$_ourCallsign)',
+      );
     }
 
     // Fall back to client mode - find device and connect
     LogService().log('BLEMessageService: [SEND] Falling back to client mode');
     final devices = _discoveryService.getAllDevices();
-    LogService().log('BLEMessageService: [SEND] Known devices: ${devices.length}');
+    LogService().log(
+      'BLEMessageService: [SEND] Known devices: ${devices.length}',
+    );
     for (final d in devices) {
-      LogService().log('BLEMessageService: [SEND]   - ${d.deviceId}: callsign=${d.callsign}');
+      LogService().log(
+        'BLEMessageService: [SEND]   - ${d.deviceId}: callsign=${d.callsign}',
+      );
     }
 
     final matchingDevices = devices
@@ -515,7 +882,9 @@ class BLEMessageService {
         .toList();
 
     if (matchingDevices.isEmpty) {
-      LogService().log('BLEMessageService: [SEND] FAILED - Device with callsign $target not found in ${devices.length} devices');
+      LogService().log(
+        'BLEMessageService: [SEND] FAILED - Device with callsign $target not found in ${devices.length} devices',
+      );
       return false;
     }
 
@@ -524,7 +893,9 @@ class BLEMessageService {
     matchingDevices.sort((a, b) => (b.lastSeen).compareTo(a.lastSeen));
     final device = matchingDevices.first;
 
-    LogService().log('BLEMessageService: [SEND] Found ${matchingDevices.length} devices for $target, using freshest: ${device.deviceId} (lastSeen: ${device.lastSeen})');
+    LogService().log(
+      'BLEMessageService: [SEND] Found ${matchingDevices.length} devices for $target, using freshest: ${device.deviceId} (lastSeen: ${device.lastSeen})',
+    );
     return sendChat(
       device: device,
       content: content,
@@ -547,16 +918,17 @@ class BLEMessageService {
       return;
     }
 
-    final chatMessage = BLEMessageBuilder.chat(
-      author: _ourCallsign!,
+    final frame = GeoBlueFrameBuilder.broadcast(
+      from: _ourCallsign!,
+      topic: channel,
       content: content,
-      channel: channel,
-      signature: signature,
-      npub: npub,
-    );
+    ).toJson();
+    final payload = (frame['payload'] as Map).cast<String, dynamic>();
+    if (signature != null) payload['signature'] = signature;
+    if (npub != null) payload['npub'] = npub;
 
-    await _gattServer.broadcastNotification(chatMessage.toJson());
-    LogService().log('BLEMessageService: Broadcast chat to all clients');
+    await _gattServer.broadcastNotification(frame);
+    LogService().log('BLEMessageService: Broadcast geoblue message to clients');
   }
 
   /// Send chat to a specific connected client (server mode)
@@ -568,19 +940,22 @@ class BLEMessageService {
     String? npub,
   }) async {
     if (!canBeServer || _ourCallsign == null) {
-      LogService().log('BLEMessageService: Cannot send to client - not a server');
+      LogService().log(
+        'BLEMessageService: Cannot send to client - not a server',
+      );
       return;
     }
 
-    final chatMessage = BLEMessageBuilder.chat(
-      author: _ourCallsign!,
-      content: content,
+    final frame = GeoBlueFrameBuilder.data(
+      from: _ourCallsign!,
       channel: channel,
-      signature: signature,
-      npub: npub,
-    );
+      content: content,
+    ).toJson();
+    final payload = (frame['payload'] as Map).cast<String, dynamic>();
+    if (signature != null) payload['signature'] = signature;
+    if (npub != null) payload['npub'] = npub;
 
-    await _gattServer.sendNotification(deviceId, chatMessage.toJson());
+    await _gattServer.sendNotification(deviceId, frame);
   }
 
   /// Send raw data to a specific connected client (server mode)
@@ -590,7 +965,9 @@ class BLEMessageService {
     required Map<String, dynamic> data,
   }) async {
     if (!canBeServer) {
-      LogService().log('BLEMessageService: Cannot send raw to client - not a server');
+      LogService().log(
+        'BLEMessageService: Cannot send raw to client - not a server',
+      );
       return;
     }
 
@@ -611,7 +988,9 @@ class BLEMessageService {
   Stream<List<BLEDevice>> get devicesStream => _discoveryService.devicesStream;
 
   /// Start scanning for devices (client mode)
-  Future<void> startScanning({Duration timeout = const Duration(seconds: 10)}) async {
+  Future<void> startScanning({
+    Duration timeout = const Duration(seconds: 10),
+  }) async {
     await _discoveryService.startScanning(timeout: timeout);
   }
 
@@ -631,7 +1010,8 @@ class BLEMessageService {
 
   /// Check if a peer supports compression
   bool peerSupportsCompression(String deviceId) {
-    return _peerCapabilities[deviceId]?.contains('compression:deflate') ?? false;
+    return _peerCapabilities[deviceId]?.contains('compression:deflate') ??
+        false;
   }
 
   String? _sanitizeClassicMac(String? mac) {
@@ -651,12 +1031,16 @@ class BLEMessageService {
     Duration timeout = const Duration(seconds: 30),
   }) async {
     if (!canBeClient) {
-      LogService().log('BLEMessageService: Cannot send data - not a client platform');
+      LogService().log(
+        'BLEMessageService: Cannot send data - not a client platform',
+      );
       return false;
     }
 
     final deviceId = device.deviceId;
-    LogService().log('BLEMessageService: Sending ${data.length} bytes to $deviceId using parcel protocol');
+    LogService().log(
+      'BLEMessageService: Sending ${data.length} bytes to $deviceId using parcel protocol',
+    );
 
     try {
       // Get or create data connection
@@ -664,7 +1048,9 @@ class BLEMessageService {
       if (connection == null || !connection.isConnected) {
         connection = await _createDataConnection(device);
         if (connection == null) {
-          LogService().log('BLEMessageService: Failed to create data connection to $deviceId');
+          LogService().log(
+            'BLEMessageService: Failed to create data connection to $deviceId',
+          );
           return false;
         }
         _dataConnections[deviceId] = connection;
@@ -689,10 +1075,14 @@ class BLEMessageService {
         peerSupportsCompression: supportsCompression,
       );
       if (supportsCompression) {
-        LogService().log('BLEMessageService: Peer supports compression, will compress if beneficial');
+        LogService().log(
+          'BLEMessageService: Peer supports compression, will compress if beneficial',
+        );
       }
 
-      LogService().log('BLEMessageService: Enqueuing message ${message.msgId} (${data.length} bytes)');
+      LogService().log(
+        'BLEMessageService: Enqueuing message ${message.msgId} (${data.length} bytes)',
+      );
       final enqueued = await _queueService.enqueue(message);
 
       if (!enqueued) {
@@ -705,8 +1095,11 @@ class BLEMessageService {
       final startTime = DateTime.now();
       while (DateTime.now().difference(startTime) < timeout) {
         // Check if queue is empty for this device (message processed)
-        if (_queueService.getQueueLength(deviceId) == 0 && !_queueService.isSending(deviceId)) {
-          LogService().log('BLEMessageService: Data transfer completed to $deviceId');
+        if (_queueService.getQueueLength(deviceId) == 0 &&
+            !_queueService.isSending(deviceId)) {
+          LogService().log(
+            'BLEMessageService: Data transfer completed to $deviceId',
+          );
           return true;
         }
         await Future.delayed(const Duration(milliseconds: 100));
@@ -728,7 +1121,9 @@ class BLEMessageService {
     }
 
     try {
-      LogService().log('BLEMessageService: Creating data connection to ${device.deviceId}');
+      LogService().log(
+        'BLEMessageService: Creating data connection to ${device.deviceId}',
+      );
 
       // Connect to device
       await device.bleDevice!.connect(timeout: const Duration(seconds: 10));
@@ -797,7 +1192,9 @@ class BLEMessageService {
         mtu: mtu,
       );
     } catch (e) {
-      LogService().log('BLEMessageService: Failed to create data connection: $e');
+      LogService().log(
+        'BLEMessageService: Failed to create data connection: $e',
+      );
       try {
         await device.bleDevice?.disconnect();
       } catch (_) {}

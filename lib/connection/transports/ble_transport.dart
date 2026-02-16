@@ -5,6 +5,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'dart:io' show Platform;
+import 'package:geoblue/geoblue.dart';
 import '../../services/log_service.dart';
 import '../../services/app_args.dart';
 import '../../services/devices_service.dart';
@@ -260,13 +261,25 @@ class BleTransport extends Transport with TransportMixin {
     );
 
     // Encode API request as JSON payload
+    dynamic normalizedBody = message.payload;
+    if (normalizedBody is String) {
+      final trimmed = normalizedBody.trimLeft();
+      if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+        try {
+          normalizedBody = jsonDecode(normalizedBody);
+        } catch (_) {
+          // Keep original string body when payload isn't valid JSON.
+        }
+      }
+    }
+
     final requestPayload = jsonEncode({
       'type': 'api_request',
       'id': message.id,
       'method': message.method,
       'path': message.path,
       'headers': message.headers,
-      'body': message.payload,
+      'body': normalizedBody,
     });
 
     LogService().log(
@@ -343,6 +356,7 @@ class BleTransport extends Transport with TransportMixin {
       targetCallsign: message.targetCallsign,
       content: content,
       channel: '_api_response', // Special channel for API response messages
+      waitForAck: false,
     );
 
     stopwatch.stop();
@@ -611,6 +625,105 @@ class BleTransport extends Transport with TransportMixin {
     }
   }
 
+  int _epochSeconds(dynamic value) {
+    if (value is int) return value;
+    if (value is num) return value.toInt();
+    if (value is String) return int.tryParse(value) ?? 0;
+    return 0;
+  }
+
+  String _stringify(dynamic value) {
+    if (value == null) return '';
+    if (value is String) return value;
+    try {
+      return jsonEncode(value);
+    } catch (_) {
+      return value.toString();
+    }
+  }
+
+  BLEChatMessage? _toBleChatFromNotification(Map<String, dynamic> message) {
+    final deviceId = message['_deviceId']?.toString() ?? 'unknown';
+    final messageType = message['type']?.toString();
+    final nowSeconds = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+
+    if (messageType == 'chat') {
+      final payload = message['payload'];
+      if (payload is! Map) {
+        return null;
+      }
+      final channel = payload['channel']?.toString() ?? 'main';
+      final author = payload['author']?.toString() ?? deviceId;
+      final content = _stringify(payload['content']);
+      var timestamp = _epochSeconds(payload['timestamp']);
+      if (timestamp <= 0) timestamp = nowSeconds;
+      return BLEChatMessage(
+        deviceId: deviceId,
+        author: author,
+        content: content,
+        channel: channel,
+        timestamp: DateTime.fromMillisecondsSinceEpoch(timestamp * 1000),
+        signature: payload['signature']?.toString(),
+        npub: payload['npub']?.toString(),
+      );
+    }
+
+    final frameType = GeoBlueFrameTypeWire.fromWire(messageType);
+    if (frameType == null) {
+      return null;
+    }
+
+    final payload = message['payload'];
+    if (payload is! Map) {
+      return null;
+    }
+
+    if (frameType == GeoBlueFrameType.data) {
+      final channel = payload['channel']?.toString() ?? 'main';
+      final author =
+          payload['from']?.toString() ??
+          payload['author']?.toString() ??
+          deviceId;
+      var content = _stringify(payload['content']);
+      if (channel == '_api' && content.isEmpty && payload['api'] != null) {
+        content = _stringify(payload['api']);
+      }
+      var timestamp = _epochSeconds(payload['timestamp']);
+      if (timestamp <= 0) timestamp = nowSeconds;
+      return BLEChatMessage(
+        deviceId: deviceId,
+        author: author,
+        content: content,
+        channel: channel,
+        timestamp: DateTime.fromMillisecondsSinceEpoch(timestamp * 1000),
+        signature: payload['signature']?.toString(),
+        npub: payload['npub']?.toString(),
+      );
+    }
+
+    if (frameType == GeoBlueFrameType.broadcast) {
+      final channel = payload['topic']?.toString() ?? 'general';
+      final author =
+          payload['from']?.toString() ??
+          payload['author']?.toString() ??
+          deviceId;
+      final content = _stringify(payload['content']);
+      var timestamp = _epochSeconds(payload['timestamp']);
+      if (timestamp <= 0) timestamp = nowSeconds;
+      return BLEChatMessage(
+        deviceId: deviceId,
+        author: author,
+        content: content,
+        channel: channel,
+        timestamp: DateTime.fromMillisecondsSinceEpoch(timestamp * 1000),
+        signature: payload['signature']?.toString(),
+        npub: payload['npub']?.toString(),
+      );
+    }
+
+    return null;
+  }
+
   /// Handle incoming notifications from GATT client connections
   /// This is called when we (as GATT client) receive notifications from a GATT server
   void _handleClientNotification(Map<String, dynamic> message) {
@@ -649,8 +762,17 @@ class BleTransport extends Transport with TransportMixin {
         }
       }
 
-      // For non-API messages, we could emit them as incoming messages
-      // but for now just log them
+      final bleChat = _toBleChatFromNotification(message);
+      if (bleChat != null) {
+        _handleIncomingMessage(bleChat);
+        return;
+      }
+
+      // Ignore handshake envelopes here; BLEMessageService handles HELLO flows.
+      if (messageType == 'hello' || messageType == 'hello_ack') {
+        return;
+      }
+
       LogService().log(
         'BleTransport: Unhandled client notification type: $messageType',
       );
