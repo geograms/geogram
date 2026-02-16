@@ -103,6 +103,8 @@ Get messages from a chat room.
 - `limit` (optional, default 50, max 500): Number of messages to return
 - `before` (optional): ISO timestamp - get messages before this time
 - `after` (optional): ISO timestamp - get messages after this time
+- `since` (optional): Unix timestamp (seconds) for incremental sync; if provided, only newer messages are returned
+- `compact` (optional, `1` or `true`): Return a compact payload with shorter field names for slow links
 
 **Headers:**
 - `Authorization: Nostr <signed_event>` (required for non-public rooms)
@@ -133,7 +135,26 @@ Get messages from a chat room.
   ],
   "count": 1,
   "hasMore": false,
-  "limit": 50
+  "limit": 50,
+  "latest_timestamp": 1733740215
+}
+```
+
+**Compact Response (`compact=1`):**
+```json
+{
+  "m": [
+    {
+      "i": "123",
+      "a": "CR7BBQ",
+      "c": "Hello everyone!",
+      "t": 1733740215
+    }
+  ],
+  "count": 1,
+  "li": 123,
+  "lt": 1733740215,
+  "compact": 1
 }
 ```
 

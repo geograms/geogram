@@ -44,10 +44,15 @@ class ChatRoom {
       name: json['name'] as String?,
       description: json['description'] as String?,
       type: json['type'] as String?,
-      memberCount: json['memberCount'] as int? ?? json['member_count'] as int? ?? 0,
-      messageCount: json['messageCount'] as int? ?? json['message_count'] as int? ?? 0,
-      lastActivity: _parseDateTime(json['lastActivity'] ?? json['last_activity']),
-      isJoined: json['isJoined'] as bool? ?? json['is_joined'] as bool? ?? false,
+      memberCount:
+          json['memberCount'] as int? ?? json['member_count'] as int? ?? 0,
+      messageCount:
+          json['messageCount'] as int? ?? json['message_count'] as int? ?? 0,
+      lastActivity: _parseDateTime(
+        json['lastActivity'] ?? json['last_activity'],
+      ),
+      isJoined:
+          json['isJoined'] as bool? ?? json['is_joined'] as bool? ?? false,
     );
   }
 
@@ -89,7 +94,9 @@ class ChatMessage {
       authorNpub: json['npub'] as String? ?? json['authorNpub'] as String?,
       timestamp: _parseDateTime(json['timestamp']) ?? DateTime.now(),
       isEdited: json['isEdited'] as bool? ?? json['edited'] as bool? ?? false,
-      reactions: (json['reactions'] as Map<String, dynamic>?)?.cast<String, int>() ?? {},
+      reactions:
+          (json['reactions'] as Map<String, dynamic>?)?.cast<String, int>() ??
+          {},
       replyTo: json['replyTo'] as String? ?? json['reply_to'] as String?,
     );
   }
@@ -125,9 +132,12 @@ class ChatFile {
       name: json['name'] as String? ?? json['filename'] as String? ?? '',
       path: json['path'] as String?,
       size: json['size'] as int?,
-      contentType: json['contentType'] as String? ?? json['content_type'] as String?,
+      contentType:
+          json['contentType'] as String? ?? json['content_type'] as String?,
       uploadedAt: json['uploadedAt'] != null
-          ? DateTime.fromMillisecondsSinceEpoch((json['uploadedAt'] as num).toInt() * 1000)
+          ? DateTime.fromMillisecondsSinceEpoch(
+              (json['uploadedAt'] as num).toInt() * 1000,
+            )
           : null,
       uploader: json['uploader'] as String?,
     );
@@ -159,12 +169,14 @@ class ChatApi {
   /// [limit] - Maximum number of messages
   /// [since] - Get messages after this timestamp (Unix seconds)
   /// [before] - Get messages before this timestamp (Unix seconds)
+  /// [compact] - Request compact payload format (optimized for constrained links)
   Future<ApiListResponse<ChatMessage>> messages(
     String callsign,
     String roomId, {
     int? limit,
     int? since,
     int? before,
+    bool compact = false,
   }) {
     return _api.list<ChatMessage>(
       callsign,
@@ -173,8 +185,10 @@ class ChatApi {
         if (limit != null) 'limit': limit,
         if (since != null) 'since': since,
         if (before != null) 'before': before,
+        if (compact) 'compact': 1,
       },
-      itemFromJson: (json) => ChatMessage.fromJson(json as Map<String, dynamic>),
+      itemFromJson: (json) =>
+          ChatMessage.fromJson(json as Map<String, dynamic>),
       listKey: 'messages',
     );
   }
@@ -439,36 +453,60 @@ class ChatApi {
   // ============================================================
 
   static String roomsPath() => paths.ChatApiPaths.roomsPath();
-  static String messagesPath(String roomId) => paths.ChatApiPaths.messagesPath(roomId);
-  static String filesPath(String roomId) => paths.ChatApiPaths.filesPath(roomId);
+  static String messagesPath(String roomId) =>
+      paths.ChatApiPaths.messagesPath(roomId);
+  static String filesPath(String roomId) =>
+      paths.ChatApiPaths.filesPath(roomId);
   static String fileDownloadPath(String roomId, String filename) =>
       paths.ChatApiPaths.fileDownloadPath(roomId, filename);
   static String reactionsPath(String roomId, String timestamp) =>
       paths.ChatApiPaths.reactionsPath(roomId, timestamp);
-  static String remoteRoomsPath(String callsign) => paths.ChatApiPaths.remoteRoomsPath(callsign);
+  static String remoteRoomsPath(String callsign) =>
+      paths.ChatApiPaths.remoteRoomsPath(callsign);
   static String remoteMessagesPath(String callsign, String roomId) =>
       paths.ChatApiPaths.remoteMessagesPath(callsign, roomId);
   static String remoteFilesPath(String callsign, String roomId) =>
       paths.ChatApiPaths.remoteFilesPath(callsign, roomId);
-  static String remoteFileDownloadPath(String callsign, String roomId, String filename) =>
-      paths.ChatApiPaths.remoteFileDownloadPath(callsign, roomId, filename);
+  static String remoteFileDownloadPath(
+    String callsign,
+    String roomId,
+    String filename,
+  ) => paths.ChatApiPaths.remoteFileDownloadPath(callsign, roomId, filename);
 
-  static String roomsUrl(String baseUrl) => paths.ChatApiPaths.roomsUrl(baseUrl);
+  static String roomsUrl(String baseUrl) =>
+      paths.ChatApiPaths.roomsUrl(baseUrl);
   static String messagesUrl(String baseUrl, String roomId, {int? limit}) =>
       paths.ChatApiPaths.messagesUrl(baseUrl, roomId, limit: limit);
   static String remoteRoomsUrl(String baseUrl, String callsign) =>
       paths.ChatApiPaths.remoteRoomsUrl(baseUrl, callsign);
-  static String remoteMessagesUrl(String baseUrl, String callsign, String roomId, {int? limit}) =>
-      paths.ChatApiPaths.remoteMessagesUrl(baseUrl, callsign, roomId, limit: limit);
+  static String remoteMessagesUrl(
+    String baseUrl,
+    String callsign,
+    String roomId, {
+    int? limit,
+  }) => paths.ChatApiPaths.remoteMessagesUrl(
+    baseUrl,
+    callsign,
+    roomId,
+    limit: limit,
+  );
 
   static bool isRoomsPath(String path) => paths.ChatApiPaths.isRoomsPath(path);
-  static bool isMessagesPath(String path) => paths.ChatApiPaths.isMessagesPath(path);
-  static bool isFilesListPath(String path) => paths.ChatApiPaths.isFilesListPath(path);
-  static bool isFileDownloadPath(String path) => paths.ChatApiPaths.isFileDownloadPath(path);
-  static bool isReactionsPath(String path) => paths.ChatApiPaths.isReactionsPath(path);
+  static bool isMessagesPath(String path) =>
+      paths.ChatApiPaths.isMessagesPath(path);
+  static bool isFilesListPath(String path) =>
+      paths.ChatApiPaths.isFilesListPath(path);
+  static bool isFileDownloadPath(String path) =>
+      paths.ChatApiPaths.isFileDownloadPath(path);
+  static bool isReactionsPath(String path) =>
+      paths.ChatApiPaths.isReactionsPath(path);
 
-  static String? extractCallsign(String path) => paths.ChatApiPaths.extractCallsign(path);
-  static String? extractRoomId(String path) => paths.ChatApiPaths.extractRoomId(path);
-  static String? extractFilename(String path) => paths.ChatApiPaths.extractFilename(path);
-  static String? extractTimestamp(String path) => paths.ChatApiPaths.extractTimestamp(path);
+  static String? extractCallsign(String path) =>
+      paths.ChatApiPaths.extractCallsign(path);
+  static String? extractRoomId(String path) =>
+      paths.ChatApiPaths.extractRoomId(path);
+  static String? extractFilename(String path) =>
+      paths.ChatApiPaths.extractFilename(path);
+  static String? extractTimestamp(String path) =>
+      paths.ChatApiPaths.extractTimestamp(path);
 }

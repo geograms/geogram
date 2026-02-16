@@ -5,6 +5,7 @@
 
 import 'dart:convert';
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
+import 'dart:math' as math;
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import '../models/chat_message.dart';
@@ -19,6 +20,7 @@ import '../services/chat_file_download_manager.dart';
 import '../api/endpoints/chat_api.dart' show ChatApi;
 import '../services/contact_service.dart';
 import '../util/event_bus.dart';
+import '../util/chat_sync_protocol.dart';
 import '../util/nostr_crypto.dart';
 import '../util/nostr_event.dart';
 import '../util/reaction_utils.dart';
@@ -47,6 +49,10 @@ class RemoteChatRoomPage extends StatefulWidget {
 }
 
 class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
+  static const int _initialFetchLimit = 100;
+  static const int _incrementalFetchLimit = 40;
+  static const int _cacheLoadLimit = 150;
+
   final DevicesService _devicesService = DevicesService();
   final I18nService _i18n = I18nService();
   final ProfileService _profileService = ProfileService();
@@ -69,17 +75,26 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
   /// Download progress event subscription
   EventSubscription<ChatDownloadProgressEvent>? _downloadSubscription;
 
+  int? _latestSyncedId;
+  int? _latestSyncedEpoch;
+
   @override
   void initState() {
     super.initState();
-    _initServices();
-    _loadMessages();
+    _initializePage();
     _subscribeToDownloadEvents();
     _loadNicknameMap();
   }
 
+  Future<void> _initializePage() async {
+    await _initServices();
+    if (!mounted) return;
+    await _loadMessages();
+  }
+
   Future<void> _initServices() async {
     await _cacheService.initialize();
+    await _loadSyncState();
   }
 
   Future<void> _loadNicknameMap() async {
@@ -92,7 +107,8 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
   }
 
   void _subscribeToDownloadEvents() {
-    final sourceId = '${widget.device.callsign}_${widget.room.id}'.toUpperCase();
+    final sourceId = '${widget.device.callsign}_${widget.room.id}'
+        .toUpperCase();
     _downloadSubscription = EventBus().on<ChatDownloadProgressEvent>((event) {
       // Check if this download belongs to this room
       if (event.downloadId.startsWith(sourceId)) {
@@ -120,8 +136,9 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
 
     try {
       // Try to load from cache first for instant response
-      final cachedMessages = await _loadFromCache();
+      final cachedMessages = await _loadFromCache(limit: _cacheLoadLimit);
       if (cachedMessages.isNotEmpty) {
+        _syncStateFromMessages(cachedMessages);
         setState(() {
           _messages = cachedMessages;
           _isLoading = false;
@@ -133,7 +150,7 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
       }
 
       // No cache - fetch from API
-      await _fetchFromApi();
+      await _fetchFromApi(forceFull: true);
     } catch (e) {
       LogService().log('RemoteChatRoomPage: Error loading messages: $e');
       setState(() {
@@ -144,32 +161,42 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
   }
 
   /// Load messages from cached data on disk
-  Future<List<ChatMessage>> _loadFromCache() async {
+  Future<List<ChatMessage>> _loadFromCache({required int limit}) async {
     try {
-      final dataDir = StorageConfig().baseDir;
-      final roomPath = '$dataDir/devices/${widget.device.callsign}/chat/${widget.room.id}';
-      final roomDir = Directory(roomPath);
+      final roomDir = await _ensureRoomCacheDir();
 
       if (!await roomDir.exists()) {
         return [];
       }
 
-      final messages = <ChatMessage>[];
+      final messageFiles = <File>[];
       await for (final entity in roomDir.list()) {
-        if (entity is File && entity.path.endsWith('.json') && !entity.path.endsWith('config.json')) {
-          try {
-            final content = await entity.readAsString();
-            final data = json.decode(content) as Map<String, dynamic>;
-            messages.add(ChatMessage.fromJson(data));
-          } catch (e) {
-            LogService().log('Error reading message ${entity.path}: $e');
-          }
+        if (entity is File &&
+            entity.path.endsWith('.json') &&
+            !entity.path.endsWith('config.json') &&
+            !entity.path.endsWith('.sync.json')) {
+          messageFiles.add(entity);
+        }
+      }
+
+      messageFiles.sort((a, b) => b.path.compareTo(a.path));
+
+      final messages = <ChatMessage>[];
+      for (final file in messageFiles.take(limit)) {
+        try {
+          final content = await file.readAsString();
+          final data = json.decode(content) as Map<String, dynamic>;
+          messages.add(ChatMessage.fromJson(data));
+        } catch (e) {
+          LogService().log('Error reading message ${file.path}: $e');
         }
       }
 
       // Sort by timestamp
       messages.sort((a, b) => a.timestamp.compareTo(b.timestamp));
-      LogService().log('RemoteChatRoomPage: Loaded ${messages.length} cached messages');
+      LogService().log(
+        'RemoteChatRoomPage: Loaded ${messages.length} cached messages',
+      );
       return messages;
     } catch (e) {
       LogService().log('RemoteChatRoomPage: Error loading cache: $e');
@@ -178,9 +205,11 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
   }
 
   /// Fetch fresh messages from API
-  Future<void> _fetchFromApi() async {
+  Future<void> _fetchFromApi({bool forceFull = false}) async {
     try {
-      LogService().log('RemoteChatRoomPage: Fetching messages from ${widget.device.callsign}, room ${widget.room.id}');
+      LogService().log(
+        'RemoteChatRoomPage: Fetching messages from ${widget.device.callsign}, room ${widget.room.id}',
+      );
 
       // Generate signed auth header for restricted room access
       final profile = _profileService.getProfile();
@@ -190,7 +219,9 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
       final authHeader = await signingService.generateAuthHeader(
         profile,
         action: 'read-messages',
-        tags: [['room', widget.room.id]],
+        tags: [
+          ['room', widget.room.id],
+        ],
       );
 
       final headers = <String, String>{};
@@ -198,32 +229,73 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
         headers['Authorization'] = 'Nostr $authHeader';
       }
 
+      final query = <String, String>{
+        'compact': '1',
+        'limit': forceFull ? '$_initialFetchLimit' : '$_incrementalFetchLimit',
+      };
+      if (!forceFull && _latestSyncedEpoch != null) {
+        // Keep 1 second overlap to avoid missing messages emitted within the same second.
+        final since = math.max(0, _latestSyncedEpoch! - 1);
+        query['since'] = since.toString();
+      }
+
+      final queryString = Uri(queryParameters: query).query;
       final response = await _devicesService.makeDeviceApiRequest(
         callsign: widget.device.callsign,
         method: 'GET',
-        path: '${ChatApi.messagesPath(widget.room.id)}?limit=100',
+        path: '${ChatApi.messagesPath(widget.room.id)}?$queryString',
         headers: headers.isNotEmpty ? headers : null,
       );
 
-      LogService().log('RemoteChatRoomPage: Response status=${response?.statusCode}, body length=${response?.body.length}');
+      LogService().log(
+        'RemoteChatRoomPage: Response status=${response?.statusCode}, body length=${response?.body.length}',
+      );
 
       if (response != null && response.statusCode == 200) {
         final responseBody = json.decode(response.body);
-        LogService().log('RemoteChatRoomPage: Response body type=${responseBody.runtimeType}');
+        final payload = ChatSyncPayload.fromResponse(responseBody);
+        final incomingMessages =
+            payload.messages.map((json) => ChatMessage.fromJson(json)).toList()
+              ..sort((a, b) => a.timestamp.compareTo(b.timestamp));
 
-        // Handle both direct list and wrapped response
-        final List<dynamic> data = responseBody is List ? responseBody : (responseBody['messages'] ?? []);
+        if (incomingMessages.isEmpty) {
+          if (mounted) {
+            setState(() {
+              _isLoading = false;
+            });
+          }
+          return;
+        }
 
-        LogService().log('RemoteChatRoomPage: Parsed ${data.length} messages');
+        final merged = forceFull
+            ? incomingMessages
+            : _mergeMessages(_messages, incomingMessages);
 
+        await _persistMessagesToCache(
+          forceFull ? merged : incomingMessages,
+          overwrite: forceFull,
+        );
+        _syncStateFromMessages(
+          merged,
+          latestIdOverride: payload.latestId,
+          latestTimestampOverride: payload.latestTimestamp,
+        );
+        await _saveSyncState();
+
+        if (!mounted) return;
         setState(() {
-          _messages = data.map((json) => ChatMessage.fromJson(json as Map<String, dynamic>)).toList();
+          _messages = merged;
           _isLoading = false;
         });
 
-        LogService().log('RemoteChatRoomPage: Fetched ${_messages.length} messages from API');
+        LogService().log(
+          'RemoteChatRoomPage: Synced ${incomingMessages.length} message(s) '
+          '(total=${merged.length}, compact=${payload.compact}, since=${query['since'] ?? "none"})',
+        );
       } else {
-        throw Exception('HTTP ${response?.statusCode ?? "null"}: ${response?.body ?? "no response"}');
+        throw Exception(
+          'HTTP ${response?.statusCode ?? "null"}: ${response?.body ?? "no response"}',
+        );
       }
     } catch (e) {
       LogService().log('RemoteChatRoomPage: ERROR fetching messages: $e');
@@ -237,6 +309,154 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
       LogService().log('RemoteChatRoomPage: Background refresh failed: $e');
       // Don't update UI with error, keep showing cached data
     });
+  }
+
+  Future<Directory> _ensureRoomCacheDir() async {
+    final dataDir = StorageConfig().baseDir;
+    final roomPath =
+        '$dataDir/devices/${widget.device.callsign}/chat/${widget.room.id}';
+    final roomDir = Directory(roomPath);
+    if (!await roomDir.exists()) {
+      await roomDir.create(recursive: true);
+    }
+    return roomDir;
+  }
+
+  File _syncStateFile(Directory roomDir) => File('${roomDir.path}/.sync.json');
+
+  Future<void> _loadSyncState() async {
+    try {
+      final roomDir = await _ensureRoomCacheDir();
+      final file = _syncStateFile(roomDir);
+      if (!await file.exists()) return;
+
+      final content = await file.readAsString();
+      final data = json.decode(content) as Map<String, dynamic>;
+      _latestSyncedId = data['latest_id'] is num
+          ? (data['latest_id'] as num).toInt()
+          : null;
+      _latestSyncedEpoch = data['latest_timestamp'] is num
+          ? (data['latest_timestamp'] as num).toInt()
+          : null;
+    } catch (e) {
+      LogService().log('RemoteChatRoomPage: Failed to load sync state: $e');
+    }
+  }
+
+  Future<void> _saveSyncState() async {
+    try {
+      final roomDir = await _ensureRoomCacheDir();
+      final file = _syncStateFile(roomDir);
+      final payload = {
+        'latest_id': _latestSyncedId,
+        'latest_timestamp': _latestSyncedEpoch,
+        'updated_at': DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      };
+      await file.writeAsString(json.encode(payload));
+    } catch (e) {
+      LogService().log('RemoteChatRoomPage: Failed to save sync state: $e');
+    }
+  }
+
+  void _syncStateFromMessages(
+    List<ChatMessage> messages, {
+    int? latestIdOverride,
+    int? latestTimestampOverride,
+  }) {
+    if (latestIdOverride != null && latestIdOverride > 0) {
+      _latestSyncedId = latestIdOverride;
+    }
+    if (latestTimestampOverride != null && latestTimestampOverride > 0) {
+      _latestSyncedEpoch = latestTimestampOverride;
+    }
+
+    for (final message in messages) {
+      final msgId = int.tryParse(message.getMeta('id') ?? '');
+      if (msgId != null &&
+          (_latestSyncedId == null || msgId > _latestSyncedId!)) {
+        _latestSyncedId = msgId;
+      }
+
+      final ts = ChatSyncPayload.parseEpochSeconds(message.timestamp);
+      if (ts != null &&
+          (_latestSyncedEpoch == null || ts > _latestSyncedEpoch!)) {
+        _latestSyncedEpoch = ts;
+      }
+    }
+  }
+
+  List<ChatMessage> _mergeMessages(
+    List<ChatMessage> current,
+    List<ChatMessage> incoming,
+  ) {
+    final merged = <String, ChatMessage>{};
+    for (final msg in current) {
+      merged[_messageKey(msg)] = msg;
+    }
+    for (final msg in incoming) {
+      merged[_messageKey(msg)] = msg;
+    }
+    final list = merged.values.toList()
+      ..sort((a, b) => a.timestamp.compareTo(b.timestamp));
+    return list;
+  }
+
+  String _messageKey(ChatMessage msg) =>
+      '${msg.timestamp}|${msg.author.toUpperCase()}|${msg.content}';
+
+  Future<void> _persistMessagesToCache(
+    List<ChatMessage> messages, {
+    required bool overwrite,
+  }) async {
+    if (messages.isEmpty) return;
+    try {
+      final roomDir = await _ensureRoomCacheDir();
+
+      if (overwrite) {
+        await for (final entity in roomDir.list()) {
+          if (entity is File &&
+              entity.path.endsWith('.json') &&
+              !entity.path.endsWith('config.json') &&
+              !entity.path.endsWith('.sync.json')) {
+            try {
+              await entity.delete();
+            } catch (_) {}
+          }
+        }
+      }
+
+      for (final message in messages) {
+        final filename = _buildMessageFilename(message);
+        final file = File('${roomDir.path}/$filename');
+        await file.writeAsString(json.encode(message.toJson()));
+      }
+    } catch (e) {
+      LogService().log('RemoteChatRoomPage: Failed to persist cache: $e');
+    }
+  }
+
+  String _buildMessageFilename(ChatMessage message) {
+    final safeTs = message.timestamp
+        .replaceAll(' ', '_')
+        .replaceAll(':', '-')
+        .replaceAll('/', '-');
+    final safeAuthor = message.author.toUpperCase().replaceAll(
+      RegExp(r'[^A-Z0-9_-]'),
+      '_',
+    );
+    final hash = _stableHash32(
+      '${message.author}|${message.timestamp}|${message.content}',
+    );
+    return '${safeTs}_${safeAuthor}_${hash.toRadixString(16).padLeft(8, '0')}.json';
+  }
+
+  int _stableHash32(String input) {
+    var hash = 2166136261;
+    for (final unit in input.codeUnits) {
+      hash ^= unit;
+      hash = (hash * 16777619) & 0xFFFFFFFF;
+    }
+    return hash & 0x7FFFFFFF;
   }
 
   void _setQuotedMessage(ChatMessage message) {
@@ -311,10 +531,7 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
       // Create signed message with voice metadata
       final signedEvent = await signingService.generateSignedEvent(
         '', // Empty content for voice messages
-        {
-          'room': widget.room.id,
-          'callsign': profile.callsign,
-        },
+        {'room': widget.room.id, 'callsign': profile.callsign},
         profile,
       );
 
@@ -348,7 +565,8 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
         headers: {'Content-Type': 'application/json'},
       );
 
-      if (response != null && (response.statusCode == 200 || response.statusCode == 201)) {
+      if (response != null &&
+          (response.statusCode == 200 || response.statusCode == 201)) {
         await _fetchFromApi();
       } else {
         throw Exception('HTTP ${response?.statusCode ?? "null"}');
@@ -376,12 +594,14 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
     if (!message.hasVoice || message.voiceFile == null) return null;
 
     // Voice files use the same storage as regular file attachments
-    final (path, _) = await _getAttachmentData(ChatMessage(
-      author: message.author,
-      content: message.content,
-      timestamp: message.timestamp,
-      metadata: {'file': message.voiceFile!},
-    ));
+    final (path, _) = await _getAttachmentData(
+      ChatMessage(
+        author: message.author,
+        content: message.content,
+        timestamp: message.timestamp,
+        metadata: {'file': message.voiceFile!},
+      ),
+    );
     return path;
   }
 
@@ -409,7 +629,8 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
     // Auto-download only if file is <= 3 MB and message is <= 7 days old
     final fileSize = int.tryParse(message.getMeta('file_size') ?? '0') ?? 0;
     final messageAge = DateTime.now().difference(message.dateTime);
-    final shouldAutoDownload = fileSize <= 3 * 1024 * 1024 && messageAge.inDays <= 7;
+    final shouldAutoDownload =
+        fileSize <= 3 * 1024 * 1024 && messageAge.inDays <= 7;
 
     if (!shouldAutoDownload) {
       // Don't auto-download, user must click download button
@@ -440,9 +661,9 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
     final (filePath, _) = await _getAttachmentData(message);
     if (filePath == null) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(_i18n.t('image_not_available'))),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(_i18n.t('image_not_available'))));
       }
       return;
     }
@@ -471,10 +692,8 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
     await Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (context) => PhotoViewerPage(
-          imagePaths: imagePaths,
-          initialIndex: initialIndex,
-        ),
+        builder: (context) =>
+            PhotoViewerPage(imagePaths: imagePaths, initialIndex: initialIndex),
       ),
     );
   }
@@ -490,7 +709,8 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
   }
 
   /// Get source ID for download manager (device + room)
-  String get _sourceId => '${widget.device.callsign}_${widget.room.id}'.toUpperCase();
+  String get _sourceId =>
+      '${widget.device.callsign}_${widget.room.id}'.toUpperCase();
 
   /// Check if download button should be shown for a message
   bool _shouldShowDownloadButton(ChatMessage message) {
@@ -508,7 +728,9 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
     final fileSize = int.tryParse(message.getMeta('file_size') ?? '0') ?? 0;
     if (fileSize <= 0) return false;
 
-    final bandwidth = _downloadManager.getDeviceBandwidth(widget.device.callsign);
+    final bandwidth = _downloadManager.getDeviceBandwidth(
+      widget.device.callsign,
+    );
     return !_downloadManager.shouldAutoDownload(bandwidth, fileSize);
   }
 
@@ -521,7 +743,10 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
   /// Get download state for a message
   ChatDownload? _getDownloadState(ChatMessage message) {
     if (!message.hasFile || message.attachedFile == null) return null;
-    final downloadId = _downloadManager.generateDownloadId(_sourceId, message.attachedFile!);
+    final downloadId = _downloadManager.generateDownloadId(
+      _sourceId,
+      message.attachedFile!,
+    );
     return _downloadManager.getDownload(downloadId);
   }
 
@@ -560,7 +785,10 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
   Future<void> _onCancelDownload(ChatMessage message) async {
     if (!message.hasFile || message.attachedFile == null) return;
 
-    final downloadId = _downloadManager.generateDownloadId(_sourceId, message.attachedFile!);
+    final downloadId = _downloadManager.generateDownloadId(
+      _sourceId,
+      message.attachedFile!,
+    );
     await _downloadManager.cancelDownload(downloadId);
   }
 
@@ -568,9 +796,9 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
     final profile = _profileService.getProfile();
     return message.author.toUpperCase() == profile.callsign.toUpperCase() ||
         (message.npub != null &&
-         message.npub!.isNotEmpty &&
-         profile.npub.isNotEmpty &&
-         message.npub == profile.npub);
+            message.npub!.isNotEmpty &&
+            profile.npub.isNotEmpty &&
+            message.npub == profile.npub);
   }
 
   Future<void> _deleteMessage(ChatMessage message) async {
@@ -602,14 +830,15 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
         throw Exception('Failed to sign delete request');
       }
 
-      final authEvent = base64Encode(utf8.encode(jsonEncode(signedEvent.toJson())));
+      final authEvent = base64Encode(
+        utf8.encode(jsonEncode(signedEvent.toJson())),
+      );
       final response = await _devicesService.makeDeviceApiRequest(
         callsign: widget.device.callsign,
         method: 'DELETE',
-        path: '${ChatApi.messagesPath(widget.room.id)}/${Uri.encodeComponent(message.timestamp)}',
-        headers: {
-          'Authorization': 'Nostr $authEvent',
-        },
+        path:
+            '${ChatApi.messagesPath(widget.room.id)}/${Uri.encodeComponent(message.timestamp)}',
+        headers: {'Authorization': 'Nostr $authEvent'},
       );
 
       if (response != null && response.statusCode == 200) {
@@ -619,9 +848,9 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to delete message: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Failed to delete message: $e')));
       }
     }
   }
@@ -660,14 +889,17 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
         throw Exception('Failed to sign reaction event');
       }
 
-      final authEvent = base64Encode(utf8.encode(jsonEncode(signedEvent.toJson())));
+      final authEvent = base64Encode(
+        utf8.encode(jsonEncode(signedEvent.toJson())),
+      );
       final response = await _devicesService.makeDeviceApiRequest(
         callsign: widget.device.callsign,
         method: 'POST',
-        path: ChatApi.reactionsPath(widget.room.id, Uri.encodeComponent(message.timestamp)),
-        headers: {
-          'Authorization': 'Nostr $authEvent',
-        },
+        path: ChatApi.reactionsPath(
+          widget.room.id,
+          Uri.encodeComponent(message.timestamp),
+        ),
+        headers: {'Authorization': 'Nostr $authEvent'},
       );
 
       if (response != null && response.statusCode == 200) {
@@ -677,8 +909,9 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
         if (rawReactions != null) {
           rawReactions.forEach((key, value) {
             if (value is List) {
-              reactions[key.toString()] =
-                  value.map((entry) => entry.toString()).toList();
+              reactions[key.toString()] = value
+                  .map((entry) => entry.toString())
+                  .toList();
             }
           });
         }
@@ -686,9 +919,11 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
 
         if (mounted) {
           setState(() {
-            final index = _messages.indexWhere((msg) =>
-                msg.timestamp == message.timestamp &&
-                msg.author == message.author);
+            final index = _messages.indexWhere(
+              (msg) =>
+                  msg.timestamp == message.timestamp &&
+                  msg.author == message.author,
+            );
             if (index != -1) {
               _messages[index] = message.copyWith(reactions: normalized);
             }
@@ -699,9 +934,9 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to react: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Failed to react: $e')));
       }
     }
   }
@@ -712,32 +947,34 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
     try {
       final profile = _profileService.getProfile();
 
-      LogService().log('RemoteChatRoomPage: Sending message to ${widget.device.callsign}, room ${widget.room.id}');
+      LogService().log(
+        'RemoteChatRoomPage: Sending message to ${widget.device.callsign}, room ${widget.room.id}',
+      );
 
       // Use SigningService to create signed event
       final signingService = SigningService();
       await signingService.initialize();
 
       if (!signingService.canSign(profile)) {
-        throw Exception('Cannot send to remote chat: NOSTR keys not configured. Please set up your npub/nsec in Settings.');
+        throw Exception(
+          'Cannot send to remote chat: NOSTR keys not configured. Please set up your npub/nsec in Settings.',
+        );
       }
 
       // Generate signed event with room and callsign tags
       // Per chat-format-specification.md: tags must include [['t', 'chat'], ['room', roomId], ['callsign', callsign]]
-      final signedEvent = await signingService.generateSignedEvent(
-        content,
-        {
-          'room': widget.room.id,
-          'callsign': profile.callsign,
-        },
-        profile,
-      );
+      final signedEvent = await signingService.generateSignedEvent(content, {
+        'room': widget.room.id,
+        'callsign': profile.callsign,
+      }, profile);
 
       if (signedEvent == null || signedEvent.sig == null) {
         throw Exception('Failed to sign message');
       }
 
-      LogService().log('RemoteChatRoomPage: Created signed event id=${signedEvent.id}');
+      LogService().log(
+        'RemoteChatRoomPage: Created signed event id=${signedEvent.id}',
+      );
 
       final metadata = <String, String>{};
       if (_quotedMessage != null) {
@@ -796,9 +1033,12 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
         headers: {'Content-Type': 'application/json'},
       );
 
-      LogService().log('RemoteChatRoomPage: Response status=${response?.statusCode}');
+      LogService().log(
+        'RemoteChatRoomPage: Response status=${response?.statusCode}',
+      );
 
-      if (response != null && (response.statusCode == 200 || response.statusCode == 201)) {
+      if (response != null &&
+          (response.statusCode == 200 || response.statusCode == 201)) {
         _clearQuotedMessage();
 
         // Reload messages to show the new one
@@ -807,15 +1047,19 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
         LogService().log('RemoteChatRoomPage: Message sent successfully');
       } else {
         final errorBody = response?.body ?? 'no response';
-        LogService().log('RemoteChatRoomPage: Send failed - status=${response?.statusCode}, body=$errorBody');
-        throw Exception('Failed to send message: HTTP ${response?.statusCode}: $errorBody');
+        LogService().log(
+          'RemoteChatRoomPage: Send failed - status=${response?.statusCode}, body=$errorBody',
+        );
+        throw Exception(
+          'Failed to send message: HTTP ${response?.statusCode}: $errorBody',
+        );
       }
     } catch (e) {
       LogService().log('RemoteChatRoomPage: Error sending message: $e');
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to send message: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Failed to send message: $e')));
       }
       rethrow;
     }
@@ -847,55 +1091,55 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
             child: _isLoading
                 ? const Center(child: CircularProgressIndicator())
                 : _error != null
-                    ? Center(
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(
-                              Icons.error_outline,
-                              size: 64,
-                              color: theme.colorScheme.error,
-                            ),
-                            const SizedBox(height: 16),
-                            Text(
-                              _i18n.t('error_loading_data'),
-                              style: theme.textTheme.titleMedium,
-                            ),
-                            const SizedBox(height: 8),
-                            Padding(
-                              padding: const EdgeInsets.symmetric(horizontal: 32),
-                              child: Text(
-                                _error!,
-                                style: theme.textTheme.bodySmall,
-                                textAlign: TextAlign.center,
-                              ),
-                            ),
-                            const SizedBox(height: 16),
-                            ElevatedButton(
-                              onPressed: _loadMessages,
-                              child: Text(_i18n.t('retry')),
-                            ),
-                          ],
+                ? Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(
+                          Icons.error_outline,
+                          size: 64,
+                          color: theme.colorScheme.error,
                         ),
-                      )
-                    : MessageListWidget(
-                        messages: _messages,
-                        isGroupChat: true,
-                        onMessageQuote: _setQuotedMessage,
-                        onMessageDelete: _deleteMessage,
-                        canDeleteMessage: _canDeleteMessage,
-                        onMessageReact: _toggleReaction,
-                        getAttachmentData: _getAttachmentData,
-                        getVoiceFilePath: _getVoiceFilePath,
-                        onImageOpen: _openImage,
-                        // Download manager integration
-                        shouldShowDownloadButton: _shouldShowDownloadButton,
-                        getFileSize: _getFileSize,
-                        getDownloadState: _getDownloadState,
-                        onDownloadPressed: _onDownloadPressed,
-                        onCancelDownload: _onCancelDownload,
-                        nicknameMap: _nicknameMap,
-                      ),
+                        const SizedBox(height: 16),
+                        Text(
+                          _i18n.t('error_loading_data'),
+                          style: theme.textTheme.titleMedium,
+                        ),
+                        const SizedBox(height: 8),
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 32),
+                          child: Text(
+                            _error!,
+                            style: theme.textTheme.bodySmall,
+                            textAlign: TextAlign.center,
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                        ElevatedButton(
+                          onPressed: _loadMessages,
+                          child: Text(_i18n.t('retry')),
+                        ),
+                      ],
+                    ),
+                  )
+                : MessageListWidget(
+                    messages: _messages,
+                    isGroupChat: true,
+                    onMessageQuote: _setQuotedMessage,
+                    onMessageDelete: _deleteMessage,
+                    canDeleteMessage: _canDeleteMessage,
+                    onMessageReact: _toggleReaction,
+                    getAttachmentData: _getAttachmentData,
+                    getVoiceFilePath: _getVoiceFilePath,
+                    onImageOpen: _openImage,
+                    // Download manager integration
+                    shouldShowDownloadButton: _shouldShowDownloadButton,
+                    getFileSize: _getFileSize,
+                    getDownloadState: _getDownloadState,
+                    onDownloadPressed: _onDownloadPressed,
+                    onCancelDownload: _onCancelDownload,
+                    nicknameMap: _nicknameMap,
+                  ),
           ),
 
           // Message input / Voice recorder
