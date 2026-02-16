@@ -32,8 +32,8 @@ class ChatMessage implements Comparable<ChatMessage> {
     this.messageType = ChatMessageType.simple,
     Map<String, String>? metadata,
     Map<String, List<String>>? reactions,
-  })  : metadata = metadata ?? {},
-        reactions = reactions ?? {};
+  }) : metadata = metadata ?? {},
+       reactions = reactions ?? {};
 
   /// Create a simple message without metadata
   factory ChatMessage.simple({
@@ -195,7 +195,8 @@ class ChatMessage implements Comparable<ChatMessage> {
   bool get isSigned => hasMeta('signature') || hasMeta('has_signature');
 
   /// Check if message has signature (from API response)
-  bool get hasSignature => getMeta('has_signature') == 'true' || hasMeta('signature');
+  bool get hasSignature =>
+      getMeta('has_signature') == 'true' || hasMeta('signature');
 
   /// Get NOSTR signature
   String? get signature => getMeta('signature');
@@ -218,7 +219,8 @@ class ChatMessage implements Comparable<ChatMessage> {
     if (status == null) return null;
     return MessageStatus.values.firstWhere(
       (s) => s.name == status,
-      orElse: () => MessageStatus.delivered, // Legacy messages assumed delivered
+      orElse: () =>
+          MessageStatus.delivered, // Legacy messages assumed delivered
     );
   }
 
@@ -226,7 +228,8 @@ class ChatMessage implements Comparable<ChatMessage> {
   bool get isPending => deliveryStatus == MessageStatus.pending;
 
   /// Check if message was delivered
-  bool get isDelivered => deliveryStatus == MessageStatus.delivered || deliveryStatus == null;
+  bool get isDelivered =>
+      deliveryStatus == MessageStatus.delivered || deliveryStatus == null;
 
   /// Check if message delivery failed
   bool get isFailed => deliveryStatus == MessageStatus.failed;
@@ -237,7 +240,8 @@ class ChatMessage implements Comparable<ChatMessage> {
   }
 
   /// Check if message quotes another message
-  bool get isQuote => hasMeta('quote') || hasMeta('quote_author') || hasMeta('quote_excerpt');
+  bool get isQuote =>
+      hasMeta('quote') || hasMeta('quote_author') || hasMeta('quote_excerpt');
 
   /// Get quoted message timestamp
   String? get quotedMessage => getMeta('quote');
@@ -282,7 +286,15 @@ class ChatMessage implements Comparable<ChatMessage> {
     // - verified/has_signature: useless in export - verification happens at load time
     //   (anyone could edit the file and set verified=true, defeating the purpose)
     // - created_at: written in specific order (needed for signature verification)
-    const reservedKeys = {'Poll', 'edited_at', 'created_at', 'npub', 'signature', 'verified', 'has_signature'};
+    const reservedKeys = {
+      'Poll',
+      'edited_at',
+      'created_at',
+      'npub',
+      'signature',
+      'verified',
+      'has_signature',
+    };
 
     // Metadata (excluding reserved keys which have special ordering or are excluded)
     for (var entry in metadata.entries) {
@@ -333,8 +345,9 @@ class ChatMessage implements Comparable<ChatMessage> {
     if (rawReactions != null) {
       rawReactions.forEach((key, value) {
         if (value is List) {
-          reactions[key.toString()] =
-              value.map((entry) => entry.toString()).toList();
+          reactions[key.toString()] = value
+              .map((entry) => entry.toString())
+              .toList();
         }
       });
     }
@@ -342,7 +355,9 @@ class ChatMessage implements Comparable<ChatMessage> {
     // Start with metadata from JSON
     final rawMetadata = json['metadata'] as Map?;
     final metadata = rawMetadata != null
-        ? rawMetadata.map((key, value) => MapEntry(key.toString(), value.toString()))
+        ? rawMetadata.map(
+            (key, value) => MapEntry(key.toString(), value.toString()),
+          )
         : <String, String>{};
 
     // Merge direct API fields into metadata (API format compatibility)
@@ -363,9 +378,9 @@ class ChatMessage implements Comparable<ChatMessage> {
     }
 
     return ChatMessage(
-      author: json['author'] as String? ?? 'Unknown',
-      timestamp: json['timestamp'] as String? ?? '',
-      content: json['content'] as String? ?? '',
+      author: (json['author'] ?? json['callsign'] ?? 'Unknown').toString(),
+      timestamp: _normalizeTimestamp(json['timestamp']),
+      content: (json['content'] ?? json['text'] ?? '').toString(),
       messageType: ChatMessageType.values.firstWhere(
         (type) => type.name == (json['messageType'] as String? ?? 'simple'),
         orElse: () => ChatMessageType.simple,
@@ -373,6 +388,47 @@ class ChatMessage implements Comparable<ChatMessage> {
       metadata: metadata,
       reactions: ReactionUtils.normalizeReactionMap(reactions),
     );
+  }
+
+  static String _normalizeTimestamp(dynamic rawTimestamp) {
+    if (rawTimestamp is String && rawTimestamp.isNotEmpty) {
+      // Already in chat format (YYYY-MM-DD HH:MM_ss)
+      if (rawTimestamp.contains('-') && rawTimestamp.contains('_')) {
+        return rawTimestamp;
+      }
+
+      // Numeric string from APIs that return unix timestamps.
+      final parsed = int.tryParse(rawTimestamp);
+      if (parsed != null) {
+        return _epochToChatTimestamp(parsed);
+      }
+
+      // Unknown string format - keep as-is.
+      return rawTimestamp;
+    }
+
+    if (rawTimestamp is num) {
+      return _epochToChatTimestamp(rawTimestamp.toInt());
+    }
+
+    // Fallback to a valid current timestamp to avoid downstream parsing errors.
+    return formatTimestamp(DateTime.now());
+  }
+
+  static String _epochToChatTimestamp(int epochRaw) {
+    var epoch = epochRaw;
+
+    // If value looks like milliseconds, convert to seconds.
+    if (epoch > 1000000000000) {
+      epoch = (epoch / 1000).round();
+    }
+
+    if (epoch <= 0) {
+      return formatTimestamp(DateTime.now());
+    }
+
+    final dt = DateTime.fromMillisecondsSinceEpoch(epoch * 1000);
+    return formatTimestamp(dt);
   }
 
   /// Convert ChatMessage to JSON

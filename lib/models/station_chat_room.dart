@@ -18,12 +18,22 @@ class StationChatRoom {
     this.stationName = '',
   });
 
-  factory StationChatRoom.fromJson(Map<String, dynamic> json, String stationUrl, String stationName) {
+  factory StationChatRoom.fromJson(
+    Map<String, dynamic> json,
+    String stationUrl,
+    String stationName,
+  ) {
+    final rawMessageCount =
+        json['message_count'] ?? json['messageCount'] ?? json['count'];
+    final messageCount = rawMessageCount is int
+        ? rawMessageCount
+        : int.tryParse(rawMessageCount?.toString() ?? '') ?? 0;
+
     return StationChatRoom(
-      id: json['id'] as String? ?? '',
-      name: json['name'] as String? ?? '',
-      description: json['description'] as String? ?? '',
-      messageCount: json['message_count'] as int? ?? 0,
+      id: json['id']?.toString() ?? '',
+      name: json['name']?.toString() ?? '',
+      description: json['description']?.toString() ?? '',
+      messageCount: messageCount,
       stationUrl: stationUrl,
       stationName: stationName,
     );
@@ -48,7 +58,8 @@ class StationChatRoom {
   }
 
   @override
-  String toString() => 'StationChatRoom(id: $id, name: $name, station: $stationName)';
+  String toString() =>
+      'StationChatRoom(id: $id, name: $name, station: $stationName)';
 }
 
 /// Model for a message from a station chat room
@@ -59,12 +70,12 @@ class StationChatMessage {
   final String roomId;
   final Map<String, String> metadata;
   final Map<String, List<String>> reactions;
-  final String? npub;      // Author's NOSTR public key (bech32)
-  final String? pubkey;    // Author's public key (hex)
+  final String? npub; // Author's NOSTR public key (bech32)
+  final String? pubkey; // Author's public key (hex)
   final String? signature; // Message signature (BIP-340 Schnorr)
-  final String? eventId;   // NOSTR event ID
-  final int? createdAt;    // Unix timestamp in seconds
-  final bool verified;     // Server-side signature verification result
+  final String? eventId; // NOSTR event ID
+  final int? createdAt; // Unix timestamp in seconds
+  final bool verified; // Server-side signature verification result
   final bool hasSignature; // Whether message has a signature
 
   StationChatMessage({
@@ -81,31 +92,43 @@ class StationChatMessage {
     this.createdAt,
     this.verified = false,
     this.hasSignature = false,
-  })  : metadata = metadata ?? {},
-        reactions = reactions ?? {};
+  }) : metadata = metadata ?? {},
+       reactions = reactions ?? {};
 
-  factory StationChatMessage.fromJson(Map<String, dynamic> json, String roomId) {
+  factory StationChatMessage.fromJson(
+    Map<String, dynamic> json,
+    String roomId,
+  ) {
     final rawMetadata = json['metadata'] as Map?;
     final metadata = rawMetadata != null
-        ? rawMetadata.map((key, value) => MapEntry(key.toString(), value.toString()))
+        ? rawMetadata.map(
+            (key, value) => MapEntry(key.toString(), value.toString()),
+          )
         : <String, String>{};
     final rawReactions = json['reactions'] as Map?;
     final reactions = <String, List<String>>{};
     if (rawReactions != null) {
       rawReactions.forEach((key, value) {
         if (value is List) {
-          reactions[key.toString()] =
-              value.map((entry) => entry.toString()).toList();
+          reactions[key.toString()] = value
+              .map((entry) => entry.toString())
+              .toList();
         }
       });
     }
-    final npub = (json['npub'] as String?) ?? metadata['npub'];
-    final signature = (json['signature'] as String?) ?? metadata['signature'];
-    final eventId = (json['event_id'] as String?) ?? metadata['event_id'];
-    final createdAt = (json['created_at'] as int?) ??
-        (metadata['created_at'] != null ? int.tryParse(metadata['created_at']!) : null);
-    final verified = (json['verified'] as bool?) ?? (metadata['verified'] == 'true');
-    final hasSignature = (json['has_signature'] as bool?) ?? (signature != null && signature.isNotEmpty);
+    final npub = json['npub']?.toString() ?? metadata['npub'];
+    final signature = json['signature']?.toString() ?? metadata['signature'];
+    final eventId = json['event_id']?.toString() ?? metadata['event_id'];
+    final createdAt =
+        _normalizeEpoch(json['created_at']) ??
+        (metadata['created_at'] != null
+            ? int.tryParse(metadata['created_at']!)
+            : null);
+    final verified =
+        (json['verified'] as bool?) ?? (metadata['verified'] == 'true');
+    final hasSignature =
+        (json['has_signature'] as bool?) ??
+        (signature != null && signature.isNotEmpty);
 
     if (npub != null && npub.isNotEmpty) {
       metadata['npub'] = npub;
@@ -124,20 +147,68 @@ class StationChatMessage {
     }
 
     return StationChatMessage(
-      timestamp: json['timestamp'] as String? ?? '',
-      callsign: json['callsign'] as String? ?? '',
-      content: json['content'] as String? ?? '',
+      timestamp: _normalizeTimestamp(json['timestamp']),
+      callsign: (json['callsign'] ?? json['author'] ?? '').toString(),
+      content: (json['content'] ?? json['text'] ?? '').toString(),
       roomId: roomId,
       metadata: metadata,
       reactions: ReactionUtils.normalizeReactionMap(reactions),
       npub: npub,
-      pubkey: json['pubkey'] as String?,
+      pubkey: json['pubkey']?.toString(),
       signature: signature,
       eventId: eventId,
       createdAt: createdAt,
       verified: verified,
       hasSignature: hasSignature,
     );
+  }
+
+  static int? _normalizeEpoch(dynamic raw) {
+    if (raw is int) return raw;
+    if (raw is num) return raw.toInt();
+    if (raw is String) return int.tryParse(raw);
+    return null;
+  }
+
+  static String _normalizeTimestamp(dynamic rawTimestamp) {
+    if (rawTimestamp is String && rawTimestamp.isNotEmpty) {
+      if (rawTimestamp.contains('-') && rawTimestamp.contains('_')) {
+        return rawTimestamp;
+      }
+
+      final parsed = int.tryParse(rawTimestamp);
+      if (parsed != null) {
+        return _epochToChatTimestamp(parsed);
+      }
+
+      return rawTimestamp;
+    }
+
+    if (rawTimestamp is num) {
+      return _epochToChatTimestamp(rawTimestamp.toInt());
+    }
+
+    return _epochToChatTimestamp(DateTime.now().millisecondsSinceEpoch ~/ 1000);
+  }
+
+  static String _epochToChatTimestamp(int epochRaw) {
+    var epoch = epochRaw;
+    if (epoch > 1000000000000) {
+      epoch = (epoch / 1000).round();
+    }
+
+    if (epoch <= 0) {
+      epoch = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    }
+
+    final dt = DateTime.fromMillisecondsSinceEpoch(epoch * 1000);
+    final year = dt.year.toString().padLeft(4, '0');
+    final month = dt.month.toString().padLeft(2, '0');
+    final day = dt.day.toString().padLeft(2, '0');
+    final hour = dt.hour.toString().padLeft(2, '0');
+    final minute = dt.minute.toString().padLeft(2, '0');
+    final second = dt.second.toString().padLeft(2, '0');
+    return '$year-$month-$day $hour:$minute\_$second';
   }
 
   /// Create from a NOSTR event
@@ -165,7 +236,8 @@ class StationChatMessage {
 
     // Format timestamp in geogram format
     final dt = DateTime.fromMillisecondsSinceEpoch(createdAt * 1000);
-    final timestamp = '${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')} '
+    final timestamp =
+        '${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')} '
         '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}_${dt.second.toString().padLeft(2, '0')}';
 
     return StationChatMessage(
