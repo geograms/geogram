@@ -17,6 +17,7 @@ This document catalogs reusable UI components available in the Geogram codebase.
 ### Cross-Platform Patterns
 - [Platform-Adaptive WebView](#platform-adaptive-webview) - Render local HTML with JS on all platforms
 - [URL-Linkified SelectableText](#url-linkified-selectabletext) - Make URLs clickable in text widgets
+- [Command Registry](#command-registry) - Self-describing console commands shared across CLI and Desktop
 
 ### Viewer Pages
 - [PhotoViewerPage](#photoviewerpage) - Image & video gallery
@@ -8307,3 +8308,81 @@ HTTP client pattern using `Communications.makeWebRequest()` with callback method
 Background `ServiceDelegate` that runs on a temporal event (every 5 minutes), checks proximity to stored locations, and fires `requestApplicationWake()` notifications. Includes deduplication to avoid repeat alerts.
 
 **Reuse potential**: Pattern for any Garmin geo-fence or location-based background alerting.
+
+---
+
+## Command Registry
+
+**Location**: `lib/cli/commands/`
+
+Self-describing command pattern for console interfaces. Each command is a class with metadata (name, aliases, description, category, contextPaths, subcommands). A central `CommandRegistry` handles dispatch, TAB completion, and help generation.
+
+### Core Files
+
+| File | Purpose |
+|------|---------|
+| `command.dart` | `Command` abstract class, `SubCommand` data class, `CommandCategory` enum |
+| `command_context.dart` | `CommandContext` — flat context object with I/O, navigation state, and `Object?` service refs |
+| `command_registry.dart` | `CommandRegistry` — dispatch, context-aware resolution, completion, help generation |
+
+### Usage
+
+```dart
+// Create and populate registry
+final registry = CommandRegistry();
+registry.registerAll([
+  HelpCommand(registry),
+  StationCommand(),
+  ChatCommand(),
+  // ...
+]);
+
+// Build context for each command invocation
+final ctx = CommandContext(
+  io: CliConsoleIO(),
+  currentPath: '/station',
+  station: myStation,
+  profileService: myProfileService,
+);
+
+// Dispatch
+final result = await registry.dispatch('start', [], ctx);
+// Context-aware: 'start' in /station dispatches to 'station start'
+
+// TAB completion
+final candidates = registry.getCompletions('stat', ctx);
+```
+
+### Adding a New Command
+
+```dart
+class MyCommand extends Command {
+  @override String get name => 'mycommand';
+  @override String get description => 'Does something';
+  @override CommandCategory get category => CommandCategory.general;
+
+  @override
+  List<SubCommand> get subcommands => [
+    SubCommand(name: 'sub1', description: 'First sub', execute: _sub1),
+  ];
+
+  @override
+  Future<void> execute(CommandContext ctx) async {
+    // Default when no subcommand matched
+  }
+
+  static Future<void> _sub1(CommandContext ctx) async {
+    final station = ctx.station as StationServer;
+    ctx.success('Done!');
+  }
+}
+```
+
+### Key Design Decisions
+
+- **`Object?` service refs** in CommandContext — avoids coupling commands to a specific platform. CLI passes `StationServer`, Desktop could pass `StationServiceInterface`.
+- **`contextPaths`** — commands declare which virtual directories they're available in (e.g., `['/station']`), enabling context-aware dispatch without hard-coding directory logic.
+- **`SubCommand`** data class — avoids 40+ tiny Command subclasses; just declare name/description/execute callbacks.
+- **Navigation stays on host** — `ls`, `cd`, `pwd` mutate console state and are dispatched before the registry.
+
+**Reuse potential**: Any new console command gets help, TAB completion, and context-aware dispatch for free by extending `Command` and registering it.
