@@ -8324,6 +8324,7 @@ Self-describing command pattern for console interfaces. Each command is a class 
 | `command.dart` | `Command` abstract class, `SubCommand` data class, `CommandCategory` enum |
 | `command_context.dart` | `CommandContext` — flat context object with I/O, navigation state, and `Object?` service refs |
 | `command_registry.dart` | `CommandRegistry` — dispatch, context-aware resolution, completion, help generation |
+| `service_interfaces.dart` | Shared interfaces (`StationCommandInterface`, `ProfileCommandInterface`, etc.) so commands don't couple to platform-specific types |
 
 ### Usage
 
@@ -8372,7 +8373,7 @@ class MyCommand extends Command {
   }
 
   static Future<void> _sub1(CommandContext ctx) async {
-    final station = ctx.station as StationServer;
+    final station = ctx.station as StationCommandInterface;
     ctx.success('Done!');
   }
 }
@@ -8380,9 +8381,10 @@ class MyCommand extends Command {
 
 ### Key Design Decisions
 
-- **`Object?` service refs** in CommandContext — avoids coupling commands to a specific platform. CLI passes `StationServer`, Desktop could pass `StationServiceInterface`.
+- **Shared interfaces** — commands cast `ctx.station as StationCommandInterface` and `ctx.profileService as ProfileCommandInterface`. Both CLI (`StationServer`, `CliProfileService`) and Desktop (adapter classes in `cli_console_controller.dart`) implement these interfaces, so all commands work on both platforms.
+- **`setSetting(key, value)`** — interface-safe mutation pattern replacing `settings.copyWith()` + `updateSettings()`, avoids exposing concrete settings types.
 - **`contextPaths`** — commands declare which virtual directories they're available in (e.g., `['/station']`), enabling context-aware dispatch without hard-coding directory logic.
 - **`SubCommand`** data class — avoids 40+ tiny Command subclasses; just declare name/description/execute callbacks.
 - **Navigation stays on host** — `ls`, `cd`, `pwd` mutate console state and are dispatched before the registry.
 
-**Reuse potential**: Any new console command gets help, TAB completion, and context-aware dispatch for free by extending `Command` and registering it.
+**Reuse potential**: Any new console command gets help, TAB completion, and context-aware dispatch for free by extending `Command` and registering it. Commands automatically work on both CLI and Desktop platforms through the shared interfaces.
