@@ -17,6 +17,7 @@ export '../cli/commands/command_registry.dart' show CompletionCandidate;
 import '../cli/commands/general_commands.dart';
 import '../cli/commands/station_command.dart';
 import '../cli/commands/devices_command.dart';
+import '../cli/commands/nip05_command.dart';
 import '../cli/commands/chat_command.dart';
 import '../cli/commands/profile_command.dart';
 import '../cli/commands/config_command.dart';
@@ -336,6 +337,7 @@ class CliConsoleController {
       StatsCommand(),
       StationCommand(),
       DevicesCommand(),
+      Nip05Command(),
       ChatCommand(),
       ProfileCommand(),
       ConfigCommand(),

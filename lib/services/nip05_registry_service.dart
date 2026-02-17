@@ -156,6 +156,18 @@ class Nip05RegistryService {
         .toList();
   }
 
+  /// Remove a registration by nickname (admin operation)
+  /// Returns true if found and removed, false if not found
+  bool removeRegistration(String nickname) {
+    final normalizedNickname = nickname.toLowerCase();
+    final removed = _registrations.remove(normalizedNickname);
+    if (removed != null) {
+      _saveToFile();
+      return true;
+    }
+    return false;
+  }
+
   /// Clean up expired registrations from storage
   /// Called on startup and can be called periodically
   void purgeExpiredRegistrations() {

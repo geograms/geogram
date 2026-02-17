@@ -26,6 +26,7 @@ import 'commands/station_command.dart';
 import 'commands/profile_command.dart';
 import 'commands/chat_command.dart';
 import 'commands/devices_command.dart';
+import 'commands/nip05_command.dart';
 import 'commands/config_command.dart';
 import 'commands/ssl_command.dart';
 import 'commands/games_command.dart';
@@ -102,6 +103,11 @@ class PureConsole {
     'list': 'list - List items in current context',
     'scan': 'scan [-t timeout_ms] - Scan network for devices (default: 2000ms)',
     'ping': 'ping <ip[:port]> - Ping a device at the specified address',
+    // NIP-05 commands
+    'nip05': 'nip05 <subcommand> - Manage NIP-05 registrations (list|info|remove)',
+    'nip05 list': 'nip05 list - List all NIP-05 registrations',
+    'nip05 info': 'nip05 info <nickname> - Show registration details',
+    'nip05 remove': 'nip05 remove <nickname> - Remove a registration',
     // Chat commands
     'chat': 'chat <subcommand> - Manage chat (list|info|create|delete|rename|history|say|delmsg)',
     'chat list': 'chat list - List all chat rooms',
@@ -491,6 +497,8 @@ class PureConsole {
       ChatCommand(),
       // Devices
       DevicesCommand(),
+      // NIP-05
+      Nip05Command(),
       // Config
       ConfigCommand(),
       // SSL
