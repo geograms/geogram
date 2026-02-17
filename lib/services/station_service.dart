@@ -39,6 +39,9 @@ class StationService {
   bool _initialized = false;
   final WebSocketService _wsService = WebSocketService();
 
+  /// Shared HTTP client for connection pooling (avoids creating a new socket per request)
+  final http.Client _httpClient = http.Client();
+
   /// Default stations
   static final List<Station> _defaultStations = [
     Station(
@@ -687,22 +690,22 @@ class StationService {
       http.Response response;
       switch (method.toUpperCase()) {
         case 'POST':
-          response = await http
+          response = await _httpClient
               .post(uri, headers: headers, body: encodedBody)
               .timeout(timeout);
           break;
         case 'PUT':
-          response = await http
+          response = await _httpClient
               .put(uri, headers: headers, body: encodedBody)
               .timeout(timeout);
           break;
         case 'DELETE':
-          response = await http
+          response = await _httpClient
               .delete(uri, headers: headers, body: encodedBody)
               .timeout(timeout);
           break;
         default:
-          response = await http.get(uri, headers: headers).timeout(timeout);
+          response = await _httpClient.get(uri, headers: headers).timeout(timeout);
       }
       return _StationApiResponse(
         statusCode: response.statusCode,
@@ -931,7 +934,7 @@ class StationService {
       final baseUrl = stationUrl.replaceFirst('wss://', 'https://').replaceFirst('ws://', 'http://');
       final uri = Uri.parse('$baseUrl/api/chat/rooms/$roomId/files');
 
-      final response = await http.post(
+      final response = await _httpClient.post(
         uri,
         body: bytes,
         headers: {
@@ -972,7 +975,7 @@ class StationService {
       final baseUrl = stationUrl.replaceFirst('wss://', 'https://').replaceFirst('ws://', 'http://');
       final uri = Uri.parse('$baseUrl/api/chat/rooms/$roomId/files/$filename');
 
-      final response = await http.get(uri).timeout(const Duration(seconds: 60));
+      final response = await _httpClient.get(uri).timeout(const Duration(seconds: 60));
 
       if (response.statusCode == 200) {
         // Cache the file using provided key or fallback to station callsign from URL

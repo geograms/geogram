@@ -142,36 +142,40 @@ class TransferWorker {
         transfer.transportUsed = 'internet_http';
         final uri = Uri.parse(transfer.remoteUrl!);
         final client = http.Client();
-        final request = http.Request('GET', uri);
-        final response = await client.send(request).timeout(timeout);
+        try {
+          final request = http.Request('GET', uri);
+          final response = await client.send(request).timeout(timeout);
 
-        if (_cancelled) throw Exception('Transfer cancelled');
-        if (response.statusCode < 200 || response.statusCode >= 300) {
-          throw Exception('HTTP download failed: ${response.statusCode}');
-        }
-
-        final sink = tempFile.openWrite();
-        final contentLength = response.contentLength;
-        int received = 0;
-
-        await for (final chunk in response.stream) {
-          if (_cancelled) {
-            await sink.close();
-            await tempFile.delete();
-            throw Exception('Transfer cancelled');
+          if (_cancelled) throw Exception('Transfer cancelled');
+          if (response.statusCode < 200 || response.statusCode >= 300) {
+            throw Exception('HTTP download failed: ${response.statusCode}');
           }
-          received += chunk.length;
-          sink.add(chunk);
-          transfer.bytesTransferred = received;
-          if (transfer.expectedBytes == 0 && contentLength != null) {
-            transfer.expectedBytes = contentLength;
-          }
-          _reportProgress(transfer, received, _calculateSpeed(received));
-        }
 
-        await sink.close();
-        bytesWritten = received;
-        transfer.bytesTransferred = bytesWritten;
+          final sink = tempFile.openWrite();
+          final contentLength = response.contentLength;
+          int received = 0;
+
+          await for (final chunk in response.stream) {
+            if (_cancelled) {
+              await sink.close();
+              await tempFile.delete();
+              throw Exception('Transfer cancelled');
+            }
+            received += chunk.length;
+            sink.add(chunk);
+            transfer.bytesTransferred = received;
+            if (transfer.expectedBytes == 0 && contentLength != null) {
+              transfer.expectedBytes = contentLength;
+            }
+            _reportProgress(transfer, received, _calculateSpeed(received));
+          }
+
+          await sink.close();
+          bytesWritten = received;
+          transfer.bytesTransferred = bytesWritten;
+        } finally {
+          client.close();
+        }
       } else if (isBotModelPath && transfer.sourceStationUrl != null) {
         transfer.transportUsed = 'station_http';
         bytesWritten = await _streamDownloadFromStation(

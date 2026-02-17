@@ -89,26 +89,31 @@ class FlasherService {
     void Function(double progress)? onProgress,
   }) async {
     final request = http.Request('GET', Uri.parse(url));
-    final response = await http.Client().send(request);
+    final client = http.Client();
+    try {
+      final response = await client.send(request);
 
-    if (response.statusCode != 200) {
-      throw FlashException('Failed to download firmware: HTTP ${response.statusCode}');
-    }
-
-    final contentLength = response.contentLength ?? 0;
-    final bytes = <int>[];
-    var received = 0;
-
-    await for (final chunk in response.stream) {
-      bytes.addAll(chunk);
-      received += chunk.length;
-
-      if (contentLength > 0 && onProgress != null) {
-        onProgress(received / contentLength);
+      if (response.statusCode != 200) {
+        throw FlashException('Failed to download firmware: HTTP ${response.statusCode}');
       }
-    }
 
-    return Uint8List.fromList(bytes);
+      final contentLength = response.contentLength ?? 0;
+      final bytes = <int>[];
+      var received = 0;
+
+      await for (final chunk in response.stream) {
+        bytes.addAll(chunk);
+        received += chunk.length;
+
+        if (contentLength > 0 && onProgress != null) {
+          onProgress(received / contentLength);
+        }
+      }
+
+      return Uint8List.fromList(bytes);
+    } finally {
+      client.close();
+    }
   }
 
   /// Load firmware from file
