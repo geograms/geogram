@@ -216,14 +216,12 @@ mixin BlogHandlerMixin {
     }
 
     // 3. NIP-05 registry lookup (nickname → npub → callsign)
+    // Don't require directory to exist — the callsign is still valid for
+    // proxying to a connected client, and disk lookup will naturally 404.
     final registration = Nip05RegistryService().getRegistration(identifier);
     if (registration != null) {
       try {
-        final callsign = NostrKeyGenerator.deriveCallsign(registration.npub);
-        final callsignDir = Directory('$devicesDir/$callsign');
-        if (await callsignDir.exists()) {
-          return callsign;
-        }
+        return NostrKeyGenerator.deriveCallsign(registration.npub);
       } catch (e) {
         blogLog('ERROR', 'Error deriving callsign from NIP-05 registry: $e');
       }
