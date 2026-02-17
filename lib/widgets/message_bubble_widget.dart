@@ -4,6 +4,7 @@
  */
 
 import 'dart:typed_data';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/foundation.dart';
@@ -12,6 +13,7 @@ import '../services/profile_service.dart';
 import '../services/devices_service.dart';
 import '../services/chat_file_download_manager.dart';
 import '../services/chat_file_upload_manager.dart';
+import '../services/file_launcher_service.dart';
 import '../util/reaction_utils.dart';
 import 'voice_player_widget.dart';
 import '../platform/file_image_helper.dart' as file_helper;
@@ -99,9 +101,23 @@ class MessageBubbleWidget extends StatefulWidget {
 }
 
 class _MessageBubbleWidgetState extends State<MessageBubbleWidget> {
+  static final _urlRegex = RegExp(
+    r'(https?://[^\s<>\[\]{}|\\^`]+|www\.[^\s<>\[\]{}|\\^`]+)',
+    caseSensitive: false,
+  );
+
   String? _attachmentPath;
   Uint8List? _attachmentBytes;
   bool _isLoadingAttachment = false;
+  List<TapGestureRecognizer> _linkRecognizers = [];
+
+  @override
+  void dispose() {
+    for (final r in _linkRecognizers) {
+      r.dispose();
+    }
+    super.dispose();
+  }
 
   @override
   void initState() {
@@ -183,6 +199,57 @@ class _MessageBubbleWidgetState extends State<MessageBubbleWidget> {
       );
     }
     return null;
+  }
+
+  /// Build selectable text with clickable URL links
+  Widget _buildLinkedText(String text, TextStyle? baseStyle) {
+    // Dispose previous recognizers
+    for (final r in _linkRecognizers) {
+      r.dispose();
+    }
+    _linkRecognizers = [];
+
+    final matches = _urlRegex.allMatches(text).toList();
+    if (matches.isEmpty) {
+      return SelectableText(text, style: baseStyle);
+    }
+
+    final spans = <InlineSpan>[];
+    int lastEnd = 0;
+
+    for (final match in matches) {
+      // Add plain text before this URL
+      if (match.start > lastEnd) {
+        spans.add(TextSpan(text: text.substring(lastEnd, match.start)));
+      }
+
+      final urlText = match.group(0)!;
+      final launchUrl = urlText.startsWith('http') ? urlText : 'https://$urlText';
+
+      final recognizer = TapGestureRecognizer()
+        ..onTap = () => FileLauncherService().openUrl(launchUrl);
+      _linkRecognizers.add(recognizer);
+
+      spans.add(TextSpan(
+        text: urlText,
+        style: baseStyle?.copyWith(
+          decoration: TextDecoration.underline,
+          decorationColor: baseStyle.color,
+        ),
+        recognizer: recognizer,
+      ));
+
+      lastEnd = match.end;
+    }
+
+    // Add remaining plain text
+    if (lastEnd < text.length) {
+      spans.add(TextSpan(text: text.substring(lastEnd)));
+    }
+
+    return SelectableText.rich(
+      TextSpan(style: baseStyle, children: spans),
+    );
   }
 
   @override
@@ -319,9 +386,9 @@ class _MessageBubbleWidgetState extends State<MessageBubbleWidget> {
                         )
                       // Text message content
                       else if (widget.message.content.isNotEmpty)
-                        SelectableText(
+                        _buildLinkedText(
                           widget.message.content,
-                          style: theme.textTheme.bodyMedium?.copyWith(
+                          theme.textTheme.bodyMedium?.copyWith(
                             color: textColor,
                           ),
                         ),

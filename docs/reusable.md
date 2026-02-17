@@ -16,6 +16,7 @@ This document catalogs reusable UI components available in the Geogram codebase.
 
 ### Cross-Platform Patterns
 - [Platform-Adaptive WebView](#platform-adaptive-webview) - Render local HTML with JS on all platforms
+- [URL-Linkified SelectableText](#url-linkified-selectabletext) - Make URLs clickable in text widgets
 
 ### Viewer Pages
 - [PhotoViewerPage](#photoviewerpage) - Image & video gallery
@@ -3283,6 +3284,67 @@ if (Platform.isAndroid || Platform.isIOS || Platform.isMacOS) {
 ```
 
 **Encrypted storage**: When files are inside encrypted `ProfileStorage`, extract the entire folder to a temp directory first (using `listDirectory(recursive: true)` + `copyToExternal()`), then load from the temp path. Clean up in `dispose()`.
+
+### URL-Linkified SelectableText
+
+**File:** `lib/widgets/message_bubble_widget.dart` — `_buildLinkedText()`
+
+**Pattern:** Convert plain text containing URLs into a `SelectableText.rich()` with tappable link spans. Reusable anywhere you display user-generated text that may contain URLs.
+
+```dart
+static final _urlRegex = RegExp(
+  r'(https?://[^\s<>\[\]{}|\\^`]+|www\.[^\s<>\[\]{}|\\^`]+)',
+  caseSensitive: false,
+);
+List<TapGestureRecognizer> _linkRecognizers = [];
+
+Widget _buildLinkedText(String text, TextStyle? baseStyle) {
+  for (final r in _linkRecognizers) { r.dispose(); }
+  _linkRecognizers = [];
+
+  final matches = _urlRegex.allMatches(text).toList();
+  if (matches.isEmpty) return SelectableText(text, style: baseStyle);
+
+  final spans = <InlineSpan>[];
+  int lastEnd = 0;
+  for (final match in matches) {
+    if (match.start > lastEnd) {
+      spans.add(TextSpan(text: text.substring(lastEnd, match.start)));
+    }
+    final urlText = match.group(0)!;
+    final launchUrl = urlText.startsWith('http') ? urlText : 'https://$urlText';
+    final recognizer = TapGestureRecognizer()
+      ..onTap = () => FileLauncherService().openUrl(launchUrl);
+    _linkRecognizers.add(recognizer);
+    spans.add(TextSpan(
+      text: urlText,
+      style: baseStyle?.copyWith(
+        decoration: TextDecoration.underline,
+        decorationColor: baseStyle.color,
+      ),
+      recognizer: recognizer,
+    ));
+    lastEnd = match.end;
+  }
+  if (lastEnd < text.length) {
+    spans.add(TextSpan(text: text.substring(lastEnd)));
+  }
+  return SelectableText.rich(TextSpan(style: baseStyle, children: spans));
+}
+
+// Don't forget to dispose recognizers:
+@override
+void dispose() {
+  for (final r in _linkRecognizers) { r.dispose(); }
+  super.dispose();
+}
+```
+
+**Key points:**
+- `www.` URLs without a scheme get `https://` prepended before launching
+- `TapGestureRecognizer` instances must be disposed to avoid memory leaks
+- Recognizers are rebuilt each `build()` call (old ones disposed first)
+- Uses `FileLauncherService().openUrl()` which wraps `url_launcher`
 
 **Reuse potential**: Any feature that needs to render local HTML with JavaScript support (website preview, web snapshots, HTML-based games, documentation viewers).
 
