@@ -57,6 +57,15 @@ mixin HealthWatchdogMixin {
   Future<void> _runHealthWatchdog() async {
     if (!isServerRunning) return;
 
+    // Log open file descriptor count for leak diagnostics
+    try {
+      final fdDir = Directory('/proc/self/fd');
+      if (fdDir.existsSync()) {
+        final count = fdDir.listSync().length;
+        log('INFO', 'Watchdog: open FDs = $count');
+      }
+    } catch (_) {}
+
     // Reset counters every minute
     final now = DateTime.now();
     if (now.difference(_lastMinuteReset).inSeconds >= 60) {
