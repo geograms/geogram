@@ -22,7 +22,9 @@ import '../cli/commands/profile_command.dart';
 import '../cli/commands/config_command.dart';
 import '../cli/commands/monitoring_commands.dart';
 import '../cli/commands/games_command.dart';
+import '../cli/commands/navigation_handler.dart';
 import '../cli/commands/service_interfaces.dart';
+import '../cli/console_io.dart';
 import '../cli/console_io_buffer.dart';
 import '../cli/game/game_config.dart';
 import '../cli/game/game_engine_io.dart';
@@ -269,17 +271,14 @@ class _StatsAdapter implements StationStatsReadable {
 /// CLI Console Controller for Flutter UI.
 ///
 /// Uses the shared [CommandRegistry] with [BufferConsoleIO] for output.
-/// This eliminates code duplication between CLI and Desktop consoles.
+/// Navigation (cd/ls/pwd) is delegated to the shared [NavigationHandler].
 class CliConsoleController {
   late final CommandRegistry _registry;
   late final BufferConsoleIO _io;
   late final _ProfileServiceAdapter _profileAdapter;
   late final _StationServiceAdapter _stationAdapter;
+  late final NavigationHandler _nav;
   GameConfig? _gameConfig;
-
-  /// Virtual filesystem navigation state
-  String _currentPath = '/';
-  String? _currentChatRoom;
 
   /// Root directories in virtual filesystem
   List<String> get rootDirs {
@@ -317,6 +316,7 @@ class CliConsoleController {
     _profileAdapter = _ProfileServiceAdapter();
     _stationAdapter = _StationServiceAdapter();
     _registry = CommandRegistry(environment: _detectEnvironment());
+    _nav = NavigationHandler(_DesktopDataProvider(this));
     _registerCommands();
   }
 
@@ -354,16 +354,16 @@ class CliConsoleController {
   CommandContext _buildContext({List<String> args = const []}) {
     return CommandContext(
       io: _io,
-      currentPath: _currentPath,
-      currentChatRoom: _currentChatRoom,
+      currentPath: _nav.currentPath,
+      currentChatStation: _nav.currentChatStation,
+      currentChatRoom: _nav.currentChatRoom,
       args: args,
       station: _stationAdapter,
       profileService: _profileAdapter,
       sslManager: null, // SSL not available on Desktop
       gameConfig: _gameConfig,
-      onNavigate: (path, chatRoom) {
-        _currentPath = path;
-        _currentChatRoom = chatRoom;
+      onNavigate: (path, chatStation, chatRoom) {
+        // Navigation via commands — not typical but kept for compatibility
       },
     );
   }
@@ -385,12 +385,12 @@ class CliConsoleController {
   bool get inGame => _inGame;
 
   /// Get current path
-  String get currentPath => _currentPath;
+  String get currentPath => _nav.currentPath;
 
   /// Get prompt string
   String getPrompt() {
     if (_inGame) return '';
-    return 'geogram:$_currentPath\$ ';
+    return 'geogram:${_nav.currentPath}\$ ';
   }
 
   /// Get welcome banner
@@ -475,7 +475,7 @@ class CliConsoleController {
     // Completing arguments for ls/cd
     final cmd = parts[0].toLowerCase();
     if ((cmd == 'ls' || cmd == 'cd') && (parts.length == 1 && endsWithSpace || parts.length == 2 && !endsWithSpace)) {
-      final partial = parts.length > 1 ? parts[1].toLowerCase() : '';
+      final partial = parts.length > 1 ? parts[1] : '';
       return _completePaths(partial);
     }
 
@@ -486,16 +486,45 @@ class CliConsoleController {
     final candidates = <CompletionCandidate>[];
     final lowerPartial = partial.toLowerCase();
 
-    if ('..'.startsWith(lowerPartial) && _currentPath != '/') {
+    if ('..'.startsWith(lowerPartial) && _nav.currentPath != '/') {
       candidates.add(CompletionCandidate('..', group: 'path'));
     }
 
-    final dirs = partial.isEmpty || partial == '/'
-        ? rootDirs
-        : rootDirs.where((d) => d.toLowerCase().startsWith(lowerPartial));
+    if (partial.isEmpty || partial == '/') {
+      for (final entry in _nav.getChildEntries('')) {
+        candidates.add(CompletionCandidate(entry, description: 'directory', group: 'path'));
+      }
+      return candidates;
+    }
 
-    for (final dir in dirs) {
-      candidates.add(CompletionCandidate(dir, description: 'directory', group: 'path'));
+    // Absolute path completion
+    if (partial.startsWith('/')) {
+      final pathParts = partial.substring(1).split('/');
+      if (pathParts.length == 1) {
+        final basePartial = pathParts[0].toLowerCase();
+        for (final dir in rootDirs) {
+          if (dir.toLowerCase().startsWith(basePartial)) {
+            candidates.add(CompletionCandidate('/$dir', description: 'directory', group: 'path'));
+          }
+        }
+      } else {
+        final parentPath = '/${pathParts.sublist(0, pathParts.length - 1).join('/')}';
+        final childPartial = pathParts.last.toLowerCase();
+        for (final entry in _nav.getChildEntries(parentPath)) {
+          if (entry.toLowerCase().startsWith(childPartial)) {
+            candidates.add(CompletionCandidate('$parentPath/$entry', description: 'path', group: 'path'));
+          }
+        }
+      }
+      return candidates;
+    }
+
+    // Relative path completion
+    final children = _nav.getChildEntries('');
+    for (final entry in children) {
+      if (entry.toLowerCase().startsWith(lowerPartial)) {
+        candidates.add(CompletionCandidate(entry, description: 'directory', group: 'path'));
+      }
     }
 
     return candidates;
@@ -519,17 +548,17 @@ class CliConsoleController {
     final command = parts[0].toLowerCase();
     final args = parts.length > 1 ? parts.sublist(1) : <String>[];
 
-    // Handle navigation commands locally
+    // Handle navigation commands via shared handler
     if (command == 'ls') {
-      _handleLs(args);
+      _nav.handleLs(args);
       return _io.getOutput() ?? '';
     }
     if (command == 'cd') {
-      _handleCd(args);
+      await _nav.handleCd(args);
       return _io.getOutput() ?? '';
     }
     if (command == 'pwd') {
-      _io.writeln(_currentPath);
+      _nav.handlePwd();
       return _io.getOutput() ?? '';
     }
 
@@ -551,92 +580,6 @@ class CliConsoleController {
     }
 
     return _io.getOutput() ?? '';
-  }
-
-  // -------------------------------------------------------------------------
-  // Navigation
-  // -------------------------------------------------------------------------
-
-  void _handleLs(List<String> args) {
-    final path = args.isNotEmpty ? _resolvePath(args[0]) : _currentPath;
-
-    if (path == '/') {
-      for (final dir in rootDirs) {
-        _io.writeln('$dir/');
-      }
-    } else if (path == '/profiles') {
-      final profiles = _profileAdapter.profilesReadable;
-      final activeId = _profileAdapter.activeProfileReadable?.id;
-      for (final profile in profiles) {
-        final isActive = profile.id == activeId;
-        final marker = isActive ? '* ' : '  ';
-        final stationTag = profile.isRelay ? ' [station]' : '';
-        _io.writeln('$marker${profile.callsign}/$stationTag');
-      }
-    } else if (path == '/config') {
-      _io.writeln('profile.json');
-      _io.writeln('config.json');
-    } else if (path == '/logs') {
-      _io.writeln('station.log');
-    } else if (path == '/games') {
-      if (_gameConfig != null && _gameConfig!.isInitialized) {
-        for (final game in _gameConfig!.listGames()) {
-          _io.writeln(game.path.split('/').last);
-        }
-      } else {
-        _io.writeln('(no games)');
-      }
-    } else {
-      _io.writeln('\x1B[31mDirectory not found: $path\x1B[0m');
-    }
-  }
-
-  void _handleCd(List<String> args) {
-    if (args.isEmpty) {
-      _currentPath = '/';
-      _currentChatRoom = null;
-      return;
-    }
-
-    final target = _resolvePath(args[0]);
-    if (_isValidPath(target)) {
-      _currentPath = target;
-      // Update chat room context
-      if (target.startsWith('/chat/')) {
-        _currentChatRoom = target.substring('/chat/'.length);
-      } else {
-        _currentChatRoom = null;
-      }
-    } else {
-      _io.writeln('\x1B[31mDirectory not found: ${args[0]}\x1B[0m');
-    }
-  }
-
-  String _resolvePath(String path) {
-    if (path.startsWith('/')) return _normalizePath(path);
-    if (path == '..') {
-      final parts = _currentPath.split('/').where((p) => p.isNotEmpty).toList();
-      if (parts.isEmpty) return '/';
-      parts.removeLast();
-      return parts.isEmpty ? '/' : '/${parts.join('/')}';
-    }
-    if (path == '.') return _currentPath;
-    final newPath = _currentPath == '/' ? '/$path' : '$_currentPath/$path';
-    return _normalizePath(newPath);
-  }
-
-  String _normalizePath(String path) {
-    final parts = path.split('/').where((p) => p.isNotEmpty).toList();
-    if (parts.isEmpty) return '/';
-    return '/${parts.join('/')}';
-  }
-
-  bool _isValidPath(String path) {
-    if (path == '/') return true;
-    final parts = path.substring(1).split('/');
-    if (parts.isEmpty) return false;
-    if (!rootDirs.contains(parts[0])) return false;
-    return true;
   }
 
   // -------------------------------------------------------------------------
@@ -669,6 +612,33 @@ class CliConsoleController {
     }
     return prefix;
   }
+}
+
+// ---------------------------------------------------------------------------
+// NavigationDataProvider implementation for Desktop
+// ---------------------------------------------------------------------------
+
+class _DesktopDataProvider implements NavigationDataProvider {
+  final CliConsoleController _controller;
+  _DesktopDataProvider(this._controller);
+
+  @override
+  ConsoleIO get io => _controller._io;
+
+  @override
+  List<String> get rootDirs => _controller.rootDirs;
+
+  @override
+  StationCommandInterface? get stationInterface => _controller._stationAdapter;
+
+  @override
+  ProfileCommandInterface? get profileInterface => _controller._profileAdapter;
+
+  @override
+  Object? get gameConfig => _controller._gameConfig;
+
+  @override
+  Object? get sslManager => null; // SSL not available on Desktop
 }
 
 // ---------------------------------------------------------------------------

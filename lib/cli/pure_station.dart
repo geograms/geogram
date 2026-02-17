@@ -10,6 +10,7 @@ import 'package:markdown/markdown.dart' as md;
 import 'package:mime/mime.dart';
 import 'package:path/path.dart' as path;
 import 'pure_storage_config.dart';
+import 'commands/service_interfaces.dart';
 import '../bot/models/music_model_info.dart';
 import '../bot/models/vision_model_info.dart';
 import '../models/blog_post.dart';
@@ -46,6 +47,7 @@ import '../services/nostr_relay_service.dart';
 import '../services/nostr_relay_storage.dart';
 import '../services/nostr_storage_paths.dart';
 import '../server/mixins/email_handler_mixin.dart';
+import '../server/mixins/blog_handler_mixin.dart';
 
 /// App version - use central version.dart for consistency
 import '../version.dart' show appVersion;
@@ -53,7 +55,7 @@ import '../version.dart' show appVersion;
 String get cliAppVersion => appVersion;
 
 /// Station server settings
-class PureRelaySettings {
+class PureRelaySettings implements StationSettingsReadable {
   int httpPort;
   bool enabled;
   bool tileServerEnabled;
@@ -371,9 +373,12 @@ class PureRelaySettings {
 }
 
 /// Log entry for CLI log history
-class LogEntry {
+class LogEntry implements LogEntryReadable {
+  @override
   final DateTime timestamp;
+  @override
   final String level;
+  @override
   final String message;
 
   LogEntry(this.timestamp, this.level, this.message);
@@ -384,15 +389,25 @@ class LogEntry {
 }
 
 /// Chat room
-class ChatRoom {
+class ChatRoom implements ChatRoomReadable {
+  @override
   final String id;
+  @override
   String name;
+  @override
   String description;
+  @override
   final String creatorCallsign;
+  @override
   final DateTime createdAt;
+  @override
   DateTime lastActivity;
   final List<ChatMessage> messages = [];
+  @override
   bool isPublic;
+
+  @override
+  List<ChatMessageReadable> get readableMessages => messages;
 
   ChatRoom({
     required this.id,
@@ -449,15 +464,24 @@ class ChatRoom {
 /// Chat message
 /// Storage format only requires: timestamp, callsign, content, npub, signature
 /// Event ID and verification status are recalculated from these fields
-class ChatMessage {
+class ChatMessage implements ChatMessageReadable {
+  @override
   final String id;           // NOSTR event ID (calculated from content)
+  @override
   final String roomId;
+  @override
   final String senderCallsign;
+  @override
   final String? senderNpub;  // NOSTR public key (bech32) - human readable
+  @override
   final String? signature;   // BIP-340 Schnorr signature
+  @override
   final String content;
+  @override
   final DateTime timestamp;
+  @override
   final bool verified;       // Signature verified (runtime, not stored)
+  @override
   final bool hasSignature;   // Has valid signature
   final Map<String, List<String>> reactions;
   final Map<String, String> metadata;  // File attachments, voice messages, etc.
@@ -542,12 +566,16 @@ class ChatMessage {
 }
 
 /// Connected WebSocket client
-class PureConnectedClient implements EmailClient {
+class PureConnectedClient implements EmailClient, BlogClient, ConnectedClientReadable {
   final WebSocket socket;
+  @override
   final String id;
+  @override
   String? callsign;
+  @override
   String? nickname;
   String? color;
+  @override
   String? deviceType;
   String? platform;
   String? version;
@@ -555,6 +583,7 @@ class PureConnectedClient implements EmailClient {
   String? npub;
   double? latitude;
   double? longitude;
+  @override
   DateTime connectedAt;
   DateTime lastActivity;
 
@@ -592,7 +621,7 @@ class PureConnectedClient implements EmailClient {
 }
 
 /// Server statistics
-class ServerStats {
+class ServerStats implements StationStatsReadable {
   int totalConnections = 0;
   int totalMessages = 0;
   int totalTileRequests = 0;
@@ -717,7 +746,7 @@ class PureTileCache {
 }
 
 /// Pure Dart station server for CLI mode
-class PureStationServer with EmailHandlerMixin {
+class PureStationServer with EmailHandlerMixin, BlogHandlerMixin {
   HttpServer? _httpServer;
   HttpServer? _httpsServer;
   SMTPServer? _smtpServer;
@@ -785,6 +814,71 @@ class PureStationServer with EmailHandlerMixin {
   }
   @override
   bool emailSafeSocketSend(PureConnectedClient client, String data) => _safeSocketSend(client, data);
+
+  // ── BlogHandlerMixin interface ──────────────────────────────────
+  @override
+  void blogLog(String level, String message) => _log(level, message);
+  @override
+  String get blogDevicesDir => PureStorageConfig().devicesDir;
+  @override
+  String get blogConfigPath => PureStorageConfig().configPath;
+  @override
+  BlogClient? blogFindConnectedClientByIdentifier(String identifier) =>
+      _findConnectedClientByIdentifier(identifier);
+  @override
+  Future<bool> blogProxyToClient(
+      BlogClient client, HttpRequest request, String filename) async {
+    if (client is! PureConnectedClient) return false;
+    final targetCallsign = client.callsign ?? '';
+    final blogApiPath = '/$targetCallsign/blog/$filename.html';
+    final requestId = DateTime.now().millisecondsSinceEpoch.toString();
+    final proxyRequest = {
+      'type': 'HTTP_REQUEST',
+      'requestId': requestId,
+      'method': 'GET',
+      'path': blogApiPath,
+      'headers': jsonEncode({'X-Device-Callsign': targetCallsign}),
+      'body': '',
+    };
+    final completer = Completer<Map<String, dynamic>>();
+    _pendingProxyRequests[requestId] = completer;
+    try {
+      client.socket.add(jsonEncode(proxyRequest));
+      final response = await completer.future.timeout(
+        const Duration(seconds: 30),
+        onTimeout: () => {
+              'type': 'HTTP_RESPONSE',
+              'statusCode': 504,
+              'responseBody': 'Gateway Timeout - client did not respond',
+            },
+      );
+      request.response.statusCode = response['statusCode'] ?? 500;
+      if (response['responseHeaders'] != null) {
+        try {
+          final headers = jsonDecode(response['responseHeaders'] as String)
+              as Map<String, dynamic>;
+          headers.forEach((key, value) {
+            request.response.headers.add(key, value.toString());
+          });
+        } catch (_) {}
+      }
+      final body = response['responseBody'] ?? '';
+      final isBase64 = response['isBase64'] == true;
+      if (isBase64) {
+        request.response.add(base64Decode(body));
+      } else {
+        request.response.write(body);
+      }
+      return true;
+    } catch (e) {
+      _log('ERROR', 'Error proxying blog request: $e');
+      request.response.statusCode = 502;
+      request.response.write('Bad Gateway: $e');
+      return true;
+    } finally {
+      _pendingProxyRequests.remove(requestId);
+    }
+  }
 
   // NOSTR relay + Blossom
   NostrRelayStorage? _nostrStorage;
@@ -2541,8 +2635,8 @@ class PureStationServer with EmailHandlerMixin {
       } else if (_isCallsignApiPath(path)) {
         // /{callsign}/api/* - proxy to connected device
         await _handleCallsignApiProxy(request);
-      } else if (_isBlogPath(path)) {
-        await _handleBlogRequest(request);
+      } else if (isBlogPath(path)) {
+        await handleBlogRequest(request);
       } else if (_isCallsignOrNicknamePath(path)) {
         await _handleCallsignOrNicknameWww(request);
       } else {
@@ -6794,171 +6888,6 @@ class PureStationServer with EmailHandlerMixin {
     return RegExp(r'^(/[A-Z0-9]+)?/api/chat/(rooms/)?[^/]+/file/\d{4}/[^/]+$').hasMatch(path);
   }
 
-  /// Check if path is a blog URL (/{identifier}/blog/{filename}.html)
-  bool _isBlogPath(String path) {
-    final regex = RegExp(r'^/([^/]+)/blog/([^/]+)\.html$');
-    return regex.hasMatch(path);
-  }
-
-  /// Handle blog post request - serves markdown as HTML
-  Future<void> _handleBlogRequest(HttpRequest request) async {
-    final path = request.uri.path;
-    final regex = RegExp(r'^/([^/]+)/blog/([^/]+)\.html$');
-    final match = regex.firstMatch(path);
-
-    if (match == null) {
-      request.response.statusCode = 400;
-      request.response.write('Invalid blog URL');
-      return;
-    }
-
-    final identifier = match.group(1)!; // nickname or callsign
-    final filename = match.group(2)!;   // blog filename without .html
-
-    try {
-      // First, try to find a connected WebSocket client with this nickname/callsign
-      final client = _findConnectedClientByIdentifier(identifier);
-
-      if (client != null) {
-        // Proxy the blog request to the connected client via WebSocket
-        _log('INFO', 'Proxying blog request to connected client: ${client.callsign} (${client.nickname ?? "no nickname"})');
-
-        // Build the blog path that routes to LogApiService _handleBlogHtmlRequest
-        // Use format: /{callsign}/blog/{filename}.html
-        final targetCallsign = client.callsign ?? identifier;
-        final blogApiPath = '/$targetCallsign/blog/$filename.html';
-
-        final requestId = DateTime.now().millisecondsSinceEpoch.toString();
-        final proxyRequest = {
-          'type': 'HTTP_REQUEST',
-          'requestId': requestId,
-          'method': 'GET',
-          'path': blogApiPath,
-          'headers': jsonEncode({
-            'X-Device-Callsign': targetCallsign,
-          }),
-          'body': '',
-        };
-
-        // Send request to device and wait for response
-        final completer = Completer<Map<String, dynamic>>();
-        _pendingProxyRequests[requestId] = completer;
-
-        try {
-          client.socket.add(jsonEncode(proxyRequest));
-
-          // Wait for response with timeout
-          final response = await completer.future.timeout(
-            const Duration(seconds: 30),
-            onTimeout: () => {
-              'type': 'HTTP_RESPONSE',
-              'statusCode': 504,
-              'responseBody': 'Gateway Timeout - client did not respond',
-            },
-          );
-
-          request.response.statusCode = response['statusCode'] ?? 500;
-          if (response['responseHeaders'] != null) {
-            try {
-              final headers = jsonDecode(response['responseHeaders'] as String) as Map<String, dynamic>;
-              headers.forEach((key, value) {
-                request.response.headers.add(key, value.toString());
-              });
-            } catch (_) {}
-          }
-
-          final body = response['responseBody'] ?? '';
-          final isBase64 = response['isBase64'] == true;
-          if (isBase64) {
-            request.response.add(base64Decode(body));
-          } else {
-            request.response.write(body);
-          }
-          return;
-        } catch (e) {
-          _log('ERROR', 'Error proxying blog request: $e');
-          request.response.statusCode = 502;
-          request.response.write('Bad Gateway: $e');
-          return;
-        } finally {
-          _pendingProxyRequests.remove(requestId);
-        }
-      }
-
-      // Fallback: Try to find the blog locally on the station server
-      // (for stations that also host their own content)
-      final callsign = await _findCallsignByIdentifier(identifier);
-      if (callsign == null) {
-        request.response.statusCode = 404;
-        request.response.write('User not found (not connected and no local data)');
-        return;
-      }
-
-      // Extract year from filename (format: YYYY-MM-DD_title)
-      final yearMatch = RegExp(r'^(\d{4})-').firstMatch(filename);
-      if (yearMatch == null) {
-        request.response.statusCode = 400;
-        request.response.write('Invalid blog filename format');
-        return;
-      }
-      final year = yearMatch.group(1)!;
-
-      // Build path to the blog markdown file
-      final devicesDir = PureStorageConfig().devicesDir;
-      final blogDir = Directory('$devicesDir/$callsign');
-
-      // Find blog post in any collection
-      BlogPost? foundPost;
-
-      if (await blogDir.exists()) {
-        await for (final entity in blogDir.list()) {
-          if (entity is Directory) {
-            final blogPath = '${entity.path}/blog/$year/$filename.md';
-            final blogFile = File(blogPath);
-            if (await blogFile.exists()) {
-              try {
-                final content = await blogFile.readAsString();
-                foundPost = BlogPost.fromText(content, filename);
-                break;
-              } catch (e) {
-                _log('ERROR', 'Error parsing blog file: $e');
-              }
-            }
-          }
-        }
-      }
-
-      if (foundPost == null) {
-        request.response.statusCode = 404;
-        request.response.write('Blog post not found');
-        return;
-      }
-
-      // Only serve published posts
-      if (foundPost.isDraft) {
-        request.response.statusCode = 403;
-        request.response.write('This post is not published');
-        return;
-      }
-
-      // Convert markdown content to HTML
-      final htmlContent = md.markdownToHtml(
-        foundPost.content,
-        extensionSet: md.ExtensionSet.gitHubWeb,
-      );
-
-      // Build full HTML page
-      final html = _buildBlogHtmlPage(foundPost, htmlContent, identifier);
-
-      request.response.headers.contentType = ContentType.html;
-      request.response.write(html);
-    } catch (e) {
-      _log('ERROR', 'Error serving blog post: $e');
-      request.response.statusCode = 500;
-      request.response.write('Internal server error');
-    }
-  }
-
   /// Find a connected WebSocket client by nickname or callsign
   PureConnectedClient? _findConnectedClientByIdentifier(String identifier) {
     final lowerIdentifier = identifier.toLowerCase();
@@ -6978,71 +6907,6 @@ class PureStationServer with EmailHandlerMixin {
     }
 
     return null;
-  }
-
-  /// Find callsign by identifier (nickname or callsign)
-  Future<String?> _findCallsignByIdentifier(String identifier) async {
-    final storageConfig = PureStorageConfig();
-    final devicesDir = storageConfig.devicesDir;
-    final dir = Directory(devicesDir);
-
-    if (!await dir.exists()) return null;
-
-    // First check if it's a direct callsign match (case-insensitive)
-    await for (final entity in dir.list()) {
-      if (entity is Directory) {
-        final callsign = entity.path.split('/').last;
-        if (callsign.toLowerCase() == identifier.toLowerCase()) {
-          return callsign;
-        }
-      }
-    }
-
-    // Search for nickname in config.json profiles
-    final configPath = storageConfig.configPath;
-    final configFile = File(configPath);
-    if (await configFile.exists()) {
-      try {
-        final content = await configFile.readAsString();
-        final config = jsonDecode(content) as Map<String, dynamic>;
-        final profiles = config['profiles'] as List<dynamic>?;
-        if (profiles != null) {
-          for (final profile in profiles) {
-            if (profile is Map<String, dynamic>) {
-              final nickname = profile['nickname'] as String?;
-              final callsign = profile['callsign'] as String?;
-              if (nickname != null &&
-                  callsign != null &&
-                  nickname.toLowerCase() == identifier.toLowerCase()) {
-                // Verify the callsign directory exists
-                final callsignDir = Directory('$devicesDir/$callsign');
-                if (await callsignDir.exists()) {
-                  return callsign;
-                }
-              }
-            }
-          }
-        }
-      } catch (e) {
-        _log('ERROR', 'Error reading config.json: $e');
-      }
-    }
-
-    return null;
-  }
-
-  /// Build HTML page for blog post
-  String _buildBlogHtmlPage(BlogPost post, String htmlContent, String author) {
-    return StationHtmlTemplates.buildBlogPostPage(
-      postTitle: post.title,
-      postDate: post.displayDate,
-      author: author,
-      htmlContent: htmlContent,
-      description: post.description,
-      tags: post.tags,
-      globalStyles: StationHtmlTemplates.getBaseStyles(),
-      appStyles: '',
-    );
   }
 
   /// GET /{identifier} or /{identifier}/* - Serve WWW collection from device

@@ -18,6 +18,7 @@ This document catalogs reusable UI components available in the Geogram codebase.
 - [Platform-Adaptive WebView](#platform-adaptive-webview) - Render local HTML with JS on all platforms
 - [URL-Linkified SelectableText](#url-linkified-selectabletext) - Make URLs clickable in text widgets
 - [Command Registry](#command-registry) - Self-describing console commands shared across CLI and Desktop
+- [Navigation Handler](#navigation-handler) - Shared virtual filesystem navigation (cd/ls/pwd) with `/chat/<station>/<room>` hierarchy
 
 ### Viewer Pages
 - [PhotoViewerPage](#photoviewerpage) - Image & video gallery
@@ -8427,3 +8428,60 @@ registry.registerAll(allCommands); // SSL included, web-only excluded
 - **`CommandEnvironment` filtering** — commands declare supported platforms, registry filters at registration time. Default is `all` for backward compatibility.
 
 **Reuse potential**: Any new console command gets help, TAB completion, and context-aware dispatch for free by extending `Command` and registering it. Commands automatically work on both CLI and Desktop platforms through the shared interfaces. Environment filtering ensures commands only appear on supported platforms.
+
+## Navigation Handler
+
+**Location**: `lib/cli/commands/navigation_handler.dart`
+
+Shared virtual filesystem navigation (`cd`, `ls`, `pwd`) used by both CLI (`PureConsole`) and Desktop (`CliConsoleController`). Eliminates duplicated path resolution, directory listing, and chat context management.
+
+### Architecture
+
+| Class | Purpose |
+|-------|---------|
+| `NavigationDataProvider` | Abstract interface — host console provides I/O, root dirs, station/profile interfaces |
+| `NavigationHandler` | Owns `_currentPath`, `_currentChatStation`, `_currentChatRoom`; implements `handleCd`, `handleLs`, `handlePwd`, `resolvePath`, `getChildEntries` |
+
+### Chat Directory Hierarchy
+
+```
+/chat/
+  X3ABCD/          <- local station (has rooms)
+    general/
+    random/
+  X3WXYZ/          <- known remote station (rooms not available yet)
+```
+
+- `ls /chat` lists known stations (X3* callsigns from `getAllDevicesSorted()` + local station)
+- `cd /chat/X3ABCD` then `ls` lists chat rooms from `StationCommandInterface.chatRoomsReadable`
+- `cd /chat/X3ABCD/general` enters the room; host shows last 10 messages
+- Remote stations show `(remote — rooms not available yet)` on `ls`
+- `CallsignGenerator.isStationCallsign()` validates station callsigns
+
+### Wiring Pattern
+
+Both consoles implement `NavigationDataProvider` as a private inner class:
+
+```dart
+// CLI (pure_console.dart)
+class _PureConsoleDataProvider implements NavigationDataProvider {
+  final PureConsole _console;
+  ConsoleIO get io => _console._io;
+  List<String> get rootDirs => _console.rootDirs;
+  StationCommandInterface? get stationInterface => _console._station;
+  ProfileCommandInterface? get profileInterface => _console._profileService;
+  Object? get gameConfig => _console._gameConfig;
+  Object? get sslManager => _console._sslManager;
+}
+
+// Desktop (cli_console_controller.dart)
+class _DesktopDataProvider implements NavigationDataProvider { ... }
+```
+
+Navigation commands are dispatched *before* the command registry (since they mutate path state), with one special case: when `_nav.isInChatRoom` is true, `ls` shows chat history instead of directory listing.
+
+### Key Design Decisions
+
+- **`handleCd` returns `bool`** — `true` when entering a chat room, so the host can display the room header and last messages using its own I/O (CLI uses stdout directly, Desktop uses buffered I/O).
+- **`getChildEntries(path)`** — public method for TAB completion; returns child names at a given path without formatting.
+- **`StationCommandInterface`** typed provider — CLI's `StationServer` already implements it; Desktop uses `_StationServiceAdapter`.

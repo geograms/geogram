@@ -21,7 +21,10 @@ class CommandContext {
   /// Current virtual filesystem path (e.g., '/', '/station', '/chat/general')
   final String currentPath;
 
-  /// Current chat room ID when inside /chat/<room>
+  /// Current chat station callsign when inside /chat/<station>
+  final String? currentChatStation;
+
+  /// Current chat room ID when inside /chat/<station>/<room>
   final String? currentChatRoom;
 
   /// Command arguments (everything after the command name)
@@ -49,7 +52,7 @@ class CommandContext {
 
   /// Callback to mutate console state (e.g., navigate to a new path).
   /// This is set by the console host, not by commands.
-  final void Function(String path, String? chatRoom)? onNavigate;
+  final void Function(String path, String? chatStation, String? chatRoom)? onNavigate;
 
   /// Callback for station restart (CLI-specific, wraps _station.restart())
   final Future<void> Function()? onStationRestart;
@@ -63,6 +66,7 @@ class CommandContext {
   CommandContext({
     required this.io,
     this.currentPath = '/',
+    this.currentChatStation,
     this.currentChatRoom,
     this.args = const [],
     this.station,
@@ -109,11 +113,13 @@ class CommandContext {
   CommandContext copyWith({
     List<String>? args,
     String? currentPath,
+    String? currentChatStation,
     String? currentChatRoom,
   }) {
     return CommandContext(
       io: io,
       currentPath: currentPath ?? this.currentPath,
+      currentChatStation: currentChatStation ?? this.currentChatStation,
       currentChatRoom: currentChatRoom ?? this.currentChatRoom,
       args: args ?? this.args,
       station: station,

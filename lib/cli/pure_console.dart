@@ -30,6 +30,8 @@ import 'commands/config_command.dart';
 import 'commands/ssl_command.dart';
 import 'commands/games_command.dart';
 import 'commands/monitoring_commands.dart';
+import 'commands/navigation_handler.dart';
+import 'commands/service_interfaces.dart';
 
 /// Completion candidate
 class Candidate {
@@ -44,11 +46,8 @@ class Candidate {
 
 /// Pure Dart CLI console for geogram
 class PureConsole {
-  /// Virtual filesystem current path
-  String _currentPath = '/';
-
-  /// Current chat room (when in /chat/<room>)
-  String? _currentChatRoom;
+  /// Shared navigation handler (cd/ls/pwd)
+  late final NavigationHandler _nav;
 
   /// Root directories - station-only dirs filtered dynamically
   static const List<String> _allRootDirs = ['station', 'devices', 'chat', 'config', 'logs', 'ssl', 'games'];
@@ -447,6 +446,9 @@ class PureConsole {
       });
       // Build command registry
       _registry = _buildRegistry();
+
+      // Build shared navigation handler
+      _nav = NavigationHandler(_PureConsoleDataProvider(this));
     } catch (e, stackTrace) {
       _printError('Failed to initialize services: $e');
       _printError('Stack trace: $stackTrace');
@@ -512,17 +514,17 @@ class PureConsole {
   CommandContext _buildCommandContext(List<String> args) {
     return CommandContext(
       io: _io,
-      currentPath: _currentPath,
-      currentChatRoom: _currentChatRoom,
+      currentPath: _nav.currentPath,
+      currentChatStation: _nav.currentChatStation,
+      currentChatRoom: _nav.currentChatRoom,
       args: args,
       station: _station,
       profileService: _profileService,
       sslManager: _sslManager,
       gameConfig: _gameConfig,
       cacheService: _cacheService,
-      onNavigate: (path, chatRoom) {
-        _currentPath = path;
-        _currentChatRoom = chatRoom;
+      onNavigate: (path, chatStation, chatRoom) {
+        // Navigation via commands — not typical but kept for compatibility
       },
       onStationRestart: () => _station.restart(),
       onStationReload: () => _station.reloadSettings(),
@@ -565,7 +567,7 @@ class PureConsole {
   /// Handle incoming chat message event - display if in same room and not from self
   void _handleIncomingChatMessage(ChatMessageEvent event) {
     // Only display if we're in the same chat room
-    if (_currentChatRoom != event.roomId) return;
+    if (_nav.currentChatRoom != event.roomId) return;
 
     // Don't display our own messages (already shown when sent)
     final myCallsign = _profileService.activeProfile?.callsign;
@@ -694,10 +696,11 @@ class PureConsole {
       _historyIndex = _history.length;
 
       // If in a chat room, treat non-command input as a message
-      if (_currentChatRoom != null && !input.startsWith('/') && !_isCommand(input)) {
+      if (_nav.isInChatRoom && !input.startsWith('/') && !_isCommand(input)) {
+        final roomId = _nav.currentChatRoom!;
         // Use station's chat room management in CLI mode
-        if (_station.chatRooms[_currentChatRoom!] != null) {
-          await _station.postMessage(_currentChatRoom!, input);
+        if (_station.chatRooms[roomId] != null) {
+          await _station.postMessage(roomId, input);
           // IRC-style: show formatted message (replacing the raw input line)
           final now = DateTime.now();
           final timeStr = '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')} ${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
@@ -706,7 +709,7 @@ class PureConsole {
           stdout.write('\x1B[A\x1B[2K');
           stdout.writeln('\x1B[33m[$timeStr]\x1B[0m \x1B[32m✓\x1B[0m \x1B[36m$callsign:\x1B[0m $input');
         } else {
-          _printError('Room not found: $_currentChatRoom');
+          _printError('Room not found: $roomId');
         }
         continue;
       }
@@ -725,10 +728,10 @@ class PureConsole {
   }
 
   String _buildPrompt() {
-    final chatPrefix = _currentChatRoom != null
-        ? '\x1B[35m[$_currentChatRoom]\x1B[0m '
+    final chatPrefix = _nav.currentChatRoom != null
+        ? '\x1B[35m[${_nav.currentChatRoom}]\x1B[0m '
         : '';
-    return '$chatPrefix\x1B[32mgeogram:$_currentPath\$ \x1B[0m';
+    return '$chatPrefix\x1B[32mgeogram:${_nav.currentPath}\$ \x1B[0m';
   }
 
   /// Console instance for terminal control
@@ -1200,20 +1203,19 @@ class PureConsole {
     return candidates;
   }
 
-  /// Complete with path entries (for ls, cd)
+  /// Complete with path entries (for ls, cd) using NavigationHandler.
   List<Candidate> _completePaths(String partial) {
     final candidates = <Candidate>[];
     final lowerPartial = partial.toLowerCase();
 
     // Parent directory
-    if ('..'.startsWith(lowerPartial)) {
+    if ('..'.startsWith(lowerPartial) && _nav.currentPath != '/') {
       candidates.add(Candidate('..', group: 'parent'));
     }
 
     if (partial.isEmpty || partial == '/') {
-      // Show root directories
-      for (final dir in rootDirs) {
-        candidates.add(Candidate(dir, display: '$dir/', group: 'directory', complete: false));
+      for (final entry in _nav.getChildEntries('')) {
+        candidates.add(Candidate(entry, display: '$entry/', group: 'directory', complete: false));
       }
       return candidates;
     }
@@ -1221,21 +1223,22 @@ class PureConsole {
     // Absolute path completion
     if (partial.startsWith('/')) {
       final pathParts = partial.substring(1).split('/');
-      final baseDir = pathParts[0];
 
       if (pathParts.length == 1) {
         // Completing root directory name
+        final basePartial = pathParts[0].toLowerCase();
         for (final dir in rootDirs) {
-          if (dir.startsWith(baseDir.toLowerCase())) {
+          if (dir.toLowerCase().startsWith(basePartial)) {
             candidates.add(Candidate('/$dir', display: '/$dir/', group: 'directory', complete: false));
           }
         }
-      } else if (baseDir == 'chat' && pathParts.length == 2) {
-        // Completing chat room name - use station's chat rooms in CLI mode
-        final roomPartial = pathParts[1].toLowerCase();
-        for (final room in _station.chatRooms.values) {
-          if (room.id.toLowerCase().startsWith(roomPartial)) {
-            candidates.add(Candidate('/chat/${room.id}', display: '/chat/${room.id}/', group: 'chat room', complete: false));
+      } else {
+        // Completing deeper path — resolve the parent and get children
+        final parentPath = '/${pathParts.sublist(0, pathParts.length - 1).join('/')}';
+        final childPartial = pathParts.last.toLowerCase();
+        for (final entry in _nav.getChildEntries(parentPath)) {
+          if (entry.toLowerCase().startsWith(childPartial)) {
+            candidates.add(Candidate('$parentPath/$entry', display: '$parentPath/$entry/', group: 'path', complete: false));
           }
         }
       }
@@ -1243,25 +1246,10 @@ class PureConsole {
     }
 
     // Relative path completion based on current directory
-    if (_currentPath == '/') {
-      for (final dir in rootDirs) {
-        if (dir.toLowerCase().startsWith(lowerPartial)) {
-          candidates.add(Candidate(dir, display: '$dir/', group: 'directory', complete: false));
-        }
-      }
-    } else if (_currentPath == '/chat') {
-      // Use station's chat rooms in CLI mode
-      for (final room in _station.chatRooms.values) {
-        if (room.id.toLowerCase().startsWith(lowerPartial)) {
-          candidates.add(Candidate(room.id, display: '${room.id}/', group: 'chat room', complete: false));
-        }
-      }
-    } else if (_currentPath == '/devices') {
-      for (final client in _station.clients.values) {
-        final callsign = client.callsign ?? 'unknown';
-        if (callsign.toLowerCase().startsWith(lowerPartial)) {
-          candidates.add(Candidate(callsign, group: 'device'));
-        }
+    final children = _nav.getChildEntries('');
+    for (final entry in children) {
+      if (entry.toLowerCase().startsWith(lowerPartial)) {
+        candidates.add(Candidate(entry, display: '$entry/', group: 'path', complete: false));
       }
     }
 
@@ -1371,21 +1359,25 @@ class PureConsole {
       return false;
     }
 
-    // Navigation commands stay on the console host (they mutate _currentPath)
+    // Navigation commands stay on the console host (they mutate path state)
     switch (command) {
       case 'ls':
         // Special: in chat room, ls shows chat history
-        if (_currentChatRoom != null) {
+        if (_nav.isInChatRoom) {
           await _handleChatHistory(args);
         } else {
-          _handleLs(args);
+          _nav.handleLs(args);
         }
         return false;
       case 'cd':
-        await _handleCd(args);
+        final enteredRoom = await _nav.handleCd(args);
+        if (enteredRoom) {
+          // Show last 10 messages when entering a room
+          await _showChatHistory(_nav.currentChatRoom!, 10);
+        }
         return false;
       case 'pwd':
-        stdout.writeln(_currentPath);
+        _nav.handlePwd();
         return false;
     }
 
@@ -1536,68 +1528,6 @@ class PureConsole {
 
 
 
-  void _listDevices() {
-    stdout.writeln();
-
-    // Get all devices sorted (owned first, then cached)
-    final allDevices = _profileService.getAllDevicesSorted();
-
-    // Section 1: My Devices (owned profiles)
-    final ownedDevices = allDevices.where((d) => d['owned'] == true).toList();
-    stdout.writeln('\x1B[1mMy Devices (${ownedDevices.length})\x1B[0m');
-    stdout.writeln('-' * 60);
-
-    if (ownedDevices.isEmpty) {
-      stdout.writeln('  No profiles configured. Run "setup" to create one.');
-    } else {
-      for (final device in ownedDevices) {
-        final isActive = device['active'] == true;
-        final activeMarker = isActive ? '\x1B[32m*\x1B[0m' : ' ';
-        final typeStr = device['type'] == 'station' ? '\x1B[33mstation\x1B[0m' : '\x1B[36mclient\x1B[0m';
-        final callsign = device['callsign'] as String;
-        final nickname = device['nickname'] as String;
-        final displayName = nickname.isNotEmpty ? '$callsign ($nickname)' : callsign;
-        stdout.writeln('$activeMarker \x1B[1m$displayName\x1B[0m - $typeStr');
-      }
-    }
-    stdout.writeln();
-
-    // Section 2: Cached/Known Devices
-    final cachedDevices = allDevices.where((d) => d['owned'] != true).toList();
-    if (cachedDevices.isNotEmpty) {
-      stdout.writeln('\x1B[1mKnown Devices (${cachedDevices.length})\x1B[0m');
-      stdout.writeln('-' * 60);
-      for (final device in cachedDevices) {
-        final callsign = device['callsign'] as String;
-        final typeStr = device['type'] ?? 'unknown';
-        stdout.writeln('  $callsign - $typeStr');
-      }
-      stdout.writeln();
-    }
-
-    // Section 3: Currently Connected (station clients)
-    final clients = _station.clients;
-    stdout.writeln('\x1B[1mConnected Now (${clients.length})\x1B[0m');
-    stdout.writeln('-' * 60);
-
-    if (clients.isEmpty) {
-      stdout.writeln('  No devices connected to this station');
-    } else {
-      for (final client in clients.values) {
-        final connectedAgo = DateTime.now().difference(client.connectedAt);
-        final isOwned = _profileService.isOwnedCallsign(client.callsign ?? '');
-        final ownedMarker = isOwned ? '\x1B[32m*\x1B[0m' : ' ';
-        stdout.writeln(
-          '$ownedMarker ${(client.callsign ?? 'Unknown').padRight(12)} '
-          '${(client.deviceType ?? '-').padRight(10)} '
-          '${_formatDuration(connectedAgo)} ago'
-        );
-      }
-    }
-    stdout.writeln();
-  }
-
-
 
   Future<void> _showChatHistory(String roomId, int? limit) async {
     // Use station's chat rooms in CLI mode
@@ -1635,51 +1565,11 @@ class PureConsole {
   }
 
   Future<void> _handleChatHistory(List<String> args) async {
-    if (_currentChatRoom == null) return;
+    if (_nav.currentChatRoom == null) return;
     final limit = args.isNotEmpty ? int.tryParse(args[0]) : null;
-    await _showChatHistory(_currentChatRoom!, limit);
+    await _showChatHistory(_nav.currentChatRoom!, limit);
   }
 
-  /// Get the current value of a config key from the profile
-  dynamic _getConfigValue(String key) {
-    final profile = _profileService.activeProfile;
-    if (profile == null) return null;
-
-    switch (key) {
-      case 'nickname': return profile.nickname;
-      case 'description': return profile.description;
-      case 'preferredColor': return profile.preferredColor;
-      case 'latitude': return profile.latitude;
-      case 'longitude': return profile.longitude;
-      case 'locationName': return profile.locationName;
-      case 'enableAprs': return profile.enableAprs;
-      // Station settings
-      case 'httpPort': return _station.settings.httpPort;
-      case 'httpsPort': return _station.settings.httpsPort;
-      case 'tileServerEnabled': return profile.tileServerEnabled;
-      case 'osmFallbackEnabled': return profile.osmFallbackEnabled;
-      case 'maxZoomLevel': return _station.settings.maxZoomLevel;
-      case 'maxCacheSizeMB': return _station.settings.maxCacheSizeMB;
-      case 'enableCors': return _station.settings.enableCors;
-      case 'maxConnectedDevices': return _station.settings.maxConnectedDevices;
-      default: return null;
-    }
-  }
-
-  /// Show config keys with values (for ls in /config)
-  void _showConfigList() {
-    final keys = configKeys;
-    final maxKeyLen = keys.map((k) => k.length).reduce((a, b) => a > b ? a : b);
-
-    for (final key in keys) {
-      final value = _getConfigValue(key);
-      final type = configKeyTypes[key] ?? 'string';
-      final valueStr = value?.toString() ?? '\x1B[90m(not set)\x1B[0m';
-      final typeStr = '\x1B[90m[$type]\x1B[0m';
-
-      stdout.writeln('${key.padRight(maxKeyLen)}  $valueStr  $typeStr');
-    }
-  }
 
 
 
@@ -2082,169 +1972,6 @@ class PureConsole {
   }
 
 
-  void _listGames() {
-    final games = _gameConfig.listGames();
-
-    stdout.writeln();
-    stdout.writeln('\x1B[1mAvailable Games (${games.length})\x1B[0m');
-    stdout.writeln('-' * 40);
-
-    if (games.isEmpty) {
-      stdout.writeln('No games found in ${_gameConfig.gamesDirectory}');
-      stdout.writeln('Add .md game files to play');
-    } else {
-      for (final game in games) {
-        final name = game.path.split('/').last;
-        final info = _gameConfig.getGameInfo(name);
-        final title = info?['title'] ?? name.replaceAll('.md', '');
-        stdout.writeln('  \x1B[36m${name.padRight(25)}\x1B[0m $title');
-      }
-    }
-
-    stdout.writeln();
-    stdout.writeln('Use "play <game-name>" to start a game');
-    stdout.writeln();
-  }
-
-
-  // --- Navigation commands ---
-
-  void _handleLs(List<String> args) {
-    final path = args.isNotEmpty ? _resolvePath(args[0]) : _currentPath;
-
-    if (path == '/') {
-      for (final dir in rootDirs) {
-        stdout.writeln('\x1B[34m$dir/\x1B[0m');
-      }
-    } else if (path == '/station') {
-      final status = _station.isRunning ? '\x1B[32mRunning\x1B[0m' : '\x1B[33mStopped\x1B[0m';
-      stdout.writeln('status      $status');
-      stdout.writeln('\x1B[34mconfig/\x1B[0m');
-      stdout.writeln('\x1B[34mcache/\x1B[0m');
-    } else if (path == '/devices') {
-      _listDevices();
-    } else if (path == '/chat') {
-      // Use station's chat rooms in CLI mode
-      for (final room in _station.chatRooms.values) {
-        stdout.writeln('\x1B[34m${room.id}/\x1B[0m  ${room.name}');
-      }
-    } else if (path.startsWith('/chat/')) {
-      final roomId = path.substring('/chat/'.length);
-      final room = _station.chatRooms[roomId];
-      if (room != null) {
-        stdout.writeln('${room.messages.length} messages');
-        if (room.messages.isNotEmpty) {
-          final lastMsg = room.messages.last;
-          stdout.writeln('Last activity: ${lastMsg.timestamp.toLocal()}');
-        }
-      } else {
-        _printError('Room not found');
-      }
-    } else if (path == '/config') {
-      _showConfigList();
-    } else if (path == '/logs') {
-      stdout.writeln('(${_station.logs.length} log entries)');
-    } else if (path == '/ssl') {
-      final sslEnabled = _station.settings.enableSsl;
-      final hasCert = _sslManager?.hasCertificate() == true;
-
-      stdout.writeln('\x1B[1mSSL/TLS Status\x1B[0m');
-      stdout.writeln('─' * 40);
-      stdout.writeln('HTTPS:       ${sslEnabled ? '\x1B[32mEnabled\x1B[0m on port ${_station.settings.httpsPort}' : '\x1B[33mDisabled\x1B[0m'}');
-      stdout.writeln('Certificate: ${hasCert ? '\x1B[32mInstalled\x1B[0m' : '\x1B[33mNot installed\x1B[0m'}');
-      stdout.writeln('Domain:      ${_station.settings.sslDomain ?? '\x1B[33m(not set)\x1B[0m'}');
-      stdout.writeln('Email:       ${_station.settings.sslEmail ?? '\x1B[33m(not set)\x1B[0m'}');
-      stdout.writeln('Auto-renew:  ${_station.settings.sslAutoRenew ? '\x1B[32mon\x1B[0m' : '\x1B[33moff\x1B[0m'}');
-      stdout.writeln('');
-      stdout.writeln('\x1B[1mCommands\x1B[0m (run from /ssl)');
-      stdout.writeln('─' * 40);
-      stdout.writeln('domain <domain>   Set domain for certificate');
-      stdout.writeln('email <email>     Set Let\'s Encrypt contact email');
-      stdout.writeln('request           Request production certificate');
-      stdout.writeln('test              Request staging (test) certificate');
-      stdout.writeln('renew             Force certificate renewal');
-      stdout.writeln('autorenew on|off  Toggle auto-renewal');
-      stdout.writeln('selfsigned        Generate self-signed certificate');
-      stdout.writeln('enable            Enable HTTPS server');
-      stdout.writeln('disable           Disable HTTPS server');
-      stdout.writeln('status            Show detailed certificate info');
-    } else if (path == '/games') {
-      _listGames();
-    } else {
-      _printError('Directory not found: $path');
-    }
-  }
-
-  Future<void> _handleCd(List<String> args) async {
-    if (args.isEmpty) {
-      _currentPath = '/';
-      _currentChatRoom = null;
-      return;
-    }
-
-    final target = _resolvePath(args[0]);
-
-    if (target == '/' || rootDirs.contains(target.substring(1).split('/')[0])) {
-      _currentPath = target;
-
-      // Check if we're entering a chat room
-      if (target.startsWith('/chat/') && target.length > '/chat/'.length) {
-        final roomId = target.substring('/chat/'.length).split('/')[0];
-        // Use station's chat rooms in CLI mode
-        final room = _station.chatRooms[roomId];
-        if (room != null) {
-          _currentChatRoom = roomId;
-          stdout.writeln('--- ${room.name} ---');
-          // Show recent messages when entering
-          await _showChatHistory(roomId, 10);
-        } else {
-          _printError('Room not found: $roomId');
-          _currentPath = '/chat';
-          _currentChatRoom = null;
-        }
-      } else {
-        _currentChatRoom = null;
-      }
-    } else {
-      _printError('Directory not found: ${args[0]}');
-    }
-  }
-
-  String _resolvePath(String path) {
-    if (path.startsWith('/')) {
-      return _normalizePath(path);
-    }
-
-    if (path == '..') {
-      final parts = _currentPath.split('/').where((p) => p.isNotEmpty).toList();
-      if (parts.isEmpty) return '/';
-      parts.removeLast();
-      return parts.isEmpty ? '/' : '/${parts.join('/')}';
-    }
-
-    if (path == '.') {
-      return _currentPath;
-    }
-
-    final newPath = _currentPath == '/' ? '/$path' : '$_currentPath/$path';
-    return _normalizePath(newPath);
-  }
-
-  String _normalizePath(String path) {
-    if (path.isEmpty) return '/';
-    var normalized = path.replaceAll(RegExp(r'/+'), '/');
-    if (normalized.length > 1 && normalized.endsWith('/')) {
-      normalized = normalized.substring(0, normalized.length - 1);
-    }
-    return normalized;
-  }
-
-  String _formatDuration(Duration d) {
-    if (d.inSeconds < 60) return '${d.inSeconds}s';
-    if (d.inMinutes < 60) return '${d.inMinutes}m';
-    if (d.inHours < 24) return '${d.inHours}h';
-    return '${d.inDays}d';
-  }
 
   /// Run email DNS diagnostics command (handles auto-detection)
   Future<void> _runEmailDnsDiagnosticsCommand() async {
@@ -2364,6 +2091,33 @@ class PureConsole {
   void _printError(String message) {
     stdout.writeln('\x1B[31m$message\x1B[0m');
   }
+}
+
+// ---------------------------------------------------------------------------
+// NavigationDataProvider implementation for PureConsole
+// ---------------------------------------------------------------------------
+
+class _PureConsoleDataProvider implements NavigationDataProvider {
+  final PureConsole _console;
+  _PureConsoleDataProvider(this._console);
+
+  @override
+  ConsoleIO get io => _console._io;
+
+  @override
+  List<String> get rootDirs => _console.rootDirs;
+
+  @override
+  StationCommandInterface? get stationInterface => _console._station;
+
+  @override
+  ProfileCommandInterface? get profileInterface => _console._profileService;
+
+  @override
+  Object? get gameConfig => _console._gameConfig;
+
+  @override
+  Object? get sslManager => _console._sslManager;
 }
 
 /// Entry point for pure Dart CLI mode
