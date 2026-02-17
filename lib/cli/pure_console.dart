@@ -20,6 +20,18 @@ import 'game/game_screen.dart';
 import 'pure_storage_config.dart';
 import '../util/nostr_key_generator.dart';
 import '../services/email_dns_service.dart';
+import 'console_io_cli.dart';
+import 'commands/command_context.dart';
+import 'commands/command_registry.dart';
+import 'commands/general_commands.dart';
+import 'commands/station_command.dart';
+import 'commands/profile_command.dart';
+import 'commands/chat_command.dart';
+import 'commands/devices_command.dart';
+import 'commands/config_command.dart';
+import 'commands/ssl_command.dart';
+import 'commands/games_command.dart';
+import 'commands/monitoring_commands.dart';
 
 /// Completion candidate
 class Candidate {
@@ -296,6 +308,12 @@ class PureConsole {
   DateTime? _lastCtrlCTime;
   static const _ctrlCTimeout = Duration(seconds: 2);
 
+  /// Console I/O adapter for command registry
+  final ConsoleIO _io = CliConsoleIO();
+
+  /// Command registry for dispatch and completion
+  late final CommandRegistry _registry;
+
   /// Station server instance
   final PureStationServer _station = PureStationServer();
 
@@ -526,11 +544,80 @@ class PureConsole {
       _chatMessageSubscription = _station.eventBus.on<ChatMessageEvent>((event) {
         _handleIncomingChatMessage(event);
       });
+      // Build command registry
+      _registry = _buildRegistry();
     } catch (e, stackTrace) {
       _printError('Failed to initialize services: $e');
       _printError('Stack trace: $stackTrace');
       exit(1);
     }
+  }
+
+  /// Build the command registry with all commands.
+  CommandRegistry _buildRegistry() {
+    final registry = CommandRegistry();
+
+    registry.registerAll([
+      // General / System
+      HelpCommand(registry),
+      ClearCommand(),
+      QuitCommand(),
+      BroadcastCommand(),
+      KickCommand(),
+      QuietCommand(),
+      VerboseCommand(),
+      RestartCommand(),
+      ReloadCommand(),
+      SetupCommand(onSetup: _handleSetup),
+      StatusCommand(),
+      StatsCommand(),
+      // Station
+      StationCommand(),
+      // Profile
+      ProfileCommand(onSetup: _handleSetup),
+      // Chat
+      ChatCommand(),
+      // Devices
+      DevicesCommand(),
+      // Config
+      ConfigCommand(),
+      // SSL
+      SslCommand(),
+      // Games
+      GamesCommand(),
+      PlayCommand(),
+      // Monitoring
+      LogsCommand(),
+      TailCommand(),
+      HeadCommand(),
+      CatCommand(),
+      DfCommand(),
+      TopCommand(),
+    ]);
+
+    return registry;
+  }
+
+  /// Build a [CommandContext] for the current console state.
+  CommandContext _buildCommandContext(List<String> args) {
+    return CommandContext(
+      io: _io,
+      currentPath: _currentPath,
+      currentChatRoom: _currentChatRoom,
+      args: args,
+      station: _station,
+      profileService: _profileService,
+      sslManager: _sslManager,
+      gameConfig: _gameConfig,
+      cacheService: _cacheService,
+      onNavigate: (path, chatRoom) {
+        _currentPath = path;
+        _currentChatRoom = chatRoom;
+      },
+      onStationRestart: () => _station.restart(),
+      onStationReload: () => _station.reloadSettings(),
+      onShutdown: _cleanup,
+    );
   }
 
   /// Run in daemon mode - start station server and wait indefinitely
@@ -1154,159 +1241,53 @@ class PureConsole {
     return buffer; // Return unchanged
   }
 
-  /// Get completion candidates based on current input
+  /// Get completion candidates based on current input.
+  ///
+  /// Delegates to the command registry for command/subcommand completion,
+  /// but handles path completion for ls/cd directly.
   List<Candidate> _getCompletions(String buffer) {
-    // Filter out empty strings from split (happens with trailing spaces)
     final parts = buffer.split(RegExp(r'\s+')).where((p) => p.isNotEmpty).toList();
-    if (parts.isEmpty) {
-      return _getContextAwareCommands('');
-    }
-
-    final firstWord = parts[0].toLowerCase();
     final endsWithSpace = buffer.endsWith(' ');
 
-    if (parts.length == 1 && !endsWithSpace) {
-      // Completing first word (command)
-      return _getContextAwareCommands(firstWord);
-    }
-
-    // If buffer ends with space and parts.length == 1, treat as completing second word with empty partial
-    final effectivePartsLength = endsWithSpace ? parts.length + 1 : parts.length;
-
-    // Check if it's a directory-local command
-    if (dirCommands.containsKey(_currentPath)) {
-      final localCmds = dirCommands[_currentPath]!;
-      if (localCmds.contains(firstWord)) {
-        return _completeLocalCommandArgs(firstWord, parts);
+    // Special case: ls/cd path completion (not in registry)
+    if (parts.isNotEmpty) {
+      final firstWord = parts[0].toLowerCase();
+      if ((firstWord == 'ls' || firstWord == 'cd') && (parts.length > 1 || endsWithSpace)) {
+        final partial = parts.length > 1 ? parts[1] : '';
+        return _completePaths(partial);
       }
     }
 
-    // Completing subsequent words (sub-commands or arguments)
-    if (effectivePartsLength == 2) {
-      final partial = parts.length > 1 ? parts[1].toLowerCase() : '';
+    // Also add navigation commands (ls, cd, pwd) to first-word completion
+    final ctx = _buildCommandContext(const []);
+    final registryCandidates = _registry.getCompletions(buffer, ctx);
 
-      // Check for sub-commands
-      if (subCommands.containsKey(firstWord)) {
-        return _filterSubCommands(firstWord, subCommands[firstWord]!, partial);
-      }
-
-      // Special completions based on command
-      switch (firstWord) {
-        case 'kick':
-          return _completeCallsigns(partial);
-        case 'ls':
-        case 'cd':
-          return _completePaths(partial);
-        case 'play':
-          return _completeGameFiles(partial);
-      }
-    }
-
-    if (effectivePartsLength == 3) {
-      final subCmd = parts.length > 1 ? parts[1].toLowerCase() : '';
-      final partial = parts.length > 2 ? parts[2].toLowerCase() : '';
-
-      // station cache <subcommand>
-      if (firstWord == 'station' && subCmd == 'cache') {
-        return _filterCandidates(['clear', 'stats'], partial);
-      }
-
-      // config set <key>
-      if (firstWord == 'config' && subCmd == 'set') {
-        return _filterCandidates(configKeys, partial);
-      }
-
-      // chat <subcommand> <roomId>
-      if (firstWord == 'chat' && ['info', 'delete', 'rename', 'history', 'say', 'delmsg'].contains(subCmd)) {
-        return _completeRoomIds(partial);
-      }
-
-      // devices ping/kick <target>
-      if (firstWord == 'devices') {
-        if (subCmd == 'kick') {
-          return _completeCallsigns(partial);
-        }
-      }
-
-      // profile switch <callsign>
-      if (firstWord == 'profile' && subCmd == 'switch') {
-        return _completeProfileCallsigns(partial);
-      }
-    }
-
-    return [];
-  }
-
-  /// Get commands based on current directory context
-  List<Candidate> _getContextAwareCommands(String partial) {
+    // Convert CompletionCandidate → Candidate and merge with navigation commands
     final candidates = <Candidate>[];
-    final lowerPartial = partial.toLowerCase();
+    final seen = <String>{};
 
-    // First add directory-local commands (if in a special directory)
-    if (dirCommands.containsKey(_currentPath)) {
-      final localCmds = dirCommands[_currentPath]!;
-      for (final cmd in localCmds) {
-        if (cmd.toLowerCase().startsWith(lowerPartial)) {
-          final dirName = _currentPath.substring(1).toUpperCase();
-          candidates.add(Candidate(cmd, group: '$dirName commands'));
-        }
+    for (final rc in registryCandidates) {
+      if (seen.add(rc.value)) {
+        candidates.add(Candidate(
+          rc.value,
+          display: rc.description != null ? '${rc.value} - ${rc.description}' : rc.value,
+          group: rc.group,
+          complete: rc.complete,
+        ));
       }
     }
 
-    // Add chat room-specific commands
-    if (_currentChatRoom != null) {
-      for (final cmd in ['messages', 'delmsg']) {
-        if (cmd.startsWith(lowerPartial)) {
-          candidates.add(Candidate(cmd, group: 'CHAT commands'));
+    // Add navigation commands for first-word completion
+    if (parts.isEmpty || (parts.length == 1 && !endsWithSpace)) {
+      final partial = parts.isNotEmpty ? parts[0].toLowerCase() : '';
+      for (final nav in ['ls', 'cd', 'pwd']) {
+        if (nav.startsWith(partial) && seen.add(nav)) {
+          candidates.add(Candidate(nav, group: 'Navigation'));
         }
-      }
-    }
-
-    // Then add global commands
-    for (final cmd in globalCommands) {
-      if (cmd.toLowerCase().startsWith(lowerPartial)) {
-        candidates.add(Candidate(cmd, group: 'Global commands'));
       }
     }
 
     return candidates;
-  }
-
-  /// Complete directory-local command arguments
-  List<Candidate> _completeLocalCommandArgs(String localCmd, List<String> parts) {
-    // Get partial - when buffer ends with space but parts.length == 1, partial is empty
-    final partial = parts.length > 1 ? parts[1].toLowerCase() : '';
-
-    if (_currentPath == '/config') {
-      if (localCmd == 'set') {
-        return _filterCandidates(configKeys, partial);
-      }
-    } else if (_currentPath == '/chat') {
-      if (['info', 'delete', 'rename', 'history'].contains(localCmd)) {
-        return _completeRoomIds(partial);
-      }
-    } else if (_currentPath == '/devices') {
-      if (localCmd == 'kick') {
-        return _completeCallsigns(partial);
-      }
-      if (localCmd == 'scan' && partial.startsWith('-')) {
-        return _filterCandidates(['-t'], partial);
-      }
-    } else if (_currentPath == '/station') {
-      if (localCmd == 'cache') {
-        return _filterCandidates(['clear', 'stats'], partial);
-      }
-    } else if (_currentPath == '/games') {
-      if (localCmd == 'play' || localCmd == 'info') {
-        return _completeGameFiles(partial);
-      }
-    } else if (_currentPath == '/ssl') {
-      if (localCmd == 'autorenew') {
-        return _filterCandidates(['on', 'off'], partial);
-      }
-    }
-
-    return [];
   }
 
   /// Complete with path entries (for ls, cd)
@@ -1567,269 +1548,40 @@ class PureConsole {
       return false;
     }
 
-    // Context-specific commands when in /station
-    if (_currentPath == '/station' || _currentPath.startsWith('/station/')) {
-      switch (command) {
-        case 'start':
-          await _handleRelayStart();
-          return false;
-        case 'stop':
-          await _handleRelayStop();
-          return false;
-        case 'port':
-          await _handleRelayPort(args);
-          return false;
-        case 'cache':
-          _handleRelayCache(args);
-          return false;
-        case 'callsign':
-          await _handleRelayCallsign(args);
-          return false;
-      }
-    }
-
-    // Context-specific commands when in /chat/<room>
-    if (_currentChatRoom != null) {
-      switch (command) {
-        case 'messages':
-          await _handleChatHistory(args);
-          return false;
-        case 'delmsg':
-          await _handleDeleteMessage(args);
-          return false;
-        case 'ls':
-          await _handleChatHistory(args);
-          return false;
-      }
-    }
-
-    // Context-specific commands when in /ssl
-    if (_currentPath == '/ssl') {
-      switch (command) {
-        case 'domain':
-          await _handleSslDomain(args);
-          return false;
-        case 'email':
-          await _handleSslEmail(args);
-          return false;
-        case 'request':
-          await _handleSslRequest(staging: false);
-          return false;
-        case 'test':
-          await _handleSslRequest(staging: true);
-          return false;
-        case 'renew':
-          await _handleSslRenew();
-          return false;
-        case 'autorenew':
-          await _handleSslAutoRenew(args);
-          return false;
-        case 'selfsigned':
-          await _handleSslSelfSigned(args);
-          return false;
-        case 'enable':
-          await _handleSslEnable(true);
-          return false;
-        case 'disable':
-          await _handleSslEnable(false);
-          return false;
-        case 'status':
-          await _showSslStatus();
-          return false;
-      }
-    }
-
-    // Context-specific commands when in /devices
-    if (_currentPath == '/devices') {
-      switch (command) {
-        case 'list':
-          _listDevices();
-          return false;
-        case 'scan':
-          await _scanDevices(args);
-          return false;
-        case 'ping':
-          if (args.isEmpty) {
-            _printError('Usage: ping <ip[:port]>');
-          } else {
-            await _pingDevice(args[0]);
-          }
-          return false;
-      }
-    }
-
-    // Context-specific commands when in /chat
-    if (_currentPath == '/chat') {
-      switch (command) {
-        case 'list':
-          await _listChatRooms();
-          return false;
-        case 'info':
-          if (args.isEmpty) {
-            _printError('Usage: info <room_id>');
-          } else {
-            await _showChatInfo(args[0]);
-          }
-          return false;
-        case 'create':
-          if (args.length < 2) {
-            _printError('Usage: create <id> <name> [description]');
-          } else {
-            final desc = args.length > 2 ? args.sublist(2).join(' ') : null;
-            await _createChatRoom(args[0], args[1], desc);
-          }
-          return false;
-        case 'delete':
-          if (args.isEmpty) {
-            _printError('Usage: delete <room_id>');
-          } else {
-            await _deleteChatRoom(args[0]);
-          }
-          return false;
-        case 'rename':
-          if (args.length < 2) {
-            _printError('Usage: rename <room_id> <new_name>');
-          } else {
-            await _renameChatRoom(args[0], args[1]);
-          }
-          return false;
-        case 'history':
-          if (args.isEmpty) {
-            _printError('Usage: history <room_id> [limit]');
-          } else {
-            final limit = args.length > 1 ? int.tryParse(args[1]) : null;
-            await _showChatHistory(args[0], limit ?? 50);
-          }
-          return false;
-        case 'say':
-          if (args.length < 2) {
-            _printError('Usage: say <room_id> <message>');
-          } else {
-            await _postMessage(args[0], args.sublist(1).join(' '));
-          }
-          return false;
-      }
-    }
-
-    // Context-specific commands when in /config
-    if (_currentPath == '/config') {
-      switch (command) {
-        case 'set':
-          if (args.length < 2) {
-            _printError('Usage: set <key> <value>');
-          } else {
-            await _setConfig(args[0], args.sublist(1).join(' '));
-          }
-          return false;
-        case 'show':
-          _showConfigList();
-          return false;
-        case 'location':
-          await _handleLocationDetect();
-          return false;
-      }
-    }
-
-    // Global commands
+    // Navigation commands stay on the console host (they mutate _currentPath)
     switch (command) {
-      case 'help':
-      case '?':
-        _printHelp();
-        break;
-      case 'status':
-        _printStatus();
-        break;
-      case 'stats':
-        _printStats();
-        break;
       case 'ls':
-        _handleLs(args);
-        break;
+        // Special: in chat room, ls shows chat history
+        if (_currentChatRoom != null) {
+          await _handleChatHistory(args);
+        } else {
+          _handleLs(args);
+        }
+        return false;
       case 'cd':
         await _handleCd(args);
-        break;
+        return false;
       case 'pwd':
         stdout.writeln(_currentPath);
-        break;
-      case 'station':
-        await _handleRelay(args);
-        break;
-      case 'devices':
-        await _handleDevices(args);
-        break;
-      case 'chat':
-        await _handleChat(args);
-        break;
-      case 'config':
-        await _handleConfig(args);
-        break;
-      case 'logs':
-        _handleLogs(args);
-        break;
-      case 'broadcast':
-        _handleBroadcast(args);
-        break;
-      case 'kick':
-        _handleKick(args);
-        break;
-      case 'df':
-        await _handleDf(args);
-        break;
-      case 'quiet':
-        _station.quietMode = true;
-        stdout.writeln('Quiet mode enabled');
-        break;
-      case 'verbose':
-        _station.quietMode = false;
-        stdout.writeln('Verbose mode enabled');
-        break;
-      case 'restart':
-        await _station.restart();
-        break;
-      case 'reload':
-        await _station.reloadSettings();
-        stdout.writeln('Settings reloaded');
-        break;
-      case 'clear':
-        stdout.write('\x1B[2J\x1B[H');
-        break;
-      case 'top':
-        await _handleTop();
-        break;
-      case 'tail':
-        await _handleTail(args);
-        break;
-      case 'head':
-        await _handleHead(args);
-        break;
-      case 'cat':
-        await _handleCat(args);
-        break;
-      case 'setup':
-        await _handleSetup();
-        break;
-      case 'profile':
-        await _handleProfile(args);
-        break;
-      case 'ssl':
-        await _handleSsl(args);
-        break;
-      case 'play':
-        await _handlePlay(args);
-        break;
-      case 'games':
-        await _handleGames(args);
-        break;
-      case 'quit':
-      case 'exit':
-      case 'shutdown':
-        await _cleanup();
-        stdout.writeln('Goodbye!');
-        exit(0);
-      default:
-        _printError('Unknown command: $command. Type "help" for available commands.');
+        return false;
     }
-    return false;
+
+    // Dispatch everything else through the command registry
+    final ctx = _buildCommandContext(args);
+    final result = await _registry.dispatch(command, args, ctx);
+
+    switch (result) {
+      case DispatchResult.ok:
+        return false;
+      case DispatchResult.exit:
+        return true;
+      case DispatchResult.requiresStation:
+        _printError('This command requires a station profile.');
+        return false;
+      case DispatchResult.notFound:
+        _printError('Unknown command: $command. Type "help" for available commands.');
+        return false;
+    }
   }
 
   void _printHelp() {
