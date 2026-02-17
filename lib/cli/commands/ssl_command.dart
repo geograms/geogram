@@ -5,9 +5,10 @@
  * SSL command: domain, email, request, test, renew, autorenew, selfsigned, enable, disable
  */
 
-import '../../station.dart';
+import '../../station.dart' show PureRelaySettings, SslCertificateManager;
 import 'command.dart';
 import 'command_context.dart';
+import 'service_interfaces.dart';
 
 /// ssl — manage SSL/TLS certificates
 class SslCommand extends Command {
@@ -117,7 +118,7 @@ class SslCommand extends Command {
   }
 
   static Future<void> _domain(CommandContext ctx) async {
-    final station = ctx.station as StationServer;
+    final station = ctx.station as StationCommandInterface;
 
     if (ctx.args.isEmpty) {
       ctx.writeln('Current domain: ${station.settings.sslDomain ?? '(not set)'}');
@@ -125,15 +126,14 @@ class SslCommand extends Command {
     }
 
     final domain = ctx.args[0];
-    final settings = station.settings.copyWith(sslDomain: domain);
-    await station.updateSettings(settings);
+    station.setSetting('sslDomain', domain);
     final sslManager = ctx.sslManager as SslCertificateManager?;
-    sslManager?.updateSettings(station.settings);
+    sslManager?.updateSettings(station.settings as PureRelaySettings);
     ctx.success('SSL domain set to: $domain');
   }
 
   static Future<void> _email(CommandContext ctx) async {
-    final station = ctx.station as StationServer;
+    final station = ctx.station as StationCommandInterface;
 
     if (ctx.args.isEmpty) {
       ctx.writeln('Current email: ${station.settings.sslEmail ?? '(not set)'}');
@@ -146,10 +146,9 @@ class SslCommand extends Command {
       return;
     }
 
-    final settings = station.settings.copyWith(sslEmail: email);
-    await station.updateSettings(settings);
+    station.setSetting('sslEmail', email);
     final sslManager = ctx.sslManager as SslCertificateManager?;
-    sslManager?.updateSettings(station.settings);
+    sslManager?.updateSettings(station.settings as PureRelaySettings);
     ctx.success('SSL email set to: $email');
   }
 
@@ -162,7 +161,7 @@ class SslCommand extends Command {
   }
 
   static Future<void> _requestCertificate(CommandContext ctx, {required bool staging}) async {
-    final station = ctx.station as StationServer;
+    final station = ctx.station as StationCommandInterface;
     final sslManager = ctx.sslManager as SslCertificateManager?;
     if (sslManager == null) {
       ctx.error('SSL manager not initialized');
@@ -208,7 +207,7 @@ class SslCommand extends Command {
   }
 
   static Future<void> _autorenew(CommandContext ctx) async {
-    final station = ctx.station as StationServer;
+    final station = ctx.station as StationCommandInterface;
     final sslManager = ctx.sslManager as SslCertificateManager?;
 
     if (ctx.args.isEmpty) {
@@ -220,9 +219,8 @@ class SslCommand extends Command {
     final value = ctx.args[0].toLowerCase();
     final enabled = value == 'on' || value == 'true' || value == '1';
 
-    final settings = station.settings.copyWith(sslAutoRenew: enabled);
-    await station.updateSettings(settings);
-    sslManager?.updateSettings(station.settings);
+    station.setSetting('sslAutoRenew', enabled);
+    sslManager?.updateSettings(station.settings as PureRelaySettings);
 
     if (enabled) {
       sslManager?.startAutoRenewal();
@@ -234,7 +232,7 @@ class SslCommand extends Command {
   }
 
   static Future<void> _selfsigned(CommandContext ctx) async {
-    final station = ctx.station as StationServer;
+    final station = ctx.station as StationCommandInterface;
     final sslManager = ctx.sslManager as SslCertificateManager?;
     if (sslManager == null) {
       ctx.error('SSL manager not initialized');
@@ -268,7 +266,7 @@ class SslCommand extends Command {
   }
 
   static Future<void> _toggleSsl(CommandContext ctx, {required bool enable}) async {
-    final station = ctx.station as StationServer;
+    final station = ctx.station as StationCommandInterface;
     final sslManager = ctx.sslManager as SslCertificateManager?;
     if (sslManager == null) {
       ctx.error('SSL manager not initialized');
@@ -280,13 +278,10 @@ class SslCommand extends Command {
       return;
     }
 
-    final settings = station.settings.copyWith(
-      enableSsl: enable,
-      sslCertPath: enable ? sslManager.certPath : null,
-      sslKeyPath: enable ? sslManager.domainKeyPath : null,
-    );
-    await station.updateSettings(settings);
-    sslManager.updateSettings(station.settings);
+    station.setSetting('enableSsl', enable);
+    station.setSetting('sslCertPath', enable ? sslManager.certPath : null);
+    station.setSetting('sslKeyPath', enable ? sslManager.domainKeyPath : null);
+    sslManager.updateSettings(station.settings as PureRelaySettings);
 
     if (enable) {
       ctx.success('SSL/HTTPS enabled');

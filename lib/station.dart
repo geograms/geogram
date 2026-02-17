@@ -46,6 +46,7 @@ import 'services/nostr_relay_storage.dart';
 import 'services/nostr_storage_paths.dart';
 import 'server/models/server_chat_room.dart';
 import 'server/models/server_chat_message.dart';
+import 'cli/commands/service_interfaces.dart';
 import 'server/mixins/rate_limit_mixin.dart';
 import 'server/mixins/health_watchdog_mixin.dart';
 import 'server/mixins/email_handler_mixin.dart';
@@ -64,7 +65,7 @@ typedef PureRelayServer = StationServer;
 typedef PureStationServer = StationServer;
 
 /// Station server settings
-class PureRelaySettings {
+class PureRelaySettings implements StationSettingsReadable {
   int httpPort;
   bool enabled;
   bool tileServerEnabled;
@@ -382,9 +383,12 @@ class PureRelaySettings {
 }
 
 /// Log entry for CLI log history
-class LogEntry {
+class LogEntry implements LogEntryReadable {
+  @override
   final DateTime timestamp;
+  @override
   final String level;
+  @override
   final String message;
 
   LogEntry(this.timestamp, this.level, this.message);
@@ -395,7 +399,7 @@ class LogEntry {
 }
 
 /// Connected WebSocket client
-class PureConnectedClient implements EmailClient {
+class PureConnectedClient implements EmailClient, ConnectedClientReadable {
   final WebSocket socket;
   final String id;
   String? callsign;
@@ -445,7 +449,7 @@ class PureConnectedClient implements EmailClient {
 }
 
 /// Server statistics
-class ServerStats {
+class ServerStats implements StationStatsReadable {
   int totalConnections = 0;
   int totalMessages = 0;
   int totalTileRequests = 0;
@@ -570,7 +574,8 @@ class PureTileCache {
 }
 
 /// Unified station server for CLI and Android modes
-class StationServer with RateLimitMixin, HealthWatchdogMixin, EmailHandlerMixin {
+class StationServer with RateLimitMixin, HealthWatchdogMixin, EmailHandlerMixin
+    implements StationCommandInterface {
   HttpServer? _httpServer;
   HttpServer? _httpsServer;
   SMTPServer? _smtpServer;
@@ -748,6 +753,20 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, EmailHandlerMixin 
   Map<String, ChatRoom> get chatRooms => Map.unmodifiable(_chatRooms);
   bool get quietMode => _quietMode;
   set quietMode(bool value) => _quietMode = value;
+
+  // --- StationCommandInterface readable bridges ---
+
+  @override
+  Map<String, ChatRoomReadable> get chatRoomsReadable =>
+      chatRooms.cast<String, ChatRoomReadable>();
+
+  @override
+  Map<String, ConnectedClientReadable> get clientsReadable =>
+      clients.cast<String, ConnectedClientReadable>();
+
+  @override
+  List<LogEntryReadable> get logsReadable =>
+      logs.cast<LogEntryReadable>();
 
   /// Initialize station server
   ///
@@ -1345,10 +1364,10 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, EmailHandlerMixin 
         break;
       // callsign is derived from npub and cannot be set directly
       case 'description':
-        _settings = _settings.copyWith(description: value as String);
+        _settings = _settings.copyWith(description: value as String?);
         break;
       case 'location':
-        _settings = _settings.copyWith(location: value as String);
+        _settings = _settings.copyWith(location: value as String?);
         break;
       case 'tileServerEnabled':
         _settings = _settings.copyWith(tileServerEnabled: value as bool);
@@ -1379,6 +1398,42 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, EmailHandlerMixin 
         break;
       case 'blossomMaxFileMb':
         _settings = _settings.copyWith(blossomMaxFileMb: value as int);
+        break;
+      case 'latitude':
+        _settings = _settings.copyWith(latitude: value as double?);
+        break;
+      case 'longitude':
+        _settings = _settings.copyWith(longitude: value as double?);
+        break;
+      case 'stationRole':
+        _settings = _settings.copyWith(stationRole: value as String);
+        break;
+      case 'networkId':
+        _settings = _settings.copyWith(networkId: value as String?);
+        break;
+      case 'parentStationUrl':
+        _settings = _settings.copyWith(parentStationUrl: value as String?);
+        break;
+      case 'setupComplete':
+        _settings = _settings.copyWith(setupComplete: value as bool);
+        break;
+      case 'sslDomain':
+        _settings = _settings.copyWith(sslDomain: value as String?);
+        break;
+      case 'sslEmail':
+        _settings = _settings.copyWith(sslEmail: value as String?);
+        break;
+      case 'sslAutoRenew':
+        _settings = _settings.copyWith(sslAutoRenew: value as bool);
+        break;
+      case 'enableSsl':
+        _settings = _settings.copyWith(enableSsl: value as bool);
+        break;
+      case 'sslCertPath':
+        _settings = _settings.copyWith(sslCertPath: value as String?);
+        break;
+      case 'sslKeyPath':
+        _settings = _settings.copyWith(sslKeyPath: value as String?);
         break;
       default:
         throw ArgumentError('Unknown setting: $key');

@@ -6,6 +6,7 @@
  * Used for in-memory message storage with NOSTR signature support.
  */
 
+import '../../cli/commands/service_interfaces.dart';
 import '../../util/reaction_utils.dart';
 
 /// Server-side chat message for station servers.
@@ -18,7 +19,7 @@ import '../../util/reaction_utils.dart';
 ///
 /// For client-side chat message parsing, see `lib/models/chat_message.dart`.
 /// For API response DTOs, see `lib/api/endpoints/chat_api.dart`.
-class ServerChatMessage {
+class ServerChatMessage implements ChatMessageReadable {
   /// NOSTR event ID (calculated from content)
   final String id;
 

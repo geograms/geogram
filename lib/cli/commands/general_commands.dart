@@ -9,11 +9,10 @@
 import 'dart:io';
 
 import '../../version.dart';
-import '../../station.dart';
-import '../cli_profile_service.dart';
 import 'command.dart';
 import 'command_context.dart';
 import 'command_registry.dart';
+import 'service_interfaces.dart';
 
 /// help — show available commands
 class HelpCommand extends Command {
@@ -28,7 +27,7 @@ class HelpCommand extends Command {
 
   @override
   Future<void> execute(CommandContext ctx) async {
-    final station = ctx.station as StationServer?;
+    final station = ctx.station as StationCommandInterface?;
     ctx.writeln(registry.generateHelp(stationAvailable: station != null));
   }
 }
@@ -76,7 +75,7 @@ class BroadcastCommand extends Command {
       ctx.error('Usage: broadcast <message>');
       return;
     }
-    final station = ctx.station as StationServer;
+    final station = ctx.station as StationCommandInterface;
     final message = ctx.args.join(' ');
     station.broadcast(message);
     ctx.success('Broadcast sent to ${station.connectedDevices} devices');
@@ -97,7 +96,7 @@ class KickCommand extends Command {
       ctx.error('Usage: kick <callsign>');
       return;
     }
-    final station = ctx.station as StationServer;
+    final station = ctx.station as StationCommandInterface;
     final callsign = ctx.args[0];
     if (station.kickDevice(callsign)) {
       ctx.success('Device $callsign disconnected');
@@ -108,9 +107,9 @@ class KickCommand extends Command {
 
   @override
   List<String> complete(CommandContext ctx) {
-    final station = ctx.station as StationServer?;
+    final station = ctx.station as StationCommandInterface?;
     if (station == null) return [];
-    return station.clients.values
+    return station.clientsReadable.values
         .map((c) => c.callsign ?? '')
         .where((cs) => cs.isNotEmpty)
         .toList();
@@ -126,7 +125,7 @@ class QuietCommand extends Command {
 
   @override
   Future<void> execute(CommandContext ctx) async {
-    final station = ctx.station as StationServer;
+    final station = ctx.station as StationCommandInterface;
     station.quietMode = true;
     ctx.writeln('Quiet mode enabled');
   }
@@ -141,7 +140,7 @@ class VerboseCommand extends Command {
 
   @override
   Future<void> execute(CommandContext ctx) async {
-    final station = ctx.station as StationServer;
+    final station = ctx.station as StationCommandInterface;
     station.quietMode = false;
     ctx.writeln('Verbose mode enabled');
   }
@@ -159,7 +158,7 @@ class RestartCommand extends Command {
     if (ctx.onStationRestart != null) {
       await ctx.onStationRestart!();
     } else {
-      final station = ctx.station as StationServer;
+      final station = ctx.station as StationCommandInterface;
       await station.restart();
     }
   }
@@ -177,7 +176,7 @@ class ReloadCommand extends Command {
     if (ctx.onStationReload != null) {
       await ctx.onStationReload!();
     } else {
-      final station = ctx.station as StationServer;
+      final station = ctx.station as StationCommandInterface;
       await station.reloadSettings();
     }
     ctx.writeln('Settings reloaded');
@@ -217,8 +216,7 @@ class StatusCommand extends Command {
 
   @override
   Future<void> execute(CommandContext ctx) async {
-    final station = ctx.station as StationServer?;
-    final profileService = ctx.profileService as CliProfileService?;
+    final station = ctx.station as StationCommandInterface?;
 
     if (station == null) {
       ctx.writeln('Station not available');
@@ -266,7 +264,7 @@ class StatsCommand extends Command {
 
   @override
   Future<void> execute(CommandContext ctx) async {
-    final station = ctx.station as StationServer;
+    final station = ctx.station as StationCommandInterface;
     final stats = station.stats;
 
     ctx.writeln();

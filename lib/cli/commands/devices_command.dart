@@ -5,10 +5,9 @@
  * Devices command: list, scan, ping
  */
 
-import '../../station.dart';
-import '../cli_profile_service.dart';
 import 'command.dart';
 import 'command_context.dart';
+import 'service_interfaces.dart';
 
 /// devices — manage and discover devices
 class DevicesCommand extends Command {
@@ -45,8 +44,8 @@ class DevicesCommand extends Command {
   }
 
   static Future<void> _list(CommandContext ctx) async {
-    final station = ctx.station as StationServer;
-    final profileService = ctx.profileService as CliProfileService?;
+    final station = ctx.station as StationCommandInterface;
+    final profileService = ctx.profileService as ProfileCommandInterface?;
 
     ctx.writeln();
 
@@ -95,7 +94,7 @@ class DevicesCommand extends Command {
     }
 
     // Section 3: Currently Connected (station clients)
-    final clients = station.clients;
+    final clients = station.clientsReadable;
     ctx.bold('Connected Now (${clients.length})');
     ctx.writeln('-' * 60);
 
@@ -119,7 +118,7 @@ class DevicesCommand extends Command {
   }
 
   static Future<void> _scan(CommandContext ctx) async {
-    final station = ctx.station as StationServer;
+    final station = ctx.station as StationCommandInterface;
 
     int timeout = 2000;
     final args = ctx.args;
@@ -153,7 +152,7 @@ class DevicesCommand extends Command {
   }
 
   static Future<void> _ping(CommandContext ctx) async {
-    final station = ctx.station as StationServer;
+    final station = ctx.station as StationCommandInterface;
 
     if (ctx.args.isEmpty) {
       ctx.error('Usage: devices ping <ip[:port]>');

@@ -5,9 +5,9 @@
  * Chat command: list, info, create, delete, rename, history, say, delmsg
  */
 
-import '../../station.dart';
 import 'command.dart';
 import 'command_context.dart';
+import 'service_interfaces.dart';
 
 /// chat — manage chat rooms and messages
 class ChatCommand extends Command {
@@ -84,8 +84,8 @@ class ChatCommand extends Command {
 
   /// Completer that returns available chat room IDs.
   static List<String> _roomIdCompleter(CommandContext ctx) {
-    final station = ctx.station as StationServer;
-    return station.chatRooms.keys.toList();
+    final station = ctx.station as StationCommandInterface;
+    return station.chatRoomsReadable.keys.toList();
   }
 
   // ---------------------------------------------------------------------------
@@ -93,8 +93,8 @@ class ChatCommand extends Command {
   // ---------------------------------------------------------------------------
 
   static Future<void> _list(CommandContext ctx) async {
-    final station = ctx.station as StationServer;
-    final rooms = station.chatRooms.values.toList();
+    final station = ctx.station as StationCommandInterface;
+    final rooms = station.chatRoomsReadable.values.toList();
 
     ctx.writeln();
     ctx.bold('Chat Rooms (${rooms.length})');
@@ -104,14 +104,14 @@ class ChatCommand extends Command {
       ctx.writeln(
         '${room.id.padRight(15)} '
         '${room.name.padRight(20)} '
-        '${room.messages.length} msgs',
+        '${room.readableMessages.length} msgs',
       );
     }
     ctx.writeln();
   }
 
   static Future<void> _info(CommandContext ctx) async {
-    final station = ctx.station as StationServer;
+    final station = ctx.station as StationCommandInterface;
 
     final roomId = ctx.args.isNotEmpty ? ctx.args[0] : ctx.currentChatRoom;
     if (roomId == null) {
@@ -119,7 +119,7 @@ class ChatCommand extends Command {
       return;
     }
 
-    final room = station.chatRooms[roomId];
+    final room = station.chatRoomsReadable[roomId];
     if (room == null) {
       ctx.error('Room not found: $roomId');
       return;
@@ -135,13 +135,13 @@ class ChatCommand extends Command {
     ctx.writeln('Creator:     ${room.creatorCallsign}');
     ctx.writeln('Created:     ${room.createdAt.toLocal()}');
     ctx.writeln('Last Active: ${room.lastActivity.toLocal()}');
-    ctx.writeln('Messages:    ${room.messages.length}');
+    ctx.writeln('Messages:    ${room.readableMessages.length}');
     ctx.writeln('Public:      ${room.isPublic ? 'Yes' : 'No'}');
     ctx.writeln();
   }
 
   static Future<void> _create(CommandContext ctx) async {
-    final station = ctx.station as StationServer;
+    final station = ctx.station as StationCommandInterface;
 
     if (ctx.args.length < 2) {
       ctx.error('Usage: chat create <id> <name> [description]');
@@ -161,7 +161,7 @@ class ChatCommand extends Command {
   }
 
   static Future<void> _delete(CommandContext ctx) async {
-    final station = ctx.station as StationServer;
+    final station = ctx.station as StationCommandInterface;
 
     final roomId = ctx.args.isNotEmpty ? ctx.args[0] : ctx.currentChatRoom;
     if (roomId == null) {
@@ -182,7 +182,7 @@ class ChatCommand extends Command {
   }
 
   static Future<void> _rename(CommandContext ctx) async {
-    final station = ctx.station as StationServer;
+    final station = ctx.station as StationCommandInterface;
 
     String? roomId;
     String? newName;
@@ -210,7 +210,7 @@ class ChatCommand extends Command {
   }
 
   static Future<void> _history(CommandContext ctx) async {
-    final station = ctx.station as StationServer;
+    final station = ctx.station as StationCommandInterface;
 
     String? roomId;
     int? limit;
@@ -229,13 +229,13 @@ class ChatCommand extends Command {
       limit = ctx.args.length > 1 ? int.tryParse(ctx.args[1]) : null;
     }
 
-    final room = station.chatRooms[roomId];
+    final room = station.chatRoomsReadable[roomId];
     if (room == null) {
       ctx.error('Room not found: $roomId');
       return;
     }
 
-    final messages = room.messages;
+    final messages = room.readableMessages;
     if (messages.isEmpty) {
       return; // Silent if no messages
     }
@@ -271,7 +271,7 @@ class ChatCommand extends Command {
   }
 
   static Future<void> _say(CommandContext ctx) async {
-    final station = ctx.station as StationServer;
+    final station = ctx.station as StationCommandInterface;
 
     String? roomId;
     String? message;
@@ -291,7 +291,7 @@ class ChatCommand extends Command {
       return;
     }
 
-    if (station.chatRooms[roomId] == null) {
+    if (station.chatRoomsReadable[roomId] == null) {
       ctx.error('Room not found: $roomId');
       return;
     }
@@ -301,7 +301,7 @@ class ChatCommand extends Command {
   }
 
   static Future<void> _delmsg(CommandContext ctx) async {
-    final station = ctx.station as StationServer;
+    final station = ctx.station as StationCommandInterface;
 
     String? roomId;
     String? messageId;

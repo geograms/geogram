@@ -1,7 +1,9 @@
 // Server statistics for station server
 
+import '../cli/commands/service_interfaces.dart';
+
 /// Server statistics tracking
-class StationStats {
+class StationStats implements StationStatsReadable {
   int totalConnections = 0;
   int totalMessages = 0;
   int totalTileRequests = 0;
@@ -75,7 +77,7 @@ class StationStats {
 }
 
 /// Log entry for CLI log history
-class LogEntry {
+class LogEntry implements LogEntryReadable {
   final DateTime timestamp;
   final String level;
   final String message;

@@ -3,154 +3,136 @@
  * License: Apache-2.0
  *
  * CLI Console Controller for Flutter UI.
- * Uses the shared ConsoleHandler with BufferConsoleIO.
+ * Uses the shared CommandRegistry with BufferConsoleIO.
  */
 
 import 'dart:async';
-import 'dart:io';
 
-import '../cli/console_completer.dart';
-import '../cli/console_handler.dart';
+import '../cli/commands/command_context.dart';
+import '../cli/commands/command_registry.dart';
+export '../cli/commands/command_registry.dart' show CompletionCandidate;
+import '../cli/commands/general_commands.dart';
+import '../cli/commands/station_command.dart';
+import '../cli/commands/devices_command.dart';
+import '../cli/commands/chat_command.dart';
+import '../cli/commands/profile_command.dart';
+import '../cli/commands/config_command.dart';
+import '../cli/commands/monitoring_commands.dart';
+import '../cli/commands/games_command.dart';
+import '../cli/commands/service_interfaces.dart';
 import '../cli/console_io_buffer.dart';
 import '../cli/game/game_config.dart';
 import '../cli/game/game_engine_io.dart';
-import '../cli/game/game_parser.dart';
-import '../cli/game/game_screen_io.dart';
 import '../models/profile.dart';
 import '../services/profile_service.dart';
 import '../services/callsign_generator.dart';
 import '../services/station_server_service.dart';
 import '../services/storage_config.dart';
+import '../version.dart';
 
-/// Adapter for ProfileService to implement ProfileServiceInterface
-class _ProfileServiceAdapter implements ProfileServiceInterface {
+// ---------------------------------------------------------------------------
+// Adapters — bridge Desktop services to command interfaces
+// ---------------------------------------------------------------------------
+
+/// Adapter for Desktop ProfileService to implement ProfileCommandInterface.
+class _ProfileServiceAdapter implements ProfileCommandInterface {
   final ProfileService _service = ProfileService();
 
   @override
-  String get activeCallsign => _service.getProfile().callsign;
+  List<ProfileReadable> get profilesReadable =>
+      _service.getAllProfiles().cast<ProfileReadable>();
 
   @override
-  String get activeNpub => _service.getProfile().npub;
-
-  @override
-  String? get activeNickname => _service.getProfile().nickname;
-
-  @override
-  bool get isStationProfile =>
-      CallsignGenerator.isStationCallsign(_service.getProfile().callsign);
-
-  @override
-  List<ProfileInfo> getAllProfiles() {
-    return _service.getAllProfiles().map((p) => ProfileInfo(
-      id: p.id,
-      callsign: p.callsign,
-      npub: p.npub,
-      nickname: p.nickname,
-      isStation: CallsignGenerator.isStationCallsign(p.callsign),
-      locationName: p.locationName,
-    )).toList();
+  ProfileReadable? get activeProfileReadable {
+    final p = _service.getProfile();
+    // Empty callsign means no real profile
+    return p.callsign.isEmpty ? null : p;
   }
 
   @override
-  String? get activeProfileId => _service.activeProfileId;
+  ProfileReadable? getProfileByCallsign(String callsign) =>
+      _service.getProfileByCallsign(callsign);
 
   @override
-  ProfileInfo? getProfileByCallsign(String callsign) {
-    final p = _service.getProfileByCallsign(callsign);
-    if (p == null) return null;
-    return ProfileInfo(
-      id: p.id,
-      callsign: p.callsign,
-      npub: p.npub,
-      nickname: p.nickname,
-      isStation: CallsignGenerator.isStationCallsign(p.callsign),
-      locationName: p.locationName,
+  Future<void> setActiveProfile(String profileId) async {
+    await _service.switchToProfile(profileId);
+  }
+
+  @override
+  Future<void> deleteProfile(String profileId) async {
+    await _service.deleteProfile(profileId);
+  }
+
+  @override
+  Future<void> updateProfile(covariant Profile profile) async {
+    await _service.updateProfile(
+      nickname: profile.nickname,
+      description: profile.description,
+      profileImagePath: profile.profileImagePath,
+      preferredColor: profile.preferredColor,
+      latitude: profile.latitude,
+      longitude: profile.longitude,
+      locationName: profile.locationName,
     );
   }
 
   @override
-  ProfileInfo? getProfileById(String id) {
-    final p = _service.getProfileById(id);
-    if (p == null) return null;
-    return ProfileInfo(
-      id: p.id,
-      callsign: p.callsign,
-      npub: p.npub,
-      nickname: p.nickname,
-      isStation: CallsignGenerator.isStationCallsign(p.callsign),
-      locationName: p.locationName,
-    );
+  List<Map<String, dynamic>> getAllDevicesSorted() {
+    // Desktop doesn't have the same cached-devices concept — return owned profiles
+    final profiles = _service.getAllProfiles();
+    return profiles.map((p) => <String, dynamic>{
+      'callsign': p.callsign,
+      'type': p.isRelay ? 'station' : 'client',
+      'nickname': p.nickname,
+      'owned': true,
+      'active': p.id == _service.activeProfileId,
+    }).toList();
   }
 
   @override
-  Future<ProfileInfo> createProfile({bool isStation = false}) async {
-    final p = await _service.createNewProfile(
-      type: isStation ? ProfileType.station : ProfileType.client,
+  bool isOwnedCallsign(String callsign) {
+    return _service.getAllProfiles().any(
+      (p) => p.callsign.toLowerCase() == callsign.toLowerCase(),
     );
-    return ProfileInfo(
-      id: p.id,
-      callsign: p.callsign,
-      npub: p.npub,
-      nickname: p.nickname,
-      isStation: CallsignGenerator.isStationCallsign(p.callsign),
-      locationName: p.locationName,
-    );
-  }
-
-  @override
-  Future<void> switchToProfile(String id) async {
-    await _service.switchToProfile(id);
   }
 }
 
-/// Adapter for StationServerService to implement StationServiceInterface
-class _StationServiceAdapter implements StationServiceInterface {
+/// Adapter for Desktop StationServerService to implement StationCommandInterface.
+///
+/// Operations that don't apply on Desktop throw [UnsupportedError] or return
+/// sensible defaults (empty maps, empty lists).
+class _StationServiceAdapter implements StationCommandInterface {
   final StationServerService _service = StationServerService();
 
   @override
   bool get isRunning => _service.isRunning;
 
   @override
-  int get port => _service.settings.port;
-
-  @override
-  String get callsign {
-    final status = _service.getStatus();
-    return status['callsign'] as String? ?? '';
-  }
-
-  @override
   int get connectedDevices => _service.connectedDevices;
 
   @override
-  int get uptime {
-    final status = _service.getStatus();
-    return status['uptime'] as int? ?? 0;
-  }
+  String? get dataDir => null; // Desktop doesn't expose this
 
   @override
-  int get cacheSize {
-    final status = _service.getStatus();
-    return status['cache_size'] as int? ?? 0;
-  }
+  bool get quietMode => false;
 
   @override
-  double get cacheSizeMB {
-    final status = _service.getStatus();
-    return (status['cache_size_mb'] as num?)?.toDouble() ?? 0.0;
-  }
+  set quietMode(bool value) {} // no-op on Desktop
 
   @override
-  double get maxCacheSize => _service.settings.maxCacheSize.toDouble();
+  StationSettingsReadable get settings => _SettingsAdapter(_service.settings);
 
   @override
-  bool get tileServerEnabled => _service.settings.tileServerEnabled;
+  StationStatsReadable get stats => _StatsAdapter(_service);
 
   @override
-  bool get osmFallbackEnabled => _service.settings.osmFallbackEnabled;
+  Map<String, ChatRoomReadable> get chatRoomsReadable => {};
 
   @override
-  int get maxZoomLevel => _service.settings.maxZoomLevel;
+  Map<String, ConnectedClientReadable> get clientsReadable => {};
+
+  @override
+  List<LogEntryReadable> get logsReadable => [];
 
   @override
   Future<bool> start() async => await _service.start();
@@ -159,50 +141,151 @@ class _StationServiceAdapter implements StationServiceInterface {
   Future<void> stop() async => await _service.stop();
 
   @override
-  Future<void> setPort(int port) async {
-    final settings = _service.settings.copyWith(port: port);
-    await _service.updateSettings(settings);
+  Future<void> restart() async {
+    await _service.stop();
+    await Future.delayed(const Duration(milliseconds: 500));
+    await _service.start();
+  }
+
+  @override
+  Future<void> reloadSettings() async {} // no-op
+
+  @override
+  Future<void> updateSettings(covariant Object settings) async {
+    if (settings is StationServerSettings) {
+      await _service.updateSettings(settings);
+    }
+  }
+
+  @override
+  Map<String, dynamic> getStatus() => _service.getStatus();
+
+  @override
+  void setSetting(String key, dynamic value) {
+    final s = _service.settings;
+    switch (key) {
+      case 'httpPort':
+        final updated = s.copyWith(port: value as int);
+        _service.updateSettings(updated);
+        break;
+      default:
+        // Many settings are not applicable on Desktop
+        break;
+    }
   }
 
   @override
   void clearCache() => _service.clearCache();
+
+  @override
+  bool kickDevice(String callsign) => false;
+
+  @override
+  void broadcast(String message) {}
+
+  @override
+  Future<List<Map<String, dynamic>>> scanNetwork({int timeout = 2000}) async => [];
+
+  @override
+  Future<Map<String, dynamic>?> pingDevice(String address) async => null;
+
+  @override
+  ChatRoomReadable? createChatRoom(String id, String name, {String? description}) => null;
+
+  @override
+  bool deleteChatRoom(String id) => false;
+
+  @override
+  bool renameChatRoom(String oldId, String newName) => false;
+
+  @override
+  Future<void> postMessage(String roomId, String content) async {}
+
+  @override
+  bool deleteMessage(String roomId, String messageId) => false;
+
+  @override
+  bool verifyMessage(covariant Object message) => false;
+
+  @override
+  List<LogEntryReadable> getLogs({int limit = 20}) => [];
 }
 
-/// Adapter for CompletionDataProvider
-class _CompletionDataProviderAdapter implements CompletionDataProvider {
-  final ProfileService _profileService = ProfileService();
+/// Read-only view over StationServerSettings.
+class _SettingsAdapter implements StationSettingsReadable {
+  final StationServerSettings _s;
+  _SettingsAdapter(this._s);
 
-  @override
-  List<String> getConnectedCallsigns() {
-    // In Flutter UI mode, we don't have direct access to connected devices
-    // This would need to be implemented via station server service if needed
-    return [];
-  }
-
-  @override
-  Map<String, String> getChatRooms() {
-    // In Flutter UI mode, chat rooms would come from a different source
-    return {};
-  }
-
-  @override
-  List<({String callsign, String? nickname, bool isStation})> getProfiles() {
-    return _profileService.getAllProfiles().map((p) => (
-      callsign: p.callsign,
-      nickname: p.nickname.isNotEmpty ? p.nickname : null,
-      isStation: CallsignGenerator.isStationCallsign(p.callsign),
-    )).toList();
-  }
+  @override String get callsign => CallsignGenerator.isStationCallsign('')
+      ? '' : ''; // Not directly available — derive via service
+  @override String get npub => '';
+  @override int get httpPort => _s.port;
+  @override int get httpsPort => _s.port + 363; // approximate
+  @override String? get description => null;
+  @override String? get location => null;
+  @override double? get latitude => null;
+  @override double? get longitude => null;
+  @override bool get tileServerEnabled => _s.tileServerEnabled;
+  @override bool get osmFallbackEnabled => _s.osmFallbackEnabled;
+  @override int get maxZoomLevel => _s.maxZoomLevel;
+  @override int get maxCacheSizeMB => _s.maxCacheSize;
+  @override bool get enableAprs => false;
+  @override bool get enableCors => true;
+  @override int get maxConnectedDevices => 100;
+  @override String? get sslDomain => null;
+  @override String? get sslEmail => null;
+  @override bool get sslAutoRenew => false;
+  @override bool get enableSsl => false;
+  @override String? get sslCertPath => null;
+  @override String? get sslKeyPath => null;
 }
 
-/// CLI Console Controller for Flutter UI
+/// Read-only view over station stats via service.
+class _StatsAdapter implements StationStatsReadable {
+  final StationServerService _service;
+  _StatsAdapter(this._service);
+
+  Map<String, dynamic> get _status => _service.getStatus();
+
+  @override int get totalConnections => _status['total_connections'] as int? ?? 0;
+  @override int get totalMessages => _status['total_messages'] as int? ?? 0;
+  @override int get totalApiRequests => _status['total_api_requests'] as int? ?? 0;
+  @override int get totalTileRequests => _status['total_tile_requests'] as int? ?? 0;
+  @override int get tilesCached => 0;
+  @override int get tilesServedFromCache => 0;
+  @override int get tilesDownloaded => 0;
+  @override DateTime? get lastConnection => null;
+  @override DateTime? get lastMessage => null;
+  @override DateTime? get lastTileRequest => null;
+}
+
+// ---------------------------------------------------------------------------
+// Controller
+// ---------------------------------------------------------------------------
+
+/// CLI Console Controller for Flutter UI.
 ///
-/// Uses the shared [ConsoleHandler] with [BufferConsoleIO] for output collection.
-/// This eliminates code duplication with pure_console.dart.
+/// Uses the shared [CommandRegistry] with [BufferConsoleIO] for output.
+/// This eliminates code duplication between CLI and Desktop consoles.
 class CliConsoleController {
-  late ConsoleHandler _handler;
+  late final CommandRegistry _registry;
   late final BufferConsoleIO _io;
+  late final _ProfileServiceAdapter _profileAdapter;
+  late final _StationServiceAdapter _stationAdapter;
   GameConfig? _gameConfig;
+
+  /// Virtual filesystem navigation state
+  String _currentPath = '/';
+  String? _currentChatRoom;
+
+  /// Root directories in virtual filesystem
+  List<String> get rootDirs {
+    final dirs = ['profiles', 'config', 'logs'];
+    if (_stationAdapter.isRunning) dirs.add('station');
+    if (_gameConfig != null) dirs.add('games');
+    dirs.sort();
+    return dirs;
+  }
 
   /// Whether we're currently in game mode
   bool _inGame = false;
@@ -218,37 +301,69 @@ class CliConsoleController {
 
   CliConsoleController() {
     _io = BufferConsoleIO();
-    _handler = ConsoleHandler(
+    _profileAdapter = _ProfileServiceAdapter();
+    _stationAdapter = _StationServiceAdapter();
+    _registry = CommandRegistry();
+    _registerCommands();
+  }
+
+  void _registerCommands() {
+    _registry.registerAll([
+      HelpCommand(_registry),
+      ClearCommand(),
+      QuitCommand(),
+      BroadcastCommand(),
+      KickCommand(),
+      QuietCommand(),
+      VerboseCommand(),
+      RestartCommand(),
+      ReloadCommand(),
+      SetupCommand(),
+      StatusCommand(),
+      StatsCommand(),
+      StationCommand(),
+      DevicesCommand(),
+      ChatCommand(),
+      ProfileCommand(),
+      ConfigCommand(),
+      LogsCommand(),
+      TailCommand(),
+      HeadCommand(),
+      CatCommand(),
+      DfCommand(),
+      TopCommand(),
+      GamesCommand(),
+      PlayCommand(),
+    ]);
+  }
+
+  /// Build a [CommandContext] for dispatching commands.
+  CommandContext _buildContext({List<String> args = const []}) {
+    return CommandContext(
       io: _io,
-      profileService: _ProfileServiceAdapter(),
-      stationService: _StationServiceAdapter(),
-      gameConfig: null, // Will be set when initialized
+      currentPath: _currentPath,
+      currentChatRoom: _currentChatRoom,
+      args: args,
+      station: _stationAdapter,
+      profileService: _profileAdapter,
+      sslManager: null, // SSL not available on Desktop
+      gameConfig: _gameConfig,
+      onNavigate: (path, chatRoom) {
+        _currentPath = path;
+        _currentChatRoom = chatRoom;
+      },
     );
   }
 
   /// Initialize (loads games if available)
   Future<void> initialize() async {
-    // Check if StorageConfig is initialized
-    if (!StorageConfig().isInitialized) {
-      return;
-    }
+    if (!StorageConfig().isInitialized) return;
 
     try {
       _gameConfig = GameConfig();
-      // Use console folder for games
       final consoleDir = '${StorageConfig().baseDir}/console';
       await _gameConfig!.initialize(consoleDir);
-
-      // Recreate handler with game config and game play callback
-      _handler = ConsoleHandler(
-        io: _io,
-        profileService: _ProfileServiceAdapter(),
-        stationService: _StationServiceAdapter(),
-        gameConfig: _gameConfig,
-      );
-      _handler.onPlayGame = _playGame;
     } catch (e) {
-      // Games not available on this platform
       _gameConfig = null;
     }
   }
@@ -257,106 +372,264 @@ class CliConsoleController {
   bool get inGame => _inGame;
 
   /// Get current path
-  String get currentPath => _handler.currentPath;
+  String get currentPath => _currentPath;
 
   /// Get prompt string
   String getPrompt() {
-    if (_inGame) {
-      return ''; // Game outputs its own prompts
-    }
-    return _handler.getPrompt();
+    if (_inGame) return '';
+    return 'geogram:$_currentPath\$ ';
   }
 
   /// Get welcome banner
-  String getBanner() => _handler.getBanner();
+  String getBanner() {
+    final profile = _profileAdapter.activeProfileReadable;
+    final callsign = profile?.callsign ?? 'unknown';
+    final isStation = profile?.isRelay == true;
 
-  /// Get console completer for TAB completion
-  ConsoleCompleter get completer => ConsoleCompleter(
-    gameConfig: _gameConfig,
-    dataProvider: _CompletionDataProviderAdapter(),
-    rootDirs: _handler.rootDirs,
-  );
+    final buf = StringBuffer();
+    buf.writeln();
+    buf.writeln('=' * 50);
+    buf.writeln('  Geogram v$appVersion - Console');
+    buf.writeln('  Active Profile: $callsign${isStation ? ' (Relay)' : ''}');
+    buf.writeln('=' * 50);
+    buf.writeln();
+    buf.writeln('Type "help" for available commands.');
+    buf.writeln();
+    return buf.toString();
+  }
 
-  /// Process a command and return the output
+  /// Get TAB completions for the given input.
+  ///
+  /// Returns a [CompletionResult] compatible with the terminal page.
+  CompletionResult getCompletions(String input) {
+    final ctx = _buildContext();
+    final candidates = _registry.getCompletions(input, ctx);
+
+    // Also add navigation commands (ls, cd, pwd) + path completions
+    final navCandidates = _getNavigationCompletions(input);
+    final allCandidates = [...navCandidates, ...candidates];
+
+    if (allCandidates.isEmpty) return CompletionResult();
+
+    // Convert CompletionCandidate → Candidate-like for the page
+    if (allCandidates.length == 1) {
+      final c = allCandidates.first;
+      final parts = input.split(RegExp(r'\s+'));
+      if (parts.isEmpty) {
+        return CompletionResult(
+          completedText: c.value,
+          exactMatch: true,
+        );
+      }
+      parts[parts.length - 1] = c.value;
+      final completed = '${parts.join(' ')} ';
+      return CompletionResult(completedText: completed, exactMatch: true);
+    }
+
+    // Multiple matches — find common prefix
+    final values = allCandidates.map((c) => c.value).toList();
+    final commonPrefix = _findCommonPrefix(values);
+    final parts = input.split(RegExp(r'\s+'));
+    final lastPart = parts.isNotEmpty ? parts.last : '';
+
+    String? completedText;
+    if (commonPrefix.length > lastPart.length) {
+      parts[parts.length - 1] = commonPrefix;
+      completedText = parts.join(' ');
+    }
+
+    return CompletionResult(
+      completedText: completedText,
+      candidates: allCandidates,
+    );
+  }
+
+  /// Get navigation-specific completions (ls, cd, pwd, path args).
+  List<CompletionCandidate> _getNavigationCompletions(String input) {
+    final parts = input.split(RegExp(r'\s+')).where((p) => p.isNotEmpty).toList();
+    final endsWithSpace = input.endsWith(' ');
+
+    // Completing command name — add nav commands
+    if (parts.isEmpty || (parts.length == 1 && !endsWithSpace)) {
+      final partial = parts.isEmpty ? '' : parts[0].toLowerCase();
+      final navCmds = ['ls', 'cd', 'pwd'];
+      return navCmds
+          .where((c) => c.startsWith(partial))
+          .map((c) => CompletionCandidate(c, group: 'Navigation'))
+          .toList();
+    }
+
+    // Completing arguments for ls/cd
+    final cmd = parts[0].toLowerCase();
+    if ((cmd == 'ls' || cmd == 'cd') && (parts.length == 1 && endsWithSpace || parts.length == 2 && !endsWithSpace)) {
+      final partial = parts.length > 1 ? parts[1].toLowerCase() : '';
+      return _completePaths(partial);
+    }
+
+    return [];
+  }
+
+  List<CompletionCandidate> _completePaths(String partial) {
+    final candidates = <CompletionCandidate>[];
+    final lowerPartial = partial.toLowerCase();
+
+    if ('..'.startsWith(lowerPartial) && _currentPath != '/') {
+      candidates.add(CompletionCandidate('..', group: 'path'));
+    }
+
+    final dirs = partial.isEmpty || partial == '/'
+        ? rootDirs
+        : rootDirs.where((d) => d.toLowerCase().startsWith(lowerPartial));
+
+    for (final dir in dirs) {
+      candidates.add(CompletionCandidate(dir, description: 'directory', group: 'path'));
+    }
+
+    return candidates;
+  }
+
+  /// Process a command and return the output.
   Future<String> processCommand(String input) async {
     // If in game mode, send input to game
     if (_inGame && _inputCompleter != null) {
       _inputCompleter!.complete(input);
       _inputCompleter = null;
-      return ''; // Output will come via onGameOutput callback
+      return '';
     }
 
     _io.clearOutput();
-    await _handler.processCommand(input);
+
+    final trimmed = input.trim();
+    if (trimmed.isEmpty) return '';
+
+    final parts = trimmed.split(RegExp(r'\s+'));
+    final command = parts[0].toLowerCase();
+    final args = parts.length > 1 ? parts.sublist(1) : <String>[];
+
+    // Handle navigation commands locally
+    if (command == 'ls') {
+      _handleLs(args);
+      return _io.getOutput() ?? '';
+    }
+    if (command == 'cd') {
+      _handleCd(args);
+      return _io.getOutput() ?? '';
+    }
+    if (command == 'pwd') {
+      _io.writeln(_currentPath);
+      return _io.getOutput() ?? '';
+    }
+
+    // Dispatch via registry
+    final ctx = _buildContext(args: args);
+    final result = await _registry.dispatch(command, args, ctx);
+
+    switch (result) {
+      case DispatchResult.ok:
+      case DispatchResult.exit:
+        break;
+      case DispatchResult.notFound:
+        _io.writeln('\x1B[31mUnknown command: $command\x1B[0m');
+        _io.writeln('Type "help" for available commands.');
+        break;
+      case DispatchResult.requiresStation:
+        _io.writeln('\x1B[33mStation not running. Start with "station start".\x1B[0m');
+        break;
+    }
+
     return _io.getOutput() ?? '';
   }
 
-  /// Play a game (called by ConsoleHandler.onPlayGame)
-  Future<void> _playGame(String gamePath) async {
-    try {
-      final content = await File(gamePath).readAsString();
-      final parser = GameParser();
-      final game = parser.parse(content);
+  // -------------------------------------------------------------------------
+  // Navigation
+  // -------------------------------------------------------------------------
 
-      // Create game screen with our IO
-      final gameIo = BufferConsoleIO();
-      final screen = GameScreenIO(gameIo);
+  void _handleLs(List<String> args) {
+    final path = args.isNotEmpty ? _resolvePath(args[0]) : _currentPath;
 
-      // Set up input callback for game
-      screen.onReadLine = () async {
-        // Flush current output to UI
-        final output = gameIo.getOutput();
-        if (output != null && output.isNotEmpty) {
-          onGameOutput?.call(output);
-          gameIo.clearOutput();
+    if (path == '/') {
+      for (final dir in rootDirs) {
+        _io.writeln('$dir/');
+      }
+    } else if (path == '/profiles') {
+      final profiles = _profileAdapter.profilesReadable;
+      final activeId = _profileAdapter.activeProfileReadable?.id;
+      for (final profile in profiles) {
+        final isActive = profile.id == activeId;
+        final marker = isActive ? '* ' : '  ';
+        final stationTag = profile.isRelay ? ' [station]' : '';
+        _io.writeln('$marker${profile.callsign}/$stationTag');
+      }
+    } else if (path == '/config') {
+      _io.writeln('profile.json');
+      _io.writeln('config.json');
+    } else if (path == '/logs') {
+      _io.writeln('station.log');
+    } else if (path == '/games') {
+      if (_gameConfig != null && _gameConfig!.isInitialized) {
+        for (final game in _gameConfig!.listGames()) {
+          _io.writeln(game.path.split('/').last);
         }
-
-        // Wait for user input
-        _inputCompleter = Completer<String?>();
-        return await _inputCompleter!.future;
-      };
-
-      _currentGame = GameEngineIO(game: game, screen: screen);
-      _inGame = true;
-
-      // Show initial message
-      onGameOutput?.call('\nStarting game: ${game.title}\nType your choices and press Enter. Type "q" to quit.\n\n');
-
-      // Run game in background
-      _runGame(gameIo);
-
-    } catch (e) {
-      _io.writeln('Failed to start game: $e');
+      } else {
+        _io.writeln('(no games)');
+      }
+    } else {
+      _io.writeln('\x1B[31mDirectory not found: $path\x1B[0m');
     }
   }
 
-  /// Run the game loop
-  Future<void> _runGame(BufferConsoleIO gameIo) async {
-    try {
-      await _currentGame!.run();
-    } catch (e) {
-      onGameOutput?.call('\nGame error: $e\n');
-    } finally {
-      // Game ended
-      _inGame = false;
-      _currentGame = null;
+  void _handleCd(List<String> args) {
+    if (args.isEmpty) {
+      _currentPath = '/';
+      _currentChatRoom = null;
+      return;
+    }
 
-      // Flush any remaining output
-      final output = gameIo.getOutput();
-      if (output != null && output.isNotEmpty) {
-        onGameOutput?.call(output);
+    final target = _resolvePath(args[0]);
+    if (_isValidPath(target)) {
+      _currentPath = target;
+      // Update chat room context
+      if (target.startsWith('/chat/')) {
+        _currentChatRoom = target.substring('/chat/'.length);
+      } else {
+        _currentChatRoom = null;
       }
-
-
-      // Complete any pending input request
-      if (_inputCompleter != null && !_inputCompleter!.isCompleted) {
-        _inputCompleter!.complete(null);
-        _inputCompleter = null;
-      }
+    } else {
+      _io.writeln('\x1B[31mDirectory not found: ${args[0]}\x1B[0m');
     }
   }
 
-  /// Quit the current game
+  String _resolvePath(String path) {
+    if (path.startsWith('/')) return _normalizePath(path);
+    if (path == '..') {
+      final parts = _currentPath.split('/').where((p) => p.isNotEmpty).toList();
+      if (parts.isEmpty) return '/';
+      parts.removeLast();
+      return parts.isEmpty ? '/' : '/${parts.join('/')}';
+    }
+    if (path == '.') return _currentPath;
+    final newPath = _currentPath == '/' ? '/$path' : '$_currentPath/$path';
+    return _normalizePath(newPath);
+  }
+
+  String _normalizePath(String path) {
+    final parts = path.split('/').where((p) => p.isNotEmpty).toList();
+    if (parts.isEmpty) return '/';
+    return '/${parts.join('/')}';
+  }
+
+  bool _isValidPath(String path) {
+    if (path == '/') return true;
+    final parts = path.substring(1).split('/');
+    if (parts.isEmpty) return false;
+    if (!rootDirs.contains(parts[0])) return false;
+    return true;
+  }
+
+  // -------------------------------------------------------------------------
+  // Game support
+  // -------------------------------------------------------------------------
+
   void quitGame() {
     if (_inGame && _currentGame != null) {
       _currentGame!.stop();
@@ -366,4 +639,38 @@ class CliConsoleController {
       }
     }
   }
+
+  // -------------------------------------------------------------------------
+  // Helpers
+  // -------------------------------------------------------------------------
+
+  String _findCommonPrefix(List<String> strings) {
+    if (strings.isEmpty) return '';
+    if (strings.length == 1) return strings.first;
+    var prefix = strings.first;
+    for (var i = 1; i < strings.length; i++) {
+      while (!strings[i].toLowerCase().startsWith(prefix.toLowerCase())) {
+        prefix = prefix.substring(0, prefix.length - 1);
+        if (prefix.isEmpty) return '';
+      }
+    }
+    return prefix;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// CompletionResult — kept for backward compatibility with console_terminal_page
+// ---------------------------------------------------------------------------
+
+/// Result of a completion operation.
+class CompletionResult {
+  final String? completedText;
+  final List<CompletionCandidate> candidates;
+  final bool exactMatch;
+
+  CompletionResult({
+    this.completedText,
+    this.candidates = const [],
+    this.exactMatch = false,
+  });
 }

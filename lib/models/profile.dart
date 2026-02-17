@@ -1,3 +1,5 @@
+import '../cli/commands/service_interfaces.dart';
+
 /// Profile type - client or station
 enum ProfileType {
   client, // X1 prefix - regular user
@@ -5,7 +7,7 @@ enum ProfileType {
 }
 
 /// User profile model - represents a single identity/callsign
-class Profile {
+class Profile implements ProfileReadable {
   /// Unique identifier for this profile (UUID)
   final String id;
   ProfileType type;

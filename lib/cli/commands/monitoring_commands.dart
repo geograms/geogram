@@ -9,9 +9,9 @@ import 'dart:io';
 
 import 'package:dart_console/dart_console.dart';
 
-import '../../station.dart';
 import 'command.dart';
 import 'command_context.dart';
+import 'service_interfaces.dart';
 
 // ---------------------------------------------------------------------------
 // Shared helpers
@@ -49,14 +49,14 @@ Future<void> _viewFile(
   int lines = 10,
   required String mode,
 }) async {
-  final station = ctx.station as StationServer;
+  final station = ctx.station as StationCommandInterface;
   List<String> content = [];
 
   // Handle virtual files
   switch (target.toLowerCase()) {
     case 'logs':
     case '/logs':
-      final logs = station.logs;
+      final logs = station.logsReadable;
       content = logs.map((log) {
         final time = log.timestamp.toLocal();
         final timeStr =
@@ -162,7 +162,7 @@ class LogsCommand extends Command {
 
   @override
   Future<void> execute(CommandContext ctx) async {
-    final station = ctx.station as StationServer;
+    final station = ctx.station as StationCommandInterface;
     final limit = ctx.args.isNotEmpty ? int.tryParse(ctx.args[0]) ?? 20 : 20;
     final logs = station.getLogs(limit: limit);
 
@@ -301,7 +301,7 @@ class DfCommand extends Command {
 
   @override
   Future<void> execute(CommandContext ctx) async {
-    final station = ctx.station as StationServer;
+    final station = ctx.station as StationCommandInterface;
     final humanReadable = ctx.args.contains('-h');
     final dataDir = station.dataDir;
 
@@ -359,7 +359,7 @@ class TopCommand extends Command {
 
   @override
   Future<void> execute(CommandContext ctx) async {
-    final station = ctx.station as StationServer;
+    final station = ctx.station as StationCommandInterface;
     final console = Console();
 
     ctx.writeln('Live monitoring - press q to exit');

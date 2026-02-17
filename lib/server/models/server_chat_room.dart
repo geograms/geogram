@@ -6,6 +6,7 @@
  * Used for in-memory chat room management with WebSocket support.
  */
 
+import '../../cli/commands/service_interfaces.dart';
 import 'server_chat_message.dart';
 
 /// Server-side chat room for station servers.
@@ -16,7 +17,7 @@ import 'server_chat_message.dart';
 ///
 /// For client-side chat message parsing, see `lib/models/chat_message.dart`.
 /// For API response DTOs, see `lib/api/endpoints/chat_api.dart`.
-class ServerChatRoom {
+class ServerChatRoom implements ChatRoomReadable {
   final String id;
   String name;
   String description;
@@ -35,6 +36,10 @@ class ServerChatRoom {
     this.isPublic = true,
   })  : createdAt = createdAt ?? DateTime.now().toUtc(),
         lastActivity = createdAt ?? DateTime.now().toUtc();
+
+  @override
+  List<ChatMessageReadable> get readableMessages =>
+      messages.cast<ChatMessageReadable>();
 
   factory ServerChatRoom.fromJson(Map<String, dynamic> json) {
     final room = ServerChatRoom(

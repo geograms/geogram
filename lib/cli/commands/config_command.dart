@@ -6,11 +6,10 @@
  */
 
 import '../../models/profile.dart';
-import '../../station.dart';
 import '../cli_location_service.dart';
-import '../cli_profile_service.dart';
 import 'command.dart';
 import 'command_context.dart';
+import 'service_interfaces.dart';
 
 /// Config key types for validation.
 /// Types: 'string', 'bool', 'int', 'double'
@@ -46,8 +45,8 @@ const List<String> _stationOnlyConfigKeys = [
 ];
 
 /// Get config keys based on profile type
-List<String> _getConfigKeys(CliProfileService? profileService) {
-  final profile = profileService?.activeProfile;
+List<String> _getConfigKeys(ProfileCommandInterface? profileService) {
+  final profile = profileService?.activeProfileReadable;
   if (profile?.isRelay == true) {
     return configKeyTypes.keys.toList();
   }
@@ -80,7 +79,7 @@ class ConfigCommand extends Command {
           description: 'Set a config value: set <key> <value>',
           execute: _set,
           completer: (ctx) {
-            final profileService = ctx.profileService as CliProfileService?;
+            final profileService = ctx.profileService as ProfileCommandInterface?;
             return _getConfigKeys(profileService);
           },
         ),
@@ -104,8 +103,8 @@ class ConfigCommand extends Command {
 
   /// Get the current value of a config key from the profile/station
   static dynamic _getConfigValue(
-      String key, CliProfileService? profileService, StationServer? station) {
-    final profile = profileService?.activeProfile;
+      String key, ProfileCommandInterface? profileService, StationCommandInterface? station) {
+    final profile = profileService?.activeProfileReadable;
     if (profile == null) return null;
 
     switch (key) {
@@ -177,8 +176,8 @@ class ConfigCommand extends Command {
   }
 
   static Future<void> _show(CommandContext ctx) async {
-    final profileService = ctx.profileService as CliProfileService?;
-    final station = ctx.station as StationServer?;
+    final profileService = ctx.profileService as ProfileCommandInterface?;
+    final station = ctx.station as StationCommandInterface?;
     final keys = _getConfigKeys(profileService);
 
     if (keys.isEmpty) {
@@ -200,8 +199,8 @@ class ConfigCommand extends Command {
   }
 
   static Future<void> _set(CommandContext ctx) async {
-    final profileService = ctx.profileService as CliProfileService?;
-    final station = ctx.station as StationServer?;
+    final profileService = ctx.profileService as ProfileCommandInterface?;
+    final station = ctx.station as StationCommandInterface?;
 
     if (ctx.args.length < 2) {
       ctx.error('Usage: set <key> <value>');
@@ -244,8 +243,8 @@ class ConfigCommand extends Command {
           parsedValue = value;
       }
 
-      // Update the profile
-      final profile = profileService?.activeProfile;
+      // Update the profile (cast to Profile for copyWith — both platforms use Profile model)
+      final profile = profileService?.activeProfileReadable as Profile?;
       if (profile != null) {
         Profile updatedProfile;
         switch (key) {
@@ -300,8 +299,8 @@ class ConfigCommand extends Command {
   }
 
   static Future<void> _location(CommandContext ctx) async {
-    final profileService = ctx.profileService as CliProfileService?;
-    final station = ctx.station as StationServer?;
+    final profileService = ctx.profileService as ProfileCommandInterface?;
+    final station = ctx.station as StationCommandInterface?;
 
     ctx.writeln('Detecting location via IP address...');
 
@@ -315,7 +314,7 @@ class ConfigCommand extends Command {
     }
 
     // Update profile with detected location
-    final profile = profileService?.activeProfile;
+    final profile = profileService?.activeProfileReadable as Profile?;
     if (profile == null) {
       ctx.error('No active profile');
       return;
@@ -331,12 +330,9 @@ class ConfigCommand extends Command {
 
     // Also update station settings so /status endpoint returns coordinates
     if (station != null) {
-      final updatedStationSettings = station.settings.copyWith(
-        latitude: result.latitude,
-        longitude: result.longitude,
-        location: result.locationName,
-      );
-      await station.updateSettings(updatedStationSettings);
+      station.setSetting('latitude', result.latitude);
+      station.setSetting('longitude', result.longitude);
+      station.setSetting('location', result.locationName);
     }
 
     ctx.success('Location detected successfully:');

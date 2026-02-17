@@ -5,10 +5,9 @@
  * Profile command: list, show, add, switch, delete
  */
 
-import '../../station.dart';
-import '../cli_profile_service.dart';
 import 'command.dart';
 import 'command_context.dart';
+import 'service_interfaces.dart';
 
 /// profile — manage user profiles
 class ProfileCommand extends Command {
@@ -62,9 +61,9 @@ class ProfileCommand extends Command {
   // --- Completers ---
 
   static List<String> _callsignCompleter(CommandContext ctx) {
-    final profileService = ctx.profileService as CliProfileService?;
+    final profileService = ctx.profileService as ProfileCommandInterface?;
     if (profileService == null) return [];
-    return profileService.profiles
+    return profileService.profilesReadable
         .map((p) => p.callsign)
         .toList();
   }
@@ -72,13 +71,13 @@ class ProfileCommand extends Command {
   // --- Sub-command implementations ---
 
   static Future<void> _show(CommandContext ctx) async {
-    final profileService = ctx.profileService as CliProfileService?;
+    final profileService = ctx.profileService as ProfileCommandInterface?;
     if (profileService == null) {
       ctx.error('Profile service not available');
       return;
     }
 
-    final profile = profileService.activeProfile;
+    final profile = profileService.activeProfileReadable;
     if (profile == null) {
       ctx.writeln('\x1B[33mNo profile configured. Run "setup" to create one.\x1B[0m');
       return;
@@ -118,13 +117,13 @@ class ProfileCommand extends Command {
   }
 
   static Future<void> _list(CommandContext ctx) async {
-    final profileService = ctx.profileService as CliProfileService?;
+    final profileService = ctx.profileService as ProfileCommandInterface?;
     if (profileService == null) {
       ctx.error('Profile service not available');
       return;
     }
 
-    final profiles = profileService.profiles;
+    final profiles = profileService.profilesReadable;
     if (profiles.isEmpty) {
       ctx.writeln('\x1B[33mNo profiles configured. Run "setup" to create one.\x1B[0m');
       return;
@@ -135,7 +134,7 @@ class ProfileCommand extends Command {
     ctx.writeln();
 
     for (final profile in profiles) {
-      final isActive = profile.id == profileService.activeProfile?.id;
+      final isActive = profile.id == profileService.activeProfileReadable?.id;
       final typeStr = profile.isRelay ? 'station' : 'client';
       final activeStr = isActive ? '\x1B[32m*\x1B[0m ' : '  ';
       final displayName = profile.nickname.isNotEmpty
@@ -156,7 +155,7 @@ class ProfileCommand extends Command {
       return;
     }
 
-    final profileService = ctx.profileService as CliProfileService?;
+    final profileService = ctx.profileService as ProfileCommandInterface?;
     if (profileService == null) {
       ctx.error('Profile service not available');
       return;
@@ -172,23 +171,20 @@ class ProfileCommand extends Command {
     await profileService.setActiveProfile(profile.id);
 
     // If switching to a station profile, update station server settings
-    final station = ctx.station as StationServer?;
+    final station = ctx.station as StationCommandInterface?;
     if (profile.isRelay && station != null) {
-      final newSettings = station.settings.copyWith(
-        httpPort: profile.port,
-        description: profile.description,
-        location: profile.locationName,
-        latitude: profile.latitude,
-        longitude: profile.longitude,
-        tileServerEnabled: profile.tileServerEnabled,
-        osmFallbackEnabled: profile.osmFallbackEnabled,
-        enableAprs: profile.enableAprs,
-        stationRole: profile.stationRole,
-        networkId: profile.networkId,
-        parentStationUrl: profile.parentStationUrl,
-        setupComplete: true,
-      );
-      await station.updateSettings(newSettings);
+      if (profile.port != null) station.setSetting('httpPort', profile.port);
+      station.setSetting('description', profile.description);
+      station.setSetting('location', profile.locationName);
+      station.setSetting('latitude', profile.latitude);
+      station.setSetting('longitude', profile.longitude);
+      station.setSetting('tileServerEnabled', profile.tileServerEnabled);
+      station.setSetting('osmFallbackEnabled', profile.osmFallbackEnabled);
+      station.setSetting('enableAprs', profile.enableAprs);
+      if (profile.stationRole != null) station.setSetting('stationRole', profile.stationRole);
+      if (profile.networkId != null) station.setSetting('networkId', profile.networkId);
+      if (profile.parentStationUrl != null) station.setSetting('parentStationUrl', profile.parentStationUrl);
+      station.setSetting('setupComplete', true);
     }
 
     ctx.success('Switched to profile: ${profile.callsign}');
@@ -200,7 +196,7 @@ class ProfileCommand extends Command {
       return;
     }
 
-    final profileService = ctx.profileService as CliProfileService?;
+    final profileService = ctx.profileService as ProfileCommandInterface?;
     if (profileService == null) {
       ctx.error('Profile service not available');
       return;
@@ -216,7 +212,7 @@ class ProfileCommand extends Command {
     await profileService.deleteProfile(profile.id);
     ctx.success('Profile deleted: ${profile.callsign}');
 
-    if (profileService.profiles.isEmpty) {
+    if (profileService.profilesReadable.isEmpty) {
       ctx.writeln('\x1B[33mNo profiles remaining. Run "setup" to create a new one.\x1B[0m');
     }
   }

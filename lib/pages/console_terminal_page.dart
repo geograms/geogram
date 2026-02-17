@@ -157,14 +157,10 @@ class _ConsoleTerminalPageState extends State<ConsoleTerminalPage> {
     });
   }
 
-  /// Handle TAB completion using shared ConsoleCompleter
+  /// Handle TAB completion using CommandRegistry completions.
   void _handleTabCompletion() {
     final input = _inputController.text;
-    final currentPath = _controller.currentPath;
-
-    // Use shared completer
-    final completer = _controller.completer;
-    final result = completer.complete(input, currentPath);
+    final result = _controller.getCompletions(input);
 
     if (result.exactMatch && result.completedText != null) {
       // Single match - complete it
@@ -173,8 +169,8 @@ class _ConsoleTerminalPageState extends State<ConsoleTerminalPage> {
         TextPosition(offset: _inputController.text.length),
       );
     } else if (result.candidates.isNotEmpty) {
-      // Multiple matches - show them
-      final displayLines = completer.formatCandidatesForDisplay(result.candidates);
+      // Multiple matches - show them grouped
+      final displayLines = _formatCandidates(result.candidates);
       setState(() {
         _spans.add(_TerminalSpan(_controller.getPrompt(), isPrompt: true));
         _spans.add(_TerminalSpan('$input\n${displayLines.join('\n')}\n', isOutput: true));
@@ -190,9 +186,9 @@ class _ConsoleTerminalPageState extends State<ConsoleTerminalPage> {
       }
     } else if (input.isEmpty) {
       // No input - show all available commands
-      final emptyResult = completer.complete('', currentPath);
+      final emptyResult = _controller.getCompletions('');
       if (emptyResult.candidates.isNotEmpty) {
-        final displayLines = completer.formatCandidatesForDisplay(emptyResult.candidates);
+        final displayLines = _formatCandidates(emptyResult.candidates);
         setState(() {
           _spans.add(_TerminalSpan(_controller.getPrompt(), isPrompt: true));
           _spans.add(_TerminalSpan('\n${displayLines.join('\n')}\n', isOutput: true));
@@ -200,6 +196,26 @@ class _ConsoleTerminalPageState extends State<ConsoleTerminalPage> {
         _scrollToBottom();
       }
     }
+  }
+
+  /// Format completion candidates for terminal display.
+  List<String> _formatCandidates(List<CompletionCandidate> candidates) {
+    final lines = <String>[];
+    final groups = <String?, List<CompletionCandidate>>{};
+    for (final c in candidates) {
+      groups.putIfAbsent(c.group, () => []).add(c);
+    }
+    for (final entry in groups.entries) {
+      if (entry.key != null) {
+        lines.add('${entry.key}:');
+      }
+      final displays = entry.value.map((c) {
+        if (c.description != null) return '${c.value} - ${c.description}';
+        return c.value;
+      }).toList();
+      lines.add('  ${displays.join('  ')}');
+    }
+    return lines;
   }
 
   /// Handle keyboard events

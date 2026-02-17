@@ -5,10 +5,9 @@
  * Station command: start, stop, status, restart, port, callsign, cache
  */
 
-import '../../station.dart';
-import '../cli_profile_service.dart';
 import 'command.dart';
 import 'command_context.dart';
+import 'service_interfaces.dart';
 
 /// station — manage the relay server
 class StationCommand extends Command {
@@ -66,7 +65,7 @@ class StationCommand extends Command {
   }
 
   static Future<void> _start(CommandContext ctx) async {
-    final station = ctx.station as StationServer;
+    final station = ctx.station as StationCommandInterface;
 
     if (station.isRunning) {
       ctx.writeln('\x1B[33mRelay server is already running on port ${station.settings.httpPort}\x1B[0m');
@@ -89,7 +88,7 @@ class StationCommand extends Command {
   }
 
   static Future<void> _stop(CommandContext ctx) async {
-    final station = ctx.station as StationServer;
+    final station = ctx.station as StationCommandInterface;
 
     if (!station.isRunning) {
       ctx.writeln('\x1B[33mRelay server is not running\x1B[0m');
@@ -102,7 +101,7 @@ class StationCommand extends Command {
   }
 
   static Future<void> _status(CommandContext ctx) async {
-    final station = ctx.station as StationServer;
+    final station = ctx.station as StationCommandInterface;
     final status = station.getStatus();
     final settings = station.settings;
 
@@ -139,12 +138,12 @@ class StationCommand extends Command {
   }
 
   static Future<void> _restart(CommandContext ctx) async {
-    final station = ctx.station as StationServer;
+    final station = ctx.station as StationCommandInterface;
     await station.restart();
   }
 
   static Future<void> _port(CommandContext ctx) async {
-    final station = ctx.station as StationServer;
+    final station = ctx.station as StationCommandInterface;
 
     if (ctx.args.isEmpty) {
       ctx.writeln('Current HTTP port: ${station.settings.httpPort}');
@@ -158,13 +157,12 @@ class StationCommand extends Command {
       return;
     }
 
-    final settings = station.settings.copyWith(httpPort: port);
-    await station.updateSettings(settings);
+    station.setSetting('httpPort', port);
     ctx.success('Port set to $port');
   }
 
   static Future<void> _callsign(CommandContext ctx) async {
-    final station = ctx.station as StationServer;
+    final station = ctx.station as StationCommandInterface;
 
     ctx.writeln('Station callsign: ${station.settings.callsign}');
     ctx.writeln('  (derived from npub: ${station.settings.npub.substring(0, 20)}...)');
@@ -174,7 +172,7 @@ class StationCommand extends Command {
   }
 
   static Future<void> _cache(CommandContext ctx) async {
-    final station = ctx.station as StationServer;
+    final station = ctx.station as StationCommandInterface;
 
     if (ctx.args.isEmpty) {
       final status = station.getStatus();

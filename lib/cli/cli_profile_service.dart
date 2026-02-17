@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 import 'cli_config_service.dart';
+import 'commands/service_interfaces.dart';
 import '../models/profile.dart';
 import '../util/nostr_key_generator.dart';
 import 'pure_storage_config.dart';
@@ -61,7 +62,7 @@ class CachedDevice {
 
 /// CLI Profile Service - manages profiles using shared config.json
 /// This ensures profiles created in CLI are visible in Desktop and vice versa
-class CliProfileService {
+class CliProfileService implements ProfileCommandInterface {
   static final CliProfileService _instance = CliProfileService._internal();
   factory CliProfileService() => _instance;
   CliProfileService._internal();
@@ -83,6 +84,14 @@ class CliProfileService {
       return _profiles.isNotEmpty ? _profiles.first : null;
     }
   }
+
+  // --- ProfileCommandInterface ---
+
+  @override
+  List<ProfileReadable> get profilesReadable => profiles;
+
+  @override
+  ProfileReadable? get activeProfileReadable => activeProfile;
 
   /// Get all owned callsigns (profiles we have private keys for)
   Set<String> get ownedCallsigns => _profiles.map((p) => p.callsign).toSet();
