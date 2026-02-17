@@ -282,7 +282,7 @@ class CliConsoleController {
 
   /// Root directories in virtual filesystem
   List<String> get rootDirs {
-    final dirs = ['profiles', 'config', 'logs'];
+    final dirs = ['profiles', 'chat', 'devices', 'config', 'logs'];
     if (_stationAdapter.isRunning) dirs.add('station');
     if (_gameConfig != null) dirs.add('games');
     dirs.sort();
