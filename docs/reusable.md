@@ -8379,6 +8379,44 @@ class MyCommand extends Command {
 }
 ```
 
+### Per-Command Environment Filtering
+
+Commands declare which platforms they support via `CommandEnvironment`. The registry filters at registration time — dispatch, help, and TAB completion automatically exclude unsupported commands with zero runtime checks.
+
+```dart
+// CommandEnvironment enum (in command.dart)
+// Values: linux, windows, macOS, android, iOS, esp32, web
+// Convenience sets: .all, .desktop, .mobile, .cli
+
+// Default: all environments (backward-compatible)
+class MyCommand extends Command {
+  // No override needed — runs everywhere
+}
+
+// Restrict to specific environments
+class SslCommand extends Command {
+  @override
+  Set<CommandEnvironment> get environments => {CommandEnvironment.linux};
+}
+
+// Use convenience sets
+class StationCommand extends Command {
+  @override
+  Set<CommandEnvironment> get environments => CommandEnvironment.cli;
+}
+
+// Exclude specific environments
+class GamesCommand extends Command {
+  @override
+  Set<CommandEnvironment> get environments =>
+      CommandEnvironment.all.difference({CommandEnvironment.esp32});
+}
+
+// Registry filters at registration time
+final registry = CommandRegistry(environment: CommandEnvironment.linux);
+registry.registerAll(allCommands); // SSL included, web-only excluded
+```
+
 ### Key Design Decisions
 
 - **Shared interfaces** — commands cast `ctx.station as StationCommandInterface` and `ctx.profileService as ProfileCommandInterface`. Both CLI (`StationServer`, `CliProfileService`) and Desktop (adapter classes in `cli_console_controller.dart`) implement these interfaces, so all commands work on both platforms.
@@ -8386,5 +8424,6 @@ class MyCommand extends Command {
 - **`contextPaths`** — commands declare which virtual directories they're available in (e.g., `['/station']`), enabling context-aware dispatch without hard-coding directory logic.
 - **`SubCommand`** data class — avoids 40+ tiny Command subclasses; just declare name/description/execute callbacks.
 - **Navigation stays on host** — `ls`, `cd`, `pwd` mutate console state and are dispatched before the registry.
+- **`CommandEnvironment` filtering** — commands declare supported platforms, registry filters at registration time. Default is `all` for backward compatibility.
 
-**Reuse potential**: Any new console command gets help, TAB completion, and context-aware dispatch for free by extending `Command` and registering it. Commands automatically work on both CLI and Desktop platforms through the shared interfaces.
+**Reuse potential**: Any new console command gets help, TAB completion, and context-aware dispatch for free by extending `Command` and registering it. Commands automatically work on both CLI and Desktop platforms through the shared interfaces. Environment filtering ensures commands only appear on supported platforms.

@@ -17,6 +17,7 @@ class StationCommand extends Command {
   @override CommandCategory get category => CommandCategory.station;
   @override bool get requiresStation => true;
   @override List<String> get contextPaths => const ['/station'];
+  @override Set<CommandEnvironment> get environments => CommandEnvironment.cli;
 
   @override
   List<SubCommand> get subcommands => [

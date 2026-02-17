@@ -26,6 +26,9 @@ class GamesCommand extends Command {
   CommandCategory get category => CommandCategory.games;
   @override
   List<String> get contextPaths => const ['/games'];
+  @override
+  Set<CommandEnvironment> get environments =>
+      CommandEnvironment.all.difference({CommandEnvironment.esp32});
 
   @override
   List<SubCommand> get subcommands => [
@@ -131,6 +134,9 @@ class PlayCommand extends Command {
   String get usage => 'play <game-name.md>';
   @override
   CommandCategory get category => CommandCategory.games;
+  @override
+  Set<CommandEnvironment> get environments =>
+      CommandEnvironment.all.difference({CommandEnvironment.esp32});
 
   @override
   Future<void> execute(CommandContext ctx) async {

@@ -18,6 +18,7 @@ class SslCommand extends Command {
   @override CommandCategory get category => CommandCategory.ssl;
   @override bool get requiresStation => true;
   @override List<String> get contextPaths => const ['/ssl'];
+  @override Set<CommandEnvironment> get environments => {CommandEnvironment.linux};
 
   @override
   List<SubCommand> get subcommands => [

@@ -26,8 +26,18 @@ class CommandRegistry {
   final Map<String, Command> _commands = {};
   final Map<String, String> _aliases = {}; // alias → primary name
 
+  /// Optional environment filter. When set, only commands that include this
+  /// environment in their [Command.environments] set are registered.
+  final CommandEnvironment? environment;
+
+  CommandRegistry({this.environment});
+
   /// Register a command. All aliases are indexed for lookup.
+  /// Skips the command if it doesn't support the current [environment].
   void register(Command command) {
+    if (environment != null && !command.environments.contains(environment)) {
+      return;
+    }
     _commands[command.name] = command;
     for (final alias in command.aliases) {
       _aliases[alias] = command.name;

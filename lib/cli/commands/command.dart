@@ -26,6 +26,36 @@ enum CommandCategory {
   const CommandCategory(this.label);
 }
 
+/// Target environments for command filtering.
+///
+/// Commands declare which environments they support via [Command.environments].
+/// The registry filters at registration time — dispatch, help, and TAB
+/// completion automatically exclude unsupported commands.
+enum CommandEnvironment {
+  linux('Linux'),
+  windows('Windows'),
+  macOS('macOS'),
+  android('Android'),
+  iOS('iOS'),
+  esp32('ESP32'),
+  web('Web');
+
+  final String label;
+  const CommandEnvironment(this.label);
+
+  /// All environments.
+  static final Set<CommandEnvironment> all = Set.unmodifiable(values.toSet());
+
+  /// Desktop platforms: Linux, Windows, macOS.
+  static final Set<CommandEnvironment> desktop = Set.unmodifiable({linux, windows, macOS});
+
+  /// Mobile platforms: Android, iOS.
+  static final Set<CommandEnvironment> mobile = Set.unmodifiable({android, iOS});
+
+  /// CLI-capable platforms: Linux, Windows, macOS, ESP32.
+  static final Set<CommandEnvironment> cli = Set.unmodifiable({linux, windows, macOS, esp32});
+}
+
 /// Lightweight sub-command descriptor.
 ///
 /// Used for commands like `station start`, `chat list`, etc.
@@ -75,6 +105,10 @@ abstract class Command {
   /// context-local command (e.g., ['/station'] means typing 'start'
   /// in /station dispatches to 'station start').
   List<String> get contextPaths => const [];
+
+  /// Environments where this command is available.
+  /// Defaults to all environments. Override to restrict.
+  Set<CommandEnvironment> get environments => CommandEnvironment.all;
 
   /// Sub-commands (e.g., 'start', 'stop' for the 'station' command).
   /// Empty for simple commands like 'help' or 'clear'.

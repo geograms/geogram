@@ -8,6 +8,9 @@
 
 import 'dart:async';
 
+import 'dart:io' show Platform;
+
+import '../cli/commands/command.dart';
 import '../cli/commands/command_context.dart';
 import '../cli/commands/command_registry.dart';
 export '../cli/commands/command_registry.dart' show CompletionCandidate;
@@ -299,11 +302,21 @@ class CliConsoleController {
   /// Callback for when game output is available
   void Function(String output)? onGameOutput;
 
+  /// Detect the current platform environment.
+  static CommandEnvironment _detectEnvironment() {
+    if (Platform.isLinux) return CommandEnvironment.linux;
+    if (Platform.isWindows) return CommandEnvironment.windows;
+    if (Platform.isMacOS) return CommandEnvironment.macOS;
+    if (Platform.isAndroid) return CommandEnvironment.android;
+    if (Platform.isIOS) return CommandEnvironment.iOS;
+    return CommandEnvironment.linux;
+  }
+
   CliConsoleController() {
     _io = BufferConsoleIO();
     _profileAdapter = _ProfileServiceAdapter();
     _stationAdapter = _StationServiceAdapter();
-    _registry = CommandRegistry();
+    _registry = CommandRegistry(environment: _detectEnvironment());
     _registerCommands();
   }
 

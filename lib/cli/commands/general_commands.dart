@@ -50,6 +50,7 @@ class QuitCommand extends Command {
   @override List<String> get aliases => const ['exit', 'shutdown'];
   @override String get description => 'Exit the console';
   @override CommandCategory get category => CommandCategory.general;
+  @override Set<CommandEnvironment> get environments => CommandEnvironment.cli;
 
   @override
   Future<void> execute(CommandContext ctx) async {
@@ -152,6 +153,7 @@ class RestartCommand extends Command {
   @override String get description => 'Restart the station server';
   @override CommandCategory get category => CommandCategory.general;
   @override bool get requiresStation => true;
+  @override Set<CommandEnvironment> get environments => CommandEnvironment.cli;
 
   @override
   Future<void> execute(CommandContext ctx) async {
@@ -170,6 +172,7 @@ class ReloadCommand extends Command {
   @override String get description => 'Reload config from file';
   @override CommandCategory get category => CommandCategory.general;
   @override bool get requiresStation => true;
+  @override Set<CommandEnvironment> get environments => CommandEnvironment.cli;
 
   @override
   Future<void> execute(CommandContext ctx) async {
@@ -197,6 +200,7 @@ class SetupCommand extends Command {
   @override String get name => 'setup';
   @override String get description => 'Run the setup wizard';
   @override CommandCategory get category => CommandCategory.general;
+  @override Set<CommandEnvironment> get environments => CommandEnvironment.cli;
 
   @override
   Future<void> execute(CommandContext ctx) async {

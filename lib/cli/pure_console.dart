@@ -18,6 +18,7 @@ import '../util/nostr_key_generator.dart';
 import '../services/email_dns_service.dart';
 import 'console_io.dart';
 import 'console_io_cli.dart';
+import 'commands/command.dart';
 import 'commands/command_context.dart';
 import 'commands/command_registry.dart';
 import 'commands/general_commands.dart';
@@ -453,9 +454,18 @@ class PureConsole {
     }
   }
 
+  /// Detect the current platform environment.
+  static CommandEnvironment _detectEnvironment() {
+    if (Platform.isLinux) return CommandEnvironment.linux;
+    if (Platform.isWindows) return CommandEnvironment.windows;
+    if (Platform.isMacOS) return CommandEnvironment.macOS;
+    // CLI doesn't run on mobile, but fall back to all-inclusive
+    return CommandEnvironment.linux;
+  }
+
   /// Build the command registry with all commands.
   CommandRegistry _buildRegistry() {
-    final registry = CommandRegistry();
+    final registry = CommandRegistry(environment: _detectEnvironment());
 
     registry.registerAll([
       // General / System
