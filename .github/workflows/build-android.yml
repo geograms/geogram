@@ -42,12 +42,20 @@ jobs:
       with:
         cache-read-only: false
 
-    - name: Clean Gradle transform caches
+    - name: Clean Gradle caches and stale locks
       run: |
+        # Kill any orphaned Gradle/Java processes that may hold cache locks
+        pkill -f GradleDaemon 2>/dev/null || true
+        pkill -f 'java.*gradle' 2>/dev/null || true
+        sleep 2
+
+        # Remove stale lock files that cause "Timeout waiting to lock" errors
+        find ~/.gradle/caches -name "*.lock" -delete 2>/dev/null || true
+
         # Remove potentially corrupted transform/build caches restored from CI cache
         rm -rf ~/.gradle/caches/transforms-*
         rm -rf ~/.gradle/caches/build-cache-*
-        echo "Cleaned Gradle transform caches to prevent stale cache hangs"
+        echo "Cleaned Gradle caches, locks, and orphaned daemons"
 
     - name: Setup Android signing
       env:
