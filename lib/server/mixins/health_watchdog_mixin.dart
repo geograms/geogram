@@ -93,21 +93,21 @@ mixin HealthWatchdogMixin {
 
   /// Perform self-health check by making request to own /api/status endpoint
   Future<bool> _performHealthCheck() async {
+    final client = HttpClient();
+    client.connectionTimeout = Duration(seconds: healthCheckTimeoutSeconds);
     try {
-      final client = HttpClient();
-      client.connectionTimeout = Duration(seconds: healthCheckTimeoutSeconds);
-
       final request = await client.getUrl(
         Uri.parse('http://127.0.0.1:$httpPort/api/status'),
       );
       final response = await request.close()
           .timeout(Duration(seconds: healthCheckTimeoutSeconds));
 
-      client.close();
       return response.statusCode == 200;
     } catch (e) {
       log('WARN', 'Health check failed: $e');
       return false;
+    } finally {
+      client.close();
     }
   }
 

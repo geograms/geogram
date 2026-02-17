@@ -187,23 +187,17 @@ class NostrBlossomService {
   }
 
   Future<void> replicateUrl(String url, {String? ownerPubkey}) async {
-    try {
-      final uri = Uri.parse(url);
-      if (uri.scheme != 'http' && uri.scheme != 'https') return;
+    final uri = Uri.parse(url);
+    if (uri.scheme != 'http' && uri.scheme != 'https') return;
 
-      final client = HttpClient();
+    final client = HttpClient();
+    try {
       final request = await client.getUrl(uri);
       final response = await request.close();
-      if (response.statusCode != 200) {
-        client.close();
-        return;
-      }
+      if (response.statusCode != 200) return;
 
       final contentLength = response.contentLength;
-      if (contentLength > 0 && contentLength > maxFileBytes) {
-        client.close();
-        return;
-      }
+      if (contentLength > 0 && contentLength > maxFileBytes) return;
 
       final builder = BytesBuilder(copy: false);
       await for (final chunk in response) {
@@ -211,9 +205,10 @@ class NostrBlossomService {
       }
       final bytes = builder.takeBytes();
       await ingestBytes(bytes: bytes, mime: response.headers.contentType?.mimeType, ownerPubkey: ownerPubkey);
-      client.close();
     } catch (_) {
       // Ignore replication failures.
+    } finally {
+      client.close();
     }
   }
 

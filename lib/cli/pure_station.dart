@@ -1930,21 +1930,21 @@ class PureStationServer with EmailHandlerMixin {
 
   /// Perform self-health check by making request to own /api/status endpoint
   Future<bool> _performHealthCheck() async {
+    final client = HttpClient();
+    client.connectionTimeout = Duration(seconds: _healthCheckTimeoutSeconds);
     try {
-      final client = HttpClient();
-      client.connectionTimeout = Duration(seconds: _healthCheckTimeoutSeconds);
-
       final request = await client.getUrl(
         Uri.parse('http://127.0.0.1:${_settings.httpPort}/api/status'),
       );
       final response = await request.close()
           .timeout(Duration(seconds: _healthCheckTimeoutSeconds));
 
-      client.close();
       return response.statusCode == 200;
     } catch (e) {
       _log('WARN', 'Health check failed: $e');
       return false;
+    } finally {
+      client.close();
     }
   }
 
@@ -9683,9 +9683,9 @@ class PureStationServer with EmailHandlerMixin {
       }
 
       // Download the model using streaming to avoid memory issues
+      final client = http.Client();
       try {
         _log('INFO', 'Downloading whisper model: $filename...');
-        final client = http.Client();
         final request = http.Request('GET', Uri.parse(url));
         request.headers['User-Agent'] = 'Geogram-Station-Updater';
 
@@ -9702,18 +9702,18 @@ class PureStationServer with EmailHandlerMixin {
 
           await sink.flush();
           await sink.close();
-          client.close();
 
           final sizeMb = (bytesReceived / (1024 * 1024)).toStringAsFixed(1);
           _log('INFO', 'Downloaded whisper model $filename: ${sizeMb}MB');
           _availableWhisperModels.add(filename);
           downloaded++;
         } else {
-          client.close();
           _log('ERROR', 'Failed to download whisper model $filename: ${streamedResponse.statusCode}');
         }
       } catch (e) {
         _log('ERROR', 'Error downloading whisper model $filename: $e');
+      } finally {
+        client.close();
       }
     }
 
@@ -9919,15 +9919,15 @@ class PureStationServer with EmailHandlerMixin {
       }
 
       // Download the model using streaming to avoid memory issues
-      try {
-        // Ensure parent directory exists (for subdirs like onnx/ and voice_styles/)
-        final parentDir = file.parent;
-        if (!await parentDir.exists()) {
-          await parentDir.create(recursive: true);
-        }
+      // Ensure parent directory exists (for subdirs like onnx/ and voice_styles/)
+      final parentDir = file.parent;
+      if (!await parentDir.exists()) {
+        await parentDir.create(recursive: true);
+      }
 
+      final client = http.Client();
+      try {
         _log('INFO', 'Downloading Supertonic model: $filename...');
-        final client = http.Client();
         final request = http.Request('GET', Uri.parse(url));
         request.headers['User-Agent'] = 'Geogram-Station-Updater';
 
@@ -9944,18 +9944,18 @@ class PureStationServer with EmailHandlerMixin {
 
           await sink.flush();
           await sink.close();
-          client.close();
 
           final sizeMb = (bytesReceived / (1024 * 1024)).toStringAsFixed(1);
           _log('INFO', 'Downloaded Supertonic model $filename: ${sizeMb}MB');
           _availableSupertonicModels.add(filename);
           downloaded++;
         } else {
-          client.close();
           _log('ERROR', 'Failed to download Supertonic model $filename: ${streamedResponse.statusCode}');
         }
       } catch (e) {
         _log('ERROR', 'Error downloading Supertonic model $filename: $e');
+      } finally {
+        client.close();
       }
     }
 
