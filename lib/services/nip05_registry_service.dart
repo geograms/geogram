@@ -205,6 +205,6 @@ class Nip05RegistryService {
     final json = {
       'registrations': _registrations.values.map((r) => r.toJson()).toList(),
     };
-    await file.writeAsString(jsonEncode(json));
+    await file.writeAsString(const JsonEncoder.withIndent('  ').convert(json));
   }
 }

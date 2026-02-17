@@ -6403,6 +6403,20 @@ h2 { font-size: 1.2rem; margin: 0 0 20px 0; }
       }
     }
 
+    // 3. NIP-05 registry lookup (nickname → npub → callsign)
+    final registration = Nip05RegistryService().getRegistration(identifier);
+    if (registration != null) {
+      try {
+        final callsign = NostrKeyGenerator.deriveCallsign(registration.npub);
+        final callsignDir = Directory('$devicesDir/$callsign');
+        if (await callsignDir.exists()) {
+          return callsign;
+        }
+      } catch (e) {
+        LogService().log('Error deriving callsign from NIP-05 registry: $e');
+      }
+    }
+
     return null;
   }
 

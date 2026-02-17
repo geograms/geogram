@@ -4966,6 +4966,8 @@ final tileHandler = TileHandler(
 | RateLimitMixin | server/mixins/rate_limit_mixin.dart | IP rate limiting |
 | SslMixin | server/mixins/ssl_mixin.dart | HTTPS support |
 | HealthWatchdogMixin | server/mixins/health_watchdog_mixin.dart | Auto-recovery |
+| EmailHandlerMixin | server/mixins/email_handler_mixin.dart | Shared email send/receive/delivery |
+| BlogHandlerMixin | server/mixins/blog_handler_mixin.dart | Blog URL resolution, NIP-05 callsign lookup, local/proxy serving |
 
 ---
 
