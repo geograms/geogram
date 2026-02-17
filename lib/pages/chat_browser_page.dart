@@ -390,6 +390,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
   Future<void> _pollForNewMessages() async {
     // Only poll if viewing a station room and station is reachable
     if (_selectedStationRoom == null || !_stationReachable) return;
+    if (_isRefreshingMessages) return;
 
     try {
       await _syncStationMessages();
@@ -484,7 +485,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       }
 
       // Poll for new messages if viewing a room (fallback when WebSocket not connected)
-      if (_selectedStationRoom != null && _updateSubscription == null) {
+      if (_selectedStationRoom != null && _updateSubscription == null && !_isRefreshingMessages) {
         // WebSocket not connected - poll for updates
         _refreshRelayMessages();
       }
@@ -944,8 +945,14 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       return;
     }
 
-    // Refresh in the background to fetch any new files
-    unawaited(_refreshRelayMessages());
+    // Cancel polling timer during initial sync to prevent FD exhaustion
+    _messagePollingTimer?.cancel();
+    _messagePollingTimer = null;
+
+    // Refresh in the background to fetch any new files, then restart polling
+    unawaited(_refreshRelayMessages().whenComplete(() {
+      if (mounted) _startMessagePolling();
+    }));
   }
 
   /// Load messages from cache for a room
@@ -1202,8 +1209,8 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
             );
             downloadedCount++;
 
-            // Reload from cache and update UI after each file
-            if (mounted && _selectedStationRoom?.id == roomId) {
+            // Only reload cache on FIRST download (fast initial display)
+            if (downloadedCount == 1 && mounted && _selectedStationRoom?.id == roomId) {
               await _loadMessagesFromCache(roomId, limit: _stationMessageLimit);
             }
           }
@@ -1213,6 +1220,11 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
             await _loadMessagesFromCache(roomId, limit: _stationMessageLimit);
           }
         }
+      }
+
+      // Reload cache once after all downloads complete (if more than 1 file downloaded)
+      if (downloadedCount > 1 && mounted && _selectedStationRoom?.id == roomId) {
+        await _loadMessagesFromCache(roomId, limit: _stationMessageLimit);
       }
 
       // 4. Quick incremental fetch for messages posted today that aren't in the daily file yet

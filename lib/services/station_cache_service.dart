@@ -334,17 +334,24 @@ class RelayCacheService {
       final List<StationChatMessage> allMessages = [];
       final List<File> chatFiles = [];
 
-      // Find all year folders and collect daily files
+      // Find all year folders, sort descending so we can break early
       final entities = await roomDir.list().toList();
-      for (final entity in entities) {
-        if (entity is Directory && _isYearFolder(entity.path)) {
-          final yearEntities = await entity.list().toList();
-          for (final yearEntity in yearEntities) {
-            if (yearEntity is File && yearEntity.path.endsWith('_chat.txt')) {
-              chatFiles.add(yearEntity);
-            }
+      final yearDirs = entities
+          .whereType<Directory>()
+          .where((d) => _isYearFolder(d.path))
+          .toList()
+        ..sort((a, b) => b.path.compareTo(a.path));
+
+      // Collect daily files from year folders, newest years first
+      for (final yearDir in yearDirs) {
+        final yearEntities = await yearDir.list().toList();
+        for (final yearEntity in yearEntities) {
+          if (yearEntity is File && yearEntity.path.endsWith('_chat.txt')) {
+            chatFiles.add(yearEntity);
           }
         }
+        // If we already have enough files to satisfy the limit, stop listing more year folders
+        if (limit != null && chatFiles.length >= limit) break;
       }
 
       // Sort files by filename (YYYY-MM-DD_chat.txt) descending for lazy loading
