@@ -281,6 +281,12 @@ class CommandRegistry {
     return buf.toString();
   }
 
+  /// Whether [name] matches a registered command or alias.
+  bool isKnownCommand(String name) {
+    final lower = name.toLowerCase();
+    return _commands.containsKey(lower) || _aliases.containsKey(lower);
+  }
+
   /// Get all registered commands (for iteration).
   Iterable<Command> get commands => _commands.values;
 }

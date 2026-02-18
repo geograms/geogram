@@ -455,6 +455,7 @@ class PureConsole {
 
       // Build shared navigation handler
       _nav = NavigationHandler(_PureConsoleDataProvider(this));
+      _nav.isKnownCommand = _registry.isKnownCommand;
     } catch (e, stackTrace) {
       _printError('Failed to initialize services: $e');
       _printError('Stack trace: $stackTrace');
@@ -703,22 +704,11 @@ class PureConsole {
       }
       _historyIndex = _history.length;
 
-      // If in a chat room, treat non-command input as a message
-      if (_nav.isInChatRoom && !input.startsWith('/') && !_isCommand(input)) {
-        final roomId = _nav.currentChatRoom!;
-        // Use station's chat room management in CLI mode
-        if (_station.chatRooms[roomId] != null) {
-          await _station.postMessage(roomId, input);
-          // IRC-style: show formatted message (replacing the raw input line)
-          final now = DateTime.now();
-          final timeStr = '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')} ${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
-          final callsign = _profileService.activeProfile?.callsign ?? 'You';
-          // Move cursor up to replace the empty line after input, print message
-          stdout.write('\x1B[A\x1B[2K');
-          stdout.writeln('\x1B[33m[$timeStr]\x1B[0m \x1B[32m✓\x1B[0m \x1B[36m$callsign:\x1B[0m $input');
-        } else {
-          _printError('Room not found: $roomId');
-        }
+      // If in a chat room, treat non-command input as a chat message
+      if (await _nav.trySendChatMessage(input)) {
+        // Move cursor up to replace the empty line after input (output already on stdout)
+        // The trySendChatMessage method writes via _io which goes to stdout,
+        // but the newline from Enter is already printed, so move up to overwrite it
         continue;
       }
 
@@ -1350,14 +1340,6 @@ class PureConsole {
       parts.add(buffer.toString());
     }
     return parts;
-  }
-
-  bool _isCommand(String input) {
-    final commands = ['help', 'status', 'stats', 'ls', 'cd', 'pwd', 'station', 'devices',
-      'chat', 'config', 'logs', 'clear', 'quit', 'exit', 'broadcast', 'kick', 'df',
-      'quiet', 'verbose', 'restart', 'reload', 'messages', 'delmsg'];
-    final firstWord = input.split(' ').first.toLowerCase();
-    return commands.contains(firstWord);
   }
 
   Future<bool> _processCommand(String command, List<String> args) async {

@@ -68,6 +68,47 @@ class NavigationHandler {
   ConsoleIO get _io => _provider.io;
   StationCommandInterface? get _station => _provider.stationInterface;
 
+  /// Optional command checker — set by the host console so that
+  /// [trySendChatMessage] can distinguish chat text from commands.
+  IsKnownCommandFn? isKnownCommand;
+
+  // --- Chat message interception ---
+
+  /// Try to send [input] as a chat message when inside a chat room.
+  ///
+  /// Returns `true` if the input was handled (sent as a message or rejected).
+  /// Returns `false` if the input should be processed as a command.
+  Future<bool> trySendChatMessage(String input) async {
+    if (!isInChatRoom) return false;
+    if (input.startsWith('/')) return false;
+
+    // Check if the first word is a known command
+    final firstWord = input.split(' ').first.toLowerCase();
+    const navCommands = ['ls', 'cd', 'pwd'];
+    if (navCommands.contains(firstWord)) return false;
+    if (isKnownCommand != null && isKnownCommand!(firstWord)) return false;
+
+    final station = _station;
+    if (station == null) return false;
+
+    final roomId = _currentChatRoom!;
+    if (!station.chatRoomsReadable.containsKey(roomId)) {
+      _io.writeln('\x1B[31mRoom not found: $roomId\x1B[0m');
+      return true;
+    }
+
+    await station.postMessage(roomId, input);
+
+    // Format confirmation (IRC-style)
+    final now = DateTime.now();
+    final timeStr = '${now.year}-${now.month.toString().padLeft(2, '0')}-'
+        '${now.day.toString().padLeft(2, '0')} '
+        '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
+    final callsign = _provider.profileInterface?.activeProfileReadable?.callsign ?? 'You';
+    _io.writeln('\x1B[33m[$timeStr]\x1B[0m \x1B[32m✓\x1B[0m \x1B[36m$callsign:\x1B[0m $input');
+    return true;
+  }
+
   // --- Core navigation ---
 
   /// Handle `pwd` — print working directory.

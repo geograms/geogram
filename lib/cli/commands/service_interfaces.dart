@@ -191,3 +191,10 @@ abstract class ProfileCommandInterface {
   List<Map<String, dynamic>> getAllDevicesSorted();
   bool isOwnedCallsign(String callsign);
 }
+
+/// Callback type for checking whether an input string is a known command.
+///
+/// Used by [NavigationHandler.trySendChatMessage] to distinguish chat messages
+/// from commands. Implementations should check the command registry plus any
+/// navigation commands (ls, cd, pwd) that are handled outside the registry.
+typedef IsKnownCommandFn = bool Function(String name);

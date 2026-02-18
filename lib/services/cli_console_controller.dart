@@ -31,6 +31,7 @@ import '../cli/game/game_config.dart';
 import '../cli/game/game_engine_io.dart';
 import '../models/profile.dart';
 import '../models/chat_channel.dart';
+import '../models/chat_message.dart';
 import '../services/profile_service.dart';
 import '../services/callsign_generator.dart';
 import '../services/chat_service.dart';
@@ -86,15 +87,33 @@ class _ProfileServiceAdapter implements ProfileCommandInterface {
 
   @override
   List<Map<String, dynamic>> getAllDevicesSorted() {
-    // Desktop doesn't have the same cached-devices concept — return owned profiles
     final profiles = _service.getAllProfiles();
-    return profiles.map((p) => <String, dynamic>{
+    final result = profiles.map((p) => <String, dynamic>{
       'callsign': p.callsign,
       'type': p.isRelay ? 'station' : 'client',
       'nickname': p.nickname,
       'owned': true,
       'active': p.id == _service.activeProfileId,
     }).toList();
+
+    // Include connected station callsign from StationServerService
+    // (mirrors what CliProfileService.getAllDevicesSorted does with cached devices)
+    try {
+      final status = StationServerService().getStatus();
+      final stationCs = status['callsign'] as String? ?? '';
+      if (stationCs.isNotEmpty &&
+          CallsignGenerator.isStationCallsign(stationCs) &&
+          !result.any((d) => d['callsign'] == stationCs)) {
+        result.add({
+          'callsign': stationCs,
+          'type': 'station',
+          'nickname': '',
+          'owned': false,
+        });
+      }
+    } catch (_) {} // StationServerService may not be initialized
+
+    return result;
   }
 
   @override
@@ -204,16 +223,52 @@ class _StationServiceAdapter implements StationCommandInterface {
   Future<Map<String, dynamic>?> pingDevice(String address) async => null;
 
   @override
-  ChatRoomReadable? createChatRoom(String id, String name, {String? description}) => null;
+  ChatRoomReadable? createChatRoom(String id, String name, {String? description}) {
+    try {
+      final channel = ChatChannel.group(
+        id: id,
+        name: name,
+        participants: ['*'], // public by default
+        description: description,
+      );
+      ChatService().createChannel(channel);
+      return _ChatChannelAdapter(channel);
+    } catch (_) {
+      return null;
+    }
+  }
 
   @override
-  bool deleteChatRoom(String id) => false;
+  bool deleteChatRoom(String id) {
+    try {
+      ChatService().deleteChannel(id);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
 
   @override
-  bool renameChatRoom(String oldId, String newName) => false;
+  bool renameChatRoom(String oldId, String newName) {
+    try {
+      final channel = ChatService().getChannel(oldId);
+      if (channel == null) return false;
+      ChatService().updateChannel(channel.copyWith(name: newName));
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
 
   @override
-  Future<void> postMessage(String roomId, String content) async {}
+  Future<void> postMessage(String roomId, String content) async {
+    final profile = ProfileService().getProfile();
+    final message = ChatMessage.now(
+      author: profile.callsign,
+      content: content,
+    );
+    await ChatService().saveMessage(roomId, message);
+  }
 
   @override
   bool deleteMessage(String roomId, String messageId) => false;
@@ -230,8 +285,17 @@ class _SettingsAdapter implements StationSettingsReadable {
   final StationServerSettings _s;
   _SettingsAdapter(this._s);
 
-  @override String get callsign => CallsignGenerator.isStationCallsign('')
-      ? '' : ''; // Not directly available — derive via service
+  @override String get callsign {
+    // Check if active profile is itself a station
+    final profile = ProfileService().getProfile();
+    if (CallsignGenerator.isStationCallsign(profile.callsign)) {
+      return profile.callsign;
+    }
+    // Otherwise get the station callsign from the running service status
+    final status = StationServerService().getStatus();
+    final cs = status['callsign'] as String? ?? '';
+    return CallsignGenerator.isStationCallsign(cs) ? cs : '';
+  }
   @override String get npub => '';
   @override int get httpPort => _s.port;
   @override int get httpsPort => _s.port + 363; // approximate
@@ -342,6 +406,7 @@ class CliConsoleController {
     _registry = CommandRegistry(environment: _detectEnvironment());
     _nav = NavigationHandler(_DesktopDataProvider(this));
     _registerCommands();
+    _nav.isKnownCommand = _registry.isKnownCommand;
   }
 
   void _registerCommands() {
@@ -568,6 +633,11 @@ class CliConsoleController {
 
     final trimmed = input.trim();
     if (trimmed.isEmpty) return '';
+
+    // Try to send as a chat message if inside a chat room
+    if (await _nav.trySendChatMessage(trimmed)) {
+      return _io.getOutput() ?? '';
+    }
 
     final parts = trimmed.split(RegExp(r'\s+'));
     final command = parts[0].toLowerCase();

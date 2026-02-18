@@ -76,8 +76,13 @@ mixin ConsoleCommandMixin {
     return _consoleRegistry!;
   }
 
-  NavigationHandler get _nav =>
-      _consoleNav ??= NavigationHandler(_ConsoleDataProvider(this));
+  NavigationHandler get _nav {
+    if (_consoleNav == null) {
+      _consoleNav = NavigationHandler(_ConsoleDataProvider(this));
+      _consoleNav!.isKnownCommand = _registry.isKnownCommand;
+    }
+    return _consoleNav!;
+  }
 
   /// Execute a console command and return the result as a JSON-encodable map.
   ///
@@ -92,6 +97,11 @@ mixin ConsoleCommandMixin {
         'output': '',
         'path': _nav.currentPath,
       };
+    }
+
+    // Try to send as a chat message if inside a chat room
+    if (await _nav.trySendChatMessage(trimmed)) {
+      return _result();
     }
 
     final parts = trimmed.split(RegExp(r'\s+'));
