@@ -107,8 +107,8 @@ class NavigationHandler {
           return true; // host should show last messages
         } else {
           _io.writeln('\x1B[31mRoom not found: $_currentChatRoom\x1B[0m');
-          // Back out to the station level
-          _currentPath = '/chat/$_currentChatStation';
+          // Back out to the parent level
+          _currentPath = _isFlatRoomMode ? '/chat' : '/chat/$_currentChatStation';
           _currentChatRoom = null;
           return false;
         }
@@ -151,10 +151,18 @@ class NavigationHandler {
     if (resolved == '/') {
       entries.addAll(_provider.rootDirs);
     } else if (resolved == '/chat') {
-      entries.addAll(_getStationCallsigns());
+      if (_isFlatRoomMode) {
+        // Flat mode: list rooms directly
+        final station = _station;
+        if (station != null) {
+          entries.addAll(station.chatRoomsReadable.keys);
+        }
+      } else {
+        entries.addAll(_getStationCallsigns());
+      }
     } else if (resolved.startsWith('/chat/')) {
       final segments = resolved.substring(1).split('/');
-      if (segments.length == 2) {
+      if (segments.length == 2 && !_isFlatRoomMode) {
         // /chat/<station> — list rooms if local
         final stationCs = segments[1];
         if (_isLocalStation(stationCs)) {
@@ -235,26 +243,65 @@ class NavigationHandler {
   }
 
   /// `ls /chat` — list known stations.
+  ///
+  /// If station callsigns are found, show the station hierarchy.
+  /// If none are found but chat rooms exist, list rooms directly (flat).
   void _listChatStations() {
     final stations = _getStationCallsigns();
-    if (stations.isEmpty) {
-      _io.writeln('(no stations)');
+    if (stations.isNotEmpty) {
+      for (final cs in stations) {
+        final local = _isLocalStation(cs);
+        final suffix = local ? '' : '  \x1B[90m(remote)\x1B[0m';
+        _io.writeln('\x1B[34m$cs/\x1B[0m$suffix');
+      }
       return;
     }
-    for (final cs in stations) {
-      final local = _isLocalStation(cs);
-      final suffix = local ? '' : '  \x1B[90m(remote)\x1B[0m';
-      _io.writeln('\x1B[34m$cs/\x1B[0m$suffix');
+
+    // Fallback: no station callsigns discovered, but we may still
+    // have chat rooms (e.g. client profile connected to a station).
+    // List rooms directly at /chat level for backward compat.
+    final station = _station;
+    if (station != null) {
+      final rooms = station.chatRoomsReadable;
+      if (rooms.isNotEmpty) {
+        for (final room in rooms.values) {
+          _io.writeln('\x1B[34m${room.id}/\x1B[0m  ${room.name}');
+        }
+        return;
+      }
     }
+
+    _io.writeln('(no stations)');
   }
 
   /// `ls /chat/<station>` or `ls /chat/<station>/<room>`.
+  /// Also handles flat-room mode: `ls /chat/<room>`.
   void _listChatSubPath(String path) {
     final segments = path.substring(1).split('/'); // ['chat', station, ?room]
-    final stationCs = segments.length > 1 ? segments[1] : null;
-    final roomId = segments.length > 2 ? segments[2] : null;
+    final secondSegment = segments.length > 1 ? segments[1] : null;
+    if (secondSegment == null) return;
 
-    if (stationCs == null) return;
+    // Check if we're in flat-room mode (second segment is a room, not station)
+    if (_isFlatRoomMode) {
+      final station = _station;
+      if (station != null) {
+        final room = station.chatRoomsReadable[secondSegment];
+        if (room != null) {
+          _io.writeln('${room.readableMessages.length} messages');
+          if (room.readableMessages.isNotEmpty) {
+            final lastMsg = room.readableMessages.last;
+            _io.writeln('Last activity: ${lastMsg.timestamp.toLocal()}');
+          }
+          return;
+        }
+      }
+      _io.writeln('\x1B[31mRoom not found\x1B[0m');
+      return;
+    }
+
+    // Station hierarchy mode
+    final stationCs = secondSegment;
+    final roomId = segments.length > 2 ? segments[2] : null;
 
     if (roomId != null) {
       // ls /chat/<station>/<room> — show room metadata
@@ -477,17 +524,25 @@ class NavigationHandler {
       return;
     }
 
-    final segments = path.substring(1).split('/'); // ['chat', station?, room?]
-    if (segments.length >= 2) {
-      _currentChatStation = segments[1];
+    final segments = path.substring(1).split('/'); // ['chat', ...]
+
+    if (_isFlatRoomMode) {
+      // Flat mode: /chat/<room> — station callsign comes from station interface
+      _currentChatStation = _station?.settings.callsign;
+      _currentChatRoom = segments.length >= 2 ? segments[1] : null;
     } else {
-      _currentChatStation = null;
+      // Station hierarchy mode: /chat/<station>/<room>
+      _currentChatStation = segments.length >= 2 ? segments[1] : null;
+      _currentChatRoom = segments.length >= 3 ? segments[2] : null;
     }
-    if (segments.length >= 3) {
-      _currentChatRoom = segments[2];
-    } else {
-      _currentChatRoom = null;
-    }
+  }
+
+  /// Whether we are in flat-room mode (no station callsigns, but rooms exist).
+  bool get _isFlatRoomMode {
+    final stations = _getStationCallsigns();
+    if (stations.isNotEmpty) return false;
+    final station = _station;
+    return station != null && station.chatRoomsReadable.isNotEmpty;
   }
 
   /// Validate that a path corresponds to an existing virtual directory.
@@ -499,22 +554,31 @@ class NavigationHandler {
     final rootDir = parts[0];
     if (!_provider.rootDirs.contains(rootDir)) return false;
 
-    // /chat/<station> — validate station callsign
+    // /chat/<...> — validate station or flat-room paths
     if (rootDir == 'chat' && parts.length >= 2) {
-      final stationCs = parts[1];
+      final secondSegment = parts[1];
       final knownStations = _getStationCallsigns();
-      if (!knownStations.contains(stationCs)) return false;
 
-      // /chat/<station>/<room> — validate room exists (local only)
-      if (parts.length >= 3) {
-        final roomId = parts[2];
-        if (_isLocalStation(stationCs)) {
-          final station = _station;
-          if (station == null) return false;
-          if (!station.chatRoomsReadable.containsKey(roomId)) return false;
-        } else {
-          return false; // can't cd into remote station rooms
+      if (knownStations.contains(secondSegment)) {
+        // /chat/<station> — station hierarchy mode
+        if (parts.length >= 3) {
+          final roomId = parts[2];
+          if (_isLocalStation(secondSegment)) {
+            final station = _station;
+            if (station == null) return false;
+            if (!station.chatRoomsReadable.containsKey(roomId)) return false;
+          } else {
+            return false; // can't cd into remote station rooms
+          }
         }
+      } else if (_isFlatRoomMode) {
+        // /chat/<room> — flat room mode (no station callsigns available)
+        final station = _station;
+        if (station == null) return false;
+        if (!station.chatRoomsReadable.containsKey(secondSegment)) return false;
+        if (parts.length > 2) return false; // no deeper nesting
+      } else {
+        return false;
       }
     }
 
@@ -523,13 +587,16 @@ class NavigationHandler {
 
   /// Get station callsigns for /chat listing.
   ///
-  /// Includes: local station + known remote stations from device list.
+  /// Includes: local station (if it has a valid callsign) + known remote
+  /// stations from the device list. Does not require `isRunning` — a client
+  /// profile connected to a station still has chat rooms available.
   List<String> _getStationCallsigns() {
     final stations = <String>{};
 
-    // Local station callsign
+    // Local station callsign (include even if not "running" —
+    // client profiles connected to stations have chat rooms too)
     final stationIf = _station;
-    if (stationIf != null && stationIf.isRunning) {
+    if (stationIf != null) {
       final cs = stationIf.settings.callsign;
       if (cs.isNotEmpty && CallsignGenerator.isStationCallsign(cs)) {
         stations.add(cs);
