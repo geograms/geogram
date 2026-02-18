@@ -15,7 +15,20 @@ String getNostrLoginHeaderHtml() {
   return '''
 <div class="nostr-header-login" id="nostr-header-login">
   <button class="nostr-header-btn" id="nostr-header-connect">Connect with Nostr</button>
-  <span class="nostr-header-callsign" id="nostr-header-callsign" style="display:none;"></span>
+  <div class="nostr-profile-wrapper" id="nostr-profile-wrapper" style="display:none;">
+    <span class="nostr-header-callsign" id="nostr-header-callsign"></span>
+    <div class="nostr-profile-menu" id="nostr-profile-menu" style="display:none;">
+      <div class="nostr-profile-field">
+        <label>Callsign</label>
+        <span id="nostr-profile-callsign"></span>
+      </div>
+      <div class="nostr-profile-field">
+        <label>Nickname</label>
+        <input type="text" id="nostr-profile-nickname" placeholder="Enter nickname..." maxlength="20">
+      </div>
+      <button id="nostr-profile-save" class="nostr-header-btn">Save</button>
+    </div>
+  </div>
 </div>
 ''';
 }
@@ -64,6 +77,59 @@ String getNostrLoginStyles() {
   font-weight: bold;
   letter-spacing: 0.05em;
   white-space: nowrap;
+  cursor: pointer;
+}
+
+.nostr-profile-wrapper {
+  position: relative;
+}
+
+.nostr-profile-menu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: 6px;
+  background: var(--background, #1a1a2e);
+  border: 1px solid var(--accent);
+  padding: 12px;
+  min-width: 220px;
+  z-index: 1000;
+}
+
+.nostr-profile-field {
+  margin-bottom: 10px;
+}
+
+.nostr-profile-field label {
+  display: block;
+  color: var(--accent);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 3px;
+  opacity: 0.7;
+}
+
+.nostr-profile-field span {
+  color: var(--foreground, #ccc);
+  font-size: 0.85rem;
+  font-weight: bold;
+}
+
+.nostr-profile-field input {
+  width: 100%;
+  box-sizing: border-box;
+  background: transparent;
+  border: 1px solid var(--accent);
+  color: var(--foreground, #ccc);
+  padding: 4px 8px;
+  font-family: inherit;
+  font-size: 0.85rem;
+}
+
+.nostr-profile-menu .nostr-header-btn {
+  width: 100%;
+  margin-top: 4px;
 }
 </style>
 ''';
@@ -128,15 +194,18 @@ String getNostrLoginScripts() {
     return bytesToHex(new Uint8Array(hash));
   }
 
-  window.GeogramNostr = { pubkey: null, callsign: null, connected: false };
+  window.GeogramNostr = { pubkey: null, callsign: null, nickname: null, connected: false };
 
-  function updateHeaderUI(callsign) {
+  function updateHeaderUI() {
     var btn = document.getElementById('nostr-header-connect');
+    var wrapper = document.getElementById('nostr-profile-wrapper');
     var csEl = document.getElementById('nostr-header-callsign');
+    var callsign = window.GeogramNostr.callsign;
+    var nickname = window.GeogramNostr.nickname;
     if (btn) btn.style.display = 'none';
+    if (wrapper) wrapper.style.display = '';
     if (csEl) {
-      csEl.textContent = callsign;
-      csEl.style.display = '';
+      csEl.textContent = nickname ? nickname + ' (' + callsign + ')' : callsign;
     }
   }
 
@@ -146,7 +215,11 @@ String getNostrLoginScripts() {
     window.GeogramNostr.callsign = callsign;
     window.GeogramNostr.connected = true;
     try { localStorage.setItem('geogram_nostr_pubkey', pubkey); } catch(e) {}
-    updateHeaderUI(callsign);
+    try {
+      var saved = localStorage.getItem('geogram_nostr_nickname');
+      if (saved) window.GeogramNostr.nickname = saved;
+    } catch(e) {}
+    updateHeaderUI();
     document.dispatchEvent(new CustomEvent('nostr-connected', { detail: { pubkey: pubkey, callsign: callsign } }));
   }
 
@@ -264,6 +337,41 @@ String getNostrLoginScripts() {
 
     if (connectBtn) {
       connectBtn.addEventListener('click', handleConnectClick);
+    }
+
+    // Profile menu toggle
+    var csEl = document.getElementById('nostr-header-callsign');
+    var profileMenu = document.getElementById('nostr-profile-menu');
+    if (csEl && profileMenu) {
+      csEl.addEventListener('click', function(e) {
+        e.stopPropagation();
+        var isOpen = profileMenu.style.display !== 'none';
+        profileMenu.style.display = isOpen ? 'none' : '';
+        if (!isOpen) {
+          var pcs = document.getElementById('nostr-profile-callsign');
+          var pnick = document.getElementById('nostr-profile-nickname');
+          if (pcs) pcs.textContent = window.GeogramNostr.callsign || '';
+          if (pnick) pnick.value = window.GeogramNostr.nickname || '';
+        }
+      });
+      profileMenu.addEventListener('click', function(e) { e.stopPropagation(); });
+      document.addEventListener('click', function() { profileMenu.style.display = 'none'; });
+    }
+
+    // Profile save
+    var saveBtn = document.getElementById('nostr-profile-save');
+    if (saveBtn) {
+      saveBtn.addEventListener('click', function() {
+        var input = document.getElementById('nostr-profile-nickname');
+        var val = input ? input.value.trim() : '';
+        window.GeogramNostr.nickname = val || null;
+        try {
+          if (val) localStorage.setItem('geogram_nostr_nickname', val);
+          else localStorage.removeItem('geogram_nostr_nickname');
+        } catch(e) {}
+        updateHeaderUI();
+        profileMenu.style.display = 'none';
+      });
     }
 
     // Poll for NIP-07 extension
