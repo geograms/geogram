@@ -7226,7 +7226,7 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, EmailHandlerMixin,
     final file = File('${PureStorageConfig().baseDir}/themes/default/$relativePath');
     if (await file.exists()) {
       request.response.headers.set('Content-Type', 'text/css');
-      request.response.headers.set('Cache-Control', 'public, max-age=3600');
+      request.response.headers.set('Cache-Control', 'no-cache');
       request.response.write(await file.readAsString());
     } else {
       request.response.statusCode = 404;
