@@ -270,8 +270,8 @@ class AppService {
         return;
       }
 
-      // Get combined styles for external stylesheet
-      final combinedStyles = await themeService.getCombinedStyles('www');
+      // Get app-specific styles (global styles served separately via /styles.css)
+      final combinedStyles = await themeService.getAppStyles('www') ?? '';
 
       // Use callsign as the display name
       final displayName = _currentCallsign ?? 'My Website';
@@ -561,8 +561,8 @@ class AppService {
       final template = await themeService.getTemplate('blog');
       if (template == null) return;
 
-      // Get combined styles for external stylesheet
-      final combinedStyles = await themeService.getCombinedStyles('blog');
+      // Get app-specific styles (global styles served separately via /styles.css)
+      final combinedStyles = await themeService.getAppStyles('blog') ?? '';
 
       // Get cache data
       final cache = await getBlogCacheOrRegenerate(blogAppPath);
@@ -844,8 +844,8 @@ class AppService {
       final template = await themeService.getTemplate('chat');
       if (template == null) return;
 
-      // Get combined styles for external stylesheet
-      final combinedStyles = await themeService.getCombinedStyles('chat');
+      // Get app-specific styles (global styles served separately via /styles.css)
+      final combinedStyles = await themeService.getAppStyles('chat') ?? '';
 
       // Get chat rooms
       final chatService = ChatService();
@@ -4674,8 +4674,8 @@ window.APP_DATA_FULL = $jsonData;
         return;
       }
 
-      // Get combined styles for external stylesheet
-      final combinedStyles = await themeService.getCombinedStyles('home');
+      // Get app-specific styles (global styles served separately via /styles.css)
+      final combinedStyles = await themeService.getAppStyles('home') ?? '';
 
       // Aggregate data from apps
       final recentPosts = await _getRecentBlogPosts(targetCallsign, limit: 5);

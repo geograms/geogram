@@ -2630,6 +2630,12 @@ class PureStationServer with EmailHandlerMixin, BlogHandlerMixin, ConsoleCommand
         await _handleRoot(request);
       } else if (path == '/download' || path == '/download/') {
         await _handleDownload(request);
+      } else if (path == '/styles.css') {
+        await _handleThemeFile('styles.css', request);
+      } else if (path.endsWith('/styles.css') && path.split('/').length == 3) {
+        // Serve app-specific CSS: /chat/styles.css, /blog/styles.css, etc.
+        final app = path.split('/')[1];
+        await _handleThemeFile('$app/styles.css', request);
       } else if (path == '/chat' || path == '/chat/') {
         await _handleChatPage(request);
       } else if (_isAlertFileUploadPath(path) && method == 'POST') {
@@ -7315,26 +7321,30 @@ class PureStationServer with EmailHandlerMixin, BlogHandlerMixin, ConsoleCommand
     );
   }
 
+  /// Serve a CSS file from the themes directory
+  Future<void> _handleThemeFile(String relativePath, HttpRequest request) async {
+    final file = File('${PureStorageConfig().baseDir}/themes/default/$relativePath');
+    if (await file.exists()) {
+      request.response.headers.set('Content-Type', 'text/css');
+      request.response.headers.set('Cache-Control', 'public, max-age=3600');
+      request.response.write(await file.readAsString());
+    } else {
+      request.response.statusCode = 404;
+      request.response.write('Not Found');
+    }
+    await request.response.close();
+  }
+
   /// Handle /chat page - shows station's chat rooms
   /// Reuses the same template pattern as remote device chat pages
   Future<void> _handleChatPage(HttpRequest request) async {
     final stationName = (_settings.name?.isNotEmpty == true) ? _settings.name! : _settings.callsign;
 
-    // Read theme files directly from disk (CLI mode, no Flutter)
+    // Read theme template from disk (CSS is served via /styles.css routes)
     final themesDir = '${PureStorageConfig().baseDir}/themes/default';
-    String globalStyles = '';
-    String appStyles = '';
     String? template;
 
     try {
-      final globalStylesFile = File('$themesDir/styles.css');
-      if (await globalStylesFile.exists()) {
-        globalStyles = await globalStylesFile.readAsString();
-      }
-      final appStylesFile = File('$themesDir/chat/styles.css');
-      if (await appStylesFile.exists()) {
-        appStyles = await appStylesFile.readAsString();
-      }
       final templateFile = File('$themesDir/chat/index.html');
       if (await templateFile.exists()) {
         template = await templateFile.readAsString();
@@ -7454,8 +7464,8 @@ class PureStationServer with EmailHandlerMixin, BlogHandlerMixin, ConsoleCommand
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1">
   <title>Chat - ${escapeHtml(stationName)}</title>
-  <style>$globalStyles</style>
-  <style>$appStyles</style>
+  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="styles.css">
 </head>
 <body>
 <div class="container">
