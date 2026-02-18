@@ -317,10 +317,12 @@ String getChatPageScripts() {
       }
 
       function scrollToBottom(force) {
-        const container = document.getElementById('messages');
-        if (container && (force || isNearBottom())) {
-          container.scrollTop = container.scrollHeight;
-        }
+        requestAnimationFrame(() => {
+          const container = document.getElementById('messages');
+          if (container && (force || isNearBottom())) {
+            container.scrollTop = container.scrollHeight;
+          }
+        });
       }
 
       // --- Nostr chat integration (uses window.GeogramNostr from nostr_login_scripts) ---

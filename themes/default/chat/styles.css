@@ -12,6 +12,7 @@ html.chat-page, .chat-page body {
   height: 100dvh;
   max-height: 100vh;
   max-height: 100dvh;
+  min-height: 0 !important;
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -29,10 +30,12 @@ html.chat-page, .chat-page body {
 .chat-layout {
   display: grid;
   grid-template-columns: 180px 1fr;
+  grid-template-rows: 1fr;
   gap: 30px;
   width: 100%;
   flex: 1;
   min-height: 0;
+  overflow: hidden;
 }
 
 /* Channels sidebar */
@@ -89,6 +92,7 @@ html.chat-page, .chat-page body {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  overflow: hidden;
 }
 
 .messages-header {
