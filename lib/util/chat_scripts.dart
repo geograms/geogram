@@ -163,6 +163,30 @@ String getChatPageScripts() {
       let nostrCallsign = null;
       let sending = false;
 
+      const BECH32_CHARSET = 'qpzry9x8gf2tvdw0s3jn54khce6mua7l';
+
+      function deriveCallsign(hexPubkey) {
+        // Convert first 3 hex bytes to byte array
+        const bytes = [];
+        for (let i = 0; i < 6 && i < hexPubkey.length; i += 2) {
+          bytes.push(parseInt(hexPubkey.substr(i, 2), 16));
+        }
+        // Convert 8-bit groups to 5-bit groups
+        let acc = 0, bits = 0;
+        const groups = [];
+        for (const b of bytes) {
+          acc = (acc << 8) | b;
+          bits += 8;
+          while (bits >= 5) {
+            bits -= 5;
+            groups.push((acc >> bits) & 31);
+          }
+        }
+        // Map through bech32 charset, take first 4, uppercase
+        const suffix = groups.slice(0, 4).map(v => BECH32_CHARSET[v]).join('').toUpperCase();
+        return 'X1' + suffix;
+      }
+
       function detectNostr(attempts) {
         if (window.nostr) {
           document.getElementById('nostr-login').style.display = '';
@@ -178,28 +202,13 @@ String getChatPageScripts() {
       async function connectNostr() {
         try {
           nostrPubkey = await window.nostr.getPublicKey();
+          nostrCallsign = deriveCallsign(nostrPubkey);
           document.getElementById('nostr-login').style.display = 'none';
-
-          // Show nickname prompt, pre-fill with saved callsign or empty
-          const saved = localStorage.getItem('geogram_callsign') || '';
-          const nicknameInput = document.getElementById('nickname-input');
-          nicknameInput.value = saved;
-          document.getElementById('nostr-nickname').style.display = '';
-          nicknameInput.focus();
+          document.getElementById('chat-input-area').style.display = '';
+          document.getElementById('chat-input').focus();
         } catch (e) {
           console.error('Nostr connect error:', e);
         }
-      }
-
-      function confirmNickname() {
-        const input = document.getElementById('nickname-input');
-        const name = input.value.trim();
-        if (!name) return;
-        nostrCallsign = name;
-        localStorage.setItem('geogram_callsign', name);
-        document.getElementById('nostr-nickname').style.display = 'none';
-        document.getElementById('chat-input-area').style.display = '';
-        document.getElementById('chat-input').focus();
       }
 
       function showChatError(msg) {
@@ -280,10 +289,6 @@ String getChatPageScripts() {
         detectNostr(10);
 
         document.getElementById('nostr-connect').addEventListener('click', connectNostr);
-        document.getElementById('nickname-ok').addEventListener('click', confirmNickname);
-        document.getElementById('nickname-input').addEventListener('keydown', function(e) {
-          if (e.key === 'Enter') { e.preventDefault(); confirmNickname(); }
-        });
         document.getElementById('chat-send').addEventListener('click', sendMessage);
         document.getElementById('chat-input').addEventListener('keydown', function(e) {
           if (e.key === 'Enter' && !e.shiftKey) {

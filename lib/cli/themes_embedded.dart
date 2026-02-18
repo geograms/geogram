@@ -533,14 +533,7 @@ class ThemesEmbedded {
         <div class="nostr-login" id="nostr-login" style="display:none;">
           <button id="nostr-connect">Connect with Nostr</button>
         </div>
-        <div class="nostr-nickname" id="nostr-nickname" style="display:none;">
-          <label for="nickname-input">Choose your callsign:</label>
-          <div class="nickname-row">
-            <input type="text" id="nickname-input" placeholder="e.g. X1SU86" autocomplete="off" maxlength="20">
-            <button id="nickname-ok">Join</button>
-          </div>
-        </div>
-        <div class="nostr-unavailable" id="nostr-unavailable" style="display:none;">
+<div class="nostr-unavailable" id="nostr-unavailable" style="display:none;">
           <span>Install a <a href="https://github.com/nicknsy/nicknsy/blob/main/nostr-extensions.md" target="_blank">Nostr extension</a> to join the chat</span>
         </div>
       </div>
@@ -831,59 +824,6 @@ class ThemesEmbedded {
 .nostr-login button:hover {
   background: var(--accent);
   color: var(--background);
-}
-
-/* Nostr nickname prompt */
-.nostr-nickname {
-  padding-top: 15px;
-  border-top: 1px solid var(--border-color);
-  margin-top: 10px;
-  text-align: center;
-}
-
-.nostr-nickname label {
-  display: block;
-  margin-bottom: 8px;
-  color: var(--accent-alpha-70);
-  font-size: 0.9rem;
-}
-
-.nickname-row {
-  display: flex;
-  gap: 8px;
-  justify-content: center;
-}
-
-.nickname-row input {
-  background: var(--background);
-  border: 1px solid var(--border-color);
-  color: var(--color);
-  padding: 8px 12px;
-  font-family: inherit;
-  font-size: 0.95rem;
-  outline: none;
-  width: 160px;
-  text-align: center;
-}
-
-.nickname-row input:focus {
-  border-color: var(--accent);
-}
-
-.nickname-row button {
-  background: var(--accent);
-  color: var(--background);
-  border: none;
-  padding: 8px 16px;
-  font-family: inherit;
-  font-size: 0.95rem;
-  cursor: pointer;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-
-.nickname-row button:hover {
-  opacity: 0.85;
 }
 
 /* Nostr unavailable message */
