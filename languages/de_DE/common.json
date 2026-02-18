@@ -978,6 +978,7 @@
   "moderator_added": "Moderator hinzugefügt",
   "moderator_removed": "Moderator entfernt",
   "read_only_station_offline": "Schreibgeschützter Modus – Station ist offline",
+  "connecting": "Verbinde...",
   "online": "Online",
   "offline_cached": "Offline (im Cache)",
   "refresh_rooms": "Räume aktualisieren",

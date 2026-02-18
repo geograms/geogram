@@ -978,6 +978,7 @@
   "moderator_added": "Moderator added",
   "moderator_removed": "Moderator removed",
   "read_only_station_offline": "Read-only mode - station is offline",
+  "connecting": "Connecting...",
   "online": "Online",
   "offline_cached": "Offline (cached)",
   "refresh_rooms": "Refresh rooms",

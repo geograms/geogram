@@ -48,6 +48,9 @@ import 'room_management_page.dart';
 import 'photo_viewer_page.dart';
 import '../platform/file_image_helper.dart' as file_helper;
 
+/// Connection status for the station: connecting (initial), online, or offline.
+enum _StationConnectionStatus { connecting, online, offline }
+
 /// Page for browsing and interacting with a chat collection
 class ChatBrowserPage extends StatefulWidget {
   final App? app;
@@ -103,7 +106,8 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
   List<StationChatMessage> _stationMessages = [];
   final Map<String, List<StationChatMessage>> _stationMessageCache = {};
   bool _loadingRelayRooms = false;
-  bool _stationReachable = false; // Track if station is currently reachable (default false until confirmed)
+  _StationConnectionStatus _connectionStatus = _StationConnectionStatus.connecting;
+  bool get _stationReachable => _connectionStatus == _StationConnectionStatus.online;
   bool _forcedOfflineMode = false; // True when viewing a device explicitly marked as offline
   bool _isStationSending = false; // Sending message to station room
   String? _syncProgressText; // "Loading Jan 15..." shown during progressive sync
@@ -479,7 +483,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       if (!wasReachable) {
         LogService().log('Station status changed: offline -> online');
         setState(() {
-          _stationReachable = true;
+          _connectionStatus = _StationConnectionStatus.online;
           _stationRooms = rooms;
         });
       }
@@ -494,7 +498,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       if (mounted && wasReachable) {
         LogService().log('Station status changed: online -> offline');
         setState(() {
-          _stationReachable = false;
+          _connectionStatus = _StationConnectionStatus.offline;
         });
       }
     }
@@ -633,7 +637,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       if (cachedRooms.isNotEmpty) {
         _setStateIfMounted(() {
           _stationRooms = cachedRooms;
-          _stationReachable = false;
+          // Keep _connectionStatus as connecting — fetch hasn't happened yet
         });
       }
 
@@ -662,7 +666,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       if (cachedRooms.isNotEmpty) {
         _setStateIfMounted(() {
           _stationRooms = cachedRooms;
-          _stationReachable = false;
+          // Keep _connectionStatus as connecting — fetch hasn't happened yet
         });
       }
     }
@@ -680,7 +684,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     }
 
     _setStateIfMounted(() {
-      _stationReachable = false;
+      _connectionStatus = _StationConnectionStatus.offline;
       _loadingRelayRooms = false;
     });
   }
@@ -697,7 +701,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
         if (rooms.isNotEmpty) {
           _stationRooms = rooms;
         }
-        _stationReachable = rooms.isNotEmpty;
+        _connectionStatus = rooms.isNotEmpty ? _StationConnectionStatus.online : _StationConnectionStatus.offline;
         _loadingRelayRooms = false;
       });
 
@@ -707,7 +711,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     } catch (e) {
       LogService().log('DEBUG _fetchRelayRoomsFromRemote: fetch failed: $e');
       _setStateIfMounted(() {
-        _stationReachable = false;
+        _connectionStatus = _StationConnectionStatus.offline;
         _loadingRelayRooms = false;
       });
     }
@@ -725,7 +729,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
         if (rooms.isNotEmpty) {
           _stationRooms = rooms;
         }
-        _stationReachable = rooms.isNotEmpty;
+        _connectionStatus = rooms.isNotEmpty ? _StationConnectionStatus.online : _StationConnectionStatus.offline;
         _loadingRelayRooms = false;
       });
 
@@ -735,7 +739,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     } catch (e) {
       LogService().log('DEBUG _fetchRelayRoomsFromStation: fetch failed: $e');
       _setStateIfMounted(() {
-        _stationReachable = false;
+        _connectionStatus = _StationConnectionStatus.offline;
         _loadingRelayRooms = false;
       });
     }
@@ -880,7 +884,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     }
 
     // Set reachability based on device status - this determines if we try online or cache first
-    _stationReachable = device.isOnline;
+    _connectionStatus = device.isOnline ? _StationConnectionStatus.online : _StationConnectionStatus.offline;
 
     await _selectRelayRoom(room);
   }
@@ -1520,14 +1524,14 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       } else {
         // Send failed - station may be unreachable
         _setStateIfMounted(() {
-          _stationReachable = false;
+          _connectionStatus = _StationConnectionStatus.offline;
         });
         _showError('Failed to send message - station offline');
       }
     } catch (e) {
       // Station became unreachable - update status
       _setStateIfMounted(() {
-        _stationReachable = false;
+        _connectionStatus = _StationConnectionStatus.offline;
       });
       _showError('Station offline - message not sent');
     }
@@ -3003,7 +3007,11 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
                     height: 10,
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
-                      color: _stationReachable ? Colors.green : Colors.red.shade400,
+                      color: _connectionStatus == _StationConnectionStatus.online
+                          ? Colors.green
+                          : _connectionStatus == _StationConnectionStatus.connecting
+                              ? Colors.grey
+                              : Colors.red.shade400,
                     ),
                   ),
                   const SizedBox(width: 10),
@@ -3023,11 +3031,17 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
                           ),
                         ),
                         Text(
-                          _stationReachable ? _i18n.t('online') : _i18n.t('offline_cached'),
+                          _connectionStatus == _StationConnectionStatus.online
+                              ? _i18n.t('online')
+                              : _connectionStatus == _StationConnectionStatus.connecting
+                                  ? _i18n.t('connecting')
+                                  : _i18n.t('offline_cached'),
                           style: theme.textTheme.bodySmall?.copyWith(
-                            color: _stationReachable
+                            color: _connectionStatus == _StationConnectionStatus.online
                                 ? Colors.green.shade700
-                                : theme.colorScheme.error,
+                                : _connectionStatus == _StationConnectionStatus.connecting
+                                    ? Colors.grey
+                                    : theme.colorScheme.error,
                           ),
                         ),
                       ],
@@ -3219,7 +3233,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
             onTap: () {
               _lastRelayCacheKey = cachedDevice.callsign;
               _lastStationUrl = cachedDevice.url;
-              _stationReachable = cachedDevice.isOnline;
+              _connectionStatus = cachedDevice.isOnline ? _StationConnectionStatus.online : _StationConnectionStatus.offline;
               _forcedOfflineMode = !cachedDevice.isOnline;
               _selectRelayRoom(room);
             },
@@ -3381,7 +3395,11 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
                   height: 10,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
-                    color: _stationReachable ? Colors.green : Colors.red.shade400,
+                    color: _connectionStatus == _StationConnectionStatus.online
+                        ? Colors.green
+                        : _connectionStatus == _StationConnectionStatus.connecting
+                            ? Colors.grey
+                            : Colors.red.shade400,
                   ),
                 ),
                 const SizedBox(width: 10),
@@ -3412,15 +3430,25 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                   decoration: BoxDecoration(
-                    color: _stationReachable
+                    color: _connectionStatus == _StationConnectionStatus.online
                         ? Colors.green.withOpacity(0.1)
-                        : Colors.red.withOpacity(0.1),
+                        : _connectionStatus == _StationConnectionStatus.connecting
+                            ? Colors.grey.withOpacity(0.1)
+                            : Colors.red.withOpacity(0.1),
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: Text(
-                    _stationReachable ? _i18n.t('online') : _i18n.t('offline_cached'),
+                    _connectionStatus == _StationConnectionStatus.online
+                        ? _i18n.t('online')
+                        : _connectionStatus == _StationConnectionStatus.connecting
+                            ? _i18n.t('connecting')
+                            : _i18n.t('offline_cached'),
                     style: theme.textTheme.bodySmall?.copyWith(
-                      color: _stationReachable ? Colors.green.shade700 : Colors.red.shade700,
+                      color: _connectionStatus == _StationConnectionStatus.online
+                          ? Colors.green.shade700
+                          : _connectionStatus == _StationConnectionStatus.connecting
+                              ? Colors.grey.shade700
+                              : Colors.red.shade700,
                     ),
                   ),
                 ),
