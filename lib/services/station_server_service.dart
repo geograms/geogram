@@ -46,6 +46,7 @@ import '../util/html_utils.dart';
 import '../util/station_html_templates.dart';
 import '../util/web_navigation.dart';
 import '../version.dart';
+import 'cli_console_controller.dart';
 import 'contact_service.dart';
 import 'nostr_blossom_service.dart';
 import 'nostr_relay_service.dart';
@@ -435,6 +436,9 @@ class StationServerService {
   // Pending HTTP proxy requests (requestId -> completer)
   final Map<String, Completer<Map<String, dynamic>>> _pendingHttpRequests = {};
 
+  // Console controller for /api/cli
+  CliConsoleController? _cliController;
+
   // Update mirror state
   Timer? _updatePollTimer;
   Map<String, dynamic>? _cachedRelease;
@@ -774,6 +778,8 @@ class StationServerService {
         await _handleWhisperLibraryRequest(request);
       } else if (path.startsWith('/console/vm/')) {
         await _handleConsoleVmRequest(request);
+      } else if (path == '/api/cli' && method == 'POST') {
+        await _handleCliCommand(request);
       } else if (_isBlogPath(path)) {
         await _handleBlogRequest(request);
       } else if (path.contains('/api/dm/')) {
@@ -1635,6 +1641,35 @@ class StationServerService {
       'country': result?.country,
       'countryCode': result?.countryCode,
     }));
+  }
+
+  /// Handle /api/cli endpoint - execute console commands
+  Future<void> _handleCliCommand(HttpRequest request) async {
+    final body = await utf8.decoder.bind(request).join();
+    final data = jsonDecode(body) as Map<String, dynamic>;
+    final command = data['command'] as String?;
+
+    if (command == null || command.trim().isEmpty) {
+      request.response.headers.contentType = ContentType.json;
+      request.response.statusCode = 400;
+      request.response.write(jsonEncode({'status': 'error', 'error': 'Missing command'}));
+      return;
+    }
+
+    try {
+      _cliController ??= CliConsoleController()..initialize();
+      final output = await _cliController!.processCommand(command);
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({
+        'status': 'ok',
+        'output': output,
+        'path': _cliController!.currentPath,
+      }));
+    } catch (e) {
+      request.response.headers.contentType = ContentType.json;
+      request.response.statusCode = 500;
+      request.response.write(jsonEncode({'status': 'error', 'error': e.toString()}));
+    }
   }
 
   /// Handle /api/clients endpoint - returns list of connected clients

@@ -54,6 +54,7 @@ import 'station_service.dart';
 import 'station_server_service_stub.dart' if (dart.library.ui) 'station_server_service.dart';
 import 'websocket_service.dart';
 import 'web_theme_service.dart';
+import 'cli_console_controller.dart';
 import 'email_service.dart';
 import '../models/email_thread.dart';
 import '../bot/models/music_model_info.dart';
@@ -92,6 +93,9 @@ class LogApiService {
   static bool mirrorSetupOpen = false;
 
   final Map<String, StreamSubscription<double>> _botDownloadSubscriptions = {};
+
+  /// Console controller for /api/cli
+  CliConsoleController? _cliController;
 
   /// Get the configured port from AppArgs (defaults to 3456)
   int get port => AppArgs().port;
@@ -501,6 +505,11 @@ class LogApiService {
       return await _handleWalletSyncRequest(request, headers);
     }
 
+    // Console command API
+    if (urlPath == 'api/cli' && request.method == 'POST') {
+      return await _handleCliCommand(request, headers);
+    }
+
     // API root: /api/ or /api
     if ((urlPath == 'api' || urlPath == 'api/') && request.method == 'GET') {
       return _handleApiRootRequest(headers);
@@ -521,6 +530,42 @@ class LogApiService {
       jsonEncode({'error': 'Not found', 'hint': 'API endpoints are available at /api/'}),
       headers: headers,
     );
+  }
+
+  /// Handle /api/cli endpoint - execute console commands
+  Future<shelf.Response> _handleCliCommand(shelf.Request request, Map<String, String> headers) async {
+    try {
+      final body = await request.readAsString();
+      final data = jsonDecode(body) as Map<String, dynamic>;
+      final command = data['command'] as String?;
+
+      if (command == null || command.trim().isEmpty) {
+        return shelf.Response(400,
+          body: jsonEncode({'status': 'error', 'error': 'Missing command'}),
+          headers: headers,
+        );
+      }
+
+      if (_cliController == null) {
+        _cliController = CliConsoleController();
+        await _cliController!.initialize();
+      }
+
+      final output = await _cliController!.processCommand(command);
+      return shelf.Response.ok(
+        jsonEncode({
+          'status': 'ok',
+          'output': output,
+          'path': _cliController!.currentPath,
+        }),
+        headers: headers,
+      );
+    } catch (e) {
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'status': 'error', 'error': e.toString()}),
+        headers: headers,
+      );
+    }
   }
 
   /// Handle /api/ root endpoint - list available endpoints

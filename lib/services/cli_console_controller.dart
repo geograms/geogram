@@ -30,8 +30,10 @@ import '../cli/console_io_buffer.dart';
 import '../cli/game/game_config.dart';
 import '../cli/game/game_engine_io.dart';
 import '../models/profile.dart';
+import '../models/chat_channel.dart';
 import '../services/profile_service.dart';
 import '../services/callsign_generator.dart';
+import '../services/chat_service.dart';
 import '../services/station_server_service.dart';
 import '../services/storage_config.dart';
 import '../version.dart';
@@ -132,7 +134,13 @@ class _StationServiceAdapter implements StationCommandInterface {
   StationStatsReadable get stats => _StatsAdapter(_service);
 
   @override
-  Map<String, ChatRoomReadable> get chatRoomsReadable => {};
+  Map<String, ChatRoomReadable> get chatRoomsReadable {
+    final channels = ChatService().channels;
+    if (channels.isEmpty) return {};
+    return {
+      for (final ch in channels) ch.id: _ChatChannelAdapter(ch),
+    };
+  }
 
   @override
   Map<String, ConnectedClientReadable> get clientsReadable => {};
@@ -263,6 +271,21 @@ class _StatsAdapter implements StationStatsReadable {
   @override DateTime? get lastConnection => null;
   @override DateTime? get lastMessage => null;
   @override DateTime? get lastTileRequest => null;
+}
+
+/// Adapter wrapping [ChatChannel] as [ChatRoomReadable] for navigation.
+class _ChatChannelAdapter implements ChatRoomReadable {
+  final ChatChannel _ch;
+  _ChatChannelAdapter(this._ch);
+
+  @override String get id => _ch.id;
+  @override String get name => _ch.name;
+  @override String get description => _ch.description ?? '';
+  @override String get creatorCallsign => '';
+  @override DateTime get createdAt => _ch.created;
+  @override DateTime get lastActivity => _ch.lastMessageTime ?? _ch.created;
+  @override bool get isPublic => _ch.participants.contains('*');
+  @override List<ChatMessageReadable> get readableMessages => const [];
 }
 
 // ---------------------------------------------------------------------------
