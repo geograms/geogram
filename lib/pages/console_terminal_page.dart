@@ -54,6 +54,19 @@ class _ConsoleTerminalPageState extends State<ConsoleTerminalPage> {
   Future<void> _initializeAndShowBanner() async {
     await _controller.initialize();
 
+    // Set up late output callback (background refresh / polling)
+    _controller.onLateOutput = (output) {
+      if (mounted) {
+        setState(() {
+          var trimmed = output.trimRight();
+          if (trimmed.isNotEmpty) {
+            _spans.add(_TerminalSpan('$trimmed\n', isOutput: true));
+          }
+        });
+        _scrollToBottom();
+      }
+    };
+
     // Set up game output callback
     _controller.onGameOutput = (output) {
       if (mounted) {
@@ -76,6 +89,8 @@ class _ConsoleTerminalPageState extends State<ConsoleTerminalPage> {
 
   @override
   void dispose() {
+    _controller.onLateOutput = null;
+    _controller.onGameOutput = null;
     _inputController.dispose();
     _scrollController.dispose();
     _focusNode.dispose();

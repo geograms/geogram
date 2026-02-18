@@ -10,6 +10,8 @@ import 'dart:async';
 
 import 'dart:io' show Platform;
 
+import 'package:flutter/foundation.dart';
+
 import '../cli/commands/command.dart';
 import '../cli/commands/command_context.dart';
 import '../cli/commands/command_registry.dart';
@@ -229,6 +231,15 @@ class _StationServiceAdapter implements StationCommandInterface {
       } catch (_) {}
     }
 
+    return const [];
+  }
+
+  /// Get cached messages for a room without network access.
+  List<ChatMessageReadable> getCachedMessages(String roomId) {
+    final stationRoom = _stationRooms[roomId];
+    if (stationRoom != null) return stationRoom.readableMessages;
+    final localRoom = _localRooms[roomId];
+    if (localRoom != null) return localRoom.readableMessages;
     return const [];
   }
 
@@ -563,6 +574,15 @@ class CliConsoleController {
   /// Callback for when game output is available
   void Function(String output)? onGameOutput;
 
+  /// Callback for late-arriving messages (background refresh / polling).
+  void Function(String output)? onLateOutput;
+
+  /// Periodic timer for polling new messages while inside a chat room.
+  Timer? _pollTimer;
+
+  /// Number of messages already shown, to detect new ones.
+  int _lastShownMessageCount = 0;
+
   /// Detect the current platform environment.
   static CommandEnvironment _detectEnvironment() {
     if (Platform.isLinux) return CommandEnvironment.linux;
@@ -823,16 +843,22 @@ class CliConsoleController {
     // Handle navigation commands via shared handler
     if (command == 'ls') {
       if (_nav.isInChatRoom && args.isEmpty) {
-        await _showChatHistory();
+        _showChatHistory();
       } else {
         _nav.handleLs(args);
       }
       return _io.getOutput() ?? '';
     }
     if (command == 'cd') {
+      final wasInRoom = _nav.isInChatRoom;
       final entered = await _nav.handleCd(args);
       if (entered && _nav.isInChatRoom) {
-        await _showChatHistory(limit: 10);
+        final roomId = _nav.currentChatRoom;
+        _showChatHistory(limit: 10);
+        if (roomId != null) _startRoomPolling(roomId);
+      } else if (wasInRoom && !_nav.isInChatRoom) {
+        // Left the room — stop polling
+        _stopRoomPolling();
       }
       return _io.getOutput() ?? '';
     }
@@ -865,31 +891,84 @@ class CliConsoleController {
   // Chat history rendering
   // -------------------------------------------------------------------------
 
-  /// Render chat messages for the current room (fetches fresh data).
-  Future<void> _showChatHistory({int? limit}) async {
+  /// Format a single chat message as a terminal line.
+  static String _formatMessage(ChatMessageReadable m) {
+    final ts = m.timestamp.toLocal();
+    final timeStr = '${ts.year}-${ts.month.toString().padLeft(2, '0')}-'
+        '${ts.day.toString().padLeft(2, '0')} '
+        '${ts.hour.toString().padLeft(2, '0')}:${ts.minute.toString().padLeft(2, '0')}';
+    final sigIcon = m.hasSignature
+        ? (m.verified ? '\x1B[32m\u2713\x1B[0m' : '\x1B[31m\u2717\x1B[0m')
+        : '\x1B[90m\u25CB\x1B[0m';
+    return '\x1B[33m[$timeStr]\x1B[0m $sigIcon \x1B[36m${m.senderCallsign}:\x1B[0m ${m.content}';
+  }
+
+  /// Render chat messages from cache (instant), then fire background refresh.
+  void _showChatHistory({int? limit}) {
     final roomId = _nav.currentChatRoom;
     if (roomId == null) return;
 
-    // Fetch fresh messages from station or local storage
-    final messages = await _stationAdapter.refreshRoomMessages(roomId);
-    if (messages.isEmpty) {
+    // Render from in-memory cache (no network, instant)
+    final cached = _stationAdapter.getCachedMessages(roomId);
+    if (cached.isEmpty) {
       _io.writeln('(no messages)');
-      return;
+    } else {
+      final count = limit ?? 20;
+      final start = cached.length > count ? cached.length - count : 0;
+      for (var i = start; i < cached.length; i++) {
+        _io.writeln(_formatMessage(cached[i]));
+      }
     }
+    _lastShownMessageCount = cached.length;
 
-    final count = limit ?? 20;
-    final start = messages.length > count ? messages.length - count : 0;
-    for (var i = start; i < messages.length; i++) {
-      final m = messages[i];
-      final ts = m.timestamp.toLocal();
-      final timeStr = '${ts.year}-${ts.month.toString().padLeft(2, '0')}-'
-          '${ts.day.toString().padLeft(2, '0')} '
-          '${ts.hour.toString().padLeft(2, '0')}:${ts.minute.toString().padLeft(2, '0')}';
-      final sigIcon = m.hasSignature
-          ? (m.verified ? '\x1B[32m\u2713\x1B[0m' : '\x1B[31m\u2717\x1B[0m')
-          : '\x1B[90m\u25CB\x1B[0m';
-      _io.writeln('\x1B[33m[$timeStr]\x1B[0m $sigIcon \x1B[36m${m.senderCallsign}:\x1B[0m ${m.content}');
-    }
+    // Fire background refresh — push new messages via onLateOutput
+    _backgroundRefresh(roomId, cached.length);
+  }
+
+  /// Background refresh: fetch fresh messages and emit any new ones.
+  void _backgroundRefresh(String roomId, int previousCount) {
+    _stationAdapter.refreshRoomMessages(roomId).then((fresh) {
+      if (fresh.length > previousCount) {
+        final buf = StringBuffer();
+        for (var i = previousCount; i < fresh.length; i++) {
+          buf.writeln(_formatMessage(fresh[i]));
+        }
+        _lastShownMessageCount = fresh.length;
+        onLateOutput?.call(buf.toString());
+      }
+    }).catchError((e) {
+      debugPrint('Background refresh error: $e');
+    });
+  }
+
+  /// Start polling for new messages every 30 seconds.
+  void _startRoomPolling(String roomId) {
+    _stopRoomPolling();
+    _pollTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      if (_nav.currentChatRoom != roomId) {
+        _stopRoomPolling();
+        return;
+      }
+      final beforeCount = _lastShownMessageCount;
+      _stationAdapter.refreshRoomMessages(roomId).then((fresh) {
+        if (fresh.length > beforeCount) {
+          final buf = StringBuffer();
+          for (var i = beforeCount; i < fresh.length; i++) {
+            buf.writeln(_formatMessage(fresh[i]));
+          }
+          _lastShownMessageCount = fresh.length;
+          onLateOutput?.call(buf.toString());
+        }
+      }).catchError((e) {
+        debugPrint('Poll error: $e');
+      });
+    });
+  }
+
+  /// Stop room polling.
+  void _stopRoomPolling() {
+    _pollTimer?.cancel();
+    _pollTimer = null;
   }
 
   // -------------------------------------------------------------------------
