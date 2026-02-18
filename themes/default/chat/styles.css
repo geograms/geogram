@@ -1,7 +1,5 @@
 /* Chat styles - extends global Terminimal theme */
 
-/* ===== Desktop: original Terminimal look ===== */
-
 /* Chat layout - sidebar + messages */
 .chat-layout {
   display: grid;
@@ -95,7 +93,7 @@
   overflow-y: auto;
 }
 
-/* Individual message */
+/* Individual message - styled like a post */
 .message {
   padding: 15px 0;
   border-bottom: 1px solid var(--border-color);
@@ -146,8 +144,13 @@
   background: var(--border-color);
 }
 
-.date-separator::before { left: 0; }
-.date-separator::after { right: 0; }
+.date-separator::before {
+  left: 0;
+}
+
+.date-separator::after {
+  right: 0;
+}
 
 /* Status messages */
 .status-message {
@@ -164,31 +167,40 @@
 }
 
 /* Scrollbar */
-.messages-list::-webkit-scrollbar { width: 6px; }
-.messages-list::-webkit-scrollbar-track { background: transparent; }
-.messages-list::-webkit-scrollbar-thumb { background: var(--accent-alpha-20); border-radius: 3px; }
-.messages-list::-webkit-scrollbar-thumb:hover { background: var(--accent-alpha-70); }
+.messages-list::-webkit-scrollbar {
+  width: 6px;
+}
 
-/* Chat input area - ESP32 style */
+.messages-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.messages-list::-webkit-scrollbar-thumb {
+  background: var(--accent-alpha-20);
+  border-radius: 3px;
+}
+
+.messages-list::-webkit-scrollbar-thumb:hover {
+  background: var(--accent-alpha-70);
+}
+
+/* Chat input area */
 .chat-input-area {
   display: flex;
-  gap: 6px;
-  align-items: center;
-  padding: 8px 0;
+  gap: 8px;
+  padding-top: 15px;
   border-top: 1px solid var(--border-color);
   margin-top: 10px;
 }
 
 .chat-input-area input {
   flex: 1;
-  min-width: 0;
-  background: transparent;
+  background: var(--background);
   border: 1px solid var(--border-color);
-  border-radius: 4px;
-  padding: 8px;
   color: var(--color);
-  font-size: 0.95rem;
+  padding: 8px 12px;
   font-family: inherit;
+  font-size: 0.95rem;
   outline: none;
 }
 
@@ -197,22 +209,26 @@
 }
 
 .chat-input-area button {
-  flex-shrink: 0;
-  font-weight: bold;
   background: var(--accent);
   color: var(--background);
   border: none;
-  border-radius: 4px;
   padding: 8px 16px;
-  cursor: pointer;
   font-family: inherit;
   font-size: 0.95rem;
+  cursor: pointer;
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
 
-.chat-input-area button:hover { opacity: 0.85; }
-.chat-input-area button:disabled { opacity: 0.5; cursor: not-allowed; }
+.chat-input-area button:hover {
+  opacity: 0.85;
+}
+
+.chat-input-area button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 
 /* Chat error message */
 .chat-error {
@@ -221,9 +237,8 @@
   padding-top: 5px;
 }
 
-/* ===== Mobile: full-viewport ESP32-style app layout ===== */
+/* ===== Mobile: full-viewport layout ===== */
 @media (max-width: 683px) {
-  /* Lock viewport */
   html.chat-page,
   .chat-page body {
     height: 100vh !important;
@@ -237,8 +252,6 @@
     height: 100vh;
     height: 100dvh;
     min-height: 0 !important;
-    max-height: 100vh;
-    max-height: 100dvh;
     overflow: hidden;
     display: flex;
     flex-direction: column;
@@ -266,7 +279,6 @@
     display: none;
   }
 
-  /* Stack layout vertically */
   .chat-layout {
     display: flex;
     flex-direction: column;
@@ -275,9 +287,9 @@
     min-height: 0;
   }
 
-  /* Channels become horizontal pill strip */
   .channels-sidebar {
     border-right: none;
+    border-bottom: 1px solid var(--border-color);
     padding-right: 0;
     padding-bottom: 6px;
     margin-bottom: 6px;
@@ -288,7 +300,6 @@
     overflow-y: hidden;
     -webkit-overflow-scrolling: touch;
     flex-shrink: 0;
-    border-bottom: 1px solid var(--border-color);
   }
 
   .channels-header {
@@ -310,7 +321,6 @@
     background: var(--accent-alpha-20);
   }
 
-  /* Messages area fills remaining space */
   .messages-area {
     flex: 1;
     min-height: 0;
