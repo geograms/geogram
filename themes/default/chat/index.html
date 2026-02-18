@@ -6,6 +6,7 @@
   <title>Chat - {{COLLECTION_NAME}}</title>
   <link rel="stylesheet" href="/styles.css">
   <link rel="stylesheet" href="styles.css">
+  {{NOSTR_STYLES}}
 </head>
 <body>
 <div class="container">
@@ -16,6 +17,7 @@
           <div class="logo">{{COLLECTION_NAME}}</div>
         </a>
       </div>
+      {{NOSTR_HEADER}}
     </div>
     <nav class="menu">
       <ul class="menu__inner">
@@ -43,12 +45,6 @@
         <div class="chat-input-area" id="chat-input-area" style="display:none;">
           <input type="text" id="chat-input" placeholder="Type a message..." autocomplete="off">
           <button id="chat-send">Send</button>
-        </div>
-        <div class="nostr-login" id="nostr-login" style="display:none;">
-          <button id="nostr-connect">Connect with Nostr</button>
-        </div>
-<div class="nostr-unavailable" id="nostr-unavailable" style="display:none;">
-          <span>Install a <a href="https://github.com/nicknsy/nicknsy/blob/main/nostr-extensions.md" target="_blank">Nostr extension</a> to join the chat</span>
         </div>
       </div>
     </div>

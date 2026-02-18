@@ -14,6 +14,9 @@ This document catalogs reusable UI components available in the Geogram codebase.
 - [BackupNotificationService](#backupnotificationservice) - Backup event notifications
 - [Notification Tap Handling Pattern](#notification-tap-handling-pattern) - Handle notification taps
 
+### Web Components
+- [NostrLoginComponent](#nostrlogincomponent) - Reusable Nostr NIP-07 login with localStorage persistence
+
 ### Cross-Platform Patterns
 - [Platform-Adaptive WebView](#platform-adaptive-webview) - Render local HTML with JS on all platforms
 - [URL-Linkified SelectableText](#url-linkified-selectabletext) - Make URLs clickable in text widgets
@@ -8532,3 +8535,47 @@ Navigation commands are dispatched *before* the command registry (since they mut
 - **`handleCd` returns `bool`** — `true` when entering a chat room, so the host can display the room header and last messages using its own I/O (CLI uses stdout directly, Desktop uses buffered I/O).
 - **`getChildEntries(path)`** — public method for TAB completion; returns child names at a given path without formatting.
 - **`StationCommandInterface`** typed provider — CLI's `StationServer` already implements it; Desktop uses `_StationServiceAdapter`.
+
+---
+
+## NostrLoginComponent
+
+**File:** `lib/util/nostr_login_scripts.dart`
+
+Reusable Nostr NIP-07 browser extension login component for web pages served by station servers. Provides a header button, localStorage persistence, and event-based integration.
+
+### Functions
+
+| Function | Returns | Description |
+|----------|---------|-------------|
+| `getNostrLoginHeaderHtml()` | HTML string | Button + callsign display div for placement in header |
+| `getNostrLoginStyles()` | `<style>` block | CSS for header button and callsign display |
+| `getNostrLoginScripts()` | JS string | NIP-07 detection, connect flow, localStorage persistence, event dispatch |
+
+### Integration
+
+1. Add `getNostrLoginStyles()` to `<head>`
+2. Add `getNostrLoginHeaderHtml()` inside `.header__inner` (after logo)
+3. Prepend `getNostrLoginScripts()` before page-specific scripts in `<script>` tag
+4. Page JS listens for `nostr-connected` CustomEvent or checks `window.GeogramNostr.connected`
+
+### Global State: `window.GeogramNostr`
+
+```js
+{ pubkey: string|null, callsign: string|null, connected: boolean }
+```
+
+### Events
+
+- **`nostr-connected`** — Dispatched on `document` when user connects. Detail: `{ pubkey, callsign }`
+
+### localStorage
+
+- Key: `geogram_nostr_pubkey` — Stores hex pubkey for auto-connect on page reload
+
+### Template Variables
+
+When using themed templates, wire these in the station handler:
+- `{{NOSTR_HEADER}}` → `getNostrLoginHeaderHtml()`
+- `{{NOSTR_STYLES}}` → `getNostrLoginStyles()`
+- `{{SCRIPTS}}` → `getNostrLoginScripts() + '\n' + getChatPageScripts()`

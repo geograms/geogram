@@ -492,6 +492,7 @@ class ThemesEmbedded {
   <title>Chat - {{COLLECTION_NAME}}</title>
   <link rel="stylesheet" href="/styles.css">
   <link rel="stylesheet" href="styles.css">
+  {{NOSTR_STYLES}}
 </head>
 <body>
 <div class="container">
@@ -502,6 +503,7 @@ class ThemesEmbedded {
           <div class="logo">{{COLLECTION_NAME}}</div>
         </a>
       </div>
+      {{NOSTR_HEADER}}
     </div>
     <nav class="menu">
       <ul class="menu__inner">
@@ -529,12 +531,6 @@ class ThemesEmbedded {
         <div class="chat-input-area" id="chat-input-area" style="display:none;">
           <input type="text" id="chat-input" placeholder="Type a message..." autocomplete="off">
           <button id="chat-send">Send</button>
-        </div>
-        <div class="nostr-login" id="nostr-login" style="display:none;">
-          <button id="nostr-connect">Connect with Nostr</button>
-        </div>
-<div class="nostr-unavailable" id="nostr-unavailable" style="display:none;">
-          <span>Install a <a href="https://github.com/nicknsy/nicknsy/blob/main/nostr-extensions.md" target="_blank">Nostr extension</a> to join the chat</span>
         </div>
       </div>
     </div>
@@ -801,44 +797,6 @@ class ThemesEmbedded {
   cursor: not-allowed;
 }
 
-/* Nostr login button */
-.nostr-login {
-  padding-top: 15px;
-  border-top: 1px solid var(--border-color);
-  margin-top: 10px;
-  text-align: center;
-}
-
-.nostr-login button {
-  background: transparent;
-  color: var(--accent);
-  border: 1px solid var(--accent);
-  padding: 8px 20px;
-  font-family: inherit;
-  font-size: 0.95rem;
-  cursor: pointer;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-
-.nostr-login button:hover {
-  background: var(--accent);
-  color: var(--background);
-}
-
-/* Nostr unavailable message */
-.nostr-unavailable {
-  padding-top: 15px;
-  border-top: 1px solid var(--border-color);
-  margin-top: 10px;
-  text-align: center;
-  color: var(--accent-alpha-70);
-  font-size: 0.9rem;
-}
-
-.nostr-unavailable a {
-  color: var(--accent);
-}
 
 /* Chat error message */
 .chat-error {

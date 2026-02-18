@@ -158,56 +158,14 @@ String getChatPageScripts() {
         }
       }
 
-      // --- NIP-07 Nostr Extension Integration ---
-      let nostrPubkey = null;
-      let nostrCallsign = null;
+      // --- Nostr chat integration (uses window.GeogramNostr from nostr_login_scripts) ---
       let sending = false;
 
-      const BECH32_CHARSET = 'qpzry9x8gf2tvdw0s3jn54khce6mua7l';
-
-      function deriveCallsign(hexPubkey) {
-        // Convert first 3 hex bytes to byte array
-        const bytes = [];
-        for (let i = 0; i < 6 && i < hexPubkey.length; i += 2) {
-          bytes.push(parseInt(hexPubkey.substr(i, 2), 16));
-        }
-        // Convert 8-bit groups to 5-bit groups
-        let acc = 0, bits = 0;
-        const groups = [];
-        for (const b of bytes) {
-          acc = (acc << 8) | b;
-          bits += 8;
-          while (bits >= 5) {
-            bits -= 5;
-            groups.push((acc >> bits) & 31);
-          }
-        }
-        // Map through bech32 charset, take first 4, uppercase
-        const suffix = groups.slice(0, 4).map(v => BECH32_CHARSET[v]).join('').toUpperCase();
-        return 'X1' + suffix;
-      }
-
-      function detectNostr(attempts) {
-        if (window.nostr) {
-          document.getElementById('nostr-login').style.display = '';
-          return;
-        }
-        if (attempts > 0) {
-          setTimeout(() => detectNostr(attempts - 1), 200);
-        } else {
-          document.getElementById('nostr-unavailable').style.display = '';
-        }
-      }
-
-      async function connectNostr() {
-        try {
-          nostrPubkey = await window.nostr.getPublicKey();
-          nostrCallsign = deriveCallsign(nostrPubkey);
-          document.getElementById('nostr-login').style.display = 'none';
-          document.getElementById('chat-input-area').style.display = '';
+      function showChatInput() {
+        const inputArea = document.getElementById('chat-input-area');
+        if (inputArea) {
+          inputArea.style.display = '';
           document.getElementById('chat-input').focus();
-        } catch (e) {
-          console.error('Nostr connect error:', e);
         }
       }
 
@@ -224,9 +182,10 @@ String getChatPageScripts() {
       }
 
       async function sendMessage() {
+        const nostr = window.GeogramNostr || {};
         const input = document.getElementById('chat-input');
         const content = input.value.trim();
-        if (!content || !nostrPubkey || sending) return;
+        if (!content || !nostr.pubkey || sending) return;
 
         sending = true;
         const sendBtn = document.getElementById('chat-send');
@@ -237,14 +196,14 @@ String getChatPageScripts() {
           const unsignedEvent = {
             kind: 1,
             created_at: createdAt,
-            tags: [['t', 'chat'], ['room', currentRoom], ['callsign', nostrCallsign]],
+            tags: [['t', 'chat'], ['room', currentRoom], ['callsign', nostr.callsign]],
             content: content,
           };
 
           const signedEvent = await window.nostr.signEvent(unsignedEvent);
 
           const body = {
-            callsign: nostrCallsign,
+            callsign: nostr.callsign,
             content: content,
             pubkey: signedEvent.pubkey,
             event_id: signedEvent.id,
@@ -261,11 +220,10 @@ String getChatPageScripts() {
 
           if (resp.ok) {
             input.value = '';
-            // Optimistic: append message immediately
             const now = new Date();
             const pad = (n) => n.toString().padStart(2, '0');
             const ts = now.getFullYear() + '-' + pad(now.getMonth()+1) + '-' + pad(now.getDate()) + ' ' + pad(now.getHours()) + ':' + pad(now.getMinutes()) + '_' + pad(now.getSeconds());
-            appendMessage({ timestamp: ts, author: nostrCallsign, content: content });
+            appendMessage({ timestamp: ts, author: nostr.callsign, content: content });
             scrollToBottom(true);
           } else {
             const err = await resp.json().catch(() => ({}));
@@ -285,10 +243,16 @@ String getChatPageScripts() {
         scrollToBottom(true);
         startPolling();
 
-        // NIP-07 detection (poll for up to 2 seconds)
-        detectNostr(10);
+        // If already connected (auto-connect from localStorage), show chat input immediately
+        if (window.GeogramNostr && window.GeogramNostr.connected) {
+          showChatInput();
+        }
 
-        document.getElementById('nostr-connect').addEventListener('click', connectNostr);
+        // Listen for nostr-connected event (user clicks connect mid-page)
+        document.addEventListener('nostr-connected', function() {
+          showChatInput();
+        });
+
         document.getElementById('chat-send').addEventListener('click', sendMessage);
         document.getElementById('chat-input').addEventListener('keydown', function(e) {
           if (e.key === 'Enter' && !e.shiftKey) {

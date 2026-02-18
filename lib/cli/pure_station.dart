@@ -31,6 +31,7 @@ import '../util/nostr_event.dart';
 import '../util/nostr_crypto.dart';
 import '../api/endpoints/chat_api_paths.dart';
 import '../util/chat_scripts.dart';
+import '../util/nostr_login_scripts.dart';
 import '../util/web_navigation.dart';
 import '../util/station_html_templates.dart';
 import '../util/html_utils.dart';
@@ -7519,7 +7520,9 @@ class PureStationServer with EmailHandlerMixin, BlogHandlerMixin, ConsoleCommand
 
     // Process template with variables
     String html;
+    final nostrScripts = getNostrLoginScripts();
     final chatScripts = getChatPageScripts();
+    final combinedScripts = '$nostrScripts\n$chatScripts';
 
     // Generate menu items for station navigation
     final menuItems = WebNavigation.generateStationMenuItems(
@@ -7543,7 +7546,9 @@ class PureStationServer with EmailHandlerMixin, BlogHandlerMixin, ConsoleCommand
         'CONTENT': messagesHtml.toString(),
         'CHANNELS_LIST': channelsHtml.toString(),
         'DATA_JSON': dataJson,
-        'SCRIPTS': chatScripts,
+        'SCRIPTS': combinedScripts,
+        'NOSTR_HEADER': getNostrLoginHeaderHtml(),
+        'NOSTR_STYLES': getNostrLoginStyles(),
         'MENU_ITEMS': menuItems,
         'HOME_URL': '/',
         'GENERATED_DATE': DateTime.now().toIso8601String().split('T').first,
@@ -7563,6 +7568,7 @@ class PureStationServer with EmailHandlerMixin, BlogHandlerMixin, ConsoleCommand
   <title>Chat - ${escapeHtml(stationName)}</title>
   <link rel="stylesheet" href="/styles.css">
   <link rel="stylesheet" href="styles.css">
+  ${getNostrLoginStyles()}
 </head>
 <body>
 <div class="container">
@@ -7573,6 +7579,7 @@ class PureStationServer with EmailHandlerMixin, BlogHandlerMixin, ConsoleCommand
           <div class="logo">$stationName</div>
         </a>
       </div>
+      ${getNostrLoginHeaderHtml()}
     </div>
     <nav class="menu">
       <ul class="menu__inner">
@@ -7599,19 +7606,6 @@ class PureStationServer with EmailHandlerMixin, BlogHandlerMixin, ConsoleCommand
           <input type="text" id="chat-input" placeholder="Type a message..." autocomplete="off">
           <button id="chat-send">Send</button>
         </div>
-        <div class="nostr-login" id="nostr-login" style="display:none;">
-          <button id="nostr-connect">Connect with Nostr</button>
-        </div>
-        <div class="nostr-nickname" id="nostr-nickname" style="display:none;">
-          <label for="nickname-input">Choose your callsign:</label>
-          <div class="nickname-row">
-            <input type="text" id="nickname-input" placeholder="e.g. X1SU86" autocomplete="off" maxlength="20">
-            <button id="nickname-ok">Join</button>
-          </div>
-        </div>
-        <div class="nostr-unavailable" id="nostr-unavailable" style="display:none;">
-          <span>Install a <a href="https://github.com/nicknsy/nicknsy/blob/main/nostr-extensions.md" target="_blank">Nostr extension</a> to join the chat</span>
-        </div>
       </div>
     </div>
   </div>
@@ -7627,7 +7621,7 @@ class PureStationServer with EmailHandlerMixin, BlogHandlerMixin, ConsoleCommand
 
 <script>
   window.GEOGRAM_DATA = $dataJson;
-  $chatScripts
+  $combinedScripts
 </script>
 </body>
 </html>
