@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'package:http/http.dart' as http;
@@ -523,6 +524,9 @@ class StationService {
 
         // Notify ChatNotificationService to reconnect to the updates stream
         ChatNotificationService().reconnect();
+
+        // Sync all chat rooms in background so UI opens instantly
+        unawaited(ChatNotificationService().syncAllRooms());
 
         return true;
       } else {

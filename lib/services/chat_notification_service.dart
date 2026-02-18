@@ -4,6 +4,7 @@
  */
 
 import 'dart:async';
+import '../models/station_chat_room.dart';
 import '../models/update_notification.dart';
 import '../services/dm_notification_service.dart';
 import 'station_cache_service.dart';
@@ -85,6 +86,61 @@ class ChatNotificationService {
     _notificationController.add(Map.from(_unreadCounts));
   }
 
+  /// Sync all cached rooms in the background (called after station connects)
+  Future<void> syncAllRooms() async {
+    final station = _stationService.getPreferredStation();
+    if (station == null || station.url.isEmpty) return;
+    if (station.callsign == null || station.callsign!.isEmpty) return;
+
+    final cacheKey = station.callsign!;
+    final stationUrl = station.url;
+
+    try {
+      await _cacheService.initialize();
+      final rooms = await _cacheService.loadChatRooms(cacheKey, stationUrl);
+      if (rooms.isEmpty) {
+        LogService().log('ChatNotificationService: No cached rooms to sync');
+        return;
+      }
+
+      LogService().log('ChatNotificationService: Syncing ${rooms.length} rooms in background');
+      for (final room in rooms) {
+        await _syncRoomMessages(cacheKey, stationUrl, room.id);
+      }
+      LogService().log('ChatNotificationService: Background sync complete');
+    } catch (e) {
+      LogService().log('ChatNotificationService: Background sync error: $e');
+    }
+  }
+
+  /// Sync messages for a single room (fetch only new messages since last cached)
+  Future<void> _syncRoomMessages(String cacheKey, String stationUrl, String roomId) async {
+    try {
+      final latestCached = await _cacheService.loadLatestMessage(cacheKey, roomId);
+      DateTime? after;
+      if (latestCached != null) {
+        final parsed = DateTime.tryParse(latestCached.timestamp.replaceAll('_', ':'));
+        if (parsed != null) {
+          after = DateTime(parsed.year, parsed.month, parsed.day);
+        }
+      }
+
+      final newMessages = await _stationService.fetchRoomMessages(
+        stationUrl,
+        roomId,
+        limit: after == null ? 50 : 200,
+        after: after,
+      );
+
+      if (newMessages.isNotEmpty) {
+        await _cacheService.mergeMessages(cacheKey, roomId, newMessages);
+        LogService().log('ChatNotificationService: Synced ${newMessages.length} messages for $roomId');
+      }
+    } catch (e) {
+      LogService().log('ChatNotificationService: Failed to sync room $roomId: $e');
+    }
+  }
+
   Future<void> _notifyChatUpdate(UpdateNotification update) async {
     final roomId = update.path;
     if (roomId.isEmpty) return;
@@ -94,6 +150,9 @@ class ChatNotificationService {
       LogService().log('ChatNotificationService: Unable to resolve message for $roomId');
       return;
     }
+
+    // Cache the message so it's immediately available when the UI opens
+    _cacheResolvedMessage(update, resolved);
 
     // Try to get image path if it's an image attachment
     String? imagePath;
@@ -109,6 +168,39 @@ class ChatNotificationService {
       fileName: resolved.fileName,
       imagePath: imagePath,
     );
+  }
+
+  /// Cache a resolved message from a notification so the UI has it immediately
+  void _cacheResolvedMessage(
+    UpdateNotification update,
+    ({String callsign, String content, bool verified, String? fileName}) resolved,
+  ) {
+    final station = _stationService.getPreferredStation();
+    if (station == null || station.callsign == null || station.callsign!.isEmpty) return;
+
+    final roomId = update.path;
+    final now = DateTime.now();
+    final timestamp = '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')} '
+        '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}_${now.second.toString().padLeft(2, '0')}';
+
+    final metadata = <String, String>{};
+    if (resolved.fileName != null) {
+      metadata['file'] = resolved.fileName!;
+    }
+    if (resolved.verified) {
+      metadata['verified'] = 'true';
+    }
+
+    final msg = StationChatMessage(
+      roomId: roomId,
+      callsign: resolved.callsign,
+      content: resolved.content,
+      timestamp: timestamp,
+      metadata: metadata,
+      verified: resolved.verified,
+    );
+
+    unawaited(_cacheService.mergeMessages(station.callsign!, roomId, [msg]));
   }
 
   Future<({String callsign, String content, bool verified, String? fileName})?> _resolveChatMessage(

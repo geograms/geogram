@@ -350,13 +350,12 @@ class RelayCacheService {
             chatFiles.add(yearEntity);
           }
         }
-        // If we already have enough files to satisfy the limit, stop listing more year folders
-        if (limit != null && chatFiles.length >= limit) break;
       }
 
       // Sort files by filename (YYYY-MM-DD_chat.txt) descending for lazy loading
       chatFiles.sort((a, b) => b.path.compareTo(a.path));
 
+      // Read files newest-first, stop when we have enough messages
       for (final file in chatFiles) {
         final content = await file.readAsString();
         final chatMessages = ChatService.parseMessageText(content);
