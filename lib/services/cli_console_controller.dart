@@ -781,11 +781,18 @@ class CliConsoleController {
 
     // Handle navigation commands via shared handler
     if (command == 'ls') {
-      _nav.handleLs(args);
+      if (_nav.isInChatRoom && args.isEmpty) {
+        _showChatHistory();
+      } else {
+        _nav.handleLs(args);
+      }
       return _io.getOutput() ?? '';
     }
     if (command == 'cd') {
-      await _nav.handleCd(args);
+      final entered = await _nav.handleCd(args);
+      if (entered && _nav.isInChatRoom) {
+        _showChatHistory(limit: 10);
+      }
       return _io.getOutput() ?? '';
     }
     if (command == 'pwd') {
@@ -811,6 +818,39 @@ class CliConsoleController {
     }
 
     return _io.getOutput() ?? '';
+  }
+
+  // -------------------------------------------------------------------------
+  // Chat history rendering
+  // -------------------------------------------------------------------------
+
+  /// Render chat messages for the current room.
+  void _showChatHistory({int? limit}) {
+    final roomId = _nav.currentChatRoom;
+    if (roomId == null) return;
+
+    final room = _stationAdapter.chatRoomsReadable[roomId];
+    if (room == null) return;
+
+    final messages = room.readableMessages;
+    if (messages.isEmpty) {
+      _io.writeln('(no messages)');
+      return;
+    }
+
+    final count = limit ?? 20;
+    final start = messages.length > count ? messages.length - count : 0;
+    for (var i = start; i < messages.length; i++) {
+      final m = messages[i];
+      final ts = m.timestamp.toLocal();
+      final timeStr = '${ts.year}-${ts.month.toString().padLeft(2, '0')}-'
+          '${ts.day.toString().padLeft(2, '0')} '
+          '${ts.hour.toString().padLeft(2, '0')}:${ts.minute.toString().padLeft(2, '0')}';
+      final sigIcon = m.hasSignature
+          ? (m.verified ? '\x1B[32m\u2713\x1B[0m' : '\x1B[31m\u2717\x1B[0m')
+          : '\x1B[90m\u25CB\x1B[0m';
+      _io.writeln('\x1B[33m[$timeStr]\x1B[0m $sigIcon \x1B[36m${m.senderCallsign}:\x1B[0m ${m.content}');
+    }
   }
 
   // -------------------------------------------------------------------------
