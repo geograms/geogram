@@ -522,6 +522,13 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
         // Load station chat rooms from the remote device
         await _loadRelayRooms();
         await _loadNicknameMap();
+
+        // Auto-select room after UI is ready
+        if (widget.initialRoomId != null && mounted) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            _autoSelectRoom(widget.initialRoomId!);
+          });
+        }
         return;
       }
 
