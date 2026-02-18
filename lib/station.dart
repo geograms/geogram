@@ -7378,10 +7378,19 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, EmailHandlerMixin,
       <div class="messages-area">
         <div class="messages-header">
           <span class="room-name">#<span id="current-room">$defaultRoom</span></span>
-          <span class="read-only-badge">read-only</span>
         </div>
         <div class="messages-list" id="messages">
           ${messagesHtml.toString()}
+        </div>
+        <div class="chat-input-area" id="chat-input-area" style="display:none;">
+          <input type="text" id="chat-input" placeholder="Type a message..." autocomplete="off">
+          <button id="chat-send">Send</button>
+        </div>
+        <div class="nostr-login" id="nostr-login" style="display:none;">
+          <button id="nostr-connect">Connect with Nostr</button>
+        </div>
+        <div class="nostr-unavailable" id="nostr-unavailable" style="display:none;">
+          <span>Install a <a href="https://github.com/nicknsy/nicknsy/blob/main/nostr-extensions.md" target="_blank">Nostr extension</a> to join the chat</span>
         </div>
       </div>
     </div>

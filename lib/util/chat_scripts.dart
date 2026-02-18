@@ -158,10 +158,121 @@ String getChatPageScripts() {
         }
       }
 
+      // --- NIP-07 Nostr Extension Integration ---
+      let nostrPubkey = null;
+      let nostrCallsign = null;
+      let sending = false;
+
+      function detectNostr(attempts) {
+        if (window.nostr) {
+          document.getElementById('nostr-login').style.display = '';
+          return;
+        }
+        if (attempts > 0) {
+          setTimeout(() => detectNostr(attempts - 1), 200);
+        } else {
+          document.getElementById('nostr-unavailable').style.display = '';
+        }
+      }
+
+      async function connectNostr() {
+        try {
+          nostrPubkey = await window.nostr.getPublicKey();
+          // Display name: first 8 + last 4 hex chars
+          nostrCallsign = nostrPubkey.substring(0, 8) + '...' + nostrPubkey.substring(nostrPubkey.length - 4);
+          document.getElementById('nostr-login').style.display = 'none';
+          document.getElementById('chat-input-area').style.display = '';
+          document.getElementById('chat-input').focus();
+        } catch (e) {
+          console.error('Nostr connect error:', e);
+        }
+      }
+
+      function showChatError(msg) {
+        let el = document.getElementById('chat-error');
+        if (!el) {
+          el = document.createElement('div');
+          el.id = 'chat-error';
+          el.className = 'chat-error';
+          document.getElementById('chat-input-area').appendChild(el);
+        }
+        el.textContent = msg;
+        setTimeout(() => { if (el) el.textContent = ''; }, 5000);
+      }
+
+      async function sendMessage() {
+        const input = document.getElementById('chat-input');
+        const content = input.value.trim();
+        if (!content || !nostrPubkey || sending) return;
+
+        sending = true;
+        const sendBtn = document.getElementById('chat-send');
+        sendBtn.disabled = true;
+
+        try {
+          const createdAt = Math.floor(Date.now() / 1000);
+          const unsignedEvent = {
+            kind: 1,
+            created_at: createdAt,
+            tags: [['t', 'chat'], ['room', currentRoom], ['callsign', nostrCallsign]],
+            content: content,
+          };
+
+          const signedEvent = await window.nostr.signEvent(unsignedEvent);
+
+          const body = {
+            callsign: nostrCallsign,
+            content: content,
+            pubkey: signedEvent.pubkey,
+            event_id: signedEvent.id,
+            signature: signedEvent.sig,
+            created_at: signedEvent.created_at,
+          };
+
+          const url = data.apiBasePath + '/' + encodeURIComponent(currentRoom) + '/messages';
+          const resp = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+          });
+
+          if (resp.ok) {
+            input.value = '';
+            // Optimistic: append message immediately
+            const now = new Date();
+            const pad = (n) => n.toString().padStart(2, '0');
+            const ts = now.getFullYear() + '-' + pad(now.getMonth()+1) + '-' + pad(now.getDate()) + ' ' + pad(now.getHours()) + ':' + pad(now.getMinutes()) + '_' + pad(now.getSeconds());
+            appendMessage({ timestamp: ts, author: nostrCallsign, content: content });
+            scrollToBottom(true);
+          } else {
+            const err = await resp.json().catch(() => ({}));
+            showChatError(err.error || 'Failed to send message');
+          }
+        } catch (e) {
+          console.error('Send error:', e);
+          showChatError('Failed to sign or send message');
+        } finally {
+          sending = false;
+          sendBtn.disabled = false;
+        }
+      }
+
       document.addEventListener('DOMContentLoaded', function() {
         initChannels();
         scrollToBottom(true);
         startPolling();
+
+        // NIP-07 detection (poll for up to 2 seconds)
+        detectNostr(10);
+
+        document.getElementById('nostr-connect').addEventListener('click', connectNostr);
+        document.getElementById('chat-send').addEventListener('click', sendMessage);
+        document.getElementById('chat-input').addEventListener('keydown', function(e) {
+          if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            sendMessage();
+          }
+        });
       });
     })();
   ''';

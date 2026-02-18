@@ -522,10 +522,19 @@ class ThemesEmbedded {
       <div class="messages-area">
         <div class="messages-header">
           <span class="room-name">#<span id="current-room">main</span></span>
-          <span class="read-only-badge">read-only</span>
         </div>
         <div class="messages-list" id="messages">
           {{CONTENT}}
+        </div>
+        <div class="chat-input-area" id="chat-input-area" style="display:none;">
+          <input type="text" id="chat-input" placeholder="Type a message..." autocomplete="off">
+          <button id="chat-send">Send</button>
+        </div>
+        <div class="nostr-login" id="nostr-login" style="display:none;">
+          <button id="nostr-connect">Connect with Nostr</button>
+        </div>
+        <div class="nostr-unavailable" id="nostr-unavailable" style="display:none;">
+          <span>Install a <a href="https://github.com/nicknsy/nicknsy/blob/main/nostr-extensions.md" target="_blank">Nostr extension</a> to join the chat</span>
         </div>
       </div>
     </div>
@@ -745,6 +754,97 @@ class ThemesEmbedded {
 
 .messages-list::-webkit-scrollbar-thumb:hover {
   background: var(--accent-alpha-70);
+}
+
+/* Chat input area */
+.chat-input-area {
+  display: flex;
+  gap: 8px;
+  padding-top: 15px;
+  border-top: 1px solid var(--border-color);
+  margin-top: 10px;
+}
+
+.chat-input-area input {
+  flex: 1;
+  background: var(--background);
+  border: 1px solid var(--border-color);
+  color: var(--color);
+  padding: 8px 12px;
+  font-family: inherit;
+  font-size: 0.95rem;
+  outline: none;
+}
+
+.chat-input-area input:focus {
+  border-color: var(--accent);
+}
+
+.chat-input-area button {
+  background: var(--accent);
+  color: var(--background);
+  border: none;
+  padding: 8px 16px;
+  font-family: inherit;
+  font-size: 0.95rem;
+  cursor: pointer;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.chat-input-area button:hover {
+  opacity: 0.85;
+}
+
+.chat-input-area button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Nostr login button */
+.nostr-login {
+  padding-top: 15px;
+  border-top: 1px solid var(--border-color);
+  margin-top: 10px;
+  text-align: center;
+}
+
+.nostr-login button {
+  background: transparent;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  padding: 8px 20px;
+  font-family: inherit;
+  font-size: 0.95rem;
+  cursor: pointer;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.nostr-login button:hover {
+  background: var(--accent);
+  color: var(--background);
+}
+
+/* Nostr unavailable message */
+.nostr-unavailable {
+  padding-top: 15px;
+  border-top: 1px solid var(--border-color);
+  margin-top: 10px;
+  text-align: center;
+  color: var(--accent-alpha-70);
+  font-size: 0.9rem;
+}
+
+.nostr-unavailable a {
+  color: var(--accent);
+}
+
+/* Chat error message */
+.chat-error {
+  color: #e55;
+  font-size: 0.85rem;
+  padding-top: 5px;
 }
 ''';
 
