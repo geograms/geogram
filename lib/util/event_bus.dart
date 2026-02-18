@@ -251,6 +251,13 @@ class EmailNotificationTappedEvent extends AppEvent {
   EmailNotificationTappedEvent({required this.threadId});
 }
 
+/// Chat room notification tapped (user tapped on a chat room notification)
+class ChatNotificationTappedEvent extends AppEvent {
+  final String roomId;
+
+  ChatNotificationTappedEvent({required this.roomId});
+}
+
 /// Direct message sync completed
 class DirectMessageSyncEvent extends AppEvent {
   final String otherCallsign; // The callsign we synced with

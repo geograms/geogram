@@ -696,6 +696,7 @@ class _GeogramAppState extends State<GeogramApp> with WidgetsBindingObserver {
   EventSubscription<EmailNotificationTappedEvent>?
   _emailNotificationSubscription;
   EventSubscription<NavigateToDevicesEvent>? _navigateToDevicesSubscription;
+  EventSubscription<ChatNotificationTappedEvent>? _chatNotificationSubscription;
   EventSubscription<TransferOfferReceivedEvent>? _transferOfferSubscription;
   EventSubscription<MirrorPairCompletedEvent>? _mirrorPairSubscription;
 
@@ -725,6 +726,16 @@ class _GeogramAppState extends State<GeogramApp> with WidgetsBindingObserver {
         unawaited(_navigateToEmailThread(event.threadId));
       },
     );
+
+    // Subscribe to chat room notification tap events for deep linking
+    _chatNotificationSubscription = EventBus().on<ChatNotificationTappedEvent>((
+      event,
+    ) {
+      LogService().log(
+        'GeogramApp: Chat notification tapped for room ${event.roomId}',
+      );
+      _navigateToChatRoom(event.roomId);
+    });
 
     // Subscribe to navigate-to-devices events (e.g., summary notification tap)
     _navigateToDevicesSubscription = EventBus().on<NavigateToDevicesEvent>((_) {
@@ -776,6 +787,7 @@ class _GeogramAppState extends State<GeogramApp> with WidgetsBindingObserver {
     _themeService.removeListener(_onThemeChanged);
     _dmNotificationSubscription?.cancel();
     _emailNotificationSubscription?.cancel();
+    _chatNotificationSubscription?.cancel();
     _navigateToDevicesSubscription?.cancel();
     _transferOfferSubscription?.cancel();
     _mirrorPairSubscription?.cancel();
@@ -836,7 +848,7 @@ class _GeogramAppState extends State<GeogramApp> with WidgetsBindingObserver {
         DebugController().navigateToPanel(2); // Devices panel
         break;
       case 'chat':
-        // Future: navigate to chat room
+        _navigateToChatRoom(action.data);
         break;
       case 'email':
         await _navigateToEmailThread(action.data);
@@ -870,6 +882,59 @@ class _GeogramAppState extends State<GeogramApp> with WidgetsBindingObserver {
     LogService().log('GeogramApp: Navigator not ready, waiting for next frame');
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _navigateToDMChat(callsign);
+    });
+  }
+
+  /// Navigate to a chat room, waiting for navigator if needed (handles cold start timing)
+  void _navigateToChatRoom(String roomId) {
+    if (_navigatorKey.currentState != null) {
+      // Get the connected station, or use default P2P Radio station
+      final stationService = StationService();
+      final preferred = stationService.getPreferredStation();
+
+      String stationUrl;
+      String stationName;
+      String? stationCallsign;
+
+      if (preferred != null) {
+        stationUrl = preferred.url;
+        stationName = preferred.name;
+        stationCallsign = preferred.callsign;
+      } else {
+        stationUrl = 'wss://p2p.radio';
+        stationName = 'P2P Radio';
+        stationCallsign = 'p2p_radio';
+      }
+
+      // Convert WebSocket URL to HTTP URL for API calls
+      String remoteUrl = stationUrl;
+      if (remoteUrl.startsWith('ws://')) {
+        remoteUrl = remoteUrl.replaceFirst('ws://', 'http://');
+      } else if (remoteUrl.startsWith('wss://')) {
+        remoteUrl = remoteUrl.replaceFirst('wss://', 'https://');
+      }
+
+      LogService().log(
+        'GeogramApp: Navigating to chat room $roomId at $remoteUrl',
+      );
+
+      _navigatorKey.currentState!.push(
+        MaterialPageRoute(
+          builder: (context) => ChatBrowserPage(
+            remoteDeviceUrl: remoteUrl,
+            remoteDeviceCallsign: stationCallsign,
+            remoteDeviceName: stationName,
+            initialRoomId: roomId,
+          ),
+        ),
+      );
+      return;
+    }
+
+    // Navigator not ready yet (cold start) - wait for next frame and retry
+    LogService().log('GeogramApp: Navigator not ready for chat, waiting for next frame');
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _navigateToChatRoom(roomId);
     });
   }
 

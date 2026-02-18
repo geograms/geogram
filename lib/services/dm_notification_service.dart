@@ -204,6 +204,15 @@ class DMNotificationService {
               EventBus().fire(EmailNotificationTappedEvent(threadId: threadId));
             });
           }
+        } else if (payload != null && payload.startsWith('chat:')) {
+          final roomId = payload.substring('chat:'.length);
+          if (roomId.isNotEmpty) {
+            final prefs = await SharedPreferences.getInstance();
+            await prefs.remove(_pendingActionKey);
+            Future.delayed(const Duration(milliseconds: 500), () {
+              EventBus().fire(ChatNotificationTappedEvent(roomId: roomId));
+            });
+          }
         }
       }
     } catch (e) {
@@ -668,6 +677,10 @@ class DMNotificationService {
       } else if (type == 'email') {
         if (data.isNotEmpty) {
           EventBus().fire(EmailNotificationTappedEvent(threadId: data));
+        }
+      } else if (type == 'chat') {
+        if (data.isNotEmpty) {
+          EventBus().fire(ChatNotificationTappedEvent(roomId: data));
         }
       } else if (type == 'nav') {
         EventBus().fire(NavigateToDevicesEvent());
