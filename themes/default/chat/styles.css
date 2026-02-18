@@ -1,67 +1,19 @@
 /* Chat styles - extends global Terminimal theme */
 
-/*
- * Full-viewport chat layout.
- * The page must fit exactly in the viewport with messages scrolling
- * inside a constrained area and the input pinned at the bottom.
- * Modeled after the ESP32 chat layout pattern.
- */
+/* ===== Desktop: original Terminimal look ===== */
 
-/* ===== Viewport lock (desktop + mobile) ===== */
-html.chat-page,
-.chat-page body {
-  height: 100vh !important;
-  height: 100dvh !important;
-  overflow: hidden !important;
-  margin: 0;
-  padding: 0;
-}
-
-.chat-page .container {
-  height: 100vh;
-  height: 100dvh;
-  min-height: 0 !important;
-  max-height: 100vh;
-  max-height: 100dvh;
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-  box-sizing: border-box;
-  padding: 20px 40px 0 40px;
-}
-
-.chat-page .header {
-  flex-shrink: 0;
-}
-
-.chat-page .content {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-.chat-page .footer {
-  display: none;
-}
-
-/* ===== Chat layout: sidebar + messages ===== */
+/* Chat layout - sidebar + messages */
 .chat-layout {
-  display: flex;
-  flex-direction: row;
+  display: grid;
+  grid-template-columns: 180px 1fr;
   gap: 30px;
   width: 100%;
-  flex: 1;
-  min-height: 0;
 }
 
 /* Channels sidebar */
 .channels-sidebar {
-  width: 180px;
-  flex-shrink: 0;
   border-right: 1px solid var(--border-color);
   padding-right: 20px;
-  overflow-y: auto;
 }
 
 .channels-header {
@@ -74,6 +26,7 @@ html.chat-page,
   border-bottom: 2px dashed var(--accent);
 }
 
+/* Channel items */
 .channel-item {
   display: block;
   padding: 8px 0;
@@ -105,10 +58,10 @@ html.chat-page,
   font-size: 0.95rem;
 }
 
-/* ===== Messages area (flex column: header + scrollable list + input) ===== */
+/* Messages area */
 .messages-area {
-  flex: 1;
-  min-height: 0;
+  min-height: 400px;
+  max-height: 70vh;
   display: flex;
   flex-direction: column;
 }
@@ -117,10 +70,9 @@ html.chat-page,
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding-bottom: 10px;
-  margin-bottom: 10px;
+  padding-bottom: 15px;
+  margin-bottom: 20px;
   border-bottom: 2px dashed var(--accent);
-  flex-shrink: 0;
 }
 
 .room-name {
@@ -137,17 +89,15 @@ html.chat-page,
   letter-spacing: 0.05em;
 }
 
-/* Scrollable messages list */
+/* Messages list */
 .messages-list {
   flex: 1;
   overflow-y: auto;
-  min-height: 0;
-  padding-bottom: 8px;
 }
 
 /* Individual message */
 .message {
-  padding: 10px 0;
+  padding: 15px 0;
   border-bottom: 1px solid var(--border-color);
 }
 
@@ -159,7 +109,7 @@ html.chat-page,
   display: flex;
   align-items: baseline;
   gap: 10px;
-  margin-bottom: 4px;
+  margin-bottom: 8px;
 }
 
 .message-author {
@@ -180,7 +130,7 @@ html.chat-page,
 /* Date separator */
 .date-separator {
   text-align: center;
-  padding: 12px 0;
+  padding: 20px 0;
   color: var(--accent-alpha-70);
   font-size: 0.9rem;
   position: relative;
@@ -219,14 +169,14 @@ html.chat-page,
 .messages-list::-webkit-scrollbar-thumb { background: var(--accent-alpha-20); border-radius: 3px; }
 .messages-list::-webkit-scrollbar-thumb:hover { background: var(--accent-alpha-70); }
 
-/* ===== Chat input area — ESP32 style ===== */
+/* Chat input area - ESP32 style */
 .chat-input-area {
-  flex-shrink: 0;
-  border-top: 1px solid var(--border-color);
-  padding: 8px 0;
   display: flex;
   gap: 6px;
   align-items: center;
+  padding: 8px 0;
+  border-top: 1px solid var(--border-color);
+  margin-top: 10px;
 }
 
 .chat-input-area input {
@@ -237,7 +187,7 @@ html.chat-page,
   border-radius: 4px;
   padding: 8px;
   color: var(--color);
-  font-size: 16px;
+  font-size: 0.95rem;
   font-family: inherit;
   outline: none;
 }
@@ -271,13 +221,33 @@ html.chat-page,
   padding-top: 5px;
 }
 
-/* ===== Mobile layout ===== */
+/* ===== Mobile: full-viewport ESP32-style app layout ===== */
 @media (max-width: 683px) {
+  /* Lock viewport */
+  html.chat-page,
+  .chat-page body {
+    height: 100vh !important;
+    height: 100dvh !important;
+    overflow: hidden !important;
+    margin: 0;
+    padding: 0;
+  }
+
   .chat-page .container {
+    height: 100vh;
+    height: 100dvh;
+    min-height: 0 !important;
+    max-height: 100vh;
+    max-height: 100dvh;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    box-sizing: border-box;
     padding: 8px 10px 0 10px;
   }
 
   .chat-page .header {
+    flex-shrink: 0;
     margin-bottom: 4px;
   }
 
@@ -285,15 +255,28 @@ html.chat-page,
     display: none;
   }
 
-  /* Switch from row to column */
+  .chat-page .content {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .chat-page .footer {
+    display: none;
+  }
+
+  /* Stack layout vertically */
   .chat-layout {
+    display: flex;
     flex-direction: column;
     gap: 0;
+    flex: 1;
+    min-height: 0;
   }
 
   /* Channels become horizontal pill strip */
   .channels-sidebar {
-    width: auto;
     border-right: none;
     padding-right: 0;
     padding-bottom: 6px;
@@ -327,13 +310,36 @@ html.chat-page,
     background: var(--accent-alpha-20);
   }
 
+  /* Messages area fills remaining space */
+  .messages-area {
+    flex: 1;
+    min-height: 0;
+    max-height: none;
+  }
+
   .messages-header {
     padding-bottom: 6px;
     margin-bottom: 6px;
+    flex-shrink: 0;
   }
 
   .messages-list {
+    flex: 1;
+    min-height: 0;
     -webkit-overflow-scrolling: touch;
+  }
+
+  .chat-input-area {
+    flex-shrink: 0;
+    margin-top: 0;
+  }
+
+  .chat-input-area input {
+    font-size: 16px;
+  }
+
+  .chat-input-area button {
+    min-height: 44px;
   }
 
   .message {
@@ -342,9 +348,5 @@ html.chat-page,
 
   .date-separator {
     padding: 8px 0;
-  }
-
-  .chat-input-area button {
-    min-height: 44px;
   }
 }
