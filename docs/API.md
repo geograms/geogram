@@ -853,7 +853,11 @@ Returns list of connected clients, grouped by callsign.
 
 #### POST /api/cli
 
-Execute a CLI console command on the station. Navigation state (`cd`) is preserved across requests.
+Execute a CLI console command. Navigation state (`cd`) is preserved across requests.
+
+Available on two servers:
+- **Station server** (port 8080) — uses `ConsoleCommandMixin`, accessible by remote clients
+- **Desktop local server** (port 3456) — uses `CliConsoleController`, same endpoint for local automation/testing
 
 **Request body:**
 ```json
@@ -877,19 +881,26 @@ Execute a CLI console command on the station. Navigation state (`cd`) is preserv
 | `output` | string | Command output (ANSI stripped) |
 | `path` | string | Current navigation path after command |
 
-**Stateful navigation example:**
+**Stateful navigation example (Desktop local server):**
 ```bash
 # Navigate to chat directory
-curl -X POST http://localhost:8080/api/cli \
+curl -X POST http://localhost:3456/api/cli \
   -H 'Content-Type: application/json' \
   -d '{"command": "cd chat"}'
 # → {"status":"ok","output":"","path":"/chat"}
 
 # List contents (uses current path from previous cd)
-curl -X POST http://localhost:8080/api/cli \
+curl -X POST http://localhost:3456/api/cli \
   -H 'Content-Type: application/json' \
   -d '{"command": "ls"}'
 # → {"status":"ok","output":"X3WFE4/\ngeneral/  General\n","path":"/chat"}
+```
+
+**Same endpoint on station server (port 8080):**
+```bash
+curl -X POST http://localhost:8080/api/cli \
+  -H 'Content-Type: application/json' \
+  -d '{"command": "ls /chat"}'
 ```
 
 **Error (400):**
