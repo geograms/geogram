@@ -306,7 +306,7 @@ String getChatPageScripts() {
 
       function startPolling() {
         if (pollInterval) clearInterval(pollInterval);
-        pollInterval = setInterval(pollNewMessages, 5000);
+        pollInterval = setInterval(pollNewMessages, 30000);
       }
 
       function isNearBottom() {
@@ -409,6 +409,13 @@ String getChatPageScripts() {
 
       document.addEventListener('DOMContentLoaded', function() {
         initChannels();
+
+        // Initialize lastTimestamp from server-rendered messages
+        const allMessages = document.querySelectorAll('.message[data-timestamp]');
+        if (allMessages.length > 0) {
+          lastTimestamp = allMessages[allMessages.length - 1].dataset.timestamp;
+        }
+
         scrollToBottom(true);
         startPolling();
 
