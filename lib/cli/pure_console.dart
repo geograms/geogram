@@ -2108,6 +2108,9 @@ class _PureConsoleDataProvider implements NavigationDataProvider {
 
   @override
   Object? get sslManager => _console._sslManager;
+
+  @override
+  Map<String, ChatRoomReadable> get localChatRooms => const {};
 }
 
 /// Entry point for pure Dart CLI mode

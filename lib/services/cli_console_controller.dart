@@ -134,15 +134,23 @@ class _ProfileServiceAdapter implements ProfileCommandInterface {
 class _StationServiceAdapter implements StationCommandInterface {
   final StationServerService _service = StationServerService();
 
-  /// Pre-loaded chat rooms with messages (keyed by room id)
-  final Map<String, _PreloadedRoom> _preloadedRooms = {};
+  /// Station rooms (from preferred station cache)
+  final Map<String, ChatRoomReadable> _stationRooms = {};
+
+  /// Local rooms (profile's own ChatService channels)
+  final Map<String, ChatRoomReadable> _localRooms = {};
 
   /// IDs of rooms that belong to the station (not local channels)
   final Set<String> _stationRoomIds = {};
 
-  /// Load all chat rooms and their messages for sync access.
+  /// Local rooms for NavigationDataProvider.localChatRooms
+  Map<String, ChatRoomReadable> get localChatRooms =>
+      Map.unmodifiable(_localRooms);
+
+  /// Load all chat rooms and their messages.
   Future<void> loadAllRooms() async {
-    _preloadedRooms.clear();
+    _stationRooms.clear();
+    _localRooms.clear();
     _stationRoomIds.clear();
 
     // Load local channels + messages from ChatService
@@ -150,9 +158,9 @@ class _StationServiceAdapter implements StationCommandInterface {
       final chatService = ChatService();
       for (final ch in chatService.channels) {
         final messages = await chatService.loadMessages(ch.id, limit: 50);
-        _preloadedRooms[ch.id] = _PreloadedRoom(
-          adapter: _ChatChannelAdapter(ch, messages.map(_wrapChatMessage).toList()),
-          isStation: false,
+        _localRooms[ch.id] = _ChatChannelAdapter(
+          ch,
+          messages.map(_wrapChatMessage).toList(),
         );
       }
     } catch (_) {}
@@ -165,19 +173,63 @@ class _StationServiceAdapter implements StationCommandInterface {
         final rooms = await RelayCacheService().loadChatRooms(cs, preferred!.url);
         final cache = RelayCacheService();
         for (final room in rooms) {
-          if (_preloadedRooms.containsKey(room.id)) continue;
           final stationMsgs = await cache.loadMessages(cs, room.id, limit: 50);
-          _preloadedRooms[room.id] = _PreloadedRoom(
-            adapter: _StationChatRoomAdapter(
-              room,
-              stationMsgs.map(_wrapStationMessage).toList(),
-            ),
-            isStation: true,
+          _stationRooms[room.id] = _StationChatRoomAdapter(
+            room,
+            stationMsgs.map(_wrapStationMessage).toList(),
           );
           _stationRoomIds.add(room.id);
         }
       }
     } catch (_) {}
+  }
+
+  /// Refresh messages for a specific room (fetch live data).
+  Future<List<ChatMessageReadable>> refreshRoomMessages(String roomId) async {
+    // Station room — fetch from remote station
+    if (_stationRoomIds.contains(roomId)) {
+      try {
+        final preferred = StationService().getPreferredStation();
+        if (preferred != null) {
+          final msgs = await StationService().fetchRoomMessages(
+            preferred.url,
+            roomId,
+            limit: 50,
+            stationCallsign: preferred.callsign,
+          );
+          final readable = msgs.map(_wrapStationMessage).toList();
+          // Update cache
+          _stationRooms[roomId] = _StationChatRoomAdapter(
+            StationChatRoom(
+              id: roomId,
+              name: (_stationRooms[roomId] as _StationChatRoomAdapter?)
+                      ?._room.name ?? roomId,
+              description: '',
+              messageCount: readable.length,
+              stationUrl: preferred.url,
+              stationName: preferred.name,
+            ),
+            readable,
+          );
+          return readable;
+        }
+      } catch (_) {}
+    }
+
+    // Local room — reload from ChatService
+    if (_localRooms.containsKey(roomId)) {
+      try {
+        final messages = await ChatService().loadMessages(roomId, limit: 50);
+        final readable = messages.map(_wrapChatMessage).toList();
+        final ch = ChatService().getChannel(roomId);
+        if (ch != null) {
+          _localRooms[roomId] = _ChatChannelAdapter(ch, readable);
+        }
+        return readable;
+      } catch (_) {}
+    }
+
+    return const [];
   }
 
   static _ChatMessageReadableAdapter _wrapChatMessage(ChatMessage m) =>
@@ -208,12 +260,8 @@ class _StationServiceAdapter implements StationCommandInterface {
   StationStatsReadable get stats => _StatsAdapter(_service);
 
   @override
-  Map<String, ChatRoomReadable> get chatRoomsReadable {
-    return {
-      for (final entry in _preloadedRooms.entries)
-        entry.key: entry.value.adapter,
-    };
-  }
+  Map<String, ChatRoomReadable> get chatRoomsReadable =>
+      Map.unmodifiable(_stationRooms);
 
   @override
   Map<String, ConnectedClientReadable> get clientsReadable => {};
@@ -411,13 +459,6 @@ class _StatsAdapter implements StationStatsReadable {
   @override DateTime? get lastConnection => null;
   @override DateTime? get lastMessage => null;
   @override DateTime? get lastTileRequest => null;
-}
-
-/// Helper to hold a room adapter + its origin.
-class _PreloadedRoom {
-  final ChatRoomReadable adapter;
-  final bool isStation;
-  _PreloadedRoom({required this.adapter, required this.isStation});
 }
 
 /// Adapter wrapping [ChatChannel] as [ChatRoomReadable] for navigation.
@@ -782,7 +823,7 @@ class CliConsoleController {
     // Handle navigation commands via shared handler
     if (command == 'ls') {
       if (_nav.isInChatRoom && args.isEmpty) {
-        _showChatHistory();
+        await _showChatHistory();
       } else {
         _nav.handleLs(args);
       }
@@ -791,7 +832,7 @@ class CliConsoleController {
     if (command == 'cd') {
       final entered = await _nav.handleCd(args);
       if (entered && _nav.isInChatRoom) {
-        _showChatHistory(limit: 10);
+        await _showChatHistory(limit: 10);
       }
       return _io.getOutput() ?? '';
     }
@@ -824,15 +865,13 @@ class CliConsoleController {
   // Chat history rendering
   // -------------------------------------------------------------------------
 
-  /// Render chat messages for the current room.
-  void _showChatHistory({int? limit}) {
+  /// Render chat messages for the current room (fetches fresh data).
+  Future<void> _showChatHistory({int? limit}) async {
     final roomId = _nav.currentChatRoom;
     if (roomId == null) return;
 
-    final room = _stationAdapter.chatRoomsReadable[roomId];
-    if (room == null) return;
-
-    final messages = room.readableMessages;
+    // Fetch fresh messages from station or local storage
+    final messages = await _stationAdapter.refreshRoomMessages(roomId);
     if (messages.isEmpty) {
       _io.writeln('(no messages)');
       return;
@@ -910,6 +949,10 @@ class _DesktopDataProvider implements NavigationDataProvider {
 
   @override
   Object? get sslManager => null; // SSL not available on Desktop
+
+  @override
+  Map<String, ChatRoomReadable> get localChatRooms =>
+      _controller._stationAdapter.localChatRooms;
 }
 
 // ---------------------------------------------------------------------------

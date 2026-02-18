@@ -194,4 +194,7 @@ class _ConsoleDataProvider implements NavigationDataProvider {
 
   @override
   Object? get sslManager => _mixin.consoleSslManager;
+
+  @override
+  Map<String, ChatRoomReadable> get localChatRooms => const {};
 }

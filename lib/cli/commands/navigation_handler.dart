@@ -37,6 +37,12 @@ abstract class NavigationDataProvider {
 
   /// SSL certificate manager (SslCertificateManager or null).
   Object? get sslManager;
+
+  /// Local chat rooms that belong to the profile, not to any station.
+  ///
+  /// These are shown at `/chat/<roomId>` level alongside station callsigns.
+  /// Default is empty (CLI stations don't have separate local rooms).
+  Map<String, ChatRoomReadable> get localChatRooms => {};
 }
 
 // ---------------------------------------------------------------------------
@@ -92,7 +98,9 @@ class NavigationHandler {
     if (station == null) return false;
 
     final roomId = _currentChatRoom!;
-    if (!station.chatRoomsReadable.containsKey(roomId)) {
+    final hasRoom = station.chatRoomsReadable.containsKey(roomId) ||
+        _provider.localChatRooms.containsKey(roomId);
+    if (!hasRoom) {
       _io.writeln('\x1B[31mRoom not found: $roomId\x1B[0m');
       return true;
     }
@@ -140,19 +148,19 @@ class NavigationHandler {
 
     // When entering a room, signal to the host
     if (isInChatRoom) {
-      final station = _station;
-      if (station != null) {
-        final room = station.chatRoomsReadable[_currentChatRoom];
-        if (room != null) {
-          _io.writeln('--- ${room.name} ---');
-          return true; // host should show last messages
-        } else {
-          _io.writeln('\x1B[31mRoom not found: $_currentChatRoom\x1B[0m');
-          // Back out to the parent level
-          _currentPath = _isFlatRoomMode ? '/chat' : '/chat/$_currentChatStation';
-          _currentChatRoom = null;
-          return false;
-        }
+      final roomId = _currentChatRoom!;
+      // Check local rooms first, then station rooms
+      final localRoom = _provider.localChatRooms[roomId];
+      final stationRoom = _station?.chatRoomsReadable[roomId];
+      final room = localRoom ?? stationRoom;
+      if (room != null) {
+        _io.writeln('--- ${room.name} ---');
+        return true; // host should show last messages
+      } else {
+        _io.writeln('\x1B[31mRoom not found: $roomId\x1B[0m');
+        _currentPath = _isFlatRoomMode ? '/chat' : '/chat/$_currentChatStation';
+        _currentChatRoom = null;
+        return false;
       }
     }
 
@@ -199,6 +207,8 @@ class NavigationHandler {
           entries.addAll(station.chatRoomsReadable.keys);
         }
       } else {
+        // Local rooms + station callsigns
+        entries.addAll(_provider.localChatRooms.keys);
         entries.addAll(_getStationCallsigns());
       }
     } else if (resolved.startsWith('/chat/')) {
@@ -289,7 +299,14 @@ class NavigationHandler {
   /// If none are found but chat rooms exist, list rooms directly (flat).
   void _listChatStations() {
     final stations = _getStationCallsigns();
+    final localRooms = _provider.localChatRooms;
+
     if (stations.isNotEmpty) {
+      // Show local rooms first (profile's own channels)
+      for (final room in localRooms.values) {
+        _io.writeln('\x1B[34m${room.id}/\x1B[0m  ${room.name}');
+      }
+      // Then station callsigns
       for (final cs in stations) {
         final local = _isLocalStation(cs);
         final suffix = local ? '' : '  \x1B[90m(remote)\x1B[0m';
@@ -312,6 +329,13 @@ class NavigationHandler {
       }
     }
 
+    if (localRooms.isNotEmpty) {
+      for (final room in localRooms.values) {
+        _io.writeln('\x1B[34m${room.id}/\x1B[0m  ${room.name}');
+      }
+      return;
+    }
+
     _io.writeln('(no stations)');
   }
 
@@ -321,6 +345,18 @@ class NavigationHandler {
     final segments = path.substring(1).split('/'); // ['chat', station, ?room]
     final secondSegment = segments.length > 1 ? segments[1] : null;
     if (secondSegment == null) return;
+
+    // Check if this is a local room at /chat/<roomId>
+    final localRooms = _provider.localChatRooms;
+    if (localRooms.containsKey(secondSegment)) {
+      final room = localRooms[secondSegment]!;
+      _io.writeln('${room.readableMessages.length} messages');
+      if (room.readableMessages.isNotEmpty) {
+        final lastMsg = room.readableMessages.last;
+        _io.writeln('Last activity: ${lastMsg.timestamp.toLocal()}');
+      }
+      return;
+    }
 
     // Check if we're in flat-room mode (second segment is a room, not station)
     if (_isFlatRoomMode) {
@@ -571,6 +607,11 @@ class NavigationHandler {
       // Flat mode: /chat/<room> — station callsign comes from station interface
       _currentChatStation = _station?.settings.callsign;
       _currentChatRoom = segments.length >= 2 ? segments[1] : null;
+    } else if (segments.length >= 2 &&
+        _provider.localChatRooms.containsKey(segments[1])) {
+      // Local room at /chat/<room> — use local station callsign
+      _currentChatStation = _station?.settings.callsign;
+      _currentChatRoom = segments[1];
     } else {
       // Station hierarchy mode: /chat/<station>/<room>
       _currentChatStation = segments.length >= 2 ? segments[1] : null;
@@ -595,10 +636,11 @@ class NavigationHandler {
     final rootDir = parts[0];
     if (!_provider.rootDirs.contains(rootDir)) return false;
 
-    // /chat/<...> — validate station or flat-room paths
+    // /chat/<...> — validate station, local room, or flat-room paths
     if (rootDir == 'chat' && parts.length >= 2) {
       final secondSegment = parts[1];
       final knownStations = _getStationCallsigns();
+      final localRooms = _provider.localChatRooms;
 
       if (knownStations.contains(secondSegment)) {
         // /chat/<station> — station hierarchy mode
@@ -612,6 +654,9 @@ class NavigationHandler {
             return false; // can't cd into remote station rooms
           }
         }
+      } else if (localRooms.containsKey(secondSegment)) {
+        // /chat/<room> — local room (profile's own channel)
+        if (parts.length > 2) return false; // no deeper nesting
       } else if (_isFlatRoomMode) {
         // /chat/<room> — flat room mode (no station callsigns available)
         final station = _station;
