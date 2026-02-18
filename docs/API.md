@@ -849,6 +849,56 @@ Returns list of connected clients, grouped by callsign.
 
 ---
 
+### Console
+
+#### POST /api/cli
+
+Execute a CLI console command on the station. Navigation state (`cd`) is preserved across requests.
+
+**Request body:**
+```json
+{
+  "command": "ls /chat"
+}
+```
+
+**Response (200 OK):**
+```json
+{
+  "status": "ok",
+  "output": "X3WFE4/\n",
+  "path": "/"
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `status` | string | `"ok"` on success |
+| `output` | string | Command output (ANSI stripped) |
+| `path` | string | Current navigation path after command |
+
+**Stateful navigation example:**
+```bash
+# Navigate to chat directory
+curl -X POST http://localhost:8080/api/cli \
+  -H 'Content-Type: application/json' \
+  -d '{"command": "cd chat"}'
+# → {"status":"ok","output":"","path":"/chat"}
+
+# List contents (uses current path from previous cd)
+curl -X POST http://localhost:8080/api/cli \
+  -H 'Content-Type: application/json' \
+  -d '{"command": "ls"}'
+# → {"status":"ok","output":"X3WFE4/\ngeneral/  General\n","path":"/chat"}
+```
+
+**Error (400):**
+```json
+{"status": "error", "error": "Missing command"}
+```
+
+---
+
 ### GeoIP
 
 Privacy-preserving IP geolocation using a bundled offline database (DB-IP Lite).

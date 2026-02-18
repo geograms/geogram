@@ -49,6 +49,7 @@ import 'server/mixins/rate_limit_mixin.dart';
 import 'server/mixins/health_watchdog_mixin.dart';
 import 'server/mixins/email_handler_mixin.dart';
 import 'server/mixins/blog_handler_mixin.dart';
+import 'server/mixins/console_command_mixin.dart';
 
 /// App version - use central version.dart for consistency
 import 'version.dart' show appVersion;
@@ -573,7 +574,7 @@ class PureTileCache {
 }
 
 /// Unified station server for CLI and Android modes
-class StationServer with RateLimitMixin, HealthWatchdogMixin, EmailHandlerMixin, BlogHandlerMixin
+class StationServer with RateLimitMixin, HealthWatchdogMixin, EmailHandlerMixin, BlogHandlerMixin, ConsoleCommandMixin
     implements StationCommandInterface {
   HttpServer? _httpServer;
   HttpServer? _httpsServer;
@@ -831,6 +832,10 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, EmailHandlerMixin,
   @override
   List<LogEntryReadable> get logsReadable =>
       logs.cast<LogEntryReadable>();
+
+  // --- ConsoleCommandMixin slot ---
+  @override
+  StationCommandInterface get consoleStationInterface => this;
 
   /// Initialize station server
   ///
@@ -8077,12 +8082,22 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, EmailHandlerMixin,
     final data = jsonDecode(body) as Map<String, dynamic>;
     final command = data['command'] as String?;
 
-    request.response.headers.contentType = ContentType.json;
-    request.response.write(jsonEncode({
-      'status': 'ok',
-      'command': command,
-      'message': 'CLI commands not yet implemented via API',
-    }));
+    if (command == null || command.trim().isEmpty) {
+      request.response.headers.contentType = ContentType.json;
+      request.response.statusCode = 400;
+      request.response.write(jsonEncode({'status': 'error', 'error': 'Missing command'}));
+      return;
+    }
+
+    try {
+      final result = await executeConsoleCommand(command);
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode(result));
+    } catch (e) {
+      request.response.headers.contentType = ContentType.json;
+      request.response.statusCode = 500;
+      request.response.write(jsonEncode({'status': 'error', 'error': e.toString()}));
+    }
   }
 
   Future<void> _handleTileRequest(HttpRequest request) async {

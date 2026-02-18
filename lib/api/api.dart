@@ -37,6 +37,7 @@ import 'endpoints/feedback_api.dart';
 import 'endpoints/backup_api.dart';
 import 'endpoints/dm_api.dart';
 import 'endpoints/updates_api.dart';
+import 'endpoints/console_api.dart';
 
 export 'api_response.dart';
 export 'api_error.dart';
@@ -51,6 +52,7 @@ export 'endpoints/feedback_api.dart';
 export 'endpoints/backup_api.dart';
 export 'endpoints/dm_api.dart';
 export 'endpoints/updates_api.dart';
+export 'endpoints/console_api.dart';
 
 /// Main API facade for device-to-device communication
 ///
@@ -99,6 +101,9 @@ class GeogramApi {
 
   /// Updates API
   late final UpdatesApi updates = UpdatesApi(this);
+
+  /// Console command API
+  late final ConsoleApi console = ConsoleApi(this);
 
   // ============================================================
   // Core Request Methods

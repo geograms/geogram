@@ -19,6 +19,7 @@ This document catalogs reusable UI components available in the Geogram codebase.
 - [URL-Linkified SelectableText](#url-linkified-selectabletext) - Make URLs clickable in text widgets
 - [Command Registry](#command-registry) - Self-describing console commands shared across CLI and Desktop
 - [Navigation Handler](#navigation-handler) - Shared virtual filesystem navigation (cd/ls/pwd) with `/chat/<station>/<room>` hierarchy
+- [ConsoleCommandMixin](#consolecommandmixin) - Shared /api/cli implementation for station servers
 
 ### Viewer Pages
 - [PhotoViewerPage](#photoviewerpage) - Image & video gallery
@@ -8478,6 +8479,50 @@ class _PureConsoleDataProvider implements NavigationDataProvider {
 
 // Desktop (cli_console_controller.dart)
 class _DesktopDataProvider implements NavigationDataProvider { ... }
+
+// Station server (via ConsoleCommandMixin)
+class _ConsoleDataProvider implements NavigationDataProvider { ... }
+```
+
+## ConsoleCommandMixin
+
+**Location**: `lib/server/mixins/console_command_mixin.dart`
+
+Shared mixin that provides console command execution (`/api/cli`) for station servers. Both `StationServer` (station.dart) and `PureStationServer` (pure_station.dart) mix this in.
+
+### Architecture
+
+Uses `BufferConsoleIO` + `CommandRegistry` + `NavigationHandler` — same infrastructure as `CliConsoleController` but without Flutter dependencies.
+
+### Abstract Slots
+
+| Slot | Type | Description |
+|------|------|-------------|
+| `consoleStationInterface` | `StationCommandInterface` | The station itself (required) |
+| `consoleProfileInterface` | `ProfileCommandInterface?` | Profile service (optional) |
+| `consoleGameConfig` | `Object?` | Game config (optional) |
+| `consoleSslManager` | `Object?` | SSL manager (optional) |
+| `consoleRootDirs` | `List<String>` | Virtual filesystem root dirs (has default) |
+
+### Usage
+
+```dart
+class StationServer with ..., ConsoleCommandMixin implements StationCommandInterface {
+  @override
+  StationCommandInterface get consoleStationInterface => this;
+
+  Future<void> _handleCliCommand(HttpRequest request) async {
+    final result = await executeConsoleCommand(command);
+    request.response.write(jsonEncode(result));
+  }
+}
+```
+
+### API Contract
+
+```
+POST /api/cli  →  {"command": "ls /chat"}
+Response:       {"status": "ok", "output": "...", "path": "/chat"}
 ```
 
 Navigation commands are dispatched *before* the command registry (since they mutate path state), with one special case: when `_nav.isInChatRoom` is true, `ls` shows chat history instead of directory listing.
