@@ -178,14 +178,28 @@ String getChatPageScripts() {
       async function connectNostr() {
         try {
           nostrPubkey = await window.nostr.getPublicKey();
-          // Display name: first 8 + last 4 hex chars
-          nostrCallsign = nostrPubkey.substring(0, 8) + '...' + nostrPubkey.substring(nostrPubkey.length - 4);
           document.getElementById('nostr-login').style.display = 'none';
-          document.getElementById('chat-input-area').style.display = '';
-          document.getElementById('chat-input').focus();
+
+          // Show nickname prompt, pre-fill with saved callsign or empty
+          const saved = localStorage.getItem('geogram_callsign') || '';
+          const nicknameInput = document.getElementById('nickname-input');
+          nicknameInput.value = saved;
+          document.getElementById('nostr-nickname').style.display = '';
+          nicknameInput.focus();
         } catch (e) {
           console.error('Nostr connect error:', e);
         }
+      }
+
+      function confirmNickname() {
+        const input = document.getElementById('nickname-input');
+        const name = input.value.trim();
+        if (!name) return;
+        nostrCallsign = name;
+        localStorage.setItem('geogram_callsign', name);
+        document.getElementById('nostr-nickname').style.display = 'none';
+        document.getElementById('chat-input-area').style.display = '';
+        document.getElementById('chat-input').focus();
       }
 
       function showChatError(msg) {
@@ -266,6 +280,10 @@ String getChatPageScripts() {
         detectNostr(10);
 
         document.getElementById('nostr-connect').addEventListener('click', connectNostr);
+        document.getElementById('nickname-ok').addEventListener('click', confirmNickname);
+        document.getElementById('nickname-input').addEventListener('keydown', function(e) {
+          if (e.key === 'Enter') { e.preventDefault(); confirmNickname(); }
+        });
         document.getElementById('chat-send').addEventListener('click', sendMessage);
         document.getElementById('chat-input').addEventListener('keydown', function(e) {
           if (e.key === 'Enter' && !e.shiftKey) {

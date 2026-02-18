@@ -266,6 +266,59 @@
   color: var(--background);
 }
 
+/* Nostr nickname prompt */
+.nostr-nickname {
+  padding-top: 15px;
+  border-top: 1px solid var(--border-color);
+  margin-top: 10px;
+  text-align: center;
+}
+
+.nostr-nickname label {
+  display: block;
+  margin-bottom: 8px;
+  color: var(--accent-alpha-70);
+  font-size: 0.9rem;
+}
+
+.nickname-row {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+}
+
+.nickname-row input {
+  background: var(--background);
+  border: 1px solid var(--border-color);
+  color: var(--color);
+  padding: 8px 12px;
+  font-family: inherit;
+  font-size: 0.95rem;
+  outline: none;
+  width: 160px;
+  text-align: center;
+}
+
+.nickname-row input:focus {
+  border-color: var(--accent);
+}
+
+.nickname-row button {
+  background: var(--accent);
+  color: var(--background);
+  border: none;
+  padding: 8px 16px;
+  font-family: inherit;
+  font-size: 0.95rem;
+  cursor: pointer;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.nickname-row button:hover {
+  opacity: 0.85;
+}
+
 /* Nostr unavailable message */
 .nostr-unavailable {
   padding-top: 15px;
