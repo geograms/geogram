@@ -1,22 +1,37 @@
 /* Chat styles - extends global Terminimal theme */
 
-/* Force chat page into full-viewport flex layout (both desktop and mobile) */
-html.chat-page, .chat-page body {
-  height: 100vh;
-  height: 100dvh;
-  overflow: hidden;
+/*
+ * Full-viewport chat layout.
+ * The page must fit exactly in the viewport with messages scrolling
+ * inside a constrained area and the input pinned at the bottom.
+ * Modeled after the ESP32 chat layout pattern.
+ */
+
+/* ===== Viewport lock (desktop + mobile) ===== */
+html.chat-page,
+.chat-page body {
+  height: 100vh !important;
+  height: 100dvh !important;
+  overflow: hidden !important;
+  margin: 0;
+  padding: 0;
 }
 
 .chat-page .container {
   height: 100vh;
   height: 100dvh;
+  min-height: 0 !important;
   max-height: 100vh;
   max-height: 100dvh;
-  min-height: 0 !important;
   overflow: hidden;
   display: flex;
   flex-direction: column;
   box-sizing: border-box;
+  padding: 20px 40px 0 40px;
+}
+
+.chat-page .header {
+  flex-shrink: 0;
 }
 
 .chat-page .content {
@@ -26,20 +41,24 @@ html.chat-page, .chat-page body {
   flex-direction: column;
 }
 
-/* Chat layout - sidebar + messages */
+.chat-page .footer {
+  display: none;
+}
+
+/* ===== Chat layout: sidebar + messages ===== */
 .chat-layout {
-  display: grid;
-  grid-template-columns: 180px 1fr;
-  grid-template-rows: 1fr;
+  display: flex;
+  flex-direction: row;
   gap: 30px;
   width: 100%;
   flex: 1;
   min-height: 0;
-  overflow: hidden;
 }
 
 /* Channels sidebar */
 .channels-sidebar {
+  width: 180px;
+  flex-shrink: 0;
   border-right: 1px solid var(--border-color);
   padding-right: 20px;
   overflow-y: auto;
@@ -55,7 +74,6 @@ html.chat-page, .chat-page body {
   border-bottom: 2px dashed var(--accent);
 }
 
-/* Channel items */
 .channel-item {
   display: block;
   padding: 8px 0;
@@ -87,20 +105,20 @@ html.chat-page, .chat-page body {
   font-size: 0.95rem;
 }
 
-/* Messages area */
+/* ===== Messages area (flex column: header + scrollable list + input) ===== */
 .messages-area {
+  flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
-  min-height: 0;
-  overflow: hidden;
 }
 
 .messages-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding-bottom: 15px;
-  margin-bottom: 20px;
+  padding-bottom: 10px;
+  margin-bottom: 10px;
   border-bottom: 2px dashed var(--accent);
   flex-shrink: 0;
 }
@@ -119,16 +137,17 @@ html.chat-page, .chat-page body {
   letter-spacing: 0.05em;
 }
 
-/* Messages list */
+/* Scrollable messages list */
 .messages-list {
   flex: 1;
   overflow-y: auto;
   min-height: 0;
+  padding-bottom: 8px;
 }
 
 /* Individual message */
 .message {
-  padding: 12px 0;
+  padding: 10px 0;
   border-bottom: 1px solid var(--border-color);
 }
 
@@ -161,7 +180,7 @@ html.chat-page, .chat-page body {
 /* Date separator */
 .date-separator {
   text-align: center;
-  padding: 16px 0;
+  padding: 12px 0;
   color: var(--accent-alpha-70);
   font-size: 0.9rem;
   position: relative;
@@ -177,13 +196,8 @@ html.chat-page, .chat-page body {
   background: var(--border-color);
 }
 
-.date-separator::before {
-  left: 0;
-}
-
-.date-separator::after {
-  right: 0;
-}
+.date-separator::before { left: 0; }
+.date-separator::after { right: 0; }
 
 /* Status messages */
 .status-message {
@@ -200,31 +214,19 @@ html.chat-page, .chat-page body {
 }
 
 /* Scrollbar */
-.messages-list::-webkit-scrollbar {
-  width: 6px;
-}
+.messages-list::-webkit-scrollbar { width: 6px; }
+.messages-list::-webkit-scrollbar-track { background: transparent; }
+.messages-list::-webkit-scrollbar-thumb { background: var(--accent-alpha-20); border-radius: 3px; }
+.messages-list::-webkit-scrollbar-thumb:hover { background: var(--accent-alpha-70); }
 
-.messages-list::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.messages-list::-webkit-scrollbar-thumb {
-  background: var(--accent-alpha-20);
-  border-radius: 3px;
-}
-
-.messages-list::-webkit-scrollbar-thumb:hover {
-  background: var(--accent-alpha-70);
-}
-
-/* Chat input area - ESP32 style */
+/* ===== Chat input area — ESP32 style ===== */
 .chat-input-area {
+  flex-shrink: 0;
   border-top: 1px solid var(--border-color);
   padding: 8px 0;
   display: flex;
   gap: 6px;
   align-items: center;
-  flex-shrink: 0;
 }
 
 .chat-input-area input {
@@ -259,14 +261,8 @@ html.chat-page, .chat-page body {
   letter-spacing: 0.05em;
 }
 
-.chat-input-area button:hover {
-  opacity: 0.85;
-}
-
-.chat-input-area button:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
+.chat-input-area button:hover { opacity: 0.85; }
+.chat-input-area button:disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* Chat error message */
 .chat-error {
@@ -275,35 +271,47 @@ html.chat-page, .chat-page body {
   padding-top: 5px;
 }
 
-/* Mobile layout */
+/* ===== Mobile layout ===== */
 @media (max-width: 683px) {
   .chat-page .container {
-    padding: 10px;
+    padding: 8px 10px 0 10px;
   }
-  .chat-page .footer {
+
+  .chat-page .header {
+    margin-bottom: 4px;
+  }
+
+  .chat-page .menu {
     display: none;
   }
+
+  /* Switch from row to column */
   .chat-layout {
-    grid-template-columns: 1fr;
-    display: flex;
     flex-direction: column;
+    gap: 0;
   }
+
+  /* Channels become horizontal pill strip */
   .channels-sidebar {
+    width: auto;
     border-right: none;
-    border-bottom: none;
     padding-right: 0;
-    padding-bottom: 8px;
-    margin-bottom: 8px;
+    padding-bottom: 6px;
+    margin-bottom: 6px;
     display: flex;
+    flex-direction: row;
     gap: 8px;
     overflow-x: auto;
     overflow-y: hidden;
     -webkit-overflow-scrolling: touch;
     flex-shrink: 0;
+    border-bottom: 1px solid var(--border-color);
   }
+
   .channels-header {
     display: none;
   }
+
   .channel-item {
     flex-shrink: 0;
     padding: 4px 12px;
@@ -313,17 +321,29 @@ html.chat-page, .chat-page body {
     white-space: nowrap;
     font-size: 0.85rem;
   }
+
   .channel-item.active {
     border-color: var(--accent);
     background: var(--accent-alpha-20);
   }
+
   .messages-header {
-    padding-bottom: 8px;
-    margin-bottom: 8px;
+    padding-bottom: 6px;
+    margin-bottom: 6px;
   }
+
   .messages-list {
     -webkit-overflow-scrolling: touch;
   }
+
+  .message {
+    padding: 8px 0;
+  }
+
+  .date-separator {
+    padding: 8px 0;
+  }
+
   .chat-input-area button {
     min-height: 44px;
   }
