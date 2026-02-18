@@ -105,7 +105,8 @@ if [ "$SKIP_BUILD" = false ]; then
     else
         # Check if any source file is newer than the binary
         NEWEST_SOURCE=$(find "$SCRIPT_DIR/lib" "$SCRIPT_DIR/bin" "$CLI_PROJECT_DIR/bin" -name "*.dart" -newer "$CLI_BINARY" 2>/dev/null | head -1)
-        if [ -n "$NEWEST_SOURCE" ]; then
+        NEWEST_THEME=$(find "$SCRIPT_DIR/themes" \( -name "*.html" -o -name "*.css" \) -newer "$CLI_BINARY" 2>/dev/null | head -1)
+        if [ -n "$NEWEST_SOURCE" ] || [ -n "$NEWEST_THEME" ]; then
             NEEDS_BUILD=true
             echo "Source files changed, rebuilding..."
         fi
@@ -115,6 +116,11 @@ if [ "$SKIP_BUILD" = false ]; then
         echo "Generating embedded games..."
         pushd "$SCRIPT_DIR" > /dev/null
         "$DART_BIN" run bin/generate_embedded_games.dart
+        popd > /dev/null
+
+        echo "Generating embedded themes..."
+        pushd "$SCRIPT_DIR" > /dev/null
+        "$DART_BIN" run bin/generate_embedded_themes.dart
         popd > /dev/null
 
         echo "Compiling standalone CLI binary..."

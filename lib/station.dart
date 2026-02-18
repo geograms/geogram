@@ -50,6 +50,7 @@ import 'server/mixins/health_watchdog_mixin.dart';
 import 'server/mixins/email_handler_mixin.dart';
 import 'server/mixins/blog_handler_mixin.dart';
 import 'server/mixins/console_command_mixin.dart';
+import 'cli/themes_embedded.dart';
 
 /// App version - use central version.dart for consistency
 import 'version.dart' show appVersion;
@@ -1514,6 +1515,9 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, EmailHandlerMixin,
       _log('WARN', 'Station server already running');
       return true;
     }
+
+    // Sync embedded theme files to disk (overwrites outdated files)
+    await _syncBundledThemes();
 
     // Reload settings to pick up any config changes
     await _loadSettings();
@@ -7106,6 +7110,35 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, EmailHandlerMixin,
       ContentType.html,
       cacheControl: 'public, max-age=30',
     );
+  }
+
+  /// Sync embedded theme files to disk, overwriting if content differs
+  Future<void> _syncBundledThemes() async {
+    final themesDir = '${PureStorageConfig().baseDir}/themes';
+    var updated = 0;
+
+    for (final entry in ThemesEmbedded.files.entries) {
+      try {
+        final targetPath = '$themesDir/${entry.key}';
+        final file = File(targetPath);
+
+        if (await file.exists()) {
+          final existing = await file.readAsString();
+          if (existing == entry.value) continue;
+        }
+
+        await file.parent.create(recursive: true);
+        await file.writeAsString(entry.value);
+        updated++;
+        _log('INFO', 'Updated theme file: ${entry.key}');
+      } catch (e) {
+        _log('WARN', 'Could not extract theme ${entry.key}: $e');
+      }
+    }
+
+    if (updated > 0) {
+      _log('INFO', 'Theme sync: $updated files updated');
+    }
   }
 
   /// Serve a CSS file from the themes directory

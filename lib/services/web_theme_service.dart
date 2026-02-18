@@ -4,6 +4,7 @@ import 'storage_config.dart';
 import 'config_service.dart';
 import 'log_service.dart';
 import '../util/chat_scripts.dart';
+import '../cli/themes_embedded.dart';
 
 /// Service for managing web themes (HTML templates and CSS)
 /// Handles extraction of bundled themes and theme selection
@@ -18,30 +19,6 @@ class WebThemeService {
   /// List of app types that have theme templates
   static const List<String> appTypes = [
     'home', 'chat', 'www', 'forum', 'blog', 'events', 'alerts', 'files', 'station'
-  ];
-
-  /// Bundled theme assets to extract
-  static const List<String> _bundledAssets = [
-    'themes/default/styles.css',
-    'themes/default/home/index.html',
-    'themes/default/home/styles.css',
-    'themes/default/chat/index.html',
-    'themes/default/chat/styles.css',
-    'themes/default/www/index.html',
-    'themes/default/www/styles.css',
-    'themes/default/forum/index.html',
-    'themes/default/forum/styles.css',
-    'themes/default/blog/index.html',
-    'themes/default/blog/post.html',
-    'themes/default/blog/styles.css',
-    'themes/default/events/index.html',
-    'themes/default/events/styles.css',
-    'themes/default/alerts/index.html',
-    'themes/default/alerts/styles.css',
-    'themes/default/files/index.html',
-    'themes/default/files/styles.css',
-    'themes/default/station/index.html',
-    'themes/default/station/styles.css',
   ];
 
   String? _themesDir;
@@ -76,33 +53,42 @@ class WebThemeService {
     LogService().log('WebThemeService initialized: $_themesDir');
   }
 
-  /// Extract bundled theme assets to the themes directory
+  /// Extract bundled theme assets to the themes directory.
+  /// Compares embedded content with files on disk and overwrites if different.
   Future<void> _extractBundledThemes() async {
-    LogService().log('Extracting bundled themes...');
+    LogService().log('Syncing bundled themes to disk...');
+    var updated = 0;
+    var unchanged = 0;
 
-    for (final assetPath in _bundledAssets) {
+    for (final entry in ThemesEmbedded.files.entries) {
       try {
-        final exeDir = File(Platform.resolvedExecutable).parent.path;
-        // Try Flutter asset bundle path first, then fallback to exe-relative
-        final assetFile = File('$exeDir/data/flutter_assets/$assetPath');
-        if (!await assetFile.exists()) {
-          LogService().log('Skipping missing bundled asset: $assetPath');
-          continue;
-        }
-        final content = await assetFile.readAsString();
-        final targetPath = '$_themesDir/${assetPath.substring(7)}'; // Remove 'themes/' prefix
-
+        final targetPath = '$_themesDir/${entry.key}';
         final file = File(targetPath);
-        await file.parent.create(recursive: true);
-        await file.writeAsString(content);
 
-        LogService().log('Extracted: $assetPath -> $targetPath');
+        // Compare with existing file on disk
+        if (await file.exists()) {
+          final existing = await file.readAsString();
+          if (existing == entry.value) {
+            unchanged++;
+            continue;
+          }
+        }
+
+        // File missing or content differs — write the embedded version
+        await file.parent.create(recursive: true);
+        await file.writeAsString(entry.value);
+        updated++;
+        LogService().log('Updated theme file: ${entry.key}');
       } catch (e) {
-        LogService().log('Warning: Could not extract $assetPath: $e');
+        LogService().log('Warning: Could not extract ${entry.key}: $e');
       }
     }
 
-    LogService().log('Theme extraction complete');
+    if (updated > 0) {
+      LogService().log('Theme sync complete: $updated updated, $unchanged unchanged');
+    } else {
+      LogService().log('Theme sync complete: all $unchanged files up-to-date');
+    }
   }
 
   /// Get the themes directory path
