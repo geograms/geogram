@@ -2654,6 +2654,28 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     }
 
     if (_channels.isEmpty && _stationRooms.isEmpty && _cachedDeviceSources.isEmpty) {
+      // Show connecting indicator while initial station fetch is in progress
+      if (_connectionStatus == _StationConnectionStatus.connecting || _loadingRelayRooms) {
+        return Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const SizedBox(
+                width: 32,
+                height: 32,
+                child: CircularProgressIndicator(strokeWidth: 3),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                _i18n.t('connecting'),
+                style: theme.textTheme.titleMedium?.copyWith(
+                  color: Colors.grey,
+                ),
+              ),
+            ],
+          ),
+        );
+      }
       return _buildEmptyState(theme);
     }
 
@@ -2985,7 +3007,56 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
 
   /// Build station rooms section widgets
   List<Widget> _buildStationSection(ThemeData theme) {
-    if (_stationRooms.isEmpty) return [];
+    // Show connecting placeholder when rooms haven't loaded yet but a station is configured
+    if (_stationRooms.isEmpty) {
+      if (_connectionStatus == _StationConnectionStatus.connecting && _lastStationUrl != null) {
+        return [
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: theme.colorScheme.surfaceContainerHighest,
+              border: Border(
+                bottom: BorderSide(
+                  color: theme.colorScheme.outlineVariant,
+                  width: 1,
+                ),
+              ),
+            ),
+            child: Row(
+              children: [
+                Container(
+                  width: 10,
+                  height: 10,
+                  decoration: const BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: Colors.grey,
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Icon(Icons.cell_tower, color: theme.colorScheme.primary),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    _i18n.t('connecting'),
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: Colors.grey,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+                const SizedBox(width: 8),
+              ],
+            ),
+          ),
+        ];
+      }
+      return [];
+    }
 
     return [
             Container(
@@ -3460,23 +3531,41 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
           Expanded(
             child: _stationRooms.isEmpty
                 ? Center(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(
-                          Icons.forum_outlined,
-                          size: 64,
-                          color: theme.colorScheme.onSurfaceVariant.withOpacity(0.5),
-                        ),
-                        const SizedBox(height: 16),
-                        Text(
-                          _i18n.t('no_rooms_found'),
-                          style: theme.textTheme.titleMedium?.copyWith(
-                            color: theme.colorScheme.onSurfaceVariant,
+                    child: _connectionStatus == _StationConnectionStatus.connecting
+                        ? Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              const SizedBox(
+                                width: 32,
+                                height: 32,
+                                child: CircularProgressIndicator(strokeWidth: 3),
+                              ),
+                              const SizedBox(height: 16),
+                              Text(
+                                _i18n.t('connecting'),
+                                style: theme.textTheme.titleMedium?.copyWith(
+                                  color: Colors.grey,
+                                ),
+                              ),
+                            ],
+                          )
+                        : Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(
+                                Icons.forum_outlined,
+                                size: 64,
+                                color: theme.colorScheme.onSurfaceVariant.withOpacity(0.5),
+                              ),
+                              const SizedBox(height: 16),
+                              Text(
+                                _i18n.t('no_rooms_found'),
+                                style: theme.textTheme.titleMedium?.copyWith(
+                                  color: theme.colorScheme.onSurfaceVariant,
+                                ),
+                              ),
+                            ],
                           ),
-                        ),
-                      ],
-                    ),
                   )
                 : ListView.builder(
                     itemCount: _stationRooms.length,
