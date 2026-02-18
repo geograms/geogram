@@ -2461,11 +2461,19 @@ class PureStationServer with EmailHandlerMixin, BlogHandlerMixin, ConsoleCommand
     ));
   }
 
-  List<ChatMessage> getChatHistory(String roomId, {int limit = 20}) {
+  List<ChatMessage> getChatHistory(String roomId, {int limit = 20, String? before}) {
     final room = _chatRooms[roomId];
     if (room == null) return [];
-    final messages = room.messages;
-    if (messages.length <= limit) return messages;
+    var messages = room.messages;
+    if (before != null) {
+      final idx = messages.lastIndexWhere((m) {
+        final ts = '${m.timestamp.year}-${m.timestamp.month.toString().padLeft(2, '0')}-${m.timestamp.day.toString().padLeft(2, '0')} ${m.timestamp.hour.toString().padLeft(2, '0')}:${m.timestamp.minute.toString().padLeft(2, '0')}_${m.timestamp.second.toString().padLeft(2, '0')}';
+        return ts.compareTo(before) < 0;
+      });
+      if (idx < 0) return [];
+      messages = messages.sublist(0, idx + 1);
+    }
+    if (messages.length <= limit) return messages.toList();
     return messages.sublist(messages.length - limit);
   }
 
@@ -7479,7 +7487,7 @@ class PureStationServer with EmailHandlerMixin, BlogHandlerMixin, ConsoleCommand
     // Build messages HTML for default room
     final messagesHtml = StringBuffer();
     if (rooms.isNotEmpty) {
-      final messages = getChatHistory(defaultRoom, limit: 50);
+      final messages = getChatHistory(defaultRoom, limit: 20);
       if (messages.isEmpty) {
         messagesHtml.writeln('<div class="empty-state">No messages yet</div>');
       } else {
@@ -7727,7 +7735,8 @@ class PureStationServer with EmailHandlerMixin, BlogHandlerMixin, ConsoleCommand
 
     if (request.method == 'GET') {
       final limit = int.tryParse(request.uri.queryParameters['limit'] ?? '50') ?? 50;
-      final messages = getChatHistory(roomId, limit: limit).map((m) => m.toJson()).toList();
+      final before = request.uri.queryParameters['before'];
+      final messages = getChatHistory(roomId, limit: limit, before: before).map((m) => m.toJson()).toList();
       request.response.headers.contentType = ContentType.json;
       request.response.write(jsonEncode({
         'room_id': roomId,
@@ -7735,6 +7744,7 @@ class PureStationServer with EmailHandlerMixin, BlogHandlerMixin, ConsoleCommand
         'callsign': targetCallsign,
         'messages': messages,
         'count': messages.length,
+        'has_more': messages.length == limit,
       }));
     } else if (request.method == 'POST') {
       try {

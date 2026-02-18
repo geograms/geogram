@@ -12,6 +12,43 @@ String getChatPageScripts() {
       let currentRoom = data.currentRoom || 'main';
       let lastTimestamp = null;
       let pollInterval = null;
+      let loadingOlder = false;
+      let hasMore = true;
+      const PAGE_SIZE = 20;
+      const isTouchDevice = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
+
+      function cacheKey(roomId) {
+        return 'geogram_chat_' + roomId;
+      }
+
+      function cacheGet(roomId) {
+        try {
+          const raw = sessionStorage.getItem(cacheKey(roomId));
+          return raw ? JSON.parse(raw) : null;
+        } catch (e) { return null; }
+      }
+
+      function cacheSet(roomId, messages) {
+        try {
+          sessionStorage.setItem(cacheKey(roomId), JSON.stringify(messages));
+        } catch (e) {}
+      }
+
+      function cacheAppend(roomId, newMessages) {
+        const cached = cacheGet(roomId) || [];
+        const existing = new Set(cached.map(m => m.timestamp));
+        newMessages.forEach(m => {
+          if (!existing.has(m.timestamp)) cached.push(m);
+        });
+        cacheSet(roomId, cached);
+      }
+
+      function cachePrepend(roomId, olderMessages) {
+        const cached = cacheGet(roomId) || [];
+        const existing = new Set(cached.map(m => m.timestamp));
+        const toAdd = olderMessages.filter(m => !existing.has(m.timestamp));
+        if (toAdd.length > 0) cacheSet(roomId, toAdd.concat(cached));
+      }
 
       function initChannels() {
         document.querySelectorAll('.channel-item').forEach(item => {
@@ -26,6 +63,8 @@ String getChatPageScripts() {
         if (roomId === currentRoom && lastTimestamp !== null) return;
         currentRoom = roomId;
         lastTimestamp = null;
+        hasMore = true;
+        loadingOlder = false;
 
         document.querySelectorAll('.channel-item').forEach(item => {
           item.classList.toggle('active', item.dataset.roomId === roomId);
@@ -36,9 +75,29 @@ String getChatPageScripts() {
         loadMessages();
       }
 
+      function parseMessages(result) {
+        let messages = [];
+        let resultHasMore = true;
+        if (Array.isArray(result)) {
+          messages = result;
+        } else if (result && Array.isArray(result.messages)) {
+          messages = result.messages;
+          if (result.has_more === false) resultHasMore = false;
+        }
+        return { messages, hasMore: resultHasMore };
+      }
+
       async function loadMessages() {
         try {
-          const url = data.apiBasePath + '/' + encodeURIComponent(currentRoom) + '/messages';
+          const cached = cacheGet(currentRoom);
+          if (cached && cached.length > 0) {
+            renderMessages(cached);
+            scrollToBottom(true);
+            startPolling();
+            return;
+          }
+
+          const url = data.apiBasePath + '/' + encodeURIComponent(currentRoom) + '/messages?limit=' + PAGE_SIZE;
           const response = await fetch(url);
           if (!response.ok) {
             document.getElementById('messages').innerHTML = '<div class="empty-state">Failed to load messages</div>';
@@ -46,40 +105,48 @@ String getChatPageScripts() {
           }
 
           const result = await response.json();
-          let messages = [];
-          if (Array.isArray(result)) {
-            messages = result;
-          } else if (result && Array.isArray(result.messages)) {
-            messages = result.messages;
-          }
+          const parsed = parseMessages(result);
+          hasMore = parsed.hasMore;
 
           const container = document.getElementById('messages');
           container.innerHTML = '';
 
-          if (messages.length === 0) {
+          if (parsed.messages.length === 0) {
             container.innerHTML = '<div class="empty-state">No messages yet</div>';
             return;
           }
 
-          let currentDate = null;
-          messages.forEach(msg => {
-            const msgDate = msg.timestamp.split(' ')[0];
-            if (currentDate !== msgDate) {
-              currentDate = msgDate;
-              const sep = document.createElement('div');
-              sep.className = 'date-separator';
-              sep.textContent = msgDate;
-              container.appendChild(sep);
-            }
-            appendMessage(msg);
-            lastTimestamp = msg.timestamp;
-          });
-
+          cacheSet(currentRoom, parsed.messages);
+          renderMessages(parsed.messages);
           scrollToBottom(true);
         } catch (e) {
           console.error('Error loading messages:', e);
           document.getElementById('messages').innerHTML = '<div class="empty-state">Error loading messages</div>';
         }
+      }
+
+      function renderMessages(messages) {
+        const container = document.getElementById('messages');
+        container.innerHTML = '';
+
+        if (messages.length === 0) {
+          container.innerHTML = '<div class="empty-state">No messages yet</div>';
+          return;
+        }
+
+        let currentDate = null;
+        messages.forEach(msg => {
+          const msgDate = msg.timestamp.split(' ')[0];
+          if (currentDate !== msgDate) {
+            currentDate = msgDate;
+            const sep = document.createElement('div');
+            sep.className = 'date-separator';
+            sep.textContent = msgDate;
+            container.appendChild(sep);
+          }
+          appendMessage(msg);
+          lastTimestamp = msg.timestamp;
+        });
       }
 
       function appendMessage(msg) {
@@ -102,6 +169,93 @@ String getChatPageScripts() {
         container.appendChild(div);
       }
 
+      async function loadOlderMessages() {
+        if (loadingOlder || !hasMore) return;
+        loadingOlder = true;
+
+        const container = document.getElementById('messages');
+        const firstMsg = container.querySelector('.message');
+        if (!firstMsg) { loadingOlder = false; return; }
+
+        const oldestTimestamp = firstMsg.dataset.timestamp;
+        const indicator = document.createElement('div');
+        indicator.className = 'status-message loading-older';
+        indicator.textContent = 'Loading older messages...';
+        container.insertBefore(indicator, container.firstChild);
+
+        try {
+          const url = data.apiBasePath + '/' + encodeURIComponent(currentRoom) +
+            '/messages?limit=' + PAGE_SIZE + '&before=' + encodeURIComponent(oldestTimestamp);
+          const response = await fetch(url);
+          if (!response.ok) { loadingOlder = false; indicator.remove(); return; }
+
+          const result = await response.json();
+          const parsed = parseMessages(result);
+          hasMore = parsed.hasMore;
+
+          indicator.remove();
+
+          if (parsed.messages.length === 0) {
+            hasMore = false;
+            loadingOlder = false;
+            return;
+          }
+
+          cachePrepend(currentRoom, parsed.messages);
+
+          const prevScrollHeight = container.scrollHeight;
+          const prevScrollTop = container.scrollTop;
+
+          let currentDate = null;
+          const firstExisting = container.firstChild;
+          const fragment = document.createDocumentFragment();
+
+          parsed.messages.forEach(msg => {
+            const msgDate = msg.timestamp.split(' ')[0];
+            if (currentDate !== msgDate) {
+              currentDate = msgDate;
+              const sep = document.createElement('div');
+              sep.className = 'date-separator';
+              sep.textContent = msgDate;
+              fragment.appendChild(sep);
+            }
+            const div = document.createElement('div');
+            div.className = 'message';
+            div.dataset.timestamp = msg.timestamp;
+            const timeParts = msg.timestamp.split(' ');
+            const time = timeParts.length > 1 ? timeParts[1].replace('_', ':').substring(0, 5) : '00:00';
+            const author = msg.author || msg.senderCallsign || 'anonymous';
+            const content = msg.content || '';
+            div.innerHTML = '<div class="message-header">' +
+                           '<span class="message-author">' + escapeHtml(author) + '</span>' +
+                           '<span class="message-time">' + time + '</span>' +
+                           '</div>' +
+                           '<div class="message-content">' + escapeHtml(content) + '</div>';
+            fragment.appendChild(div);
+          });
+
+          // Remove duplicate date separators
+          if (firstExisting && firstExisting.classList && firstExisting.classList.contains('date-separator')) {
+            const lastAdded = fragment.lastChild;
+            if (lastAdded && lastAdded.classList && lastAdded.classList.contains('date-separator') &&
+                lastAdded.textContent === firstExisting.textContent) {
+              firstExisting.remove();
+            }
+          }
+
+          container.insertBefore(fragment, container.firstChild);
+
+          // Preserve scroll position
+          const newScrollHeight = container.scrollHeight;
+          container.scrollTop = prevScrollTop + (newScrollHeight - prevScrollHeight);
+        } catch (e) {
+          console.error('Error loading older messages:', e);
+          indicator.remove();
+        } finally {
+          loadingOlder = false;
+        }
+      }
+
       async function pollNewMessages() {
         if (!lastTimestamp) return;
 
@@ -111,21 +265,17 @@ String getChatPageScripts() {
           if (!response.ok) return;
 
           const result = await response.json();
-          let messages = [];
-          if (Array.isArray(result)) {
-            messages = result;
-          } else if (result && Array.isArray(result.messages)) {
-            messages = result.messages;
-          }
+          const parsed = parseMessages(result);
 
-          if (messages.length > 0) {
+          if (parsed.messages.length > 0) {
             const shouldScroll = isNearBottom();
-            messages.forEach(msg => {
+            parsed.messages.forEach(msg => {
               if (msg.timestamp > lastTimestamp) {
                 appendMessage(msg);
                 lastTimestamp = msg.timestamp;
               }
             });
+            cacheAppend(currentRoom, parsed.messages);
             if (shouldScroll) scrollToBottom(true);
           }
         } catch (e) {
@@ -165,7 +315,9 @@ String getChatPageScripts() {
         const inputArea = document.getElementById('chat-input-area');
         if (inputArea) {
           inputArea.style.display = '';
-          document.getElementById('chat-input').focus();
+          if (!isTouchDevice) {
+            document.getElementById('chat-input').focus();
+          }
         }
       }
 
@@ -223,7 +375,9 @@ String getChatPageScripts() {
             const now = new Date();
             const pad = (n) => n.toString().padStart(2, '0');
             const ts = now.getFullYear() + '-' + pad(now.getMonth()+1) + '-' + pad(now.getDate()) + ' ' + pad(now.getHours()) + ':' + pad(now.getMinutes()) + '_' + pad(now.getSeconds());
-            appendMessage({ timestamp: ts, author: nostr.callsign, content: content });
+            const newMsg = { timestamp: ts, author: nostr.callsign, content: content };
+            appendMessage(newMsg);
+            cacheAppend(currentRoom, [newMsg]);
             scrollToBottom(true);
           } else {
             const err = await resp.json().catch(() => ({}));
@@ -242,6 +396,23 @@ String getChatPageScripts() {
         initChannels();
         scrollToBottom(true);
         startPolling();
+
+        // Scroll-up pagination
+        const messagesContainer = document.getElementById('messages');
+        if (messagesContainer) {
+          messagesContainer.addEventListener('scroll', function() {
+            if (messagesContainer.scrollTop <= 0) {
+              loadOlderMessages();
+            }
+          });
+        }
+
+        // visualViewport handler for mobile keyboard
+        if (window.visualViewport) {
+          window.visualViewport.addEventListener('resize', function() {
+            scrollToBottom(false);
+          });
+        }
 
         // If already connected (auto-connect from localStorage), show chat input immediately
         if (window.GeogramNostr && window.GeogramNostr.connected) {

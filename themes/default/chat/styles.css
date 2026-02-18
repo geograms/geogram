@@ -9,14 +9,87 @@
 }
 
 @media (max-width: 683px) {
+  html, body {
+    height: 100vh;
+    height: 100dvh;
+    overflow: hidden;
+  }
+  .container {
+    height: 100vh;
+    height: 100dvh;
+    padding: 10px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    box-sizing: border-box;
+  }
+  .content {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
   .chat-layout {
     grid-template-columns: 1fr;
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
   }
   .channels-sidebar {
     border-right: none;
-    border-bottom: 1px solid var(--border-color);
-    padding-bottom: 20px;
-    margin-bottom: 20px;
+    border-bottom: none;
+    padding-right: 0;
+    padding-bottom: 8px;
+    margin-bottom: 8px;
+    display: flex;
+    gap: 8px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+    flex-shrink: 0;
+  }
+  .channels-header {
+    display: none;
+  }
+  .channel-item {
+    flex-shrink: 0;
+    padding: 4px 12px;
+    border-bottom: none;
+    border: 1px solid var(--border-color);
+    border-radius: 16px;
+    white-space: nowrap;
+    font-size: 0.85rem;
+  }
+  .channel-item.active {
+    border-color: var(--accent);
+    background: var(--accent-alpha-20);
+  }
+  .messages-area {
+    flex: 1;
+    min-height: 0;
+    max-height: none;
+  }
+  .messages-header {
+    padding-bottom: 8px;
+    margin-bottom: 8px;
+  }
+  .messages-list {
+    flex: 1;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .chat-input-area {
+    flex-shrink: 0;
+  }
+  .chat-input-area input {
+    font-size: 16px;
+  }
+  .chat-input-area button {
+    min-height: 44px;
+  }
+  .footer {
+    display: none;
   }
 }
 
