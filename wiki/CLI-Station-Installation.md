@@ -293,16 +293,18 @@ Expected response:
 
 ```json
 {
+  "service": "Geogram Station Server",
   "station_mode": true,
   "callsign": "X3ABCD",
   "npub": "npub1...",
   "name": "My Station",
   "version": "1.23.0",
   "connected_devices": 0,
-  "tile_server_enabled": true,
-  "stun_server_enabled": true,
-  "update_mirror_enabled": true,
-  "ssl_enabled": true
+  "uptime": 3600,
+  "tile_server": true,
+  "http_port": 80,
+  "https_enabled": true,
+  "https_port": 443
 }
 ```
 
@@ -443,7 +445,6 @@ After the setup wizard, you can fine-tune settings by editing `/root/geogram/sta
 | POST | `/blossom/upload` | Upload a file |
 | GET | `/blossom/{hash}` | Download a file by hash |
 | HEAD | `/blossom/{hash}` | Check if file exists |
-| DELETE | `/blossom/{hash}` | Delete a file |
 | WebSocket | `/` | Real-time messaging, NOSTR relay, P2P signaling |
 | TCP 25 | — | SMTP server (incoming email) |
 | UDP 3478 | — | STUN server |
