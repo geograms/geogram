@@ -7,6 +7,7 @@ import 'dart:async';
 import '../models/station_chat_room.dart';
 import '../models/update_notification.dart';
 import '../services/dm_notification_service.dart';
+import 'config_service.dart';
 import 'station_cache_service.dart';
 import 'station_service.dart';
 import 'log_service.dart';
@@ -44,6 +45,37 @@ class ChatNotificationService {
   /// Get unread count for a specific room
   int getUnreadCount(String roomId) => _unreadCounts[roomId] ?? 0;
 
+  /// Check if a room is muted
+  bool isRoomMuted(String roomId) {
+    final list = ConfigService().getNestedValue('chat.mutedRooms', <dynamic>[]) as List;
+    return list.contains(roomId);
+  }
+
+  /// Get all muted room IDs
+  Set<String> get mutedRooms {
+    final list = ConfigService().getNestedValue('chat.mutedRooms', <dynamic>[]) as List;
+    return Set<String>.from(list);
+  }
+
+  /// Toggle mute state for a room
+  void toggleRoomMute(String roomId) {
+    final list = ConfigService().getNestedValue('chat.mutedRooms', <dynamic>[]) as List;
+    final muted = List<String>.from(list);
+    if (muted.contains(roomId)) {
+      muted.remove(roomId);
+      LogService().log('ChatNotificationService: Unmuted room $roomId');
+    } else {
+      muted.add(roomId);
+      // Clear any existing unread count for the newly muted room
+      if (_unreadCounts.containsKey(roomId)) {
+        _unreadCounts.remove(roomId);
+        _notificationController.add(Map.from(_unreadCounts));
+      }
+      LogService().log('ChatNotificationService: Muted room $roomId');
+    }
+    ConfigService().setNestedValue('chat.mutedRooms', muted);
+  }
+
   /// Initialize the service and start listening
   void initialize() {
     _setupUpdateListener();
@@ -73,6 +105,12 @@ class ChatNotificationService {
     // If user is currently viewing this room, don't increment
     if (_currentRoomId == roomId) {
       LogService().log('ChatNotificationService: Update for current room $roomId (ignored)');
+      return;
+    }
+
+    // If room is muted, skip notification and unread count
+    if (isRoomMuted(roomId)) {
+      LogService().log('ChatNotificationService: Update for muted room $roomId (skipped)');
       return;
     }
 

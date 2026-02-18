@@ -2879,6 +2879,11 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       onRefreshDevice: (device) => _loadRelayRooms(),
       localCallsign: currentProfile.callsign,
       unreadCounts: _unreadCounts,
+      mutedRooms: _chatNotificationService.mutedRooms,
+      onToggleMute: (roomId) {
+        _chatNotificationService.toggleRoomMute(roomId);
+        setState(() {});
+      },
     );
   }
 

@@ -42,6 +42,12 @@ class DeviceChatSidebar extends StatefulWidget {
   /// Unread counts map (room ID -> count)
   final Map<String, int> unreadCounts;
 
+  /// Set of muted room IDs
+  final Set<String> mutedRooms;
+
+  /// Callback to toggle mute for a room
+  final Function(String roomId)? onToggleMute;
+
   const DeviceChatSidebar({
     Key? key,
     required this.localChannels,
@@ -54,6 +60,8 @@ class DeviceChatSidebar extends StatefulWidget {
     this.onRefreshDevice,
     required this.localCallsign,
     this.unreadCounts = const {},
+    this.mutedRooms = const {},
+    this.onToggleMute,
   }) : super(key: key);
 
   @override
@@ -322,6 +330,7 @@ class _DeviceChatSidebarState extends State<DeviceChatSidebar> {
   Widget _buildLocalChannelTile(ThemeData theme, ChatChannel channel) {
     final isSelected = widget.selectedLocalChannelId == channel.id;
     final unreadCount = channel.unreadCount;
+    final isMuted = widget.mutedRooms.contains(channel.id);
 
     return Material(
       color: isSelected
@@ -330,24 +339,39 @@ class _DeviceChatSidebarState extends State<DeviceChatSidebar> {
       child: InkWell(
         onTap: () => widget.onLocalChannelSelect(channel),
         child: Padding(
-          padding: const EdgeInsets.only(left: 44, right: 12, top: 8, bottom: 8),
+          padding: const EdgeInsets.only(left: 44, right: 8, top: 8, bottom: 8),
           child: Row(
             children: [
               // Channel icon
               _buildChannelIcon(theme, channel),
               const SizedBox(width: 10),
-              // Channel name
+              // Channel name + muted indicator
               Expanded(
-                child: Text(
-                  channel.name,
-                  style: theme.textTheme.bodyMedium?.copyWith(
-                    fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                    color: isSelected
-                        ? theme.colorScheme.onPrimaryContainer
-                        : null,
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
+                child: Row(
+                  children: [
+                    Flexible(
+                      child: Text(
+                        channel.name,
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                          fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                          color: isSelected
+                              ? theme.colorScheme.onPrimaryContainer
+                              : null,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    if (isMuted)
+                      Padding(
+                        padding: const EdgeInsets.only(left: 4),
+                        child: Icon(
+                          Icons.notifications_off,
+                          size: 14,
+                          color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.5),
+                        ),
+                      ),
+                  ],
                 ),
               ),
               // Favorite indicator
@@ -377,6 +401,9 @@ class _DeviceChatSidebarState extends State<DeviceChatSidebar> {
                     ),
                   ),
                 ),
+              // Mute toggle menu
+              if (widget.onToggleMute != null)
+                _buildMuteMenuButton(theme, channel.id, isMuted),
             ],
           ),
         ),
@@ -392,6 +419,7 @@ class _DeviceChatSidebarState extends State<DeviceChatSidebar> {
     final isSelected = widget.selectedRemoteRoom?.deviceId == device.id &&
         widget.selectedRemoteRoom?.roomId == room.id;
     final unreadCount = widget.unreadCounts[room.id] ?? 0;
+    final isMuted = widget.mutedRooms.contains(room.id);
 
     return Material(
       color: isSelected
@@ -400,7 +428,7 @@ class _DeviceChatSidebarState extends State<DeviceChatSidebar> {
       child: InkWell(
         onTap: () => widget.onRemoteRoomSelect(device, room),
         child: Padding(
-          padding: const EdgeInsets.only(left: 44, right: 12, top: 8, bottom: 8),
+          padding: const EdgeInsets.only(left: 44, right: 8, top: 8, bottom: 8),
           child: Row(
             children: [
               // Room icon
@@ -417,21 +445,36 @@ class _DeviceChatSidebarState extends State<DeviceChatSidebar> {
                 ),
               ),
               const SizedBox(width: 10),
-              // Room name
+              // Room name + muted indicator
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      room.name,
-                      style: theme.textTheme.bodyMedium?.copyWith(
-                        fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                        color: isSelected
-                            ? theme.colorScheme.onPrimaryContainer
-                            : null,
-                      ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
+                    Row(
+                      children: [
+                        Flexible(
+                          child: Text(
+                            room.name,
+                            style: theme.textTheme.bodyMedium?.copyWith(
+                              fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                              color: isSelected
+                                  ? theme.colorScheme.onPrimaryContainer
+                                  : null,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        if (isMuted)
+                          Padding(
+                            padding: const EdgeInsets.only(left: 4),
+                            child: Icon(
+                              Icons.notifications_off,
+                              size: 14,
+                              color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.5),
+                            ),
+                          ),
+                      ],
                     ),
                     if (room.description.isNotEmpty)
                       Text(
@@ -463,9 +506,50 @@ class _DeviceChatSidebarState extends State<DeviceChatSidebar> {
                     ),
                   ),
                 ),
+              // Mute toggle menu
+              if (widget.onToggleMute != null)
+                _buildMuteMenuButton(theme, room.id, isMuted),
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _buildMuteMenuButton(ThemeData theme, String roomId, bool isMuted) {
+    return SizedBox(
+      width: 24,
+      height: 24,
+      child: PopupMenuButton<String>(
+        padding: EdgeInsets.zero,
+        iconSize: 18,
+        icon: Icon(
+          Icons.more_vert,
+          size: 18,
+          color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.6),
+        ),
+        onSelected: (value) {
+          if (value == 'toggle_mute') {
+            widget.onToggleMute?.call(roomId);
+          }
+        },
+        itemBuilder: (context) => [
+          PopupMenuItem<String>(
+            value: 'toggle_mute',
+            height: 40,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  isMuted ? Icons.notifications_active : Icons.notifications_off,
+                  size: 18,
+                ),
+                const SizedBox(width: 8),
+                Text(isMuted ? _i18n.t('unmute_notifications') : _i18n.t('mute_notifications')),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }

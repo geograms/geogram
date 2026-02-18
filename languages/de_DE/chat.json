@@ -17,5 +17,7 @@
   "chat_settings": "Chat-Einstellungen",
   "dm_sync_complete": "Synchronisation abgeschlossen: {0} empfangen, {1} gesendet",
   "dm_sync_failed": "Synchronisation fehlgeschlagen: {0}",
-  "chat_room_not_found": "Chatraum nicht gefunden"
+  "chat_room_not_found": "Chatraum nicht gefunden",
+  "mute_notifications": "Benachrichtigungen stummschalten",
+  "unmute_notifications": "Benachrichtigungen aktivieren"
 }
