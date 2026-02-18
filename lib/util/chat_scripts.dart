@@ -335,6 +335,7 @@ String getChatPageScripts() {
           if (!isTouchDevice) {
             document.getElementById('chat-input').focus();
           }
+          scrollToBottom(true);
         }
       }
 
