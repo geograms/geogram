@@ -30,6 +30,7 @@ import 'util/nostr_crypto.dart';
 import 'api/endpoints/chat_api_paths.dart';
 import 'util/chat_scripts.dart';
 import 'util/nostr_login_scripts.dart';
+import 'util/nostr_bundle.dart';
 import 'util/web_navigation.dart';
 import 'util/station_html_templates.dart';
 import 'util/html_utils.dart';
@@ -2410,6 +2411,12 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, EmailHandlerMixin,
         // Serve app-specific CSS: /chat/styles.css, /blog/styles.css, etc.
         final app = path.split('/')[1];
         await _handleThemeFile('$app/styles.css', request);
+      } else if (path == '/lib/nostr.bundle.js') {
+        // Serve embedded nostr-tools bundle for client-side key generation
+        request.response.headers.set('Content-Type', 'application/javascript');
+        request.response.headers.set('Cache-Control', 'public, max-age=86400');
+        request.response.write(getNostrBundleJs());
+        await request.response.close();
       } else if (path == '/chat' || path == '/chat/') {
         await _handleChatPage(request);
       } else if (_isAlertFileUploadPath(path) && method == 'POST') {

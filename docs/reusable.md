@@ -15,7 +15,8 @@ This document catalogs reusable UI components available in the Geogram codebase.
 - [Notification Tap Handling Pattern](#notification-tap-handling-pattern) - Handle notification taps
 
 ### Web Components
-- [NostrLoginComponent](#nostrlogincomponent) - Reusable Nostr NIP-07 login with localStorage persistence
+- [NostrLoginComponent](#nostrlogincomponent) - Reusable Nostr login with NIP-07 extension + client-side key generation
+- [NostrToolsBundle](#nostrtoolsbundle) - Embedded nostr-tools JS bundle for client-side signing
 
 ### Cross-Platform Patterns
 - [Platform-Adaptive WebView](#platform-adaptive-webview) - Render local HTML with JS on all platforms
@@ -8542,22 +8543,36 @@ Navigation commands are dispatched *before* the command registry (since they mut
 
 **File:** `lib/util/nostr_login_scripts.dart`
 
-Reusable Nostr NIP-07 browser extension login component for web pages served by station servers. Provides a header button, localStorage persistence, and event-based integration.
+Reusable Nostr login component for web pages served by station servers. Supports NIP-07 browser extensions (Alby, nos2x) AND client-side key generation via embedded nostr-tools bundle. Button is always visible regardless of extension availability.
 
 ### Functions
 
 | Function | Returns | Description |
 |----------|---------|-------------|
-| `getNostrLoginHeaderHtml()` | HTML string | Button + callsign display div for placement in header |
-| `getNostrLoginStyles()` | `<style>` block | CSS for header button and callsign display |
-| `getNostrLoginScripts()` | JS string | NIP-07 detection, connect flow, localStorage persistence, event dispatch |
+| `getNostrLoginHeaderHtml()` | HTML string | Button + callsign display div (always visible) |
+| `getNostrLoginStyles()` | `<style>` + `<script>` block | CSS + nostr.bundle.js script tag for head |
+| `getNostrLoginScripts()` | JS string | Extension detection, key generation, polyfill, localStorage persistence |
 
 ### Integration
 
-1. Add `getNostrLoginStyles()` to `<head>`
+1. Add `getNostrLoginStyles()` to `<head>` (loads CSS + nostr-tools bundle)
 2. Add `getNostrLoginHeaderHtml()` inside `.header__inner` (after logo)
 3. Prepend `getNostrLoginScripts()` before page-specific scripts in `<script>` tag
 4. Page JS listens for `nostr-connected` CustomEvent or checks `window.GeogramNostr.connected`
+
+### Login Flow
+
+1. Button always shown (no extension required)
+2. Polls for NIP-07 extension (10 attempts x 200ms)
+3. If extension found: uses it (extension always takes priority)
+4. If no extension: uses nostr-tools for client-side key generation
+5. Installs `window.nostr` polyfill so chat_scripts and blog likes work unchanged
+6. On refresh: auto-reconnects from localStorage
+
+### localStorage Keys
+
+- `geogram_nostr_pubkey` — hex pubkey (used by both extension and generated)
+- `geogram_nostr_privkey` — hex private key (only for generated identities)
 
 ### Global State: `window.GeogramNostr`
 
@@ -8568,6 +8583,32 @@ Reusable Nostr NIP-07 browser extension login component for web pages served by 
 ### Events
 
 - **`nostr-connected`** — Dispatched on `document` when user connects. Detail: `{ pubkey, callsign }`
+
+---
+
+## NostrToolsBundle
+
+**File:** `lib/util/nostr_bundle.dart`
+
+Embedded nostr-tools JavaScript bundle (224KB) for client-side Nostr operations. Sets `window.NostrTools` with key generation, signing, and event finalization.
+
+### Functions
+
+| Function | Returns | Description |
+|----------|---------|-------------|
+| `getNostrBundleJs()` | JS string | Complete nostr-tools bundle content |
+
+### Available APIs (via `window.NostrTools`)
+
+- `generateSecretKey()` — Returns Uint8Array private key
+- `getPublicKey(skBytes)` — Returns hex public key from Uint8Array secret key
+- `finalizeEvent(event, skBytes)` — Complete signed event with id + sig
+- `getEventHash(event)` — SHA-256 event ID
+- `schnorr.sign(msg, key)` — BIP-340 Schnorr signature
+
+### Route
+
+Both stations serve the bundle at `/lib/nostr.bundle.js` with `Content-Type: application/javascript` and 24h cache.
 
 ### localStorage
 
