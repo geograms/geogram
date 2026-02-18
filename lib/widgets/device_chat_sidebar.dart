@@ -97,6 +97,7 @@ class _DeviceChatSidebarState extends State<DeviceChatSidebar> {
                     source.device,
                     null,
                     source.rooms,
+                    source.isLoading,
                   ),
                 // Local device section (only show if there are local channels)
                 if (widget.localChannels.isNotEmpty)
@@ -143,8 +144,9 @@ class _DeviceChatSidebarState extends State<DeviceChatSidebar> {
     ThemeData theme,
     DeviceSource device,
     List<ChatChannel>? localChannels,
-    List<StationChatRoom>? remoteRooms,
-  ) {
+    List<StationChatRoom>? remoteRooms, [
+    bool isLoading = false,
+  ]) {
     // Default to expanded if:
     // - It's a remote device (station), OR
     // - There are no remote sources (local only mode)
@@ -157,7 +159,7 @@ class _DeviceChatSidebarState extends State<DeviceChatSidebar> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         // Device header (expandable)
-        _buildDeviceHeader(theme, device, isExpanded, hasItems),
+        _buildDeviceHeader(theme, device, isExpanded, hasItems, isLoading),
         // Expanded content
         if (isExpanded) ...[
           if (localChannels != null)
@@ -219,10 +221,16 @@ class _DeviceChatSidebarState extends State<DeviceChatSidebar> {
     ThemeData theme,
     DeviceSource device,
     bool isExpanded,
-    bool hasItems,
-  ) {
+    bool hasItems, [
+    bool isLoading = false,
+  ]) {
     final icon = _getDeviceIcon(device.type);
-    final statusColor = device.isOnline ? Colors.green : Colors.grey;
+    final isConnecting = isLoading && !device.isOnline;
+    final statusColor = device.isOnline
+        ? Colors.green
+        : isConnecting
+            ? Colors.grey
+            : Colors.grey;
 
     return Material(
       color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
@@ -247,15 +255,25 @@ class _DeviceChatSidebarState extends State<DeviceChatSidebar> {
                     : theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.3),
               ),
               const SizedBox(width: 4),
-              // Status dot
-              Container(
-                width: 8,
-                height: 8,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: statusColor,
+              // Status indicator: spinner when connecting, dot otherwise
+              if (isConnecting)
+                SizedBox(
+                  width: 8,
+                  height: 8,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 1.5,
+                    color: Colors.grey,
+                  ),
+                )
+              else
+                Container(
+                  width: 8,
+                  height: 8,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: statusColor,
+                  ),
                 ),
-              ),
               const SizedBox(width: 8),
               // Device icon
               Icon(
@@ -275,8 +293,16 @@ class _DeviceChatSidebarState extends State<DeviceChatSidebar> {
                   overflow: TextOverflow.ellipsis,
                 ),
               ),
-              // Status text (only shown when offline)
-              if (device.statusText.isNotEmpty)
+              // Status text: "Connecting..." when loading, "Not reachable" when offline
+              if (isConnecting)
+                Text(
+                  'Connecting...',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: Colors.grey,
+                    fontSize: 10,
+                  ),
+                )
+              else if (device.statusText.isNotEmpty)
                 Text(
                   device.statusText,
                   style: theme.textTheme.bodySmall?.copyWith(

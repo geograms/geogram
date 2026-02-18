@@ -2813,7 +2813,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
           latency: null,
         ),
         rooms: _stationRooms,
-        isLoading: _loadingRelayRooms,
+        isLoading: _loadingRelayRooms || _connectionStatus == _StationConnectionStatus.connecting,
       ));
 
       // Mark this device as added
