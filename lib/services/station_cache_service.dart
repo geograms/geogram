@@ -615,6 +615,61 @@ class RelayCacheService {
     }
   }
 
+  /// Update a message's content in cached daily files (for edits)
+  Future<void> updateMessage(
+    String deviceCallsign,
+    String roomId,
+    String timestamp,
+    String author,
+    String newContent,
+  ) async {
+    if (kIsWeb || _basePath == null) return;
+    if (timestamp.length < 10) return;
+
+    try {
+      final cacheDir = await getDeviceCacheDir(deviceCallsign);
+      if (cacheDir == null) return;
+
+      final dateStr = timestamp.substring(0, 10);
+      final year = dateStr.substring(0, 4);
+      final dailyFile = File('${cacheDir.path}/chat/$roomId/$year/${dateStr}_chat.txt');
+      if (!await dailyFile.exists()) return;
+
+      final content = await dailyFile.readAsString();
+      final messages = ChatService.parseMessageText(content);
+
+      // Find and update the message
+      bool found = false;
+      for (int i = 0; i < messages.length; i++) {
+        if (messages[i].timestamp == timestamp &&
+            messages[i].author.toUpperCase() == author.toUpperCase()) {
+          final updatedMetadata = Map<String, String>.from(messages[i].metadata);
+          updatedMetadata['edited_at'] = DateTime.now().toIso8601String();
+          messages[i] = messages[i].copyWith(
+            content: newContent,
+            metadata: updatedMetadata,
+          );
+          found = true;
+          break;
+        }
+      }
+
+      if (!found) return;
+
+      final buffer = StringBuffer();
+      buffer.writeln('# ${roomId.toUpperCase()}: $roomId from $dateStr');
+      for (final msg in messages) {
+        buffer.writeln();
+        buffer.writeln();
+        buffer.write(msg.exportAsText());
+      }
+
+      await dailyFile.writeAsString(buffer.toString());
+    } catch (e) {
+      LogService().log('Error updating cached message: $e');
+    }
+  }
+
   /// Get list of cached device callsigns
   Future<List<String>> getCachedDevices() async {
     print('DEBUG getCachedDevices: kIsWeb=$kIsWeb, _basePath=$_basePath');

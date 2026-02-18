@@ -1176,11 +1176,15 @@ class StationService {
   }
 
   /// Delete a message from a station chat room (author only)
+  ///
+  /// When [eventId] is provided, sends a NIP-09 kind 5 deletion event.
+  /// Otherwise falls back to legacy kind 1 deletion for backwards compatibility.
   Future<bool> deleteRoomMessage(
     String stationUrl,
     String roomId,
-    String timestamp,
-  ) async {
+    String timestamp, {
+    String? eventId,
+  }) async {
     try {
       final profile = ProfileService().getProfile();
       final signingService = SigningService();
@@ -1192,16 +1196,30 @@ class StationService {
       }
 
       final pubkeyHex = NostrCrypto.decodeNpub(profile.npub);
-      final event = NostrEvent.textNote(
-        pubkeyHex: pubkeyHex,
-        content: 'delete',
-        tags: [
-          ['action', 'delete'],
-          ['room', roomId],
-          ['timestamp', timestamp],
-          ['callsign', profile.callsign],
-        ],
-      );
+      final additionalTags = <List<String>>[
+        ['action', 'delete'],
+        ['room', roomId],
+        ['timestamp', timestamp],
+        ['callsign', profile.callsign],
+      ];
+
+      NostrEvent event;
+      if (eventId != null && eventId.isNotEmpty) {
+        // NIP-09: kind 5 deletion event
+        event = NostrEvent.deletion(
+          pubkeyHex: pubkeyHex,
+          eventIds: [eventId],
+          additionalTags: additionalTags,
+          content: 'delete',
+        );
+      } else {
+        // Legacy: kind 1 text note
+        event = NostrEvent.textNote(
+          pubkeyHex: pubkeyHex,
+          content: 'delete',
+          tags: additionalTags,
+        );
+      }
       event.calculateId();
 
       final signedEvent = await signingService.signEvent(event, profile);
@@ -1222,6 +1240,92 @@ class StationService {
     } catch (e) {
       LogService().log('Error deleting message: $e');
       return false;
+    }
+  }
+
+  /// Edit a message in a station chat room (author only)
+  ///
+  /// Sends a kind 1 NOSTR event with action:edit tag and the new content.
+  Future<bool> editRoomMessage(
+    String stationUrl,
+    String roomId,
+    String timestamp,
+    String newContent, {
+    String? eventId,
+  }) async {
+    try {
+      final profile = ProfileService().getProfile();
+      final signingService = SigningService();
+      await signingService.initialize();
+
+      if (!signingService.canSign(profile)) {
+        LogService().log('Cannot edit message: NOSTR keys not configured');
+        return false;
+      }
+
+      final pubkeyHex = NostrCrypto.decodeNpub(profile.npub);
+      final event = NostrEvent.textNote(
+        pubkeyHex: pubkeyHex,
+        content: newContent,
+        tags: [
+          ['action', 'edit'],
+          ['room', roomId],
+          ['timestamp', timestamp],
+          ['callsign', profile.callsign],
+        ],
+      );
+      event.calculateId();
+
+      final signedEvent = await signingService.signEvent(event, profile);
+      if (signedEvent == null) {
+        LogService().log('Failed to sign edit event');
+        return false;
+      }
+
+      final authEvent = base64Encode(utf8.encode(jsonEncode(signedEvent.toJson())));
+      final response = await _stationApiRequest(
+        stationUrl: stationUrl,
+        method: 'PUT',
+        path: '/api/chat/rooms/$roomId/messages/${Uri.encodeComponent(timestamp)}',
+        headers: {'Authorization': 'Nostr $authEvent'},
+      );
+
+      return response != null && response.statusCode == 200;
+    } catch (e) {
+      LogService().log('Error editing message: $e');
+      return false;
+    }
+  }
+
+  /// Fetch modification log for a room since a given timestamp.
+  /// Returns list of modification entries from the server.
+  Future<List<Map<String, dynamic>>> fetchRoomModifications(
+    String stationUrl,
+    String roomId, {
+    DateTime? since,
+  }) async {
+    try {
+      var path = '/api/chat/$roomId/modifications';
+      if (since != null) {
+        path += '?since=${Uri.encodeComponent(since.toUtc().toIso8601String())}';
+      }
+
+      final response = await _stationApiRequest(
+        stationUrl: stationUrl,
+        method: 'GET',
+        path: path,
+      );
+
+      if (response == null || response.statusCode != 200) return [];
+
+      final data = jsonDecode(response.body) as Map<String, dynamic>;
+      final mods = data['modifications'] as List?;
+      if (mods == null) return [];
+
+      return mods.map((m) => Map<String, dynamic>.from(m as Map)).toList();
+    } catch (e) {
+      LogService().log('Error fetching room modifications: $e');
+      return [];
     }
   }
 

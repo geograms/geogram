@@ -25,6 +25,14 @@ class ChatApiPaths {
   static String fileDownloadPath(String roomId, String filename) =>
       '/api/chat/$roomId/files/$filename';
 
+  /// Chat message modification path: /api/chat/{roomId}/messages/{timestamp}
+  static String messageModificationPath(String roomId, String timestamp) =>
+      '/api/chat/rooms/$roomId/messages/$timestamp';
+
+  /// Chat modifications log path: /api/chat/{roomId}/modifications
+  static String modificationsPath(String roomId) =>
+      '/api/chat/$roomId/modifications';
+
   /// Chat reactions path: /api/chat/{roomId}/messages/{timestamp}/reactions
   static String reactionsPath(String roomId, String timestamp) =>
       '/api/chat/$roomId/messages/$timestamp/reactions';
@@ -94,6 +102,19 @@ class ChatApiPaths {
     return RegExp(r'^(/[A-Z0-9]+)?/api/chat/(rooms/)?[^/]+/files/.+$').hasMatch(path);
   }
 
+  /// Check if path matches chat message modification pattern (DELETE/PUT)
+  /// Matches /api/chat/{roomId}/messages/{timestamp} but NOT .../reactions
+  static bool isMessageModificationPath(String path) {
+    return RegExp(r'^(/[A-Z0-9]+)?/api/chat/(rooms/)?[^/]+/messages/[^/]+$').hasMatch(path) &&
+        !path.endsWith('/reactions');
+  }
+
+  /// Check if path matches chat modifications log pattern
+  /// Matches /api/chat/{roomId}/modifications
+  static bool isModificationsPath(String path) {
+    return RegExp(r'^(/[A-Z0-9]+)?/api/chat/(rooms/)?[^/]+/modifications$').hasMatch(path);
+  }
+
   /// Check if path matches chat reactions pattern
   static bool isReactionsPath(String path) {
     return RegExp(r'^(/[A-Z0-9]+)?/api/chat/(rooms/)?[^/]+/messages/.+/reactions$').hasMatch(path);
@@ -131,6 +152,12 @@ class ChatApiPaths {
   /// Extract timestamp from a reactions path
   static String? extractTimestamp(String path) {
     final match = RegExp(r'/messages/([^/]+)/reactions$').firstMatch(path);
+    return match?.group(1);
+  }
+
+  /// Extract timestamp from a message modification path (DELETE/PUT)
+  static String? extractModificationTimestamp(String path) {
+    final match = RegExp(r'/messages/([^/]+)$').firstMatch(path);
     return match?.group(1);
   }
 

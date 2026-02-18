@@ -77,8 +77,9 @@ import '../transfer/services/p2p_transfer_service.dart';
 import '../pages/transfer_send_page.dart';
 import '../util/event_bus.dart';
 import '../util/station_html_templates.dart';
+import '../server/mixins/chat_modification_mixin.dart';
 
-class LogApiService {
+class LogApiService with ChatModificationMixin {
   static final LogApiService _instance = LogApiService._internal();
   factory LogApiService() => _instance;
   LogApiService._internal();
@@ -358,6 +359,12 @@ class LogApiService {
         urlPath.contains('/messages/') &&
         urlPath.endsWith('/reactions')) {
       return await _handleChatMessageReactionRequest(request, urlPath, headers);
+    }
+
+    // Chat modifications log endpoint
+    // GET /api/chat/{roomId}/modifications?since=ISO_TIMESTAMP
+    if (urlPath.startsWith('api/chat/') && urlPath.endsWith('/modifications') && request.method == 'GET') {
+      return await _handleChatModificationsRequest(request, urlPath, headers);
     }
 
     // Chat message edit/delete endpoints
@@ -3773,8 +3780,12 @@ class LogApiService {
       final timestamp = Uri.decodeComponent(match.group(2)!);
 
       if (request.method == 'DELETE') {
-        // Delete message - requires NOSTR event with 'delete' action
-        final event = _verifyNostrEventWithTags(request, 'delete', roomId);
+        // Delete message - accepts NIP-09 kind 5 or legacy kind 1
+        final event = verifyModificationEvent(
+          request.headers['authorization'],
+          'delete',
+          roomId,
+        );
         if (event == null) {
           return shelf.Response.forbidden(
             jsonEncode({
@@ -3806,6 +3817,18 @@ class LogApiService {
           );
         }
 
+        // For kind 5 events, validate the ["e"] tag matches the stored event ID
+        final storedEventId = message.metadata['event_id'];
+        if (!validateDeletionTarget(event, storedEventId)) {
+          return shelf.Response.forbidden(
+            jsonEncode({
+              'error': 'Event ID mismatch in deletion event',
+              'code': 'EVENT_ID_MISMATCH',
+            }),
+            headers: headers,
+          );
+        }
+
         // Delete the message (ChatService handles authorization)
         await chatService.deleteMessageByTimestamp(
           channelId: roomId,
@@ -3814,7 +3837,7 @@ class LogApiService {
           actorNpub: event.npub,
         );
 
-        LogService().log('LogApiService: Message deleted from $roomId at $timestamp by ${event.npub}');
+        LogService().log('LogApiService: Message deleted from $roomId at $timestamp by ${event.npub} (kind ${event.kind})');
 
         return shelf.Response.ok(
           jsonEncode({
@@ -3830,7 +3853,11 @@ class LogApiService {
         );
       } else if (request.method == 'PUT') {
         // Edit message - requires NOSTR event with 'edit' action
-        final event = _verifyNostrEventWithTags(request, 'edit', roomId);
+        final event = verifyModificationEvent(
+          request.headers['authorization'],
+          'edit',
+          roomId,
+        );
         if (event == null) {
           return shelf.Response.forbidden(
             jsonEncode({
@@ -3929,6 +3956,53 @@ class LogApiService {
       );
     } catch (e) {
       LogService().log('LogApiService: Error in message modification: $e');
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'error': e.toString()}),
+        headers: headers,
+      );
+    }
+  }
+
+  /// Handle modifications log request
+  /// GET /api/chat/{roomId}/modifications?since=ISO_TIMESTAMP
+  Future<shelf.Response> _handleChatModificationsRequest(
+    shelf.Request request,
+    String urlPath,
+    Map<String, String> headers,
+  ) async {
+    try {
+      await _initializeChatServiceIfNeeded();
+      final chatService = ChatService();
+
+      // Extract roomId from path: api/chat/{roomId}/modifications
+      final regex = RegExp(r'^api/chat/(?:rooms/)?([^/]+)/modifications$');
+      final match = regex.firstMatch(urlPath);
+      if (match == null) {
+        return shelf.Response.badRequest(
+          body: jsonEncode({'error': 'Invalid path format'}),
+          headers: headers,
+        );
+      }
+
+      final roomId = Uri.decodeComponent(match.group(1)!);
+      final sinceParam = request.url.queryParameters['since'];
+      DateTime? since;
+      if (sinceParam != null && sinceParam.isNotEmpty) {
+        since = DateTime.tryParse(sinceParam);
+      }
+
+      final modifications = await chatService.getModifications(roomId, since: since);
+
+      return shelf.Response.ok(
+        jsonEncode({
+          'roomId': roomId,
+          'modifications': modifications,
+          'count': modifications.length,
+        }),
+        headers: headers,
+      );
+    } catch (e) {
+      LogService().log('LogApiService: Error fetching modifications: $e');
       return shelf.Response.internalServerError(
         body: jsonEncode({'error': e.toString()}),
         headers: headers,

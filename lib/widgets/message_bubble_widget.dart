@@ -35,9 +35,11 @@ class MessageBubbleWidget extends StatefulWidget {
   final VoidCallback? onFileOpen;
   final VoidCallback? onLocationView;
   final VoidCallback? onDelete;
+  final void Function(String newContent)? onEdit;
   final VoidCallback? onQuote;
   final VoidCallback? onHide;
   final bool canDelete;
+  final bool canEdit;
   final bool isHidden;
   final VoidCallback? onUnhide;
   final VoidCallback? onImageOpen;
@@ -75,9 +77,11 @@ class MessageBubbleWidget extends StatefulWidget {
     this.onFileOpen,
     this.onLocationView,
     this.onDelete,
+    this.onEdit,
     this.onQuote,
     this.onHide,
     this.canDelete = false,
+    this.canEdit = false,
     this.voiceFilePath,
     this.onVoiceDownloadRequested,
     this.isHidden = false,
@@ -280,7 +284,7 @@ class _MessageBubbleWidgetState extends State<MessageBubbleWidget> {
       textColor = _getTextColor(device?.preferredColor, theme);
     }
 
-    final hasActions = (widget.onQuote != null) || (widget.onHide != null) || (widget.canDelete && widget.onDelete != null);
+    final hasActions = (widget.onQuote != null) || (widget.onHide != null) || (widget.canDelete && widget.onDelete != null) || (widget.canEdit && widget.onEdit != null);
     final isImageAttachment = _isImageAttachment();
     final isDownloading = widget.downloadState?.status == ChatDownloadStatus.downloading;
     final hasAttachmentData = _attachmentPath != null || _attachmentBytes != null;
@@ -1210,6 +1214,15 @@ class _MessageBubbleWidgetState extends State<MessageBubbleWidget> {
                 _showMessageInfo(context);
               },
             ),
+            if (widget.canEdit && widget.onEdit != null)
+              ListTile(
+                leading: const Icon(Icons.edit),
+                title: const Text('Edit message'),
+                onTap: () {
+                  Navigator.pop(context);
+                  _showEditDialog(context);
+                },
+              ),
             if (widget.canDelete && widget.onDelete != null)
               ListTile(
                 leading: Icon(
@@ -1256,6 +1269,44 @@ class _MessageBubbleWidgetState extends State<MessageBubbleWidget> {
               backgroundColor: Theme.of(context).colorScheme.error,
             ),
             child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Show edit dialog
+  void _showEditDialog(BuildContext context) {
+    final controller = TextEditingController(text: widget.message.content);
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Edit Message'),
+        content: TextField(
+          controller: controller,
+          maxLines: null,
+          autofocus: true,
+          decoration: const InputDecoration(
+            hintText: 'Edit your message...',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () {
+              final newContent = controller.text.trim();
+              if (newContent.isNotEmpty && newContent != widget.message.content) {
+                Navigator.pop(context);
+                widget.onEdit!(newContent);
+              } else {
+                Navigator.pop(context);
+              }
+            },
+            child: const Text('Save'),
           ),
         ],
       ),

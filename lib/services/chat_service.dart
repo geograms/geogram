@@ -599,6 +599,63 @@ class ChatService {
     return messages;
   }
 
+  // ============================================================
+  // Modification Log (for offline client sync)
+  // ============================================================
+
+  /// Append a modification entry to the room's modification log.
+  /// File: extra/chat/{roomId}/modifications.jsonl
+  Future<void> _appendModificationLog(
+    String roomId,
+    Map<String, dynamic> entry,
+  ) async {
+    try {
+      final logPath = 'extra/chat/$roomId/modifications.jsonl';
+      final existing = await _storage.readString(logPath);
+      final line = jsonEncode(entry);
+      final newContent = existing != null ? '$existing\n$line' : line;
+      await _storage.createDirectory('extra/chat/$roomId');
+      await _storage.writeString(logPath, newContent);
+    } catch (e) {
+      // Non-critical: don't fail the operation if logging fails
+      stderr.writeln('ChatService: Failed to write modification log: $e');
+    }
+  }
+
+  /// Get modifications for a room since a given timestamp.
+  /// Returns list of modification entries as maps.
+  Future<List<Map<String, dynamic>>> getModifications(
+    String roomId, {
+    DateTime? since,
+  }) async {
+    try {
+      final logPath = 'extra/chat/$roomId/modifications.jsonl';
+      final content = await _storage.readString(logPath);
+      if (content == null || content.trim().isEmpty) return [];
+
+      final entries = <Map<String, dynamic>>[];
+      for (final line in content.split('\n')) {
+        if (line.trim().isEmpty) continue;
+        try {
+          final entry = jsonDecode(line.trim()) as Map<String, dynamic>;
+          if (since != null) {
+            final at = entry['at'] as String?;
+            if (at != null) {
+              final entryTime = DateTime.tryParse(at);
+              if (entryTime != null && entryTime.isBefore(since)) continue;
+            }
+          }
+          entries.add(entry);
+        } catch (_) {
+          // Skip malformed lines
+        }
+      }
+      return entries;
+    } catch (e) {
+      return [];
+    }
+  }
+
   /// Parse message text content (static for testing)
   /// Uses unified ChatFormat parser for consistency with server
   static List<ChatMessage> parseMessageText(String content) {
@@ -1005,6 +1062,15 @@ class ChatService {
     // Rewrite the file
     await _rewriteMessageFileStorage(messageFilePath, channel, messages, messageDate);
 
+    // Append to modification log for offline client sync
+    await _appendModificationLog(channelId, {
+      'action': 'edit',
+      'timestamp': timestamp,
+      'author': authorCallsign,
+      'content': newContent,
+      'at': DateTime.now().toUtc().toIso8601String(),
+    });
+
     return updatedMessage;
   }
 
@@ -1084,6 +1150,14 @@ class ChatService {
 
     // Rewrite the file
     await _rewriteMessageFileStorage(messageFilePath, channel, messages, messageDate);
+
+    // Append to modification log for offline client sync
+    await _appendModificationLog(channelId, {
+      'action': 'delete',
+      'timestamp': timestamp,
+      'author': authorCallsign,
+      'at': DateTime.now().toUtc().toIso8601String(),
+    });
 
     return true;
   }

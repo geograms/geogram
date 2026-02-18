@@ -81,6 +81,33 @@ class NostrEvent {
     );
   }
 
+  /// Create a deletion event (NIP-09, kind 5) for deleting messages
+  factory NostrEvent.deletion({
+    required String pubkeyHex,
+    required List<String> eventIds,
+    int deletedKind = NostrEventKind.textNote,
+    String content = '',
+    List<List<String>>? additionalTags,
+    int? createdAt,
+  }) {
+    final tags = <List<String>>[
+      for (final id in eventIds) ['e', id],
+      ['k', deletedKind.toString()],
+    ];
+
+    if (additionalTags != null) {
+      tags.addAll(additionalTags);
+    }
+
+    return NostrEvent(
+      pubkey: pubkeyHex,
+      createdAt: createdAt ?? (DateTime.now().millisecondsSinceEpoch ~/ 1000),
+      kind: NostrEventKind.deletion,
+      tags: tags,
+      content: content,
+    );
+  }
+
   /// Create a channel message event (kind 42) for public chat rooms
   factory NostrEvent.channelMessage({
     required String pubkeyHex,

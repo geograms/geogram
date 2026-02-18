@@ -219,24 +219,55 @@ Delete a message by its timestamp. Only the original author can delete their own
 - `Authorization: Nostr <signed_event>` (required): NOSTR event with action tags
 
 **Authorization Event Requirements:**
-The NOSTR event must include specific tags:
+
+The server accepts two event kinds for deletion:
+
+#### NIP-09 Kind 5 (Preferred)
+A proper NIP-09 deletion event with `["e", eventId]` and `["k", "1"]` tags:
+- `["e", "{eventId}"]` - The NOSTR event ID of the message to delete
+- `["k", "1"]` - The kind of the event being deleted
+- `["action", "delete"]` - Indicates delete action
+- `["room", "{roomId}"]` - Must match the roomId in the URL
+- `["timestamp", "{timestamp}"]` - Must match the timestamp in the URL (optional but recommended)
+- `["callsign", "{callsign}"]` - Author's callsign
+
+**Example NIP-09 Event:**
+```json
+{
+  "pubkey": "author_hex_pubkey",
+  "created_at": 1733923456,
+  "kind": 5,
+  "tags": [
+    ["e", "original_event_id_hex"],
+    ["k", "1"],
+    ["action", "delete"],
+    ["room", "main"],
+    ["timestamp", "2025-12-11 14:30_25"],
+    ["callsign", "CR7BBQ"]
+  ],
+  "content": "delete",
+  "sig": "hex_signature"
+}
+```
+
+#### Kind 1 (Legacy)
+A text note event (backwards compatible):
 - `["action", "delete"]` - Indicates delete action
 - `["room", "{roomId}"]` - Must match the roomId in the URL
 - `["timestamp", "{timestamp}"]` - Must match the timestamp in the URL (optional but recommended)
 
-**Example Event:**
+**Example Legacy Event:**
 ```json
 {
   "pubkey": "author_hex_pubkey",
   "created_at": 1733923456,
   "kind": 1,
   "tags": [
-    ["t", "chat"],
     ["action", "delete"],
     ["room", "main"],
     ["timestamp", "2025-12-11 14:30_25"]
   ],
-  "content": "Deleting message",
+  "content": "delete",
   "sig": "hex_signature"
 }
 ```
@@ -388,6 +419,46 @@ Updated message content here
 - `400 Bad Request`: Empty content
 - `403 Forbidden`: Invalid NOSTR signature, not authorized (not the author)
 - `404 Not Found`: Message not found
+
+---
+
+### GET /api/chat/{roomId}/modifications
+
+Get the modification log for a room (edits and deletions). Used by clients that reconnect after being offline to catch up on changes they missed.
+
+**Path Parameters:**
+- `roomId`: The channel ID
+
+**Query Parameters:**
+- `since` (optional): ISO 8601 timestamp - only return modifications after this time
+
+**Response:**
+```json
+{
+  "roomId": "main",
+  "modifications": [
+    {
+      "action": "delete",
+      "timestamp": "2025-12-11 14:30_25",
+      "author": "CR7BBQ",
+      "at": "2025-12-11T15:00:00Z"
+    },
+    {
+      "action": "edit",
+      "timestamp": "2025-12-11 14:30_25",
+      "author": "CR7BBQ",
+      "content": "Updated message text",
+      "at": "2025-12-11T15:05:00Z"
+    }
+  ],
+  "count": 2
+}
+```
+
+**Notes:**
+- Modifications are stored as JSONL (one JSON object per line) in `{profile}/extra/chat/{roomId}/modifications.jsonl`
+- Both CLI and Desktop stations maintain this log
+- Clients should store the last sync timestamp per room and pass it as `since` on reconnect
 
 ---
 

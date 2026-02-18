@@ -24,6 +24,7 @@ This document catalogs reusable UI components available in the Geogram codebase.
 - [Command Registry](#command-registry) - Self-describing console commands shared across CLI and Desktop
 - [Navigation Handler](#navigation-handler) - Shared virtual filesystem navigation (cd/ls/pwd) with `/chat/<station>/<room>` hierarchy
 - [ConsoleCommandMixin](#consolecommandmixin) - Shared /api/cli implementation for station servers
+- [ChatModificationMixin](#chatmodificationmixin) - Shared NOSTR auth verification for chat message edit/delete (NIP-09 + legacy)
 
 ### Viewer Pages
 - [PhotoViewerPage](#photoviewerpage) - Image & video gallery
@@ -8536,6 +8537,33 @@ Navigation commands are dispatched *before* the command registry (since they mut
 - **`handleCd` returns `bool`** — `true` when entering a chat room, so the host can display the room header and last messages using its own I/O (CLI uses stdout directly, Desktop uses buffered I/O).
 - **`getChildEntries(path)`** — public method for TAB completion; returns child names at a given path without formatting.
 - **`StationCommandInterface`** typed provider — CLI's `StationServer` already implements it; Desktop uses `_StationServiceAdapter`.
+
+---
+
+## ChatModificationMixin
+
+**Location**: `lib/server/mixins/chat_modification_mixin.dart`
+
+Shared mixin for NOSTR event verification on chat message modifications (edit/delete). Used by both `LogApiService` (Desktop station) and `PureStationServer` (CLI station).
+
+### Methods
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `verifyModificationEvent(authHeader, expectedAction, expectedRoomId)` | `NostrEvent?` | Parse Authorization header, verify sig + 5-min freshness, accept kind 5 for delete or kind 1 for both |
+| `validateDeletionTarget(event, storedEventId)` | `bool` | For kind 5, checks `["e"]` tag matches stored event ID |
+
+### Usage
+
+```dart
+class MyStation with ChatModificationMixin {
+  void handleDelete(String authHeader, String roomId) {
+    final event = verifyModificationEvent(authHeader, 'delete', roomId);
+    if (event == null) { /* unauthorized */ }
+    // For kind 5: validateDeletionTarget(event, storedEventId)
+  }
+}
+```
 
 ---
 

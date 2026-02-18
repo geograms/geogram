@@ -1676,10 +1676,20 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     if (!_canDeleteStationMessage(message)) return;
 
     try {
+      // Look up eventId from cache for NIP-09 kind 5 deletion
+      final roomId = _selectedStationRoom!.id;
+      final cached = _stationMessageCache[roomId] ?? _stationMessages;
+      final stationMsg = cached.cast<StationChatMessage?>().firstWhere(
+        (m) => m?.timestamp == message.timestamp &&
+               m?.callsign.toUpperCase() == message.author.toUpperCase(),
+        orElse: () => null,
+      );
+
       final success = await _stationService.deleteRoomMessage(
         _selectedStationRoom!.stationUrl,
-        _selectedStationRoom!.id,
+        roomId,
         message.timestamp,
+        eventId: stationMsg?.eventId,
       );
 
       if (!success) {
@@ -1687,7 +1697,6 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
         return;
       }
 
-      final roomId = _selectedStationRoom!.id;
       final updated = List<StationChatMessage>.from(
         _stationMessageCache[roomId] ?? _stationMessages,
       );
@@ -1709,6 +1718,85 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       }
     } catch (e) {
       _showError('Failed to delete message: $e');
+    }
+  }
+
+  bool _canEditStationMessage(ChatMessage message) {
+    return _canDeleteStationMessage(message); // Same logic: own messages only
+  }
+
+  Future<void> _editStationMessage(ChatMessage message, String newContent) async {
+    if (_selectedStationRoom == null) return;
+    if (!_canEditStationMessage(message)) return;
+
+    try {
+      final roomId = _selectedStationRoom!.id;
+      final cached = _stationMessageCache[roomId] ?? _stationMessages;
+      final stationMsg = cached.cast<StationChatMessage?>().firstWhere(
+        (m) => m?.timestamp == message.timestamp &&
+               m?.callsign.toUpperCase() == message.author.toUpperCase(),
+        orElse: () => null,
+      );
+
+      final success = await _stationService.editRoomMessage(
+        _selectedStationRoom!.stationUrl,
+        roomId,
+        message.timestamp,
+        newContent,
+        eventId: stationMsg?.eventId,
+      );
+
+      if (!success) {
+        _showError('Failed to edit message');
+        return;
+      }
+
+      // Update in-memory cache
+      final editedAt = DateTime.now().toIso8601String();
+      final messageList = List<StationChatMessage>.from(
+        _stationMessageCache[roomId] ?? _stationMessages,
+      );
+      final index = messageList.indexWhere((msg) =>
+          msg.timestamp == message.timestamp &&
+          msg.callsign.toUpperCase() == message.author.toUpperCase());
+
+      if (index != -1) {
+        final existing = messageList[index];
+        final updatedMetadata = Map<String, String>.from(existing.metadata);
+        updatedMetadata['edited_at'] = editedAt;
+
+        messageList[index] = StationChatMessage(
+          timestamp: existing.timestamp,
+          callsign: existing.callsign,
+          content: newContent,
+          roomId: existing.roomId,
+          metadata: updatedMetadata,
+          reactions: existing.reactions,
+          npub: existing.npub,
+          pubkey: existing.pubkey,
+          signature: existing.signature,
+          eventId: existing.eventId,
+          createdAt: existing.createdAt,
+          verified: existing.verified,
+          hasSignature: existing.hasSignature,
+        );
+        _stationMessageCache[roomId] = messageList;
+        _applyStationMessageLimit(messageList);
+
+        // Update disk cache
+        final cacheKey = _lastRelayCacheKey ?? '';
+        if (cacheKey.isNotEmpty) {
+          await _cacheService.updateMessage(
+            cacheKey,
+            roomId,
+            message.timestamp,
+            message.author,
+            newContent,
+          );
+        }
+      }
+    } catch (e) {
+      _showError('Failed to edit message: $e');
     }
   }
 
@@ -2901,6 +2989,8 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
             onLoadMore: _loadMoreStationMessages,
             onMessageDelete: _deleteStationMessage,
             canDeleteMessage: _canDeleteStationMessage,
+            onMessageEdit: _editStationMessage,
+            canEditMessage: _canEditStationMessage,
             onMessageQuote: _setQuotedMessage,
             onMessageReact: _toggleStationReaction,
             getAttachmentData: _getStationAttachmentData,

@@ -21,6 +21,8 @@ class MessageListWidget extends StatefulWidget {
   final Function(ChatMessage)? onFileOpen;
   final Function(ChatMessage)? onMessageDelete;
   final bool Function(ChatMessage)? canDeleteMessage;
+  final void Function(ChatMessage, String)? onMessageEdit;
+  final bool Function(ChatMessage)? canEditMessage;
   final Function(ChatMessage)? onMessageQuote;
   final Function(ChatMessage)? onMessageHide;
   final bool Function(ChatMessage)? isMessageHidden;
@@ -60,6 +62,8 @@ class MessageListWidget extends StatefulWidget {
     this.onFileOpen,
     this.onMessageDelete,
     this.canDeleteMessage,
+    this.onMessageEdit,
+    this.canEditMessage,
     this.onMessageQuote,
     this.onMessageHide,
     this.isMessageHidden,
@@ -190,6 +194,12 @@ class _MessageListWidgetState extends State<MessageListWidget> {
                         : null,
                     canDelete: widget.canDeleteMessage != null
                         ? widget.canDeleteMessage!(message)
+                        : false,
+                    onEdit: widget.onMessageEdit != null
+                        ? (newContent) => widget.onMessageEdit!(message, newContent)
+                        : null,
+                    canEdit: widget.canEditMessage != null
+                        ? widget.canEditMessage!(message)
                         : false,
                     onQuote: widget.onMessageQuote != null
                         ? () => widget.onMessageQuote!(message)

@@ -30,6 +30,7 @@ import '../util/nostr_key_generator.dart';
 import '../util/nostr_event.dart';
 import '../util/nostr_crypto.dart';
 import '../api/endpoints/chat_api_paths.dart';
+import '../server/mixins/chat_modification_mixin.dart';
 import '../util/chat_scripts.dart';
 import '../util/nostr_login_scripts.dart';
 import '../util/nostr_bundle.dart';
@@ -748,7 +749,7 @@ class PureTileCache {
 }
 
 /// Pure Dart station server for CLI mode
-class PureStationServer with EmailHandlerMixin, BlogHandlerMixin, ConsoleCommandMixin
+class PureStationServer with EmailHandlerMixin, BlogHandlerMixin, ConsoleCommandMixin, ChatModificationMixin
     implements StationCommandInterface {
   HttpServer? _httpServer;
   HttpServer? _httpsServer;
@@ -2572,6 +2573,14 @@ class PureStationServer with EmailHandlerMixin, BlogHandlerMixin, ConsoleCommand
         // /{callsign}/api/chat/rooms OR /api/chat/rooms
         final callsign = ChatApi.extractCallsign(path) ?? _settings.callsign;
         await _handleChatRooms(request, callsign);
+      } else if (ChatApi.isMessageModificationPath(path)) {
+        // DELETE/PUT /api/chat/{roomId}/messages/{timestamp}
+        final callsign = ChatApi.extractCallsign(path) ?? _settings.callsign;
+        await _handleRoomMessageModification(request, callsign);
+      } else if (ChatApi.isModificationsPath(path)) {
+        // GET /api/chat/{roomId}/modifications?since=
+        final callsign = ChatApi.extractCallsign(path) ?? _settings.callsign;
+        await _handleRoomModificationsLog(request, callsign);
       } else if (ChatApi.isMessagesPath(path)) {
         // Accepts both formats:
         // - /api/chat/{roomId}/messages (unified)
@@ -7711,6 +7720,315 @@ class PureStationServer with EmailHandlerMixin, BlogHandlerMixin, ConsoleCommand
         request.response.statusCode = 400;
         request.response.write('Missing id or name');
       }
+    }
+  }
+
+  /// Handle DELETE/PUT for chat messages (edit and delete)
+  Future<void> _handleRoomMessageModification(HttpRequest request, String targetCallsign) async {
+    final reqPath = request.uri.path;
+    final roomId = _extractRoomId(reqPath) ?? 'general';
+    final timestamp = ChatApi.extractModificationTimestamp(reqPath);
+
+    if (timestamp == null) {
+      request.response.statusCode = 400;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({'error': 'Missing timestamp in path'}));
+      return;
+    }
+
+    final decodedTimestamp = Uri.decodeComponent(timestamp);
+
+    // If targeting a remote device, proxy the request
+    if (targetCallsign.toUpperCase() != _settings.callsign.toUpperCase()) {
+      await _proxyRequestToDevice(
+        request,
+        targetCallsign,
+        ChatApi.messageModificationPath(roomId, timestamp),
+      );
+      return;
+    }
+
+    final room = _chatRooms[roomId];
+    if (room == null) {
+      request.response.statusCode = 404;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({'error': 'Room not found'}));
+      return;
+    }
+
+    final authHeader = request.headers.value('authorization');
+
+    if (request.method == 'DELETE') {
+      // Verify NOSTR auth (accepts kind 5 or kind 1)
+      final event = verifyModificationEvent(authHeader, 'delete', roomId);
+      if (event == null) {
+        request.response.statusCode = 403;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({
+          'error': 'Invalid or missing NOSTR authentication',
+          'code': 'AUTH_REQUIRED',
+        }));
+        return;
+      }
+
+      // Find message by formatted timestamp
+      final msgIndex = room.messages.indexWhere((m) =>
+          _formatChatTimestamp(m.timestamp) == decodedTimestamp);
+      if (msgIndex == -1) {
+        request.response.statusCode = 404;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'Message not found'}));
+        return;
+      }
+
+      final message = room.messages[msgIndex];
+
+      // Verify author owns the message
+      if (message.senderNpub != event.npub) {
+        request.response.statusCode = 403;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'Not authorized to delete this message'}));
+        return;
+      }
+
+      // For kind 5, validate event ID target
+      if (!validateDeletionTarget(event, message.id)) {
+        request.response.statusCode = 403;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'Event ID mismatch in deletion event'}));
+        return;
+      }
+
+      final author = message.senderCallsign;
+      room.messages.removeAt(msgIndex);
+      await _saveRoomMessages(roomId, targetCallsign);
+
+      // Write modification log
+      await _appendChatModificationLog(roomId, targetCallsign, {
+        'action': 'delete',
+        'timestamp': decodedTimestamp,
+        'author': author,
+        'at': DateTime.now().toUtc().toIso8601String(),
+      });
+
+      // Broadcast to WebSocket clients
+      final payload = jsonEncode({
+        'type': 'chat_delete',
+        'room': roomId,
+        'callsign': targetCallsign,
+        'timestamp': decodedTimestamp,
+        'author': author,
+      });
+      final updateNotification = 'UPDATE:${_settings.callsign}/chat/$roomId';
+      for (final client in _clients.values) {
+        try {
+          client.socket.add(payload);
+          client.socket.add(updateNotification);
+        } catch (_) {}
+      }
+
+      _log('INFO', 'Message deleted from $roomId at $decodedTimestamp by ${event.npub} (kind ${event.kind})');
+
+      request.response.statusCode = 200;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({
+        'success': true,
+        'action': 'delete',
+        'roomId': roomId,
+        'deleted': {
+          'timestamp': decodedTimestamp,
+          'author': author,
+        },
+      }));
+    } else if (request.method == 'PUT') {
+      // Edit message
+      final event = verifyModificationEvent(authHeader, 'edit', roomId);
+      if (event == null) {
+        request.response.statusCode = 403;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({
+          'error': 'Invalid or missing NOSTR authentication',
+          'code': 'AUTH_REQUIRED',
+        }));
+        return;
+      }
+
+      // Find message by formatted timestamp
+      final msgIndex = room.messages.indexWhere((m) =>
+          _formatChatTimestamp(m.timestamp) == decodedTimestamp);
+      if (msgIndex == -1) {
+        request.response.statusCode = 404;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'Message not found'}));
+        return;
+      }
+
+      final message = room.messages[msgIndex];
+
+      // Verify author owns the message
+      if (message.senderNpub != event.npub) {
+        request.response.statusCode = 403;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'Only the author can edit this message'}));
+        return;
+      }
+
+      final newContent = event.content;
+      if (newContent.isEmpty) {
+        request.response.statusCode = 400;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'New content cannot be empty'}));
+        return;
+      }
+
+      // Create edited_at timestamp
+      final editedAt = _formatChatTimestamp(DateTime.now());
+
+      // Update message in-memory (recreate since ChatMessage is immutable)
+      final updatedMetadata = Map<String, String>.from(message.metadata);
+      updatedMetadata['edited_at'] = editedAt;
+      updatedMetadata['signature'] = event.sig ?? '';
+      updatedMetadata['created_at'] = event.createdAt.toString();
+
+      room.messages[msgIndex] = ChatMessage(
+        id: message.id,
+        roomId: message.roomId,
+        senderCallsign: message.senderCallsign,
+        senderNpub: message.senderNpub,
+        signature: event.sig,
+        content: newContent,
+        timestamp: message.timestamp,
+        verified: message.verified,
+        hasSignature: message.hasSignature,
+        reactions: message.reactions,
+        metadata: updatedMetadata,
+      );
+
+      await _saveRoomMessages(roomId, targetCallsign);
+
+      // Write modification log
+      await _appendChatModificationLog(roomId, targetCallsign, {
+        'action': 'edit',
+        'timestamp': decodedTimestamp,
+        'author': message.senderCallsign,
+        'content': newContent,
+        'at': DateTime.now().toUtc().toIso8601String(),
+      });
+
+      // Broadcast to WebSocket clients
+      final payload = jsonEncode({
+        'type': 'chat_edit',
+        'room': roomId,
+        'callsign': targetCallsign,
+        'timestamp': decodedTimestamp,
+        'author': message.senderCallsign,
+        'content': newContent,
+        'edited_at': editedAt,
+      });
+      final updateNotification = 'UPDATE:${_settings.callsign}/chat/$roomId';
+      for (final client in _clients.values) {
+        try {
+          client.socket.add(payload);
+          client.socket.add(updateNotification);
+        } catch (_) {}
+      }
+
+      _log('INFO', 'Message edited in $roomId at $decodedTimestamp by ${event.npub}');
+
+      request.response.statusCode = 200;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({
+        'success': true,
+        'action': 'edit',
+        'roomId': roomId,
+        'edited': {
+          'timestamp': decodedTimestamp,
+          'author': message.senderCallsign,
+          'edited_at': editedAt,
+        },
+      }));
+    } else {
+      request.response.statusCode = 405;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({'error': 'Method not allowed'}));
+    }
+  }
+
+  /// Handle GET /api/chat/{roomId}/modifications?since=ISO_TIMESTAMP
+  Future<void> _handleRoomModificationsLog(HttpRequest request, String targetCallsign) async {
+    if (request.method != 'GET') {
+      request.response.statusCode = 405;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({'error': 'Method not allowed'}));
+      return;
+    }
+
+    final reqPath = request.uri.path;
+    final roomId = _extractRoomId(reqPath) ?? 'general';
+
+    // If targeting a remote device, proxy the request
+    if (targetCallsign.toUpperCase() != _settings.callsign.toUpperCase()) {
+      await _proxyRequestToDevice(request, targetCallsign, ChatApi.modificationsPath(roomId));
+      return;
+    }
+
+    final sinceParam = request.uri.queryParameters['since'];
+    DateTime? since;
+    if (sinceParam != null && sinceParam.isNotEmpty) {
+      since = DateTime.tryParse(sinceParam);
+    }
+
+    final chatPath = _getChatDataPath(targetCallsign);
+    final logFile = File('$chatPath/$roomId/modifications.jsonl');
+
+    final modifications = <Map<String, dynamic>>[];
+    if (await logFile.exists()) {
+      final content = await logFile.readAsString();
+      for (final line in content.split('\n')) {
+        if (line.trim().isEmpty) continue;
+        try {
+          final entry = jsonDecode(line.trim()) as Map<String, dynamic>;
+          if (since != null) {
+            final at = entry['at'] as String?;
+            if (at != null) {
+              final entryTime = DateTime.tryParse(at);
+              if (entryTime != null && entryTime.isBefore(since)) continue;
+            }
+          }
+          modifications.add(entry);
+        } catch (_) {}
+      }
+    }
+
+    request.response.statusCode = 200;
+    request.response.headers.contentType = ContentType.json;
+    request.response.write(jsonEncode({
+      'roomId': roomId,
+      'modifications': modifications,
+      'count': modifications.length,
+    }));
+  }
+
+  /// Append a modification log entry for CLI station
+  Future<void> _appendChatModificationLog(
+    String roomId,
+    String callsign,
+    Map<String, dynamic> entry,
+  ) async {
+    try {
+      final chatPath = _getChatDataPath(callsign);
+      final logFile = File('$chatPath/$roomId/modifications.jsonl');
+      final dir = logFile.parent;
+      if (!await dir.exists()) {
+        await dir.create(recursive: true);
+      }
+      final line = jsonEncode(entry);
+      await logFile.writeAsString(
+        '${await logFile.exists() ? '\n' : ''}$line',
+        mode: FileMode.append,
+      );
+    } catch (e) {
+      _log('WARN', 'Failed to write modification log: $e');
     }
   }
 

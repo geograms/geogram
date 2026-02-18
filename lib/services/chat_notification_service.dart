@@ -144,6 +144,7 @@ class ChatNotificationService {
       LogService().log('ChatNotificationService: Syncing ${rooms.length} rooms in background');
       for (final room in rooms) {
         await _syncRoomMessages(cacheKey, stationUrl, room.id);
+        await _syncRoomModifications(cacheKey, stationUrl, room.id);
       }
       LogService().log('ChatNotificationService: Background sync complete');
     } catch (e) {
@@ -176,6 +177,51 @@ class ChatNotificationService {
       }
     } catch (e) {
       LogService().log('ChatNotificationService: Failed to sync room $roomId: $e');
+    }
+  }
+
+  /// Sync modifications (edits/deletes) for a room since last sync
+  Future<void> _syncRoomModifications(String cacheKey, String stationUrl, String roomId) async {
+    try {
+      // Load last sync timestamp from config
+      final configService = ConfigService();
+      final configKey = 'chat_mod_sync_${cacheKey}_$roomId';
+      final lastSyncStr = configService.get(configKey) as String?;
+      DateTime? since;
+      if (lastSyncStr != null && lastSyncStr.isNotEmpty) {
+        since = DateTime.tryParse(lastSyncStr);
+      }
+
+      final modifications = await _stationService.fetchRoomModifications(
+        stationUrl,
+        roomId,
+        since: since,
+      );
+
+      if (modifications.isEmpty) return;
+
+      for (final mod in modifications) {
+        final action = mod['action'] as String?;
+        final timestamp = mod['timestamp'] as String?;
+        final author = mod['author'] as String?;
+
+        if (action == null || timestamp == null || author == null) continue;
+
+        if (action == 'delete') {
+          await _cacheService.removeMessage(cacheKey, roomId, timestamp, author);
+        } else if (action == 'edit') {
+          final newContent = mod['content'] as String?;
+          if (newContent != null) {
+            await _cacheService.updateMessage(cacheKey, roomId, timestamp, author, newContent);
+          }
+        }
+      }
+
+      // Store the current time as last sync
+      configService.set(configKey, DateTime.now().toUtc().toIso8601String());
+      LogService().log('ChatNotificationService: Applied ${modifications.length} modifications for $roomId');
+    } catch (e) {
+      LogService().log('ChatNotificationService: Failed to sync modifications for $roomId: $e');
     }
   }
 
