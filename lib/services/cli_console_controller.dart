@@ -36,7 +36,10 @@ import '../services/profile_service.dart';
 import '../services/callsign_generator.dart';
 import '../services/chat_service.dart';
 import '../services/station_server_service.dart';
+import '../services/station_service.dart';
+import '../services/station_cache_service.dart';
 import '../services/storage_config.dart';
+import '../models/station_chat_room.dart';
 import '../version.dart';
 
 // ---------------------------------------------------------------------------
@@ -96,22 +99,22 @@ class _ProfileServiceAdapter implements ProfileCommandInterface {
       'active': p.id == _service.activeProfileId,
     }).toList();
 
-    // Include connected station callsign from StationServerService
-    // (mirrors what CliProfileService.getAllDevicesSorted does with cached devices)
+    // Include all known stations (preferred + backup + available)
     try {
-      final status = StationServerService().getStatus();
-      final stationCs = status['callsign'] as String? ?? '';
-      if (stationCs.isNotEmpty &&
-          CallsignGenerator.isStationCallsign(stationCs) &&
-          !result.any((d) => d['callsign'] == stationCs)) {
-        result.add({
-          'callsign': stationCs,
-          'type': 'station',
-          'nickname': '',
-          'owned': false,
-        });
+      for (final station in StationService().getAllStations()) {
+        final cs = station.callsign;
+        if (cs != null &&
+            cs.isNotEmpty &&
+            !result.any((d) => d['callsign'] == cs)) {
+          result.add({
+            'callsign': cs,
+            'type': 'station',
+            'nickname': station.name,
+            'owned': false,
+          });
+        }
       }
-    } catch (_) {} // StationServerService may not be initialized
+    } catch (_) {} // StationService may not be initialized
 
     return result;
   }
@@ -130,6 +133,25 @@ class _ProfileServiceAdapter implements ProfileCommandInterface {
 /// sensible defaults (empty maps, empty lists).
 class _StationServiceAdapter implements StationCommandInterface {
   final StationServerService _service = StationServerService();
+
+  /// Pre-loaded station rooms (loaded during initialize)
+  List<StationChatRoom> _stationRooms = [];
+
+  /// Load preferred station's cached rooms for sync access
+  Future<void> loadStationRooms() async {
+    try {
+      final preferred = StationService().getPreferredStation();
+      final cs = preferred?.callsign;
+      if (cs != null && cs.isNotEmpty) {
+        _stationRooms = await RelayCacheService().loadChatRooms(
+          cs,
+          preferred!.url,
+        );
+      }
+    } catch (_) {
+      _stationRooms = [];
+    }
+  }
 
   @override
   bool get isRunning => _service.isRunning;
@@ -154,11 +176,18 @@ class _StationServiceAdapter implements StationCommandInterface {
 
   @override
   Map<String, ChatRoomReadable> get chatRoomsReadable {
-    final channels = ChatService().channels;
-    if (channels.isEmpty) return {};
-    return {
-      for (final ch in channels) ch.id: _ChatChannelAdapter(ch),
-    };
+    final result = <String, ChatRoomReadable>{};
+    // Local channels
+    for (final ch in ChatService().channels) {
+      result[ch.id] = _ChatChannelAdapter(ch);
+    }
+    // Preferred station's cached rooms (pre-loaded)
+    for (final room in _stationRooms) {
+      if (!result.containsKey(room.id)) {
+        result[room.id] = _StationChatRoomAdapter(room);
+      }
+    }
+    return result;
   }
 
   @override
@@ -263,6 +292,22 @@ class _StationServiceAdapter implements StationCommandInterface {
   @override
   Future<void> postMessage(String roomId, String content) async {
     final profile = ProfileService().getProfile();
+
+    // Check if this is a station room (not a local channel)
+    if (_stationRooms.any((r) => r.id == roomId)) {
+      final preferred = StationService().getPreferredStation();
+      if (preferred != null) {
+        await StationService().postRoomMessage(
+          preferred.url,
+          roomId,
+          profile.callsign,
+          content,
+        );
+        return;
+      }
+    }
+
+    // Local channel — save directly
     final message = ChatMessage.now(
       author: profile.callsign,
       content: content,
@@ -291,7 +336,13 @@ class _SettingsAdapter implements StationSettingsReadable {
     if (CallsignGenerator.isStationCallsign(profile.callsign)) {
       return profile.callsign;
     }
-    // Otherwise get the station callsign from the running service status
+    // Get preferred station's callsign
+    try {
+      final preferred = StationService().getPreferredStation();
+      final cs = preferred?.callsign ?? '';
+      if (cs.isNotEmpty && CallsignGenerator.isStationCallsign(cs)) return cs;
+    } catch (_) {}
+    // Fallback to StationServerService
     final status = StationServerService().getStatus();
     final cs = status['callsign'] as String? ?? '';
     return CallsignGenerator.isStationCallsign(cs) ? cs : '';
@@ -349,6 +400,21 @@ class _ChatChannelAdapter implements ChatRoomReadable {
   @override DateTime get createdAt => _ch.created;
   @override DateTime get lastActivity => _ch.lastMessageTime ?? _ch.created;
   @override bool get isPublic => _ch.participants.contains('*');
+  @override List<ChatMessageReadable> get readableMessages => const [];
+}
+
+/// Adapter wrapping [StationChatRoom] as [ChatRoomReadable] for navigation.
+class _StationChatRoomAdapter implements ChatRoomReadable {
+  final StationChatRoom _room;
+  _StationChatRoomAdapter(this._room);
+
+  @override String get id => _room.id;
+  @override String get name => _room.name;
+  @override String get description => _room.description;
+  @override String get creatorCallsign => '';
+  @override DateTime get createdAt => DateTime.now();
+  @override DateTime get lastActivity => DateTime.now();
+  @override bool get isPublic => true;
   @override List<ChatMessageReadable> get readableMessages => const [];
 }
 
@@ -458,7 +524,7 @@ class CliConsoleController {
     );
   }
 
-  /// Initialize (loads games if available)
+  /// Initialize (loads games if available, pre-loads station rooms)
   Future<void> initialize() async {
     if (!StorageConfig().isInitialized) return;
 
@@ -469,6 +535,9 @@ class CliConsoleController {
     } catch (e) {
       _gameConfig = null;
     }
+
+    // Pre-load preferred station's cached chat rooms
+    await _stationAdapter.loadStationRooms();
   }
 
   /// Whether we're currently in game mode
