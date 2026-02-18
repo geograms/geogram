@@ -637,7 +637,9 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       if (cachedRooms.isNotEmpty) {
         _setStateIfMounted(() {
           _stationRooms = cachedRooms;
-          // Keep _connectionStatus as connecting — fetch hasn't happened yet
+          // We have cached rooms — mark online immediately so user can interact
+          _connectionStatus = _StationConnectionStatus.online;
+          _loadingRelayRooms = false;
         });
       }
 
@@ -666,7 +668,9 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       if (cachedRooms.isNotEmpty) {
         _setStateIfMounted(() {
           _stationRooms = cachedRooms;
-          // Keep _connectionStatus as connecting — fetch hasn't happened yet
+          // We have cached rooms — mark online immediately so user can interact
+          _connectionStatus = _StationConnectionStatus.online;
+          _loadingRelayRooms = false;
         });
       }
     }
@@ -677,9 +681,8 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     LogService().log('DEBUG _loadRelayRooms: final _stationRooms.length=${_stationRooms.length}, cachedDevices=${_cachedDeviceSources.length}');
 
     if (station != null && station.url.isNotEmpty && cacheKey != null) {
-      // Await the fetch so we know station online status before displaying
-      // This prevents the UI from "wiggling" as items reorder when status changes
-      await _fetchRelayRoomsFromStation(cacheKey, station.url);
+      // Fire room fetch in background — don't block UI
+      unawaited(_fetchRelayRoomsFromStation(cacheKey, station.url));
       return;
     }
 
