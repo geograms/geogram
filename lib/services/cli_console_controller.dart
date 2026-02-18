@@ -134,24 +134,57 @@ class _ProfileServiceAdapter implements ProfileCommandInterface {
 class _StationServiceAdapter implements StationCommandInterface {
   final StationServerService _service = StationServerService();
 
-  /// Pre-loaded station rooms (loaded during initialize)
-  List<StationChatRoom> _stationRooms = [];
+  /// Pre-loaded chat rooms with messages (keyed by room id)
+  final Map<String, _PreloadedRoom> _preloadedRooms = {};
 
-  /// Load preferred station's cached rooms for sync access
-  Future<void> loadStationRooms() async {
+  /// IDs of rooms that belong to the station (not local channels)
+  final Set<String> _stationRoomIds = {};
+
+  /// Load all chat rooms and their messages for sync access.
+  Future<void> loadAllRooms() async {
+    _preloadedRooms.clear();
+    _stationRoomIds.clear();
+
+    // Load local channels + messages from ChatService
+    try {
+      final chatService = ChatService();
+      for (final ch in chatService.channels) {
+        final messages = await chatService.loadMessages(ch.id, limit: 50);
+        _preloadedRooms[ch.id] = _PreloadedRoom(
+          adapter: _ChatChannelAdapter(ch, messages.map(_wrapChatMessage).toList()),
+          isStation: false,
+        );
+      }
+    } catch (_) {}
+
+    // Load preferred station's cached rooms + messages
     try {
       final preferred = StationService().getPreferredStation();
       final cs = preferred?.callsign;
       if (cs != null && cs.isNotEmpty) {
-        _stationRooms = await RelayCacheService().loadChatRooms(
-          cs,
-          preferred!.url,
-        );
+        final rooms = await RelayCacheService().loadChatRooms(cs, preferred!.url);
+        final cache = RelayCacheService();
+        for (final room in rooms) {
+          if (_preloadedRooms.containsKey(room.id)) continue;
+          final stationMsgs = await cache.loadMessages(cs, room.id, limit: 50);
+          _preloadedRooms[room.id] = _PreloadedRoom(
+            adapter: _StationChatRoomAdapter(
+              room,
+              stationMsgs.map(_wrapStationMessage).toList(),
+            ),
+            isStation: true,
+          );
+          _stationRoomIds.add(room.id);
+        }
       }
-    } catch (_) {
-      _stationRooms = [];
-    }
+    } catch (_) {}
   }
+
+  static _ChatMessageReadableAdapter _wrapChatMessage(ChatMessage m) =>
+      _ChatMessageReadableAdapter(m);
+
+  static _StationChatMessageAdapter _wrapStationMessage(StationChatMessage m) =>
+      _StationChatMessageAdapter(m);
 
   @override
   bool get isRunning => _service.isRunning;
@@ -176,18 +209,10 @@ class _StationServiceAdapter implements StationCommandInterface {
 
   @override
   Map<String, ChatRoomReadable> get chatRoomsReadable {
-    final result = <String, ChatRoomReadable>{};
-    // Local channels
-    for (final ch in ChatService().channels) {
-      result[ch.id] = _ChatChannelAdapter(ch);
-    }
-    // Preferred station's cached rooms (pre-loaded)
-    for (final room in _stationRooms) {
-      if (!result.containsKey(room.id)) {
-        result[room.id] = _StationChatRoomAdapter(room);
-      }
-    }
-    return result;
+    return {
+      for (final entry in _preloadedRooms.entries)
+        entry.key: entry.value.adapter,
+    };
   }
 
   @override
@@ -294,7 +319,7 @@ class _StationServiceAdapter implements StationCommandInterface {
     final profile = ProfileService().getProfile();
 
     // Check if this is a station room (not a local channel)
-    if (_stationRooms.any((r) => r.id == roomId)) {
+    if (_stationRoomIds.contains(roomId)) {
       final preferred = StationService().getPreferredStation();
       if (preferred != null) {
         await StationService().postRoomMessage(
@@ -388,10 +413,18 @@ class _StatsAdapter implements StationStatsReadable {
   @override DateTime? get lastTileRequest => null;
 }
 
+/// Helper to hold a room adapter + its origin.
+class _PreloadedRoom {
+  final ChatRoomReadable adapter;
+  final bool isStation;
+  _PreloadedRoom({required this.adapter, required this.isStation});
+}
+
 /// Adapter wrapping [ChatChannel] as [ChatRoomReadable] for navigation.
 class _ChatChannelAdapter implements ChatRoomReadable {
   final ChatChannel _ch;
-  _ChatChannelAdapter(this._ch);
+  final List<ChatMessageReadable> _messages;
+  _ChatChannelAdapter(this._ch, [this._messages = const []]);
 
   @override String get id => _ch.id;
   @override String get name => _ch.name;
@@ -400,22 +433,56 @@ class _ChatChannelAdapter implements ChatRoomReadable {
   @override DateTime get createdAt => _ch.created;
   @override DateTime get lastActivity => _ch.lastMessageTime ?? _ch.created;
   @override bool get isPublic => _ch.participants.contains('*');
-  @override List<ChatMessageReadable> get readableMessages => const [];
+  @override List<ChatMessageReadable> get readableMessages => _messages;
 }
 
 /// Adapter wrapping [StationChatRoom] as [ChatRoomReadable] for navigation.
 class _StationChatRoomAdapter implements ChatRoomReadable {
   final StationChatRoom _room;
-  _StationChatRoomAdapter(this._room);
+  final List<ChatMessageReadable> _messages;
+  _StationChatRoomAdapter(this._room, [this._messages = const []]);
 
   @override String get id => _room.id;
   @override String get name => _room.name;
   @override String get description => _room.description;
   @override String get creatorCallsign => '';
   @override DateTime get createdAt => DateTime.now();
-  @override DateTime get lastActivity => DateTime.now();
+  @override DateTime get lastActivity =>
+      _messages.isNotEmpty ? _messages.last.timestamp : DateTime.now();
   @override bool get isPublic => true;
-  @override List<ChatMessageReadable> get readableMessages => const [];
+  @override List<ChatMessageReadable> get readableMessages => _messages;
+}
+
+/// Adapter wrapping [ChatMessage] as [ChatMessageReadable].
+class _ChatMessageReadableAdapter implements ChatMessageReadable {
+  final ChatMessage _m;
+  _ChatMessageReadableAdapter(this._m);
+
+  @override String get id => _m.timestamp;
+  @override String get roomId => '';
+  @override String get senderCallsign => _m.author;
+  @override String? get senderNpub => _m.metadata['npub'];
+  @override String? get signature => _m.metadata['signature'];
+  @override String get content => _m.content;
+  @override DateTime get timestamp => _m.dateTime;
+  @override bool get verified => _m.metadata.containsKey('signature');
+  @override bool get hasSignature => _m.metadata.containsKey('signature');
+}
+
+/// Adapter wrapping [StationChatMessage] as [ChatMessageReadable].
+class _StationChatMessageAdapter implements ChatMessageReadable {
+  final StationChatMessage _m;
+  _StationChatMessageAdapter(this._m);
+
+  @override String get id => _m.timestamp;
+  @override String get roomId => _m.roomId;
+  @override String get senderCallsign => _m.callsign;
+  @override String? get senderNpub => _m.npub;
+  @override String? get signature => _m.signature;
+  @override String get content => _m.content;
+  @override DateTime get timestamp => _m.dateTime ?? DateTime.now();
+  @override bool get verified => _m.verified;
+  @override bool get hasSignature => _m.hasSignature;
 }
 
 // ---------------------------------------------------------------------------
@@ -536,8 +603,8 @@ class CliConsoleController {
       _gameConfig = null;
     }
 
-    // Pre-load preferred station's cached chat rooms
-    await _stationAdapter.loadStationRooms();
+    // Pre-load all chat rooms with messages
+    await _stationAdapter.loadAllRooms();
   }
 
   /// Whether we're currently in game mode
