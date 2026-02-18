@@ -45,12 +45,13 @@ jobs:
     - name: Clean Gradle caches and stale locks
       run: |
         # Kill any orphaned Gradle/Java processes that may hold cache locks
-        pkill -f GradleDaemon 2>/dev/null || true
-        pkill -f 'java.*gradle' 2>/dev/null || true
+        pkill -9 -f GradleDaemon 2>/dev/null || true
+        pkill -9 -f 'java.*gradle' 2>/dev/null || true
         sleep 2
 
         # Remove stale lock files that cause "Timeout waiting to lock" errors
         find ~/.gradle/caches -name "*.lock" -delete 2>/dev/null || true
+        find ~/.gradle -name "*.lock" -delete 2>/dev/null || true
 
         # Remove potentially corrupted transform/build caches restored from CI cache
         rm -rf ~/.gradle/caches/transforms-*
@@ -103,33 +104,31 @@ jobs:
 
     - name: Build Android APK
       timeout-minutes: 35
+      env:
+        GRADLE_OPTS: "-Dorg.gradle.daemon=false"
       run: |
-        # Use gtimeout (macOS coreutils) or timeout (Linux)
-        TIMEOUT_CMD="gtimeout"
-        command -v gtimeout >/dev/null 2>&1 || TIMEOUT_CMD="timeout"
-        command -v $TIMEOUT_CMD >/dev/null 2>&1 || { echo "No timeout command found, installing coreutils"; brew install coreutils; TIMEOUT_CMD="gtimeout"; }
-
         for i in 1 2 3; do
           echo "Build attempt $i..."
-          if $TIMEOUT_CMD 1500 flutter build apk --release; then
-            echo "Build succeeded on attempt $i"
-            exit 0
-          fi
-          EXIT_CODE=$?
-          if [ $EXIT_CODE -eq 124 ]; then
-            echo "Build timed out on attempt $i (25 min limit)"
-          else
-            echo "Build failed on attempt $i (exit code $EXIT_CODE)"
-          fi
-          # Kill any leftover Gradle daemons before retry
-          pkill -f GradleDaemon 2>/dev/null || true
-          sleep 10
+          flutter build apk --release && { echo "Build succeeded on attempt $i"; exit 0; }
+          echo "Build failed on attempt $i"
+
+          # Kill ALL Java/Gradle processes aggressively before retry
+          pkill -9 -f GradleDaemon 2>/dev/null || true
+          pkill -9 -f 'java.*gradle' 2>/dev/null || true
+          sleep 5
+
+          # Remove stale lock files left by killed processes
+          find ~/.gradle -name "*.lock" -delete 2>/dev/null || true
+          echo "Cleaned up for retry"
+          sleep 5
         done
         echo "All build attempts failed"
         exit 1
 
     - name: Build Android App Bundle
       timeout-minutes: 10
+      env:
+        GRADLE_OPTS: "-Dorg.gradle.daemon=false"
       run: flutter build appbundle --release
 
     - name: Rename APK
