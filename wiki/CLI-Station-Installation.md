@@ -10,7 +10,7 @@ A Geogram CLI station is a self-contained network node that provides:
 - **STUN server** — NAT traversal for WebRTC peer connections
 - **Blossom file hosting** — file uploads and downloads with hash-addressed storage
 - **Update mirror** — mirrors Geogram release binaries from GitHub
-- **Optional SMTP** — send email via upstream relay with DKIM signing
+- **Built-in SMTP** — send and receive email with DKIM signing (no external relay needed)
 
 ---
 
@@ -31,7 +31,7 @@ A Geogram CLI station is a self-contained network node that provides:
 | 80 | TCP | HTTP (required for Let's Encrypt) |
 | 443 | TCP | HTTPS |
 | 3478 | UDP | STUN server |
-| 2525 | TCP | SMTP (optional) |
+| 25 | TCP | SMTP (optional, for email) |
 
 ---
 
@@ -175,8 +175,8 @@ ufw allow 80/tcp     # HTTP
 ufw allow 443/tcp    # HTTPS
 ufw allow 3478/udp   # STUN
 
-# Optional:
-# ufw allow 2525/tcp  # SMTP
+# Optional (for email):
+# ufw allow 25/tcp   # SMTP
 
 ufw enable
 ufw status
@@ -186,38 +186,98 @@ ufw status
 
 ## 7. Optional: Email
 
-To enable SMTP support, edit `station_config.json`:
+Geogram includes a **built-in SMTP server** that sends email directly to destination mail servers (via MX lookup) with DKIM signing. No external SMTP relay service (Brevo, Mailgun, etc.) is needed.
+
+### Step 1: Generate DKIM Keys
+
+The `--email-dns` command auto-generates a 1024-bit RSA key pair for DKIM signing and saves the private key to `station_config.json`:
+
+```bash
+cd /root/geogram
+./geogram-cli --data-dir=/root/geogram --email-dns
+```
+
+This will:
+1. Read your `sslDomain` from `station_config.json` (or specify one: `--email-dns=yourstation.example.com`)
+2. Generate a DKIM keypair if one doesn't exist yet
+3. Save the private key to `station_config.json` (`dkimPrivateKey` field)
+4. Run DNS diagnostics and **print the exact DNS records you need to add**
+5. Show a suggested DNS zone file if any records are missing
+
+If you already have a DKIM key configured, it will reuse it.
+
+### Step 2: Add DNS Records
+
+Add the DNS records printed by the diagnostics tool. They will look like:
+
+```dns
+; MX record — routes incoming email to your server
+yourstation.example.com.  IN  MX  10  yourstation.example.com.
+
+; SPF — authorizes your server IP to send email
+yourstation.example.com.  IN  TXT  "v=spf1 ip4:203.0.113.10 mx -all"
+
+; DKIM — public key for email signature verification
+; Selector is always "geogram"
+geogram._domainkey.yourstation.example.com.  IN  TXT  "v=DKIM1; k=rsa; p=<PUBLIC_KEY_FROM_DIAGNOSTICS>"
+
+; DMARC — policy for authentication failures
+_dmarc.yourstation.example.com.  IN  TXT  "v=DMARC1; p=none; rua=mailto:postmaster@yourstation.example.com"
+```
+
+Also set up a **PTR (reverse DNS) record** with your hosting provider so your IP resolves back to your domain. This improves email deliverability.
+
+### Step 3: Verify DNS
+
+Re-run the diagnostics to confirm all records are in place:
+
+```bash
+./geogram-cli --data-dir=/root/geogram --email-dns
+```
+
+All checks should show as passed (MX, SPF, DKIM, DMARC, PTR, SMTP connectivity).
+
+### Step 4: Enable SMTP
+
+Edit `station_config.json`:
 
 ```json
 {
   "smtpEnabled": true,
   "smtpServerEnabled": true,
-  "smtpPort": 2525,
-  "smtpRelayHost": "smtp-relay.brevo.com",
+  "smtpPort": 25
+}
+```
+
+Then restart:
+
+```bash
+systemctl restart geogram-station
+```
+
+Open the SMTP port: `ufw allow 25/tcp`
+
+### How It Works
+
+- **Incoming email**: The built-in SMTP server receives mail on port 25, validates recipients against the NIP-05 registry (no open relay), and delivers to connected clients via WebSocket. Emails for offline users are encrypted and cached until they reconnect (up to 24 hours).
+- **Outgoing email**: The SMTP client looks up the recipient's MX record, connects directly to their mail server, and sends the message with DKIM signing. No external relay needed.
+- **DKIM selector**: Hardcoded as `geogram` (so the DNS record is always `geogram._domainkey.yourdomain.com`).
+
+### Optional: External Relay
+
+If your server's IP is on email blocklists or port 25 is blocked by your hosting provider, you can optionally route outgoing email through an external relay. Add these fields to `station_config.json`:
+
+```json
+{
+  "smtpRelayHost": "smtp.mailgun.org",
   "smtpRelayPort": 587,
-  "smtpRelayUsername": "your-api-key@smtp-relay.brevo.com",
+  "smtpRelayUsername": "postmaster@yourdomain.com",
   "smtpRelayPassword": "your-smtp-password",
   "smtpRelayStartTls": true
 }
 ```
 
-You'll also need DNS records for email:
-
-```
-; MX record
-yourstation.example.com.  IN  MX  10  yourstation.example.com.
-
-; SPF
-yourstation.example.com.  IN  TXT  "v=spf1 a mx ~all"
-
-; DKIM (generate key: openssl genrsa 2048 | openssl rsa -pubout -outform DER | base64 -w0)
-geogram._domainkey.yourstation.example.com.  IN  TXT  "v=DKIM1; k=rsa; p=YOUR_PUBLIC_KEY"
-
-; DMARC
-_dmarc.yourstation.example.com.  IN  TXT  "v=DMARC1; p=none"
-```
-
-Open the SMTP port: `ufw allow 2525/tcp`
+This is **not required** — only use it if direct delivery doesn't work for your setup.
 
 ---
 
@@ -226,7 +286,7 @@ Open the SMTP port: `ufw allow 2525/tcp`
 ### HTTP Status
 
 ```bash
-curl http://yourstation.example.com/api/status
+curl https://yourstation.example.com/api/status
 ```
 
 Expected response:
@@ -235,10 +295,13 @@ Expected response:
 {
   "station_mode": true,
   "callsign": "X3ABCD",
+  "npub": "npub1...",
   "name": "My Station",
-  "version": "1.17.3",
+  "version": "1.23.0",
   "connected_devices": 0,
   "tile_server_enabled": true,
+  "stun_server_enabled": true,
+  "update_mirror_enabled": true,
   "ssl_enabled": true
 }
 ```
@@ -279,26 +342,58 @@ The node will connect to the parent station via WebSocket and participate in the
 
 After the setup wizard, you can fine-tune settings by editing `/root/geogram/station_config.json`:
 
+### Core
+
 | Field | Default | Description |
 |-------|---------|-------------|
 | `httpPort` | 8080 | HTTP listening port |
+| `httpsPort` | 8443 | HTTPS listening port |
 | `enabled` | false | Enable the station server |
 | `name` | — | Station display name |
 | `description` | — | Station description |
 | `location` | — | Human-readable location |
 | `latitude` / `longitude` | — | Coordinates |
-| `stationRole` | "root" | `"root"` or `"node"` |
+| `stationRole` | "" | `"root"` or `"node"` |
 | `parentStationUrl` | null | Parent station URL (node only) |
+| `maxConnectedDevices` | 100 | Max simultaneous WebSocket clients |
+
+### Services
+
+| Field | Default | Description |
+|-------|---------|-------------|
 | `tileServerEnabled` | true | Enable tile caching proxy |
+| `osmFallbackEnabled` | true | Fallback to OSM when cache misses |
 | `maxZoomLevel` | 15 | Max tile zoom level to cache |
 | `maxCacheSizeMB` | 500 | Tile cache size limit (MB) |
 | `stunServerEnabled` | true | Enable STUN server |
+| `stunServerPort` | 3478 | STUN server UDP port |
+| `updateMirrorEnabled` | true | Mirror release binaries |
+| `nostrRequireAuthForWrites` | true | Require auth for Nostr event writes |
 | `blossomMaxStorageMb` | 1024 | File storage limit (MB) |
 | `blossomMaxFileMb` | 10 | Max single file size (MB) |
+
+### SSL/TLS
+
+| Field | Default | Description |
+|-------|---------|-------------|
 | `enableSsl` | false | Enable HTTPS |
 | `sslDomain` | — | Domain for Let's Encrypt |
+| `sslEmail` | — | Contact email for Let's Encrypt |
 | `sslAutoRenew` | true | Auto-renew certificates |
-| `updateMirrorEnabled` | true | Mirror release binaries |
+
+### Email/SMTP
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `smtpEnabled` | false | Enable email send/receive |
+| `smtpServerEnabled` | false | Enable incoming SMTP server |
+| `smtpPort` | 2525 | SMTP listening port (use 25 for production) |
+| `dkimPrivateKey` | null | RSA private key in PEM format (auto-generated by `--email-dns`) |
+| `smtpRelayHost` | null | Optional external relay host |
+| `smtpRelayPort` | 587 | Relay port |
+| `smtpRelayUsername` | null | Relay auth username |
+| `smtpRelayPassword` | null | Relay auth password |
+| `smtpRelayStartTls` | true | Use STARTTLS with relay |
 
 ---
 
@@ -347,5 +442,8 @@ After the setup wizard, you can fine-tune settings by editing `/root/geogram/sta
 | GET | `/.well-known/nostr.json` | NIP-05 identity verification |
 | POST | `/blossom/upload` | Upload a file |
 | GET | `/blossom/{hash}` | Download a file by hash |
+| HEAD | `/blossom/{hash}` | Check if file exists |
+| DELETE | `/blossom/{hash}` | Delete a file |
 | WebSocket | `/` | Real-time messaging, NOSTR relay, P2P signaling |
+| TCP 25 | — | SMTP server (incoming email) |
 | UDP 3478 | — | STUN server |
