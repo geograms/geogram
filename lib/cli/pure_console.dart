@@ -5,7 +5,8 @@ import 'dart:io';
 
 import 'package:dart_console/dart_console.dart';
 
-import '../station.dart';
+import '../station.dart' hide PureStationServer, SslCertificateManager, cliAppVersion;
+import 'pure_station.dart';
 import 'cli_profile_service.dart';
 import 'cli_location_service.dart';
 import 'cli_station_cache_service.dart';
