@@ -2442,6 +2442,8 @@ Triggers a debug action.
 | `station_connect` | Connect to preferred station | `url` (optional): Station WebSocket URL |
 | `station_status` | Get station connection status | None |
 | `station_send_chat` | Send a message to a station room (bypasses UI) | `room` (optional): Room ID (default: "general"), `content` (optional): Message text, `image_path` (optional): Absolute path to image file |
+| `station_delete_chat` | Delete a message from a station room | `room` (optional): Room ID (default: "general"), `timestamp` (required): Message timestamp, `event_id` (optional): NOSTR event ID, `local` (optional): true to delete from local station |
+| `station_edit_chat` | Edit a message in a station room | `room` (optional): Room ID (default: "general"), `timestamp` (required): Message timestamp, `content` (required): New message text, `event_id` (optional): NOSTR event ID |
 | `open_console` | Open the Console collection and auto-launch the first session | `session_id` (optional): Session ID to focus (default: first session) |
 | `console_status` | Report Console VM status (files present, rootfs extraction marker, recent logs) | None |
 | `email_compose` | Create a draft email | `to` (required): Recipient email(s) comma-separated, `subject` (required): Subject line, `content` (optional): Message body, `cc` (optional): CC recipients comma-separated, `station` (optional): Station domain (default: preferred station or p2p.radio) |
@@ -2909,6 +2911,17 @@ curl -X POST http://localhost:3456/api/debug \
   -H "Content-Type: application/json" \
   -d '{"action": "station_send_chat", "room": "general", "content": "Check this photo", "image_path": "/absolute/path/to/image.jpg"}'
 # Returns: {"success": true, "metadata": {"file": "hash_filename.jpg", "file_size": "12345"}, "logs": [...]}
+
+# Delete a chat message from a station room
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action": "station_delete_chat", "room": "general", "timestamp": "2026-02-18 19:47_53", "event_id": "abc123..."}'
+# Optional: "local": true to delete from local station directly (no NOSTR auth needed)
+
+# Edit a chat message in a station room
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action": "station_edit_chat", "room": "general", "timestamp": "2026-02-18 19:47_53", "content": "Updated message text"}'
 ```
 
 ---

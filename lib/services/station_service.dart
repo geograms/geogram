@@ -1236,6 +1236,11 @@ class StationService {
         headers: {'Authorization': 'Nostr $authEvent'},
       );
 
+      if (response == null) {
+        LogService().log('StationService: Delete message: no response from server');
+      } else {
+        LogService().log('StationService: Delete message response: ${response.statusCode} - ${response.body}');
+      }
       return response != null && response.statusCode == 200;
     } catch (e) {
       LogService().log('Error deleting message: $e');

@@ -9351,6 +9351,172 @@ class LogApiService with ChatModificationMixin {
             );
           }
 
+        case 'station_delete_chat':
+          // Delete a chat message from a station room
+          final room = params['room'] as String? ?? 'general';
+          final timestamp = params['timestamp'] as String?;
+          final eventId = params['event_id'] as String?;
+          final useLocal = params['local'] == true || params['local'] == 'true';
+
+          if (timestamp == null || timestamp.isEmpty) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'timestamp is required (e.g. "2026-02-18 19:47_53")',
+              }),
+              headers: headers,
+            );
+          }
+
+          final deleteLogs = <String>[];
+
+          if (useLocal) {
+            // Delete from local station directly (no NOSTR auth needed for testing)
+            deleteLogs.add('Mode: local (direct ChatService)');
+            deleteLogs.add('Room: $room');
+            deleteLogs.add('Timestamp: $timestamp');
+
+            try {
+              await _initializeChatServiceIfNeeded();
+              final chatService = ChatService();
+              final message = await chatService.findMessage(room, timestamp);
+              if (message == null) {
+                deleteLogs.add('ERROR: Message not found');
+                return shelf.Response.ok(
+                  jsonEncode({
+                    'success': false,
+                    'message': 'Message not found at $timestamp',
+                    'logs': deleteLogs,
+                  }),
+                  headers: headers,
+                );
+              }
+              deleteLogs.add('Found message by ${message.author}: ${message.content}');
+              await chatService.deleteMessageByTimestamp(
+                channelId: room,
+                timestamp: timestamp,
+                authorCallsign: message.author,
+                actorNpub: message.npub ?? '',
+              );
+              deleteLogs.add('Deleted successfully');
+              return shelf.Response.ok(
+                jsonEncode({
+                  'success': true,
+                  'message': 'Message deleted (local)',
+                  'room': room,
+                  'timestamp': timestamp,
+                  'deleted_author': message.author,
+                  'deleted_content': message.content,
+                  'logs': deleteLogs,
+                }),
+                headers: headers,
+              );
+            } catch (e) {
+              deleteLogs.add('ERROR: $e');
+              return shelf.Response.ok(
+                jsonEncode({
+                  'success': false,
+                  'message': 'Local delete failed: $e',
+                  'logs': deleteLogs,
+                }),
+                headers: headers,
+              );
+            }
+          }
+
+          final preferred = stationService.getPreferredStation();
+          if (preferred == null) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'No preferred station configured. Use station_set first.',
+              }),
+              headers: headers,
+            );
+          }
+
+          deleteLogs.add('Station URL: ${preferred.url}');
+          deleteLogs.add('Room: $room');
+          deleteLogs.add('Timestamp: $timestamp');
+          if (eventId != null) deleteLogs.add('Event ID: $eventId');
+
+          final deleteResult = await stationService.deleteRoomMessage(
+            preferred.url,
+            room,
+            timestamp,
+            eventId: eventId,
+          );
+
+          deleteLogs.add('Result: $deleteResult');
+
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': deleteResult,
+              'message': deleteResult ? 'Message deleted' : 'Failed to delete message',
+              'room': room,
+              'timestamp': timestamp,
+              'event_id': eventId,
+              'logs': deleteLogs,
+            }),
+            headers: headers,
+          );
+
+        case 'station_edit_chat':
+          // Edit a chat message in a station room
+          final room = params['room'] as String? ?? 'general';
+          final timestamp = params['timestamp'] as String?;
+          final content = params['content'] as String?;
+          final eventId = params['event_id'] as String?;
+
+          if (timestamp == null || timestamp.isEmpty) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'timestamp is required (e.g. "2026-02-18 19:47_53")',
+              }),
+              headers: headers,
+            );
+          }
+          if (content == null || content.isEmpty) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'content is required (the new message text)',
+              }),
+              headers: headers,
+            );
+          }
+
+          final preferredStation = stationService.getPreferredStation();
+          if (preferredStation == null) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'No preferred station configured. Use station_set first.',
+              }),
+              headers: headers,
+            );
+          }
+
+          final editResult = await stationService.editRoomMessage(
+            preferredStation.url,
+            room,
+            timestamp,
+            content,
+            eventId: eventId,
+          );
+
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': editResult,
+              'message': editResult ? 'Message edited' : 'Failed to edit message',
+              'room': room,
+              'timestamp': timestamp,
+              'content': content,
+            }),
+            headers: headers,
+          );
+
         default:
           return shelf.Response.badRequest(
             body: jsonEncode({
@@ -9365,6 +9531,8 @@ class LogApiService with ChatModificationMixin {
                 'station_server_stop',
                 'station_server_status',
                 'station_send_chat',
+                'station_delete_chat',
+                'station_edit_chat',
               ],
             }),
             headers: headers,
