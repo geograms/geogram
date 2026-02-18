@@ -80,6 +80,16 @@ String getNostrLoginStyles() {
   cursor: pointer;
 }
 
+.nostr-header-callsign:hover {
+  text-decoration: underline;
+}
+
+.nostr-header-callsign::after {
+  content: ' \\25BE';
+  font-size: 0.7em;
+  opacity: 0.7;
+}
+
 .nostr-profile-wrapper {
   position: relative;
 }
