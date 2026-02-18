@@ -125,6 +125,23 @@ String getChatPageScripts() {
         }
       }
 
+      function parseMsgDate(timestamp) {
+        const d = new Date(timestamp);
+        if (!isNaN(d.getTime())) {
+          return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+        }
+        return timestamp.split('T')[0].split(' ')[0];
+      }
+
+      function parseMsgTime(timestamp) {
+        const d = new Date(timestamp);
+        if (!isNaN(d.getTime())) {
+          return String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0');
+        }
+        const timeParts = timestamp.split(' ');
+        return timeParts.length > 1 ? timeParts[1].replace('_', ':').substring(0, 5) : '00:00';
+      }
+
       function renderMessages(messages) {
         const container = document.getElementById('messages');
         container.innerHTML = '';
@@ -136,7 +153,7 @@ String getChatPageScripts() {
 
         let currentDate = null;
         messages.forEach(msg => {
-          const msgDate = msg.timestamp.split(' ')[0];
+          const msgDate = parseMsgDate(msg.timestamp);
           if (currentDate !== msgDate) {
             currentDate = msgDate;
             const sep = document.createElement('div');
@@ -155,8 +172,7 @@ String getChatPageScripts() {
         div.className = 'message';
         div.dataset.timestamp = msg.timestamp;
 
-        const timeParts = msg.timestamp.split(' ');
-        const time = timeParts.length > 1 ? timeParts[1].replace('_', ':').substring(0, 5) : '00:00';
+        const time = parseMsgTime(msg.timestamp);
         const author = msg.author || msg.senderCallsign || 'anonymous';
         const content = msg.content || '';
 
@@ -211,7 +227,7 @@ String getChatPageScripts() {
           const fragment = document.createDocumentFragment();
 
           parsed.messages.forEach(msg => {
-            const msgDate = msg.timestamp.split(' ')[0];
+            const msgDate = parseMsgDate(msg.timestamp);
             if (currentDate !== msgDate) {
               currentDate = msgDate;
               const sep = document.createElement('div');
@@ -222,8 +238,7 @@ String getChatPageScripts() {
             const div = document.createElement('div');
             div.className = 'message';
             div.dataset.timestamp = msg.timestamp;
-            const timeParts = msg.timestamp.split(' ');
-            const time = timeParts.length > 1 ? timeParts[1].replace('_', ':').substring(0, 5) : '00:00';
+            const time = parseMsgTime(msg.timestamp);
             const author = msg.author || msg.senderCallsign || 'anonymous';
             const content = msg.content || '';
             div.innerHTML = '<div class="message-header">' +

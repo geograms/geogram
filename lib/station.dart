@@ -2235,12 +2235,12 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, EmailHandlerMixin,
     if (room == null) return [];
     var messages = room.messages;
     if (before != null) {
-      final idx = messages.lastIndexWhere((m) {
-        final ts = '${m.timestamp.year}-${m.timestamp.month.toString().padLeft(2, '0')}-${m.timestamp.day.toString().padLeft(2, '0')} ${m.timestamp.hour.toString().padLeft(2, '0')}:${m.timestamp.minute.toString().padLeft(2, '0')}_${m.timestamp.second.toString().padLeft(2, '0')}';
-        return ts.compareTo(before) < 0;
-      });
-      if (idx < 0) return [];
-      messages = messages.sublist(0, idx + 1);
+      final beforeDt = DateTime.tryParse(before);
+      if (beforeDt != null) {
+        final idx = messages.lastIndexWhere((m) => m.timestamp.isBefore(beforeDt));
+        if (idx < 0) return [];
+        messages = messages.sublist(0, idx + 1);
+      }
     }
     if (messages.length <= limit) return messages.toList();
     return messages.sublist(messages.length - limit);
@@ -7284,7 +7284,7 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, EmailHandlerMixin,
           final ts = msg.timestamp;
           final msgDate = '${ts.year}-${ts.month.toString().padLeft(2, '0')}-${ts.day.toString().padLeft(2, '0')}';
           final msgTime = '${ts.hour.toString().padLeft(2, '0')}:${ts.minute.toString().padLeft(2, '0')}';
-          final timestampStr = '$msgDate $msgTime';
+          final timestampIso = ts.toUtc().toIso8601String();
 
           // Add date separator if date changed
           if (currentDate != msgDate) {
@@ -7296,7 +7296,7 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, EmailHandlerMixin,
           final content = escapeHtml(msg.content);
 
           messagesHtml.writeln('''
-<div class="message" data-timestamp="${escapeHtml(timestampStr)}">
+<div class="message" data-timestamp="${escapeHtml(timestampIso)}">
   <div class="message-header">
     <span class="message-author">$author</span>
     <span class="message-time">$msgTime</span>
