@@ -71,6 +71,7 @@
   padding-bottom: 15px;
   margin-bottom: 20px;
   border-bottom: 2px dashed var(--accent);
+  flex-shrink: 0;
 }
 
 .room-name {
@@ -90,6 +91,7 @@
 /* Messages list */
 .messages-list {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
 }
 
@@ -191,6 +193,7 @@
   padding-top: 15px;
   border-top: 1px solid var(--border-color);
   margin-top: 10px;
+  flex-shrink: 0;
 }
 
 .chat-input-area input {

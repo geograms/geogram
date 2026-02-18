@@ -485,13 +485,13 @@ class ThemesEmbedded {
 
   static const String _defaultChatIndexHtml = r'''
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="chat-page">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1">
   <title>Chat - {{COLLECTION_NAME}}</title>
   <link rel="stylesheet" href="/styles.css">
-  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="styles.css?v=3">
   {{NOSTR_STYLES}}
 </head>
 <body>
@@ -564,18 +564,6 @@ class ThemesEmbedded {
   width: 100%;
 }
 
-@media (max-width: 683px) {
-  .chat-layout {
-    grid-template-columns: 1fr;
-  }
-  .channels-sidebar {
-    border-right: none;
-    border-bottom: 1px solid var(--border-color);
-    padding-bottom: 20px;
-    margin-bottom: 20px;
-  }
-}
-
 /* Channels sidebar */
 .channels-sidebar {
   border-right: 1px solid var(--border-color);
@@ -639,6 +627,7 @@ class ThemesEmbedded {
   padding-bottom: 15px;
   margin-bottom: 20px;
   border-bottom: 2px dashed var(--accent);
+  flex-shrink: 0;
 }
 
 .room-name {
@@ -658,6 +647,7 @@ class ThemesEmbedded {
 /* Messages list */
 .messages-list {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
 }
 
@@ -759,6 +749,7 @@ class ThemesEmbedded {
   padding-top: 15px;
   border-top: 1px solid var(--border-color);
   margin-top: 10px;
+  flex-shrink: 0;
 }
 
 .chat-input-area input {
@@ -803,6 +794,130 @@ class ThemesEmbedded {
   color: #e55;
   font-size: 0.85rem;
   padding-top: 5px;
+}
+
+/* ===== Mobile: full-viewport layout ===== */
+@media (max-width: 683px) {
+  html.chat-page,
+  .chat-page body {
+    height: 100vh !important;
+    height: 100dvh !important;
+    overflow: hidden !important;
+    margin: 0;
+    padding: 0;
+  }
+
+  .chat-page .container {
+    height: 100vh;
+    height: 100dvh;
+    min-height: 0 !important;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    box-sizing: border-box;
+    padding: 8px 10px 0 10px;
+  }
+
+  .chat-page .header {
+    flex-shrink: 0;
+    margin-bottom: 4px;
+  }
+
+  .chat-page .menu {
+    display: none;
+  }
+
+  .chat-page .content {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .chat-page .footer {
+    display: none;
+  }
+
+  .chat-layout {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    flex: 1;
+    min-height: 0;
+  }
+
+  .channels-sidebar {
+    border-right: none;
+    border-bottom: 1px solid var(--border-color);
+    padding-right: 0;
+    padding-bottom: 6px;
+    margin-bottom: 6px;
+    display: flex;
+    flex-direction: row;
+    gap: 8px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+    flex-shrink: 0;
+  }
+
+  .channels-header {
+    display: none;
+  }
+
+  .channel-item {
+    flex-shrink: 0;
+    padding: 4px 12px;
+    border-bottom: none;
+    border: 1px solid var(--border-color);
+    border-radius: 16px;
+    white-space: nowrap;
+    font-size: 0.85rem;
+  }
+
+  .channel-item.active {
+    border-color: var(--accent);
+    background: var(--accent-alpha-20);
+  }
+
+  .messages-area {
+    flex: 1;
+    min-height: 0;
+    max-height: none;
+  }
+
+  .messages-header {
+    padding-bottom: 6px;
+    margin-bottom: 6px;
+    flex-shrink: 0;
+  }
+
+  .messages-list {
+    flex: 1;
+    min-height: 0;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .chat-input-area {
+    flex-shrink: 0;
+    margin-top: 0;
+  }
+
+  .chat-input-area input {
+    font-size: 16px;
+  }
+
+  .chat-input-area button {
+    min-height: 44px;
+  }
+
+  .message {
+    padding: 8px 0;
+  }
+
+  .date-separator {
+    padding: 8px 0;
+  }
 }
 ''';
 
