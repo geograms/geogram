@@ -34,6 +34,7 @@ String getNostrLoginStyles() {
   display: flex;
   align-items: center;
   gap: 8px;
+  margin-left: 20px;
 }
 
 .nostr-header-btn {
