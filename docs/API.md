@@ -3844,3 +3844,75 @@ Access-Control-Allow-Origin: *
 Access-Control-Allow-Methods: GET, POST, OPTIONS
 Access-Control-Allow-Headers: Content-Type
 ```
+
+---
+
+## Blossom (BUD-02 Blob Storage)
+
+Hash-addressed file storage following the [Blossom protocol](https://github.com/hzrd149/blossom).
+
+### POST /blossom/upload
+
+Upload a file. Requires Nostr authorization header when `nostrRequireAuthForWrites` is enabled.
+
+**Authorization:** `Authorization: Nostr <base64-encoded kind 24242 event>`
+
+**Request body:** Raw bytes or `multipart/form-data` with a `file` part.
+
+**Response (200 OK):**
+```json
+{
+  "hash": "<sha256>",
+  "size": 12345,
+  "mime": "image/png",
+  "url": "https://example.com/blossom/<sha256>"
+}
+```
+
+| Status | Meaning |
+|--------|---------|
+| 200 | Upload successful |
+| 400 | Upload too large or invalid |
+| 403 | Unauthorized or forbidden |
+
+### GET /blossom/{hash}
+
+Download a blob by its SHA-256 hash.
+
+**Response:** Raw file bytes with `Content-Type: application/octet-stream`.
+
+| Status | Meaning |
+|--------|---------|
+| 200 | File returned |
+| 404 | Blob not found |
+
+### HEAD /blossom/{hash}
+
+Check if a blob exists. Returns `Content-Length` header.
+
+| Status | Meaning |
+|--------|---------|
+| 200 | Blob exists |
+| 404 | Blob not found |
+
+### DELETE /blossom/{hash}
+
+Delete a blob. Requires a Nostr authorization header with a kind 24242 event containing `["t", "delete"]` and `["x", "<sha256>"]` tags.
+
+**Authorization:** `Authorization: Nostr <base64-encoded kind 24242 event>`
+
+The authorization event must include:
+- `kind`: 24242
+- Tag `["t", "delete"]`
+- Tag `["x", "<sha256>"]` matching the requested hash
+
+**Ownership rules:**
+- If the blob has a recorded owner, only the owner or station owner can delete it.
+- If the blob has no owner, any pubkey in the allowed set (station owner + contacts) can delete it.
+
+| Status | Meaning |
+|--------|---------|
+| 200 | Blob deleted |
+| 401 | Missing or invalid Nostr auth |
+| 403 | Not authorized to delete this blob |
+| 404 | Blob not found |

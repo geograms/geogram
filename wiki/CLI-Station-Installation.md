@@ -442,9 +442,10 @@ After the setup wizard, you can fine-tune settings by editing `/root/geogram/sta
 | GET | `/api/updates/latest` | Latest mirrored release |
 | GET | `/tiles/{z}/{x}/{y}.png` | Map tile proxy/cache |
 | GET | `/.well-known/nostr.json` | NIP-05 identity verification |
-| POST | `/blossom/upload` | Upload a file |
+| POST | `/blossom/upload` | Upload a file (requires Nostr auth) |
 | GET | `/blossom/{hash}` | Download a file by hash |
 | HEAD | `/blossom/{hash}` | Check if file exists |
+| DELETE | `/blossom/{hash}` | Delete a file (requires Nostr auth) |
 | WebSocket | `/` | Real-time messaging, NOSTR relay, P2P signaling |
 | TCP 25 | — | SMTP server (incoming email) |
 | UDP 3478 | — | STUN server |

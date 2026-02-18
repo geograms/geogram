@@ -3257,10 +3257,73 @@ class PureStationServer with EmailHandlerMixin, BlogHandlerMixin, ConsoleCommand
         await _handleBlossomDownload(request, hash);
         return;
       }
+      if (method == 'DELETE') {
+        await _handleBlossomDelete(request, hash);
+        return;
+      }
     }
 
     request.response.statusCode = 404;
     request.response.write('Not Found');
+    await request.response.close();
+  }
+
+  Future<void> _handleBlossomDelete(HttpRequest request, String hash) async {
+    // Check blob exists
+    if (!_blossom!.hasBlob(hash)) {
+      request.response.statusCode = 404;
+      request.response.write(jsonEncode({'error': 'Blob not found'}));
+      await request.response.close();
+      return;
+    }
+
+    // Verify Nostr auth header (kind 24242)
+    final authEvent = _verifyNostrAuthHeader(request);
+    if (authEvent == null || authEvent.kind != 24242) {
+      request.response.statusCode = 401;
+      request.response.write(jsonEncode({'error': 'Unauthorized'}));
+      await request.response.close();
+      return;
+    }
+
+    // Verify required tags: ["t", "delete"] and ["x", hash]
+    final tTag = authEvent.getTagValue('t');
+    final xTag = authEvent.getTagValue('x');
+    if (tTag != 'delete' || xTag != hash) {
+      request.response.statusCode = 403;
+      request.response.write(jsonEncode({'error': 'Invalid authorization event'}));
+      await request.response.close();
+      return;
+    }
+
+    // Authorization: check ownership
+    final ownerPubkey = _blossom!.getBlobOwner(hash);
+    final stationOwnerHex = _settings.npub.isNotEmpty
+        ? NostrCrypto.decodeNpub(_settings.npub)
+        : null;
+    final isStationOwner = stationOwnerHex != null && authEvent.pubkey == stationOwnerHex;
+
+    if (ownerPubkey != null) {
+      // Blob has an owner — allow if requester is the owner or station owner
+      if (authEvent.pubkey != ownerPubkey && !isStationOwner) {
+        request.response.statusCode = 403;
+        request.response.write(jsonEncode({'error': 'Forbidden'}));
+        await request.response.close();
+        return;
+      }
+    } else {
+      // No owner recorded — allow if requester is in the allowed set
+      final allowed = await _loadAllowedPubkeys();
+      if (!allowed.contains(authEvent.pubkey)) {
+        request.response.statusCode = 403;
+        request.response.write(jsonEncode({'error': 'Forbidden'}));
+        await request.response.close();
+        return;
+      }
+    }
+
+    await _blossom!.deleteBlob(hash);
+    request.response.statusCode = 200;
     await request.response.close();
   }
 
@@ -3299,8 +3362,9 @@ class PureStationServer with EmailHandlerMixin, BlogHandlerMixin, ConsoleCommand
 
   Future<void> _handleBlossomUpload(HttpRequest request) async {
     final isOpenRelay = _isOpenRelayPath(request.uri.path);
+    NostrEvent? authEvent;
     if (!isOpenRelay && _settings.nostrRequireAuthForWrites) {
-      final authEvent = _verifyNostrAuthHeader(request);
+      authEvent = _verifyNostrAuthHeader(request);
       if (authEvent == null) {
         request.response.statusCode = 403;
         request.response.write(jsonEncode({'error': 'Unauthorized'}));
@@ -3321,7 +3385,7 @@ class PureStationServer with EmailHandlerMixin, BlogHandlerMixin, ConsoleCommand
       final result = await _blossom!.ingestBytes(
         bytes: upload.bytes,
         mime: upload.mime,
-        ownerPubkey: null,
+        ownerPubkey: authEvent?.pubkey,
       );
       request.response.headers.contentType = ContentType.json;
       request.response.write(jsonEncode(result.toJson(baseUrl: _blossomBaseUrl(request))));

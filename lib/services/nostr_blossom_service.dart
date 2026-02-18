@@ -222,6 +222,36 @@ class NostrBlossomService {
   }
 
   int knownSize(int size) => size;
+
+  /// Returns the owner pubkey for a blob, or null if not found / no owner.
+  String? getBlobOwner(String hash) {
+    final rows = _db.select(
+      'SELECT owner_pubkey FROM blobs WHERE hash = ?',
+      [hash],
+    );
+    if (rows.isEmpty) return null;
+    return rows.first['owner_pubkey'] as String?;
+  }
+
+  /// Returns true if the blob exists in the DB (regardless of owner).
+  bool hasBlob(String hash) {
+    final rows = _db.select('SELECT 1 FROM blobs WHERE hash = ? LIMIT 1', [hash]);
+    return rows.isNotEmpty;
+  }
+
+  /// Deletes a blob file from disk and removes rows from blobs + blob_refs.
+  /// Returns true if the blob existed and was deleted.
+  Future<bool> deleteBlob(String hash) async {
+    if (!hasBlob(hash)) return false;
+
+    final file = File(pathForHash(hash));
+    if (await file.exists()) {
+      await file.delete();
+    }
+    _db.execute('DELETE FROM blobs WHERE hash = ?', [hash]);
+    _db.execute('DELETE FROM blob_refs WHERE hash = ?', [hash]);
+    return true;
+  }
 }
 
 class BlossomUploadResult {
