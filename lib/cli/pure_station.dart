@@ -7445,7 +7445,6 @@ class PureStationServer with EmailHandlerMixin, BlogHandlerMixin, ConsoleCommand
       request.response.statusCode = 404;
       request.response.write('Not Found');
     }
-    await request.response.close();
   }
 
   /// Handle /chat page - shows station's chat rooms

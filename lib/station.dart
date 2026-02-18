@@ -7232,7 +7232,6 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, EmailHandlerMixin,
       request.response.statusCode = 404;
       request.response.write('Not Found');
     }
-    await request.response.close();
   }
 
   /// Handle /chat page - shows station's chat rooms
