@@ -166,14 +166,7 @@ class ConferenceService {
     return _room!;
   }
 
-  /// Get the shareable LAN URL for browser joining (LAN mode only).
-  String? get lanUrl {
-    if (_signalingServer == null || !_signalingServer!.isRunning) return null;
-    final port = _signalingServer!.port;
-    return 'http://<LAN_IP>:$port/conference/web';
-  }
-
-  /// Get all LAN URLs (one per local IP).
+  /// Get all LAN URLs for browser joining (one per local IP).
   Future<List<String>> getLanUrls() async {
     if (_signalingServer == null || !_signalingServer!.isRunning) return [];
     final port = _signalingServer!.port;
