@@ -77,6 +77,8 @@ IconData getAppTypeIcon(String type) {
       return Icons.snippet_folder;
     case 'qr':
       return Icons.qr_code_2;
+    case 'conference':
+      return Icons.mic;
     default:
       return Icons.folder;
   }
@@ -324,6 +326,14 @@ LinearGradient getAppTypeGradient(String type, bool isDark) {
         colors: isDark
             ? [const Color(0xFF212121), const Color(0xFF424242)]
             : [const Color(0xFF616161), const Color(0xFF424242)],
+      );
+    case 'conference':
+      return LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: isDark
+            ? [const Color(0xFF00838F), const Color(0xFF00695C)]
+            : [const Color(0xFF26C6DA), const Color(0xFF00BFA5)],
       );
     default:
       return LinearGradient(

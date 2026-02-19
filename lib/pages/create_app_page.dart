@@ -96,6 +96,7 @@ class _CreateAppPageState extends State<CreateAppPage> {
     _AppTypeInfo('stories', Icons.auto_stories),
     _AppTypeInfo('files', Icons.snippet_folder),
     _AppTypeInfo('qr', Icons.qr_code_2),
+    _AppTypeInfo('conference', Icons.mic),
   ];
 
   // Single-instance types - use centralized constant from app_constants.dart
@@ -849,6 +850,8 @@ class _CreateAppPageState extends State<CreateAppPage> {
         return 'Browse and manage files on your device. View the geogram profile folder contents and navigate the filesystem. Opens documents, images, music, and videos with built-in viewers.';
       case 'qr':
         return 'Scan and generate QR codes and barcodes. Create WiFi sharing codes, URLs, contacts, and more. Organize your codes in folders and share them as images.';
+      case 'conference':
+        return 'Host or join P2P audio conferences. Create voice rooms on your local network or through your station. Share via link or QR code for up to 6 participants.';
       default:
         return '';
     }
@@ -1018,6 +1021,14 @@ class _CreateAppPageState extends State<CreateAppPage> {
           'Support for EAN, UPC, Code 128',
           'Organize in folders',
           'Share as images',
+        ];
+      case 'conference':
+        return [
+          'P2P audio calls',
+          'LAN and station modes',
+          'QR code sharing',
+          'Web browser joining',
+          'Up to 6 participants',
         ];
       default:
         return [];

@@ -35,6 +35,7 @@ const List<String> knownAppTypesConst = [
   'music',
   'stories',
   'qr',
+  'conference',
 ];
 
 /// App types that can only have a single instance per profile
@@ -70,6 +71,7 @@ const Set<String> singleInstanceTypesConst = {
   'stories',
   'files',
   'qr',
+  'conference',
 };
 
 /// App types enabled on the web platform (subset — more added incrementally)

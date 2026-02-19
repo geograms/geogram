@@ -1031,6 +1031,21 @@ class DebugController {
         'description': 'Toggle mute in current conference',
         'params': {},
       },
+      {
+        'action': 'create_app',
+        'description': 'Create a new app/collection by type',
+        'params': {
+          'type': 'App type (required, e.g. conference, chat, blog)',
+          'title': '(optional) App title (default: type name)',
+        },
+      },
+      {
+        'action': 'open_app',
+        'description': 'Open an existing app by type',
+        'params': {
+          'type': 'App type to open (required)',
+        },
+      },
     ];
   }
 
@@ -1436,6 +1451,12 @@ class DebugController {
       case 'conference_mute':
         return _conferenceMute();
 
+      case 'create_app':
+        return _createApp(params);
+
+      case 'open_app':
+        return _openApp(params);
+
       default:
         return {
           'success': false,
@@ -1514,6 +1535,64 @@ class DebugController {
       return {
         'success': true,
         'is_muted': ConferenceService().isLocalMuted,
+      };
+    } catch (e) {
+      return {'success': false, 'error': e.toString()};
+    }
+  }
+
+  // ── App management debug actions ────────────────────────────────
+
+  Future<Map<String, dynamic>> _createApp(Map<String, dynamic> params) async {
+    try {
+      final type = params['type'] as String?;
+      if (type == null) {
+        return {'success': false, 'error': 'Missing type parameter'};
+      }
+      final title = params['title'] as String? ?? type;
+      final app = await AppService().createApp(
+        title: title,
+        type: type,
+      );
+      return {
+        'success': true,
+        'message': 'Created app: ${app.title} (${app.type})',
+        'app_id': app.id,
+        'app_type': app.type,
+      };
+    } catch (e) {
+      return {'success': false, 'error': e.toString()};
+    }
+  }
+
+  Future<Map<String, dynamic>> _openApp(Map<String, dynamic> params) async {
+    try {
+      final type = params['type'] as String?;
+      if (type == null) {
+        return {'success': false, 'error': 'Missing type parameter'};
+      }
+      // Find the app by type
+      final apps = await AppService().loadApps();
+      final app = apps.where((a) => a.type == type).firstOrNull;
+      if (app == null) {
+        return {
+          'success': false,
+          'error': 'No app found with type: $type',
+          'available_types': apps.map((a) => a.type).toList(),
+        };
+      }
+      // Emit a navigate action with the app info
+      _actionController.add(DebugActionEvent(
+        action: DebugAction.navigateToPanel,
+        params: {
+          'panel': 'app',
+          'app_type': type,
+          'app_id': app.id,
+        },
+      ));
+      return {
+        'success': true,
+        'message': 'Opening app: ${app.title} (${app.type})',
       };
     } catch (e) {
       return {'success': false, 'error': e.toString()};

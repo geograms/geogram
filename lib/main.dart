@@ -108,6 +108,7 @@ import 'music/pages/music_home_page.dart';
 import 'pages/files_browser_page.dart';
 import 'stories/pages/stories_home_page.dart';
 import 'pages/qr_browser_page.dart';
+import 'pages/conference_home_page.dart';
 import 'pages/website_browser_page.dart';
 import 'pages/profile_management_page.dart';
 import 'pages/create_app_page.dart';
@@ -2686,6 +2687,8 @@ class _AppsPageState extends State<AppsPage> {
                                           appTitle: appEntry.title,
                                           i18n: _i18n,
                                         )
+                                      : appEntry.type == 'conference'
+                                      ? const ConferenceHomePage()
                                       : AppBrowserPage(app: appEntry);
 
                                   LogService().log(
@@ -2875,6 +2878,8 @@ class _AppsPageState extends State<AppsPage> {
                                           appTitle: appEntry.title,
                                           i18n: _i18n,
                                         )
+                                      : appEntry.type == 'conference'
+                                      ? const ConferenceHomePage()
                                       : AppBrowserPage(app: appEntry);
 
                                   LogService().log(
