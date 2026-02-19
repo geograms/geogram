@@ -1759,49 +1759,11 @@ class StationServerService {
     request.response.headers.contentType = ContentType.json;
     request.response.headers.add('Access-Control-Allow-Origin', '*');
 
-    final nameParam = request.uri.queryParameters['name']?.toLowerCase();
-    final registry = Nip05RegistryService();
-
     try {
-      if (nameParam != null) {
-        // Query for specific name
-        final reg = registry.getRegistration(nameParam);
-        if (reg == null) {
-          request.response.write(jsonEncode({'names': {}, 'relays': {}}));
-          return;
-        }
-
-        final hexPubkey = NostrKeyGenerator.getPublicKeyHex(reg.npub);
-        if (hexPubkey == null) {
-          request.response.write(jsonEncode({'names': {}, 'relays': {}}));
-          return;
-        }
-
-        // Include all names for this identity (callsign + nickname)
-        final names = <String, String>{};
-        for (final name in reg.names) {
-          names[name] = hexPubkey;
-        }
-        request.response.write(jsonEncode({
-          'names': names,
-          'relays': {hexPubkey: ['wss://p2p.radio']},
-        }));
-      } else {
-        // Return all valid registrations
-        final validRegs = registry.getAllValidRegistrations();
-        final names = <String, String>{};
-        final relays = <String, List<String>>{};
-
-        for (final entry in validRegs.entries) {
-          final hexPubkey = NostrKeyGenerator.getPublicKeyHex(entry.value);
-          if (hexPubkey != null) {
-            names[entry.key] = hexPubkey;
-            relays[hexPubkey] = ['wss://p2p.radio'];
-          }
-        }
-
-        request.response.write(jsonEncode({'names': names, 'relays': relays}));
-      }
+      final nameParam = request.uri.queryParameters['name']?.toLowerCase();
+      final response = Nip05RegistryService()
+          .buildNostrJsonResponse(nameParam, 'wss://p2p.radio');
+      request.response.write(jsonEncode(response));
     } catch (e) {
       LogService().log('NIP-05 handler error: $e');
       request.response.statusCode = 500;

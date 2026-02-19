@@ -10,6 +10,8 @@
 import 'dart:convert';
 import 'dart:io';
 
+import '../util/nostr_key_generator.dart';
+
 /// A NIP-05 identity registration binding a callsign (and optional nickname) to an npub
 class Nip05Registration {
   final String callsign;
@@ -382,6 +384,42 @@ class Nip05RegistryService {
     if (lower.length < 4 || lower.length > 8) return false;
     // Pattern: starts with letter, second char is digit
     return RegExp(r'^[a-z]\d[a-z0-9]+$').hasMatch(lower);
+  }
+
+  /// Build the NIP-05 nostr.json response for a given name query.
+  /// If [name] is provided, returns all names for that identity.
+  /// If [name] is null, returns all valid registrations.
+  /// [relayUrl] is the WebSocket relay URL to advertise.
+  Map<String, dynamic> buildNostrJsonResponse(String? name, String relayUrl) {
+    if (name != null) {
+      final reg = getRegistration(name);
+      if (reg == null) return {'names': {}, 'relays': {}};
+
+      final hexPubkey = NostrKeyGenerator.getPublicKeyHex(reg.npub);
+      if (hexPubkey == null) return {'names': {}, 'relays': {}};
+
+      final names = <String, String>{};
+      for (final n in reg.names) {
+        names[n] = hexPubkey;
+      }
+      return {
+        'names': names,
+        'relays': {hexPubkey: [relayUrl]},
+      };
+    }
+
+    // No name filter — return all
+    final validRegs = getAllValidRegistrations();
+    final names = <String, String>{};
+    final relays = <String, List<String>>{};
+    for (final entry in validRegs.entries) {
+      final hexPubkey = NostrKeyGenerator.getPublicKeyHex(entry.value);
+      if (hexPubkey != null) {
+        names[entry.key] = hexPubkey;
+        relays[hexPubkey] = [relayUrl];
+      }
+    }
+    return {'names': names, 'relays': relays};
   }
 
   /// Save registrations to disk
