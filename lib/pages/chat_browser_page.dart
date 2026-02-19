@@ -113,6 +113,10 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
   String? _syncProgressText; // "Loading Jan 15..." shown during progressive sync
   bool _isStationRecording = false; // Recording voice for station room
   final Set<String> _recentlyUploadedFiles = {}; // Track files we just uploaded to skip re-downloading
+  final Set<String> _pendingDeletions = {}; // Track messages being deleted to prevent sync race condition
+
+  String _deletionKey(String timestamp, String author) =>
+      '$timestamp|${author.toUpperCase()}';
 
   // All cached devices with their rooms (for offline viewing)
   List<CachedDeviceRooms> _cachedDeviceSources = [];
@@ -440,6 +444,12 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       );
 
       if (!mounted) return;
+
+      // Filter out messages that are currently being deleted to prevent race condition
+      if (_pendingDeletions.isNotEmpty) {
+        cachedMessages.removeWhere((msg) =>
+            _pendingDeletions.contains(_deletionKey(msg.timestamp, msg.callsign)));
+      }
 
       _stationMessageCache[roomId] = cachedMessages;
       final latestMsg = cachedMessages.isNotEmpty ? cachedMessages.last : null;
@@ -978,6 +988,11 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
         limit: limit ?? _stationMessageLimit,
       );
       LogService().log('DEBUG _loadMessagesFromCache: Loaded ${cachedMessages.length} messages for room $roomId');
+      // Filter out messages that are currently being deleted to prevent race condition
+      if (_pendingDeletions.isNotEmpty) {
+        cachedMessages.removeWhere((msg) =>
+            _pendingDeletions.contains(_deletionKey(msg.timestamp, msg.callsign)));
+      }
       _stationMessageCache[roomId] = cachedMessages;
       _applyStationMessageLimit(cachedMessages, limit: limit);
     } else {
@@ -1675,6 +1690,9 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     if (_selectedStationRoom == null) return;
     if (!_canDeleteStationMessage(message)) return;
 
+    final key = _deletionKey(message.timestamp, message.author);
+    _pendingDeletions.add(key);
+
     try {
       // Look up eventId from cache for NIP-09 kind 5 deletion
       final roomId = _selectedStationRoom!.id;
@@ -1693,10 +1711,23 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       );
 
       if (!success) {
+        _pendingDeletions.remove(key);
         _showError('Failed to delete message');
         return;
       }
 
+      // Remove from disk cache first to minimize race window with _syncStationMessages
+      final cacheKey = _lastRelayCacheKey ?? '';
+      if (cacheKey.isNotEmpty) {
+        await _cacheService.removeMessage(
+          cacheKey,
+          roomId,
+          message.timestamp,
+          message.author,
+        );
+      }
+
+      // Then remove from memory cache and update UI
       final updated = List<StationChatMessage>.from(
         _stationMessageCache[roomId] ?? _stationMessages,
       );
@@ -1707,16 +1738,9 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       _stationMessageCache[roomId] = updated;
       _applyStationMessageLimit(updated);
 
-      final cacheKey = _lastRelayCacheKey ?? '';
-      if (cacheKey.isNotEmpty) {
-        await _cacheService.removeMessage(
-          cacheKey,
-          roomId,
-          message.timestamp,
-          message.author,
-        );
-      }
+      _pendingDeletions.remove(key);
     } catch (e) {
+      _pendingDeletions.remove(key);
       _showError('Failed to delete message: $e');
     }
   }
