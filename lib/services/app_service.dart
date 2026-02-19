@@ -204,7 +204,6 @@ class AppService {
   /// Default app types that should be created for every profile
   /// These are the core apps that users expect to be available
   static const List<String> defaultAppTypes = [
-    'www',
     'chat',
     'contacts',
     'places',
@@ -213,8 +212,6 @@ class AppService {
     'tracker',
     'blog',
     'alerts',
-    'inventory',
-    'backup',
     'log',
   ];
 
