@@ -6,10 +6,12 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:audio_service/audio_service.dart';
 import 'package:media_kit/media_kit.dart';
 
 import '../../services/log_service.dart';
 import '../models/music_models.dart';
+import 'music_audio_handler.dart';
 import 'music_storage_service.dart';
 
 /// Playback state
@@ -29,6 +31,7 @@ class MusicPlaybackService {
 
   Player? _player;
   MusicLibrary? _library;
+  MusicAudioHandler? _audioHandler;
 
   PlaybackQueue _queue = PlaybackQueue();
   PlayHistory _history = PlayHistory();
@@ -125,6 +128,24 @@ class MusicPlaybackService {
         _currentTrack = track;
         _trackController.add(track);
         // Don't auto-play, just restore state
+      }
+    }
+
+    // Initialize Android media session (notification + lock screen controls)
+    if (Platform.isAndroid) {
+      try {
+        _audioHandler = await AudioService.init(
+          builder: () => MusicAudioHandler(this, _library!),
+          config: const AudioServiceConfig(
+            androidNotificationChannelId: 'com.geogram.music',
+            androidNotificationChannelName: 'Music',
+            androidNotificationOngoing: true,
+            androidStopForegroundOnPause: true,
+          ),
+        );
+        _log.log('MusicPlaybackService: AudioService initialized');
+      } catch (e) {
+        _log.log('MusicPlaybackService: AudioService init failed: $e');
       }
     }
 
@@ -449,6 +470,10 @@ class MusicPlaybackService {
   Future<void> dispose() async {
     await savePosition();
     _recordPlayEvent(completed: false);
+
+    await _audioHandler?.stop();
+    await _audioHandler?.dispose();
+    _audioHandler = null;
 
     await _player?.dispose();
     _player = null;
