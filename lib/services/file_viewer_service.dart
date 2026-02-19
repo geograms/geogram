@@ -20,6 +20,25 @@ class FileViewerService {
   static const _channel = MethodChannel('dev.geogram/file_viewer');
   bool _initialized = false;
 
+  /// File info from the launching intent (cold start), set by [checkLaunchIntent].
+  static Map<String, String>? launchFile;
+
+  /// Pull the launch intent file from the native side (call before runApp).
+  /// Returns true if a file intent was detected.
+  static Future<bool> checkLaunchIntent() async {
+    if (!Platform.isAndroid) return false;
+    try {
+      final result = await _channel.invokeMethod('getLaunchFile');
+      if (result != null && result is Map) {
+        launchFile = Map<String, String>.from(result);
+        return true;
+      }
+    } catch (e) {
+      // Channel not ready or no intent — not an error
+    }
+    return false;
+  }
+
   /// Initialize the service and start listening for file events
   void initialize() {
     if (_initialized) return;

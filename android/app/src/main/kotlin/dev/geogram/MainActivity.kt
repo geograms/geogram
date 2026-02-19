@@ -91,14 +91,22 @@ class MainActivity : FlutterActivity() {
         // Initialize file viewer channel for external file viewing
         fileViewerMethodChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, FILE_VIEWER_CHANNEL)
 
+        // Handle Dart pulling the launch file intent (cold start — avoids race condition)
+        fileViewerMethodChannel?.setMethodCallHandler { call, result ->
+            when (call.method) {
+                "getLaunchFile" -> {
+                    val fileInfo = copyIntentFileToCache(intent)
+                    result.success(fileInfo)
+                }
+                else -> result.notImplemented()
+            }
+        }
+
         // Initialize recent files channel for MediaStore queries
         setupRecentFilesChannel(flutterEngine)
 
         // Check if launched with USB device attached (cold start)
         handleUsbIntent(intent)
-
-        // Check if launched with VIEW intent for external file (cold start)
-        handleFileViewIntent(intent)
 
         // BLE foreground service channel with bidirectional communication
         val bleChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, BLE_CHANNEL)
@@ -429,17 +437,17 @@ class MainActivity : FlutterActivity() {
     }
 
     /**
-     * Handle VIEW intent for external files (images, videos, PDFs)
-     * Copies the file to cache and notifies Dart to open the appropriate viewer
+     * Copy the file from a VIEW intent URI to a cache directory.
+     * Returns a map with "path" and "mimeType", or null if the intent is not a supported file.
      */
-    private fun handleFileViewIntent(intent: Intent?) {
-        if (intent?.action != Intent.ACTION_VIEW) return
-        val uri = intent.data ?: return
-        val mimeType = intent.type ?: contentResolver.getType(uri)
+    private fun copyIntentFileToCache(intent: Intent?): Map<String, String>? {
+        if (intent?.action != Intent.ACTION_VIEW) return null
+        val uri = intent.data ?: return null
+        val mimeType = intent.type ?: contentResolver.getType(uri) ?: return null
 
-        if (mimeType == null || !isSupportedViewerMimeType(mimeType)) return
+        if (!isSupportedViewerMimeType(mimeType)) return null
 
-        try {
+        return try {
             val fileName = getFileNameFromUri(uri) ?: "file_${System.currentTimeMillis()}"
             val extension = getExtensionForMimeType(mimeType) ?: ""
             val finalName = if (fileName.contains('.')) fileName else "$fileName$extension"
@@ -455,14 +463,19 @@ class MainActivity : FlutterActivity() {
             }
 
             android.util.Log.d("GeogramFileViewer", "File copied to: ${tempFile.absolutePath}")
-
-            fileViewerMethodChannel?.invokeMethod("onFileReceived", mapOf(
-                "path" to tempFile.absolutePath,
-                "mimeType" to mimeType,
-            ))
+            mapOf("path" to tempFile.absolutePath, "mimeType" to mimeType)
         } catch (e: Exception) {
-            android.util.Log.e("GeogramFileViewer", "Error handling file view intent: ${e.message}")
+            android.util.Log.e("GeogramFileViewer", "Error copying intent file to cache: ${e.message}")
+            null
         }
+    }
+
+    /**
+     * Handle VIEW intent for external files (warm start only — pushes to Dart via invokeMethod)
+     */
+    private fun handleFileViewIntent(intent: Intent?) {
+        val result = copyIntentFileToCache(intent) ?: return
+        fileViewerMethodChannel?.invokeMethod("onFileReceived", result)
     }
 
     /**

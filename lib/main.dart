@@ -183,6 +183,20 @@ void main() async {
 
   WidgetsFlutterBinding.ensureInitialized();
 
+  // Check if launched via a file VIEW intent (Android cold start).
+  // Must happen before heavy initialization — if a file intent is detected,
+  // run a lightweight viewer app and skip all service init.
+  if (!kIsWeb && Platform.isAndroid) {
+    if (await FileViewerService.checkLaunchIntent()) {
+      final info = FileViewerService.launchFile!;
+      runApp(FileViewerApp(
+        filePath: info['path']!,
+        mimeType: info['mimeType']!,
+      ));
+      return;
+    }
+  }
+
   // Initialize media_kit for cross-platform video playback
   // Wrapped in try-catch to prevent crash if native libraries fail to load
   try {
@@ -4283,5 +4297,46 @@ class _EditAppDialogState extends State<EditAppDialog> {
         ),
       ],
     );
+  }
+}
+
+/// Minimal app used when Geogram is launched via a file VIEW intent.
+/// Shows the appropriate viewer and exits on Back press.
+class FileViewerApp extends StatelessWidget {
+  final String filePath;
+  final String mimeType;
+
+  const FileViewerApp({
+    super.key,
+    required this.filePath,
+    required this.mimeType,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      debugShowCheckedModeBanner: false,
+      theme: ThemeData.dark(useMaterial3: true),
+      home: PopScope(
+        canPop: false,
+        onPopInvokedWithResult: (didPop, result) {
+          if (!didPop) {
+            SystemNavigator.pop();
+          }
+        },
+        child: _buildViewer(),
+      ),
+    );
+  }
+
+  Widget _buildViewer() {
+    if (mimeType == 'application/pdf') {
+      return DocumentViewerEditorPage(
+        filePath: filePath,
+        readOnly: true,
+      );
+    }
+    // Images and videos
+    return PhotoViewerPage(imagePaths: [filePath]);
   }
 }
