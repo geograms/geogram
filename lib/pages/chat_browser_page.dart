@@ -372,11 +372,59 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
         // Incremental update - fast, existing logic
         await _syncStationMessages();
       } else {
-        // First load - use progressive day-by-day download
-        await _progressiveSyncStationMessages();
+        // Cold cache: fast-path fetch latest messages directly, then
+        // background-sync full history via progressive file downloads.
+        await _quickFetchLatestMessages();
+        if (mounted && _selectedStationRoom?.id == roomId) {
+          unawaited(_progressiveSyncStationMessages());
+        }
       }
     } finally {
       _isRefreshingMessages = false;
+    }
+  }
+
+  /// Fast-path: fetch the latest messages via a single API call and display
+  /// immediately. Much faster than the progressive file-by-file sync on cold
+  /// cache (~200-500ms vs 5-15s).
+  Future<void> _quickFetchLatestMessages() async {
+    if (_selectedStationRoom == null) return;
+    final roomId = _selectedStationRoom!.id;
+    final stationUrl = _selectedStationRoom!.stationUrl;
+    final cacheKey = _lastRelayCacheKey ?? '';
+
+    try {
+      final messages = await _stationService.fetchRoomMessages(
+        stationUrl,
+        roomId,
+        limit: _stationMessageLimit,
+      );
+
+      if (!mounted || _selectedStationRoom?.id != roomId) return;
+
+      if (messages.isNotEmpty) {
+        // Filter pending deletions
+        if (_pendingDeletions.isNotEmpty) {
+          messages.removeWhere((msg) =>
+              _pendingDeletions.contains(_deletionKey(msg.timestamp, msg.callsign)));
+        }
+
+        _stationMessageCache[roomId] = messages;
+        _applyStationMessageLimit(messages);
+
+        // Persist to disk cache in background
+        if (cacheKey.isNotEmpty) {
+          unawaited(_cacheService.mergeMessages(cacheKey, roomId, messages));
+        }
+      } else {
+        _setStateIfMounted(() {
+          _isLoading = false;
+        });
+      }
+    } catch (e) {
+      LogService().log('Quick fetch failed, falling back to progressive sync: $e');
+      // Fall back to progressive sync on failure
+      await _progressiveSyncStationMessages();
     }
   }
 
@@ -456,38 +504,35 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
 
       if (newMessages.isEmpty) return;
 
-      final previousLatest = _stationMessages.isNotEmpty ? _stationMessages.last.timestamp : null;
-
-      await _cacheService.mergeMessages(cacheKey, roomId, newMessages);
-      final cachedMessages = await _cacheService.loadMessages(
-        cacheKey,
-        roomId,
-        limit: _stationMessageLimit,
-      );
+      // Inline merge: combine new messages into in-memory cache directly,
+      // avoiding the write-to-disk → read-from-disk round-trip.
+      final existing = List<StationChatMessage>.from(cached ?? _stationMessages);
+      final existingKeys = <String>{};
+      for (final msg in existing) {
+        existingKeys.add('${msg.timestamp}|${msg.callsign}');
+      }
+      for (final msg in newMessages) {
+        final key = '${msg.timestamp}|${msg.callsign}';
+        if (!existingKeys.contains(key)) {
+          existing.add(msg);
+          existingKeys.add(key);
+        }
+      }
+      existing.sort((a, b) => a.timestamp.compareTo(b.timestamp));
 
       if (!mounted) return;
 
       // Filter out messages that are currently being deleted to prevent race condition
       if (_pendingDeletions.isNotEmpty) {
-        cachedMessages.removeWhere((msg) =>
+        existing.removeWhere((msg) =>
             _pendingDeletions.contains(_deletionKey(msg.timestamp, msg.callsign)));
       }
 
-      _stationMessageCache[roomId] = cachedMessages;
-      final latestMsg = cachedMessages.isNotEmpty ? cachedMessages.last : null;
-      if (latestMsg != null && latestMsg.timestamp != previousLatest) {
-        print('');
-        print('╔══════════════════════════════════════════════════════════════╗');
-        print('║  NEW MESSAGE RECEIVED                                        ║');
-        print('╠══════════════════════════════════════════════════════════════╣');
-        print('║  Room: $roomId');
-        print('║  From: ${latestMsg.callsign}');
-        print('║  Content: ${latestMsg.content}');
-        print('║  Time: ${latestMsg.timestamp}');
-        print('╚══════════════════════════════════════════════════════════════╝');
-        print('');
-      }
-      _applyStationMessageLimit(cachedMessages);
+      _stationMessageCache[roomId] = existing;
+      _applyStationMessageLimit(existing);
+
+      // Persist to disk in background (non-blocking)
+      unawaited(_cacheService.mergeMessages(cacheKey, roomId, newMessages));
     } catch (e) {
       // Silently fail - user is already viewing messages
     }
@@ -1039,7 +1084,6 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
         roomId,
         limit: limit ?? _stationMessageLimit,
       );
-      LogService().log('DEBUG _loadMessagesFromCache: Loaded ${cachedMessages.length} messages for room $roomId');
       // Filter out messages that are currently being deleted to prevent race condition
       if (_pendingDeletions.isNotEmpty) {
         cachedMessages.removeWhere((msg) =>
@@ -1262,50 +1306,67 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       files.sort((a, b) =>
         (b['filename'] as String).compareTo(a['filename'] as String));
 
-      // 3. Download each file newest-first, updating UI after each
-      int downloadedCount = 0;
+      // 3. Identify files that need downloading
+      final toDownload = <Map<String, dynamic>>[];
       for (final fileInfo in files) {
         final year = fileInfo['year'] as String;
         final filename = fileInfo['filename'] as String;
         final expectedSize = fileInfo['size'] as int?;
 
-        // Check if already cached with matching size
         final isCached = await _cacheService.hasCachedChatFile(
           cacheKey, roomId, year, filename, expectedSize: expectedSize,
         );
 
         if (!isCached) {
-          // Update progress text for this file
-          _setStateIfMounted(() {
-            _syncProgressText = 'Loading ${_formatDateFromFilename(filename)}...';
-          });
+          toDownload.add(fileInfo);
+        }
+      }
 
+      // If nothing to download but cache exists, ensure UI shows it
+      if (toDownload.isEmpty) {
+        if (mounted && _selectedStationRoom?.id == roomId && _stationMessages.isEmpty) {
+          await _loadMessagesFromCache(roomId, limit: _stationMessageLimit);
+        }
+      } else {
+        // Download first (newest) file with await for fast initial display
+        _setStateIfMounted(() {
+          _syncProgressText = 'Loading ${_formatDateFromFilename(toDownload.first['filename'] as String)}...';
+        });
+
+        Future<void> downloadFile(Map<String, dynamic> fileInfo) async {
+          final year = fileInfo['year'] as String;
+          final filename = fileInfo['filename'] as String;
           final content = await _stationService.fetchRoomChatFile(
             stationUrl, roomId, year, filename,
           );
-
           if (content != null && content.isNotEmpty) {
             await _cacheService.saveRawChatFile(
               cacheKey, roomId, year, filename, content,
             );
-            downloadedCount++;
-
-            // Only reload cache on FIRST download (fast initial display)
-            if (downloadedCount == 1 && mounted && _selectedStationRoom?.id == roomId) {
-              await _loadMessagesFromCache(roomId, limit: _stationMessageLimit);
-            }
-          }
-        } else if (downloadedCount == 0) {
-          // First file was cached - make sure UI shows it
-          if (mounted && _selectedStationRoom?.id == roomId && _stationMessages.isEmpty) {
-            await _loadMessagesFromCache(roomId, limit: _stationMessageLimit);
           }
         }
-      }
 
-      // Reload cache once after all downloads complete (if more than 1 file downloaded)
-      if (downloadedCount > 1 && mounted && _selectedStationRoom?.id == roomId) {
-        await _loadMessagesFromCache(roomId, limit: _stationMessageLimit);
+        await downloadFile(toDownload.first);
+        if (mounted && _selectedStationRoom?.id == roomId) {
+          await _loadMessagesFromCache(roomId, limit: _stationMessageLimit);
+        }
+
+        // Download remaining files in parallel batches of 3
+        final remaining = toDownload.skip(1).toList();
+        for (var i = 0; i < remaining.length; i += 3) {
+          final batch = remaining.sublist(
+            i, i + 3 > remaining.length ? remaining.length : i + 3,
+          );
+          _setStateIfMounted(() {
+            _syncProgressText = 'Loading history...';
+          });
+          await Future.wait(batch.map(downloadFile));
+        }
+
+        // Reload cache after all downloads
+        if (remaining.isNotEmpty && mounted && _selectedStationRoom?.id == roomId) {
+          await _loadMessagesFromCache(roomId, limit: _stationMessageLimit);
+        }
       }
 
       // 4. Quick incremental fetch for messages posted today that aren't in the daily file yet

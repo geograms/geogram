@@ -605,6 +605,24 @@ class StationService {
   /// Get stream of update notifications from connected station
   Stream<UpdateNotification> get updates => _wsService.updates;
 
+  /// Returns true if [url] points to a public internet host (not LAN/localhost).
+  /// Used to skip ConnectionManager P2P transport probing for internet stations.
+  bool _isInternetUrl(String url) {
+    final normalized = url
+        .replaceFirst('wss://', 'https://')
+        .replaceFirst('ws://', 'http://');
+    final host = Uri.tryParse(normalized)?.host ?? '';
+    if (host.isEmpty || host == 'localhost' || host == '127.0.0.1') return false;
+    final parts = host.split('.');
+    if (parts.length == 4 && parts.every((p) => int.tryParse(p) != null)) {
+      final first = int.parse(parts[0]);
+      if (first == 10) return false;
+      if (first == 172 && int.parse(parts[1]) >= 16 && int.parse(parts[1]) <= 31) return false;
+      if (first == 192 && parts[1] == '168') return false;
+    }
+    return true; // Domain name or public IP → internet station
+  }
+
   /// Get HTTP base URL for a station
   String _getHttpBaseUrl(String wsUrl) {
     return wsUrl
@@ -655,7 +673,12 @@ class StationService {
   }) async {
     final station = _resolveStation(stationUrl, stationCallsign: stationCallsign);
 
-    if (station.callsign != null &&
+    // Skip ConnectionManager P2P probing for internet stations — LAN/WebRTC
+    // transports will never reach a public server, so the 2-4s timeout is waste.
+    final isInternet = _isInternetUrl(stationUrl);
+
+    if (!isInternet &&
+        station.callsign != null &&
         station.callsign!.isNotEmpty &&
         ConnectionManager().isInitialized) {
       try {
