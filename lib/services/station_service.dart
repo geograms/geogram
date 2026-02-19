@@ -726,11 +726,40 @@ class StationService {
   /// [stationCallsign] is the station's X3 callsign used in the API path
   Future<List<StationChatRoom>> fetchChatRooms(String stationUrl, {String? stationCallsign}) async {
     try {
+      // Build NOSTR auth header so the server can identify the user
+      // and return moderator flags in the response.
+      Map<String, String>? authHeaders;
+      try {
+        final profile = ProfileService().getProfile();
+        final signingService = SigningService();
+        await signingService.initialize();
+        if (signingService.canSign(profile) && profile.npub.isNotEmpty) {
+          final pubkeyHex = NostrCrypto.decodeNpub(profile.npub);
+          final event = NostrEvent.textNote(
+            pubkeyHex: pubkeyHex,
+            content: 'rooms',
+            tags: [
+              ['action', 'list_rooms'],
+              ['callsign', profile.callsign],
+            ],
+          );
+          event.calculateId();
+          final signed = await signingService.signEvent(event, profile);
+          if (signed != null) {
+            final encoded = base64Encode(utf8.encode(jsonEncode(signed.toJson())));
+            authHeaders = {'Authorization': 'Nostr $encoded'};
+          }
+        }
+      } catch (_) {
+        // Auth is optional — continue without it
+      }
+
       final response = await _stationApiRequest(
         stationUrl: stationUrl,
         method: 'GET',
         path: '/api/chat/rooms',
         stationCallsign: stationCallsign,
+        headers: authHeaders,
       );
 
       if (response == null) {

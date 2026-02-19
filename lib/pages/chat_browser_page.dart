@@ -517,6 +517,16 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
         setState(() {
           _connectionStatus = _StationConnectionStatus.online;
           _stationRooms = rooms;
+          // Update selected room reference to pick up new fields (e.g. isModerator)
+          if (_selectedStationRoom != null) {
+            final updated = rooms.cast<StationChatRoom?>().firstWhere(
+              (r) => r?.id == _selectedStationRoom!.id,
+              orElse: () => null,
+            );
+            if (updated != null) {
+              _selectedStationRoom = updated;
+            }
+          }
         });
       }
 
@@ -742,6 +752,16 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       _setStateIfMounted(() {
         if (rooms.isNotEmpty) {
           _stationRooms = rooms;
+          // Update selected room reference to pick up new fields (e.g. isModerator)
+          if (_selectedStationRoom != null) {
+            final updated = rooms.cast<StationChatRoom?>().firstWhere(
+              (r) => r?.id == _selectedStationRoom!.id,
+              orElse: () => null,
+            );
+            if (updated != null) {
+              _selectedStationRoom = updated;
+            }
+          }
         }
         _connectionStatus = rooms.isNotEmpty ? _StationConnectionStatus.online : _StationConnectionStatus.offline;
         _loadingRelayRooms = false;
@@ -770,6 +790,16 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       _setStateIfMounted(() {
         if (rooms.isNotEmpty) {
           _stationRooms = rooms;
+          // Update selected room reference to pick up new fields (e.g. isModerator)
+          if (_selectedStationRoom != null) {
+            final updated = rooms.cast<StationChatRoom?>().firstWhere(
+              (r) => r?.id == _selectedStationRoom!.id,
+              orElse: () => null,
+            );
+            if (updated != null) {
+              _selectedStationRoom = updated;
+            }
+          }
         }
         _connectionStatus = rooms.isNotEmpty ? _StationConnectionStatus.online : _StationConnectionStatus.offline;
         _loadingRelayRooms = false;
