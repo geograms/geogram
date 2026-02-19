@@ -805,6 +805,39 @@ Returns detailed station status and configuration.
 
 ---
 
+### Meeting Discovery
+
+#### GET /api/meet/active
+
+Returns info about the currently active meeting on this device, or 404 if no meeting is hosted.
+
+**Response (200 OK):**
+```json
+{
+  "room_id": "EDGD@X1SU86",
+  "room_name": "Test Conference",
+  "host_callsign": "X1SU86",
+  "signaling_port": 44233,
+  "participant_count": 1,
+  "max_participants": 6
+}
+```
+
+**Response (404 Not Found):** No active meeting.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `room_id` | string | Room ID in `XXXX@callsign` format |
+| `room_name` | string | Meeting name |
+| `host_callsign` | string | Host device callsign |
+| `signaling_port` | int | WebSocket signaling server port (for LAN join) |
+| `participant_count` | int | Current participants |
+| `max_participants` | int | Maximum participants |
+
+No authentication required.
+
+---
+
 ### Clients
 
 #### GET /api/clients

@@ -21,6 +21,7 @@ import 'chat_service.dart';
 import 'profile_storage.dart';
 import 'direct_message_service.dart';
 import 'devices_service.dart';
+import 'conference_service.dart';
 import 'device_apps_service.dart';
 import 'chat_file_upload_manager.dart';
 import 'app_args.dart';
@@ -294,6 +295,11 @@ class LogApiService with ChatModificationMixin {
     if ((urlPath == 'api/status' || urlPath == 'station/status') &&
         request.method == 'GET') {
       return _handleStatusRequest(headers);
+    }
+
+    // Meet endpoint: /api/meet/active — active meeting info
+    if (urlPath == 'api/meet/active' && request.method == 'GET') {
+      return _handleMeetActiveRequest(headers);
     }
 
     // Files endpoint: /api/files or /files (legacy)
@@ -594,6 +600,7 @@ class LogApiService with ChatModificationMixin {
         'hostname': io.Platform.localHostname,
         'endpoints': {
           '/api/status': 'Device status and location',
+          '/api/meet/active': 'Active meeting info (room ID, signaling port) or 404',
           '/api/log': 'Get log entries (supports ?filter=text&limit=100)',
           '/api/files': 'Browse collections (supports ?path=subfolder)',
           '/api/files/content': 'Get file content (supports ?path=file/path)',
@@ -743,6 +750,32 @@ class LogApiService with ChatModificationMixin {
     if (mirrorSetupOpen) {
       response['mirror_setup_open'] = true;
     }
+
+    return shelf.Response.ok(
+      jsonEncode(response),
+      headers: headers,
+    );
+  }
+
+  /// Handle GET /api/meet/active — returns active meeting info or 404.
+  shelf.Response _handleMeetActiveRequest(Map<String, String> headers) {
+    final conf = ConferenceService();
+    if (!conf.isActive || conf.room == null) {
+      return shelf.Response.notFound(
+        jsonEncode({'error': 'No active meeting'}),
+        headers: headers,
+      );
+    }
+
+    final room = conf.room!;
+    final response = {
+      'room_id': room.roomId,
+      'room_name': room.roomName,
+      'host_callsign': room.hostCallsign,
+      'signaling_port': conf.signalingPort,
+      'participant_count': room.participants.length,
+      'max_participants': room.maxParticipants,
+    };
 
     return shelf.Response.ok(
       jsonEncode(response),

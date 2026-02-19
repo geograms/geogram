@@ -55,6 +55,9 @@ class _ConferenceJoinPageState extends State<ConferenceJoinPage> {
         final wsScheme = uri.scheme == 'https' ? 'wss' : 'ws';
         final wsUrl = '$wsScheme://${uri.host}:${uri.port}/conference/ws';
         await _conferenceService.joinLan(wsUrl);
+      } else if (input.contains('@')) {
+        // Room ID with @callsign — use discovery
+        await _conferenceService.discoverAndJoin(input);
       } else {
         // Assume room ID — join via station
         await _conferenceService.joinStation(input);
@@ -67,9 +70,12 @@ class _ConferenceJoinPageState extends State<ConferenceJoinPage> {
       );
     } catch (e) {
       if (!mounted) return;
+      final msg = e is StateError
+          ? e.message
+          : e.toString();
       setState(() {
         _joining = false;
-        _error = e.toString();
+        _error = msg;
       });
     }
   }
@@ -107,7 +113,7 @@ class _ConferenceJoinPageState extends State<ConferenceJoinPage> {
               controller: _linkController,
               decoration: const InputDecoration(
                 labelText: 'Link or Room ID',
-                hintText: 'ws://192.168.1.5:12345/conference/ws',
+                hintText: 'ABCD@CALLSIGN or ws://...',
                 border: OutlineInputBorder(),
                 prefixIcon: Icon(Icons.link),
               ),
@@ -132,7 +138,9 @@ class _ConferenceJoinPageState extends State<ConferenceJoinPage> {
                       child: CircularProgressIndicator(strokeWidth: 2),
                     )
                   : const Icon(Icons.call),
-              label: Text(_joining ? 'Joining...' : 'Join'),
+              label: Text(_joining
+                  ? (_linkController.text.contains('@') ? 'Searching...' : 'Joining...')
+                  : 'Join'),
             ),
           ],
         ),

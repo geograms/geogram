@@ -12,8 +12,11 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 
+import 'package:http/http.dart' as http;
+
 import 'conference_peer_manager.dart';
 import 'conference_signaling_server.dart';
+import 'devices_service.dart';
 import 'log_service.dart';
 import 'profile_service.dart';
 import 'websocket_service.dart';
@@ -104,6 +107,8 @@ class ConferenceService {
   ConferenceState get state => _state;
   bool get isActive => _state == ConferenceState.active;
   bool get isLocalMuted => _peerManager?.isLocalMuted ?? false;
+
+  int? get signalingPort => _signalingServer?.port;
 
   Stream<ConferenceState> get stateStream => _stateController.stream;
   Stream<ConferenceEvent> get events => _eventController.stream;
@@ -267,6 +272,70 @@ class ConferenceService {
     });
 
     LogService().log('ConferenceService: Joining station conference $roomId');
+  }
+
+  // ── Discovery: find meeting by room ID ──────────────────────────
+
+  /// Discover and join a meeting from a room ID with `@callsign` suffix.
+  /// Tries LAN first (via DevicesService), then falls back to station relay.
+  Future<void> discoverAndJoin(String roomId) async {
+    final atIndex = roomId.indexOf('@');
+    if (atIndex < 0) {
+      throw ArgumentError('Room ID must contain @callsign: $roomId');
+    }
+    final hostCallsign = roomId.substring(atIndex + 1);
+
+    LogService().log('ConferenceService: Discovering meeting $roomId '
+        '(host: $hostCallsign)');
+
+    // Try LAN discovery first — look up host device URL
+    final devices = DevicesService().getAllDevices();
+    final hostDevice = devices.cast<RemoteDevice?>().firstWhere(
+      (d) => d!.callsign.toUpperCase() == hostCallsign.toUpperCase(),
+      orElse: () => null,
+    );
+
+    if (hostDevice?.url != null) {
+      try {
+        final baseUrl = hostDevice!.url!;
+        final uri = Uri.parse('$baseUrl/api/meet/active');
+        final response = await http.get(uri).timeout(
+          const Duration(seconds: 5),
+        );
+
+        if (response.statusCode == 200) {
+          final data = jsonDecode(response.body) as Map<String, dynamic>;
+          final activeRoomId = data['room_id'] as String?;
+          final sigPort = data['signaling_port'] as int?;
+
+          if (activeRoomId == roomId && sigPort != null) {
+            final host = Uri.parse(baseUrl).host;
+            final wsUrl = 'ws://$host:$sigPort/conference/ws';
+            LogService().log(
+                'ConferenceService: Found meeting via LAN at $wsUrl');
+            await joinLan(wsUrl);
+            return;
+          }
+        }
+      } catch (e) {
+        LogService().log(
+            'ConferenceService: LAN discovery failed: $e');
+      }
+    }
+
+    // Fallback: try station relay
+    final wsService = WebSocketService();
+    if (wsService.isConnected) {
+      LogService().log(
+          'ConferenceService: Trying station relay for $roomId');
+      await joinStation(roomId);
+      return;
+    }
+
+    throw StateError(
+      'Meeting not found. Make sure the host is on the same network '
+      'or connected to the same station.',
+    );
   }
 
   // ── Mute ─────────────────────────────────────────────────────────
@@ -643,8 +712,8 @@ class ConferenceService {
     final r = Random();
     final letters = String.fromCharCodes(
         List.generate(4, (_) => r.nextInt(26) + 65));
-    final digits = r.nextInt(9000) + 1000;
-    return '$letters-$digits';
+    final callsign = _myCallsign;
+    return '$letters@$callsign';
   }
 
   Future<List<String>> _getLocalIPs() async {
