@@ -206,6 +206,7 @@ class AppService {
   static const List<String> defaultAppTypes = [
     'chat',
     'contacts',
+    'email',
     'places',
     'events',
     'transfer',
