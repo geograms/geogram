@@ -1746,16 +1746,29 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     final key = _deletionKey(message.timestamp, message.author);
     _pendingDeletions.add(key);
 
-    try {
-      // Look up eventId from cache for NIP-09 kind 5 deletion
-      final roomId = _selectedStationRoom!.id;
-      final cached = _stationMessageCache[roomId] ?? _stationMessages;
-      final stationMsg = cached.cast<StationChatMessage?>().firstWhere(
-        (m) => m?.timestamp == message.timestamp &&
-               m?.callsign.toUpperCase() == message.author.toUpperCase(),
-        orElse: () => null,
-      );
+    final roomId = _selectedStationRoom!.id;
+    final cached = _stationMessageCache[roomId] ?? _stationMessages;
 
+    // Look up eventId from cache for NIP-09 kind 5 deletion
+    final stationMsg = cached.cast<StationChatMessage?>().firstWhere(
+      (m) => m?.timestamp == message.timestamp &&
+             m?.callsign.toUpperCase() == message.author.toUpperCase(),
+      orElse: () => null,
+    );
+
+    // Save snapshot for rollback
+    final snapshot = List<StationChatMessage>.from(cached);
+
+    // Optimistic: remove from UI immediately
+    final updated = List<StationChatMessage>.from(cached);
+    updated.removeWhere((msg) =>
+        msg.timestamp == message.timestamp &&
+        msg.callsign.toUpperCase() == message.author.toUpperCase());
+    _stationMessageCache[roomId] = updated;
+    _applyStationMessageLimit(updated);
+
+    // Server call in background
+    try {
       final success = await _stationService.deleteRoomMessage(
         _selectedStationRoom!.stationUrl,
         roomId,
@@ -1764,38 +1777,29 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       );
 
       if (!success) {
-        _pendingDeletions.remove(key);
+        // Rollback
+        _stationMessageCache[roomId] = snapshot;
+        _applyStationMessageLimit(snapshot);
         _showError('Failed to delete message');
-        return;
+      } else {
+        // Clean disk cache
+        final cacheKey = _lastRelayCacheKey ?? '';
+        if (cacheKey.isNotEmpty) {
+          await _cacheService.removeMessage(
+            cacheKey,
+            roomId,
+            message.timestamp,
+            message.author,
+          );
+        }
       }
-
-      // Remove from disk cache first to minimize race window with _syncStationMessages
-      final cacheKey = _lastRelayCacheKey ?? '';
-      if (cacheKey.isNotEmpty) {
-        await _cacheService.removeMessage(
-          cacheKey,
-          roomId,
-          message.timestamp,
-          message.author,
-        );
-      }
-
-      // Then remove from memory cache and update UI
-      final updated = List<StationChatMessage>.from(
-        _stationMessageCache[roomId] ?? _stationMessages,
-      );
-      updated.removeWhere((msg) =>
-          msg.timestamp == message.timestamp &&
-          msg.callsign.toUpperCase() == message.author.toUpperCase());
-
-      _stationMessageCache[roomId] = updated;
-      _applyStationMessageLimit(updated);
-
-      _pendingDeletions.remove(key);
     } catch (e) {
-      _pendingDeletions.remove(key);
+      // Rollback
+      _stationMessageCache[roomId] = snapshot;
+      _applyStationMessageLimit(snapshot);
       _showError('Failed to delete message: $e');
     }
+    _pendingDeletions.remove(key);
   }
 
   bool _canEditStationMessage(ChatMessage message) {

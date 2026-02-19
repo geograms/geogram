@@ -12,6 +12,7 @@ import '../connection/connection_manager.dart';
 import '../connection/transports/usb_aoa_transport.dart';
 import 'chat_service.dart';
 import 'app_service.dart';
+import 'conference_service.dart';
 import 'devices_service.dart';
 import 'log_service.dart';
 import 'usb_aoa_service.dart';
@@ -1000,6 +1001,36 @@ class DebugController {
           'nsec': '(optional) NOSTR secret key for decryption - uses profile nsec if not provided',
         },
       },
+      {
+        'action': 'conference_host',
+        'description': 'Host a new audio conference (LAN or station mode)',
+        'params': {
+          'room_name': '(optional) Conference name (default: "Test Conference")',
+        },
+      },
+      {
+        'action': 'conference_join',
+        'description': 'Join an existing conference',
+        'params': {
+          'url': '(optional) WebSocket URL for LAN mode (ws://host:port/conference/ws)',
+          'room_id': '(optional) Room ID for station mode',
+        },
+      },
+      {
+        'action': 'conference_status',
+        'description': 'Get current conference status',
+        'params': {},
+      },
+      {
+        'action': 'conference_end',
+        'description': 'End or leave the current conference',
+        'params': {},
+      },
+      {
+        'action': 'conference_mute',
+        'description': 'Toggle mute in current conference',
+        'params': {},
+      },
     ];
   }
 
@@ -1390,6 +1421,21 @@ class DebugController {
           'devices': deviceList,
         };
 
+      case 'conference_host':
+        return _conferenceHost(params);
+
+      case 'conference_join':
+        return _conferenceJoin(params);
+
+      case 'conference_status':
+        return _conferenceStatus();
+
+      case 'conference_end':
+        return _conferenceEnd();
+
+      case 'conference_mute':
+        return _conferenceMute();
+
       default:
         return {
           'success': false,
@@ -1398,6 +1444,79 @@ class DebugController {
               .map((a) => a['action'])
               .toList(),
         };
+    }
+  }
+
+  // ── Conference debug actions ────────────────────────────────────
+
+  Future<Map<String, dynamic>> _conferenceHost(Map<String, dynamic> params) async {
+    try {
+      final roomName = params['room_name'] as String? ?? 'Test Conference';
+      final room = await ConferenceService().hostConference(roomName: roomName);
+      final urls = await ConferenceService().getLanUrls();
+      return {
+        'success': true,
+        'message': 'Conference hosted',
+        'room': room.toJson(),
+        'lan_urls': urls,
+        'ws_urls': await ConferenceService().getLanWsUrls(),
+      };
+    } catch (e) {
+      return {'success': false, 'error': e.toString()};
+    }
+  }
+
+  Future<Map<String, dynamic>> _conferenceJoin(Map<String, dynamic> params) async {
+    try {
+      final wsUrl = params['url'] as String?;
+      final roomId = params['room_id'] as String?;
+
+      if (wsUrl != null) {
+        await ConferenceService().joinLan(wsUrl);
+      } else if (roomId != null) {
+        await ConferenceService().joinStation(roomId);
+      } else {
+        return {'success': false, 'error': 'Provide url or room_id'};
+      }
+      return {
+        'success': true,
+        'message': 'Joined conference',
+        'room': ConferenceService().room?.toJson(),
+      };
+    } catch (e) {
+      return {'success': false, 'error': e.toString()};
+    }
+  }
+
+  Map<String, dynamic> _conferenceStatus() {
+    final cs = ConferenceService();
+    return {
+      'success': true,
+      'state': cs.state.name,
+      'role': cs.role?.name,
+      'is_muted': cs.isLocalMuted,
+      'room': cs.room?.toJson(),
+    };
+  }
+
+  Future<Map<String, dynamic>> _conferenceEnd() async {
+    try {
+      await ConferenceService().endConference();
+      return {'success': true, 'message': 'Conference ended'};
+    } catch (e) {
+      return {'success': false, 'error': e.toString()};
+    }
+  }
+
+  Map<String, dynamic> _conferenceMute() {
+    try {
+      ConferenceService().toggleMute();
+      return {
+        'success': true,
+        'is_muted': ConferenceService().isLocalMuted,
+      };
+    } catch (e) {
+      return {'success': false, 'error': e.toString()};
     }
   }
 

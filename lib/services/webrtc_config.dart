@@ -134,7 +134,26 @@ class WebRTCConfig {
         'maxRetransmits': dataChannelMaxRetransmits,
     };
   }
+
+  /// Create a configuration optimized for audio conferencing.
+  ///
+  /// Uses shorter timeouts since audio conferences are real-time sensitive.
+  factory WebRTCConfig.forConference({
+    List<Map<String, dynamic>>? iceServers,
+  }) {
+    return WebRTCConfig(
+      iceServers: iceServers ?? defaultStunServers,
+      iceGatheringTimeoutMs: 3000,
+      connectionTimeoutMs: 10000,
+      offerTimeoutMs: 8000,
+      maxIceRestarts: 1,
+      useTrickleIce: true,
+    );
+  }
 }
+
+/// Maximum participants in a conference (mesh topology limits).
+const int conferenceMaxParticipants = 6;
 
 /// Connection state for a WebRTC peer
 enum WebRTCConnectionState {

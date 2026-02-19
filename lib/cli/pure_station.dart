@@ -53,6 +53,7 @@ import '../services/nostr_storage_paths.dart';
 import '../server/mixins/email_handler_mixin.dart';
 import '../server/mixins/blog_handler_mixin.dart';
 import '../server/mixins/console_command_mixin.dart';
+import '../server/mixins/conference_mixin.dart';
 import 'themes_embedded.dart';
 
 /// App version - use central version.dart for consistency
@@ -756,7 +757,7 @@ class PureTileCache {
 }
 
 /// Pure Dart station server for CLI mode
-class PureStationServer with EmailHandlerMixin, BlogHandlerMixin, ConsoleCommandMixin, ChatModificationMixin, ChatNip05Mixin, ChatModerationMixin
+class PureStationServer with EmailHandlerMixin, BlogHandlerMixin, ConsoleCommandMixin, ChatModificationMixin, ChatNip05Mixin, ChatModerationMixin, ConferenceMixin
     implements StationCommandInterface {
   HttpServer? _httpServer;
   HttpServer? _httpsServer;
@@ -826,6 +827,31 @@ class PureStationServer with EmailHandlerMixin, BlogHandlerMixin, ConsoleCommand
   }
   @override
   bool emailSafeSocketSend(PureConnectedClient client, String data) => _safeSocketSend(client, data);
+
+  // ── ConferenceMixin interface ───────────────────────────────────
+  @override
+  void conferenceLog(String level, String message) => _log(level, message);
+  @override
+  bool conferenceSendToClient(String clientId, String data) {
+    final client = _clients[clientId];
+    if (client == null) return false;
+    return _safeSocketSend(client, data);
+  }
+  @override
+  String? conferenceFindClientId(String callsign) {
+    try {
+      final client = _clients.values.firstWhere(
+        (c) => c.callsign?.toUpperCase() == callsign.toUpperCase(),
+      );
+      return client.id;
+    } catch (_) {
+      return null;
+    }
+  }
+  @override
+  String? conferenceGetClientCallsign(String clientId) {
+    return _clients[clientId]?.callsign;
+  }
 
   // ── BlogHandlerMixin interface ──────────────────────────────────
   @override
@@ -2275,6 +2301,9 @@ class PureStationServer with EmailHandlerMixin, BlogHandlerMixin, ConsoleCommand
     // Clean up any pending proxy requests for this client
     _cleanupPendingRequestsForClient(client);
 
+    // Clean up conference rooms hosted by this client
+    conferenceHandleClientDisconnect(clientId);
+
     _log('INFO', 'Client removed: ${client.callsign ?? clientId} ($reason)');
   }
 
@@ -3222,6 +3251,16 @@ class PureStationServer with EmailHandlerMixin, BlogHandlerMixin, ConsoleCommand
           case 'webrtc_ice':
           case 'webrtc_bye':
             _handleWebRTCSignaling(client, message);
+            break;
+
+          // Conference signaling relay
+          case 'conference_create':
+          case 'conference_join':
+          case 'conference_leave':
+          case 'conference_end':
+          case 'conference_signal':
+          case 'conference_list':
+            handleConferenceMessage(client.id, message);
             break;
 
           // Email relay - forward emails between connected clients

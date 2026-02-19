@@ -19,6 +19,7 @@ import '../services/i18n_service.dart';
 import '../util/place_parser.dart';
 import '../services/profile_service.dart';
 import '../widgets/event_detail_widget.dart';
+import 'conference_host_page.dart';
 import 'contacts_browser_page.dart';
 import 'new_event_page.dart';
 import 'place_detail_page.dart';
@@ -404,6 +405,13 @@ class _EventDetailPageState extends State<EventDetailPage> {
     return path.dirname(path.dirname(placeFolderPath));
   }
 
+  void _openConference() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const ConferenceHostPage()),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final canEdit = !widget.readOnly &&
@@ -440,6 +448,12 @@ class _EventDetailPageState extends State<EventDetailPage> {
         appBar: AppBar(
           title: Text(_event.title),
           actions: [
+            if (_event.isOnline)
+              IconButton(
+                icon: const Icon(Icons.mic),
+                onPressed: _openConference,
+                tooltip: 'Conference',
+              ),
             if (canEdit)
               IconButton(
                 icon: const Icon(Icons.edit),

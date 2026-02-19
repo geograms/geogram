@@ -29,6 +29,12 @@ This document catalogs reusable UI components available in the Geogram codebase.
 - [ChatNip05Mixin](#chatnip05mixin) - Shared NIP-05 registration for chat message senders
 - [Nip05RegistryService.buildNostrJsonResponse](#nip05registryservicebuildnostrjsonresponse) - Build NIP-05 nostr.json response (used by all station handlers)
 
+### Conference Components
+- [ConferenceMixin](#conferencemixin) - Station-side conference signaling relay (shared mixin)
+- [ConferenceSignalingServer](#conferencesignalingserver) - Host-side HTTP+WS signaling server (LAN mode)
+- [ConferencePeerManager](#conferencepeermanager) - Audio WebRTC mesh peer connections
+- [ConferenceService](#conferenceservice) - Orchestration (mode selection, host/join, room management)
+
 ### Viewer Pages
 - [PhotoViewerPage](#photoviewerpage) - Image & video gallery
 - [LocationPickerPage](#locationpickerpage) - Map location selection
@@ -8728,3 +8734,88 @@ When using themed templates, wire these in the station handler:
 - `{{NOSTR_HEADER}}` → `getNostrLoginHeaderHtml()`
 - `{{NOSTR_STYLES}}` → `getNostrLoginStyles()`
 - `{{SCRIPTS}}` → `getNostrLoginScripts() + '\n' + getChatPageScripts()`
+
+## Conference Components
+
+### ConferenceMixin
+
+**File:** `lib/server/mixins/conference_mixin.dart`
+
+Station-side conference signaling relay, shared by both `StationServer` (Desktop) and `PureStationServer` (CLI). The station acts as a relay for WebRTC signaling only — no audio media passes through it.
+
+**Abstract contract (implement in station):**
+- `conferenceLog(level, message)` — logging
+- `conferenceSendToClient(clientId, data)` — send string to client
+- `conferenceFindClientId(callsign)` — find client ID by callsign
+- `conferenceGetClientCallsign(clientId)` — get callsign from client ID
+
+**Public methods:**
+- `handleConferenceMessage(clientId, message)` — dispatch incoming conference messages
+- `conferenceHandleClientDisconnect(clientId)` — clean up on disconnect
+- `getConferenceRooms()` — list active rooms
+
+**Message types:** `conference_create`, `conference_join`, `conference_leave`, `conference_end`, `conference_signal`, `conference_list`
+
+### ConferenceSignalingServer
+
+**File:** `lib/services/conference_signaling_server.dart`
+
+Lightweight HTTP + WebSocket server run by the host client for LAN-mode signaling.
+
+**Endpoints:**
+- `GET /conference/info` — room info JSON
+- `WS /conference/ws` — WebSocket signaling relay
+- `GET /conference/web` — serves browser web client
+
+**Usage:**
+```dart
+final server = ConferenceSignalingServer(
+  roomId: 'ABCD-1234',
+  roomName: 'My Conference',
+  hostCallsign: 'MYCALL',
+);
+server.setWebClientHtml(htmlString);
+final port = await server.start();
+// ... later
+await server.stop();
+```
+
+### ConferencePeerManager
+
+**File:** `lib/services/conference_peer_manager.dart`
+
+Manages a mesh of audio WebRTC connections for conferencing. Captures microphone audio via `getUserMedia` and exchanges media tracks with each peer.
+
+**Key methods:**
+- `startLocalAudio()` — capture microphone
+- `createOffer(callsign)` — initiate connection to a peer
+- `handleOffer(callsign, sessionId, sdp)` — respond to incoming offer
+- `handleAnswer(callsign, sdp)` / `handleIceCandidate(callsign, candidate)` — handle signaling
+- `toggleMute()` / `setMuted(bool)` — mute/unmute local audio
+- `dispose()` — release all resources
+
+**Events stream:** `peer_connected`, `peer_disconnected`, `remote_stream`
+
+### ConferenceService
+
+**File:** `lib/services/conference_service.dart`
+
+Singleton orchestration service. Auto-selects signaling mode (LAN or station).
+
+**Host flow:**
+```dart
+final room = await ConferenceService().hostConference(roomName: 'My Room');
+final urls = await ConferenceService().getLanUrls(); // LAN URLs for sharing
+```
+
+**Joiner flow:**
+```dart
+await ConferenceService().joinLan('ws://192.168.1.5:12345/conference/ws');
+// or
+await ConferenceService().joinStation('ABCD-1234');
+```
+
+**State management:**
+- `stateStream` — ConferenceState changes (idle/starting/active/ending)
+- `events` — ConferenceEvent stream (peer connected/disconnected)
+- `isLocalMuted`, `toggleMute()`, `endConference()`

@@ -2460,6 +2460,11 @@ Triggers a debug action.
 | `p2p_status` | Get status of a transfer offer | `offer_id`: Offer ID to check (required) |
 | `list_devices` | List all known devices with online status | None |
 | `add_device` | Add a device by callsign and URL | `callsign` (required): Device callsign, `url` (required): Device HTTP API URL. Fetches device nickname from its status API |
+| `conference_host` | Host a new audio conference (LAN or station mode) | `room_name` (optional): Conference name (default: "Test Conference") |
+| `conference_join` | Join an existing conference | `url` (optional): WebSocket URL for LAN mode, `room_id` (optional): Room ID for station mode |
+| `conference_status` | Get current conference status | None |
+| `conference_end` | End or leave the current conference | None |
+| `conference_mute` | Toggle mute in current conference | None |
 
 Place feedback actions send signed events to the station and only update local cache files if the place folder can be resolved via `place_path` or `callsign`.
 
