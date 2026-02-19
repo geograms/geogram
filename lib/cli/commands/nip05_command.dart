@@ -104,7 +104,10 @@ class Nip05Command extends Command {
     ctx.writeln();
     ctx.bold('NIP-05 Registration: $nickname');
     ctx.writeln('-' * 50);
-    ctx.writeln('  Nickname:    ${reg.nickname}');
+    ctx.writeln('  Callsign:    ${reg.callsign}');
+    if (reg.nickname != null) {
+      ctx.writeln('  Nickname:    ${reg.nickname}');
+    }
     ctx.writeln('  npub:        ${reg.npub}');
     ctx.writeln('  Registered:  ${reg.registeredAt.toIso8601String()}');
     ctx.writeln('  Expires:     ${reg.expiresAt.toIso8601String()}');

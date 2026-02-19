@@ -678,11 +678,7 @@ abstract class StationServerBase {
 
     // Register for NIP-05
     if (callsign != null) {
-      final registry = Nip05RegistryService();
-      registry.registerNickname(callsign, npub);
-      if (nickname != null && nickname.toLowerCase() != callsign.toLowerCase()) {
-        registry.registerNickname(nickname, npub);
-      }
+      Nip05RegistryService().registerIdentity(callsign, npub, nickname: nickname);
     }
 
     // Send acknowledgment

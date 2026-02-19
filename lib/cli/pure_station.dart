@@ -31,6 +31,7 @@ import '../util/nostr_event.dart';
 import '../util/nostr_crypto.dart';
 import '../api/endpoints/chat_api_paths.dart';
 import '../server/mixins/chat_modification_mixin.dart';
+import '../server/mixins/chat_nip05_mixin.dart';
 import '../util/chat_scripts.dart';
 import '../util/nostr_login_scripts.dart';
 import '../util/nostr_bundle.dart';
@@ -476,6 +477,7 @@ class ChatMessage implements ChatMessageReadable {
   final String senderCallsign;
   @override
   final String? senderNpub;  // NOSTR public key (bech32) - human readable
+  final String? senderPubkey; // NOSTR public key (hex) - for relay queries
   @override
   final String? signature;   // BIP-340 Schnorr signature
   @override
@@ -494,6 +496,7 @@ class ChatMessage implements ChatMessageReadable {
     required this.roomId,
     required this.senderCallsign,
     this.senderNpub,
+    this.senderPubkey,
     this.signature,
     required this.content,
     DateTime? timestamp,
@@ -542,6 +545,7 @@ class ChatMessage implements ChatMessageReadable {
       roomId: json['room_id'] as String? ?? roomId,
       senderCallsign: json['sender'] as String? ?? json['callsign'] as String? ?? 'Unknown',
       senderNpub: json['npub'] as String?,
+      senderPubkey: json['pubkey'] as String?,
       signature: sig,
       content: json['content'] as String? ?? '',
       timestamp: parsedTime ?? DateTime.now().toUtc(),
@@ -557,6 +561,7 @@ class ChatMessage implements ChatMessageReadable {
         'room_id': roomId,
         'callsign': senderCallsign,
         if (senderNpub != null) 'npub': senderNpub,
+        if (senderPubkey != null) 'pubkey': senderPubkey,
         if (signature != null) 'signature': signature,
         'content': content,
         'timestamp': timestamp.toIso8601String(),
@@ -749,7 +754,7 @@ class PureTileCache {
 }
 
 /// Pure Dart station server for CLI mode
-class PureStationServer with EmailHandlerMixin, BlogHandlerMixin, ConsoleCommandMixin, ChatModificationMixin
+class PureStationServer with EmailHandlerMixin, BlogHandlerMixin, ConsoleCommandMixin, ChatModificationMixin, ChatNip05Mixin
     implements StationCommandInterface {
   HttpServer? _httpServer;
   HttpServer? _httpsServer;
@@ -2934,16 +2939,8 @@ class PureStationServer with EmailHandlerMixin, BlogHandlerMixin, ConsoleCommand
 
             // Register for NIP-05 identity verification
             if (callsign != null && npub != null) {
-              final registry = Nip05RegistryService();
-              // Always register callsign (prevents callsign spoofing)
-              if (!registry.registerNickname(callsign, npub)) {
-                _log('WARN', 'NIP-05: Callsign $callsign already registered to different npub');
-              }
-              // Also register nickname if different from callsign
-              if (nickname != null && nickname.toLowerCase() != callsign.toLowerCase()) {
-                if (!registry.registerNickname(nickname, npub)) {
-                  _log('WARN', 'NIP-05: Nickname $nickname already registered to different npub');
-                }
+              if (!Nip05RegistryService().registerIdentity(callsign, npub, nickname: nickname)) {
+                _log('WARN', 'NIP-05: Identity $callsign/$nickname already registered to different npub');
               }
             }
 
@@ -8142,6 +8139,7 @@ class PureStationServer with EmailHandlerMixin, BlogHandlerMixin, ConsoleCommand
           roomId: roomId,
           senderCallsign: senderCallsign,
           senderNpub: npub,
+          senderPubkey: pubkey,
           signature: signature,
           content: content,
           timestamp: createdAt != null
@@ -8156,6 +8154,9 @@ class PureStationServer with EmailHandlerMixin, BlogHandlerMixin, ConsoleCommand
         room.lastActivity = DateTime.now();
         _stats.totalMessages++;
         _stats.lastMessage = DateTime.now();
+
+        // Register sender in NIP-05 registry
+        registerChatSender(senderCallsign, npub);
 
         // Fire event for subscribers
         _fireChatMessageEvent(msg);

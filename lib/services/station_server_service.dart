@@ -1237,16 +1237,8 @@ class StationServerService {
 
     // Register for NIP-05 identity verification
     if (callsign != null && npub != null) {
-      final registry = Nip05RegistryService();
-      // Always register callsign (prevents callsign spoofing)
-      if (!registry.registerNickname(callsign, npub)) {
-        LogService().log('NIP-05: Callsign $callsign already registered to different npub');
-      }
-      // Also register nickname if different from callsign
-      if (nickname != null && nickname.toLowerCase() != callsign.toLowerCase()) {
-        if (!registry.registerNickname(nickname, npub)) {
-          LogService().log('NIP-05: Nickname $nickname already registered to different npub');
-        }
+      if (!Nip05RegistryService().registerIdentity(callsign, npub, nickname: nickname)) {
+        LogService().log('NIP-05: Identity $callsign/$nickname already registered to different npub');
       }
     }
 

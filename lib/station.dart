@@ -52,6 +52,7 @@ import 'server/mixins/health_watchdog_mixin.dart';
 import 'server/mixins/email_handler_mixin.dart';
 import 'server/mixins/blog_handler_mixin.dart';
 import 'server/mixins/console_command_mixin.dart';
+import 'server/mixins/chat_nip05_mixin.dart';
 import 'cli/themes_embedded.dart';
 
 /// App version - use central version.dart for consistency
@@ -577,7 +578,7 @@ class PureTileCache {
 }
 
 /// Unified station server for CLI and Android modes
-class StationServer with RateLimitMixin, HealthWatchdogMixin, EmailHandlerMixin, BlogHandlerMixin, ConsoleCommandMixin
+class StationServer with RateLimitMixin, HealthWatchdogMixin, EmailHandlerMixin, BlogHandlerMixin, ConsoleCommandMixin, ChatNip05Mixin
     implements StationCommandInterface {
   HttpServer? _httpServer;
   HttpServer? _httpsServer;
@@ -2713,16 +2714,8 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, EmailHandlerMixin,
 
             // Register for NIP-05 identity verification
             if (callsign != null && npub != null) {
-              final registry = Nip05RegistryService();
-              // Always register callsign (prevents callsign spoofing)
-              if (!registry.registerNickname(callsign, npub)) {
-                _log('WARN', 'NIP-05: Callsign $callsign already registered to different npub');
-              }
-              // Also register nickname if different from callsign
-              if (nickname != null && nickname.toLowerCase() != callsign.toLowerCase()) {
-                if (!registry.registerNickname(nickname, npub)) {
-                  _log('WARN', 'NIP-05: Nickname $nickname already registered to different npub');
-                }
+              if (!Nip05RegistryService().registerIdentity(callsign, npub, nickname: nickname)) {
+                _log('WARN', 'NIP-05: Identity $callsign/$nickname already registered to different npub');
               }
             }
 
@@ -7611,6 +7604,7 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, EmailHandlerMixin,
           roomId: roomId,
           senderCallsign: senderCallsign,
           senderNpub: npub,
+          senderPubkey: pubkey,
           signature: signature,
           content: content,
           timestamp: createdAt != null
@@ -7625,6 +7619,9 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, EmailHandlerMixin,
         room.lastActivity = DateTime.now();
         _stats.totalMessages++;
         _stats.lastMessage = DateTime.now();
+
+        // Register sender in NIP-05 registry
+        registerChatSender(senderCallsign, npub);
 
         // Fire event for subscribers
         _fireChatMessageEvent(msg);
