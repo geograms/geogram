@@ -7041,8 +7041,13 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, EmailHandlerMixin,
           return;
         }
 
+        // Include all names for this identity (callsign + nickname)
+        final names = <String, String>{};
+        for (final name in reg.names) {
+          names[name] = hexPubkey;
+        }
         request.response.write(jsonEncode({
-          'names': {nameParam: hexPubkey},
+          'names': names,
           'relays': {hexPubkey: ['wss://p2p.radio']},
         }));
       } else {
