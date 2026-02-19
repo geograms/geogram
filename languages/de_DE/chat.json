@@ -19,5 +19,10 @@
   "dm_sync_failed": "Synchronisation fehlgeschlagen: {0}",
   "chat_room_not_found": "Chatraum nicht gefunden",
   "mute_notifications": "Benachrichtigungen stummschalten",
-  "unmute_notifications": "Benachrichtigungen aktivieren"
+  "unmute_notifications": "Benachrichtigungen aktivieren",
+  "create_room": "Raum erstellen",
+  "rename_room": "Raum umbenennen",
+  "delete_room": "Raum löschen",
+  "delete_room_confirm": "Sind Sie sicher, dass Sie löschen möchten",
+  "room_name": "Raumname"
 }

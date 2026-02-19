@@ -1491,6 +1491,145 @@ class StationService {
     return fetchChatRooms(station.url);
   }
 
+  /// Build NOSTR auth headers for station API requests.
+  /// Returns null if signing is not available.
+  Future<Map<String, String>?> _buildNostrAuthHeaders({
+    required String action,
+    List<List<String>>? extraTags,
+  }) async {
+    try {
+      final profile = ProfileService().getProfile();
+      final signingService = SigningService();
+      await signingService.initialize();
+
+      if (!signingService.canSign(profile) || profile.npub.isEmpty) {
+        return null;
+      }
+
+      final pubkeyHex = NostrCrypto.decodeNpub(profile.npub);
+      final tags = <List<String>>[
+        ['action', action],
+        ['callsign', profile.callsign],
+        ...?extraTags,
+      ];
+
+      final event = NostrEvent.textNote(
+        pubkeyHex: pubkeyHex,
+        content: action,
+        tags: tags,
+      );
+      event.calculateId();
+
+      final signed = await signingService.signEvent(event, profile);
+      if (signed == null) return null;
+
+      final encoded = base64Encode(utf8.encode(jsonEncode(signed.toJson())));
+      return {'Authorization': 'Nostr $encoded'};
+    } catch (e) {
+      LogService().log('Failed to build NOSTR auth headers: $e');
+      return null;
+    }
+  }
+
+  /// Create a new room on a station
+  Future<bool> createStationRoom(String stationUrl, String id, String name, {String? description}) async {
+    try {
+      final headers = await _buildNostrAuthHeaders(action: 'create_room');
+      final body = jsonEncode({
+        'id': id,
+        'name': name,
+        if (description != null) 'description': description,
+      });
+
+      final response = await _stationApiRequest(
+        stationUrl: stationUrl,
+        method: 'POST',
+        path: '/api/chat/rooms',
+        headers: {
+          ...?headers,
+          'Content-Type': 'application/json',
+        },
+        body: body,
+      );
+
+      if (response == null) {
+        LogService().log('StationService: Create room: no response');
+        return false;
+      }
+      LogService().log('StationService: Create room response: ${response.statusCode}');
+      return response.statusCode == 201;
+    } catch (e) {
+      LogService().log('Error creating room: $e');
+      return false;
+    }
+  }
+
+  /// Delete a room on a station (moderator only)
+  Future<bool> deleteStationRoom(String stationUrl, String roomId) async {
+    try {
+      final headers = await _buildNostrAuthHeaders(
+        action: 'delete_room',
+        extraTags: [['room', roomId]],
+      );
+      if (headers == null) {
+        LogService().log('Cannot delete room: NOSTR keys not configured');
+        return false;
+      }
+
+      final response = await _stationApiRequest(
+        stationUrl: stationUrl,
+        method: 'DELETE',
+        path: '/api/chat/rooms/$roomId',
+        headers: headers,
+      );
+
+      if (response == null) {
+        LogService().log('StationService: Delete room: no response');
+        return false;
+      }
+      LogService().log('StationService: Delete room response: ${response.statusCode} - ${response.body}');
+      return response.statusCode == 200;
+    } catch (e) {
+      LogService().log('Error deleting room: $e');
+      return false;
+    }
+  }
+
+  /// Rename a room on a station (moderator only)
+  Future<bool> renameStationRoom(String stationUrl, String roomId, String newName) async {
+    try {
+      final headers = await _buildNostrAuthHeaders(
+        action: 'rename_room',
+        extraTags: [['room', roomId]],
+      );
+      if (headers == null) {
+        LogService().log('Cannot rename room: NOSTR keys not configured');
+        return false;
+      }
+
+      final response = await _stationApiRequest(
+        stationUrl: stationUrl,
+        method: 'PUT',
+        path: '/api/chat/rooms/$roomId',
+        headers: {
+          ...headers,
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({'name': newName}),
+      );
+
+      if (response == null) {
+        LogService().log('StationService: Rename room: no response');
+        return false;
+      }
+      LogService().log('StationService: Rename room response: ${response.statusCode}');
+      return response.statusCode == 200;
+    } catch (e) {
+      LogService().log('Error renaming room: $e');
+      return false;
+    }
+  }
+
   /// Check if a callsign indicates a client device (X1 prefix)
   /// X1 = client (reject), X3 = station (allow)
   bool _isClientCallsign(String? callsign) {

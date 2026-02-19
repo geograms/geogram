@@ -48,6 +48,18 @@ class DeviceChatSidebar extends StatefulWidget {
   /// Callback to toggle mute for a room
   final Function(String roomId)? onToggleMute;
 
+  /// Whether the user is a moderator on the station (enables room management)
+  final bool isModerator;
+
+  /// Callback to create a new station room (null hides the button)
+  final Future<void> Function(String id, String name, {String? description})? onCreateRoom;
+
+  /// Callback to delete a station room
+  final Future<void> Function(StationChatRoom room)? onDeleteRoom;
+
+  /// Callback to rename a station room
+  final Future<void> Function(StationChatRoom room, String newName)? onRenameRoom;
+
   const DeviceChatSidebar({
     Key? key,
     required this.localChannels,
@@ -62,6 +74,10 @@ class DeviceChatSidebar extends StatefulWidget {
     this.unreadCounts = const {},
     this.mutedRooms = const {},
     this.onToggleMute,
+    this.isModerator = false,
+    this.onCreateRoom,
+    this.onDeleteRoom,
+    this.onRenameRoom,
   }) : super(key: key);
 
   @override
@@ -320,6 +336,22 @@ class _DeviceChatSidebarState extends State<DeviceChatSidebar> {
                     fontSize: 10,
                   ),
                 ),
+              // Add room button for station devices when moderator
+              if (!device.isLocal && widget.isModerator && widget.onCreateRoom != null)
+                SizedBox(
+                  width: 28,
+                  height: 28,
+                  child: IconButton(
+                    padding: EdgeInsets.zero,
+                    iconSize: 18,
+                    icon: Icon(
+                      Icons.add,
+                      color: theme.colorScheme.primary,
+                    ),
+                    tooltip: _i18n.t('create_room'),
+                    onPressed: () => _showCreateRoomDialog(context),
+                  ),
+                ),
             ],
           ),
         ),
@@ -506,12 +538,84 @@ class _DeviceChatSidebarState extends State<DeviceChatSidebar> {
                     ),
                   ),
                 ),
-              // Mute toggle menu
+              // Room context menu (mute + moderator actions for remote rooms)
               if (widget.onToggleMute != null)
-                _buildMuteMenuButton(theme, room.id, isMuted),
+                _buildRemoteRoomMenuButton(theme, device, room, isMuted),
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _buildRemoteRoomMenuButton(ThemeData theme, DeviceSource device, StationChatRoom room, bool isMuted) {
+    final canManage = widget.isModerator && room.id != 'general';
+
+    return SizedBox(
+      width: 24,
+      height: 24,
+      child: PopupMenuButton<String>(
+        padding: EdgeInsets.zero,
+        iconSize: 18,
+        icon: Icon(
+          Icons.more_vert,
+          size: 18,
+          color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.6),
+        ),
+        onSelected: (value) {
+          switch (value) {
+            case 'toggle_mute':
+              widget.onToggleMute?.call(room.id);
+              break;
+            case 'rename':
+              _showRenameRoomDialog(context, room);
+              break;
+            case 'delete':
+              _showDeleteRoomDialog(context, room);
+              break;
+          }
+        },
+        itemBuilder: (context) => [
+          PopupMenuItem<String>(
+            value: 'toggle_mute',
+            height: 40,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(isMuted ? Icons.notifications_active : Icons.notifications_off, size: 18),
+                const SizedBox(width: 8),
+                Text(isMuted ? _i18n.t('unmute_notifications') : _i18n.t('mute_notifications')),
+              ],
+            ),
+          ),
+          if (canManage) ...[
+            const PopupMenuDivider(),
+            PopupMenuItem<String>(
+              value: 'rename',
+              height: 40,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.edit, size: 18),
+                  const SizedBox(width: 8),
+                  Text(_i18n.t('rename_room')),
+                ],
+              ),
+            ),
+            PopupMenuItem<String>(
+              value: 'delete',
+              height: 40,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.delete, size: 18, color: theme.colorScheme.error),
+                  const SizedBox(width: 8),
+                  Text(_i18n.t('delete_room'), style: TextStyle(color: theme.colorScheme.error)),
+                ],
+              ),
+            ),
+          ],
+        ],
       ),
     );
   }
@@ -596,6 +700,107 @@ class _DeviceChatSidebarState extends State<DeviceChatSidebar> {
       case DeviceSourceType.usb:
         return Icons.usb;
     }
+  }
+
+  void _showCreateRoomDialog(BuildContext context) {
+    final nameController = TextEditingController();
+    final descController = TextEditingController();
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(_i18n.t('create_room')),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: nameController,
+              decoration: InputDecoration(labelText: _i18n.t('room_name')),
+              autofocus: true,
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: descController,
+              decoration: InputDecoration(labelText: _i18n.t('description')),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text(_i18n.t('cancel')),
+          ),
+          FilledButton(
+            onPressed: () {
+              final name = nameController.text.trim();
+              if (name.isEmpty) return;
+              final id = name.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), '-');
+              final desc = descController.text.trim();
+              Navigator.pop(ctx);
+              widget.onCreateRoom?.call(id, name, description: desc.isEmpty ? null : desc);
+            },
+            child: Text(_i18n.t('create')),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showRenameRoomDialog(BuildContext context, StationChatRoom room) {
+    final controller = TextEditingController(text: room.name);
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(_i18n.t('rename_room')),
+        content: TextField(
+          controller: controller,
+          decoration: InputDecoration(labelText: _i18n.t('room_name')),
+          autofocus: true,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text(_i18n.t('cancel')),
+          ),
+          FilledButton(
+            onPressed: () {
+              final newName = controller.text.trim();
+              if (newName.isEmpty || newName == room.name) return;
+              Navigator.pop(ctx);
+              widget.onRenameRoom?.call(room, newName);
+            },
+            child: Text(_i18n.t('rename')),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showDeleteRoomDialog(BuildContext context, StationChatRoom room) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(_i18n.t('delete_room')),
+        content: Text('${_i18n.t('delete_room_confirm')} "${room.name}"?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text(_i18n.t('cancel')),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(context).colorScheme.error,
+            ),
+            onPressed: () {
+              Navigator.pop(ctx);
+              widget.onDeleteRoom?.call(room);
+            },
+            child: Text(_i18n.t('delete')),
+          ),
+        ],
+      ),
+    );
   }
 }
 

@@ -1739,6 +1739,43 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     return _selectedStationRoom?.isModerator ?? false;
   }
 
+  Future<void> _createStationRoom(String id, String name, {String? description}) async {
+    final stationUrl = _lastStationUrl;
+    if (stationUrl == null) return;
+
+    final success = await _stationService.createStationRoom(stationUrl, id, name, description: description);
+    if (success) {
+      await _loadRelayRooms();
+    }
+  }
+
+  Future<void> _deleteStationRoom(StationChatRoom room) async {
+    final stationUrl = _lastStationUrl;
+    if (stationUrl == null) return;
+
+    final success = await _stationService.deleteStationRoom(stationUrl, room.id);
+    if (success) {
+      // If we deleted the selected room, deselect it
+      if (_selectedStationRoom?.id == room.id) {
+        _setStateIfMounted(() {
+          _selectedStationRoom = null;
+          _stationMessages = [];
+        });
+      }
+      await _loadRelayRooms();
+    }
+  }
+
+  Future<void> _renameStationRoom(StationChatRoom room, String newName) async {
+    final stationUrl = _lastStationUrl;
+    if (stationUrl == null) return;
+
+    final success = await _stationService.renameStationRoom(stationUrl, room.id, newName);
+    if (success) {
+      await _loadRelayRooms();
+    }
+  }
+
   Future<void> _deleteStationMessage(ChatMessage message) async {
     if (_selectedStationRoom == null) return;
     if (!_canDeleteStationMessage(message)) return;
@@ -3032,6 +3069,8 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     // For remote device mode, don't show local channels
     final localChannels = widget.isRemoteDevice ? <ChatChannel>[] : _channels;
 
+    final isModerator = _stationRooms.any((r) => r.isModerator);
+
     return DeviceChatSidebar(
       localChannels: localChannels,
       remoteSources: remoteSources,
@@ -3053,6 +3092,10 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
         _chatNotificationService.toggleRoomMute(roomId);
         setState(() {});
       },
+      isModerator: isModerator,
+      onCreateRoom: isModerator ? _createStationRoom : null,
+      onDeleteRoom: isModerator ? _deleteStationRoom : null,
+      onRenameRoom: isModerator ? _renameStationRoom : null,
     );
   }
 

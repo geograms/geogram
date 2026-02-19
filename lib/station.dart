@@ -2408,6 +2408,10 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, EmailHandlerMixin,
         await _handleDeviceProxy(request);
       } else if (path == '/search') {
         await _handleSearch(request);
+      } else if (ChatApi.isRoomCrudPath(path)) {
+        // DELETE/PUT /api/chat/rooms/{roomId}
+        final callsign = ChatApi.extractCallsign(path) ?? _settings.callsign;
+        await _handleChatRoomCrud(request, callsign);
       } else if (ChatApi.isRoomsPath(path)) {
         // /{callsign}/api/chat/rooms OR /api/chat/rooms
         final callsign = ChatApi.extractCallsign(path) ?? _settings.callsign;
@@ -7512,7 +7516,13 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, EmailHandlerMixin,
     }
 
     if (request.method == 'GET') {
-      final rooms = _chatRooms.values.map((r) => r.toJson()).toList();
+      final authEvent = _verifyNostrAuthHeader(request);
+      final authNpub = authEvent?.npub;
+      final rooms = _chatRooms.values.map((r) {
+        final roomJson = r.toJson();
+        injectModeratorFlag(roomJson, r.id, authNpub);
+        return roomJson;
+      }).toList();
       request.response.headers.contentType = ContentType.json;
       request.response.write(jsonEncode({
         'callsign': targetCallsign,
@@ -7538,6 +7548,79 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, EmailHandlerMixin,
         request.response.statusCode = 400;
         request.response.write('Missing id or name');
       }
+    }
+  }
+
+  /// Handle DELETE/PUT for a single chat room (delete/rename)
+  Future<void> _handleChatRoomCrud(HttpRequest request, String targetCallsign) async {
+    final roomId = ChatApi.extractRoomCrudId(request.uri.path);
+    if (roomId == null) {
+      request.response.statusCode = 400;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({'error': 'Missing room ID'}));
+      return;
+    }
+
+    // If targeting a remote device, proxy the request
+    if (targetCallsign.toUpperCase() != _settings.callsign.toUpperCase()) {
+      await _proxyRequestToDevice(request, targetCallsign, ChatApi.roomCrudPath(roomId));
+      return;
+    }
+
+    // Require moderator auth for all room CRUD operations
+    final authEvent = _verifyNostrAuthHeader(request);
+    if (authEvent == null) {
+      request.response.statusCode = 403;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({'error': 'Authentication required'}));
+      return;
+    }
+    if (!chatSecurity.canModerate(authEvent.npub, roomId)) {
+      request.response.statusCode = 403;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({'error': 'Moderator access required'}));
+      return;
+    }
+
+    if (request.method == 'DELETE') {
+      if (roomId == 'general') {
+        request.response.statusCode = 400;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'Cannot delete the general room'}));
+        return;
+      }
+      if (deleteChatRoom(roomId)) {
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'success': true, 'roomId': roomId}));
+      } else {
+        request.response.statusCode = 404;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'Room not found'}));
+      }
+    } else if (request.method == 'PUT') {
+      final body = await utf8.decoder.bind(request).join();
+      final data = jsonDecode(body) as Map<String, dynamic>;
+      final newName = data['name'] as String?;
+      if (newName == null || newName.isEmpty) {
+        request.response.statusCode = 400;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'Missing name'}));
+        return;
+      }
+      if (renameChatRoom(roomId, newName)) {
+        final room = _chatRooms[roomId]!;
+        await _saveRoomConfig(room, targetCallsign);
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode(room.toJson()));
+      } else {
+        request.response.statusCode = 404;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'Room not found'}));
+      }
+    } else {
+      request.response.statusCode = 405;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({'error': 'Method not allowed'}));
     }
   }
 

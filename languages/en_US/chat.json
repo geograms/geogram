@@ -19,5 +19,10 @@
   "dm_sync_failed": "Sync failed: {0}",
   "chat_room_not_found": "Chat room not found",
   "mute_notifications": "Mute notifications",
-  "unmute_notifications": "Unmute notifications"
+  "unmute_notifications": "Unmute notifications",
+  "create_room": "Create room",
+  "rename_room": "Rename room",
+  "delete_room": "Delete room",
+  "delete_room_confirm": "Are you sure you want to delete",
+  "room_name": "Room name"
 }

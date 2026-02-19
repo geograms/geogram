@@ -37,6 +37,9 @@ class ChatApiPaths {
   static String reactionsPath(String roomId, String timestamp) =>
       '/api/chat/$roomId/messages/$timestamp/reactions';
 
+  /// Single room CRUD path: /api/chat/rooms/{roomId}
+  static String roomCrudPath(String roomId) => '/api/chat/rooms/$roomId';
+
   /// Remote chat rooms path: /{callsign}/api/chat/rooms
   static String remoteRoomsPath(String callsign) => '/$callsign/api/chat/rooms';
 
@@ -85,6 +88,18 @@ class ChatApiPaths {
   /// Check if path matches chat rooms list pattern
   static bool isRoomsPath(String path) {
     return RegExp(r'^(/[A-Z0-9]+)?/api/chat/rooms/?$').hasMatch(path);
+  }
+
+  /// Check if path matches single room CRUD pattern (DELETE/PUT)
+  /// Matches /api/chat/rooms/{roomId} but NOT /api/chat/rooms or deeper sub-paths
+  static bool isRoomCrudPath(String path) {
+    return RegExp(r'^(/[A-Z0-9]+)?/api/chat/rooms/[^/]+$').hasMatch(path);
+  }
+
+  /// Extract room ID from a room CRUD path: /api/chat/rooms/{roomId}
+  static String? extractRoomCrudId(String path) {
+    final match = RegExp(r'/api/chat/rooms/([^/]+)$').firstMatch(path);
+    return match?.group(1);
   }
 
   /// Check if path matches chat messages pattern

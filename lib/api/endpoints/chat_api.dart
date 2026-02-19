@@ -462,6 +462,7 @@ class ChatApi {
       paths.ChatApiPaths.remoteMessagesUrl(baseUrl, callsign, roomId, limit: limit);
 
   static bool isRoomsPath(String path) => paths.ChatApiPaths.isRoomsPath(path);
+  static bool isRoomCrudPath(String path) => paths.ChatApiPaths.isRoomCrudPath(path);
   static bool isMessagesPath(String path) => paths.ChatApiPaths.isMessagesPath(path);
   static bool isFilesListPath(String path) => paths.ChatApiPaths.isFilesListPath(path);
   static bool isFileDownloadPath(String path) => paths.ChatApiPaths.isFileDownloadPath(path);
@@ -469,6 +470,8 @@ class ChatApi {
 
   static String? extractCallsign(String path) => paths.ChatApiPaths.extractCallsign(path);
   static String? extractRoomId(String path) => paths.ChatApiPaths.extractRoomId(path);
+  static String? extractRoomCrudId(String path) => paths.ChatApiPaths.extractRoomCrudId(path);
+  static String roomCrudPath(String roomId) => paths.ChatApiPaths.roomCrudPath(roomId);
   static String? extractFilename(String path) => paths.ChatApiPaths.extractFilename(path);
   static String? extractTimestamp(String path) => paths.ChatApiPaths.extractTimestamp(path);
 }
