@@ -4,10 +4,9 @@
 /// WebRTC audio conferencing on a local network without a station.
 ///
 /// Endpoints:
-///   GET  /meet/{code}      — shareable URL, serves the browser web client
-///   GET  /conference/info  — room info (host callsign, room name, participants)
-///   WS   /conference/ws    — WebSocket for signaling relay
-///   GET  /conference/web   — serves the browser-based web client (legacy)
+///   GET  /meet/{code}  — shareable URL, serves the browser web client
+///   GET  /meet/info    — room info (host callsign, room name, participants)
+///   WS   /meet/ws      — WebSocket for signaling relay
 library;
 
 import 'dart:async';
@@ -92,30 +91,22 @@ class ConferenceSignalingServer {
     LogService().log('Conference signaling server stopped');
   }
 
-  /// Set the HTML content served at /conference/web.
+  /// Set the HTML content served at /meet/{code}.
   void setWebClientHtml(String html) {
     _webClientHtml = html;
   }
 
   // ── Request routing ──────────────────────────────────────────────
 
-  /// The 4-letter room code (the part before @).
-  String get _roomCode {
-    final at = roomId.indexOf('@');
-    return at > 0 ? roomId.substring(0, at) : roomId;
-  }
-
   void _handleRequest(HttpRequest request) {
     final path = request.uri.path;
     switch (path) {
-      case '/conference/info':
+      case '/meet/info':
         _handleInfo(request);
-      case '/conference/ws':
+      case '/meet/ws':
         _handleWebSocket(request);
-      case '/conference/web':
-        _handleWebClient(request);
       default:
-        // Handle /meet/XXXX — serves the web client at the shareable URL
+        // Handle /meet/{code} — serves the web client at the shareable URL
         if (path.startsWith('/meet/')) {
           _handleWebClient(request);
         } else {
@@ -127,7 +118,7 @@ class ConferenceSignalingServer {
     }
   }
 
-  // ── GET /conference/info ─────────────────────────────────────────
+  // ── GET /meet/info ─────────────────────────────────────────────
 
   void _handleInfo(HttpRequest request) {
     final info = {
@@ -145,7 +136,7 @@ class ConferenceSignalingServer {
       ..close();
   }
 
-  // ── GET /conference/web ──────────────────────────────────────────
+  // ── GET /meet/{code} ──────────────────────────────────────────
 
   void _handleWebClient(HttpRequest request) {
     if (_webClientHtml == null) {
@@ -162,7 +153,7 @@ class ConferenceSignalingServer {
       ..close();
   }
 
-  // ── WS /conference/ws ───────────────────────────────────────────
+  // ── WS /meet/ws ──────────────────────────────────────────────
 
   Future<void> _handleWebSocket(HttpRequest request) async {
     WebSocket socket;

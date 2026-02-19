@@ -57,7 +57,7 @@ class _ConferenceJoinPageState extends State<ConferenceJoinPage> {
         if (segments.length == 2 && segments[0] == 'meet') {
           // LAN: http://ip:port/meet/XXXX → derive WS URL
           final wsScheme = uri.scheme == 'https' ? 'wss' : 'ws';
-          final wsUrl = '$wsScheme://${uri.host}:${uri.port}/conference/ws';
+          final wsUrl = '$wsScheme://${uri.host}:${uri.port}/meet/ws';
           await _conferenceService.joinLan(wsUrl);
         } else if (segments.length == 3 && segments[1] == 'meet') {
           // Station: http://station/CALLSIGN/meet/XXXX
@@ -66,10 +66,7 @@ class _ConferenceJoinPageState extends State<ConferenceJoinPage> {
           final roomId = '$code@$callsign';
           await _conferenceService.discoverAndJoin(roomId);
         } else {
-          // Legacy: http://ip:port/conference/web → derive WS URL
-          final wsScheme = uri.scheme == 'https' ? 'wss' : 'ws';
-          final wsUrl = '$wsScheme://${uri.host}:${uri.port}/conference/ws';
-          await _conferenceService.joinLan(wsUrl);
+          throw ArgumentError('Unrecognized URL format: $input');
         }
       } else if (input.contains('@')) {
         // Room ID with @callsign — use discovery

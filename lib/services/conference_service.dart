@@ -323,7 +323,7 @@ class ConferenceService {
 
           if (activeRoomId == roomId && sigPort != null) {
             final host = Uri.parse(baseUrl).host;
-            final wsUrl = 'ws://$host:$sigPort/conference/ws';
+            final wsUrl = 'ws://$host:$sigPort/meet/ws';
             LogService().log(
                 'ConferenceService: Found meeting via LAN at $wsUrl');
             await joinLan(wsUrl);
@@ -453,7 +453,7 @@ class ConferenceService {
     }
 
     try {
-      _hostSelfSocket = await WebSocket.connect('ws://127.0.0.1:$port/conference/ws');
+      _hostSelfSocket = await WebSocket.connect('ws://127.0.0.1:$port/meet/ws');
       _hostSelfSocket!.listen(
         (data) {
           if (data is String) _handleLanMessage(data);

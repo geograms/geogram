@@ -1012,7 +1012,7 @@ class DebugController {
         'action': 'conference_join',
         'description': 'Join an existing conference',
         'params': {
-          'url': '(optional) WebSocket URL for LAN mode (ws://host:port/conference/ws)',
+          'url': '(optional) WebSocket URL for LAN mode (ws://host:port/meet/ws)',
           'room_id': '(optional) Room ID for station mode',
         },
       },
