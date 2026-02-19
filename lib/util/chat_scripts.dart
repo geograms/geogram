@@ -19,6 +19,8 @@ String getChatPageScripts() {
 
       // Nickname cache: pubkey_hex -> display_name
       const knownNicknames = {};
+      // Callsign-based nickname cache: CALLSIGN_UPPER -> nickname
+      const callsignNicknames = {};
       // Track pubkeys we've already requested kind 0 for
       const pendingNicknameQueries = new Set();
 
@@ -179,7 +181,56 @@ String getChatPageScripts() {
         if (pubkey && knownNicknames[pubkey]) {
           return knownNicknames[pubkey] + ' (' + callsign + ')';
         }
+        const upper = (callsign || '').toUpperCase();
+        if (callsignNicknames[upper]) {
+          return callsignNicknames[upper] + ' (' + callsign + ')';
+        }
         return callsign;
+      }
+
+      async function fetchCallsignNicknames() {
+        try {
+          const resp = await fetch('/.well-known/nostr.json');
+          if (!resp.ok) return;
+          const json = await resp.json();
+          const names = json.names || {};
+
+          // Group entries by hex pubkey
+          const byHex = {};
+          for (const [name, hex] of Object.entries(names)) {
+            if (!byHex[hex]) byHex[hex] = [];
+            byHex[hex].push(name);
+          }
+
+          // Callsign pattern: letter, digit, then alphanumeric (e.g. x1su86)
+          const callsignRe = /^[a-z]\\d[a-z0-9]+\$/;
+
+          for (const entries of Object.values(byHex)) {
+            const callsigns = entries.filter(n => callsignRe.test(n));
+            const nicknames = entries.filter(n => !callsignRe.test(n));
+            if (callsigns.length > 0 && nicknames.length > 0) {
+              const nick = nicknames[0];
+              for (const cs of callsigns) {
+                callsignNicknames[cs.toUpperCase()] = nick;
+              }
+            }
+          }
+
+          // Re-render existing messages with updated author names
+          document.querySelectorAll('.message').forEach(function(el) {
+            const authorEl = el.querySelector('.message-author');
+            if (!authorEl) return;
+            const currentText = authorEl.textContent;
+            // Skip already-resolved names (contain parentheses)
+            if (currentText.includes('(')) return;
+            const upper = currentText.toUpperCase();
+            if (callsignNicknames[upper]) {
+              authorEl.textContent = callsignNicknames[upper] + ' (' + currentText + ')';
+            }
+          });
+        } catch (e) {
+          console.error('Error fetching callsign nicknames:', e);
+        }
       }
 
       function requestNickname(pubkey) {
@@ -464,6 +515,7 @@ String getChatPageScripts() {
 
       document.addEventListener('DOMContentLoaded', function() {
         initChannels();
+        fetchCallsignNicknames();
 
         // Open room from URL hash if present
         const hashRoom = getRoomFromHash();
