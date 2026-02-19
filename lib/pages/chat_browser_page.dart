@@ -1705,7 +1705,8 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
          message.npub!.isNotEmpty &&
          currentProfile.npub.isNotEmpty &&
          message.npub == currentProfile.npub);
-    return isOwnMessage;
+    if (isOwnMessage) return true;
+    return _selectedStationRoom?.isModerator ?? false;
   }
 
   Future<void> _deleteStationMessage(ChatMessage message) async {
@@ -1768,7 +1769,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
   }
 
   bool _canEditStationMessage(ChatMessage message) {
-    return _canDeleteStationMessage(message); // Same logic: own messages only
+    return _canDeleteStationMessage(message); // Same logic: own messages or moderator
   }
 
   Future<void> _editStationMessage(ChatMessage message, String newContent) async {

@@ -12,6 +12,7 @@ import 'pure_storage_config.dart';
 import 'commands/service_interfaces.dart';
 import '../bot/models/music_model_info.dart';
 import '../bot/models/vision_model_info.dart';
+import '../models/chat_security.dart';
 import '../models/event.dart';
 import '../models/report.dart';
 import '../services/event_service.dart';
@@ -30,6 +31,7 @@ import '../util/nostr_key_generator.dart';
 import '../util/nostr_event.dart';
 import '../util/nostr_crypto.dart';
 import '../api/endpoints/chat_api_paths.dart';
+import '../server/mixins/chat_moderation_mixin.dart';
 import '../server/mixins/chat_modification_mixin.dart';
 import '../server/mixins/chat_nip05_mixin.dart';
 import '../util/chat_scripts.dart';
@@ -754,7 +756,7 @@ class PureTileCache {
 }
 
 /// Pure Dart station server for CLI mode
-class PureStationServer with EmailHandlerMixin, BlogHandlerMixin, ConsoleCommandMixin, ChatModificationMixin, ChatNip05Mixin
+class PureStationServer with EmailHandlerMixin, BlogHandlerMixin, ConsoleCommandMixin, ChatModificationMixin, ChatNip05Mixin, ChatModerationMixin
     implements StationCommandInterface {
   HttpServer? _httpServer;
   HttpServer? _httpsServer;
@@ -769,6 +771,7 @@ class PureStationServer with EmailHandlerMixin, BlogHandlerMixin, ConsoleCommand
 
   final PureTileCache _tileCache = PureTileCache();
   final Map<String, ChatRoom> _chatRooms = {};
+  ChatSecurity _chatSecurityData = ChatSecurity();
   final List<LogEntry> _logs = [];
   final ServerStats _stats = ServerStats();
   final EventBus _eventBus = EventBus();
@@ -1010,6 +1013,26 @@ class PureStationServer with EmailHandlerMixin, BlogHandlerMixin, ConsoleCommand
   List<LogEntryReadable> get logsReadable =>
       logs.cast<LogEntryReadable>();
 
+  // --- ChatModerationMixin overrides ---
+  @override
+  ChatSecurity get chatSecurity => _chatSecurityData;
+
+  @override
+  Future<void> saveChatSecurity(ChatSecurity security) async {
+    _chatSecurityData = security;
+    final chatPath = _getChatDataPath();
+    final extraDir = Directory('$chatPath/extra');
+    if (!await extraDir.exists()) {
+      await extraDir.create(recursive: true);
+    }
+    final file = File('$chatPath/extra/security.json');
+    final json = {
+      'version': '1.0',
+      ...security.toJson(),
+    };
+    await file.writeAsString(const JsonEncoder.withIndent('  ').convert(json));
+  }
+
   // --- ConsoleCommandMixin slot ---
   @override
   StationCommandInterface get consoleStationInterface => this;
@@ -1205,8 +1228,26 @@ class PureStationServer with EmailHandlerMixin, BlogHandlerMixin, ConsoleCommand
       }
 
       _log('INFO', 'Loaded $loadedCount chat rooms from $chatPath');
+
+      // Load chat security (moderators, etc.)
+      await _loadChatSecurity(chatPath);
     } catch (e) {
       _log('ERROR', 'Failed to load chat data: $e');
+    }
+  }
+
+  /// Load chat security settings from {chatPath}/extra/security.json
+  Future<void> _loadChatSecurity(String chatPath) async {
+    try {
+      final secFile = File('$chatPath/extra/security.json');
+      if (await secFile.exists()) {
+        final content = await secFile.readAsString();
+        final json = jsonDecode(content) as Map<String, dynamic>;
+        _chatSecurityData = ChatSecurity.fromJson(json);
+        _log('INFO', 'Loaded chat security: ${_chatSecurityData.getGlobalModerators().length} global moderators');
+      }
+    } catch (e) {
+      _log('ERROR', 'Failed to load chat security: $e');
     }
   }
 
@@ -7658,7 +7699,13 @@ class PureStationServer with EmailHandlerMixin, BlogHandlerMixin, ConsoleCommand
     }
 
     if (request.method == 'GET') {
-      final rooms = _chatRooms.values.map((r) => r.toJson()).toList();
+      final authEvent = _verifyNostrAuthHeader(request);
+      final authNpub = authEvent?.npub;
+      final rooms = _chatRooms.values.map((r) {
+        final roomJson = r.toJson();
+        injectModeratorFlag(roomJson, r.id, authNpub);
+        return roomJson;
+      }).toList();
       request.response.headers.contentType = ContentType.json;
       request.response.write(jsonEncode({
         'callsign': targetCallsign,
@@ -7735,9 +7782,10 @@ class PureStationServer with EmailHandlerMixin, BlogHandlerMixin, ConsoleCommand
         return;
       }
 
-      // Find message by formatted timestamp
+      // Find message by timestamp (supports ISO, formatted, and epoch)
+      final targetTime = _parseApiTimestamp(decodedTimestamp);
       final msgIndex = room.messages.indexWhere((m) =>
-          _formatChatTimestamp(m.timestamp) == decodedTimestamp);
+          _messageTimestampMatches(m, decodedTimestamp, targetTime));
       if (msgIndex == -1) {
         request.response.statusCode = 404;
         request.response.headers.contentType = ContentType.json;
@@ -7747,8 +7795,8 @@ class PureStationServer with EmailHandlerMixin, BlogHandlerMixin, ConsoleCommand
 
       final message = room.messages[msgIndex];
 
-      // Verify author owns the message
-      if (message.senderNpub != event.npub) {
+      // Verify author owns the message or is a moderator
+      if (!canModifyMessage(event.npub, message.senderNpub, roomId)) {
         request.response.statusCode = 403;
         request.response.headers.contentType = ContentType.json;
         request.response.write(jsonEncode({'error': 'Not authorized to delete this message'}));
@@ -7817,9 +7865,10 @@ class PureStationServer with EmailHandlerMixin, BlogHandlerMixin, ConsoleCommand
         return;
       }
 
-      // Find message by formatted timestamp
+      // Find message by timestamp (supports ISO, formatted, and epoch)
+      final editTargetTime = _parseApiTimestamp(decodedTimestamp);
       final msgIndex = room.messages.indexWhere((m) =>
-          _formatChatTimestamp(m.timestamp) == decodedTimestamp);
+          _messageTimestampMatches(m, decodedTimestamp, editTargetTime));
       if (msgIndex == -1) {
         request.response.statusCode = 404;
         request.response.headers.contentType = ContentType.json;
@@ -7829,11 +7878,11 @@ class PureStationServer with EmailHandlerMixin, BlogHandlerMixin, ConsoleCommand
 
       final message = room.messages[msgIndex];
 
-      // Verify author owns the message
-      if (message.senderNpub != event.npub) {
+      // Verify author owns the message or is a moderator
+      if (!canModifyMessage(event.npub, message.senderNpub, roomId)) {
         request.response.statusCode = 403;
         request.response.headers.contentType = ContentType.json;
-        request.response.write(jsonEncode({'error': 'Only the author can edit this message'}));
+        request.response.write(jsonEncode({'error': 'Not authorized to edit this message'}));
         return;
       }
 
@@ -7853,6 +7902,7 @@ class PureStationServer with EmailHandlerMixin, BlogHandlerMixin, ConsoleCommand
       updatedMetadata['edited_at'] = editedAt;
       updatedMetadata['signature'] = event.sig ?? '';
       updatedMetadata['created_at'] = event.createdAt.toString();
+      updatedMetadata.addAll(buildModEditAttribution(event.npub, message.senderNpub));
 
       room.messages[msgIndex] = ChatMessage(
         id: message.id,
@@ -8017,7 +8067,11 @@ class PureStationServer with EmailHandlerMixin, BlogHandlerMixin, ConsoleCommand
     if (request.method == 'GET') {
       final limit = int.tryParse(request.uri.queryParameters['limit'] ?? '50') ?? 50;
       final before = request.uri.queryParameters['before'];
-      final messages = getChatHistory(roomId, limit: limit, before: before).map((m) => m.toJson()).toList();
+      final messages = getChatHistory(roomId, limit: limit, before: before).map((m) {
+        final msgJson = m.toJson();
+        injectModBadge(msgJson, m.senderNpub, roomId);
+        return msgJson;
+      }).toList();
       request.response.headers.contentType = ContentType.json;
       request.response.write(jsonEncode({
         'room_id': roomId,

@@ -8,6 +8,7 @@ class StationChatRoom {
   final int messageCount;
   final String stationUrl;
   final String stationName;
+  final bool isModerator;
 
   StationChatRoom({
     required this.id,
@@ -16,6 +17,7 @@ class StationChatRoom {
     this.messageCount = 0,
     required this.stationUrl,
     this.stationName = '',
+    this.isModerator = false,
   });
 
   factory StationChatRoom.fromJson(
@@ -36,6 +38,7 @@ class StationChatRoom {
       messageCount: messageCount,
       stationUrl: stationUrl,
       stationName: stationName,
+      isModerator: json['isModerator'] == true,
     );
   }
 

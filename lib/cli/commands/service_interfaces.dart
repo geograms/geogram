@@ -142,6 +142,12 @@ abstract class StationCommandInterface {
   bool deleteMessage(String roomId, String messageId);
   bool verifyMessage(covariant Object message);
 
+  // --- Moderation ---
+  bool addGlobalModerator(String npub);
+  bool removeGlobalModerator(String npub);
+  List<String> getGlobalModerators();
+  String? resolveIdentityToNpub(String nameOrCallsign);
+
   // --- Logs ---
   List<LogEntryReadable> getLogs({int limit = 20});
 }

@@ -17,6 +17,11 @@ String getChatPageScripts() {
       const PAGE_SIZE = 20;
       const isTouchDevice = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
 
+      // Nickname cache: pubkey_hex -> display_name
+      const knownNicknames = {};
+      // Track pubkeys we've already requested kind 0 for
+      const pendingNicknameQueries = new Set();
+
       function cacheKey(roomId) {
         return 'geogram_chat_' + roomId;
       }
@@ -166,6 +171,22 @@ String getChatPageScripts() {
         });
       }
 
+      function resolveAuthorDisplay(callsign, pubkey) {
+        if (pubkey && knownNicknames[pubkey]) {
+          return knownNicknames[pubkey] + ' (' + callsign + ')';
+        }
+        return callsign;
+      }
+
+      function requestNickname(pubkey) {
+        if (!pubkey || pendingNicknameQueries.has(pubkey) || knownNicknames[pubkey]) return;
+        var nostr = window.GeogramNostr || {};
+        if (nostr.queryKind0) {
+          pendingNicknameQueries.add(pubkey);
+          nostr.queryKind0(pubkey);
+        }
+      }
+
       function appendMessage(msg) {
         const container = document.getElementById('messages');
         const div = document.createElement('div');
@@ -173,16 +194,25 @@ String getChatPageScripts() {
         div.dataset.timestamp = msg.timestamp;
 
         const time = parseMsgTime(msg.timestamp);
-        const author = msg.callsign || msg.author || msg.senderCallsign;
+        const callsign = msg.callsign || msg.author || msg.senderCallsign;
+        const pubkey = msg.pubkey || msg.senderPubkey || null;
+        const authorDisplay = resolveAuthorDisplay(callsign, pubkey);
         const content = msg.content || '';
 
+        if (pubkey) div.dataset.pubkey = pubkey;
+
         div.innerHTML = '<div class="message-header">' +
-                       '<span class="message-author">' + escapeHtml(author) + '</span>' +
+                       '<span class="message-author">' + escapeHtml(authorDisplay) + '</span>' +
                        '<span class="message-time">' + time + '</span>' +
                        '</div>' +
                        '<div class="message-content">' + escapeHtml(content) + '</div>';
 
         container.appendChild(div);
+
+        // Query kind 0 if we don't know this pubkey's nickname yet
+        if (pubkey && !knownNicknames[pubkey]) {
+          requestNickname(pubkey);
+        }
       }
 
       async function loadOlderMessages() {
@@ -239,14 +269,18 @@ String getChatPageScripts() {
             div.className = 'message';
             div.dataset.timestamp = msg.timestamp;
             const time = parseMsgTime(msg.timestamp);
-            const author = msg.callsign || msg.author || msg.senderCallsign;
+            const callsign = msg.callsign || msg.author || msg.senderCallsign;
+            const pubkey = msg.pubkey || msg.senderPubkey || null;
+            const authorDisplay = resolveAuthorDisplay(callsign, pubkey);
             const content = msg.content || '';
+            if (pubkey) div.dataset.pubkey = pubkey;
             div.innerHTML = '<div class="message-header">' +
-                           '<span class="message-author">' + escapeHtml(author) + '</span>' +
+                           '<span class="message-author">' + escapeHtml(authorDisplay) + '</span>' +
                            '<span class="message-time">' + time + '</span>' +
                            '</div>' +
                            '<div class="message-content">' + escapeHtml(content) + '</div>';
             fragment.appendChild(div);
+            if (pubkey && !knownNicknames[pubkey]) requestNickname(pubkey);
           });
 
           // Remove duplicate date separators
@@ -393,7 +427,7 @@ String getChatPageScripts() {
             const now = new Date();
             const pad = (n) => n.toString().padStart(2, '0');
             const ts = now.getFullYear() + '-' + pad(now.getMonth()+1) + '-' + pad(now.getDate()) + ' ' + pad(now.getHours()) + ':' + pad(now.getMinutes()) + '_' + pad(now.getSeconds());
-            const newMsg = { timestamp: ts, author: nostr.callsign, content: content };
+            const newMsg = { timestamp: ts, author: nostr.callsign, pubkey: nostr.pubkey, content: content };
             appendMessage(newMsg);
             cacheAppend(currentRoom, [newMsg]);
             scrollToBottom(true);
@@ -437,6 +471,24 @@ String getChatPageScripts() {
           window.visualViewport.addEventListener('resize', function() {
             scrollToBottom(false);
           });
+        }
+
+        // Register kind 0 callback to update message nicknames
+        if (window.GeogramNostr) {
+          window.GeogramNostr._onKind0 = function(pubkey, displayName) {
+            if (!pubkey || !displayName) return;
+            knownNicknames[pubkey] = displayName;
+            // Update all message elements with this pubkey
+            document.querySelectorAll('.message[data-pubkey="' + pubkey + '"]').forEach(function(el) {
+              var authorEl = el.querySelector('.message-author');
+              if (authorEl) {
+                // Extract callsign from current text (it's the raw callsign or already formatted)
+                var currentText = authorEl.textContent;
+                var callsign = currentText.includes('(') ? currentText.split('(').pop().replace(')', '').trim() : currentText;
+                authorEl.textContent = displayName + ' (' + callsign + ')';
+              }
+            });
+          };
         }
 
         // If already connected (auto-connect from localStorage), show chat input immediately

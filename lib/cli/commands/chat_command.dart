@@ -2,12 +2,13 @@
  * Copyright (c) geogram
  * License: Apache-2.0
  *
- * Chat command: list, info, create, delete, rename, history, say, delmsg
+ * Chat command: list, info, create, delete, rename, history, say, delmsg, mod
  */
 
 import 'command.dart';
 import 'command_context.dart';
 import 'service_interfaces.dart';
+import '../../services/nip05_registry_service.dart';
 
 /// chat — manage chat rooms and messages
 class ChatCommand extends Command {
@@ -15,7 +16,7 @@ class ChatCommand extends Command {
   String get name => 'chat';
   @override
   String get description =>
-      'Manage chat rooms (list|info|create|delete|rename|history|say|delmsg)';
+      'Manage chat rooms (list|info|create|delete|rename|history|say|delmsg|mod)';
   @override
   String get usage => 'chat <subcommand>';
   @override
@@ -73,6 +74,11 @@ class ChatCommand extends Command {
           description: 'Delete a message from a chat room',
           execute: _delmsg,
           completer: _roomIdCompleter,
+        ),
+        SubCommand(
+          name: 'mod',
+          description: 'Manage global moderators (add|remove|list)',
+          execute: _mod,
         ),
       ];
 
@@ -325,6 +331,85 @@ class ChatCommand extends Command {
       ctx.success('Message deleted');
     } else {
       ctx.error('Message not found');
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Moderator management
+  // ---------------------------------------------------------------------------
+
+  static Future<void> _mod(CommandContext ctx) async {
+    final station = ctx.station as StationCommandInterface;
+
+    if (ctx.args.isEmpty) {
+      ctx.error('Usage: chat mod <add|remove|list> [callsign_or_nickname]');
+      return;
+    }
+
+    final action = ctx.args[0].toLowerCase();
+
+    switch (action) {
+      case 'add':
+        if (ctx.args.length < 2) {
+          ctx.error('Usage: chat mod add <callsign_or_nickname>');
+          return;
+        }
+        final name = ctx.args[1];
+        final npub = station.resolveIdentityToNpub(name);
+        if (npub == null) {
+          ctx.error('Identity not found: $name');
+          return;
+        }
+        if (station.addGlobalModerator(npub)) {
+          ctx.success('Added global moderator: $name ($npub)');
+        } else {
+          ctx.error('$name is already a global moderator');
+        }
+        break;
+
+      case 'remove':
+        if (ctx.args.length < 2) {
+          ctx.error('Usage: chat mod remove <callsign_or_nickname>');
+          return;
+        }
+        final name = ctx.args[1];
+        final npub = station.resolveIdentityToNpub(name);
+        if (npub == null) {
+          ctx.error('Identity not found: $name');
+          return;
+        }
+        if (station.removeGlobalModerator(npub)) {
+          ctx.success('Removed global moderator: $name');
+        } else {
+          ctx.error('$name is not a global moderator');
+        }
+        break;
+
+      case 'list':
+        final mods = station.getGlobalModerators();
+        if (mods.isEmpty) {
+          ctx.writeln('No global moderators configured');
+          return;
+        }
+        ctx.writeln();
+        ctx.bold('Global Moderators (${mods.length})');
+        ctx.writeln('-' * 40);
+        for (final npub in mods) {
+          final reg = Nip05RegistryService().getRegistrationByNpub(npub);
+          if (reg != null) {
+            final display = reg.nickname != null
+                ? '${reg.nickname} (${reg.callsign})'
+                : reg.callsign;
+            ctx.writeln('  $display  $npub');
+          } else {
+            ctx.writeln('  $npub');
+          }
+        }
+        ctx.writeln();
+        break;
+
+      default:
+        ctx.error('Unknown mod action: $action. Use add, remove, or list.');
     }
   }
 }

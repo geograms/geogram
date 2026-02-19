@@ -11,6 +11,7 @@ import 'package:path/path.dart' as path;
 import 'cli/pure_storage_config.dart';
 import 'bot/models/music_model_info.dart';
 import 'bot/models/vision_model_info.dart';
+import 'models/chat_security.dart';
 import 'models/event.dart';
 import 'models/report.dart';
 import 'services/event_service.dart';
@@ -52,6 +53,7 @@ import 'server/mixins/health_watchdog_mixin.dart';
 import 'server/mixins/email_handler_mixin.dart';
 import 'server/mixins/blog_handler_mixin.dart';
 import 'server/mixins/console_command_mixin.dart';
+import 'server/mixins/chat_moderation_mixin.dart';
 import 'server/mixins/chat_nip05_mixin.dart';
 import 'cli/themes_embedded.dart';
 
@@ -578,7 +580,7 @@ class PureTileCache {
 }
 
 /// Unified station server for CLI and Android modes
-class StationServer with RateLimitMixin, HealthWatchdogMixin, EmailHandlerMixin, BlogHandlerMixin, ConsoleCommandMixin, ChatNip05Mixin
+class StationServer with RateLimitMixin, HealthWatchdogMixin, EmailHandlerMixin, BlogHandlerMixin, ConsoleCommandMixin, ChatNip05Mixin, ChatModerationMixin
     implements StationCommandInterface {
   HttpServer? _httpServer;
   HttpServer? _httpsServer;
@@ -593,6 +595,7 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, EmailHandlerMixin,
 
   final PureTileCache _tileCache = PureTileCache();
   final Map<String, ChatRoom> _chatRooms = {};
+  ChatSecurity _chatSecurityData = ChatSecurity();
   final List<LogEntry> _logs = [];
   final ServerStats _stats = ServerStats();
   final EventBus _eventBus = EventBus();
@@ -837,6 +840,26 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, EmailHandlerMixin,
   List<LogEntryReadable> get logsReadable =>
       logs.cast<LogEntryReadable>();
 
+  // --- ChatModerationMixin overrides ---
+  @override
+  ChatSecurity get chatSecurity => _chatSecurityData;
+
+  @override
+  Future<void> saveChatSecurity(ChatSecurity security) async {
+    _chatSecurityData = security;
+    final chatPath = _getChatDataPath();
+    final extraDir = Directory('$chatPath/extra');
+    if (!await extraDir.exists()) {
+      await extraDir.create(recursive: true);
+    }
+    final file = File('$chatPath/extra/security.json');
+    final json = {
+      'version': '1.0',
+      ...security.toJson(),
+    };
+    await file.writeAsString(const JsonEncoder.withIndent('  ').convert(json));
+  }
+
   // --- ConsoleCommandMixin slot ---
   @override
   StationCommandInterface get consoleStationInterface => this;
@@ -1032,8 +1055,26 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, EmailHandlerMixin,
       }
 
       _log('INFO', 'Loaded $loadedCount chat rooms from $chatPath');
+
+      // Load chat security (moderators, etc.)
+      await _loadChatSecurity(chatPath);
     } catch (e) {
       _log('ERROR', 'Failed to load chat data: $e');
+    }
+  }
+
+  /// Load chat security settings from {chatPath}/extra/security.json
+  Future<void> _loadChatSecurity(String chatPath) async {
+    try {
+      final secFile = File('$chatPath/extra/security.json');
+      if (await secFile.exists()) {
+        final content = await secFile.readAsString();
+        final json = jsonDecode(content) as Map<String, dynamic>;
+        _chatSecurityData = ChatSecurity.fromJson(json);
+        _log('INFO', 'Loaded chat security: ${_chatSecurityData.getGlobalModerators().length} global moderators');
+      }
+    } catch (e) {
+      _log('ERROR', 'Failed to load chat security: $e');
     }
   }
 

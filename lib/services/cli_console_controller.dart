@@ -37,6 +37,7 @@ import '../models/chat_message.dart';
 import '../services/profile_service.dart';
 import '../services/callsign_generator.dart';
 import '../services/chat_service.dart';
+import '../services/nip05_registry_service.dart';
 import '../services/station_server_service.dart';
 import '../services/station_service.dart';
 import '../services/station_cache_service.dart';
@@ -407,6 +408,35 @@ class _StationServiceAdapter implements StationCommandInterface {
 
   @override
   List<LogEntryReadable> getLogs({int limit = 20}) => [];
+
+  @override
+  bool addGlobalModerator(String npub) {
+    final security = ChatService().security;
+    if (security.isGlobalModerator(npub)) return false;
+    security.addGlobalModerator(npub);
+    ChatService().saveSecurity(security);
+    return true;
+  }
+
+  @override
+  bool removeGlobalModerator(String npub) {
+    final security = ChatService().security;
+    if (!security.isGlobalModerator(npub)) return false;
+    security.removeGlobalModerator(npub);
+    ChatService().saveSecurity(security);
+    return true;
+  }
+
+  @override
+  List<String> getGlobalModerators() {
+    return ChatService().security.getGlobalModerators();
+  }
+
+  @override
+  String? resolveIdentityToNpub(String nameOrCallsign) {
+    final reg = Nip05RegistryService().getRegistration(nameOrCallsign.toLowerCase());
+    return reg?.npub;
+  }
 }
 
 /// Read-only view over StationServerSettings.

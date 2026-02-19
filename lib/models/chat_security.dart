@@ -53,9 +53,15 @@ class ChatSecurity {
     return channelMods.contains(npub);
   }
 
-  /// Check if npub has moderation permissions (admin or moderator)
+  /// Check if npub is a global moderator (across all channels)
+  bool isGlobalModerator(String? npub) {
+    if (npub == null) return false;
+    return (moderators['*'] ?? []).contains(npub);
+  }
+
+  /// Check if npub has moderation permissions (admin, global mod, or channel mod)
   bool canModerate(String? npub, String channelId) {
-    return isAdmin(npub) || isModerator(npub, channelId);
+    return isAdmin(npub) || isGlobalModerator(npub) || isModerator(npub, channelId);
   }
 
   /// Get moderators for a specific channel
@@ -78,6 +84,21 @@ class ChatSecurity {
     if (moderators.containsKey(channelId)) {
       moderators[channelId]!.remove(npub);
     }
+  }
+
+  /// Add a global moderator (moderates all channels)
+  void addGlobalModerator(String npub) {
+    addModerator('*', npub);
+  }
+
+  /// Remove a global moderator
+  void removeGlobalModerator(String npub) {
+    removeModerator('*', npub);
+  }
+
+  /// Get all global moderators
+  List<String> getGlobalModerators() {
+    return List.unmodifiable(moderators['*'] ?? []);
   }
 
   /// Copy with modifications

@@ -204,7 +204,86 @@ String getNostrLoginScripts() {
     return bytesToHex(new Uint8Array(hash));
   }
 
-  window.GeogramNostr = { pubkey: null, callsign: null, nickname: null, connected: false };
+  window.GeogramNostr = { pubkey: null, callsign: null, nickname: null, connected: false, relayWs: null };
+
+  // --- Relay WebSocket for kind 0 metadata events ---
+
+  function connectRelay() {
+    if (window.GeogramNostr.relayWs) return;
+    try {
+      var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      var ws = new WebSocket(proto + '//' + location.host);
+      ws.onopen = function() {
+        console.log('Relay WebSocket connected');
+        window.GeogramNostr.relayWs = ws;
+      };
+      ws.onclose = function() {
+        window.GeogramNostr.relayWs = null;
+        // Reconnect after 5s
+        setTimeout(connectRelay, 5000);
+      };
+      ws.onerror = function() {
+        window.GeogramNostr.relayWs = null;
+      };
+      ws.onmessage = function(evt) {
+        try {
+          var msg = JSON.parse(evt.data);
+          // Handle EVENT responses for kind 0 queries
+          if (Array.isArray(msg) && msg[0] === 'EVENT' && msg[2]) {
+            var ev = msg[2];
+            if (ev.kind === 0) {
+              try {
+                var meta = JSON.parse(ev.content);
+                var displayName = meta.display_name || meta.name || null;
+                if (displayName && window.GeogramNostr._onKind0) {
+                  window.GeogramNostr._onKind0(ev.pubkey, displayName);
+                }
+              } catch(e) {}
+            }
+          }
+        } catch(e) {}
+      };
+    } catch(e) {
+      console.error('Relay WebSocket error:', e);
+    }
+  }
+
+  // Publish a kind 0 metadata event to the relay
+  async function publishKind0(nickname) {
+    var ws = window.GeogramNostr.relayWs;
+    var pubkey = window.GeogramNostr.pubkey;
+    var callsign = window.GeogramNostr.callsign;
+    if (!ws || ws.readyState !== 1 || !pubkey || !window.nostr) return;
+
+    try {
+      var content = JSON.stringify({
+        name: callsign,
+        display_name: nickname || callsign
+      });
+      var unsignedEvent = {
+        kind: 0,
+        created_at: Math.floor(Date.now() / 1000),
+        tags: [],
+        content: content
+      };
+      var signedEvent = await window.nostr.signEvent(unsignedEvent);
+      ws.send(JSON.stringify(['EVENT', signedEvent]));
+    } catch(e) {
+      console.error('Failed to publish kind 0:', e);
+    }
+  }
+
+  // Query kind 0 metadata for a pubkey
+  function queryKind0(pubkeyHex) {
+    var ws = window.GeogramNostr.relayWs;
+    if (!ws || ws.readyState !== 1) return;
+    var subId = 'k0_' + pubkeyHex.substring(0, 8);
+    ws.send(JSON.stringify(['REQ', subId, { kinds: [0], authors: [pubkeyHex] }]));
+  }
+
+  // Expose for chat_scripts to use
+  window.GeogramNostr.publishKind0 = publishKind0;
+  window.GeogramNostr.queryKind0 = queryKind0;
 
   function updateHeaderUI() {
     var btn = document.getElementById('nostr-header-connect');
@@ -230,6 +309,8 @@ String getNostrLoginScripts() {
       if (saved) window.GeogramNostr.nickname = saved;
     } catch(e) {}
     updateHeaderUI();
+    // Connect relay WebSocket for kind 0 metadata
+    connectRelay();
     document.dispatchEvent(new CustomEvent('nostr-connected', { detail: { pubkey: pubkey, callsign: callsign } }));
   }
 
@@ -381,6 +462,8 @@ String getNostrLoginScripts() {
         } catch(e) {}
         updateHeaderUI();
         profileMenu.style.display = 'none';
+        // Publish kind 0 metadata event to relay
+        publishKind0(val || null);
       });
     }
 

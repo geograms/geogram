@@ -316,10 +316,12 @@ class _MessageBubbleWidgetState extends State<MessageBubbleWidget> {
                 padding: const EdgeInsets.only(left: 12, bottom: 4),
                 child: Builder(builder: (context) {
                   final authorNickname = device?.nickname ?? widget.contactNickname;
+                  final isMod = widget.message.metadata['is_mod'] == 'true';
+                  final baseName = authorNickname != null
+                      ? '$authorNickname (${widget.message.author})'
+                      : widget.message.author;
                   return Text(
-                    authorNickname != null
-                        ? '$authorNickname (${widget.message.author})'
-                        : widget.message.author,
+                    isMod ? '$baseName (mod)' : baseName,
                     style: theme.textTheme.bodySmall?.copyWith(
                       color: theme.colorScheme.onSurfaceVariant,
                       fontWeight: FontWeight.w600,
@@ -572,6 +574,20 @@ class _MessageBubbleWidgetState extends State<MessageBubbleWidget> {
                       Padding(
                         padding: const EdgeInsets.only(top: 6),
                         child: _buildReactionsRow(theme, normalizedCallsign),
+                      ),
+                    // Moderator edit attribution
+                    if (widget.message.metadata['edited_by_mod'] != null)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: Text(
+                          'edited by moderator ${widget.message.metadata['mod_nickname'] ?? widget.message.metadata['mod_callsign'] ?? ''}'
+                              .trim(),
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: textColor.withOpacity(0.5),
+                            fontSize: 10,
+                            fontStyle: FontStyle.italic,
+                          ),
+                        ),
                       ),
                   ],
                 ),

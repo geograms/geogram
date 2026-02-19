@@ -16,6 +16,7 @@ import '../util/chat_format.dart';
 import '../util/event_bus.dart';
 import '../util/reaction_utils.dart';
 import 'profile_service.dart';
+import 'nip05_registry_service.dart';
 import 'profile_storage.dart';
 import 'signing_service.dart';
 
@@ -1034,10 +1035,12 @@ class ChatService {
       throw Exception('Message not found');
     }
 
-    // Verify authorization: only the author can edit their own message
+    // Verify authorization: author can edit own, moderators can edit any
     final messageNpub = targetMessage.npub;
-    if (messageNpub != actorNpub) {
-      throw Exception('Only the author can edit this message');
+    final isAuthor = messageNpub == actorNpub;
+    final isModerator = _security.canModerate(actorNpub, channelId);
+    if (!isAuthor && !isModerator) {
+      throw Exception('Not authorized to edit this message');
     }
 
     // Create the edited_at timestamp
@@ -1050,6 +1053,18 @@ class ChatService {
     updatedMetadata['npub'] = actorNpub;
     updatedMetadata['signature'] = newSignature;
     updatedMetadata['created_at'] = newCreatedAt.toString();
+
+    // Add mod attribution when a moderator edits someone else's message
+    if (!isAuthor && isModerator) {
+      updatedMetadata['edited_by_mod'] = actorNpub;
+      final reg = Nip05RegistryService().getRegistrationByNpub(actorNpub);
+      if (reg != null) {
+        updatedMetadata['mod_callsign'] = reg.callsign;
+        if (reg.nickname != null) {
+          updatedMetadata['mod_nickname'] = reg.nickname!;
+        }
+      }
+    }
 
     final updatedMessage = targetMessage.copyWith(
       content: newContent,

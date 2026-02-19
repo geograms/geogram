@@ -3892,15 +3892,20 @@ class LogApiService with ChatModificationMixin {
           );
         }
 
-        // Verify callsign matches if provided
+        // Verify callsign matches if provided (skip for moderator edits —
+        // the mod's callsign won't match the original author's callsign;
+        // authorization is handled by ChatService.editMessage)
         if (callsignTag != null && callsignTag != message.author) {
-          return shelf.Response.forbidden(
-            jsonEncode({
-              'error': 'Callsign mismatch',
-              'code': 'CALLSIGN_MISMATCH',
-            }),
-            headers: headers,
-          );
+          final isMod = chatService.security.canModerate(event.npub, roomId);
+          if (!isMod) {
+            return shelf.Response.forbidden(
+              jsonEncode({
+                'error': 'Callsign mismatch',
+                'code': 'CALLSIGN_MISMATCH',
+              }),
+              headers: headers,
+            );
+          }
         }
 
         // New content is in the event content field
@@ -3912,7 +3917,7 @@ class LogApiService with ChatModificationMixin {
           );
         }
 
-        // Edit the message (ChatService handles authorization - only author can edit)
+        // Edit the message (ChatService handles authorization - author or moderator)
         // event.sig is guaranteed non-null since _verifyNostrEventWithTags verified the signature
         final editedMessage = await chatService.editMessage(
           channelId: roomId,

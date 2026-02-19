@@ -197,6 +197,12 @@ class Nip05RegistryService {
     return registerIdentity(nickname, npub);
   }
 
+  /// Get registration by npub (reverse lookup)
+  Nip05Registration? getRegistrationByNpub(String npub) {
+    final reg = _registrations[npub];
+    return (reg != null && !reg.isExpired) ? reg : null;
+  }
+
   /// Get registration for a name if valid (not expired)
   Nip05Registration? getRegistration(String name) {
     final npub = _nameIndex[name.toLowerCase()];

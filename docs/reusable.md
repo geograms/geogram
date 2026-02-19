@@ -24,6 +24,7 @@ This document catalogs reusable UI components available in the Geogram codebase.
 - [Command Registry](#command-registry) - Self-describing console commands shared across CLI and Desktop
 - [Navigation Handler](#navigation-handler) - Shared virtual filesystem navigation (cd/ls/pwd) with `/chat/<station>/<room>` hierarchy
 - [ConsoleCommandMixin](#consolecommandmixin) - Shared /api/cli implementation for station servers
+- [ChatModerationMixin](#chatmoderationmixin) - Shared global moderator management and API response helpers
 - [ChatModificationMixin](#chatmodificationmixin) - Shared NOSTR auth verification for chat message edit/delete (NIP-09 + legacy)
 - [ChatNip05Mixin](#chatnip05mixin) - Shared NIP-05 registration for chat message senders
 - [Nip05RegistryService.buildNostrJsonResponse](#nip05registryservicebuildnostrjsonresponse) - Build NIP-05 nostr.json response (used by all station handlers)
@@ -8539,6 +8540,36 @@ Navigation commands are dispatched *before* the command registry (since they mut
 - **`handleCd` returns `bool`** — `true` when entering a chat room, so the host can display the room header and last messages using its own I/O (CLI uses stdout directly, Desktop uses buffered I/O).
 - **`getChildEntries(path)`** — public method for TAB completion; returns child names at a given path without formatting.
 - **`StationCommandInterface`** typed provider — CLI's `StationServer` already implements it; Desktop uses `_StationServiceAdapter`.
+
+---
+
+## ChatModerationMixin
+
+**Location**: `lib/server/mixins/chat_moderation_mixin.dart`
+
+Shared mixin for global chat moderator management and API response helpers. Used by both CLI (`PureStationServer`) and Desktop (`StationServer`) stations.
+
+**Key methods:**
+- `addGlobalModerator(npub)` / `removeGlobalModerator(npub)` / `getGlobalModerators()` — Manage global moderators stored under `'*'` key in `ChatSecurity.moderators`
+- `resolveIdentityToNpub(nameOrCallsign)` — Resolve callsign/nickname to npub via NIP-05 registry
+- `injectModeratorFlag(roomJson, roomId, authNpub)` — Add `isModerator: true` to room JSON for authenticated moderators
+- `injectModBadge(msgJson, msgNpub, roomId)` — Add `is_mod: 'true'` to message metadata for moderator authors
+- `canModifyMessage(actorNpub, messageNpub, roomId)` — Check if actor can edit/delete a message (author or moderator)
+- `buildModEditAttribution(actorNpub, messageNpub)` — Build `edited_by_mod`, `mod_callsign`, `mod_nickname` metadata for mod edits
+
+**Abstract members (must be overridden):**
+- `ChatSecurity get chatSecurity` — Provide the active security instance
+- `Future<void> saveChatSecurity(ChatSecurity)` — Persist security changes
+
+**Usage:**
+```dart
+class MyStation with ChatModerationMixin {
+  @override
+  ChatSecurity get chatSecurity => _security;
+  @override
+  Future<void> saveChatSecurity(ChatSecurity s) async { /* save */ }
+}
+```
 
 ---
 

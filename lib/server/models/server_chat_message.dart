@@ -32,6 +32,9 @@ class ServerChatMessage implements ChatMessageReadable {
   /// NOSTR public key (bech32) - human readable
   final String? senderNpub;
 
+  /// NOSTR public key (hex) - for relay queries
+  final String? senderPubkey;
+
   /// BIP-340 Schnorr signature
   final String? signature;
 
@@ -58,6 +61,7 @@ class ServerChatMessage implements ChatMessageReadable {
     required this.roomId,
     required this.senderCallsign,
     this.senderNpub,
+    this.senderPubkey,
     this.signature,
     required this.content,
     DateTime? timestamp,
@@ -110,6 +114,7 @@ class ServerChatMessage implements ChatMessageReadable {
           json['callsign'] as String? ??
           'Unknown',
       senderNpub: json['npub'] as String?,
+      senderPubkey: json['pubkey'] as String?,
       signature: sig,
       content: json['content'] as String? ?? '',
       timestamp: parsedTime ?? DateTime.now().toUtc(),
@@ -126,6 +131,7 @@ class ServerChatMessage implements ChatMessageReadable {
         'room_id': roomId,
         'callsign': senderCallsign,
         if (senderNpub != null) 'npub': senderNpub,
+        if (senderPubkey != null) 'pubkey': senderPubkey,
         if (signature != null) 'signature': signature,
         'content': content,
         'timestamp': timestamp.toIso8601String(),

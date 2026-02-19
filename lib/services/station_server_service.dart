@@ -2550,6 +2550,11 @@ h2 { font-size: 1.2rem; margin: 0 0 20px 0; }
               config.admins.length + 1;
         }
 
+        // Flag moderator status for the authenticated user
+        if (authNpub != null && chatService.security.canModerate(authNpub, channel.id)) {
+          roomInfo['isModerator'] = true;
+        }
+
         rooms.add(roomInfo);
       }
 
@@ -2677,7 +2682,7 @@ h2 { font-size: 1.2rem; margin: 0 0 20px 0; }
         final hasMore = messages.length > limit;
         final returnMessages = hasMore ? messages.sublist(0, limit) : messages;
         final messageList = returnMessages.map((msg) {
-          return {
+          final msgMap = <String, dynamic>{
             'author': msg.author,
             'timestamp': msg.timestamp,
             'content': msg.content,
@@ -2692,6 +2697,14 @@ h2 { font-size: 1.2rem; margin: 0 0 20px 0; }
             'metadata': msg.metadata,
             'reactions': msg.reactions,
           };
+          // Inject mod badge for messages authored by moderators
+          final msgNpub = msg.npub;
+          if (msgNpub != null && chatService.security.canModerate(msgNpub, roomId)) {
+            final meta = Map<String, dynamic>.from(msgMap['metadata'] as Map? ?? {});
+            meta['is_mod'] = 'true';
+            msgMap['metadata'] = meta;
+          }
+          return msgMap;
         }).toList();
 
         request.response.headers.contentType = ContentType.json;
