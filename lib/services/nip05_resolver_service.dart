@@ -51,6 +51,11 @@ class Nip05ResolverService {
   final Map<String, Nip05ResolvedIdentity> _cache = {};
   static const cacheTtl = Duration(hours: 1);
 
+  /// Cached station identity maps: domain → (uppercase callsign → nickname)
+  final Map<String, Map<String, String>> _stationIdentityCache = {};
+  final Map<String, DateTime> _stationIdentityFetchedAt = {};
+  static const stationIdentityCacheTtl = Duration(minutes: 10);
+
   /// Resolve a NIP-05 identifier (e.g., "alice@example.com")
   /// Returns the resolved identity if valid, null if not found/invalid
   Future<Nip05ResolvedIdentity?> resolve(String identifier) async {
@@ -131,5 +136,76 @@ class Nip05ResolverService {
       return cached;
     }
     return null;
+  }
+
+  /// Fetch all identities from a station's nostr.json and build callsign→nickname map.
+  /// Returns cached result if fresh enough.
+  Future<Map<String, String>> fetchStationIdentities(String stationUrl) async {
+    // Extract domain from wss://domain or https://domain
+    final domain = Uri.parse(
+      stationUrl.replaceFirst('wss://', 'https://').replaceFirst('ws://', 'http://'),
+    ).host;
+
+    // Check cache
+    final fetchedAt = _stationIdentityFetchedAt[domain];
+    if (fetchedAt != null &&
+        DateTime.now().difference(fetchedAt) < stationIdentityCacheTtl) {
+      return _stationIdentityCache[domain] ?? {};
+    }
+
+    // Fetch full registry (no ?name= param)
+    final url = 'https://$domain/.well-known/nostr.json';
+    try {
+      final response = await http
+          .get(Uri.parse(url), headers: {'Accept': 'application/json'})
+          .timeout(const Duration(seconds: 10));
+      if (response.statusCode != 200) {
+        return _stationIdentityCache[domain] ?? {};
+      }
+
+      final json = jsonDecode(response.body) as Map<String, dynamic>;
+      final names = json['names'] as Map<String, dynamic>? ?? {};
+
+      // Group names by hex pubkey to find callsign/nickname pairs
+      final byPubkey = <String, List<String>>{};
+      for (final entry in names.entries) {
+        final hex = entry.value as String;
+        byPubkey.putIfAbsent(hex, () => []).add(entry.key);
+      }
+
+      // Build callsign → nickname map
+      final map = <String, String>{};
+      for (final entry in byPubkey.entries) {
+        final nameList = entry.value;
+        if (nameList.length < 2) continue; // No nickname to map
+
+        // Identify which is callsign vs nickname
+        String? callsign;
+        String? nickname;
+        for (final n in nameList) {
+          if (_looksLikeCallsign(n)) {
+            callsign = n;
+          } else {
+            nickname = n;
+          }
+        }
+        if (callsign != null && nickname != null) {
+          map[callsign.toUpperCase()] = nickname;
+        }
+      }
+
+      _stationIdentityCache[domain] = map;
+      _stationIdentityFetchedAt[domain] = DateTime.now();
+      return map;
+    } catch (e) {
+      return _stationIdentityCache[domain] ?? {};
+    }
+  }
+
+  /// Check if a name looks like an auto-generated callsign (e.g. x1su86)
+  static bool _looksLikeCallsign(String name) {
+    final lower = name.toLowerCase();
+    if (lower.length < 4 || lower.length > 8) return false;
+    return RegExp(r'^[a-z]\d[a-z0-9]+$').hasMatch(lower);
   }
 }

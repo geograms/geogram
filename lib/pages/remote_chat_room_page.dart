@@ -3,6 +3,7 @@
  * License: Apache-2.0
  */
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'dart:typed_data';
@@ -11,6 +12,7 @@ import '../models/chat_message.dart';
 import '../services/devices_service.dart';
 import '../services/i18n_service.dart';
 import '../services/log_service.dart';
+import '../services/nip05_resolver_service.dart';
 import '../services/profile_service.dart';
 import '../services/signing_service.dart';
 import '../services/station_cache_service.dart';
@@ -18,6 +20,7 @@ import '../services/storage_config.dart';
 import '../services/chat_file_download_manager.dart';
 import '../api/endpoints/chat_api.dart' show ChatApi;
 import '../services/contact_service.dart';
+import '../services/websocket_service.dart';
 import '../util/event_bus.dart';
 import '../util/nostr_crypto.dart';
 import '../util/nostr_event.dart';
@@ -69,6 +72,9 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
   /// Download progress event subscription
   EventSubscription<ChatDownloadProgressEvent>? _downloadSubscription;
 
+  /// Periodic timer to refresh nickname map (NIP-05 + contacts)
+  Timer? _nicknameRefreshTimer;
+
   @override
   void initState() {
     super.initState();
@@ -76,6 +82,10 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
     _loadMessages();
     _subscribeToDownloadEvents();
     _loadNicknameMap();
+    _nicknameRefreshTimer = Timer.periodic(
+      const Duration(minutes: 10),
+      (_) => _loadNicknameMap(),
+    );
   }
 
   Future<void> _initServices() async {
@@ -83,10 +93,22 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
   }
 
   Future<void> _loadNicknameMap() async {
-    final map = await ContactService().buildNicknameMap();
+    // Fetch contacts and NIP-05 station identities in parallel
+    final contactMapFuture = ContactService().buildNicknameMap();
+    final stationUrl = WebSocketService().connectedUrl;
+    final nip05MapFuture = stationUrl != null
+        ? Nip05ResolverService().fetchStationIdentities(stationUrl)
+        : Future.value(<String, String>{});
+
+    final contactMap = await contactMapFuture;
+    final nip05Map = await nip05MapFuture;
+
+    // Merge: NIP-05 names as base, contact names override
+    final merged = <String, String>{...nip05Map, ...contactMap};
+
     if (mounted) {
       setState(() {
-        _nicknameMap = map;
+        _nicknameMap = merged;
       });
     }
   }
@@ -108,6 +130,7 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
 
   @override
   void dispose() {
+    _nicknameRefreshTimer?.cancel();
     _downloadSubscription?.cancel();
     super.dispose();
   }

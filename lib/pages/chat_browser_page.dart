@@ -42,6 +42,8 @@ import '../services/audio_service.dart';
 import '../services/audio_platform_stub.dart'
     if (dart.library.io) '../services/audio_platform_io.dart';
 import '../services/contact_service.dart';
+import '../services/nip05_resolver_service.dart';
+import '../services/websocket_service.dart';
 import '../models/contact.dart';
 import 'chat_settings_page.dart';
 import 'room_management_page.dart';
@@ -142,6 +144,9 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
   Timer? _updateDebounceTimer;
   bool _isRefreshingMessages = false;
 
+  // Periodic timer to refresh nickname map (NIP-05 + contacts)
+  Timer? _nicknameRefreshTimer;
+
   // File change subscription for CLI/external updates
   StreamSubscription<ChatFileChange>? _fileChangeSubscription;
 
@@ -169,14 +174,30 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     _subscribeToDownloadEvents();
     _startRelayStatusChecker();
     _startMessagePolling();
+    _nicknameRefreshTimer = Timer.periodic(
+      const Duration(minutes: 10),
+      (_) => _loadNicknameMap(),
+    );
   }
 
   Future<void> _loadNicknameMap() async {
     try {
-      final map = await ContactService().buildNicknameMap();
+      // Fetch contacts and NIP-05 station identities in parallel
+      final contactMapFuture = ContactService().buildNicknameMap();
+      final stationUrl = WebSocketService().connectedUrl;
+      final nip05MapFuture = stationUrl != null
+          ? Nip05ResolverService().fetchStationIdentities(stationUrl)
+          : Future.value(<String, String>{});
+
+      final contactMap = await contactMapFuture;
+      final nip05Map = await nip05MapFuture;
+
+      // Merge: NIP-05 names as base, contact names override
+      final merged = <String, String>{...nip05Map, ...contactMap};
+
       if (mounted) {
         setState(() {
-          _nicknameMap = map;
+          _nicknameMap = merged;
         });
       }
     } catch (e) {
@@ -301,6 +322,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     _fileChangeSubscription?.cancel();
     _debugActionSubscription?.cancel();
     _downloadSubscription?.cancel();
+    _nicknameRefreshTimer?.cancel();
     _chatService.stopWatching();
     _stationStatusTimer?.cancel();
     _messagePollingTimer?.cancel();
