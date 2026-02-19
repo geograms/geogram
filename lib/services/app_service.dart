@@ -897,7 +897,7 @@ class AppService {
         final time = msg.timestamp.split(' ').length > 1
             ? msg.timestamp.split(' ')[1].replaceAll('_', ':').substring(0, 5)
             : '00:00';
-        final author = escapeHtml(msg.author ?? 'anonymous');
+        final author = escapeHtml(msg.author);
         final content = escapeHtml(msg.content ?? '');
 
         messagesHtml.writeln('''

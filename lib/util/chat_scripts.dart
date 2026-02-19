@@ -173,7 +173,7 @@ String getChatPageScripts() {
         div.dataset.timestamp = msg.timestamp;
 
         const time = parseMsgTime(msg.timestamp);
-        const author = msg.author || msg.senderCallsign || 'anonymous';
+        const author = msg.callsign || msg.author || msg.senderCallsign;
         const content = msg.content || '';
 
         div.innerHTML = '<div class="message-header">' +
@@ -239,7 +239,7 @@ String getChatPageScripts() {
             div.className = 'message';
             div.dataset.timestamp = msg.timestamp;
             const time = parseMsgTime(msg.timestamp);
-            const author = msg.author || msg.senderCallsign || 'anonymous';
+            const author = msg.callsign || msg.author || msg.senderCallsign;
             const content = msg.content || '';
             div.innerHTML = '<div class="message-header">' +
                            '<span class="message-author">' + escapeHtml(author) + '</span>' +
