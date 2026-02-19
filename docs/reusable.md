@@ -8805,14 +8805,15 @@ Singleton orchestration service. Auto-selects signaling mode (LAN or station).
 **Host flow:**
 ```dart
 final room = await ConferenceService().hostConference(roomName: 'My Room');
-final urls = await ConferenceService().getLanUrls(); // LAN URLs for sharing
+final urls = await ConferenceService().getMeetUrls(); // LAN meet URLs (http://ip:port/meet/XXXX)
+final stationUrl = ConferenceService().stationMeetUrl; // Station URL (http://station/CALLSIGN/meet/XXXX)
 ```
 
 **Joiner flow:**
 ```dart
 await ConferenceService().joinLan('ws://192.168.1.5:12345/conference/ws');
 // or
-await ConferenceService().joinStation('ABCD-1234');
+await ConferenceService().discoverAndJoin('ABCD@X1SU86'); // finds host by callsign
 ```
 
 **State management:**

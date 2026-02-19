@@ -21,8 +21,7 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
   final _conferenceService = ConferenceService();
   StreamSubscription? _stateSubscription;
   StreamSubscription? _eventSubscription;
-  List<String> _lanWsUrls = [];
-  List<String> _lanWebUrls = [];
+  List<String> _meetUrls = [];
 
   @override
   void initState() {
@@ -41,20 +40,14 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
       if (mounted) setState(() {});
     });
 
-    _loadLanUrls();
+    _loadMeetUrls();
   }
 
-  Future<void> _loadLanUrls() async {
+  Future<void> _loadMeetUrls() async {
     if (_conferenceService.role == ConferenceRole.host &&
         _conferenceService.room?.signalingMode == ConferenceSignalingMode.lan) {
-      final wsUrls = await _conferenceService.getLanWsUrls();
-      final webUrls = await _conferenceService.getLanUrls();
-      if (mounted) {
-        setState(() {
-          _lanWsUrls = wsUrls;
-          _lanWebUrls = webUrls;
-        });
-      }
+      final urls = await _conferenceService.getMeetUrls();
+      if (mounted) setState(() => _meetUrls = urls);
     }
   }
 
@@ -75,18 +68,27 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
     setState(() {});
   }
 
-  void _copyRoomId() {
-    final roomId = _conferenceService.room?.roomId;
-    if (roomId == null) return;
-    Clipboard.setData(ClipboardData(text: roomId));
+  /// The primary shareable URL: LAN meet URL or station meet URL.
+  String? get _shareUrl {
+    if (_meetUrls.isNotEmpty) return _meetUrls.first;
+    return _conferenceService.stationMeetUrl;
+  }
+
+  void _copyShareUrl() {
+    final url = _shareUrl;
+    if (url == null) return;
+    Clipboard.setData(ClipboardData(text: url));
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Room ID copied')),
+      const SnackBar(content: Text('Link copied')),
     );
   }
 
   void _showShareSheet() {
     final room = _conferenceService.room;
     if (room == null) return;
+
+    final primaryUrl = _shareUrl;
+    final stationUrl = _conferenceService.stationMeetUrl;
 
     showModalBottomSheet(
       context: context,
@@ -102,83 +104,120 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
             ),
             const SizedBox(height: 20),
 
-            // Room ID — always shown, prominently
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Theme.of(ctx).colorScheme.primaryContainer,
-                borderRadius: BorderRadius.circular(12),
+            // Primary share URL
+            if (primaryUrl != null) ...[
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Theme.of(ctx).colorScheme.primaryContainer,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Column(
+                  children: [
+                    Text(
+                      _meetUrls.isNotEmpty ? 'Join link' : 'Station link',
+                      style: Theme.of(ctx).textTheme.labelMedium?.copyWith(
+                        color: Theme.of(ctx).colorScheme.onPrimaryContainer,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    SelectableText(
+                      primaryUrl,
+                      style: Theme.of(ctx).textTheme.bodyLarge?.copyWith(
+                        fontWeight: FontWeight.bold,
+                        color: Theme.of(ctx).colorScheme.onPrimaryContainer,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                  ],
+                ),
               ),
-              child: Column(
-                children: [
-                  Text(
-                    'Room ID',
-                    style: Theme.of(ctx).textTheme.labelMedium?.copyWith(
-                      color: Theme.of(ctx).colorScheme.onPrimaryContainer,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  SelectableText(
-                    room.roomId,
-                    style: Theme.of(ctx).textTheme.headlineSmall?.copyWith(
-                      fontWeight: FontWeight.bold,
-                      letterSpacing: 1.5,
-                      color: Theme.of(ctx).colorScheme.onPrimaryContainer,
-                    ),
-                    textAlign: TextAlign.center,
-                  ),
-                ],
+              const SizedBox(height: 16),
+
+              // QR code
+              SizedBox(
+                width: 180,
+                height: 180,
+                child: QrImageView(
+                  data: primaryUrl,
+                  version: QrVersions.auto,
+                  size: 180,
+                ),
+              ),
+              const SizedBox(height: 16),
+
+              // Copy button
+              FilledButton.icon(
+                onPressed: () {
+                  Clipboard.setData(ClipboardData(text: primaryUrl));
+                  Navigator.pop(ctx);
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Link copied')),
+                  );
+                },
+                icon: const Icon(Icons.copy),
+                label: const Text('Copy Link'),
+              ),
+            ],
+
+            // Room ID (secondary info, for manual entry)
+            const SizedBox(height: 16),
+            const Divider(),
+            const SizedBox(height: 8),
+            Text(
+              'Room ID',
+              style: Theme.of(ctx).textTheme.labelMedium?.copyWith(
+                color: Theme.of(ctx).colorScheme.onSurfaceVariant,
               ),
             ),
-            const SizedBox(height: 16),
-
-            // QR code — encodes the room ID
-            SizedBox(
-              width: 180,
-              height: 180,
-              child: QrImageView(
-                data: room.roomId,
-                version: QrVersions.auto,
-                size: 180,
-              ),
-            ),
-            const SizedBox(height: 16),
-
-            // Copy Room ID button
-            FilledButton.icon(
-              onPressed: () {
+            const SizedBox(height: 4),
+            InkWell(
+              onTap: () {
                 Clipboard.setData(ClipboardData(text: room.roomId));
                 Navigator.pop(ctx);
                 ScaffoldMessenger.of(context).showSnackBar(
                   const SnackBar(content: Text('Room ID copied')),
                 );
               },
-              icon: const Icon(Icons.copy),
-              label: const Text('Copy Room ID'),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    room.roomId,
+                    style: Theme.of(ctx).textTheme.titleMedium?.copyWith(
+                      fontFamily: 'monospace',
+                      letterSpacing: 1,
+                      color: Theme.of(ctx).colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  Icon(Icons.copy, size: 14,
+                      color: Theme.of(ctx).colorScheme.onSurfaceVariant),
+                ],
+              ),
             ),
 
-            // LAN WebSocket URL for direct join (secondary info)
-            if (_lanWsUrls.isNotEmpty) ...[
-              const SizedBox(height: 16),
-              const Divider(),
-              const SizedBox(height: 8),
+            // Additional LAN URLs if more than one
+            if (_meetUrls.length > 1) ...[
+              const SizedBox(height: 12),
               Text(
-                'Direct LAN join',
+                'Other LAN addresses',
                 style: Theme.of(ctx).textTheme.labelMedium?.copyWith(
                   color: Theme.of(ctx).colorScheme.onSurfaceVariant,
                 ),
               ),
               const SizedBox(height: 4),
-              for (final wsUrl in _lanWsUrls)
+              for (final url in _meetUrls.skip(1))
                 Padding(
                   padding: const EdgeInsets.symmetric(vertical: 2),
                   child: InkWell(
                     onTap: () {
-                      Clipboard.setData(ClipboardData(text: wsUrl));
+                      Clipboard.setData(ClipboardData(text: url));
                       Navigator.pop(ctx);
                       ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(content: Text('Copied: $wsUrl')),
+                        SnackBar(content: Text('Copied: $url')),
                       );
                     },
                     child: Row(
@@ -188,7 +227,7 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
                         const SizedBox(width: 6),
                         Expanded(
                           child: Text(
-                            wsUrl,
+                            url,
                             style: Theme.of(ctx).textTheme.bodySmall?.copyWith(
                               fontFamily: 'monospace',
                               color: Theme.of(ctx).colorScheme.onSurfaceVariant,
@@ -203,11 +242,11 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
                 ),
             ],
 
-            // Web browser URL (tertiary info)
-            if (_lanWebUrls.isNotEmpty) ...[
+            // Station URL (if LAN is primary, show station as secondary)
+            if (_meetUrls.isNotEmpty && stationUrl != null) ...[
               const SizedBox(height: 12),
               Text(
-                'Browser join',
+                'Station link',
                 style: Theme.of(ctx).textTheme.labelMedium?.copyWith(
                   color: Theme.of(ctx).colorScheme.onSurfaceVariant,
                 ),
@@ -215,20 +254,20 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
               const SizedBox(height: 4),
               InkWell(
                 onTap: () {
-                  Clipboard.setData(ClipboardData(text: _lanWebUrls.first));
+                  Clipboard.setData(ClipboardData(text: stationUrl));
                   Navigator.pop(ctx);
                   ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('Copied: ${_lanWebUrls.first}')),
+                    SnackBar(content: Text('Copied: $stationUrl')),
                   );
                 },
                 child: Row(
                   children: [
-                    Icon(Icons.language, size: 14,
+                    Icon(Icons.cloud, size: 14,
                         color: Theme.of(ctx).colorScheme.onSurfaceVariant),
                     const SizedBox(width: 6),
                     Expanded(
                       child: Text(
-                        _lanWebUrls.first,
+                        stationUrl,
                         style: Theme.of(ctx).textTheme.bodySmall?.copyWith(
                           fontFamily: 'monospace',
                           color: Theme.of(ctx).colorScheme.onSurfaceVariant,
@@ -256,6 +295,7 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
     final isHost = _conferenceService.role == ConferenceRole.host;
     final isMuted = _conferenceService.isLocalMuted;
     final participants = room?.participants.values.toList() ?? [];
+    final shareUrl = _shareUrl;
 
     return Scaffold(
       backgroundColor: theme.colorScheme.surface,
@@ -273,7 +313,7 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
       ),
       body: Column(
         children: [
-          // Room info bar — shows room ID (tappable to copy), mode, participants
+          // Room info bar — shows meet link (tappable to copy), mode, participants
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             child: Row(
@@ -286,52 +326,50 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
                   color: theme.colorScheme.onSurfaceVariant,
                 ),
                 const SizedBox(width: 6),
-                Text(
-                  room?.signalingMode == ConferenceSignalingMode.lan
-                      ? 'LAN'
-                      : 'Station',
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: theme.colorScheme.onSurfaceVariant,
-                  ),
-                ),
-                const SizedBox(width: 12),
-                // Room ID — tappable to copy
+                // Room ID / meet link — tappable to copy
                 if (room != null)
-                  InkWell(
-                    onTap: _copyRoomId,
-                    borderRadius: BorderRadius.circular(6),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 8, vertical: 3),
-                      decoration: BoxDecoration(
-                        color: theme.colorScheme.primaryContainer,
-                        borderRadius: BorderRadius.circular(6),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text(
-                            room.roomId,
-                            style: theme.textTheme.labelMedium?.copyWith(
-                              fontWeight: FontWeight.bold,
-                              color: theme.colorScheme.onPrimaryContainer,
-                              letterSpacing: 0.5,
+                  Expanded(
+                    child: InkWell(
+                      onTap: _copyShareUrl,
+                      borderRadius: BorderRadius.circular(6),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 8, vertical: 3),
+                        decoration: BoxDecoration(
+                          color: theme.colorScheme.primaryContainer,
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Flexible(
+                              child: Text(
+                                shareUrl ?? room.roomId,
+                                style: theme.textTheme.labelMedium?.copyWith(
+                                  fontWeight: FontWeight.bold,
+                                  color: theme.colorScheme.onPrimaryContainer,
+                                ),
+                                overflow: TextOverflow.ellipsis,
+                              ),
                             ),
-                          ),
-                          const SizedBox(width: 4),
-                          Icon(Icons.copy, size: 12,
-                              color: theme.colorScheme.onPrimaryContainer),
-                        ],
+                            const SizedBox(width: 4),
+                            Icon(Icons.copy, size: 12,
+                                color: theme.colorScheme.onPrimaryContainer),
+                          ],
+                        ),
                       ),
                     ),
                   ),
-                const Spacer(),
+                const SizedBox(width: 8),
                 Text(
-                  '${participants.length} participant${participants.length != 1 ? 's' : ''}',
+                  '${participants.length}',
                   style: theme.textTheme.bodySmall?.copyWith(
                     color: theme.colorScheme.onSurfaceVariant,
                   ),
                 ),
+                const SizedBox(width: 2),
+                Icon(Icons.person, size: 14,
+                    color: theme.colorScheme.onSurfaceVariant),
               ],
             ),
           ),
@@ -375,7 +413,6 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceEvenly,
             children: [
-              // Mute button
               _CallButton(
                 icon: isMuted ? Icons.mic_off : Icons.mic,
                 label: isMuted ? 'Unmute' : 'Mute',
@@ -386,8 +423,6 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
                     isMuted ? Colors.white : theme.colorScheme.onSurface,
                 onPressed: _toggleMute,
               ),
-
-              // End call
               _CallButton(
                 icon: Icons.call_end,
                 label: isHost ? 'End' : 'Leave',

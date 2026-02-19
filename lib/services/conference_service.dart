@@ -166,20 +166,40 @@ class ConferenceService {
     return _room!;
   }
 
-  /// Get all LAN URLs for browser joining (one per local IP).
-  Future<List<String>> getLanUrls() async {
-    if (_signalingServer == null || !_signalingServer!.isRunning) return [];
-    final port = _signalingServer!.port;
-    final ips = await _getLocalIPs();
-    return ips.map((ip) => 'http://$ip:$port/conference/web').toList();
+  /// The 4-letter room code (the part before @).
+  String? get roomCode {
+    final id = _room?.roomId;
+    if (id == null) return null;
+    final at = id.indexOf('@');
+    return at > 0 ? id.substring(0, at) : id;
   }
 
-  /// Get the WebSocket URL for Geogram clients to join (LAN mode).
-  Future<List<String>> getLanWsUrls() async {
+  /// Get shareable LAN meet URLs (one per local IP).
+  /// Format: http://ip:port/meet/XXXX
+  Future<List<String>> getMeetUrls() async {
     if (_signalingServer == null || !_signalingServer!.isRunning) return [];
     final port = _signalingServer!.port;
+    final code = roomCode ?? '';
     final ips = await _getLocalIPs();
-    return ips.map((ip) => 'ws://$ip:$port/conference/ws').toList();
+    return ips.map((ip) => 'http://$ip:$port/meet/$code').toList();
+  }
+
+  /// Get the station meet URL if connected to a station.
+  /// Format: http://station-host/CALLSIGN/meet/XXXX
+  String? get stationMeetUrl {
+    final room = _room;
+    if (room == null) return null;
+    final stationUrl = WebSocketService().connectedUrl;
+    if (stationUrl == null) return null;
+    try {
+      final uri = Uri.parse(stationUrl);
+      final scheme = uri.scheme == 'wss' ? 'https' : 'http';
+      final host = uri.host;
+      final code = roomCode ?? '';
+      return '$scheme://$host/${room.hostCallsign}/meet/$code';
+    } catch (_) {
+      return null;
+    }
   }
 
   // ── Joiner: Join a conference ────────────────────────────────────

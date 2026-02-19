@@ -4,9 +4,10 @@
 /// WebRTC audio conferencing on a local network without a station.
 ///
 /// Endpoints:
+///   GET  /meet/{code}      — shareable URL, serves the browser web client
 ///   GET  /conference/info  — room info (host callsign, room name, participants)
 ///   WS   /conference/ws    — WebSocket for signaling relay
-///   GET  /conference/web   — serves the browser-based web client
+///   GET  /conference/web   — serves the browser-based web client (legacy)
 library;
 
 import 'dart:async';
@@ -98,6 +99,12 @@ class ConferenceSignalingServer {
 
   // ── Request routing ──────────────────────────────────────────────
 
+  /// The 4-letter room code (the part before @).
+  String get _roomCode {
+    final at = roomId.indexOf('@');
+    return at > 0 ? roomId.substring(0, at) : roomId;
+  }
+
   void _handleRequest(HttpRequest request) {
     final path = request.uri.path;
     switch (path) {
@@ -108,10 +115,15 @@ class ConferenceSignalingServer {
       case '/conference/web':
         _handleWebClient(request);
       default:
-        request.response
-          ..statusCode = HttpStatus.notFound
-          ..write('Not found')
-          ..close();
+        // Handle /meet/XXXX — serves the web client at the shareable URL
+        if (path.startsWith('/meet/')) {
+          _handleWebClient(request);
+        } else {
+          request.response
+            ..statusCode = HttpStatus.notFound
+            ..write('Not found')
+            ..close();
+        }
     }
   }
 

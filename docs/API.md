@@ -814,10 +814,10 @@ Returns info about the currently active meeting on this device, or 404 if no mee
 **Response (200 OK):**
 ```json
 {
-  "room_id": "EDGD@X1SU86",
+  "room_id": "BGNI@X1SU86",
   "room_name": "Test Conference",
   "host_callsign": "X1SU86",
-  "signaling_port": 44233,
+  "signaling_port": 36665,
   "participant_count": 1,
   "max_participants": 6
 }
@@ -835,6 +835,10 @@ Returns info about the currently active meeting on this device, or 404 if no mee
 | `max_participants` | int | Maximum participants |
 
 No authentication required.
+
+**Shareable URLs:**
+- **LAN**: `http://ip:port/meet/XXXX` — the 4-letter code, no callsign needed (IP is the direct connection)
+- **Station**: `http://p2p.radio/CALLSIGN/meet/XXXX` — includes callsign for routing through the station
 
 ---
 

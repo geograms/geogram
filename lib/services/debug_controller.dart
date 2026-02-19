@@ -1474,13 +1474,13 @@ class DebugController {
     try {
       final roomName = params['room_name'] as String? ?? 'Test Conference';
       final room = await ConferenceService().hostConference(roomName: roomName);
-      final urls = await ConferenceService().getLanUrls();
+      final meetUrls = await ConferenceService().getMeetUrls();
       return {
         'success': true,
         'message': 'Conference hosted',
         'room': room.toJson(),
-        'lan_urls': urls,
-        'ws_urls': await ConferenceService().getLanWsUrls(),
+        'meet_urls': meetUrls,
+        'station_meet_url': ConferenceService().stationMeetUrl,
       };
     } catch (e) {
       return {'success': false, 'error': e.toString()};

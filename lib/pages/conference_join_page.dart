@@ -50,11 +50,27 @@ class _ConferenceJoinPageState extends State<ConferenceJoinPage> {
         // Direct WebSocket URL (LAN mode)
         await _conferenceService.joinLan(input);
       } else if (input.contains('://')) {
-        // HTTP URL — derive WebSocket URL
+        // HTTP(S) URL — parse meet URL format
         final uri = Uri.parse(input);
-        final wsScheme = uri.scheme == 'https' ? 'wss' : 'ws';
-        final wsUrl = '$wsScheme://${uri.host}:${uri.port}/conference/ws';
-        await _conferenceService.joinLan(wsUrl);
+        final segments = uri.pathSegments;
+
+        if (segments.length == 2 && segments[0] == 'meet') {
+          // LAN: http://ip:port/meet/XXXX → derive WS URL
+          final wsScheme = uri.scheme == 'https' ? 'wss' : 'ws';
+          final wsUrl = '$wsScheme://${uri.host}:${uri.port}/conference/ws';
+          await _conferenceService.joinLan(wsUrl);
+        } else if (segments.length == 3 && segments[1] == 'meet') {
+          // Station: http://station/CALLSIGN/meet/XXXX
+          final callsign = segments[0];
+          final code = segments[2];
+          final roomId = '$code@$callsign';
+          await _conferenceService.discoverAndJoin(roomId);
+        } else {
+          // Legacy: http://ip:port/conference/web → derive WS URL
+          final wsScheme = uri.scheme == 'https' ? 'wss' : 'ws';
+          final wsUrl = '$wsScheme://${uri.host}:${uri.port}/conference/ws';
+          await _conferenceService.joinLan(wsUrl);
+        }
       } else if (input.contains('@')) {
         // Room ID with @callsign — use discovery
         await _conferenceService.discoverAndJoin(input);
@@ -102,7 +118,7 @@ class _ConferenceJoinPageState extends State<ConferenceJoinPage> {
             ),
             const SizedBox(height: 8),
             Text(
-              'Enter a conference link, WebSocket URL, or room ID.',
+              'Enter a conference link or room ID.',
               style: theme.textTheme.bodyMedium?.copyWith(
                 color: theme.colorScheme.onSurfaceVariant,
               ),
@@ -113,7 +129,7 @@ class _ConferenceJoinPageState extends State<ConferenceJoinPage> {
               controller: _linkController,
               decoration: const InputDecoration(
                 labelText: 'Link or Room ID',
-                hintText: 'ABCD@CALLSIGN or ws://...',
+                hintText: 'http://192.168.1.5:8080/meet/ABCD',
                 border: OutlineInputBorder(),
                 prefixIcon: Icon(Icons.link),
               ),
@@ -138,9 +154,7 @@ class _ConferenceJoinPageState extends State<ConferenceJoinPage> {
                       child: CircularProgressIndicator(strokeWidth: 2),
                     )
                   : const Icon(Icons.call),
-              label: Text(_joining
-                  ? (_linkController.text.contains('@') ? 'Searching...' : 'Joining...')
-                  : 'Join'),
+              label: Text(_joining ? 'Joining...' : 'Join'),
             ),
           ],
         ),
