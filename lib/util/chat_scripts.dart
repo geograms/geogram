@@ -64,12 +64,16 @@ String getChatPageScripts() {
         });
       }
 
-      function switchRoom(roomId) {
+      function switchRoom(roomId, skipHistory) {
         if (roomId === currentRoom && lastTimestamp !== null) return;
         currentRoom = roomId;
         lastTimestamp = null;
         hasMore = true;
         loadingOlder = false;
+
+        if (!skipHistory) {
+          history.pushState(null, '', '#' + roomId);
+        }
 
         document.querySelectorAll('.channel-item').forEach(item => {
           item.classList.toggle('active', item.dataset.roomId === roomId);
@@ -444,8 +448,32 @@ String getChatPageScripts() {
         }
       }
 
+      function getRoomFromHash() {
+        const hash = location.hash.replace('#', '');
+        if (!hash) return null;
+        const channels = document.querySelectorAll('.channel-item');
+        for (const ch of channels) {
+          const id = ch.dataset.roomId || '';
+          const name = (ch.textContent || '').trim();
+          if (id.toLowerCase() === hash.toLowerCase() || name.toLowerCase() === hash.toLowerCase()) {
+            return id;
+          }
+        }
+        return null;
+      }
+
       document.addEventListener('DOMContentLoaded', function() {
         initChannels();
+
+        // Open room from URL hash if present
+        const hashRoom = getRoomFromHash();
+        if (hashRoom) {
+          currentRoom = hashRoom;
+          document.querySelectorAll('.channel-item').forEach(item => {
+            item.classList.toggle('active', item.dataset.roomId === hashRoom);
+          });
+          document.getElementById('current-room').textContent = hashRoom;
+        }
 
         // Initialize lastTimestamp from server-rendered messages
         const allMessages = document.querySelectorAll('.message[data-timestamp]');
@@ -453,8 +481,22 @@ String getChatPageScripts() {
           lastTimestamp = allMessages[allMessages.length - 1].dataset.timestamp;
         }
 
+        // If we switched to a hash room, reload messages for it
+        if (hashRoom && hashRoom !== (data.currentRoom || 'main')) {
+          document.getElementById('messages').innerHTML = '<div class="status-message">Loading messages...</div>';
+          loadMessages();
+        }
+
         scrollToBottom(true);
         startPolling();
+
+        // Handle browser back/forward
+        window.addEventListener('popstate', function() {
+          const room = getRoomFromHash();
+          if (room && room !== currentRoom) {
+            switchRoom(room, true);
+          }
+        });
 
         // Scroll-up pagination
         const messagesContainer = document.getElementById('messages');
