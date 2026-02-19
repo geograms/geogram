@@ -4010,12 +4010,12 @@ h2 { font-size: 1.2rem; margin: 0 0 20px 0; }
     return matches;
   }
 
-  /// Check if path is a device proxy path (/{callsign}/api/*)
+  /// Check if path is a device proxy path (/{callsign}/api/* or /{callsign}/meet/*)
   bool _isDeviceProxyPath(String path) {
-    // Pattern: /{callsign}/api/{endpoint}
-    // Must have at least 3 segments: /{callsign}/api/{something}
+    // Pattern: /{callsign}/api/{endpoint} or /{callsign}/meet/{something}
+    // Must have at least 3 segments
     final parts = path.split('/').where((p) => p.isNotEmpty).toList();
-    return parts.length >= 3 && parts[1] == 'api';
+    return parts.length >= 3 && (parts[1] == 'api' || parts[1] == 'meet');
   }
 
   /// Check if path is a callsign root path without trailing slash (/{callsign})
@@ -4033,8 +4033,8 @@ h2 { font-size: 1.2rem; margin: 0 0 20px 0; }
     if (parts.isEmpty) return false;
     // Must start with alphanumeric callsign
     if (!RegExp(r'^[A-Za-z0-9]+$').hasMatch(parts[0])) return false;
-    // Exclude API paths (handled by _isDeviceProxyPath)
-    if (parts.length >= 2 && parts[1] == 'api') return false;
+    // Exclude API and meet paths (handled by _isDeviceProxyPath)
+    if (parts.length >= 2 && (parts[1] == 'api' || parts[1] == 'meet')) return false;
     // Exclude blog HTML paths (handled by _isBlogPath)
     if (path.contains('/blog/') && path.endsWith('.html')) return false;
     return true;
@@ -5954,16 +5954,19 @@ h2 { font-size: 1.2rem; margin: 0 0 20px 0; }
     final path = request.uri.path;
     final method = request.method;
 
-    // Parse path: /{callsign}/api/{endpoint}
+    // Parse path: /{callsign}/api/{endpoint} or /{callsign}/meet/{something}
     final parts = path.split('/').where((p) => p.isNotEmpty).toList();
-    if (parts.length < 3 || parts[1] != 'api') {
+    if (parts.length < 3 || (parts[1] != 'api' && parts[1] != 'meet')) {
       request.response.statusCode = 400;
       request.response.write('Invalid device proxy path');
       return;
     }
 
     final targetCallsign = parts[0].toUpperCase();
-    final apiPath = '/${parts.sublist(1).join('/')}'; // /api/{endpoint}
+    // Rewrite /meet/* to /api/meet/* so the client's LogApiService handles it
+    final apiPath = parts[1] == 'meet'
+        ? '/api/${parts.sublist(1).join('/')}'
+        : '/${parts.sublist(1).join('/')}'; // /api/{endpoint}
 
     LogService().log('Device proxy request: $method $path -> $targetCallsign $apiPath');
 

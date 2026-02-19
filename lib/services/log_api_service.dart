@@ -297,9 +297,19 @@ class LogApiService with ChatModificationMixin {
       return _handleStatusRequest(headers);
     }
 
-    // Meet endpoint: /api/meet/active — active meeting info
+    // Meet endpoints: /api/meet/*
     if (urlPath == 'api/meet/active' && request.method == 'GET') {
       return _handleMeetActiveRequest(headers);
+    }
+    if (urlPath == 'api/meet/info' && request.method == 'GET') {
+      return _handleMeetInfoRequest(headers);
+    }
+    if (urlPath.startsWith('api/meet/') && request.method == 'GET') {
+      // /api/meet/{code} — serve a join page for the meeting
+      final code = urlPath.substring('api/meet/'.length);
+      if (code.isNotEmpty && code != 'active' && code != 'info') {
+        return _handleMeetJoinPage(code, headers);
+      }
     }
 
     // Files endpoint: /api/files or /files (legacy)
@@ -601,6 +611,8 @@ class LogApiService with ChatModificationMixin {
         'endpoints': {
           '/api/status': 'Device status and location',
           '/api/meet/active': 'Active meeting info (room ID, signaling port) or 404',
+          '/api/meet/info': 'Room info (participants list)',
+          '/api/meet/{code}': 'Meeting join page (HTML) for browser access via station',
           '/api/log': 'Get log entries (supports ?filter=text&limit=100)',
           '/api/files': 'Browse collections (supports ?path=subfolder)',
           '/api/files/content': 'Get file content (supports ?path=file/path)',
@@ -755,6 +767,140 @@ class LogApiService with ChatModificationMixin {
       jsonEncode(response),
       headers: headers,
     );
+  }
+
+  /// Handle GET /api/meet/info — returns room info (same as signaling server /meet/info).
+  shelf.Response _handleMeetInfoRequest(Map<String, String> headers) {
+    final conf = ConferenceService();
+    if (!conf.isActive || conf.room == null) {
+      return shelf.Response.notFound(
+        jsonEncode({'error': 'No active meeting'}),
+        headers: headers,
+      );
+    }
+
+    final room = conf.room!;
+    final response = {
+      'room_id': room.roomId,
+      'room_name': room.roomName,
+      'host_callsign': room.hostCallsign,
+      'participant_count': room.participants.length,
+      'participants': room.participants.values.map((p) => p.callsign).toList(),
+      'max_participants': room.maxParticipants,
+    };
+
+    return shelf.Response.ok(
+      jsonEncode(response),
+      headers: headers,
+    );
+  }
+
+  /// Handle GET /api/meet/{code} — serves an HTML join page for the meeting.
+  shelf.Response _handleMeetJoinPage(String code, Map<String, String> headers) {
+    final conf = ConferenceService();
+    if (!conf.isActive || conf.room == null) {
+      final htmlHeaders = Map<String, String>.from(headers);
+      htmlHeaders['Content-Type'] = 'text/html; charset=utf-8';
+      return shelf.Response.notFound(
+        _meetNotFoundHtml(code),
+        headers: htmlHeaders,
+      );
+    }
+
+    final room = conf.room!;
+    // Verify the code matches the current room
+    final roomCode = conf.roomCode;
+    if (roomCode != null && roomCode.toUpperCase() != code.toUpperCase()) {
+      final htmlHeaders = Map<String, String>.from(headers);
+      htmlHeaders['Content-Type'] = 'text/html; charset=utf-8';
+      return shelf.Response.notFound(
+        _meetNotFoundHtml(code),
+        headers: htmlHeaders,
+      );
+    }
+
+    final htmlHeaders = Map<String, String>.from(headers);
+    htmlHeaders['Content-Type'] = 'text/html; charset=utf-8';
+    return shelf.Response.ok(
+      _meetJoinHtml(room.roomId, room.roomName, room.hostCallsign,
+          room.participants.length, room.maxParticipants),
+      headers: htmlHeaders,
+    );
+  }
+
+  String _meetJoinHtml(String roomId, String roomName, String hostCallsign,
+      int participantCount, int maxParticipants) {
+    return '''<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Join Meeting - $roomName</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+           display: flex; justify-content: center; align-items: center; min-height: 100vh;
+           margin: 0; background: #1a1a2e; color: #eee; }
+    .card { background: #16213e; border-radius: 16px; padding: 40px; max-width: 420px;
+            text-align: center; box-shadow: 0 8px 32px rgba(0,0,0,0.3); }
+    .icon { font-size: 64px; margin-bottom: 16px; }
+    h1 { margin: 0 0 8px; font-size: 24px; }
+    .subtitle { color: #a0a0b0; margin-bottom: 24px; }
+    .info { background: #0f3460; border-radius: 8px; padding: 16px; margin: 16px 0; text-align: left; }
+    .info-row { display: flex; justify-content: space-between; margin: 4px 0; }
+    .info-label { color: #a0a0b0; }
+    .room-id { font-family: monospace; font-size: 18px; background: #0f3460;
+               padding: 8px 16px; border-radius: 8px; display: inline-block; margin: 8px 0;
+               letter-spacing: 2px; }
+    .btn { display: inline-block; background: #e94560; color: white; padding: 14px 32px;
+           border-radius: 8px; text-decoration: none; font-size: 16px; font-weight: 600;
+           margin-top: 16px; }
+    .btn:hover { background: #c73a52; }
+    .note { color: #707080; font-size: 13px; margin-top: 20px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="icon">&#128226;</div>
+    <h1>$roomName</h1>
+    <p class="subtitle">Audio Conference</p>
+    <div class="room-id">$roomId</div>
+    <div class="info">
+      <div class="info-row"><span class="info-label">Host</span><span>$hostCallsign</span></div>
+      <div class="info-row"><span class="info-label">Participants</span><span>$participantCount / $maxParticipants</span></div>
+    </div>
+    <p>Open the Geogram app and enter the Room ID above to join this meeting.</p>
+    <p class="note">Audio conferences require the Geogram desktop or mobile app.</p>
+  </div>
+</body>
+</html>''';
+  }
+
+  String _meetNotFoundHtml(String code) {
+    return '''<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Meeting Not Found</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+           display: flex; justify-content: center; align-items: center; min-height: 100vh;
+           margin: 0; background: #1a1a2e; color: #eee; }
+    .card { background: #16213e; border-radius: 16px; padding: 40px; max-width: 420px;
+            text-align: center; box-shadow: 0 8px 32px rgba(0,0,0,0.3); }
+    .icon { font-size: 64px; margin-bottom: 16px; }
+    h1 { margin: 0 0 8px; font-size: 24px; }
+    .subtitle { color: #a0a0b0; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="icon">&#128528;</div>
+    <h1>Meeting Not Found</h1>
+    <p class="subtitle">The meeting "$code" is not active or has ended.</p>
+  </div>
+</body>
+</html>''';
   }
 
   /// Handle GET /api/meet/active — returns active meeting info or 404.
