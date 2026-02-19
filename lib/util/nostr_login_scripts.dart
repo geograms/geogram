@@ -86,8 +86,8 @@ String getNostrLoginStyles() {
 
 .nostr-header-callsign::after {
   content: ' \\25BE';
-  font-size: 0.7em;
-  opacity: 0.7;
+  font-size: 1em;
+  opacity: 0.8;
 }
 
 .nostr-profile-wrapper {
