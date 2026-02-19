@@ -830,47 +830,389 @@ class LogApiService with ChatModificationMixin {
 
   String _meetJoinHtml(String roomId, String roomName, String hostCallsign,
       int participantCount, int maxParticipants) {
+    // Derive station WS URL: the browser page is served via station proxy,
+    // so the station host is the same as the page host.
+    // We embed config as JS so the client knows what to connect to.
     return '''<!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Join Meeting - $roomName</title>
-  <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-           display: flex; justify-content: center; align-items: center; min-height: 100vh;
-           margin: 0; background: #1a1a2e; color: #eee; }
-    .card { background: #16213e; border-radius: 16px; padding: 40px; max-width: 420px;
-            text-align: center; box-shadow: 0 8px 32px rgba(0,0,0,0.3); }
-    .icon { font-size: 64px; margin-bottom: 16px; }
-    h1 { margin: 0 0 8px; font-size: 24px; }
-    .subtitle { color: #a0a0b0; margin-bottom: 24px; }
-    .info { background: #0f3460; border-radius: 8px; padding: 16px; margin: 16px 0; text-align: left; }
-    .info-row { display: flex; justify-content: space-between; margin: 4px 0; }
-    .info-label { color: #a0a0b0; }
-    .room-id { font-family: monospace; font-size: 18px; background: #0f3460;
-               padding: 8px 16px; border-radius: 8px; display: inline-block; margin: 8px 0;
-               letter-spacing: 2px; }
-    .btn { display: inline-block; background: #e94560; color: white; padding: 14px 32px;
-           border-radius: 8px; text-decoration: none; font-size: 16px; font-weight: 600;
-           margin-top: 16px; }
-    .btn:hover { background: #c73a52; }
-    .note { color: #707080; font-size: 13px; margin-top: 20px; }
-  </style>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>$roomName - Geogram Conference</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:system-ui,sans-serif;background:#1a1a2e;color:#e0e0e0;display:flex;flex-direction:column;align-items:center;min-height:100vh;padding:16px}
+h1{font-size:1.4em;margin-bottom:4px;color:#f0f0f0}
+.room-info{font-size:.85em;color:#888;margin-bottom:16px}
+#status{font-size:.9em;color:#888;margin-bottom:16px}
+#join-form{display:flex;flex-direction:column;gap:12px;align-items:center;margin:24px 0}
+#join-form input{padding:10px 16px;border-radius:8px;border:1px solid #444;background:#2a2a40;color:#fff;font-size:1em;width:240px;text-align:center}
+button{padding:10px 24px;border:none;border-radius:8px;font-size:1em;cursor:pointer;transition:background .2s}
+#btn-join{background:#4a9eff;color:#fff}
+#btn-join:hover{background:#3a8eef}
+#btn-join:disabled{background:#555;cursor:default}
+#call-ui{display:none;flex-direction:column;align-items:center;gap:16px;width:100%;max-width:400px}
+#participants{width:100%;list-style:none}
+#participants li{padding:10px 16px;background:#2a2a40;border-radius:8px;margin-bottom:6px;display:flex;justify-content:space-between;align-items:center}
+#participants li .name{font-weight:600}
+#participants li .state{font-size:.8em;color:#888}
+.controls{display:flex;gap:12px;margin-top:8px}
+#btn-mute{background:#444;color:#fff}
+#btn-mute.muted{background:#e74c3c}
+#btn-leave{background:#e74c3c;color:#fff}
+#btn-leave:hover{background:#c0392b}
+.connected{color:#2ecc71}
+.connecting{color:#f39c12}
+</style>
 </head>
 <body>
-  <div class="card">
-    <div class="icon">&#128226;</div>
-    <h1>$roomName</h1>
-    <p class="subtitle">Audio Conference</p>
-    <div class="room-id">$roomId</div>
-    <div class="info">
-      <div class="info-row"><span class="info-label">Host</span><span>$hostCallsign</span></div>
-      <div class="info-row"><span class="info-label">Participants</span><span>$participantCount / $maxParticipants</span></div>
-    </div>
-    <p>Open the Geogram app and enter the Room ID above to join this meeting.</p>
-    <p class="note">Audio conferences require the Geogram desktop or mobile app.</p>
+<h1>$roomName</h1>
+<div class="room-info">Hosted by $hostCallsign &middot; $participantCount / $maxParticipants participants</div>
+<div id="status">Not connected</div>
+
+<div id="join-form">
+  <input id="nickname" type="text" placeholder="Your name" maxlength="20" autofocus>
+  <button id="btn-join" onclick="joinConference()">Join Conference</button>
+</div>
+
+<div id="call-ui">
+  <ul id="participants"></ul>
+  <div class="controls">
+    <button id="btn-mute" onclick="toggleMute()">Mute</button>
+    <button id="btn-leave" onclick="leaveConference()">Leave</button>
   </div>
+</div>
+
+<script>
+'use strict';
+
+// ── Config (embedded by server) ─────────────────────────────────
+const CONFIG = {
+  mode: 'station',
+  roomId: '$roomId',
+  roomName: '$roomName',
+  hostCallsign: '$hostCallsign'
+};
+
+// Derive station WebSocket URL from page URL (same host)
+const loc = window.location;
+const stationWsUrl = (loc.protocol === 'https:' ? 'wss://' : 'ws://') + loc.host + '/';
+
+let ws = null;
+let localStream = null;
+let myCallsign = '';
+let muted = false;
+const peers = {};
+const audioElements = {};
+
+const statusEl = document.getElementById('status');
+const joinForm = document.getElementById('join-form');
+const callUi = document.getElementById('call-ui');
+const participantsEl = document.getElementById('participants');
+const muteBtn = document.getElementById('btn-mute');
+
+function setStatus(msg) { statusEl.textContent = msg; }
+
+function randomHex(len) {
+  const arr = new Uint8Array(len / 2);
+  crypto.getRandomValues(arr);
+  return Array.from(arr, b => b.toString(16).padStart(2, '0')).join('');
+}
+
+async function joinConference() {
+  const nick = document.getElementById('nickname').value.trim();
+  if (!nick) { alert('Enter your name'); return; }
+  myCallsign = 'WEB-' + nick.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 12);
+
+  document.getElementById('btn-join').disabled = true;
+  setStatus('Requesting microphone...');
+
+  try {
+    localStream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      video: false
+    });
+  } catch (e) {
+    setStatus('Microphone access denied');
+    document.getElementById('btn-join').disabled = false;
+    return;
+  }
+
+  setStatus('Connecting to station...');
+  ws = new WebSocket(stationWsUrl);
+
+  ws.onopen = () => {
+    // Step 1: Send hello with random npub (station accepts any non-empty npub)
+    ws.send(JSON.stringify({
+      type: 'hello',
+      callsign: myCallsign,
+      device_type: 'browser',
+      npub: randomHex(64)
+    }));
+    setStatus('Authenticating...');
+  };
+
+  ws.onmessage = (ev) => handleMessage(JSON.parse(ev.data));
+
+  ws.onclose = () => {
+    setStatus('Disconnected');
+    cleanup();
+  };
+
+  ws.onerror = () => {
+    setStatus('Connection failed');
+    document.getElementById('btn-join').disabled = false;
+  };
+}
+
+function handleMessage(msg) {
+  switch (msg.type) {
+    case 'hello_ack':
+      // Step 2: Authenticated — now join the conference room
+      ws.send(JSON.stringify({
+        type: 'conference_join',
+        room_id: CONFIG.roomId
+      }));
+      setStatus('Joining conference...');
+      break;
+
+    case 'conference_welcome':
+      joinForm.style.display = 'none';
+      callUi.style.display = 'flex';
+      setStatus('In conference: ' + (msg.room_name || CONFIG.roomName));
+      // Step 3: Create offers to existing participants
+      if (msg.participants) {
+        msg.participants.forEach(cs => {
+          if (cs !== myCallsign) createOffer(cs);
+        });
+      }
+      updateParticipantList();
+      break;
+
+    case 'conference_participant_joined':
+      // New participant — they will send us an offer
+      updateParticipantList();
+      break;
+
+    case 'conference_participant_left':
+      removePeer(msg.callsign);
+      updateParticipantList();
+      break;
+
+    case 'conference_end':
+      setStatus('Conference ended by host');
+      cleanup();
+      break;
+
+    case 'conference_error':
+      setStatus('Error: ' + (msg.error || 'unknown'));
+      document.getElementById('btn-join').disabled = false;
+      break;
+
+    case 'conference_signal':
+      // Unwrap station signal — route by signal_type
+      handleSignal(msg);
+      break;
+  }
+}
+
+function handleSignal(msg) {
+  switch (msg.signal_type) {
+    case 'webrtc_offer':
+      handleOffer(msg);
+      break;
+    case 'webrtc_answer':
+      handleAnswer(msg);
+      break;
+    case 'webrtc_ice':
+      handleIce(msg);
+      break;
+    case 'webrtc_bye':
+      removePeer(msg.from_callsign);
+      updateParticipantList();
+      break;
+  }
+}
+
+// ── WebRTC ───────────────────────────────────────────────────────
+
+function createPeerConnection(callsign) {
+  const pc = new RTCPeerConnection({
+    iceServers: [
+      { urls: 'stun:stun.l.google.com:19302' },
+      { urls: 'stun:stun1.l.google.com:19302' }
+    ]
+  });
+
+  if (localStream) {
+    localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
+  }
+
+  pc.onicecandidate = (ev) => {
+    if (ev.candidate) {
+      sendSignal({
+        type: 'webrtc_ice',
+        to_callsign: callsign,
+        candidate: {
+          candidate: ev.candidate.candidate,
+          sdpMid: ev.candidate.sdpMid,
+          sdpMLineIndex: ev.candidate.sdpMLineIndex
+        }
+      });
+    }
+  };
+
+  pc.ontrack = (ev) => {
+    if (ev.streams && ev.streams[0]) {
+      const stream = ev.streams[0];
+      peers[callsign] = peers[callsign] || {};
+      peers[callsign].remoteStream = stream;
+      let audio = audioElements[callsign];
+      if (!audio) {
+        audio = new Audio();
+        audio.autoplay = true;
+        audioElements[callsign] = audio;
+      }
+      audio.srcObject = stream;
+      updateParticipantList();
+    }
+  };
+
+  pc.onconnectionstatechange = () => updateParticipantList();
+
+  peers[callsign] = peers[callsign] || {};
+  peers[callsign].pc = pc;
+  return pc;
+}
+
+async function createOffer(callsign) {
+  const pc = createPeerConnection(callsign);
+  const offer = await pc.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: false });
+  await pc.setLocalDescription(offer);
+
+  sendSignal({
+    type: 'webrtc_offer',
+    to_callsign: callsign,
+    session_id: Date.now().toString(),
+    sdp: { type: offer.type, sdp: offer.sdp }
+  });
+}
+
+async function handleOffer(msg) {
+  const callsign = msg.from_callsign;
+  const pc = createPeerConnection(callsign);
+  await pc.setRemoteDescription(new RTCSessionDescription({ type: msg.sdp.type, sdp: msg.sdp.sdp }));
+
+  if (peers[callsign] && peers[callsign].pendingIce) {
+    for (const c of peers[callsign].pendingIce) {
+      await pc.addIceCandidate(new RTCIceCandidate(c));
+    }
+    peers[callsign].pendingIce = [];
+  }
+
+  const answer = await pc.createAnswer({ offerToReceiveAudio: true, offerToReceiveVideo: false });
+  await pc.setLocalDescription(answer);
+
+  sendSignal({
+    type: 'webrtc_answer',
+    to_callsign: callsign,
+    session_id: msg.session_id,
+    sdp: { type: answer.type, sdp: answer.sdp }
+  });
+}
+
+async function handleAnswer(msg) {
+  const peer = peers[msg.from_callsign];
+  if (!peer || !peer.pc) return;
+  await peer.pc.setRemoteDescription(new RTCSessionDescription({ type: msg.sdp.type, sdp: msg.sdp.sdp }));
+
+  if (peer.pendingIce) {
+    for (const c of peer.pendingIce) {
+      await peer.pc.addIceCandidate(new RTCIceCandidate(c));
+    }
+    peer.pendingIce = [];
+  }
+}
+
+async function handleIce(msg) {
+  const callsign = msg.from_callsign;
+  const peer = peers[callsign];
+  const candidate = msg.candidate;
+  if (!candidate) return;
+
+  if (peer && peer.pc && peer.pc.remoteDescription) {
+    await peer.pc.addIceCandidate(new RTCIceCandidate(candidate));
+  } else {
+    if (!peers[callsign]) peers[callsign] = {};
+    if (!peers[callsign].pendingIce) peers[callsign].pendingIce = [];
+    peers[callsign].pendingIce.push(candidate);
+  }
+}
+
+// ── Station signal wrapping ─────────────────────────────────────
+
+function sendSignal(msg) {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({
+      type: 'conference_signal',
+      signal_type: msg.type,
+      room_id: CONFIG.roomId,
+      from_callsign: myCallsign,
+      to_callsign: msg.to_callsign,
+      session_id: msg.session_id,
+      sdp: msg.sdp,
+      candidate: msg.candidate
+    }));
+  }
+}
+
+// ── UI ───────────────────────────────────────────────────────────
+
+function updateParticipantList() {
+  participantsEl.innerHTML = '';
+  for (const [cs, peer] of Object.entries(peers)) {
+    const li = document.createElement('li');
+    const state = peer.pc ? peer.pc.connectionState || 'new' : 'new';
+    const stateClass = state === 'connected' ? 'connected' : 'connecting';
+    li.innerHTML = '<span class="name">' + cs + '</span><span class="state ' + stateClass + '">' + state + '</span>';
+    participantsEl.appendChild(li);
+  }
+}
+
+function toggleMute() {
+  muted = !muted;
+  if (localStream) {
+    localStream.getAudioTracks().forEach(t => { t.enabled = !muted; });
+  }
+  muteBtn.textContent = muted ? 'Unmute' : 'Mute';
+  muteBtn.classList.toggle('muted', muted);
+}
+
+function leaveConference() {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: 'conference_leave', room_id: CONFIG.roomId }));
+  }
+  cleanup();
+  setStatus('Left conference');
+}
+
+function removePeer(callsign) {
+  const peer = peers[callsign];
+  if (peer && peer.pc) peer.pc.close();
+  const audio = audioElements[callsign];
+  if (audio) { audio.srcObject = null; delete audioElements[callsign]; }
+  delete peers[callsign];
+}
+
+function cleanup() {
+  for (const cs of Object.keys(peers)) removePeer(cs);
+  if (localStream) { localStream.getTracks().forEach(t => t.stop()); localStream = null; }
+  if (ws) { ws.close(); ws = null; }
+  callUi.style.display = 'none';
+  joinForm.style.display = 'flex';
+  document.getElementById('btn-join').disabled = false;
+}
+</script>
 </body>
 </html>''';
   }

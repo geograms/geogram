@@ -51,7 +51,7 @@ button{padding:10px 24px;border:none;border-radius:8px;font-size:1em;cursor:poin
 
 // Derive the WebSocket URL from the page URL
 const loc = window.location;
-const wsUrl = (loc.protocol === 'https:' ? 'wss://' : 'ws://') + loc.host + '/conference/ws';
+const wsUrl = (loc.protocol === 'https:' ? 'wss://' : 'ws://') + loc.host + '/meet/ws';
 
 let ws = null;
 let localStream = null;
