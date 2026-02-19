@@ -25,6 +25,8 @@ This document catalogs reusable UI components available in the Geogram codebase.
 - [Navigation Handler](#navigation-handler) - Shared virtual filesystem navigation (cd/ls/pwd) with `/chat/<station>/<room>` hierarchy
 - [ConsoleCommandMixin](#consolecommandmixin) - Shared /api/cli implementation for station servers
 - [ChatModificationMixin](#chatmodificationmixin) - Shared NOSTR auth verification for chat message edit/delete (NIP-09 + legacy)
+- [ChatNip05Mixin](#chatnip05mixin) - Shared NIP-05 registration for chat message senders
+- [Nip05RegistryService.buildNostrJsonResponse](#nip05registryservicebuildnostrjsonresponse) - Build NIP-05 nostr.json response (used by all station handlers)
 
 ### Viewer Pages
 - [PhotoViewerPage](#photoviewerpage) - Image & video gallery
@@ -8563,6 +8565,53 @@ class MyStation with ChatModificationMixin {
     // For kind 5: validateDeletionTarget(event, storedEventId)
   }
 }
+```
+
+---
+
+## ChatNip05Mixin
+
+**Location**: `lib/server/mixins/chat_nip05_mixin.dart`
+
+Shared mixin for registering chat message senders in the NIP-05 registry. Binds callsign→npub so web chat participants are discoverable via `.well-known/nostr.json`. Used by both `StationServer` (Desktop) and `PureStationServer` (CLI).
+
+### Methods
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `registerChatSender(callsign, npub)` | `void` | Register callsign→npub in NIP-05 registry; skips if npub is null/empty |
+
+### Usage
+
+```dart
+class MyStation with ChatNip05Mixin {
+  void handlePost(String callsign, String? npub) {
+    // After message creation
+    registerChatSender(callsign, npub);
+  }
+}
+```
+
+---
+
+## Nip05RegistryService.buildNostrJsonResponse
+
+**Location**: `lib/services/nip05_registry_service.dart`
+
+Builds the complete NIP-05 `nostr.json` response map for a given name query. Handles single-name lookup (returns all names for that identity — callsign + nickname) and full-registry dump. Used by all 3 station `_handleWellKnownNostr` handlers.
+
+### Signature
+
+```dart
+Map<String, dynamic> buildNostrJsonResponse(String? name, String relayUrl)
+```
+
+### Usage
+
+```dart
+final response = Nip05RegistryService()
+    .buildNostrJsonResponse(nameParam, 'wss://p2p.radio');
+request.response.write(jsonEncode(response));
 ```
 
 ---
