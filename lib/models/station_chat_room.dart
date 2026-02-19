@@ -60,6 +60,18 @@ class StationChatRoom {
         .replaceFirst('wss://', 'https://');
   }
 
+  StationChatRoom copyWith({String? name, String? description}) {
+    return StationChatRoom(
+      id: id,
+      name: name ?? this.name,
+      description: description ?? this.description,
+      messageCount: messageCount,
+      stationUrl: stationUrl,
+      stationName: stationName,
+      isModerator: isModerator,
+    );
+  }
+
   @override
   String toString() =>
       'StationChatRoom(id: $id, name: $name, station: $stationName)';

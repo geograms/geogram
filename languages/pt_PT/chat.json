@@ -24,5 +24,6 @@
   "rename_room": "Renomear sala",
   "delete_room": "Eliminar sala",
   "delete_room_confirm": "Tem a certeza que deseja eliminar",
-  "room_name": "Nome da sala"
+  "room_name": "Nome da sala",
+  "rename_room_failed": "Falha ao renomear sala"
 }

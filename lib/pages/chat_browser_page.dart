@@ -1770,10 +1770,33 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     final stationUrl = _lastStationUrl;
     if (stationUrl == null) return;
 
+    final oldName = room.name;
+
+    // Optimistic update: rename immediately in the UI
+    _applyRoomRename(room.id, newName);
+
     final success = await _stationService.renameStationRoom(stationUrl, room.id, newName);
-    if (success) {
-      await _loadRelayRooms();
+    if (!success) {
+      // Revert on failure
+      _applyRoomRename(room.id, oldName);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(_i18n.t('rename_room_failed'))),
+        );
+      }
     }
+  }
+
+  void _applyRoomRename(String roomId, String name) {
+    _setStateIfMounted(() {
+      final idx = _stationRooms.indexWhere((r) => r.id == roomId);
+      if (idx != -1) {
+        _stationRooms[idx] = _stationRooms[idx].copyWith(name: name);
+      }
+      if (_selectedStationRoom?.id == roomId) {
+        _selectedStationRoom = _selectedStationRoom!.copyWith(name: name);
+      }
+    });
   }
 
   Future<void> _deleteStationMessage(ChatMessage message) async {

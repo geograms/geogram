@@ -24,5 +24,6 @@
   "rename_room": "Rename room",
   "delete_room": "Delete room",
   "delete_room_confirm": "Are you sure you want to delete",
-  "room_name": "Room name"
+  "room_name": "Room name",
+  "rename_room_failed": "Failed to rename room"
 }

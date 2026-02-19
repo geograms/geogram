@@ -24,5 +24,6 @@
   "rename_room": "Raum umbenennen",
   "delete_room": "Raum löschen",
   "delete_room_confirm": "Sind Sie sicher, dass Sie löschen möchten",
-  "room_name": "Raumname"
+  "room_name": "Raumname",
+  "rename_room_failed": "Raum umbenennen fehlgeschlagen"
 }
