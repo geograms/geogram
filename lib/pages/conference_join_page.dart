@@ -99,7 +99,7 @@ class _ConferenceJoinPageState extends State<ConferenceJoinPage> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Join Conference'),
+        title: const Text('Join Meeting'),
       ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(16),
@@ -109,13 +109,13 @@ class _ConferenceJoinPageState extends State<ConferenceJoinPage> {
             Icon(Icons.group, size: 64, color: theme.colorScheme.primary),
             const SizedBox(height: 16),
             Text(
-              'Join an audio conference',
+              'Join an audio meeting',
               style: theme.textTheme.headlineSmall,
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: 8),
             Text(
-              'Enter a conference link or room ID.',
+              'Enter a meeting link or room ID.',
               style: theme.textTheme.bodyMedium?.copyWith(
                 color: theme.colorScheme.onSurfaceVariant,
               ),

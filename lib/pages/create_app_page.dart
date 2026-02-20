@@ -851,7 +851,7 @@ class _CreateAppPageState extends State<CreateAppPage> {
       case 'qr':
         return 'Scan and generate QR codes and barcodes. Create WiFi sharing codes, URLs, contacts, and more. Organize your codes in folders and share them as images.';
       case 'conference':
-        return 'Host or join P2P audio conferences. Create voice rooms on your local network or through your station. Share via link or QR code for up to 6 participants.';
+        return 'Host or join P2P audio meetings. Create voice rooms on your local network or through your station. Share via link or QR code for up to 6 participants.';
       default:
         return '';
     }

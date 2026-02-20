@@ -99,7 +99,7 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
           mainAxisSize: MainAxisSize.min,
           children: [
             Text(
-              'Share Conference',
+              'Share Meeting',
               style: Theme.of(ctx).textTheme.titleLarge,
             ),
             const SizedBox(height: 20),
@@ -300,14 +300,14 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
     return Scaffold(
       backgroundColor: theme.colorScheme.surface,
       appBar: AppBar(
-        title: Text(room?.roomName ?? 'Conference'),
+        title: Text(room?.roomName ?? 'Meeting'),
         automaticallyImplyLeading: false,
         actions: [
           if (isHost)
             IconButton(
               icon: const Icon(Icons.share),
               onPressed: _showShareSheet,
-              tooltip: 'Share conference',
+              tooltip: 'Share meeting',
             ),
         ],
       ),

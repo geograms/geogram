@@ -16,7 +16,7 @@ class ConferenceHostPage extends StatefulWidget {
 }
 
 class _ConferenceHostPageState extends State<ConferenceHostPage> {
-  final _nameController = TextEditingController(text: 'My Conference');
+  final _nameController = TextEditingController(text: 'My Meeting');
   final _conferenceService = ConferenceService();
   bool _starting = false;
   String? _error;
@@ -59,7 +59,7 @@ class _ConferenceHostPageState extends State<ConferenceHostPage> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Host Conference'),
+        title: const Text('Host Meeting'),
       ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(16),
@@ -69,7 +69,7 @@ class _ConferenceHostPageState extends State<ConferenceHostPage> {
             Icon(Icons.mic, size: 64, color: theme.colorScheme.primary),
             const SizedBox(height: 16),
             Text(
-              'Create an audio conference',
+              'Create an audio meeting',
               style: theme.textTheme.headlineSmall,
               textAlign: TextAlign.center,
             ),
@@ -85,7 +85,7 @@ class _ConferenceHostPageState extends State<ConferenceHostPage> {
             TextField(
               controller: _nameController,
               decoration: const InputDecoration(
-                labelText: 'Conference name',
+                labelText: 'Meeting name',
                 border: OutlineInputBorder(),
                 prefixIcon: Icon(Icons.label),
               ),
@@ -110,7 +110,7 @@ class _ConferenceHostPageState extends State<ConferenceHostPage> {
                       child: CircularProgressIndicator(strokeWidth: 2),
                     )
                   : const Icon(Icons.call),
-              label: Text(_starting ? 'Starting...' : 'Start Conference'),
+              label: Text(_starting ? 'Starting...' : 'Start Meeting'),
             ),
           ],
         ),

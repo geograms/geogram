@@ -1005,7 +1005,7 @@ class DebugController {
         'action': 'conference_host',
         'description': 'Host a new audio conference (LAN or station mode)',
         'params': {
-          'room_name': '(optional) Conference name (default: "Test Conference")',
+          'room_name': '(optional) Meeting name (default: "Test Meeting")',
         },
       },
       {
@@ -1472,7 +1472,7 @@ class DebugController {
 
   Future<Map<String, dynamic>> _conferenceHost(Map<String, dynamic> params) async {
     try {
-      final roomName = params['room_name'] as String? ?? 'Test Conference';
+      final roomName = params['room_name'] as String? ?? 'Test Meeting';
       final room = await ConferenceService().hostConference(roomName: roomName);
       final meetUrls = await ConferenceService().getMeetUrls();
       return {
