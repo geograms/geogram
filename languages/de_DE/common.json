@@ -137,6 +137,8 @@
   "copied_to_clipboard": "In die Zwischenablage kopiert",
   "callsign": "Rufzeichen",
   "copy_callsign": "Rufzeichen kopieren",
+  "share_as_qr": "Als QR teilen",
+  "share_nsec_qr_warning": "Seien Sie vorsichtig beim Teilen dieses QR-Codes, er enthält den privaten Schlüssel Ihres Rufzeichens",
   "copy_to_clipboard": "In die Zwischenablage kopieren",
   "keep_secret_warning": "⚠️ Geheim halten! Niemals mit anderen teilen.",
   "reset_identity": "Identität zurücksetzen",

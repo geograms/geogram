@@ -137,6 +137,8 @@
   "copied_to_clipboard": "Copied to clipboard",
   "callsign": "Callsign",
   "copy_callsign": "Copy Callsign",
+  "share_as_qr": "Share as QR",
+  "share_nsec_qr_warning": "Be careful when sharing this QR, contains the private key for your callsign",
   "copy_to_clipboard": "Copy to clipboard",
   "keep_secret_warning": "⚠️ Keep this secret! Never share with anyone.",
   "reset_identity": "Reset Identity",

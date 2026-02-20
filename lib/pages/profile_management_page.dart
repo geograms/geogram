@@ -6,6 +6,7 @@
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 import '../models/profile.dart';
 import '../services/profile_service.dart';
 import '../services/i18n_service.dart';
@@ -631,6 +632,9 @@ class _ProfileManagementPageState extends State<ProfileManagementPage> {
                             case 'deactivate':
                               _profileService.deactivateProfile(profile.id);
                               break;
+                            case 'share_qr':
+                              _shareAsQr(profile);
+                              break;
                             case 'copy':
                               _copyCallsign(profile);
                               break;
@@ -716,6 +720,17 @@ class _ProfileManagementPageState extends State<ProfileManagementPage> {
                               ],
                             ),
                           ),
+                          if (profile.nsec.isNotEmpty)
+                            PopupMenuItem(
+                              value: 'share_qr',
+                              child: Row(
+                                children: [
+                                  const Icon(Icons.qr_code),
+                                  const SizedBox(width: 8),
+                                  Text(_i18n.t('share_as_qr')),
+                                ],
+                              ),
+                            ),
                           if (!kIsWeb)
                             PopupMenuItem(
                               value: 'export',
@@ -829,6 +844,86 @@ class _ProfileManagementPageState extends State<ProfileManagementPage> {
       SnackBar(
         content: Text(_i18n.t('copied_to_clipboard', params: [profile.callsign])),
         duration: const Duration(seconds: 2),
+      ),
+    );
+  }
+
+  void _shareAsQr(Profile profile) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Row(
+          children: [
+            const Icon(Icons.qr_code, size: 28),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                profile.callsign,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ],
+        ),
+        content: SizedBox(
+          width: 280,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: SizedBox(
+                  width: 220,
+                  height: 220,
+                  child: QrImageView(
+                    data: profile.nsec,
+                    version: QrVersions.auto,
+                    size: 220,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Theme.of(context).colorScheme.errorContainer.withValues(alpha: 0.3),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: Theme.of(context).colorScheme.error.withValues(alpha: 0.5),
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.warning_amber_rounded,
+                      color: Theme.of(context).colorScheme.error,
+                      size: 20,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        _i18n.t('share_nsec_qr_warning'),
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                              color: Theme.of(context).colorScheme.error,
+                              fontWeight: FontWeight.w600,
+                            ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: Text(_i18n.t('close')),
+          ),
+        ],
       ),
     );
   }

@@ -75,6 +75,8 @@
   "copied_to_clipboard": "Copiado para a área de transferência",
   "callsign": "Indicativo",
   "copy_callsign": "Copiar Indicativo",
+  "share_as_qr": "Partilhar como QR",
+  "share_nsec_qr_warning": "Cuidado ao partilhar este QR, contém a chave privada do seu indicativo",
   "copy_to_clipboard": "Copiar para área de transferência",
   "keep_secret_warning": "⚠️ Mantenha isto secreto! Nunca partilhe com ninguém.",
   "reset_identity": "Repor Identidade",
