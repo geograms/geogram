@@ -449,6 +449,7 @@ class _MessageInputWidgetState extends State<MessageInputWidget> {
 
   /// Handle send button press
   Future<void> _handleSend() async {
+    if (_isSending) return; // Guard against double-send (Enter key + onSubmitted)
     final content = _controller.text.trim();
 
     // Check if there's content or a file

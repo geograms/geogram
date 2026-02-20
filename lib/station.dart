@@ -1189,11 +1189,33 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, EmailHandlerMixin,
           reactions: p.reactions,
           metadata: p.metadata,
         );
-        room.messages.add(msg);
+        _addChatMessage(room, msg);
       }
     } catch (e) {
       _log('ERROR', 'Failed to parse chat file ${chatFile.path}: $e');
     }
+  }
+
+  /// Add a chat message to a room with deduplication.
+  /// Returns true if the message was added, false if it was a duplicate.
+  /// Primary key: event ID (NOSTR event ID). Fallback: sender + timestamp within 2s window.
+  bool _addChatMessage(ServerChatRoom room, ChatMessage msg) {
+    // Check by event ID first (most reliable for signed messages)
+    final msgId = msg.id;
+    for (final existing in room.messages) {
+      // Primary: exact event ID match (skip auto-generated millisecond IDs)
+      if (msgId.length > 13 && existing.id == msgId) {
+        return false;
+      }
+      // Fallback: same sender + timestamp within 2-second window
+      if (existing.senderCallsign.toUpperCase() == msg.senderCallsign.toUpperCase() &&
+          existing.content == msg.content &&
+          (existing.timestamp.difference(msg.timestamp).abs().inSeconds <= 2)) {
+        return false;
+      }
+    }
+    room.messages.add(msg);
+    return true;
   }
 
   /// Reconstruct a NOSTR event from stored message data
@@ -2263,7 +2285,7 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, EmailHandlerMixin,
       verified: verified,  // Set verification status
       hasSignature: signature != null,
     );
-    room.messages.add(message);
+    if (!_addChatMessage(room, message)) return; // Duplicate, skip
     room.lastActivity = now;
     _stats.totalMessages++;
     _stats.lastMessage = now;
@@ -2993,7 +3015,10 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, EmailHandlerMixin,
                   verified: isVerified,
                   hasSignature: hasSig,
                 );
-                room.messages.add(msg);
+                if (!_addChatMessage(room, msg)) {
+                  _log('DEBUG', 'Duplicate chat_message skipped from ${client.callsign}');
+                  break;
+                }
                 room.lastActivity = now;
                 _stats.totalMessages++;
                 _stats.lastMessage = DateTime.now();
@@ -3486,7 +3511,10 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, EmailHandlerMixin,
         hasSignature: true,
       );
 
-      room.messages.add(msg);
+      if (!_addChatMessage(room, msg)) {
+        _log('DEBUG', 'Duplicate NOSTR relay message skipped for room $roomId');
+        return;
+      }
       room.lastActivity = DateTime.now().toUtc();
       _stats.totalMessages++;
       _stats.lastMessage = DateTime.now();
@@ -7745,7 +7773,15 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, EmailHandlerMixin,
           metadata: metadata,
         );
 
-        room.messages.add(msg);
+        if (!_addChatMessage(room, msg)) {
+          _log('DEBUG', 'Duplicate HTTP POST message skipped for room $roomId');
+          request.response
+            ..statusCode = HttpStatus.conflict
+            ..headers.contentType = ContentType.json
+            ..write(jsonEncode({'error': 'Duplicate message'}))
+            ..close();
+          return;
+        }
         room.lastActivity = DateTime.now();
         _stats.totalMessages++;
         _stats.lastMessage = DateTime.now();

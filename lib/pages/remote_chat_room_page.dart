@@ -16,7 +16,6 @@ import '../services/nip05_resolver_service.dart';
 import '../services/profile_service.dart';
 import '../services/signing_service.dart';
 import '../services/station_cache_service.dart';
-import '../services/storage_config.dart';
 import '../services/chat_file_download_manager.dart';
 import '../api/endpoints/chat_api.dart' show ChatApi;
 import '../services/contact_service.dart';
@@ -166,34 +165,43 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
     }
   }
 
-  /// Load messages from cached data on disk
+  /// Load messages from cached .txt files on disk
   Future<List<ChatMessage>> _loadFromCache() async {
     try {
-      final dataDir = StorageConfig().baseDir;
-      final roomPath = '$dataDir/devices/${widget.device.callsign}/chat/${widget.room.id}';
-      final roomDir = Directory(roomPath);
+      final cached = await _cacheService.loadMessages(
+        widget.device.callsign,
+        widget.room.id,
+        limit: 100,
+      );
+      if (cached.isEmpty) return [];
 
-      if (!await roomDir.exists()) {
-        return [];
+      // Convert StationChatMessage → ChatMessage
+      final messages = cached.map((m) {
+        final meta = Map<String, String>.from(m.metadata);
+        if (m.npub != null && m.npub!.isNotEmpty) meta['npub'] = m.npub!;
+        if (m.signature != null && m.signature!.isNotEmpty) meta['signature'] = m.signature!;
+        if (m.verified) meta['verified'] = 'true';
+        if (m.hasSignature) meta['has_signature'] = 'true';
+        return ChatMessage(
+          author: m.callsign,
+          timestamp: m.timestamp,
+          content: m.content,
+          metadata: meta,
+          reactions: m.reactions,
+        );
+      }).toList();
+
+      // Deduplicate
+      final seen = <String>{};
+      final deduped = <ChatMessage>[];
+      for (final msg in messages) {
+        final key = '${msg.timestamp}|${msg.author.toUpperCase()}';
+        if (seen.add(key)) deduped.add(msg);
       }
+      deduped.sort((a, b) => a.timestamp.compareTo(b.timestamp));
 
-      final messages = <ChatMessage>[];
-      await for (final entity in roomDir.list()) {
-        if (entity is File && entity.path.endsWith('.json') && !entity.path.endsWith('config.json')) {
-          try {
-            final content = await entity.readAsString();
-            final data = json.decode(content) as Map<String, dynamic>;
-            messages.add(ChatMessage.fromJson(data));
-          } catch (e) {
-            LogService().log('Error reading message ${entity.path}: $e');
-          }
-        }
-      }
-
-      // Sort by timestamp
-      messages.sort((a, b) => a.timestamp.compareTo(b.timestamp));
-      LogService().log('RemoteChatRoomPage: Loaded ${messages.length} cached messages');
-      return messages;
+      LogService().log('RemoteChatRoomPage: Loaded ${deduped.length} cached messages');
+      return deduped;
     } catch (e) {
       LogService().log('RemoteChatRoomPage: Error loading cache: $e');
       return [];
@@ -239,8 +247,20 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
 
         LogService().log('RemoteChatRoomPage: Parsed ${data.length} messages');
 
+        final parsed = data.map((json) => ChatMessage.fromJson(json as Map<String, dynamic>)).toList();
+
+        // Deduplicate by timestamp + author (same key the cache uses)
+        final seen = <String>{};
+        final deduped = <ChatMessage>[];
+        for (final msg in parsed) {
+          final key = '${msg.timestamp}|${msg.author.toUpperCase()}';
+          if (seen.add(key)) deduped.add(msg);
+        }
+        // Sort by timestamp ascending
+        deduped.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+
         setState(() {
-          _messages = data.map((json) => ChatMessage.fromJson(json as Map<String, dynamic>)).toList();
+          _messages = deduped;
           _isLoading = false;
         });
 
