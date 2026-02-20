@@ -251,7 +251,7 @@ class _MessageBubbleWidgetState extends State<MessageBubbleWidget> {
       spans.add(TextSpan(text: text.substring(lastEnd)));
     }
 
-    return SelectableText.rich(
+    return Text.rich(
       TextSpan(style: baseStyle, children: spans),
     );
   }
