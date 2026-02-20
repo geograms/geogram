@@ -3,6 +3,7 @@
  * License: Apache-2.0
  */
 
+import 'dart:convert';
 import 'dart:io' show Platform;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
@@ -113,6 +114,7 @@ class _ProfileManagementPageState extends State<ProfileManagementPage> {
     final nsecController = TextEditingController();
     final formKey = GlobalKey<FormState>();
     var profileType = ProfileType.client;
+    String? scannedNickname;
 
     final result = await showDialog<Map<String, dynamic>>(
       context: context,
@@ -179,14 +181,17 @@ class _ProfileManagementPageState extends State<ProfileManagementPage> {
                     Center(
                       child: TextButton.icon(
                         onPressed: () async {
-                          final scanned = await Navigator.push<String>(
+                          final scanned = await Navigator.push<Map<String, String>>(
                             context,
                             MaterialPageRoute(
                               builder: (context) => _NsecScannerPage(i18n: _i18n),
                             ),
                           );
                           if (scanned != null) {
-                            nsecController.text = scanned;
+                            nsecController.text = scanned['nsec'] ?? '';
+                            if (scanned['nickname'] != null && scanned['nickname']!.isNotEmpty) {
+                              scannedNickname = scanned['nickname'];
+                            }
                           }
                         },
                         icon: const Icon(Icons.qr_code_scanner),
@@ -245,6 +250,8 @@ class _ProfileManagementPageState extends State<ProfileManagementPage> {
                       'npub': npub,
                       'callsign': callsign,
                       'type': profileType,
+                      if (scannedNickname != null)
+                        'nickname': scannedNickname,
                     });
                   } catch (e) {
                     ScaffoldMessenger.of(context).showSnackBar(
@@ -285,6 +292,7 @@ class _ProfileManagementPageState extends State<ProfileManagementPage> {
           npub: result['npub'] as String,
           nsec: result['nsec'] as String,
           callsign: result['callsign'] as String,
+          nickname: result['nickname'] as String?,
           type: result['type'] as ProfileType,
         );
         _loadProfiles();
@@ -1087,7 +1095,10 @@ class _ProfileManagementPageState extends State<ProfileManagementPage> {
                   borderRadius: BorderRadius.circular(12),
                 ),
                 child: QrImageView(
-                    data: profile.nsec,
+                    data: jsonEncode({
+                      'nsec': profile.nsec,
+                      if (profile.nickname.isNotEmpty) 'nickname': profile.nickname,
+                    }),
                     version: QrVersions.auto,
                     size: 220,
                     backgroundColor: Colors.white,
@@ -1156,7 +1167,8 @@ class _ProfileManagementPageState extends State<ProfileManagementPage> {
   }
 }
 
-/// Full-screen scanner page for reading NSEC QR codes
+/// Full-screen scanner page for reading NSEC QR codes.
+/// Returns a Map with 'nsec' and optionally 'nickname'.
 class _NsecScannerPage extends StatefulWidget {
   final I18nService i18n;
   const _NsecScannerPage({required this.i18n});
@@ -1207,17 +1219,39 @@ class _NsecScannerPageState extends State<_NsecScannerPage> {
     if (value == null) return;
 
     final trimmed = value.trim();
-    if (!trimmed.startsWith('nsec1')) return;
+    String nsec;
+    String? nickname;
+
+    // Try JSON format first: {"nsec":"nsec1...","nickname":"..."}
+    if (trimmed.startsWith('{')) {
+      try {
+        final data = jsonDecode(trimmed) as Map<String, dynamic>;
+        nsec = (data['nsec'] as String?)?.trim() ?? '';
+        nickname = data['nickname'] as String?;
+      } catch (e) {
+        return;
+      }
+    } else if (trimmed.startsWith('nsec1')) {
+      // Backward compatibility: bare nsec string
+      nsec = trimmed;
+    } else {
+      return;
+    }
+
+    if (!nsec.startsWith('nsec1')) return;
 
     // Validate it's a decodable NSEC
     try {
-      NostrCrypto.decodeNsec(trimmed);
+      NostrCrypto.decodeNsec(nsec);
     } catch (e) {
       return;
     }
 
     setState(() => _hasScanned = true);
-    Navigator.of(context).pop(trimmed);
+    Navigator.of(context).pop({
+      'nsec': nsec,
+      if (nickname != null && nickname.isNotEmpty) 'nickname': nickname,
+    });
   }
 
   @override
