@@ -8,6 +8,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import '../models/profile.dart';
+import '../util/nostr_crypto.dart';
+import '../util/nostr_key_generator.dart';
 import '../services/profile_service.dart';
 import '../services/i18n_service.dart';
 import '../services/log_service.dart';
@@ -102,6 +104,185 @@ class _ProfileManagementPageState extends State<ProfileManagementPage> {
         ),
       ),
     );
+  }
+
+  Future<void> _importProfile() async {
+    final nsecController = TextEditingController();
+    final formKey = GlobalKey<FormState>();
+    var profileType = ProfileType.client;
+
+    final result = await showDialog<Map<String, dynamic>>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: Row(
+            children: [
+              const Icon(Icons.qr_code, size: 28),
+              const SizedBox(width: 8),
+              Text(_i18n.t('import_profile')),
+            ],
+          ),
+          content: SizedBox(
+            width: 360,
+            child: Form(
+              key: formKey,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    _i18n.t('import_nsec_hint'),
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextFormField(
+                    controller: nsecController,
+                    decoration: InputDecoration(
+                      labelText: 'NSEC',
+                      hintText: 'nsec1...',
+                      border: const OutlineInputBorder(),
+                      prefixIcon: const Icon(Icons.key),
+                      suffixIcon: IconButton(
+                        icon: const Icon(Icons.paste),
+                        tooltip: _i18n.t('paste'),
+                        onPressed: () async {
+                          final data = await Clipboard.getData(Clipboard.kTextPlain);
+                          if (data?.text != null) {
+                            nsecController.text = data!.text!.trim();
+                          }
+                        },
+                      ),
+                    ),
+                    validator: (value) {
+                      if (value == null || value.trim().isEmpty) {
+                        return _i18n.t('field_is_empty');
+                      }
+                      final trimmed = value.trim();
+                      if (!trimmed.startsWith('nsec1')) {
+                        return _i18n.t('invalid_nsec_format');
+                      }
+                      try {
+                        NostrCrypto.decodeNsec(trimmed);
+                      } catch (e) {
+                        return _i18n.t('invalid_nsec_format');
+                      }
+                      return null;
+                    },
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    _i18n.t('profile_type'),
+                    style: Theme.of(context).textTheme.titleSmall,
+                  ),
+                  const SizedBox(height: 8),
+                  SegmentedButton<ProfileType>(
+                    segments: [
+                      ButtonSegment(
+                        value: ProfileType.client,
+                        label: Text(_i18n.t('client')),
+                        icon: const Icon(Icons.person),
+                      ),
+                      ButtonSegment(
+                        value: ProfileType.station,
+                        label: Text(_i18n.t('station')),
+                        icon: const Icon(Icons.cell_tower),
+                      ),
+                    ],
+                    selected: {profileType},
+                    onSelectionChanged: (selected) {
+                      setDialogState(() {
+                        profileType = selected.first;
+                      });
+                    },
+                  ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: Text(_i18n.t('cancel')),
+            ),
+            FilledButton(
+              onPressed: () {
+                if (formKey.currentState!.validate()) {
+                  final nsec = nsecController.text.trim();
+                  try {
+                    final privateKeyHex = NostrCrypto.decodeNsec(nsec);
+                    final publicKeyHex = NostrCrypto.derivePublicKey(privateKeyHex);
+                    final npub = NostrCrypto.encodeNpub(publicKeyHex);
+                    final callsign = profileType == ProfileType.station
+                        ? NostrKeyGenerator.deriveStationCallsign(npub)
+                        : NostrKeyGenerator.deriveCallsign(npub);
+                    Navigator.of(context).pop({
+                      'nsec': nsec,
+                      'npub': npub,
+                      'callsign': callsign,
+                      'type': profileType,
+                    });
+                  } catch (e) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(_i18n.t('invalid_nsec_format')),
+                        backgroundColor: Colors.red,
+                      ),
+                    );
+                  }
+                }
+              },
+              child: Text(_i18n.t('import')),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (result != null) {
+      // Check if profile with same callsign already exists
+      final existingProfile = _profiles.where(
+        (p) => p.callsign == result['callsign'],
+      );
+      if (existingProfile.isNotEmpty) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(_i18n.t('profile_already_exists', params: [result['callsign']])),
+              backgroundColor: Colors.orange,
+            ),
+          );
+        }
+        return;
+      }
+
+      try {
+        await _profileService.createNewProfileWithKeys(
+          npub: result['npub'] as String,
+          nsec: result['nsec'] as String,
+          callsign: result['callsign'] as String,
+          type: result['type'] as ProfileType,
+        );
+        _loadProfiles();
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(_i18n.t('profile_imported', params: [result['callsign']])),
+            ),
+          );
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(_i18n.t('error_importing_profile', params: ['$e'])),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+      }
+    }
   }
 
   Future<void> _createNewProfile() async {
@@ -444,6 +625,13 @@ class _ProfileManagementPageState extends State<ProfileManagementPage> {
       floatingActionButton: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
+          FloatingActionButton.extended(
+            heroTag: 'import_profile',
+            onPressed: _importProfile,
+            icon: const Icon(Icons.qr_code),
+            label: Text(_i18n.t('import')),
+          ),
+          const SizedBox(width: 12),
           FloatingActionButton.extended(
             heroTag: 'new_profile',
             onPressed: _createNewProfile,
