@@ -65,7 +65,6 @@ class _ConferenceHomePageState extends State<ConferenceHomePage> {
 
     await Future.wait(devices
         .where((d) =>
-            d.isOnline &&
             d.url != null &&
             d.callsign.toUpperCase() != ownCallsign)
         .map((d) async {

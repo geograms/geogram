@@ -2573,8 +2573,11 @@ class PureStationServer with EmailHandlerMixin, BlogHandlerMixin, ConsoleCommand
     _requestsThisMinute++;  // Track for health watchdog
 
     try {
+      // Meet pages are user-facing — exempt from rate limiting
+      final isMeetPath = _isCallsignMeetPath(path);
+
       // Check if IP is banned
-      if (_isIpBanned(ip)) {
+      if (!isMeetPath && _isIpBanned(ip)) {
         _errorsThisMinute++;  // Track for attack detection
         request.response.statusCode = 429;
         request.response.write('Too Many Requests');
@@ -2586,7 +2589,7 @@ class PureStationServer with EmailHandlerMixin, BlogHandlerMixin, ConsoleCommand
       }
 
       // Check rate limits
-      if (!_checkRateLimit(ip)) {
+      if (!isMeetPath && !_checkRateLimit(ip)) {
         _errorsThisMinute++;  // Track for attack detection
         _banIp(ip);
         request.response.statusCode = 429;
