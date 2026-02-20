@@ -875,15 +875,27 @@ class _ProfileManagementPageState extends State<ProfileManagementPage> {
                   color: Colors.white,
                   borderRadius: BorderRadius.circular(12),
                 ),
-                child: SizedBox(
-                  width: 220,
-                  height: 220,
-                  child: QrImageView(
+                child: QrImageView(
                     data: profile.nsec,
                     version: QrVersions.auto,
                     size: 220,
+                    backgroundColor: Colors.white,
+                    eyeStyle: const QrEyeStyle(
+                      eyeShape: QrEyeShape.square,
+                      color: Colors.black,
+                    ),
+                    dataModuleStyle: const QrDataModuleStyle(
+                      dataModuleShape: QrDataModuleShape.square,
+                      color: Colors.black,
+                    ),
+                    errorStateBuilder: (context, error) {
+                      return Center(
+                        child: Text('QR Error: $error',
+                          style: const TextStyle(color: Colors.red, fontSize: 12),
+                        ),
+                      );
+                    },
                   ),
-                ),
               ),
               const SizedBox(height: 16),
               Container(
