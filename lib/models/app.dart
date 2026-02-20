@@ -60,7 +60,7 @@ class App {
   String? storagePath;
   bool isOwned;
   bool isFavorite;
-  String type; // 'shared_folder', 'forum', 'chat', 'www'
+  String type; // 'shared', 'forum', 'chat', 'www'
 
   // Security settings
   String visibility; // 'public', 'private', 'restricted'
@@ -78,7 +78,7 @@ class App {
     this.storagePath,
     this.isOwned = false,
     this.isFavorite = false,
-    this.type = 'shared_folder',
+    this.type = 'shared',
     this.visibility = 'public',
     this.allowedReaders = const [],
     this.encryption = 'none',
@@ -97,7 +97,7 @@ class App {
       storagePath: json['storagePath'] as String?,
       isOwned: json['isOwned'] as bool? ?? false,
       isFavorite: json['isFavorite'] as bool? ?? false,
-      type: json['type'] as String? ?? 'shared_folder',
+      type: json['type'] as String? ?? 'shared',
       visibility: json['visibility'] as String? ?? 'public',
       allowedReaders: (json['allowedReaders'] as List<dynamic>?)?.cast<String>() ?? [],
       encryption: json['encryption'] as String? ?? 'none',

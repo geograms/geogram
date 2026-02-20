@@ -68,7 +68,7 @@ class _MirrorWizardPageState extends State<MirrorWizardPage> {
     _AppInfo('music', 'Music', 'Music library', Icons.library_music),
     _AppInfo('stories', 'Stories', 'Visual stories', Icons.auto_stories),
     _AppInfo('qr', 'QR Codes', 'QR codes and barcodes', Icons.qr_code_2),
-    _AppInfo('shared_folder', 'Shared Folder', 'Shared files', Icons.folder),
+    _AppInfo('shared', 'Shared', 'Shared folders', Icons.folder_shared),
   ];
 
   @override

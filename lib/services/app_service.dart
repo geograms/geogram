@@ -1063,17 +1063,9 @@ class AppService {
         if (singleInstanceTypesConst.contains(folderName)) {
           results.add(_createMinimalApp(folderName, storagePath));
         } else {
-          // Shared folder — minimal app, no file reads
-          final app = App(
-            id: folderName,
-            title: folderName,
-            type: 'shared_folder',
-            updated: DateTime.now().toIso8601String(),
-            storagePath: storagePath,
-            isOwned: true,
-          );
-          app.isFavorite = _configService.isFavorite(app.id);
-          results.add(app);
+          // Unknown folder — try to load from app.js
+          final app = await _loadAppFromStorage(folderName);
+          if (app != null) results.add(app);
         }
       }
     }
@@ -1190,7 +1182,7 @@ class AppService {
         id: appData['id'] as String? ?? '',
         title: appData['title'] as String? ?? 'Untitled',
         description: appData['description'] as String? ?? '',
-        type: appData['type'] as String? ?? 'shared_folder',
+        type: appData['type'] as String? ?? 'shared',
         updated: appData['updated'] as String? ?? DateTime.now().toIso8601String(),
         storagePath: storagePath,
         isOwned: true,
@@ -1357,7 +1349,7 @@ class AppService {
         id: appData['id'] as String? ?? '',
         title: appData['title'] as String? ?? 'Untitled',
         description: appData['description'] as String? ?? '',
-        type: appData['type'] as String? ?? 'shared_folder',
+        type: appData['type'] as String? ?? 'shared',
         updated: appData['updated'] as String? ?? DateTime.now().toIso8601String(),
         storagePath: folderPath,
         isOwned: true,
@@ -1474,7 +1466,7 @@ class AppService {
         await _generateAndSaveTreeJson(folder);
 
         // For files and www types, also ensure data.js and index.html exist
-        if (app.type == 'shared_folder' || app.type == 'www') {
+        if (app.type == 'shared' || app.type == 'www') {
           if (!await _hasRequiredFiles(folder)) {
             await _generateAndSaveDataJs(folder);
             await _generateAndSaveIndexHtml(folder);
@@ -1618,8 +1610,7 @@ class AppService {
   Future<App> createApp({
     required String title,
     String description = '',
-    String type = 'shared_folder',
-    String? customRootPath,
+    String type = 'shared',
   }) async {
     try {
       // Generate NOSTR key pair (npub/nsec)
@@ -1640,78 +1631,28 @@ class AppService {
         throw Exception('AppService not initialized. Call init() first.');
       }
 
-      // Determine folder name based on type
-      String folderName;
+      // All types use the type name as folder name (single-instance)
+      String folderName = type;
 
-      if (type != 'shared_folder') {
-        // For non-shared_folder types (forum, chat, www), use the type as folder name
-        folderName = type;
+      stderr.writeln('Using fixed folder name for $type: $folderName');
 
-        stderr.writeln('Using fixed folder name for $type: $folderName');
+      // Check if this type already exists
+      if (await _profileStorage!.directoryExists(folderName)) {
+        // Check if the folder is essentially empty (only hidden/system files)
+        // This can happen if the app was "deleted" but folder remained
+        final entries = await _profileStorage!.listDirectory(folderName);
+        final hasUserContent = entries.any((e) {
+          // Hidden files/folders (starting with .) and system folders are not user content
+          return !e.name.startsWith('.') && e.name != 'extra' && e.name != 'media';
+        });
 
-        // Check if this type already exists
-        if (await _profileStorage!.directoryExists(folderName)) {
-          // Check if the folder is essentially empty (only hidden/system files)
-          // This can happen if the app was "deleted" but folder remained
-          final entries = await _profileStorage!.listDirectory(folderName);
-          final hasUserContent = entries.any((e) {
-            // Hidden files/folders (starting with .) and system folders are not user content
-            return !e.name.startsWith('.') && e.name != 'extra' && e.name != 'media';
-          });
-
-          if (hasUserContent) {
-            throw Exception('A $type app already exists');
-          }
-
-          // Folder exists but is empty - delete it and recreate fresh
-          stderr.writeln('Found empty $type folder, recreating...');
-          await _profileStorage!.deleteDirectory(folderName, recursive: true);
-        }
-      } else {
-        // For files type, sanitize the title as folder name
-        folderName = title
-            .replaceAll(' ', '_')
-            .toLowerCase()
-            .replaceAll(RegExp(r'[^a-z0-9_-]'), '_');
-
-        // Truncate to 50 characters
-        if (folderName.length > 50) {
-          folderName = folderName.substring(0, 50);
+        if (hasUserContent) {
+          throw Exception('A $type app already exists');
         }
 
-        // Remove trailing underscores
-        folderName = folderName.replaceAll(RegExp(r'_+$'), '');
-
-        // Ensure folder name is not empty
-        if (folderName.isEmpty) {
-          folderName = 'collection';
-        }
-
-        stderr.writeln('Sanitized folder name: $folderName');
-
-        // Custom root paths are only supported for filesystem storage
-        if (customRootPath != null && !_useEncryptedStorage) {
-          // Fall back to filesystem for custom paths
-          return await _createFilesystemApp(
-            id: id,
-            title: title,
-            description: description,
-            type: type,
-            customRootPath: customRootPath,
-          );
-        }
-      }
-
-      // Find unique folder name for shared_folder type
-      if (type == 'shared_folder') {
-        int counter = 1;
-        while (await _profileStorage!.directoryExists(folderName)) {
-          folderName = '${title.replaceAll(' ', '_').toLowerCase().replaceAll(RegExp(r'[^a-z0-9_-]'), '_')}_$counter';
-          if (folderName.length > 50) {
-            folderName = folderName.substring(0, 50);
-          }
-          counter++;
-        }
+        // Folder exists but is empty - delete it and recreate fresh
+        stderr.writeln('Found empty $type folder, recreating...');
+        await _profileStorage!.deleteDirectory(folderName, recursive: true);
       }
 
       stderr.writeln('Creating folder: $folderName');
@@ -1828,32 +1769,13 @@ class AppService {
 
     final fs = FileSystemService.instance;
 
-    // Determine folder name
-    String folderName;
-    if (type != 'shared_folder') {
-      folderName = type;
-    } else {
-      folderName = title
-          .replaceAll(' ', '_')
-          .toLowerCase()
-          .replaceAll(RegExp(r'[^a-z0-9_-]'), '_');
-      if (folderName.length > 50) folderName = folderName.substring(0, 50);
-      folderName = folderName.replaceAll(RegExp(r'_+$'), '');
-      if (folderName.isEmpty) folderName = 'collection';
-    }
+    // All types use the type name as folder name
+    String folderName = type;
 
     final basePath = '/web/devices/$_currentCallsign';
     var appPath = '$basePath/$folderName';
 
-    // Ensure unique path for shared_folder type
-    if (type == 'shared_folder') {
-      int counter = 1;
-      while (await fs.exists(appPath)) {
-        appPath = '$basePath/${folderName}_$counter';
-        counter++;
-      }
-    } else {
-      // For non-files types, check if already exists
+    // Check if already exists
       if (await fs.exists(appPath)) {
         // Check if the folder is essentially empty (can be recreated)
         final entities = await fs.list(appPath);
@@ -1870,7 +1792,7 @@ class AppService {
         // Folder exists but is empty - delete it and recreate fresh
         await fs.delete(appPath, recursive: true);
       }
-    }
+
 
     // Create folder structure
     await fs.createDirectory(appPath, recursive: true);
@@ -2810,7 +2732,7 @@ ${currentProfile.callsign}
 
     // Only generate tree.json, data.js, and index.html for files and www types
     // Other types (groups, chat, forum, etc.) have their own structure
-    if (app.type == 'shared_folder' || app.type == 'www') {
+    if (app.type == 'shared' || app.type == 'www') {
       // Generate and write tree.json, data.js, and index.html
       // For new apps, generate synchronously so app is fully ready
       stderr.writeln('Generating tree.json, data.js, and index.html...');
@@ -2843,7 +2765,7 @@ ${currentProfile.callsign}
     );
 
     // Only generate tree.json, data.js, and index.html for files and www types
-    if (app.type == 'shared_folder' || app.type == 'www') {
+    if (app.type == 'shared' || app.type == 'www') {
       stderr.writeln('Generating tree.json, data.js, and index.html...');
       await _generateAndSaveTreeJsonWithStorage(folderName);
       await _generateAndSaveDataJsWithStorage(folderName);

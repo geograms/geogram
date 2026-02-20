@@ -108,6 +108,7 @@ import 'music/pages/music_home_page.dart';
 import 'pages/files_browser_page.dart';
 import 'stories/pages/stories_home_page.dart';
 import 'pages/qr_browser_page.dart';
+import 'pages/shared_browser_page.dart';
 import 'pages/conference_home_page.dart';
 import 'pages/website_browser_page.dart';
 import 'pages/profile_management_page.dart';
@@ -2232,10 +2233,6 @@ class _AppsPageState extends State<AppsPage> {
     super.dispose();
   }
 
-  bool _isFileAppType(App app) {
-    return app.type == 'shared_folder';
-  }
-
   /// Build a WorkPage with ProfileStorage from AppService
   Widget _buildWorkPage(App app) {
     final profileStorage = AppService().profileStorage;
@@ -2292,9 +2289,6 @@ class _AppsPageState extends State<AppsPage> {
   void _updateAppsList(List<App> apps, {required bool isComplete}) {
     if (!mounted) return;
 
-    final appItems = apps.where((c) => !_isFileAppType(c)).toList();
-    final fileApps = apps.where(_isFileAppType).toList();
-
     // Pre-fetch usage counts once — avoids O(N log N) config lookups in sort
     final config = ConfigService();
     final usageCache = <String, int>{};
@@ -2303,27 +2297,20 @@ class _AppsPageState extends State<AppsPage> {
           config.getNestedValue('apps.usage.${app.type}', 0) as int;
     }
 
-    void sortGroup(List<App> group) {
-      group.sort((a, b) {
-        if (a.isFavorite != b.isFavorite) {
-          return a.isFavorite ? -1 : 1;
-        }
-        final aUsage = usageCache[a.type] ?? 0;
-        final bUsage = usageCache[b.type] ?? 0;
-        if (aUsage != bUsage) {
-          return bUsage.compareTo(aUsage);
-        }
-        return a.title.toLowerCase().compareTo(b.title.toLowerCase());
-      });
-    }
-
-    sortGroup(appItems);
-    sortGroup(fileApps);
-
-    final sortedApps = [...appItems, ...fileApps];
+    apps.sort((a, b) {
+      if (a.isFavorite != b.isFavorite) {
+        return a.isFavorite ? -1 : 1;
+      }
+      final aUsage = usageCache[a.type] ?? 0;
+      final bUsage = usageCache[b.type] ?? 0;
+      if (aUsage != bUsage) {
+        return bUsage.compareTo(aUsage);
+      }
+      return a.title.toLowerCase().compareTo(b.title.toLowerCase());
+    });
 
     setState(() {
-      _allApps = sortedApps;
+      _allApps = apps;
       _isLoading = !isComplete;
     });
   }
@@ -2536,16 +2523,10 @@ class _AppsPageState extends State<AppsPage> {
                       ? 7 // Large desktop: 7 columns
                       : 8; // Extra large: 8 columns
 
-                  // Separate app items from file apps
-                  final appItems = filteredApps
-                      .where((c) => !_isFileAppType(c))
-                      .toList();
-                  final fileApps = filteredApps.where(_isFileAppType).toList();
-
                   return CustomScrollView(
                     slivers: [
-                      // App items grid
-                      if (appItems.isNotEmpty)
+                      // App grid
+                      if (filteredApps.isNotEmpty)
                         SliverPadding(
                           padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
                           sliver: SliverGrid(
@@ -2560,7 +2541,7 @@ class _AppsPageState extends State<AppsPage> {
                               context,
                               index,
                             ) {
-                              final appEntry = appItems[index];
+                              final appEntry = filteredApps[index];
                               return _AppGridCard(
                                 app: appEntry,
                                 onTap: () {
@@ -2703,6 +2684,11 @@ class _AppsPageState extends State<AppsPage> {
                                         )
                                       : appEntry.type == 'conference'
                                       ? const ConferenceHomePage()
+                                      : appEntry.type == 'shared'
+                                      ? SharedBrowserPage(
+                                          appPath: appEntry.storagePath ?? '',
+                                          appTitle: appEntry.title,
+                                        )
                                       : AppBrowserPage(app: appEntry);
 
                                   LogService().log(
@@ -2722,198 +2708,10 @@ class _AppsPageState extends State<AppsPage> {
                                     ? _chatNotificationService.totalUnreadCount
                                     : 0,
                               );
-                            }, childCount: appItems.length),
+                            }, childCount: filteredApps.length),
                           ),
                         ),
 
-                      // Separator between fixed and file apps
-                      if (appItems.isNotEmpty && fileApps.isNotEmpty)
-                        SliverToBoxAdapter(
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 16,
-                              vertical: 12,
-                            ),
-                            child: Divider(
-                              thickness: 1,
-                              color: Theme.of(
-                                context,
-                              ).colorScheme.outlineVariant,
-                            ),
-                          ),
-                        ),
-
-                      // File apps grid
-                      if (fileApps.isNotEmpty)
-                        SliverPadding(
-                          padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-                          sliver: SliverGrid(
-                            gridDelegate:
-                                SliverGridDelegateWithFixedCrossAxisCount(
-                                  crossAxisCount: crossAxisCount,
-                                  crossAxisSpacing: 8,
-                                  mainAxisSpacing: 8,
-                                  childAspectRatio: 1.9,
-                                ),
-                            delegate: SliverChildBuilderDelegate((
-                              context,
-                              index,
-                            ) {
-                              final appEntry = fileApps[index];
-                              return _AppGridCard(
-                                app: appEntry,
-                                onTap: () {
-                                  // Clear search when app is selected
-                                  widget.onAppSelected?.call();
-                                  _recordAppUsage(appEntry.type);
-                                  LogService().log(
-                                    'Opened app: ${appEntry.title}',
-                                  );
-                                  // Route to appropriate page based on app type
-                                  final Widget targetPage =
-                                      appEntry.type == 'chat'
-                                      ? ChatBrowserPage(app: appEntry)
-                                      : appEntry.type == 'email'
-                                      ? EmailBrowserPage(app: appEntry)
-                                      : appEntry.type == 'forum'
-                                      ? ForumBrowserPage(app: appEntry)
-                                      : appEntry.type == 'blog'
-                                      ? BlogBrowserPage(
-                                          appPath: appEntry.storagePath ?? '',
-                                          appTitle: appEntry.title,
-                                        )
-                                      : appEntry.type == 'news'
-                                      ? NewsBrowserPage(app: appEntry)
-                                      : appEntry.type == 'events'
-                                      ? EventsBrowserPage(
-                                          appPath: appEntry.storagePath ?? '',
-                                          appTitle: appEntry.title,
-                                        )
-                                      : appEntry.type == 'postcards'
-                                      ? PostcardsBrowserPage(
-                                          appPath: appEntry.storagePath ?? '',
-                                          appTitle: appEntry.title,
-                                        )
-                                      : appEntry.type == 'contacts'
-                                      ? ContactsBrowserPage(
-                                          appPath: appEntry.storagePath ?? '',
-                                          appTitle: appEntry.title,
-                                        )
-                                      : appEntry.type == 'places'
-                                      ? PlacesBrowserPage(
-                                          appPath: appEntry.storagePath ?? '',
-                                          appTitle: appEntry.title,
-                                        )
-                                      : appEntry.type == 'market'
-                                      ? MarketBrowserPage(
-                                          appPath: appEntry.storagePath ?? '',
-                                          appTitle: appEntry.title,
-                                        )
-                                      : appEntry.type == 'inventory'
-                                      ? InventoryBrowserPage(
-                                          appPath: appEntry.storagePath ?? '',
-                                          appTitle: appEntry.title,
-                                          i18n: _i18n,
-                                        )
-                                      : appEntry.type == 'tracker'
-                                      ? TrackerBrowserPage(
-                                          appPath: appEntry.storagePath ?? '',
-                                          appTitle: appEntry.title,
-                                          i18n: _i18n,
-                                        )
-                                      : appEntry.type == 'alerts'
-                                      ? ReportBrowserPage(
-                                          appPath: appEntry.storagePath ?? '',
-                                          appTitle: appEntry.title,
-                                        )
-                                      : appEntry.type == 'groups'
-                                      ? GroupsBrowserPage(
-                                          appPath: appEntry.storagePath ?? '',
-                                          appTitle: appEntry.title,
-                                        )
-                                      : appEntry.type == 'wallet'
-                                      ? WalletBrowserPage(
-                                          appPath: appEntry.storagePath ?? '',
-                                          appTitle: appEntry.title,
-                                          i18n: _i18n,
-                                        )
-                                      : appEntry.type == 'console'
-                                      ? ConsoleBrowserPage(
-                                          appPath: appEntry.storagePath ?? '',
-                                          appTitle: appEntry.title,
-                                        )
-                                      : appEntry.type == 'log'
-                                      ? const LogBrowserPage()
-                                      : appEntry.type == 'videos'
-                                      ? VideoBrowserPage(
-                                          appPath: appEntry.storagePath ?? '',
-                                          appTitle: appEntry.title,
-                                        )
-                                      : appEntry.type == 'reader'
-                                      ? ReaderHomePage(
-                                          appPath: appEntry.storagePath ?? '',
-                                          appTitle: appEntry.title,
-                                          i18n: _i18n,
-                                        )
-                                      : appEntry.type == 'flasher'
-                                      ? FlasherPage(
-                                          basePath: appEntry.storagePath ?? '',
-                                        )
-                                      : appEntry.type == 'work'
-                                      ? _buildWorkPage(appEntry)
-                                      : appEntry.type == 'usenet'
-                                      ? const UsenetAppPage()
-                                      : appEntry.type == 'music'
-                                      ? MusicHomePage(
-                                          appPath: appEntry.storagePath ?? '',
-                                          appTitle: appEntry.title,
-                                          i18n: _i18n,
-                                        )
-                                      : appEntry.type == 'stories'
-                                      ? StoriesHomePage(
-                                          appPath: appEntry.storagePath ?? '',
-                                          appTitle: appEntry.title,
-                                          i18n: _i18n,
-                                        )
-                                      : appEntry.type == 'files'
-                                      ? FilesBrowserPage(
-                                          appPath: appEntry.storagePath ?? '',
-                                          appTitle: appEntry.title,
-                                          i18n: _i18n,
-                                        )
-                                      : appEntry.type == 'qr'
-                                      ? QrBrowserPage(
-                                          appPath: appEntry.storagePath ?? '',
-                                          appTitle: appEntry.title,
-                                        )
-                                      : appEntry.type == 'www'
-                                      ? WebsiteBrowserPage(
-                                          appPath: appEntry.storagePath ?? '',
-                                          appTitle: appEntry.title,
-                                          i18n: _i18n,
-                                        )
-                                      : appEntry.type == 'conference'
-                                      ? const ConferenceHomePage()
-                                      : AppBrowserPage(app: appEntry);
-
-                                  LogService().log(
-                                    'Opening app: ${appEntry.title} (type: ${appEntry.type}) -> ${targetPage.runtimeType}',
-                                  );
-                                  Navigator.push(
-                                    context,
-                                    MaterialPageRoute(
-                                      builder: (context) => targetPage,
-                                    ),
-                                  ).then((_) => _loadApps());
-                                },
-                                onFavoriteToggle: () =>
-                                    _toggleFavorite(appEntry),
-                                onDelete: () => _deleteApp(appEntry),
-                                unreadCount: 0, // File apps don't track unread
-                              );
-                            }, childCount: fileApps.length),
-                          ),
-                        ),
                     ],
                   );
                 },
@@ -2944,15 +2742,10 @@ class _AppGridCard extends StatelessWidget {
     this.unreadCount = 0,
   });
 
-  /// Check if this is a file app type (not an app)
-  bool _isFileAppType() {
-    return app.type == 'shared_folder';
-  }
-
   /// Get display title with proper capitalization and translation for app types
   String _getDisplayTitle() {
     final i18n = I18nService();
-    if (!_isFileAppType() && app.title.isNotEmpty) {
+    if (app.title.isNotEmpty) {
       // Try to get translated label for known app types
       final key = 'app_type_${app.type}';
       final translated = i18n.t(key);

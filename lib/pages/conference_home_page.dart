@@ -63,22 +63,35 @@ class _ConferenceHomePageState extends State<ConferenceHomePage> {
     final ownCallsign = ProfileService().getProfile().callsign.toUpperCase();
     final results = <Map<String, dynamic>>[];
 
-    await Future.wait(devices
-        .where((d) =>
-            d.url != null &&
-            d.callsign.toUpperCase() != ownCallsign)
-        .map((d) async {
+    // Filter to devices with HTTP(S) URLs (skip wss:// station-only devices)
+    final candidates = devices.where((d) =>
+        d.url != null &&
+        d.url!.startsWith('http') &&
+        d.callsign.toUpperCase() != ownCallsign).toList();
+
+    debugPrint('MEET_SCAN: ${devices.length} total devices, '
+        '${candidates.length} candidates (own=$ownCallsign)');
+    for (final d in candidates) {
+      debugPrint('MEET_SCAN:   ${d.callsign} url=${d.url}');
+    }
+
+    await Future.wait(candidates.map((d) async {
       try {
+        final url = '${d.url}/api/meet/active';
+        debugPrint('MEET_SCAN: Checking $url');
         final resp = await http
-            .get(Uri.parse('${d.url}/api/meet/active'))
+            .get(Uri.parse(url))
             .timeout(const Duration(seconds: 3));
+        debugPrint('MEET_SCAN:   ${d.callsign} -> ${resp.statusCode}');
         if (resp.statusCode == 200) {
           final data = jsonDecode(resp.body) as Map<String, dynamic>;
           data['device_nickname'] = d.nickname ?? d.name;
           data['device_url'] = d.url;
           results.add(data);
         }
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('MEET_SCAN:   ${d.callsign} -> ERROR: $e');
+      }
     }));
 
     if (mounted) {

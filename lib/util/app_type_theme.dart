@@ -41,8 +41,8 @@ IconData getAppTypeIcon(String type) {
       return Icons.groups;
     case 'postcards':
       return Icons.mail;
-    case 'shared_folder':
-      return Icons.folder;
+    case 'shared':
+      return Icons.folder_shared;
     case 'inventory':
       return Icons.inventory_2;
     case 'wallet':
@@ -175,7 +175,7 @@ LinearGradient getAppTypeGradient(String type, bool isDark) {
             ? [const Color(0xFF0277BD), const Color(0xFF01579B)]
             : [const Color(0xFF29B6F6), const Color(0xFF039BE5)],
       );
-    case 'shared_folder':
+    case 'shared':
       return LinearGradient(
         begin: Alignment.topLeft,
         end: Alignment.bottomRight,

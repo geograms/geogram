@@ -6,8 +6,6 @@
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 
 import 'package:flutter/material.dart';
-import 'package:file_picker/file_picker.dart';
-
 import '../services/app_service.dart';
 import '../services/i18n_service.dart';
 import '../services/log_service.dart';
@@ -30,9 +28,6 @@ class _CreateAppPageState extends State<CreateAppPage> {
   final _searchController = TextEditingController();
 
   String? _selectedType;
-  String _visibility = 'public';
-  bool _useAutoFolder = true;
-  String? _selectedFolderPath;
   bool _isCreating = false;
   String _searchQuery = '';
   Set<String> _existingTypes = {};
@@ -82,7 +77,7 @@ class _CreateAppPageState extends State<CreateAppPage> {
     _AppTypeInfo('log', Icons.article_outlined),
     _AppTypeInfo('backup', Icons.backup),
     _AppTypeInfo('transfer', Icons.swap_horiz),
-    _AppTypeInfo('shared_folder', Icons.folder),
+    _AppTypeInfo('shared', Icons.folder_shared),
     // _AppTypeInfo('postcards', Icons.mail),  // Hidden: not ready
     // _AppTypeInfo('market', Icons.storefront),  // Hidden: not ready
     _AppTypeInfo('groups', Icons.groups),
@@ -151,34 +146,8 @@ class _CreateAppPageState extends State<CreateAppPage> {
   bool get _canCreate {
     if (_isCreating) return false;
     if (_selectedType == null) return false;
-    if (_selectedType == 'shared_folder') {
-      if (_titleController.text.trim().isEmpty) return false;
-      if (!_useAutoFolder && _selectedFolderPath == null) return false;
-    } else {
-      if (_existingTypes.contains(_selectedType)) return false;
-    }
+    if (_existingTypes.contains(_selectedType)) return false;
     return true;
-  }
-
-  Future<void> _pickFolder() async {
-    try {
-      final result = await FilePicker.platform.getDirectoryPath(
-        dialogTitle: 'Select root folder for app',
-      );
-
-      if (result != null) {
-        setState(() {
-          _selectedFolderPath = result;
-        });
-      }
-    } catch (e) {
-      LogService().log('Error picking folder: $e');
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Error selecting folder: $e')));
-      }
-    }
   }
 
   Future<void> _create() async {
@@ -188,24 +157,13 @@ class _CreateAppPageState extends State<CreateAppPage> {
 
     try {
       final type = _selectedType!;
-      final title = type == 'shared_folder'
-          ? _titleController.text.trim()
-          : _i18n.t('app_type_$type');
+      final title = _i18n.t('app_type_$type');
 
       final app = await AppService().createApp(
         title: title,
         description: _descriptionController.text.trim(),
         type: type,
-        customRootPath: type == 'shared_folder'
-            ? (_useAutoFolder ? null : _selectedFolderPath)
-            : null,
       );
-
-      // Update visibility if not public
-      if (type == 'shared_folder' && _visibility != 'public') {
-        app.visibility = _visibility;
-        await AppService().updateApp(app);
-      }
 
       LogService().log('Created app: ${app.title}');
 
@@ -346,9 +304,7 @@ class _CreateAppPageState extends State<CreateAppPage> {
                   setState(() {
                     _selectedType = isExpanded ? null : typeInfo.type;
                     // Clear title when collapsing or switching types
-                    if (!isExpanded && typeInfo.type != 'shared_folder') {
-                      _titleController.clear();
-                    }
+                    _titleController.clear();
                   });
                   // Scroll to make expanded item fully visible (including bottom content)
                   if (!isExpanded) {
@@ -546,11 +502,6 @@ class _CreateAppPageState extends State<CreateAppPage> {
                       .toList(),
                 ),
               ],
-              // Settings for 'shared_folder' type
-              if (typeInfo.type == 'shared_folder') ...[
-                const SizedBox(height: 20),
-                _buildFilesSettings(theme),
-              ],
               const SizedBox(height: 24),
               // Create button - more prominent
               SizedBox(
@@ -595,205 +546,6 @@ class _CreateAppPageState extends State<CreateAppPage> {
     );
   }
 
-  Widget _buildFilesSettings(ThemeData theme) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: theme.colorScheme.surfaceContainerLowest,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: theme.colorScheme.outlineVariant.withValues(alpha: 0.5),
-        ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Section header
-          Row(
-            children: [
-              Icon(
-                Icons.settings_outlined,
-                size: 18,
-                color: theme.colorScheme.primary,
-              ),
-              const SizedBox(width: 8),
-              Text(
-                _i18n.t('settings'),
-                style: theme.textTheme.titleSmall?.copyWith(
-                  fontWeight: FontWeight.w600,
-                  color: theme.colorScheme.primary,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 16),
-
-          // Title field
-          TextField(
-            controller: _titleController,
-            decoration: InputDecoration(
-              labelText: _i18n.t('app_title'),
-              hintText: _i18n.t('app_title_hint'),
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-              ),
-              prefixIcon: const Icon(Icons.title),
-              filled: true,
-              fillColor: theme.colorScheme.surface,
-            ),
-            enabled: !_isCreating,
-            textInputAction: TextInputAction.done,
-            onChanged: (_) => setState(() {}),
-            onSubmitted: (_) {
-              if (_canCreate) _create();
-            },
-          ),
-          const SizedBox(height: 16),
-
-          // Visibility dropdown
-          DropdownButtonFormField<String>(
-            value: _visibility,
-            decoration: InputDecoration(
-              labelText: _i18n.t('visibility'),
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-              ),
-              prefixIcon: const Icon(Icons.visibility_outlined),
-              filled: true,
-              fillColor: theme.colorScheme.surface,
-            ),
-            items: [
-              DropdownMenuItem(
-                value: 'public',
-                child: Text(_i18n.t('visibility_public')),
-              ),
-              DropdownMenuItem(
-                value: 'private',
-                child: Text(_i18n.t('visibility_private')),
-              ),
-              DropdownMenuItem(
-                value: 'restricted',
-                child: Text(_i18n.t('visibility_restricted')),
-              ),
-            ],
-            onChanged: _isCreating
-                ? null
-                : (value) {
-                    if (value != null) {
-                      setState(() {
-                        _visibility = value;
-                      });
-                    }
-                  },
-          ),
-          const SizedBox(height: 16),
-
-          // Storage location toggle
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: theme.colorScheme.surface,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: theme.colorScheme.outlineVariant),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            _i18n.t('storage_location'),
-                            style: theme.textTheme.titleSmall?.copyWith(
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            _useAutoFolder
-                                ? '~/Documents/geogram/devices/${AppService().currentCallsign ?? "..."}'
-                                : _i18n.t('choose_custom_location'),
-                            style: theme.textTheme.bodySmall?.copyWith(
-                              color: theme.colorScheme.onSurfaceVariant,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    Switch(
-                      value: _useAutoFolder,
-                      onChanged: _isCreating
-                          ? null
-                          : (value) {
-                              setState(() {
-                                _useAutoFolder = value;
-                                if (_useAutoFolder) {
-                                  _selectedFolderPath = null;
-                                }
-                              });
-                            },
-                    ),
-                  ],
-                ),
-
-                // Custom folder picker
-                if (!_useAutoFolder) ...[
-                  const SizedBox(height: 12),
-                  OutlinedButton.icon(
-                    onPressed: _isCreating ? null : _pickFolder,
-                    icon: const Icon(Icons.folder_open, size: 20),
-                    label: Text(_i18n.t('choose_folder')),
-                    style: OutlinedButton.styleFrom(
-                      minimumSize: const Size(double.infinity, 44),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                    ),
-                  ),
-                  if (_selectedFolderPath != null) ...[
-                    const SizedBox(height: 8),
-                    Container(
-                      padding: const EdgeInsets.all(10),
-                      decoration: BoxDecoration(
-                        color: theme.colorScheme.primaryContainer.withValues(
-                          alpha: 0.3,
-                        ),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Row(
-                        children: [
-                          Icon(
-                            Icons.folder,
-                            size: 18,
-                            color: theme.colorScheme.primary,
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              _selectedFolderPath!,
-                              style: theme.textTheme.bodySmall?.copyWith(
-                                color: theme.colorScheme.onSurface,
-                              ),
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ],
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
   String _getTypeDescription(String type) {
     // Try to get from i18n, fallback to default descriptions
     final key = 'app_type_desc_$type';
@@ -802,8 +554,8 @@ class _CreateAppPageState extends State<CreateAppPage> {
 
     // Fallback descriptions
     switch (type) {
-      case 'shared_folder':
-        return 'Store and share files in a shared folder. Create multiple shared folders for different purposes like documents, photos, or projects.';
+      case 'shared':
+        return 'Manage shared folders from a single app. Add local directories, set visibility, and browse their contents.';
       case 'forum':
         return 'Discussion forum for threaded conversations and community discussions. Topics are organized by categories with support for replies and moderation.';
       case 'chat':
@@ -869,12 +621,12 @@ class _CreateAppPageState extends State<CreateAppPage> {
 
     // Fallback features
     switch (type) {
-      case 'shared_folder':
+      case 'shared':
         return [
-          'Organize files by folders',
-          'Share with specific users',
-          'Set visibility permissions',
-          'Multiple shared folders allowed',
+          'Add local directories',
+          'Set visibility per folder',
+          'Browse files in-app',
+          'Restrict access by user',
         ];
       case 'forum':
         return [

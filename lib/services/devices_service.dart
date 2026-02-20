@@ -3283,7 +3283,7 @@ class RemoteApp {
     return RemoteApp(
       name: json['name'] ?? json['id'] ?? 'Unknown',
       deviceCallsign: deviceCallsign,
-      type: json['type'] ?? 'shared_folder',
+      type: json['type'] ?? 'shared',
       description: json['description'],
       fileCount: json['fileCount'] ?? json['file_count'],
       visibility: json['visibility'],

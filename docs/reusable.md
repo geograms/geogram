@@ -35,6 +35,11 @@ This document catalogs reusable UI components available in the Geogram codebase.
 - [ConferencePeerManager](#conferencepeermanager) - Audio WebRTC mesh peer connections
 - [ConferenceService](#conferenceservice) - Orchestration (mode selection, host/join, room management)
 
+### Shared Folder Components
+- [SharedFolder Model](#sharedfolder-model) - Data model for shared folder entries (JSON serialization, visibility)
+- [SharedFolderService](#sharedfolderservice) - ProfileStorage CRUD for shared folder entries
+- [SharedBrowserPage](#sharedbrowserpage) - List, add, edit, delete shared folders; opens FilesBrowserPage
+
 ### Viewer Pages
 - [PhotoViewerPage](#photoviewerpage) - Image & video gallery
 - [LocationPickerPage](#locationpickerpage) - Map location selection
@@ -8820,3 +8825,57 @@ await ConferenceService().discoverAndJoin('ABCD@X1SU86'); // finds host by calls
 - `stateStream` — ConferenceState changes (idle/starting/active/ending)
 - `events` — ConferenceEvent stream (peer connected/disconnected)
 - `isLocalMuted`, `toggleMute()`, `endConference()`
+
+---
+
+## SharedFolder Model
+
+**File:** `lib/models/shared_folder.dart`
+
+Data model for shared folder entries. Follows the QrCode model pattern with JSON serialization and copyWith support.
+
+**Fields:** `id`, `title`, `location`, `visibility` (public/private/restricted), `allowedReaders`, `description`, `createdAt`, `modifiedAt`, `filePath`
+
+**Usage:**
+```dart
+final folder = SharedFolder(
+  title: 'My Photos',
+  location: '/home/user/Photos',
+  visibility: SharedFolderVisibility.public,
+);
+final json = folder.toJsonString(); // Serialize to JSON
+final loaded = SharedFolder.fromJsonString(json, filePath: path); // Deserialize
+```
+
+---
+
+## SharedFolderService
+
+**File:** `lib/services/shared_folder_service.dart`
+
+Singleton service for CRUD operations on shared folder entries via ProfileStorage. Follows QrCodeService pattern.
+
+**Key methods:**
+- `setStorage(ProfileStorage)` — set the storage backend
+- `initializeApp(String appPath)` — initialize the app directory
+- `loadAll()` — load all shared folder entries
+- `save(SharedFolder)` — create a new entry
+- `update(SharedFolder)` — update an existing entry
+- `delete(String filePath)` — remove entry (does NOT delete actual folder)
+- `migrateFromLegacy(ProfileStorage)` — migrate old shared_folder apps
+
+---
+
+## SharedBrowserPage
+
+**File:** `lib/pages/shared_browser_page.dart`
+
+Browser page for the "Shared" app. Lists shared folder entries and allows add/edit/delete. Tapping an entry opens `FilesBrowserPage` pointing to the folder's disk location.
+
+**Constructor:** `SharedBrowserPage(appPath: String, appTitle: String)`
+
+**Features:**
+- Empty state with icon and instructions
+- FAB to add new shared folders (title, folder picker, visibility)
+- Long-press context menu for edit/delete
+- Automatic legacy migration on first open
