@@ -147,6 +147,8 @@
   "profile_already_exists": "Profile {0} already exists",
   "profile_imported": "Profile {0} imported successfully",
   "error_importing_profile": "Error importing profile: {0}",
+  "scan_qr": "Scan QR",
+  "scan_nsec_qr_hint": "Point the camera at a QR code containing an NSEC key",
   "copy_to_clipboard": "Copy to clipboard",
   "keep_secret_warning": "⚠️ Keep this secret! Never share with anyone.",
   "reset_identity": "Reset Identity",

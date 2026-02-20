@@ -3,9 +3,12 @@
  * License: Apache-2.0
  */
 
+import 'dart:io' show Platform;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_zxing/flutter_zxing.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import '../models/profile.dart';
 import '../util/nostr_crypto.dart';
@@ -171,6 +174,26 @@ class _ProfileManagementPageState extends State<ProfileManagementPage> {
                       return null;
                     },
                   ),
+                  if (!kIsWeb && (Platform.isAndroid || Platform.isIOS || Platform.isMacOS)) ...[
+                    const SizedBox(height: 8),
+                    Center(
+                      child: TextButton.icon(
+                        onPressed: () async {
+                          final scanned = await Navigator.push<String>(
+                            context,
+                            MaterialPageRoute(
+                              builder: (context) => _NsecScannerPage(i18n: _i18n),
+                            ),
+                          );
+                          if (scanned != null) {
+                            nsecController.text = scanned;
+                          }
+                        },
+                        icon: const Icon(Icons.qr_code_scanner),
+                        label: Text(_i18n.t('scan_qr')),
+                      ),
+                    ),
+                  ],
                   const SizedBox(height: 16),
                   Text(
                     _i18n.t('profile_type'),
@@ -1130,5 +1153,163 @@ class _ProfileManagementPageState extends State<ProfileManagementPage> {
 
   String _formatDate(DateTime date) {
     return '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
+  }
+}
+
+/// Full-screen scanner page for reading NSEC QR codes
+class _NsecScannerPage extends StatefulWidget {
+  final I18nService i18n;
+  const _NsecScannerPage({required this.i18n});
+
+  @override
+  State<_NsecScannerPage> createState() => _NsecScannerPageState();
+}
+
+class _NsecScannerPageState extends State<_NsecScannerPage> {
+  bool _isLoading = true;
+  bool _permissionDenied = false;
+  bool _permissionPermanentlyDenied = false;
+  bool _hasScanned = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _checkPermission();
+  }
+
+  Future<void> _checkPermission() async {
+    final status = await Permission.camera.status;
+    if (status.isGranted) {
+      setState(() => _isLoading = false);
+    } else if (status.isPermanentlyDenied) {
+      setState(() {
+        _isLoading = false;
+        _permissionDenied = true;
+        _permissionPermanentlyDenied = true;
+      });
+    } else {
+      final result = await Permission.camera.request();
+      if (result.isGranted) {
+        setState(() => _isLoading = false);
+      } else {
+        setState(() {
+          _isLoading = false;
+          _permissionDenied = true;
+          _permissionPermanentlyDenied = result.isPermanentlyDenied;
+        });
+      }
+    }
+  }
+
+  void _onScan(Code code) {
+    if (_hasScanned || !code.isValid) return;
+    final value = code.text;
+    if (value == null) return;
+
+    final trimmed = value.trim();
+    if (!trimmed.startsWith('nsec1')) return;
+
+    // Validate it's a decodable NSEC
+    try {
+      NostrCrypto.decodeNsec(trimmed);
+    } catch (e) {
+      return;
+    }
+
+    setState(() => _hasScanned = true);
+    Navigator.of(context).pop(trimmed);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(widget.i18n.t('scan_qr')),
+      ),
+      body: _isLoading
+          ? const Center(child: CircularProgressIndicator())
+          : _permissionDenied
+              ? _buildPermissionDenied(theme)
+              : _buildScanner(theme),
+    );
+  }
+
+  Widget _buildPermissionDenied(ThemeData theme) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.camera_alt_outlined, size: 64, color: theme.colorScheme.onSurfaceVariant),
+            const SizedBox(height: 16),
+            Text(
+              _permissionPermanentlyDenied
+                  ? widget.i18n.t('camera_permission_denied')
+                  : widget.i18n.t('camera_permission_required'),
+              style: theme.textTheme.titleMedium,
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 24),
+            if (_permissionPermanentlyDenied)
+              FilledButton.icon(
+                onPressed: () => openAppSettings(),
+                icon: const Icon(Icons.settings),
+                label: Text(widget.i18n.t('open_settings')),
+              )
+            else
+              FilledButton.icon(
+                onPressed: _checkPermission,
+                icon: const Icon(Icons.refresh),
+                label: Text(widget.i18n.t('try_again')),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildScanner(ThemeData theme) {
+    return Stack(
+      children: [
+        ReaderWidget(
+          onScan: _onScan,
+          isMultiScan: false,
+          showFlashlight: true,
+          showToggleCamera: true,
+          showGallery: false,
+          tryHarder: true,
+          tryInverted: true,
+        ),
+        Positioned(
+          bottom: 48,
+          left: 0,
+          right: 0,
+          child: Container(
+            margin: const EdgeInsets.symmetric(horizontal: 32),
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: theme.colorScheme.surface.withValues(alpha: 0.9),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(Icons.qr_code_scanner, color: theme.colorScheme.primary),
+                const SizedBox(width: 12),
+                Flexible(
+                  child: Text(
+                    widget.i18n.t('scan_nsec_qr_hint'),
+                    style: theme.textTheme.bodyMedium,
+                    textAlign: TextAlign.center,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
   }
 }

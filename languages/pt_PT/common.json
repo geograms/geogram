@@ -85,6 +85,8 @@
   "profile_already_exists": "O perfil {0} já existe",
   "profile_imported": "Perfil {0} importado com sucesso",
   "error_importing_profile": "Erro ao importar perfil: {0}",
+  "scan_qr": "Ler QR",
+  "scan_nsec_qr_hint": "Aponte a câmara para um código QR que contenha uma chave NSEC",
   "copy_to_clipboard": "Copiar para área de transferência",
   "keep_secret_warning": "⚠️ Mantenha isto secreto! Nunca partilhe com ninguém.",
   "reset_identity": "Repor Identidade",
