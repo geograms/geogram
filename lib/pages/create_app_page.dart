@@ -126,6 +126,8 @@ class _CreateAppPageState extends State<CreateAppPage> {
           _existingTypes = _singleInstanceTypes.intersection(
             existingFolderNames,
           );
+          // Files app is always present (virtual, no folder on disk)
+          _existingTypes.add('files');
           // Initialize item keys for scroll-to functionality
           for (final type in _appTypes) {
             _itemKeys[type.type] = GlobalKey();
