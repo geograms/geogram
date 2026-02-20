@@ -20,6 +20,7 @@ class _ConferenceHostPageState extends State<ConferenceHostPage> {
   final _conferenceService = ConferenceService();
   bool _starting = false;
   String? _error;
+  int _maxSpeakers = 6;
 
   @override
   void dispose() {
@@ -37,7 +38,10 @@ class _ConferenceHostPageState extends State<ConferenceHostPage> {
     });
 
     try {
-      await _conferenceService.hostConference(roomName: name);
+      await _conferenceService.hostConference(
+        roomName: name,
+        maxSpeakers: _maxSpeakers,
+      );
       if (!mounted) return;
 
       Navigator.pushReplacement(
@@ -75,7 +79,8 @@ class _ConferenceHostPageState extends State<ConferenceHostPage> {
             ),
             const SizedBox(height: 8),
             Text(
-              'Others can join from the local network or via your station.',
+              'You are the host (SFU). Speakers connect to you directly. '
+              'Listeners receive all speaker audio without a microphone.',
               style: theme.textTheme.bodyMedium?.copyWith(
                 color: theme.colorScheme.onSurfaceVariant,
               ),
@@ -91,6 +96,37 @@ class _ConferenceHostPageState extends State<ConferenceHostPage> {
               ),
               textCapitalization: TextCapitalization.sentences,
               enabled: !_starting,
+            ),
+            const SizedBox(height: 16),
+            // Max speakers slider
+            Row(
+              children: [
+                Icon(Icons.mic, size: 18, color: theme.colorScheme.onSurfaceVariant),
+                const SizedBox(width: 8),
+                Text(
+                  'Max speakers: $_maxSpeakers',
+                  style: theme.textTheme.bodyMedium,
+                ),
+                Expanded(
+                  child: Slider(
+                    value: _maxSpeakers.toDouble(),
+                    min: 2,
+                    max: 10,
+                    divisions: 8,
+                    label: '$_maxSpeakers',
+                    onChanged: _starting
+                        ? null
+                        : (v) => setState(() => _maxSpeakers = v.round()),
+                  ),
+                ),
+              ],
+            ),
+            Text(
+              'Listeners are unlimited',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+              textAlign: TextAlign.center,
             ),
             const SizedBox(height: 24),
             if (_error != null) ...[

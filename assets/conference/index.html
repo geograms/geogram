@@ -12,13 +12,16 @@ h1{font-size:1.4em;margin-bottom:8px;color:#f0f0f0}
 #join-form{display:flex;flex-direction:column;gap:12px;align-items:center;margin:24px 0}
 #join-form input{padding:10px 16px;border-radius:8px;border:1px solid #444;background:#2a2a40;color:#fff;font-size:1em;width:240px;text-align:center}
 button{padding:10px 24px;border:none;border-radius:8px;font-size:1em;cursor:pointer;transition:background .2s}
-#btn-join{background:#4a9eff;color:#fff}
-#btn-join:hover{background:#3a8eef}
-#btn-join:disabled{background:#555;cursor:default}
+#btn-join-listener{background:#4a9eff;color:#fff}
+#btn-join-listener:hover{background:#3a8eef}
+#btn-join-speaker{background:#2ecc71;color:#fff}
+#btn-join-speaker:hover{background:#27ae60}
+button:disabled{background:#555;cursor:default}
 #call-ui{display:none;flex-direction:column;align-items:center;gap:16px;width:100%;max-width:400px}
 #participants{width:100%;list-style:none}
 #participants li{padding:10px 16px;background:#2a2a40;border-radius:8px;margin-bottom:6px;display:flex;justify-content:space-between;align-items:center}
 #participants li .name{font-weight:600}
+#participants li .role{font-size:.75em;color:#888;margin-left:8px}
 #participants li .state{font-size:.8em;color:#888}
 .controls{display:flex;gap:12px;margin-top:8px}
 #btn-mute{background:#444;color:#fff}
@@ -27,6 +30,10 @@ button{padding:10px 24px;border:none;border-radius:8px;font-size:1em;cursor:poin
 #btn-leave:hover{background:#c0392b}
 .connected{color:#2ecc71}
 .connecting{color:#f39c12}
+.role-label{font-size:.8em;padding:2px 8px;border-radius:4px;margin-left:8px}
+.role-speaker{background:#2ecc71;color:#fff}
+.role-listener{background:#555;color:#ccc}
+.info-bar{font-size:.85em;color:#aaa;margin-bottom:12px}
 </style>
 </head>
 <body>
@@ -35,13 +42,16 @@ button{padding:10px 24px;border:none;border-radius:8px;font-size:1em;cursor:poin
 
 <div id="join-form">
   <input id="nickname" type="text" placeholder="Your name" maxlength="20" autofocus>
-  <button id="btn-join" onclick="joinConference()">Join Conference</button>
+  <button id="btn-join-listener" onclick="joinConference('listener')">Join as Listener</button>
+  <button id="btn-join-speaker" onclick="joinConference('speaker')">Join as Speaker</button>
+  <div style="font-size:.8em;color:#666;margin-top:4px">Listeners don't need a microphone</div>
 </div>
 
 <div id="call-ui">
+  <div id="info-bar" class="info-bar"></div>
   <ul id="participants"></ul>
   <div class="controls">
-    <button id="btn-mute" onclick="toggleMute()">Mute</button>
+    <button id="btn-mute" onclick="toggleMute()" style="display:none">Mute</button>
     <button id="btn-leave" onclick="leaveConference()">Leave</button>
   </div>
 </div>
@@ -49,49 +59,60 @@ button{padding:10px 24px;border:none;border-radius:8px;font-size:1em;cursor:poin
 <script>
 'use strict';
 
-// Derive the WebSocket URL from the page URL
 const loc = window.location;
 const wsUrl = (loc.protocol === 'https:' ? 'wss://' : 'ws://') + loc.host + '/meet/ws';
 
 let ws = null;
 let localStream = null;
 let myCallsign = '';
+let myRole = 'listener';
 let muted = false;
-const peers = {}; // callsign -> { pc, remoteStream }
-const audioElements = {}; // callsign -> HTMLAudioElement
+let hostCallsign = '';
+let hostPc = null; // Single connection to host
+const audioElements = {}; // stream.id -> HTMLAudioElement
+const knownParticipants = {}; // callsign -> { role }
 
 const statusEl = document.getElementById('status');
 const joinForm = document.getElementById('join-form');
 const callUi = document.getElementById('call-ui');
 const participantsEl = document.getElementById('participants');
 const muteBtn = document.getElementById('btn-mute');
+const infoBar = document.getElementById('info-bar');
 
 function setStatus(msg) { statusEl.textContent = msg; }
 
-async function joinConference() {
+async function joinConference(role) {
   const nick = document.getElementById('nickname').value.trim();
   if (!nick) { alert('Enter your name'); return; }
   myCallsign = 'WEB-' + nick.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 12);
+  myRole = role;
 
-  document.getElementById('btn-join').disabled = true;
-  setStatus('Requesting microphone...');
+  document.getElementById('btn-join-listener').disabled = true;
+  document.getElementById('btn-join-speaker').disabled = true;
 
-  try {
-    localStream = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-      video: false
-    });
-  } catch (e) {
-    setStatus('Microphone access denied');
-    document.getElementById('btn-join').disabled = false;
-    return;
+  // Only request mic for speakers
+  if (role === 'speaker') {
+    setStatus('Requesting microphone...');
+    try {
+      localStream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+        video: false
+      });
+    } catch (e) {
+      setStatus('Microphone access denied');
+      document.getElementById('btn-join-listener').disabled = false;
+      document.getElementById('btn-join-speaker').disabled = false;
+      return;
+    }
+    muteBtn.style.display = '';
+  } else {
+    setStatus('Connecting as listener...');
   }
 
-  setStatus('Connecting...');
   ws = new WebSocket(wsUrl);
 
   ws.onopen = () => {
-    ws.send(JSON.stringify({ type: 'conference_hello', callsign: myCallsign }));
+    ws.send(JSON.stringify({ type: 'conference_hello', callsign: myCallsign, role: myRole }));
     setStatus('Connected — waiting for room info...');
   };
 
@@ -104,7 +125,8 @@ async function joinConference() {
 
   ws.onerror = () => {
     setStatus('Connection failed');
-    document.getElementById('btn-join').disabled = false;
+    document.getElementById('btn-join-listener').disabled = false;
+    document.getElementById('btn-join-speaker').disabled = false;
   };
 }
 
@@ -113,22 +135,43 @@ function handleMessage(msg) {
     case 'conference_welcome':
       joinForm.style.display = 'none';
       callUi.style.display = 'flex';
+      hostCallsign = msg.host_callsign || '';
       setStatus('In conference: ' + (msg.room_name || ''));
-      // Create offers to existing participants
+
+      // Track participants
       if (msg.participants) {
-        msg.participants.forEach(cs => createOffer(cs));
+        const speakers = msg.speakers || [];
+        msg.participants.forEach(cs => {
+          knownParticipants[cs] = { role: speakers.includes(cs) ? 'speaker' : 'listener' };
+        });
       }
-      updateParticipantList();
+
+      // In star topology, connect only to host
+      if (hostCallsign && hostCallsign !== myCallsign) {
+        connectToHost();
+      }
+      updateUI();
       break;
 
     case 'conference_participant_joined':
-      // New participant joined — they will send us an offer
-      updateParticipantList();
+      knownParticipants[msg.callsign] = { role: msg.role || 'listener' };
+      updateUI();
       break;
 
     case 'conference_participant_left':
-      removePeer(msg.callsign);
-      updateParticipantList();
+      delete knownParticipants[msg.callsign];
+      updateUI();
+      break;
+
+    case 'conference_role_change':
+      if (knownParticipants[msg.callsign]) {
+        knownParticipants[msg.callsign].role = msg.role;
+      }
+      // If we got promoted/demoted
+      if (msg.callsign === myCallsign) {
+        handleMyRoleChange(msg.role);
+      }
+      updateUI();
       break;
 
     case 'conference_end':
@@ -140,8 +183,9 @@ function handleMessage(msg) {
       setStatus('Error: ' + msg.error);
       break;
 
+    // WebRTC signals from host (renegotiation)
     case 'webrtc_offer':
-      handleOffer(msg);
+      handleOfferFromHost(msg);
       break;
 
     case 'webrtc_answer':
@@ -153,29 +197,27 @@ function handleMessage(msg) {
       break;
 
     case 'webrtc_bye':
-      removePeer(msg.from_callsign);
-      updateParticipantList();
+      if (hostPc) { hostPc.close(); hostPc = null; }
+      updateUI();
       break;
   }
 }
 
-// ── WebRTC ───────────────────────────────────────────────────────
+// ── WebRTC — single connection to host ────────────────────────────
 
-function createPeerConnection(callsign) {
-  // No external STUN servers — LAN only
+function createHostConnection() {
   const pc = new RTCPeerConnection({ iceServers: [] });
 
-  // Add local audio
-  if (localStream) {
+  // Add local audio only if speaker
+  if (localStream && myRole === 'speaker') {
     localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
   }
 
-  // ICE candidate → send to remote
   pc.onicecandidate = (ev) => {
     if (ev.candidate) {
       sendSignal({
         type: 'webrtc_ice',
-        to_callsign: callsign,
+        to_callsign: hostCallsign,
         candidate: {
           candidate: ev.candidate.candidate,
           sdpMid: ev.candidate.sdpMid,
@@ -185,98 +227,96 @@ function createPeerConnection(callsign) {
     }
   };
 
-  // Remote audio track
+  // Multiple remote tracks (one per speaker on the host)
   pc.ontrack = (ev) => {
     if (ev.streams && ev.streams[0]) {
       const stream = ev.streams[0];
-      peers[callsign] = peers[callsign] || {};
-      peers[callsign].remoteStream = stream;
-
-      // Create audio element
-      let audio = audioElements[callsign];
+      let audio = audioElements[stream.id];
       if (!audio) {
         audio = new Audio();
         audio.autoplay = true;
-        audioElements[callsign] = audio;
+        audioElements[stream.id] = audio;
       }
       audio.srcObject = stream;
-      updateParticipantList();
     }
   };
 
-  pc.onconnectionstatechange = () => {
-    updateParticipantList();
-  };
+  pc.onconnectionstatechange = () => updateUI();
 
-  peers[callsign] = peers[callsign] || {};
-  peers[callsign].pc = pc;
+  hostPc = pc;
   return pc;
 }
 
-async function createOffer(callsign) {
-  const pc = createPeerConnection(callsign);
+async function connectToHost() {
+  const pc = createHostConnection();
   const offer = await pc.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: false });
   await pc.setLocalDescription(offer);
 
   sendSignal({
     type: 'webrtc_offer',
-    to_callsign: callsign,
+    to_callsign: hostCallsign,
     session_id: Date.now().toString(),
+    role: myRole,
     sdp: { type: offer.type, sdp: offer.sdp }
   });
 }
 
-async function handleOffer(msg) {
-  const callsign = msg.from_callsign;
-  const pc = createPeerConnection(callsign);
-  await pc.setRemoteDescription(new RTCSessionDescription({ type: msg.sdp.type, sdp: msg.sdp.sdp }));
+async function handleOfferFromHost(msg) {
+  // Renegotiation from host (new speaker tracks added/removed)
+  if (!hostPc) createHostConnection();
+  const pc = hostPc;
 
-  // Add pending ICE candidates
-  if (peers[callsign] && peers[callsign].pendingIce) {
-    for (const c of peers[callsign].pendingIce) {
-      await pc.addIceCandidate(new RTCIceCandidate(c));
-    }
-    peers[callsign].pendingIce = [];
-  }
+  await pc.setRemoteDescription(new RTCSessionDescription({ type: msg.sdp.type, sdp: msg.sdp.sdp }));
 
   const answer = await pc.createAnswer({ offerToReceiveAudio: true, offerToReceiveVideo: false });
   await pc.setLocalDescription(answer);
 
   sendSignal({
     type: 'webrtc_answer',
-    to_callsign: callsign,
+    to_callsign: msg.from_callsign || hostCallsign,
     session_id: msg.session_id,
     sdp: { type: answer.type, sdp: answer.sdp }
   });
 }
 
 async function handleAnswer(msg) {
-  const peer = peers[msg.from_callsign];
-  if (!peer || !peer.pc) return;
-  await peer.pc.setRemoteDescription(new RTCSessionDescription({ type: msg.sdp.type, sdp: msg.sdp.sdp }));
-
-  // Add pending ICE candidates
-  if (peer.pendingIce) {
-    for (const c of peer.pendingIce) {
-      await peer.pc.addIceCandidate(new RTCIceCandidate(c));
-    }
-    peer.pendingIce = [];
-  }
+  if (!hostPc) return;
+  await hostPc.setRemoteDescription(new RTCSessionDescription({ type: msg.sdp.type, sdp: msg.sdp.sdp }));
 }
 
 async function handleIce(msg) {
-  const callsign = msg.from_callsign;
-  const peer = peers[callsign];
-  const candidate = msg.candidate;
-  if (!candidate) return;
+  if (!msg.candidate) return;
+  if (hostPc && hostPc.remoteDescription) {
+    await hostPc.addIceCandidate(new RTCIceCandidate(msg.candidate));
+  }
+  // If no remote description yet, candidate will be queued by browser
+}
 
-  if (peer && peer.pc && peer.pc.remoteDescription) {
-    await peer.pc.addIceCandidate(new RTCIceCandidate(candidate));
-  } else {
-    // Queue until remote description is set
-    if (!peers[callsign]) peers[callsign] = {};
-    if (!peers[callsign].pendingIce) peers[callsign].pendingIce = [];
-    peers[callsign].pendingIce.push(candidate);
+async function handleMyRoleChange(newRole) {
+  myRole = newRole;
+  if (newRole === 'speaker' && !localStream) {
+    try {
+      localStream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+        video: false
+      });
+      muteBtn.style.display = '';
+      // Add tracks to existing connection
+      if (hostPc) {
+        localStream.getTracks().forEach(t => hostPc.addTrack(t, localStream));
+      }
+    } catch (e) {
+      setStatus('Microphone access denied — remaining as listener');
+    }
+  } else if (newRole === 'listener' && localStream) {
+    // Remove tracks and stop mic
+    if (hostPc) {
+      const senders = hostPc.getSenders();
+      senders.forEach(s => { if (s.track && s.track.kind === 'audio') hostPc.removeTrack(s); });
+    }
+    localStream.getTracks().forEach(t => t.stop());
+    localStream = null;
+    muteBtn.style.display = 'none';
   }
 }
 
@@ -287,16 +327,35 @@ function sendSignal(msg) {
   }
 }
 
-// ── UI ───────────────────────────────────────────────────────────
+// ── UI ────────────────────────────────────────────────────────────
 
-function updateParticipantList() {
+function updateUI() {
+  // Info bar
+  const speakerCount = Object.values(knownParticipants).filter(p => p.role === 'speaker').length;
+  const totalCount = Object.keys(knownParticipants).length;
+  const listenerCount = totalCount - speakerCount;
+  infoBar.textContent = speakerCount + ' speaker' + (speakerCount !== 1 ? 's' : '') +
+    ', ' + listenerCount + ' listener' + (listenerCount !== 1 ? 's' : '');
+
+  // Participant list
   participantsEl.innerHTML = '';
-  for (const [cs, peer] of Object.entries(peers)) {
+  for (const [cs, info] of Object.entries(knownParticipants)) {
     const li = document.createElement('li');
-    const state = peer.pc ? peer.pc.connectionState || 'new' : 'new';
-    const stateClass = state === 'connected' ? 'connected' : 'connecting';
-    li.innerHTML = '<span class="name">' + cs + '</span><span class="state ' + stateClass + '">' + state + '</span>';
+    const roleClass = info.role === 'speaker' ? 'role-speaker' : 'role-listener';
+    const roleIcon = info.role === 'speaker' ? '&#x1F3A4;' : '&#x1F3A7;';
+    const isHost = cs === hostCallsign ? ' (Host)' : '';
+    const isMe = cs === myCallsign ? ' (You)' : '';
+    li.innerHTML = '<span class="name">' + cs + isHost + isMe + '</span>' +
+      '<span class="role-label ' + roleClass + '">' + info.role + '</span>';
     participantsEl.appendChild(li);
+  }
+
+  // Connection state
+  if (hostPc) {
+    const state = hostPc.connectionState || 'new';
+    if (state !== 'connected') {
+      setStatus('Connecting to host...');
+    }
   }
 }
 
@@ -317,22 +376,11 @@ function leaveConference() {
   setStatus('Left conference');
 }
 
-function removePeer(callsign) {
-  const peer = peers[callsign];
-  if (peer && peer.pc) {
-    peer.pc.close();
-  }
-  const audio = audioElements[callsign];
-  if (audio) {
-    audio.srcObject = null;
-    delete audioElements[callsign];
-  }
-  delete peers[callsign];
-}
-
 function cleanup() {
-  for (const cs of Object.keys(peers)) {
-    removePeer(cs);
+  if (hostPc) { hostPc.close(); hostPc = null; }
+  for (const [id, audio] of Object.entries(audioElements)) {
+    audio.srcObject = null;
+    delete audioElements[id];
   }
   if (localStream) {
     localStream.getTracks().forEach(t => t.stop());
@@ -341,7 +389,8 @@ function cleanup() {
   if (ws) { ws.close(); ws = null; }
   callUi.style.display = 'none';
   joinForm.style.display = 'flex';
-  document.getElementById('btn-join').disabled = false;
+  document.getElementById('btn-join-listener').disabled = false;
+  document.getElementById('btn-join-speaker').disabled = false;
 }
 </script>
 </body>

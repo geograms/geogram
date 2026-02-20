@@ -1,4 +1,6 @@
 /// Conference Join Page — join an audio conference via link, room ID, or QR scan.
+///
+/// Defaults to listener role (no mic prompt). Option to join as speaker.
 library;
 
 import 'dart:async';
@@ -23,6 +25,7 @@ class _ConferenceJoinPageState extends State<ConferenceJoinPage> {
   final _conferenceService = ConferenceService();
   bool _joining = false;
   String? _error;
+  ConferenceParticipantRole _joinRole = ConferenceParticipantRole.listener;
 
   @override
   void initState() {
@@ -47,33 +50,27 @@ class _ConferenceJoinPageState extends State<ConferenceJoinPage> {
 
     try {
       if (input.startsWith('ws://') || input.startsWith('wss://')) {
-        // Direct WebSocket URL (LAN mode)
-        await _conferenceService.joinLan(input);
+        await _conferenceService.joinLan(input, participantRole: _joinRole);
       } else if (input.contains('://')) {
-        // HTTP(S) URL — parse meet URL format
         final uri = Uri.parse(input);
         final segments = uri.pathSegments;
 
         if (segments.length == 2 && segments[0] == 'meet') {
-          // LAN: http://ip:port/meet/XXXX → derive WS URL
           final wsScheme = uri.scheme == 'https' ? 'wss' : 'ws';
           final wsUrl = '$wsScheme://${uri.host}:${uri.port}/meet/ws';
-          await _conferenceService.joinLan(wsUrl);
+          await _conferenceService.joinLan(wsUrl, participantRole: _joinRole);
         } else if (segments.length == 3 && segments[1] == 'meet') {
-          // Station: http://station/CALLSIGN/meet/XXXX
           final callsign = segments[0];
           final code = segments[2];
           final roomId = '$code@$callsign';
-          await _conferenceService.discoverAndJoin(roomId);
+          await _conferenceService.discoverAndJoin(roomId, participantRole: _joinRole);
         } else {
           throw ArgumentError('Unrecognized URL format: $input');
         }
       } else if (input.contains('@')) {
-        // Room ID with @callsign — use discovery
-        await _conferenceService.discoverAndJoin(input);
+        await _conferenceService.discoverAndJoin(input, participantRole: _joinRole);
       } else {
-        // Assume room ID — join via station
-        await _conferenceService.joinStation(input);
+        await _conferenceService.joinStation(input, participantRole: _joinRole);
       }
 
       if (!mounted) return;
@@ -132,6 +129,36 @@ class _ConferenceJoinPageState extends State<ConferenceJoinPage> {
               ),
               keyboardType: TextInputType.url,
               enabled: !_joining,
+            ),
+            const SizedBox(height: 16),
+            // Role selection
+            SegmentedButton<ConferenceParticipantRole>(
+              segments: const [
+                ButtonSegment(
+                  value: ConferenceParticipantRole.listener,
+                  label: Text('Listen'),
+                  icon: Icon(Icons.headphones),
+                ),
+                ButtonSegment(
+                  value: ConferenceParticipantRole.speaker,
+                  label: Text('Speak'),
+                  icon: Icon(Icons.mic),
+                ),
+              ],
+              selected: {_joinRole},
+              onSelectionChanged: _joining
+                  ? null
+                  : (s) => setState(() => _joinRole = s.first),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              _joinRole == ConferenceParticipantRole.listener
+                  ? 'No microphone needed'
+                  : 'Microphone will be requested',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+              textAlign: TextAlign.center,
             ),
             const SizedBox(height: 24),
             if (_error != null) ...[

@@ -1,11 +1,15 @@
-/// Conference Signaling Server (LAN mode)
+/// Conference Signaling Server (LAN mode) — SFU star topology.
 ///
 /// Lightweight HTTP + WebSocket server run by the host client to coordinate
 /// WebRTC audio conferencing on a local network without a station.
 ///
+/// In star topology, participants connect only to the host. The signaling
+/// server relays WebRTC signals between host and each participant.
+/// Speakers are limited by [maxSpeakers]; listeners are unlimited.
+///
 /// Endpoints:
 ///   GET  /meet/{code}  — shareable URL, serves the browser web client
-///   GET  /meet/info    — room info (host callsign, room name, participants)
+///   GET  /meet/info    — room info (host, speakers, listener count)
 ///   WS   /meet/ws      — WebSocket for signaling relay
 library;
 
@@ -21,42 +25,59 @@ class SignalingParticipant {
   final String id;
   final WebSocket socket;
   String? callsign;
+  String role; // 'speaker' or 'listener'
   DateTime connectedAt;
 
   SignalingParticipant({
     required this.id,
     required this.socket,
     this.callsign,
+    this.role = 'listener',
   }) : connectedAt = DateTime.now();
+
+  bool get isSpeaker => role == 'speaker';
 }
 
-/// Lightweight signaling server for LAN-mode audio conferences.
+/// Lightweight signaling server for LAN-mode SFU audio conferences.
 ///
 /// The host client starts this server so peers on the same network can
-/// exchange WebRTC offers / answers / ICE candidates without a station.
+/// exchange WebRTC offers / answers / ICE candidates with the host.
 class ConferenceSignalingServer {
   HttpServer? _httpServer;
   final Map<String, SignalingParticipant> _participants = {};
   final String roomId;
   final String roomName;
   final String hostCallsign;
-  final int maxParticipants;
+  final int maxSpeakers;
   String? _webClientHtml;
 
   int? get port => _httpServer?.port;
   bool get isRunning => _httpServer != null;
   int get participantCount => _participants.length;
+
   List<String> get participantCallsigns =>
       _participants.values
           .where((p) => p.callsign != null)
           .map((p) => p.callsign!)
           .toList();
 
+  List<String> get speakerCallsigns =>
+      _participants.values
+          .where((p) => p.callsign != null && p.isSpeaker)
+          .map((p) => p.callsign!)
+          .toList();
+
+  int get listenerCount =>
+      _participants.values.where((p) => p.callsign != null && !p.isSpeaker).length;
+
+  int get speakerCount =>
+      _participants.values.where((p) => p.callsign != null && p.isSpeaker).length;
+
   ConferenceSignalingServer({
     required this.roomId,
     required this.roomName,
     required this.hostCallsign,
-    this.maxParticipants = 6,
+    this.maxSpeakers = 6,
   });
 
   /// Start listening on all interfaces at a random available port.
@@ -106,7 +127,6 @@ class ConferenceSignalingServer {
       case '/meet/ws':
         _handleWebSocket(request);
       default:
-        // Handle /meet/{code} — serves the web client at the shareable URL
         if (path.startsWith('/meet/')) {
           _handleWebClient(request);
         } else {
@@ -126,8 +146,11 @@ class ConferenceSignalingServer {
       'room_name': roomName,
       'host_callsign': hostCallsign,
       'participant_count': participantCount,
+      'speaker_count': speakerCount,
+      'listener_count': listenerCount,
+      'speakers': speakerCallsigns,
       'participants': participantCallsigns,
-      'max_participants': maxParticipants,
+      'max_speakers': maxSpeakers,
     };
     request.response
       ..statusCode = HttpStatus.ok
@@ -194,18 +217,15 @@ class ConferenceSignalingServer {
     if (type == null) return;
 
     switch (type) {
-      // Participant announces itself with a callsign
       case 'conference_hello':
         _handleHello(sender, message);
-
-      // WebRTC signaling — relay to target participant
       case 'webrtc_offer':
       case 'webrtc_answer':
       case 'webrtc_ice':
       case 'webrtc_bye':
         _relaySignal(sender, message);
-
-      // Participant leaves
+      case 'conference_role_change':
+        _handleRoleChange(sender, message);
       case 'conference_leave':
         _removeParticipant(sender.id);
     }
@@ -215,22 +235,29 @@ class ConferenceSignalingServer {
     final callsign = message['callsign'] as String?;
     if (callsign == null || callsign.isEmpty) return;
 
-    if (_participants.length > maxParticipants) {
-      sender.socket.add(jsonEncode({
-        'type': 'conference_error',
-        'error': 'room_full',
-        'max_participants': maxParticipants,
-      }));
-      _removeParticipant(sender.id);
-      return;
+    final requestedRole = message['role'] as String? ?? 'listener';
+
+    // Enforce speaker limit (only for speakers, listeners are unlimited)
+    if (requestedRole == 'speaker' && speakerCount >= maxSpeakers) {
+      // Downgrade to listener instead of rejecting
+      sender.role = 'listener';
+      LogService().log(
+          'Conference: $callsign wanted speaker but limit reached, joining as listener');
+    } else {
+      sender.role = requestedRole;
     }
 
     sender.callsign = callsign;
-    LogService().log('Conference participant identified: $callsign');
+    LogService().log('Conference participant identified: $callsign (${sender.role})');
 
     // Send the current participant list to the new joiner
     final existing = _participants.values
         .where((p) => p.id != sender.id && p.callsign != null)
+        .map((p) => p.callsign!)
+        .toList();
+
+    final speakers = _participants.values
+        .where((p) => p.id != sender.id && p.callsign != null && p.isSpeaker)
         .map((p) => p.callsign!)
         .toList();
 
@@ -240,6 +267,9 @@ class ConferenceSignalingServer {
       'room_name': roomName,
       'host_callsign': hostCallsign,
       'participants': existing,
+      'speakers': speakers,
+      'listener_count': listenerCount,
+      'max_speakers': maxSpeakers,
     }));
 
     // Notify existing participants about the new joiner
@@ -247,9 +277,36 @@ class ConferenceSignalingServer {
       jsonEncode({
         'type': 'conference_participant_joined',
         'callsign': callsign,
+        'role': sender.role,
       }),
       excludeId: sender.id,
     );
+  }
+
+  void _handleRoleChange(SignalingParticipant sender, Map<String, dynamic> message) {
+    final targetCallsign = message['callsign'] as String?;
+    final newRole = message['role'] as String?;
+    if (targetCallsign == null || newRole == null) return;
+
+    // Only host can change roles
+    if (sender.callsign != hostCallsign) return;
+
+    // Update the target's role
+    final target = _participants.values.cast<SignalingParticipant?>().firstWhere(
+      (p) => p!.callsign?.toLowerCase() == targetCallsign.toLowerCase(),
+      orElse: () => null,
+    );
+
+    if (target != null) {
+      target.role = newRole;
+    }
+
+    // Broadcast role change to all participants
+    _broadcast(jsonEncode({
+      'type': 'conference_role_change',
+      'callsign': targetCallsign,
+      'role': newRole,
+    }));
   }
 
   /// Relay a WebRTC signal to a specific participant identified by to_callsign.
@@ -296,6 +353,7 @@ class ConferenceSignalingServer {
       _broadcast(jsonEncode({
         'type': 'conference_participant_left',
         'callsign': participant.callsign,
+        'role': participant.role,
       }));
     }
   }

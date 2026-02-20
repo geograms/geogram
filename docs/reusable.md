@@ -29,11 +29,13 @@ This document catalogs reusable UI components available in the Geogram codebase.
 - [ChatNip05Mixin](#chatnip05mixin) - Shared NIP-05 registration for chat message senders
 - [Nip05RegistryService.buildNostrJsonResponse](#nip05registryservicebuildnostrjsonresponse) - Build NIP-05 nostr.json response (used by all station handlers)
 
-### Conference Components
+### Conference Components (SFU Star Topology)
 - [ConferenceMixin](#conferencemixin) - Station-side conference signaling relay (shared mixin)
 - [ConferenceSignalingServer](#conferencesignalingserver) - Host-side HTTP+WS signaling server (LAN mode)
-- [ConferencePeerManager](#conferencepeermanager) - Audio WebRTC mesh peer connections
-- [ConferenceService](#conferenceservice) - Orchestration (mode selection, host/join, room management)
+- [ConferenceHostPeerManager](#conferencehostpeermanager) - Host-side SFU WebRTC manager (one connection per participant, track forwarding)
+- [ConferenceParticipantPeerManager](#conferenceparticipantpeermanager) - Participant-side SFU WebRTC manager (single connection to host)
+- [ConferencePeerManager](#conferencepeermanager) - Legacy audio WebRTC mesh peer connections (deprecated)
+- [ConferenceService](#conferenceservice) - Orchestration (SFU topology, host/join, role management, promote/demote)
 
 ### Shared Folder Components
 - [SharedFolder Model](#sharedfolder-model) - Data model for shared folder entries (JSON serialization, visibility)
@@ -8746,7 +8748,7 @@ When using themed templates, wire these in the station handler:
 
 **File:** `lib/server/mixins/conference_mixin.dart`
 
-Station-side conference signaling relay, shared by both `StationServer` (Desktop) and `PureStationServer` (CLI). The station acts as a relay for WebRTC signaling only — no audio media passes through it.
+Station-side conference signaling relay (SFU star topology), shared by both `StationServer` (Desktop) and `PureStationServer` (CLI). The station acts as a relay for WebRTC signaling only — no audio media passes through it. Tracks speaker/listener roles and enforces speaker limits.
 
 **Abstract contract (implement in station):**
 - `conferenceLog(level, message)` — logging
@@ -8759,71 +8761,90 @@ Station-side conference signaling relay, shared by both `StationServer` (Desktop
 - `conferenceHandleClientDisconnect(clientId)` — clean up on disconnect
 - `getConferenceRooms()` — list active rooms
 
-**Message types:** `conference_create`, `conference_join`, `conference_leave`, `conference_end`, `conference_signal`, `conference_list`
+**Message types:** `conference_create`, `conference_join`, `conference_leave`, `conference_end`, `conference_signal`, `conference_role_change`, `conference_list`
 
 ### ConferenceSignalingServer
 
 **File:** `lib/services/conference_signaling_server.dart`
 
-Lightweight HTTP + WebSocket server run by the host client for LAN-mode signaling.
+Lightweight HTTP + WebSocket server run by the host for LAN-mode SFU signaling. Tracks speaker/listener roles per participant. Speakers limited by `maxSpeakers`; listeners unlimited.
 
 **Endpoints:**
-- `GET /conference/info` — room info JSON
-- `WS /conference/ws` — WebSocket signaling relay
-- `GET /conference/web` — serves browser web client
+- `GET /meet/info` — room info JSON (speakers, listeners, counts)
+- `WS /meet/ws` — WebSocket signaling relay
+- `GET /meet/{code}` — serves browser web client
 
 **Usage:**
 ```dart
 final server = ConferenceSignalingServer(
-  roomId: 'ABCD-1234',
+  roomId: 'ABCD@MYCALL',
   roomName: 'My Conference',
   hostCallsign: 'MYCALL',
+  maxSpeakers: 6,
 );
 server.setWebClientHtml(htmlString);
 final port = await server.start();
-// ... later
 await server.stop();
 ```
 
-### ConferencePeerManager
+### ConferenceHostPeerManager
+
+**File:** `lib/services/conference_host_peer_manager.dart`
+
+Host-side SFU manager. Maintains one `RTCPeerConnection` per participant. Receives audio tracks from speakers via `onTrack` and forwards them to every other connection. Listeners receive all speaker tracks but send no audio. No audio mixing — individual tracks forwarded as-is.
+
+**Key methods:**
+- `startLocalAudio()` — capture host's microphone (host is always a speaker)
+- `handleOffer(callsign, sessionId, sdp, role)` — answer incoming offer with all speaker tracks
+- `handleAnswer/handleIceCandidate/handleBye` — standard WebRTC signaling
+- `promoteToSpeaker(callsign)` — renegotiate to accept audio from participant
+- `demoteToListener(callsign)` — remove participant's track from all connections
+- `dispose()` — release all resources
+
+### ConferenceParticipantPeerManager
+
+**File:** `lib/services/conference_participant_peer_manager.dart`
+
+Participant-side SFU manager. Maintains exactly ONE connection to the host. Receives multiple speaker tracks from the host. Sends local audio only if the participant is a speaker.
+
+**Key methods:**
+- `connectToHost(hostCallsign)` — create connection to host, send offer
+- `handleOffer(callsign, sessionId, sdp)` — handle renegotiation from host (new speaker tracks)
+- `handleAnswer/handleIceCandidate/handleBye` — standard WebRTC signaling
+- `onPromotedToSpeaker()` — start mic, add track to host connection
+- `onDemotedToListener()` — stop mic, remove track
+- `startLocalAudio()` / `stopLocalAudio()` — mic control
+
+### ConferencePeerManager (DEPRECATED)
 
 **File:** `lib/services/conference_peer_manager.dart`
 
-Manages a mesh of audio WebRTC connections for conferencing. Captures microphone audio via `getUserMedia` and exchanges media tracks with each peer.
-
-**Key methods:**
-- `startLocalAudio()` — capture microphone
-- `createOffer(callsign)` — initiate connection to a peer
-- `handleOffer(callsign, sessionId, sdp)` — respond to incoming offer
-- `handleAnswer(callsign, sdp)` / `handleIceCandidate(callsign, candidate)` — handle signaling
-- `toggleMute()` / `setMuted(bool)` — mute/unmute local audio
-- `dispose()` — release all resources
-
-**Events stream:** `peer_connected`, `peer_disconnected`, `remote_stream`
+Legacy mesh peer manager. Keep temporarily for shared types (`ConferenceAudioPeer`, `ConferenceEvent`, `ConferenceSignalSender`). Will be removed after full migration.
 
 ### ConferenceService
 
 **File:** `lib/services/conference_service.dart`
 
-Singleton orchestration service. Auto-selects signaling mode (LAN or station).
+Singleton orchestration service. SFU star topology — all participants connect to host only. Auto-selects signaling mode (LAN or station). Supports speaker/listener roles with promote/demote.
 
 **Host flow:**
 ```dart
-final room = await ConferenceService().hostConference(roomName: 'My Room');
-final urls = await ConferenceService().getMeetUrls(); // LAN meet URLs (http://ip:port/meet/XXXX)
-final stationUrl = ConferenceService().stationMeetUrl; // Station URL (http://station/CALLSIGN/meet/XXXX)
+final room = await ConferenceService().hostConference(roomName: 'My Room', maxSpeakers: 6);
+final urls = await ConferenceService().getMeetUrls();
+await ConferenceService().promoteToSpeaker('CALLSIGN');
+await ConferenceService().demoteToListener('CALLSIGN');
 ```
 
-**Joiner flow:**
+**Joiner flow (default: listener, no mic):**
 ```dart
-await ConferenceService().joinLan('ws://192.168.1.5:12345/conference/ws');
-// or
-await ConferenceService().discoverAndJoin('ABCD@X1SU86'); // finds host by callsign
+await ConferenceService().joinLan('ws://192.168.1.5:12345/meet/ws');
+await ConferenceService().joinLan(url, participantRole: ConferenceParticipantRole.speaker);
+await ConferenceService().discoverAndJoin('ABCD@X1SU86');
 ```
 
 **State management:**
 - `stateStream` — ConferenceState changes (idle/starting/active/ending)
-- `events` — ConferenceEvent stream (peer connected/disconnected)
+- `events` — ConferenceEvent stream (peer connected/disconnected/role_changed)
 - `isLocalMuted`, `toggleMute()`, `endConference()`
 
 ---

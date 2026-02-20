@@ -34,6 +34,8 @@ import '../util/nostr_key_generator.dart';
 import '../models/update_notification.dart';
 import '../models/blog_post.dart';
 import '../models/app.dart';
+import '../models/shared_folder.dart';
+import '../services/shared_folder_service.dart';
 
 /// WebSocket service for station connections (singleton)
 class WebSocketService {
@@ -856,6 +858,12 @@ class WebSocketService {
         throw Exception('Collection has no storage path: $appName');
       }
 
+      // For shared collection, resolve files from shared folder entries' disk locations
+      if (appName == 'shared') {
+        await _handleSharedFolderRequest(requestId, filePath, storagePath);
+        return;
+      }
+
       // For www collection requesting index.html, regenerate it dynamically
       // This ensures the page always reflects the current state of available apps
       if (appName == 'www' && (filePath == '/' || filePath == '/index.html')) {
@@ -932,6 +940,210 @@ class WebSocketService {
       LogService().log('Error handling HTTP request: $e');
       _sendHttpResponse(requestId, 500, {'Content-Type': 'text/plain'}, 'Internal Server Error: $e');
     }
+  }
+
+  /// Handle HTTP requests for the 'shared' app type.
+  /// Resolves shared folder entries and serves files from their actual disk locations.
+  /// Path format: /{folderSlug}/{filePath} or / for index
+  Future<void> _handleSharedFolderRequest(String requestId, String filePath, String storagePath) async {
+    try {
+      // Set up the shared folder service
+      final profileStorage = AppService().profileStorage;
+      if (profileStorage == null) {
+        _sendHttpResponse(requestId, 500, {'Content-Type': 'text/plain'}, 'Storage not available');
+        return;
+      }
+
+      final scopedStorage = ScopedProfileStorage.fromAbsolutePath(profileStorage, storagePath);
+      final service = SharedFolderService();
+      service.setStorage(scopedStorage);
+      await service.initializeApp(storagePath);
+
+      final folders = await service.loadAll();
+
+      // Index page: list all shared folders
+      if (filePath == '/' || filePath == '/index.html') {
+        final html = _generateSharedIndexHtml(folders);
+        _sendHttpResponse(requestId, 200, {'Content-Type': 'text/html'}, base64Encode(utf8.encode(html)), isBase64: true);
+        return;
+      }
+
+      // Parse: /{folderSlug}/{rest}
+      final parts = filePath.split('/').where((p) => p.isNotEmpty).toList();
+      if (parts.isEmpty) {
+        _sendHttpResponse(requestId, 404, {'Content-Type': 'text/plain'}, 'Not Found');
+        return;
+      }
+
+      final folderSlug = parts[0];
+      final remainingPath = parts.length > 1 ? parts.sublist(1).join('/') : '';
+
+      // Find matching shared folder entry by sanitized title
+      final entry = folders.cast<SharedFolder?>().firstWhere(
+        (f) => f?.sanitizedFilename == folderSlug,
+        orElse: () => null,
+      );
+
+      if (entry == null) {
+        LogService().log('Shared folder not found for slug: $folderSlug');
+        _sendHttpResponse(requestId, 404, {'Content-Type': 'text/plain'}, 'Shared folder not found');
+        return;
+      }
+
+      // Check visibility
+      if (entry.visibility == SharedFolderVisibility.private_) {
+        _sendHttpResponse(requestId, 403, {'Content-Type': 'text/plain'}, 'Forbidden');
+        return;
+      }
+
+      final diskPath = entry.location;
+
+      // If no remaining path or index.html, generate directory listing
+      if (remainingPath.isEmpty || remainingPath == 'index.html') {
+        final dirHtml = await _generateDirectoryListing(diskPath, entry.title, folderSlug);
+        _sendHttpResponse(requestId, 200, {'Content-Type': 'text/html'}, base64Encode(utf8.encode(dirHtml)), isBase64: true);
+        return;
+      }
+
+      // Serve actual file from disk
+      final targetPath = '$diskPath/$remainingPath';
+      final file = File(targetPath);
+
+      if (!await file.exists()) {
+        LogService().log('File not found: $targetPath');
+        _sendHttpResponse(requestId, 404, {'Content-Type': 'text/plain'}, 'Not Found');
+        return;
+      }
+
+      final fileBytes = await file.readAsBytes();
+      final contentType = _getContentType(remainingPath);
+
+      _sendHttpResponse(
+        requestId,
+        200,
+        {'Content-Type': contentType},
+        base64Encode(fileBytes),
+        isBase64: true,
+      );
+
+      LogService().log('Shared: Served $targetPath (${fileBytes.length} bytes)');
+    } catch (e) {
+      LogService().log('Error handling shared folder request: $e');
+      _sendHttpResponse(requestId, 500, {'Content-Type': 'text/plain'}, 'Internal Server Error: $e');
+    }
+  }
+
+  /// Generate an index page listing all shared folders
+  String _generateSharedIndexHtml(List<SharedFolder> folders) {
+    final buf = StringBuffer();
+    buf.writeln('<!DOCTYPE html><html><head>');
+    buf.writeln('<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">');
+    buf.writeln('<title>Shared Folders</title>');
+    buf.writeln('<style>');
+    buf.writeln('body{font-family:system-ui,sans-serif;max-width:800px;margin:40px auto;padding:0 20px;background:#f5f5f5;color:#333}');
+    buf.writeln('h1{border-bottom:2px solid #2196F3;padding-bottom:10px}');
+    buf.writeln('.folder{background:#fff;border-radius:8px;padding:16px;margin:12px 0;box-shadow:0 1px 3px rgba(0,0,0,.1);display:flex;align-items:center;text-decoration:none;color:inherit;transition:box-shadow .2s}');
+    buf.writeln('.folder:hover{box-shadow:0 2px 8px rgba(0,0,0,.15)}');
+    buf.writeln('.icon{font-size:32px;margin-right:16px}');
+    buf.writeln('.info{flex:1}.title{font-size:18px;font-weight:600;color:#1976D2}');
+    buf.writeln('.desc{color:#666;font-size:14px;margin-top:4px}');
+    buf.writeln('.badge{font-size:12px;padding:2px 8px;border-radius:12px;background:#e3f2fd;color:#1565C0}');
+    buf.writeln('.empty{text-align:center;color:#999;padding:40px}');
+    buf.writeln('</style></head><body>');
+    buf.writeln('<h1>Shared Folders</h1>');
+
+    if (folders.isEmpty) {
+      buf.writeln('<div class="empty">No shared folders available.</div>');
+    } else {
+      for (final f in folders) {
+        if (f.visibility == SharedFolderVisibility.private_) continue;
+        final slug = f.sanitizedFilename;
+        buf.writeln('<a class="folder" href="$slug/">');
+        buf.writeln('<div class="icon">&#128193;</div>');
+        buf.writeln('<div class="info">');
+        buf.writeln('<div class="title">${_escapeHtml(f.title)}</div>');
+        if (f.description.isNotEmpty) {
+          buf.writeln('<div class="desc">${_escapeHtml(f.description)}</div>');
+        }
+        buf.writeln('</div>');
+        buf.writeln('<span class="badge">${f.visibility.displayName}</span>');
+        buf.writeln('</a>');
+      }
+    }
+
+    buf.writeln('</body></html>');
+    return buf.toString();
+  }
+
+  /// Generate a directory listing HTML for a shared folder's disk path
+  Future<String> _generateDirectoryListing(String dirPath, String title, String folderSlug) async {
+    final dir = Directory(dirPath);
+    final buf = StringBuffer();
+    buf.writeln('<!DOCTYPE html><html><head>');
+    buf.writeln('<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">');
+    buf.writeln('<title>$title</title>');
+    buf.writeln('<style>');
+    buf.writeln('body{font-family:system-ui,sans-serif;max-width:900px;margin:40px auto;padding:0 20px;background:#f5f5f5;color:#333}');
+    buf.writeln('h1{border-bottom:2px solid #2196F3;padding-bottom:10px}');
+    buf.writeln('table{width:100%;border-collapse:collapse;background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.1)}');
+    buf.writeln('th{background:#1976D2;color:#fff;text-align:left;padding:12px 16px}');
+    buf.writeln('td{padding:10px 16px;border-bottom:1px solid #eee}');
+    buf.writeln('tr:hover td{background:#f0f7ff}');
+    buf.writeln('a{color:#1565C0;text-decoration:none}a:hover{text-decoration:underline}');
+    buf.writeln('.back{margin-bottom:16px;display:inline-block}');
+    buf.writeln('.size{color:#666;font-size:13px}');
+    buf.writeln('</style></head><body>');
+    buf.writeln('<a class="back" href="../">&larr; Back to shared folders</a>');
+    buf.writeln('<h1>${_escapeHtml(title)}</h1>');
+
+    if (!await dir.exists()) {
+      buf.writeln('<p>Directory not found on disk.</p>');
+    } else {
+      buf.writeln('<table><tr><th>Name</th><th>Size</th></tr>');
+      try {
+        final entries = await dir.list().toList();
+        entries.sort((a, b) {
+          // Directories first, then alphabetical
+          final aIsDir = a is Directory;
+          final bIsDir = b is Directory;
+          if (aIsDir != bIsDir) return aIsDir ? -1 : 1;
+          return a.path.toLowerCase().compareTo(b.path.toLowerCase());
+        });
+
+        for (final entity in entries) {
+          final name = entity.path.split('/').last;
+          if (name.startsWith('.')) continue; // Skip hidden files
+          if (entity is Directory) {
+            buf.writeln('<tr><td><a href="$name/">&#128193; $name/</a></td><td class="size">-</td></tr>');
+          } else if (entity is File) {
+            final stat = await entity.stat();
+            final size = _formatFileSize(stat.size);
+            buf.writeln('<tr><td><a href="$name">&#128196; $name</a></td><td class="size">$size</td></tr>');
+          }
+        }
+      } catch (e) {
+        buf.writeln('<tr><td colspan="2">Error reading directory: $e</td></tr>');
+      }
+      buf.writeln('</table>');
+    }
+
+    buf.writeln('</body></html>');
+    return buf.toString();
+  }
+
+  String _formatFileSize(int bytes) {
+    if (bytes < 1024) return '$bytes B';
+    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
+    if (bytes < 1024 * 1024 * 1024) return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+    return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(1)} GB';
+  }
+
+  String _escapeHtml(String text) {
+    return text
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;');
   }
 
   /// Handle blog API request from station

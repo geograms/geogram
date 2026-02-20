@@ -16,6 +16,9 @@ import 'conference_service.dart';
 import 'devices_service.dart';
 import 'log_service.dart';
 import 'usb_aoa_service.dart';
+import 'profile_storage.dart';
+import 'shared_folder_service.dart';
+import '../models/shared_folder.dart';
 
 /// Debug action types that can be triggered via API
 enum DebugAction {
@@ -1003,9 +1006,10 @@ class DebugController {
       },
       {
         'action': 'conference_host',
-        'description': 'Host a new audio conference (LAN or station mode)',
+        'description': 'Host a new SFU audio conference (LAN or station mode)',
         'params': {
           'room_name': '(optional) Meeting name (default: "Test Meeting")',
+          'max_speakers': '(optional) Max speakers including host (default: 6)',
         },
       },
       {
@@ -1014,6 +1018,7 @@ class DebugController {
         'params': {
           'url': '(optional) WebSocket URL for LAN mode (ws://host:port/meet/ws)',
           'room_id': '(optional) Room ID for station mode',
+          'role': '(optional) "speaker" or "listener" (default: "listener")',
         },
       },
       {
@@ -1032,6 +1037,20 @@ class DebugController {
         'params': {},
       },
       {
+        'action': 'conference_promote',
+        'description': 'Promote a listener to speaker (host only)',
+        'params': {
+          'callsign': 'Callsign of participant to promote (required)',
+        },
+      },
+      {
+        'action': 'conference_demote',
+        'description': 'Demote a speaker to listener (host only)',
+        'params': {
+          'callsign': 'Callsign of participant to demote (required)',
+        },
+      },
+      {
         'action': 'create_app',
         'description': 'Create a new app/collection by type',
         'params': {
@@ -1045,6 +1064,21 @@ class DebugController {
         'params': {
           'type': 'App type to open (required)',
         },
+      },
+      {
+        'action': 'shared_add',
+        'description': 'Add a shared folder entry to the Shared app',
+        'params': {
+          'title': 'Folder title (required)',
+          'location': 'Absolute path to folder on disk (required)',
+          'visibility': '(optional) public, private, restricted (default: public)',
+          'description': '(optional) Folder description',
+        },
+      },
+      {
+        'action': 'shared_list',
+        'description': 'List all shared folder entries',
+        'params': {},
       },
     ];
   }
@@ -1451,11 +1485,23 @@ class DebugController {
       case 'conference_mute':
         return _conferenceMute();
 
+      case 'conference_promote':
+        return _conferencePromote(params);
+
+      case 'conference_demote':
+        return _conferenceDemote(params);
+
       case 'create_app':
         return _createApp(params);
 
       case 'open_app':
         return _openApp(params);
+
+      case 'shared_add':
+        return _sharedAdd(params);
+
+      case 'shared_list':
+        return _sharedList();
 
       default:
         return {
@@ -1473,11 +1519,15 @@ class DebugController {
   Future<Map<String, dynamic>> _conferenceHost(Map<String, dynamic> params) async {
     try {
       final roomName = params['room_name'] as String? ?? 'Test Meeting';
-      final room = await ConferenceService().hostConference(roomName: roomName);
+      final maxSpeakers = params['max_speakers'] as int? ?? 6;
+      final room = await ConferenceService().hostConference(
+        roomName: roomName,
+        maxSpeakers: maxSpeakers,
+      );
       final meetUrls = await ConferenceService().getMeetUrls();
       return {
         'success': true,
-        'message': 'Conference hosted',
+        'message': 'Conference hosted (SFU, max $maxSpeakers speakers)',
         'room': room.toJson(),
         'meet_urls': meetUrls,
         'station_meet_url': ConferenceService().stationMeetUrl,
@@ -1491,17 +1541,21 @@ class DebugController {
     try {
       final wsUrl = params['url'] as String?;
       final roomId = params['room_id'] as String?;
+      final roleStr = params['role'] as String? ?? 'listener';
+      final role = roleStr == 'speaker'
+          ? ConferenceParticipantRole.speaker
+          : ConferenceParticipantRole.listener;
 
       if (wsUrl != null) {
-        await ConferenceService().joinLan(wsUrl);
+        await ConferenceService().joinLan(wsUrl, participantRole: role);
       } else if (roomId != null) {
-        await ConferenceService().joinStation(roomId);
+        await ConferenceService().joinStation(roomId, participantRole: role);
       } else {
         return {'success': false, 'error': 'Provide url or room_id'};
       }
       return {
         'success': true,
-        'message': 'Joined conference',
+        'message': 'Joined conference as $roleStr',
         'room': ConferenceService().room?.toJson(),
       };
     } catch (e) {
@@ -1535,6 +1589,40 @@ class DebugController {
       return {
         'success': true,
         'is_muted': ConferenceService().isLocalMuted,
+      };
+    } catch (e) {
+      return {'success': false, 'error': e.toString()};
+    }
+  }
+
+  Future<Map<String, dynamic>> _conferencePromote(Map<String, dynamic> params) async {
+    try {
+      final callsign = params['callsign'] as String?;
+      if (callsign == null) {
+        return {'success': false, 'error': 'Missing callsign parameter'};
+      }
+      await ConferenceService().promoteToSpeaker(callsign);
+      return {
+        'success': true,
+        'message': '$callsign promoted to speaker',
+        'room': ConferenceService().room?.toJson(),
+      };
+    } catch (e) {
+      return {'success': false, 'error': e.toString()};
+    }
+  }
+
+  Future<Map<String, dynamic>> _conferenceDemote(Map<String, dynamic> params) async {
+    try {
+      final callsign = params['callsign'] as String?;
+      if (callsign == null) {
+        return {'success': false, 'error': 'Missing callsign parameter'};
+      }
+      await ConferenceService().demoteToListener(callsign);
+      return {
+        'success': true,
+        'message': '$callsign demoted to listener',
+        'room': ConferenceService().room?.toJson(),
       };
     } catch (e) {
       return {'success': false, 'error': e.toString()};
@@ -1593,6 +1681,110 @@ class DebugController {
       return {
         'success': true,
         'message': 'Opening app: ${app.title} (${app.type})',
+      };
+    } catch (e) {
+      return {'success': false, 'error': e.toString()};
+    }
+  }
+
+  // ── Shared folder debug actions ──────────────────────────────────
+
+  Future<Map<String, dynamic>> _sharedAdd(Map<String, dynamic> params) async {
+    try {
+      final title = params['title'] as String?;
+      final location = params['location'] as String?;
+
+      if (title == null || location == null) {
+        return {'success': false, 'error': 'Missing required: title, location'};
+      }
+
+      // Ensure the shared app exists
+      final apps = await AppService().loadApps();
+      var sharedApp = apps.where((a) => a.type == 'shared').firstOrNull;
+      if (sharedApp == null) {
+        sharedApp = await AppService().createApp(title: 'Shared', type: 'shared');
+      }
+
+      final storagePath = sharedApp.storagePath;
+      if (storagePath == null) {
+        return {'success': false, 'error': 'Shared app has no storage path'};
+      }
+
+      // Set up service
+      final profileStorage = AppService().profileStorage;
+      if (profileStorage == null) {
+        return {'success': false, 'error': 'Profile storage not available'};
+      }
+
+      final scopedStorage = ScopedProfileStorage.fromAbsolutePath(profileStorage, storagePath);
+      final service = SharedFolderService();
+      service.setStorage(scopedStorage);
+      await service.initializeApp(storagePath);
+
+      // Create and save the entry
+      final visibility = params['visibility'] as String? ?? 'public';
+      final description = params['description'] as String? ?? '';
+
+      final folder = SharedFolder(
+        title: title,
+        location: location,
+        visibility: SharedFolderVisibility.fromValue(visibility),
+        description: description,
+      );
+
+      final saved = await service.save(folder);
+
+      return {
+        'success': true,
+        'message': 'Added shared folder: $title → $location',
+        'entry': {
+          'id': saved.id,
+          'title': saved.title,
+          'location': saved.location,
+          'visibility': saved.visibility.value,
+          'slug': saved.sanitizedFilename,
+        },
+      };
+    } catch (e) {
+      return {'success': false, 'error': e.toString()};
+    }
+  }
+
+  Future<Map<String, dynamic>> _sharedList() async {
+    try {
+      final apps = await AppService().loadApps();
+      final sharedApp = apps.where((a) => a.type == 'shared').firstOrNull;
+      if (sharedApp == null) {
+        return {'success': true, 'folders': [], 'message': 'No shared app found'};
+      }
+
+      final storagePath = sharedApp.storagePath;
+      if (storagePath == null) {
+        return {'success': true, 'folders': []};
+      }
+
+      final profileStorage = AppService().profileStorage;
+      if (profileStorage == null) {
+        return {'success': false, 'error': 'Profile storage not available'};
+      }
+
+      final scopedStorage = ScopedProfileStorage.fromAbsolutePath(profileStorage, storagePath);
+      final service = SharedFolderService();
+      service.setStorage(scopedStorage);
+      await service.initializeApp(storagePath);
+
+      final folders = await service.loadAll();
+
+      return {
+        'success': true,
+        'count': folders.length,
+        'folders': folders.map((f) => {
+          'id': f.id,
+          'title': f.title,
+          'location': f.location,
+          'visibility': f.visibility.value,
+          'slug': f.sanitizedFilename,
+        }).toList(),
       };
     } catch (e) {
       return {'success': false, 'error': e.toString()};

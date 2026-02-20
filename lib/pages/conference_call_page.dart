@@ -1,4 +1,4 @@
-/// Conference Call Page — active call UI shared by host and joiner.
+/// Conference Call Page — active call UI shared by host and joiner (SFU topology).
 library;
 
 import 'dart:async';
@@ -68,7 +68,6 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
     setState(() {});
   }
 
-  /// The primary shareable URL: LAN meet URL or station meet URL.
   String? get _shareUrl {
     if (_meetUrls.isNotEmpty) return _meetUrls.first;
     return _conferenceService.stationMeetUrl;
@@ -81,6 +80,30 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('Link copied')),
     );
+  }
+
+  Future<void> _promoteParticipant(String callsign) async {
+    try {
+      await _conferenceService.promoteToSpeaker(callsign);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('$e')),
+        );
+      }
+    }
+  }
+
+  Future<void> _demoteParticipant(String callsign) async {
+    try {
+      await _conferenceService.demoteToListener(callsign);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('$e')),
+        );
+      }
+    }
   }
 
   void _showShareSheet() {
@@ -104,7 +127,6 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
             ),
             const SizedBox(height: 20),
 
-            // Primary share URL
             if (primaryUrl != null) ...[
               Container(
                 width: double.infinity,
@@ -135,7 +157,6 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
               ),
               const SizedBox(height: 16),
 
-              // QR code
               SizedBox(
                 width: 180,
                 height: 180,
@@ -147,7 +168,6 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
               ),
               const SizedBox(height: 16),
 
-              // Copy button
               FilledButton.icon(
                 onPressed: () {
                   Clipboard.setData(ClipboardData(text: primaryUrl));
@@ -161,7 +181,6 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
               ),
             ],
 
-            // Room ID (secondary info, for manual entry)
             const SizedBox(height: 16),
             const Divider(),
             const SizedBox(height: 8),
@@ -199,7 +218,6 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
               ),
             ),
 
-            // Additional LAN URLs if more than one
             if (_meetUrls.length > 1) ...[
               const SizedBox(height: 12),
               Text(
@@ -242,7 +260,6 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
                 ),
             ],
 
-            // Station URL (if LAN is primary, show station as secondary)
             if (_meetUrls.isNotEmpty && stationUrl != null) ...[
               const SizedBox(height: 12),
               Text(
@@ -313,7 +330,7 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
       ),
       body: Column(
         children: [
-          // Room info bar — shows meet link (tappable to copy), mode, participants
+          // Room info bar
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             child: Row(
@@ -326,7 +343,6 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
                   color: theme.colorScheme.onSurfaceVariant,
                 ),
                 const SizedBox(width: 6),
-                // Room ID / meet link — tappable to copy
                 if (room != null)
                   Expanded(
                     child: InkWell(
@@ -361,15 +377,26 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
                     ),
                   ),
                 const SizedBox(width: 8),
+                // Speaker/listener count
+                Icon(Icons.mic, size: 14,
+                    color: theme.colorScheme.onSurfaceVariant),
+                const SizedBox(width: 2),
                 Text(
-                  '${participants.length}',
+                  '${room?.speakerCount ?? 0}',
                   style: theme.textTheme.bodySmall?.copyWith(
                     color: theme.colorScheme.onSurfaceVariant,
                   ),
                 ),
-                const SizedBox(width: 2),
-                Icon(Icons.person, size: 14,
+                const SizedBox(width: 8),
+                Icon(Icons.headphones, size: 14,
                     color: theme.colorScheme.onSurfaceVariant),
+                const SizedBox(width: 2),
+                Text(
+                  '${room?.listenerCount ?? 0}',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
               ],
             ),
           ),
@@ -396,9 +423,15 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
                         callsign: p.callsign,
                         isConnected: p.isConnected,
                         isMuted: p.isMuted,
+                        isSpeaker: p.isSpeaker,
                         isHost: p.callsign == room?.hostCallsign,
                         isMe: p.callsign ==
                             ProfileService().getProfile().callsign,
+                        canManage: isHost &&
+                            p.callsign != room?.hostCallsign &&
+                            p.callsign != ProfileService().getProfile().callsign,
+                        onPromote: () => _promoteParticipant(p.callsign),
+                        onDemote: () => _demoteParticipant(p.callsign),
                       );
                     },
                   ),
@@ -442,15 +475,23 @@ class _ParticipantTile extends StatelessWidget {
   final String callsign;
   final bool isConnected;
   final bool isMuted;
+  final bool isSpeaker;
   final bool isHost;
   final bool isMe;
+  final bool canManage;
+  final VoidCallback? onPromote;
+  final VoidCallback? onDemote;
 
   const _ParticipantTile({
     required this.callsign,
     required this.isConnected,
     required this.isMuted,
+    required this.isSpeaker,
     required this.isHost,
     required this.isMe,
+    this.canManage = false,
+    this.onPromote,
+    this.onDemote,
   });
 
   @override
@@ -465,7 +506,7 @@ class _ParticipantTile extends StatelessWidget {
               ? theme.colorScheme.primaryContainer
               : theme.colorScheme.surfaceContainerHighest,
           child: Icon(
-            isConnected ? Icons.person : Icons.person_outline,
+            isSpeaker ? Icons.mic : Icons.headphones,
             color: isConnected
                 ? theme.colorScheme.onPrimaryContainer
                 : theme.colorScheme.onSurfaceVariant,
@@ -476,15 +517,38 @@ class _ParticipantTile extends StatelessWidget {
           style: theme.textTheme.bodyLarge,
         ),
         subtitle: Text(
-          isConnected ? 'Connected' : 'Connecting...',
+          '${isConnected ? 'Connected' : 'Connecting...'} - ${isSpeaker ? 'Speaker' : 'Listener'}',
           style: TextStyle(
             color: isConnected ? Colors.green : Colors.orange,
             fontSize: 12,
           ),
         ),
-        trailing: isMuted
-            ? Icon(Icons.mic_off, color: theme.colorScheme.error, size: 20)
-            : null,
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (isMuted)
+              Icon(Icons.mic_off, color: theme.colorScheme.error, size: 20),
+            if (canManage) ...[
+              const SizedBox(width: 4),
+              if (isSpeaker)
+                IconButton(
+                  icon: const Icon(Icons.mic_off, size: 20),
+                  onPressed: onDemote,
+                  tooltip: 'Demote to listener',
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                )
+              else
+                IconButton(
+                  icon: const Icon(Icons.mic, size: 20),
+                  onPressed: onPromote,
+                  tooltip: 'Promote to speaker',
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                ),
+            ],
+          ],
+        ),
       ),
     );
   }

@@ -282,14 +282,39 @@ class _ConferenceHomePageState extends State<ConferenceHomePage> {
                                       ],
                                     ),
                                   ),
-                                  Text(
-                                    '${m['participant_count'] ?? 0}'
-                                    '/${m['max_participants'] ?? 6}',
-                                    style:
-                                        theme.textTheme.labelMedium?.copyWith(
-                                      color:
-                                          theme.colorScheme.onSurfaceVariant,
-                                    ),
+                                  Column(
+                                    crossAxisAlignment: CrossAxisAlignment.end,
+                                    children: [
+                                      Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Icon(Icons.mic, size: 12,
+                                              color: theme.colorScheme.onSurfaceVariant),
+                                          const SizedBox(width: 2),
+                                          Text(
+                                            '${m['speaker_count'] ?? 0}'
+                                            '/${m['max_speakers'] ?? 6}',
+                                            style: theme.textTheme.labelSmall?.copyWith(
+                                              color: theme.colorScheme.onSurfaceVariant,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                      Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Icon(Icons.people, size: 12,
+                                              color: theme.colorScheme.onSurfaceVariant),
+                                          const SizedBox(width: 2),
+                                          Text(
+                                            '${m['participant_count'] ?? 0}',
+                                            style: theme.textTheme.labelSmall?.copyWith(
+                                              color: theme.colorScheme.onSurfaceVariant,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ],
                                   ),
                                   const SizedBox(width: 4),
                                   Icon(Icons.arrow_forward_ios,

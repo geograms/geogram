@@ -787,7 +787,7 @@ class LogApiService with ChatModificationMixin {
       'host_callsign': room.hostCallsign,
       'participant_count': room.participants.length,
       'participants': room.participants.values.map((p) => p.callsign).toList(),
-      'max_participants': room.maxParticipants,
+      'max_participants': room.maxSpeakers,
     };
 
     return shelf.Response.ok(
@@ -824,7 +824,7 @@ class LogApiService with ChatModificationMixin {
     htmlHeaders['Content-Type'] = 'text/html; charset=utf-8';
     return shelf.Response.ok(
       _meetJoinHtml(room.roomId, room.roomName, room.hostCallsign,
-          room.participants.length, room.maxParticipants),
+          room.participants.length, room.maxSpeakers),
       headers: htmlHeaders,
     );
   }
@@ -1401,7 +1401,7 @@ function cleanup() {
       'host_callsign': room.hostCallsign,
       'signaling_port': conf.signalingPort,
       'participant_count': room.participants.length,
-      'max_participants': room.maxParticipants,
+      'max_participants': room.maxSpeakers,
     };
 
     return shelf.Response.ok(

@@ -1,14 +1,18 @@
-/// Conference Mixin — station-side conference signaling relay.
+/// Conference Mixin — station-side conference signaling relay (SFU star topology).
 ///
 /// Shared by both `StationServer` (Desktop) and `PureStationServer` (CLI).
 /// The station acts as a signaling relay only — no media passes through it.
 ///
+/// In star topology, speakers are limited by [maxSpeakers] but listeners
+/// are unlimited. The station tracks speaker/listener roles.
+///
 /// Message types handled:
-///   conference_create  — host announces a conference room
-///   conference_join    — joiner requests to join a room
-///   conference_signal  — relay WebRTC signaling scoped to a room
-///   conference_leave   — participant leaves
-///   conference_end     — host ends the conference
+///   conference_create       — host announces a conference room
+///   conference_join         — joiner requests to join a room
+///   conference_signal       — relay WebRTC signaling scoped to a room
+///   conference_leave        — participant leaves
+///   conference_end          — host ends the conference
+///   conference_role_change  — host promotes/demotes a participant
 library;
 
 import 'dart:convert';
@@ -19,60 +23,55 @@ class ConferenceRoomInfo {
   final String roomName;
   final String hostCallsign;
   final String hostClientId;
-  final int maxParticipants;
+  final int maxSpeakers;
   final DateTime createdAt;
   final Set<String> participantCallsigns = {};
+  final Set<String> speakerCallsigns = {};
 
   ConferenceRoomInfo({
     required this.roomId,
     required this.roomName,
     required this.hostCallsign,
     required this.hostClientId,
-    this.maxParticipants = 6,
+    this.maxSpeakers = 6,
   }) : createdAt = DateTime.now() {
-    // Host is a participant
+    // Host is a participant and a speaker
     participantCallsigns.add(hostCallsign);
+    speakerCallsigns.add(hostCallsign);
   }
+
+  int get listenerCount => participantCallsigns.length - speakerCallsigns.length;
 
   Map<String, dynamic> toJson() => {
     'room_id': roomId,
     'room_name': roomName,
     'host_callsign': hostCallsign,
     'participant_count': participantCallsigns.length,
+    'speaker_count': speakerCallsigns.length,
+    'listener_count': listenerCount,
     'participants': participantCallsigns.toList(),
-    'max_participants': maxParticipants,
+    'speakers': speakerCallsigns.toList(),
+    'max_speakers': maxSpeakers,
     'created_at': createdAt.toIso8601String(),
   };
 }
 
 /// Abstract contract that the station must fulfil for conference relay.
-///
-/// Mirrors the pattern in [EmailHandlerMixin] / [ChatModerationMixin]:
-/// declare abstract dependencies, implement shared relay logic.
 mixin ConferenceMixin {
   // ── Abstract contract ────────────────────────────────────────────
 
-  /// Log a message (provided by the station implementation).
   void conferenceLog(String level, String message);
-
-  /// Send a JSON-encoded string to a specific client by ID. Returns true on success.
   bool conferenceSendToClient(String clientId, String data);
-
-  /// Find a client ID by callsign (case-insensitive). Returns null if not connected.
   String? conferenceFindClientId(String callsign);
-
-  /// Get the callsign of a client by ID. Returns null if unknown.
   String? conferenceGetClientCallsign(String clientId);
 
   // ── State ────────────────────────────────────────────────────────
 
   final Map<String, ConferenceRoomInfo> _conferenceRooms = {};
 
-  // ── Public API (called from message dispatch) ────────────────────
+  // ── Public API ───────────────────────────────────────────────────
 
   /// Handle an incoming conference-related WebSocket message.
-  ///
-  /// Returns true if the message was handled, false if the type is unknown.
   bool handleConferenceMessage(String clientId, Map<String, dynamic> message) {
     final type = message['type'] as String?;
     if (type == null) return false;
@@ -93,6 +92,9 @@ mixin ConferenceMixin {
       case 'conference_signal':
         _handleSignal(clientId, message);
         return true;
+      case 'conference_role_change':
+        _handleRoleChange(clientId, message);
+        return true;
       case 'conference_list':
         _handleList(clientId);
         return true;
@@ -108,11 +110,10 @@ mixin ConferenceMixin {
       if (entry.value.hostClientId == clientId) {
         roomsToRemove.add(entry.key);
       } else {
-        // Remove from participant list
         final callsign = conferenceGetClientCallsign(clientId);
         if (callsign != null) {
           entry.value.participantCallsigns.remove(callsign);
-          // Notify remaining participants
+          entry.value.speakerCallsigns.remove(callsign);
           _broadcastToRoom(entry.key, {
             'type': 'conference_participant_left',
             'callsign': callsign,
@@ -137,7 +138,7 @@ mixin ConferenceMixin {
     final roomId = message['room_id'] as String?;
     final roomName = message['room_name'] as String? ?? 'Conference';
     final hostCallsign = conferenceGetClientCallsign(clientId);
-    final maxParticipants = message['max_participants'] as int? ?? 6;
+    final maxSpeakers = message['max_speakers'] as int? ?? 6;
 
     if (roomId == null || hostCallsign == null) {
       conferenceSendToClient(clientId, jsonEncode({
@@ -162,7 +163,7 @@ mixin ConferenceMixin {
       roomName: roomName,
       hostCallsign: hostCallsign,
       hostClientId: clientId,
-      maxParticipants: maxParticipants,
+      maxSpeakers: maxSpeakers,
     );
     _conferenceRooms[roomId] = room;
 
@@ -171,12 +172,13 @@ mixin ConferenceMixin {
       ...room.toJson(),
     }));
 
-    conferenceLog('INFO', 'Conference created: $roomId by $hostCallsign');
+    conferenceLog('INFO', 'Conference created: $roomId by $hostCallsign (max $maxSpeakers speakers)');
   }
 
   void _handleJoin(String clientId, Map<String, dynamic> message) {
     final roomId = message['room_id'] as String?;
     final callsign = conferenceGetClientCallsign(clientId);
+    final requestedRole = message['role'] as String? ?? 'listener';
 
     if (roomId == null || callsign == null) {
       conferenceSendToClient(clientId, jsonEncode({
@@ -196,18 +198,19 @@ mixin ConferenceMixin {
       return;
     }
 
-    if (room.participantCallsigns.length >= room.maxParticipants) {
-      conferenceSendToClient(clientId, jsonEncode({
-        'type': 'conference_error',
-        'error': 'room_full',
-        'room_id': roomId,
-      }));
-      return;
+    // Determine actual role (enforce speaker limit)
+    String actualRole = requestedRole;
+    if (requestedRole == 'speaker' &&
+        room.speakerCallsigns.length >= room.maxSpeakers) {
+      actualRole = 'listener'; // Downgrade
     }
 
     room.participantCallsigns.add(callsign);
+    if (actualRole == 'speaker') {
+      room.speakerCallsigns.add(callsign);
+    }
 
-    // Send welcome to the joiner with existing participants
+    // Send welcome with speaker info
     conferenceSendToClient(clientId, jsonEncode({
       'type': 'conference_welcome',
       ...room.toJson(),
@@ -217,11 +220,13 @@ mixin ConferenceMixin {
     _broadcastToRoom(roomId, {
       'type': 'conference_participant_joined',
       'callsign': callsign,
+      'role': actualRole,
       'room_id': roomId,
     }, excludeCallsign: callsign);
 
-    conferenceLog('INFO', 'Conference $roomId: $callsign joined '
-        '(${room.participantCallsigns.length}/${room.maxParticipants})');
+    conferenceLog('INFO', 'Conference $roomId: $callsign joined as $actualRole '
+        '(${room.speakerCallsigns.length}/${room.maxSpeakers} speakers, '
+        '${room.listenerCount} listeners)');
   }
 
   void _handleLeave(String clientId, Map<String, dynamic> message) {
@@ -233,6 +238,7 @@ mixin ConferenceMixin {
     if (room == null) return;
 
     room.participantCallsigns.remove(callsign);
+    room.speakerCallsigns.remove(callsign);
 
     _broadcastToRoom(roomId, {
       'type': 'conference_participant_left',
@@ -242,7 +248,6 @@ mixin ConferenceMixin {
 
     conferenceLog('INFO', 'Conference $roomId: $callsign left');
 
-    // If host left, end the room
     if (callsign == room.hostCallsign) {
       _endRoom(roomId, reason: 'host_left');
     }
@@ -255,7 +260,6 @@ mixin ConferenceMixin {
     final room = _conferenceRooms[roomId];
     if (room == null) return;
 
-    // Only the host can end
     if (room.hostClientId != clientId) {
       conferenceSendToClient(clientId, jsonEncode({
         'type': 'conference_error',
@@ -278,20 +282,67 @@ mixin ConferenceMixin {
     final room = _conferenceRooms[roomId];
     if (room == null) return;
 
-    // Verify both are participants
     if (!room.participantCallsigns.contains(fromCallsign) ||
         !room.participantCallsigns.contains(toCallsign)) {
       return;
     }
 
-    // Find target client and relay
     final targetClientId = conferenceFindClientId(toCallsign);
     if (targetClientId == null) return;
 
-    // Ensure from_callsign is set correctly
     message['from_callsign'] = fromCallsign;
-
     conferenceSendToClient(targetClientId, jsonEncode(message));
+  }
+
+  void _handleRoleChange(String clientId, Map<String, dynamic> message) {
+    final roomId = message['room_id'] as String?;
+    final targetCallsign = message['callsign'] as String?;
+    final newRole = message['role'] as String?;
+
+    if (roomId == null || targetCallsign == null || newRole == null) return;
+
+    final room = _conferenceRooms[roomId];
+    if (room == null) return;
+
+    // Only the host can change roles
+    if (room.hostClientId != clientId) {
+      conferenceSendToClient(clientId, jsonEncode({
+        'type': 'conference_error',
+        'error': 'not_host',
+        'room_id': roomId,
+      }));
+      return;
+    }
+
+    // Enforce speaker limit on promotion
+    if (newRole == 'speaker' &&
+        !room.speakerCallsigns.contains(targetCallsign) &&
+        room.speakerCallsigns.length >= room.maxSpeakers) {
+      conferenceSendToClient(clientId, jsonEncode({
+        'type': 'conference_error',
+        'error': 'speaker_limit_reached',
+        'room_id': roomId,
+        'max_speakers': room.maxSpeakers,
+      }));
+      return;
+    }
+
+    // Update role
+    if (newRole == 'speaker') {
+      room.speakerCallsigns.add(targetCallsign);
+    } else {
+      room.speakerCallsigns.remove(targetCallsign);
+    }
+
+    // Broadcast role change to all participants
+    _broadcastToRoom(roomId, {
+      'type': 'conference_role_change',
+      'callsign': targetCallsign,
+      'role': newRole,
+      'room_id': roomId,
+    });
+
+    conferenceLog('INFO', 'Conference $roomId: $targetCallsign role changed to $newRole');
   }
 
   void _handleList(String clientId) {
@@ -316,7 +367,6 @@ mixin ConferenceMixin {
     conferenceLog('INFO', 'Conference $roomId ended: $reason');
   }
 
-  /// Broadcast a message to all participants in a room.
   void _broadcastToRoom(
     String roomId,
     Map<String, dynamic> message, {
