@@ -9,7 +9,6 @@ import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import '../models/app.dart';
 import '../models/shared_folder.dart';
-import '../models/contact.dart';
 import '../models/group.dart';
 import '../services/app_service.dart';
 import '../services/i18n_service.dart';
@@ -118,11 +117,12 @@ class _SharedBrowserPageState extends State<SharedBrowserPage> {
   }
 
   /// Build the restricted access picker widgets (groups + contacts)
+  /// allowedReaders is a map of hex pubkey → display label
   List<Widget> _buildRestrictedAccessWidgets({
     required BuildContext context,
     required List<Group> availableGroups,
     required Set<String> selectedGroups,
-    required List<Contact> selectedContacts,
+    required Map<String, String> allowedReaders,
     required void Function(void Function()) setDialogState,
   }) {
     return [
@@ -175,18 +175,25 @@ class _SharedBrowserPageState extends State<SharedBrowserPage> {
               builder: (_) => ContactPickerPage(
                 i18n: _i18n,
                 multiSelect: true,
-                initialSelection: selectedContacts
-                    .map((c) => c.callsign)
-                    .toSet(),
               ),
             ),
           );
           if (results != null) {
             setDialogState(() {
-              selectedContacts.clear();
-              selectedContacts.addAll(
-                results.map((r) => r.contact),
-              );
+              for (final r in results) {
+                final contact = r.contact;
+                if (contact.npub != null && contact.npub!.isNotEmpty) {
+                  try {
+                    final hex = NostrCrypto.decodeNpub(contact.npub!);
+                    if (hex.isNotEmpty) {
+                      final label = contact.displayName.isNotEmpty
+                          ? contact.displayName
+                          : contact.callsign;
+                      allowedReaders[hex] = label;
+                    }
+                  } catch (_) {}
+                }
+              }
             });
           }
         },
@@ -196,39 +203,23 @@ class _SharedBrowserPageState extends State<SharedBrowserPage> {
           minimumSize: const Size(double.infinity, 40),
         ),
       ),
-      if (selectedContacts.isNotEmpty) ...[
+      if (allowedReaders.isNotEmpty) ...[
         const SizedBox(height: 8),
         Wrap(
           spacing: 6,
           runSpacing: 4,
-          children: selectedContacts.map((contact) => Chip(
-            label: Text(contact.displayName.isNotEmpty
-                ? contact.displayName
-                : contact.callsign),
+          children: allowedReaders.entries.map((entry) => Chip(
+            label: Text(entry.value),
             deleteIcon: const Icon(Icons.close, size: 16),
             onDeleted: () {
               setDialogState(() {
-                selectedContacts.remove(contact);
+                allowedReaders.remove(entry.key);
               });
             },
           )).toList(),
         ),
       ],
     ];
-  }
-
-  /// Convert selected contacts to hex pubkeys for storage
-  List<String> _contactsToHexPubkeys(List<Contact> contacts) {
-    final pubkeys = <String>[];
-    for (final contact in contacts) {
-      if (contact.npub != null && contact.npub!.isNotEmpty) {
-        try {
-          final hex = NostrCrypto.decodeNpub(contact.npub!);
-          if (hex.isNotEmpty) pubkeys.add(hex);
-        } catch (_) {}
-      }
-    }
-    return pubkeys;
   }
 
   Future<void> _showAddDialog() async {
@@ -238,7 +229,7 @@ class _SharedBrowserPageState extends State<SharedBrowserPage> {
     String visibility = 'public';
     List<Group> availableGroups = [];
     final selectedGroups = <String>{};
-    final selectedContacts = <Contact>[];
+    final allowedReaders = <String, String>{};
 
     final result = await showDialog<SharedFolder>(
       context: context,
@@ -364,7 +355,7 @@ class _SharedBrowserPageState extends State<SharedBrowserPage> {
                         context: context,
                         availableGroups: availableGroups,
                         selectedGroups: selectedGroups,
-                        selectedContacts: selectedContacts,
+                        allowedReaders: allowedReaders,
                         setDialogState: setDialogState,
                       ),
 
@@ -405,7 +396,7 @@ class _SharedBrowserPageState extends State<SharedBrowserPage> {
                       visibility:
                           SharedFolderVisibility.fromValue(visibility),
                       allowedGroups: selectedGroups.toList(),
-                      allowedReaders: _contactsToHexPubkeys(selectedContacts),
+                      allowedReaders: allowedReaders.keys.toList(),
                       description: descController.text.trim(),
                     ),
                   );
@@ -430,7 +421,12 @@ class _SharedBrowserPageState extends State<SharedBrowserPage> {
     String visibility = folder.visibility.value;
     List<Group> availableGroups = [];
     final selectedGroups = <String>{...folder.allowedGroups};
-    final selectedContacts = <Contact>[];
+    // Initialize allowed readers map: hex pubkey → display label
+    // For existing readers we show truncated hex as label (can't reverse to contact name)
+    final allowedReaders = <String, String>{};
+    for (final hex in folder.allowedReaders) {
+      allowedReaders[hex] = '${hex.substring(0, 8)}...';
+    }
 
     // Pre-load groups if editing a restricted folder
     if (visibility == 'restricted') {
@@ -447,11 +443,10 @@ class _SharedBrowserPageState extends State<SharedBrowserPage> {
           i18n: _i18n,
           initialVisibility: visibility,
           initialGroups: selectedGroups,
-          initialContacts: selectedContacts,
+          initialAllowedReaders: allowedReaders,
           availableGroups: availableGroups,
           loadAvailableGroups: _loadAvailableGroups,
           buildRestrictedAccessWidgets: _buildRestrictedAccessWidgets,
-          contactsToHexPubkeys: _contactsToHexPubkeys,
         ),
       ),
     );
@@ -735,28 +730,26 @@ class _EditSharedFolderPage extends StatefulWidget {
   final I18nService i18n;
   final String initialVisibility;
   final Set<String> initialGroups;
-  final List<Contact> initialContacts;
+  final Map<String, String> initialAllowedReaders;
   final List<Group> availableGroups;
   final Future<List<Group>> Function() loadAvailableGroups;
   final List<Widget> Function({
     required BuildContext context,
     required List<Group> availableGroups,
     required Set<String> selectedGroups,
-    required List<Contact> selectedContacts,
+    required Map<String, String> allowedReaders,
     required void Function(void Function()) setDialogState,
   }) buildRestrictedAccessWidgets;
-  final List<String> Function(List<Contact>) contactsToHexPubkeys;
 
   const _EditSharedFolderPage({
     required this.folder,
     required this.i18n,
     required this.initialVisibility,
     required this.initialGroups,
-    required this.initialContacts,
+    required this.initialAllowedReaders,
     required this.availableGroups,
     required this.loadAvailableGroups,
     required this.buildRestrictedAccessWidgets,
-    required this.contactsToHexPubkeys,
   });
 
   @override
@@ -769,7 +762,7 @@ class _EditSharedFolderPageState extends State<_EditSharedFolderPage> {
   late String _visibility;
   late List<Group> _availableGroups;
   late final Set<String> _selectedGroups;
-  late final List<Contact> _selectedContacts;
+  late final Map<String, String> _allowedReaders;
 
   @override
   void initState() {
@@ -779,7 +772,7 @@ class _EditSharedFolderPageState extends State<_EditSharedFolderPage> {
     _visibility = widget.initialVisibility;
     _availableGroups = List.from(widget.availableGroups);
     _selectedGroups = Set.from(widget.initialGroups);
-    _selectedContacts = List.from(widget.initialContacts);
+    _allowedReaders = Map.from(widget.initialAllowedReaders);
   }
 
   @override
@@ -799,7 +792,7 @@ class _EditSharedFolderPageState extends State<_EditSharedFolderPage> {
         visibility: SharedFolderVisibility.fromValue(_visibility),
         allowedGroups: _selectedGroups.toList(),
         allowedReaders: _visibility == 'restricted'
-            ? widget.contactsToHexPubkeys(_selectedContacts)
+            ? _allowedReaders.keys.toList()
             : null,
         description: _descController.text.trim(),
       ),
@@ -901,7 +894,7 @@ class _EditSharedFolderPageState extends State<_EditSharedFolderPage> {
               context: context,
               availableGroups: _availableGroups,
               selectedGroups: _selectedGroups,
-              selectedContacts: _selectedContacts,
+              allowedReaders: _allowedReaders,
               setDialogState: (fn) => setState(fn),
             ),
 
