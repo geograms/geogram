@@ -2504,6 +2504,9 @@ Triggers a debug action.
 | `conference_mute` | Toggle mute in current conference | None |
 | `conference_promote` | Promote a listener to speaker (host only) | `callsign` (required): Callsign of participant to promote |
 | `conference_demote` | Demote a speaker to listener (host only) | `callsign` (required): Callsign of participant to demote |
+| `shared_list` | List all shared folder entries with metadata | None |
+| `shared_test_access` | Test access control for a given pubkey | `pubkey` (optional): Hex pubkey to test. Returns accessibility per folder |
+| `shared_test_cookie` | Test cookie parsing from HTTP headers | `headers` (required): Raw HTTP headers string to parse for `geogram_nostr_pubkey` cookie |
 
 Place feedback actions send signed events to the station and only update local cache files if the place folder can be resolved via `place_path` or `callsign`.
 
