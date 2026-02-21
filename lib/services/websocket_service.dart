@@ -811,9 +811,10 @@ class WebSocketService {
       final appName = parts[0];
       final filePath = parts.length > 1 ? '/${parts.sublist(1).join('/')}' : '/';
 
-      // Load collection - match by folder name (last segment of storagePath)
+      // Load collection - match by folder name (last segment of storagePath) or type
       final appService = AppService();
       var apps = await appService.loadApps();
+      LogService().log('HTTP_REQUEST: Looking for app "$appName" among ${apps.length} apps: ${apps.map((a) => '${a.type}@${a.storagePath?.split("/").last}').join(", ")}');
       var app = apps.cast<App?>().firstWhere(
         (c) {
           if (c?.storagePath != null) {
@@ -823,6 +824,12 @@ class WebSocketService {
           }
           return c?.title == appName;
         },
+        orElse: () => null,
+      );
+
+      // Fallback: match by type for single-instance apps
+      app ??= apps.cast<App?>().firstWhere(
+        (c) => c?.type == appName,
         orElse: () => null,
       );
 
@@ -975,8 +982,8 @@ class WebSocketService {
         return;
       }
 
-      final folderSlug = parts[0];
-      final remainingPath = parts.length > 1 ? parts.sublist(1).join('/') : '';
+      final folderSlug = Uri.decodeComponent(parts[0]);
+      final remainingPath = parts.length > 1 ? parts.sublist(1).map(Uri.decodeComponent).join('/') : '';
 
       // Find matching shared folder entry by sanitized title
       final entry = folders.cast<SharedFolder?>().firstWhere(
@@ -1113,12 +1120,14 @@ class WebSocketService {
         for (final entity in entries) {
           final name = entity.path.split('/').last;
           if (name.startsWith('.')) continue; // Skip hidden files
+          final encodedName = Uri.encodeComponent(name);
+          final escapedName = _escapeHtml(name);
           if (entity is Directory) {
-            buf.writeln('<tr><td><a href="$name/">&#128193; $name/</a></td><td class="size">-</td></tr>');
+            buf.writeln('<tr><td><a href="$encodedName/">&#128193; $escapedName/</a></td><td class="size">-</td></tr>');
           } else if (entity is File) {
             final stat = await entity.stat();
             final size = _formatFileSize(stat.size);
-            buf.writeln('<tr><td><a href="$name">&#128196; $name</a></td><td class="size">$size</td></tr>');
+            buf.writeln('<tr><td><a href="$encodedName">&#128196; $escapedName</a></td><td class="size">$size</td></tr>');
           }
         }
       } catch (e) {
