@@ -8742,6 +8742,32 @@ When using themed templates, wire these in the station handler:
 - `{{NOSTR_STYLES}}` → `getNostrLoginStyles()`
 - `{{SCRIPTS}}` → `getNostrLoginScripts() + '\n' + getChatPageScripts()`
 
+### WebThemeService Named Templates
+
+**File:** `lib/services/web_theme_service.dart`
+
+Use `getNamedTemplate(appType, templateName)` to load templates other than `index.html` (e.g., `directory.html` for shared folder directory listings).
+
+```dart
+final template = await WebThemeService().getNamedTemplate('shared', 'directory.html');
+```
+
+### Shared Folder Theme Templates
+
+**Files:** `themes/default/shared/{index.html, directory.html, styles.css}`
+
+The shared folder app uses device-side dynamic rendering (HTML generated per request in `websocket_service.dart`) because folder contents change at runtime. Templates are loaded via `WebThemeService` and filled with `processTemplate()`. Falls back to minimal inline HTML if templates fail to load.
+
+Key template variables:
+- `{{COLLECTION_NAME}}` — device owner's nickname or callsign
+- `{{CONTENT}}` — folder cards (index) or file rows (directory)
+- `{{FOLDER_NAME}}` — folder title (directory template only)
+- `{{MENU_ITEMS}}` — nav menu via `AppService().generateDeviceMenu()`
+- `{{HOME_URL}}` — relative path back to device root (`../` or `../../`)
+- `{{NOSTR_STYLES}}` / `{{NOSTR_HEADER}}` — Nostr login component
+
+**CSS serving:** When `filePath` is `/styles.css` or `{slug}/styles.css`, the device serves combined styles via `WebThemeService().getCombinedStyles('shared')`.
+
 ## Conference Components
 
 ### ConferenceMixin
