@@ -16356,12 +16356,58 @@ function cleanup() {
             headers: headers,
           );
 
+        case 'shared_update':
+          // Update a shared folder's fields (for testing save roundtrip)
+          // Params: id (folder ID), allowedReaders (list of hex pubkeys), allowedGroups (list), visibility
+          final folderId = params['id'] as String?;
+          if (folderId == null) {
+            return shelf.Response.ok(
+              jsonEncode({'success': false, 'error': 'Missing id parameter'}),
+              headers: headers,
+            );
+          }
+          final folders = await service.loadAll();
+          final folder = folders.cast<SharedFolder?>().firstWhere(
+            (f) => f?.id == folderId,
+            orElse: () => null,
+          );
+          if (folder == null) {
+            return shelf.Response.ok(
+              jsonEncode({'success': false, 'error': 'Folder not found: $folderId'}),
+              headers: headers,
+            );
+          }
+          final updated = folder.copyWith(
+            visibility: params['visibility'] != null
+                ? SharedFolderVisibility.fromValue(params['visibility'] as String)
+                : null,
+            allowedReaders: (params['allowedReaders'] as List<dynamic>?)?.cast<String>(),
+            allowedGroups: (params['allowedGroups'] as List<dynamic>?)?.cast<String>(),
+          );
+          await service.update(updated);
+          // Re-read to confirm
+          final reloaded = await service.loadAll();
+          final confirmed = reloaded.cast<SharedFolder?>().firstWhere(
+            (f) => f?.id == folderId,
+            orElse: () => null,
+          );
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'folder': confirmed != null ? {
+                ...confirmed.toJson(),
+                'filePath': confirmed.filePath,
+              } : null,
+            }),
+            headers: headers,
+          );
+
         default:
           return shelf.Response.ok(
             jsonEncode({
               'success': false,
               'error': 'Unknown shared action: $action',
-              'available': ['shared_list', 'shared_test_access', 'shared_test_cookie'],
+              'available': ['shared_list', 'shared_test_access', 'shared_test_cookie', 'shared_update'],
             }),
             headers: headers,
           );
