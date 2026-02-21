@@ -148,6 +148,7 @@ class NostrEvent {
     double? latitude,
     double? longitude,
     String? platform,
+    int? ssid,
   }) {
     // Convert npub to pubkey hex
     final pubkeyHex = NostrCrypto.decodeNpub(npub);
@@ -171,6 +172,10 @@ class NostrEvent {
     // Include platform if provided
     if (platform != null && platform.isNotEmpty) {
       tags.add(['platform', platform]);
+    }
+    // Include APRS-style SSID for device identification
+    if (ssid != null && ssid > 0) {
+      tags.add(['ssid', ssid.toString()]);
     }
     // Build content with platform name
     final platformName = platform ?? 'Desktop';

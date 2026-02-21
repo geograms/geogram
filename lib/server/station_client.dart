@@ -78,6 +78,7 @@ class StationClient {
   ConnectionType connectionType;
   double? latitude;
   double? longitude;
+  int ssid; // APRS-style SSID for device identification (0-15)
   DateTime connectedAt;
   DateTime lastActivity;
 
@@ -95,6 +96,7 @@ class StationClient {
     this.connectionType = ConnectionType.other,
     this.latitude,
     this.longitude,
+    this.ssid = 0,
   })  : connectedAt = DateTime.now(),
         lastActivity = DateTime.now();
 
@@ -136,6 +138,7 @@ class StationClient {
       'connection_type': connectionType.code,
       'latitude': latitude,
       'longitude': longitude,
+      if (ssid > 0) 'ssid': ssid,
       'connected_at': connectedAt.toIso8601String(),
       'last_activity': lastActivity.toIso8601String(),
     };

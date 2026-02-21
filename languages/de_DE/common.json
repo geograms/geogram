@@ -1384,5 +1384,7 @@
   "open_folder": "Öffnen Ordner",
   "could_not_open_folder": "Ordner konnte nicht geöffnet werden",
   "encrypting_progress": "Verschlüsselung: {0}/{1} Dateien ({2}%)",
-  "decrypting_progress": "Entschlüsselung: {0}/{1} Dateien ({2}%)"
+  "decrypting_progress": "Entschlüsselung: {0}/{1} Dateien ({2}%)",
+  "ssid": "SSID",
+  "ssid_hint": "Gerätekennung (0-15). Verwende unterschiedliche Nummern für mehrere Geräte mit demselben Rufzeichen."
 }

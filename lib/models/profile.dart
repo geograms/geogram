@@ -36,6 +36,9 @@ class Profile implements ProfileReadable {
   bool osmFallbackEnabled;
   bool enableAprs;
 
+  // APRS-style SSID for device identification (0-15, default 0)
+  int ssid;
+
   Profile({
     String? id,
     this.type = ProfileType.client,
@@ -59,11 +62,15 @@ class Profile implements ProfileReadable {
     this.tileServerEnabled = true,
     this.osmFallbackEnabled = true,
     this.enableAprs = false,
+    this.ssid = 0,
   }) : id = id ?? _generateId(),
        createdAt = createdAt ?? DateTime.now();
 
   bool get isRelay => type == ProfileType.station;
   bool get isClient => type == ProfileType.client;
+
+  /// Full callsign with SSID suffix (e.g., "CR7BBQ-5"). SSID 0 has no suffix.
+  String get fullCallsign => ssid == 0 ? callsign : '$callsign-$ssid';
 
   /// Generate a simple unique ID
   static String _generateId() {
@@ -98,6 +105,7 @@ class Profile implements ProfileReadable {
       tileServerEnabled: json['tileServerEnabled'] as bool? ?? true,
       osmFallbackEnabled: json['osmFallbackEnabled'] as bool? ?? true,
       enableAprs: json['enableAprs'] as bool? ?? false,
+      ssid: json['ssid'] as int? ?? 0,
     );
   }
 
@@ -126,6 +134,7 @@ class Profile implements ProfileReadable {
       'tileServerEnabled': tileServerEnabled,
       'osmFallbackEnabled': osmFallbackEnabled,
       'enableAprs': enableAprs,
+      if (ssid > 0) 'ssid': ssid,
     };
   }
 
@@ -151,6 +160,7 @@ class Profile implements ProfileReadable {
     bool? tileServerEnabled,
     bool? osmFallbackEnabled,
     bool? enableAprs,
+    int? ssid,
   }) {
     return Profile(
       id: id, // Preserve the ID
@@ -175,6 +185,7 @@ class Profile implements ProfileReadable {
       tileServerEnabled: tileServerEnabled ?? this.tileServerEnabled,
       osmFallbackEnabled: osmFallbackEnabled ?? this.osmFallbackEnabled,
       enableAprs: enableAprs ?? this.enableAprs,
+      ssid: ssid ?? this.ssid,
     );
   }
 

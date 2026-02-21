@@ -1378,5 +1378,7 @@
   "points": "Pontos",
   "select_app_type": "Selecionar tipo de app",
   "unpointed": "Desmarcado",
-  "whats_new_in_version": "Novidades na v{0}"
+  "whats_new_in_version": "Novidades na v{0}",
+  "ssid": "SSID",
+  "ssid_hint": "Identificador do dispositivo (0-15). Use números diferentes para múltiplos dispositivos com o mesmo indicativo."
 }

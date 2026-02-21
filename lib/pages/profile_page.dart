@@ -323,6 +323,56 @@ class _ProfilePageState extends State<ProfilePage> {
                     ),
                   ),
 
+                  const SizedBox(height: 16),
+
+                  // SSID selector (APRS-style device identifier)
+                  Text(
+                    _i18n.t('ssid'),
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    _i18n.t('ssid_hint'),
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        ),
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      SizedBox(
+                        width: 80,
+                        child: DropdownButtonFormField<int>(
+                          value: _profile?.ssid ?? 0,
+                          decoration: InputDecoration(
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                          ),
+                          items: List.generate(16, (i) => DropdownMenuItem(
+                            value: i,
+                            child: Text('$i'),
+                          )),
+                          onChanged: (value) {
+                            if (value != null && _profile != null) {
+                              setState(() {
+                                _profile = _profile!.copyWith(ssid: value);
+                              });
+                            }
+                          },
+                        ),
+                      ),
+                      const SizedBox(width: 16),
+                      Text(
+                        _profile?.fullCallsign ?? '',
+                        style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                              fontWeight: FontWeight.bold,
+                            ),
+                      ),
+                    ],
+                  ),
+
                   const SizedBox(height: 24),
 
                   // NPUB (read-only)

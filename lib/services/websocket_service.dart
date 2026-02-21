@@ -188,6 +188,7 @@ class WebSocketService {
         latitude: roundedLat,
         longitude: roundedLon,
         platform: platform,
+        ssid: profile.ssid,
       );
       event.calculateId();
 

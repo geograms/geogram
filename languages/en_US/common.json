@@ -1384,5 +1384,7 @@
   "open_folder": "Open folder",
   "could_not_open_folder": "Could not open folder",
   "encrypting_progress": "Encrypting: {0}/{1} files ({2}%)",
-  "decrypting_progress": "Decrypting: {0}/{1} files ({2}%)"
+  "decrypting_progress": "Decrypting: {0}/{1} files ({2}%)",
+  "ssid": "SSID",
+  "ssid_hint": "Device identifier (0-15). Use different numbers for multiple devices with the same callsign."
 }

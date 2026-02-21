@@ -614,6 +614,12 @@ abstract class StationServerBase {
                   deviceType = 'desktop';
                 }
                 break;
+              case 'ssid':
+                final ssidValue = int.tryParse(tag[1].toString());
+                if (ssidValue != null && ssidValue >= 0 && ssidValue <= 15) {
+                  client.ssid = ssidValue;
+                }
+                break;
             }
           }
         }
