@@ -7316,24 +7316,40 @@ class PureStationServer with EmailHandlerMixin, BlogHandlerMixin, ConsoleCommand
       final body = response['responseBody'] ?? '';
       final isBase64 = response['isBase64'] == true;
 
-      // Set content type based on file extension (use appPath which has the actual filename)
-      final ext = appPath.split('.').last.toLowerCase();
-      final contentTypes = {
-        'html': 'text/html',
-        'htm': 'text/html',
-        'css': 'text/css',
-        'js': 'application/javascript',
-        'json': 'application/json',
-        'png': 'image/png',
-        'jpg': 'image/jpeg',
-        'jpeg': 'image/jpeg',
-        'gif': 'image/gif',
-        'svg': 'image/svg+xml',
-        'ico': 'image/x-icon',
-        'txt': 'text/plain',
-      };
-      final contentType = contentTypes[ext] ?? 'application/octet-stream';
-      request.response.headers.set('Content-Type', contentType);
+      // Use Content-Type from device response headers if available
+      String? contentType;
+      if (response['responseHeaders'] != null) {
+        try {
+          final headers = jsonDecode(response['responseHeaders'] as String)
+              as Map<String, dynamic>;
+          headers.forEach((key, value) {
+            if (key.toLowerCase() == 'content-type') {
+              contentType = value.toString();
+            }
+          });
+        } catch (_) {}
+      }
+
+      // Fallback: guess content type from file extension
+      if (contentType == null) {
+        final ext = appPath.split('.').last.toLowerCase();
+        final contentTypes = {
+          'html': 'text/html',
+          'htm': 'text/html',
+          'css': 'text/css',
+          'js': 'application/javascript',
+          'json': 'application/json',
+          'png': 'image/png',
+          'jpg': 'image/jpeg',
+          'jpeg': 'image/jpeg',
+          'gif': 'image/gif',
+          'svg': 'image/svg+xml',
+          'ico': 'image/x-icon',
+          'txt': 'text/plain',
+        };
+        contentType = contentTypes[ext] ?? 'application/octet-stream';
+      }
+      request.response.headers.set('Content-Type', contentType!);
 
       if (isBase64) {
         request.response.add(base64Decode(body));

@@ -67,10 +67,14 @@ class SharedFolderService {
     try {
       final entries = await _storage.listDirectory('');
 
+      // Known non-folder JSON files to skip
+      const skipFiles = {'tree.json', 'app.js', 'data.js'};
+
       for (final entry in entries) {
         if (!entry.isDirectory &&
             entry.name.endsWith('.json') &&
-            !entry.name.startsWith('.')) {
+            !entry.name.startsWith('.') &&
+            !skipFiles.contains(entry.name)) {
           try {
             final content = await _storage.readString(entry.path);
             if (content != null) {
