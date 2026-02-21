@@ -13,6 +13,7 @@ import '../models/group.dart';
 import '../services/app_service.dart';
 import '../services/i18n_service.dart';
 import '../services/groups_service.dart';
+import '../services/contact_service.dart';
 import '../services/profile_storage.dart';
 import '../services/shared_folder_service.dart';
 import '../util/nostr_crypto.dart';
@@ -179,22 +180,36 @@ class _SharedBrowserPageState extends State<SharedBrowserPage> {
             ),
           );
           if (results != null) {
-            setDialogState(() {
-              for (final r in results) {
-                final contact = r.contact;
-                if (contact.npub != null && contact.npub!.isNotEmpty) {
-                  try {
-                    final hex = NostrCrypto.decodeNpub(contact.npub!);
-                    if (hex.isNotEmpty) {
-                      final label = contact.displayName.isNotEmpty
-                          ? contact.displayName
-                          : contact.callsign;
-                      allowedReaders[hex] = label;
-                    }
-                  } catch (_) {}
-                }
+            // Set up ContactService to load full contact data (with npub)
+            final appService = AppService();
+            final contactsApp = appService.getAppByType('contacts');
+            if (contactsApp?.storagePath == null) return;
+            final contactService = ContactService();
+            final profileStorage = appService.profileStorage;
+            if (profileStorage != null) {
+              contactService.setStorage(ScopedProfileStorage.fromAbsolutePath(
+                profileStorage, contactsApp!.storagePath!));
+            } else {
+              contactService.setStorage(FilesystemProfileStorage(contactsApp!.storagePath!));
+            }
+            await contactService.initializeApp(contactsApp.storagePath!);
+
+            for (final r in results) {
+              final fullContact = await contactService.loadContact(
+                r.contact.callsign, groupPath: r.contact.groupPath);
+              if (fullContact?.npub != null && fullContact!.npub!.isNotEmpty) {
+                try {
+                  final hex = NostrCrypto.decodeNpub(fullContact.npub!);
+                  if (hex.isNotEmpty) {
+                    final label = fullContact.displayName.isNotEmpty
+                        ? fullContact.displayName
+                        : fullContact.callsign;
+                    allowedReaders[hex] = label;
+                  }
+                } catch (_) {}
               }
-            });
+            }
+            setDialogState(() {});
           }
         },
         icon: const Icon(Icons.person_add),
