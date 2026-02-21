@@ -1174,6 +1174,7 @@ class WebSocketService {
         final menuItems = await AppService().generateDeviceMenu(
           activeApp: 'shared',
           appsPath: p.dirname(storagePath),
+          depth: 2,
         );
 
         return themeService.processTemplate(template, {

@@ -792,6 +792,23 @@ class AppService {
             return await scoped.exists('extra/channels.json');
           }
           return await File('$appPath/extra/channels.json').exists();
+        case 'shared':
+          // Shared has content if any .json folder entries exist (excluding metadata files)
+          const metaFiles = {'tree.json', 'app.js', 'data.js'};
+          if (storage != null) {
+            final scoped =
+                ScopedProfileStorage.fromAbsolutePath(storage, appPath);
+            final entries = await scoped.listDirectory('');
+            return entries.any((e) =>
+                e.name.endsWith('.json') && !metaFiles.contains(e.name));
+          }
+          final dir = Directory(appPath);
+          if (!await dir.exists()) return false;
+          final entries = await dir.list().toList();
+          return entries.any((e) =>
+              e is File &&
+              e.path.endsWith('.json') &&
+              !metaFiles.contains(e.path.split('/').last));
         default:
           // Events, places, files, alerts: need a generated index.html
           if (storage != null) {
@@ -816,6 +833,7 @@ class AppService {
     String? appsPath,
     ProfileStorage? storage,
     bool isRootLevel = false,
+    int depth = 1,
   }) async {
     final apps = await getPublicApps(appsPath: appsPath, storage: storage);
     return WebNavigation.generateDeviceMenuItems(
@@ -828,6 +846,7 @@ class AppService {
       hasShared: apps['shared']!,
       hasAlerts: apps['alerts']!,
       isRootLevel: isRootLevel,
+      depth: depth,
     );
   }
 

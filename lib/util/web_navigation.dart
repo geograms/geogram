@@ -31,6 +31,7 @@ class WebNavigation {
     required String activeApp,
     bool isStationPage = false,
     bool isRootLevel = false,
+    int depth = 1,
     String? prefix,
   }) {
     final buffer = StringBuffer();
@@ -56,11 +57,12 @@ class WebNavigation {
           href = './${item.path.substring(1)}';
         }
       } else {
-        // Sub-level device pages (e.g., /{callsign}/blog/)
+        // Sub-level device pages (e.g., /{callsign}/blog/, /{callsign}/shared/screenshots/)
+        final upPrefix = '../' * depth;
         if (item.path == '/') {
-          href = '../';
+          href = upPrefix;
         } else {
-          href = '../${item.path.substring(1)}';
+          href = '$upPrefix${item.path.substring(1)}';
         }
       }
 
@@ -118,6 +120,7 @@ class WebNavigation {
     bool hasAlerts = false,
     bool hasDownload = false,
     bool isRootLevel = false,
+    int depth = 1,
   }) {
     final apps = <String>['home'];
     if (hasBlog) apps.add('blog');
@@ -134,6 +137,7 @@ class WebNavigation {
       activeApp: activeApp,
       isStationPage: false,
       isRootLevel: isRootLevel,
+      depth: depth,
     );
   }
 
