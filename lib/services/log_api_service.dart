@@ -80,6 +80,10 @@ import '../pages/transfer_send_page.dart';
 import '../util/event_bus.dart';
 import '../util/station_html_templates.dart';
 import '../server/mixins/chat_modification_mixin.dart';
+import '../models/shared_folder.dart';
+import 'shared_folder_service.dart';
+import 'groups_service.dart';
+import '../models/app.dart';
 
 class LogApiService with ChatModificationMixin {
   static final LogApiService _instance = LogApiService._internal();
@@ -2042,6 +2046,11 @@ function cleanup() {
       // Handle encrypted storage debug actions
       if (action.toLowerCase().startsWith('encrypt_storage_')) {
         return await _handleEncryptStorageAction(action.toLowerCase(), params, headers);
+      }
+
+      // Handle shared folder debug actions
+      if (action.toLowerCase().startsWith('shared_')) {
+        return await _handleSharedAction(action.toLowerCase(), params, headers);
       }
 
       final debugController = DebugController();
@@ -16247,6 +16256,121 @@ function cleanup() {
           'success': false,
           'error': e.toString(),
         }),
+        headers: headers,
+      );
+    }
+  }
+
+  /// Handle shared folder debug actions
+  Future<shelf.Response> _handleSharedAction(
+    String action,
+    Map<String, dynamic> params,
+    Map<String, String> headers,
+  ) async {
+    try {
+      final profileStorage = AppService().profileStorage;
+      if (profileStorage == null) {
+        return shelf.Response.ok(
+          jsonEncode({'success': false, 'error': 'No profile storage'}),
+          headers: headers,
+        );
+      }
+
+      // Find shared app
+      final apps = await AppService().loadApps();
+      final sharedApp = apps.cast<App?>().firstWhere(
+        (a) => a?.type == 'shared',
+        orElse: () => null,
+      );
+      if (sharedApp?.storagePath == null) {
+        return shelf.Response.ok(
+          jsonEncode({'success': false, 'error': 'No shared app found'}),
+          headers: headers,
+        );
+      }
+
+      final scopedStorage = ScopedProfileStorage.fromAbsolutePath(
+        profileStorage, sharedApp!.storagePath!,
+      );
+      final service = SharedFolderService();
+      service.setStorage(scopedStorage);
+      await service.initializeApp(sharedApp.storagePath!);
+
+      switch (action) {
+        case 'shared_list':
+          final folders = await service.loadAll();
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'folders': folders.map((f) => {
+                ...f.toJson(),
+                'filePath': f.filePath,
+              }).toList(),
+            }),
+            headers: headers,
+          );
+
+        case 'shared_test_cookie':
+          // Test cookie parsing from headers string
+          // Params: headers (raw header string to parse)
+          final headersStr = params['headers'] as String?;
+          final wsService = WebSocketService();
+          final extracted = wsService.testExtractNostrPubkey(headersStr);
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'input': headersStr,
+              'extractedPubkey': extracted,
+            }),
+            headers: headers,
+          );
+
+        case 'shared_test_access':
+          // Test access control by simulating cookie-based access
+          // Params: pubkey (optional hex pubkey to test)
+          final testPubkey = params['pubkey'] as String?;
+          final folders = await service.loadAll();
+          final wsService = WebSocketService();
+
+          final results = <Map<String, dynamic>>[];
+          for (final folder in folders) {
+            final accessible = folder.visibility == SharedFolderVisibility.public
+                ? true
+                : folder.visibility == SharedFolderVisibility.private_
+                    ? false
+                    : await wsService.testIsAuthorizedReader(folder, testPubkey);
+            results.add({
+              'title': folder.title,
+              'visibility': folder.visibility.value,
+              'accessible': accessible,
+              'allowedReaders': folder.allowedReaders,
+              'allowedGroups': folder.allowedGroups,
+            });
+          }
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'testPubkey': testPubkey,
+              'results': results,
+            }),
+            headers: headers,
+          );
+
+        default:
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': false,
+              'error': 'Unknown shared action: $action',
+              'available': ['shared_list', 'shared_test_access', 'shared_test_cookie'],
+            }),
+            headers: headers,
+          );
+      }
+    } catch (e, stack) {
+      LogService().log('LogApiService: Shared action error: $e');
+      LogService().log('Stack: $stack');
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'success': false, 'error': e.toString()}),
         headers: headers,
       );
     }

@@ -1229,6 +1229,11 @@ class WebSocketService {
         .replaceAll('"', '&quot;');
   }
 
+  /// Public wrapper for testing cookie extraction via debug API
+  String? testExtractNostrPubkey(String? headersStr) {
+    return _extractNostrPubkeyFromHeaders(headersStr);
+  }
+
   /// Extract Nostr pubkey from HTTP headers cookie string
   String? _extractNostrPubkeyFromHeaders(String? headersStr) {
     if (headersStr == null || headersStr.isEmpty) return null;
@@ -1256,6 +1261,11 @@ class WebSocketService {
   }
 
   /// Check if a visitor is authorized to access a restricted shared folder
+  /// Public wrapper for testing via debug API
+  Future<bool> testIsAuthorizedReader(SharedFolder folder, String? visitorPubkey) async {
+    return _isAuthorizedReader(folder, visitorPubkey);
+  }
+
   Future<bool> _isAuthorizedReader(SharedFolder folder, String? visitorPubkey) async {
     if (visitorPubkey == null) return false;
 
