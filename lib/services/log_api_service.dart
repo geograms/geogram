@@ -12834,10 +12834,9 @@ function cleanup() {
         LogService().log('Blog HTML: Serving blog for device $deviceCallsign (from proxy header)');
       }
 
-      // Read blog post directly from storage (no BlogService needed)
-      final ProfileStorage blogStorage;
+      // Read blog post by searching all blog-type apps
+      final ProfileStorage baseStorage;
       if (isOwnBlog) {
-        // Own blog: use ProfileStorage (handles encrypted or plain)
         final storage = AppService().profileStorage;
         if (storage == null) {
           return shelf.Response.internalServerError(
@@ -12845,35 +12844,60 @@ function cleanup() {
             headers: {'Content-Type': 'text/html'},
           );
         }
-        blogStorage = storage;
+        baseStorage = storage;
       } else {
-        // Proxy case: serving another device's blog (unencrypted access)
-        blogStorage = FilesystemProfileStorage('$dataDir/devices/$deviceCallsign');
+        baseStorage = FilesystemProfileStorage('$dataDir/devices/$deviceCallsign');
       }
-      final year = filename.length >= 4 ? filename.substring(0, 4) : '';
-      final postRelativePath = 'blog/$year/$filename';
-      final postContent = await blogStorage.readString('$postRelativePath/post.md');
 
-      if (postContent == null) {
+      final year = filename.length >= 4 ? filename.substring(0, 4) : '';
+      BlogPost? foundPost;
+      String? postRelativePath;
+      ProfileStorage? blogStorage;
+
+      // Search all blog-type apps for this post
+      final apps = await AppService().loadApps();
+      for (final app in apps) {
+        if (app.visibility == 'private') continue;
+        if (app.type != 'blog') continue;
+        final storagePath = app.storagePath;
+        if (storagePath == null) continue;
+
+        final appStorage = ScopedProfileStorage.fromAbsolutePath(baseStorage, storagePath);
+        final candidatePath = '$year/$filename/post.md';
+        final content = await appStorage.readString(candidatePath);
+        if (content != null) {
+          try {
+            foundPost = BlogPost.fromText(content, filename);
+            // Store path relative to app storage for feedback lookup
+            postRelativePath = '$year/$filename';
+            blogStorage = appStorage;
+            break;
+          } catch (e) {
+            LogService().log('Error parsing blog file: $e');
+          }
+        }
+      }
+
+      if (foundPost == null) {
         return shelf.Response.notFound(
           '<html><body><h1>404 Not Found</h1><p>Blog post not found: $filename</p></body></html>',
           headers: {'Content-Type': 'text/html'},
         );
       }
 
-      final post = BlogPost.fromText(postContent, filename);
-
       // Only serve published posts
-      if (!post.isPublished) {
+      if (!foundPost.isPublished) {
         return shelf.Response.notFound(
           '<html><body><h1>404 Not Found</h1><p>Blog post not available</p></body></html>',
           headers: {'Content-Type': 'text/html'},
         );
       }
 
+      final post = foundPost;
+
       // Read liked npubs and convert to hex pubkeys for client-side checking
       final likedNpubs = await FeedbackFolderUtils.readFeedbackFile(
-        postRelativePath,
+        postRelativePath!,
         FeedbackFolderUtils.feedbackTypeLikes,
         storage: blogStorage,
       );
