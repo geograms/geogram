@@ -12899,7 +12899,7 @@ function cleanup() {
       final likedNpubs = await FeedbackFolderUtils.readFeedbackFile(
         postRelativePath!,
         FeedbackFolderUtils.feedbackTypeLikes,
-        storage: blogStorage,
+        storage: blogStorage!,
       );
       final likedHexPubkeys = <String>[];
       for (final npub in likedNpubs) {

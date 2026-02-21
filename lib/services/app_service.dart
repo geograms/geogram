@@ -16,6 +16,7 @@ import '../util/app_constants.dart';
 import '../util/nostr_key_generator.dart';
 import '../util/tlsh.dart';
 import '../util/html_utils.dart';
+import '../util/nostr_login_scripts.dart';
 import '../util/web_navigation.dart';
 import 'config_service.dart';
 import 'chat_service.dart';
@@ -960,6 +961,9 @@ class AppService {
         'DATA_JSON': dataJson,
         'SCRIPTS': themeService.getChatScripts(),
         'MENU_ITEMS': menuItems,
+        'HOME_URL': '../',
+        'NOSTR_STYLES': getNostrLoginStyles(),
+        'NOSTR_HEADER': getNostrLoginHeaderHtml(),
         'GENERATED_DATE': DateTime.now().toIso8601String().split('T').first,
       });
 

@@ -890,14 +890,11 @@ class WebSocketService {
       // For chat collection requesting index.html, regenerate it dynamically
       if (appName == 'chat' && (filePath == '/' || filePath == '/index.html')) {
         LogService().log('Regenerating chat index.html dynamically...');
-        // Chat uses the chat collection path from AppService
-        final appsDir = appService.appsDirectory;
-        final chatPath = '${appsDir.path}/chat';
-        await appService.generateChatIndex(chatPath);
+        await appService.generateChatIndex(storagePath);
         // Read the generated file via ProfileStorage
         final chatProfileStorage = AppService().profileStorage;
         if (chatProfileStorage != null) {
-          final chatAppStorage = ScopedProfileStorage.fromAbsolutePath(chatProfileStorage, chatPath);
+          final chatAppStorage = ScopedProfileStorage.fromAbsolutePath(chatProfileStorage, storagePath);
           final chatFileBytes = await chatAppStorage.readBytes('index.html');
           if (chatFileBytes != null) {
             final fileContent = base64Encode(chatFileBytes);
