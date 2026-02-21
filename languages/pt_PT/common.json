@@ -1380,5 +1380,21 @@
   "unpointed": "Desmarcado",
   "whats_new_in_version": "Novidades na v{0}",
   "ssid": "SSID",
-  "ssid_hint": "Identificador do dispositivo (0-15). Use números diferentes para múltiplos dispositivos com o mesmo indicativo."
+  "ssid_hint": "Identificador do dispositivo (0-15). Use números diferentes para múltiplos dispositivos com o mesmo indicativo.",
+  "ssid_0": "Principal (padrão)",
+  "ssid_1": "Secundário",
+  "ssid_2": "Espelho",
+  "ssid_3": "Terciário",
+  "ssid_4": "Reservado",
+  "ssid_5": "Smartphone",
+  "ssid_6": "Tablet",
+  "ssid_7": "Portátil",
+  "ssid_8": "Marítimo",
+  "ssid_9": "Veículo",
+  "ssid_10": "Gateway internet",
+  "ssid_11": "Aeronave",
+  "ssid_12": "Estação (CLI)",
+  "ssid_13": "Estação meteorológica",
+  "ssid_14": "Embarcado / IoT",
+  "ssid_15": "Experimental"
 }

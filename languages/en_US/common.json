@@ -1386,5 +1386,21 @@
   "encrypting_progress": "Encrypting: {0}/{1} files ({2}%)",
   "decrypting_progress": "Decrypting: {0}/{1} files ({2}%)",
   "ssid": "SSID",
-  "ssid_hint": "Device identifier (0-15). Use different numbers for multiple devices with the same callsign."
+  "ssid_hint": "Device identifier (0-15). Use different numbers for multiple devices with the same callsign.",
+  "ssid_0": "Primary (default)",
+  "ssid_1": "Secondary",
+  "ssid_2": "Mirror",
+  "ssid_3": "Tertiary",
+  "ssid_4": "Reserved",
+  "ssid_5": "Smartphone",
+  "ssid_6": "Tablet",
+  "ssid_7": "Handheld",
+  "ssid_8": "Marine",
+  "ssid_9": "Vehicle",
+  "ssid_10": "Internet gateway",
+  "ssid_11": "Aircraft",
+  "ssid_12": "Station (CLI)",
+  "ssid_13": "Weather station",
+  "ssid_14": "Embedded / IoT",
+  "ssid_15": "Experimental"
 }

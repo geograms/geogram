@@ -1386,5 +1386,21 @@
   "encrypting_progress": "Verschlüsselung: {0}/{1} Dateien ({2}%)",
   "decrypting_progress": "Entschlüsselung: {0}/{1} Dateien ({2}%)",
   "ssid": "SSID",
-  "ssid_hint": "Gerätekennung (0-15). Verwende unterschiedliche Nummern für mehrere Geräte mit demselben Rufzeichen."
+  "ssid_hint": "Gerätekennung (0-15). Verwende unterschiedliche Nummern für mehrere Geräte mit demselben Rufzeichen.",
+  "ssid_0": "Primär (Standard)",
+  "ssid_1": "Sekundär",
+  "ssid_2": "Spiegel",
+  "ssid_3": "Tertiär",
+  "ssid_4": "Reserviert",
+  "ssid_5": "Smartphone",
+  "ssid_6": "Tablet",
+  "ssid_7": "Handgerät",
+  "ssid_8": "Maritim",
+  "ssid_9": "Fahrzeug",
+  "ssid_10": "Internet-Gateway",
+  "ssid_11": "Flugzeug",
+  "ssid_12": "Station (CLI)",
+  "ssid_13": "Wetterstation",
+  "ssid_14": "Eingebettet / IoT",
+  "ssid_15": "Experimentell"
 }
