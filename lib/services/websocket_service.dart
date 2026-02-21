@@ -1109,6 +1109,7 @@ class WebSocketService {
           'HOME_URL': '../',
           'NOSTR_STYLES': getNostrLoginStyles(),
           'NOSTR_HEADER': getNostrLoginHeaderHtml(),
+          'NOSTR_SCRIPTS': getNostrLoginScripts(),
           'GENERATED_DATE': DateTime.now().toIso8601String().split('T').first,
         });
       }
@@ -1183,6 +1184,7 @@ class WebSocketService {
           'HOME_URL': '../../',
           'NOSTR_STYLES': getNostrLoginStyles(),
           'NOSTR_HEADER': getNostrLoginHeaderHtml(),
+          'NOSTR_SCRIPTS': getNostrLoginScripts(),
           'GENERATED_DATE': DateTime.now().toIso8601String().split('T').first,
         });
       }

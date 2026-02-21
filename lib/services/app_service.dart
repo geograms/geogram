@@ -959,7 +959,7 @@ class AppService {
         'CONTENT': messagesHtml.toString(),
         'CHANNELS_LIST': channelsHtml.toString(),
         'DATA_JSON': dataJson,
-        'SCRIPTS': themeService.getChatScripts(),
+        'SCRIPTS': '${getNostrLoginScripts()}\n${themeService.getChatScripts()}',
         'MENU_ITEMS': menuItems,
         'HOME_URL': '../',
         'NOSTR_STYLES': getNostrLoginStyles(),
