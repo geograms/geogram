@@ -439,143 +439,20 @@ class _SharedBrowserPageState extends State<SharedBrowserPage> {
 
     if (!mounted) return;
 
-    final result = await showDialog<SharedFolder>(
-      context: context,
-      builder: (context) => StatefulBuilder(
-        builder: (context, setDialogState) {
-          return AlertDialog(
-            title: Text(_i18n.t('edit_shared_folder')),
-            content: SizedBox(
-              width: double.maxFinite,
-              child: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    TextField(
-                      controller: titleController,
-                      decoration: InputDecoration(
-                        labelText: _i18n.t('title'),
-                        prefixIcon: const Icon(Icons.title),
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    Container(
-                      padding: const EdgeInsets.all(10),
-                      decoration: BoxDecoration(
-                        color: Theme.of(context)
-                            .colorScheme
-                            .surfaceContainerLow,
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Row(
-                        children: [
-                          const Icon(Icons.folder, size: 18),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              folder.location,
-                              style: Theme.of(context).textTheme.bodySmall,
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    DropdownButtonFormField<String>(
-                      value: visibility,
-                      decoration: InputDecoration(
-                        labelText: _i18n.t('visibility'),
-                        prefixIcon: const Icon(Icons.visibility_outlined),
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                      ),
-                      items: [
-                        DropdownMenuItem(
-                          value: 'public',
-                          child: Text(_i18n.t('visibility_public')),
-                        ),
-                        DropdownMenuItem(
-                          value: 'private',
-                          child: Text(_i18n.t('visibility_private')),
-                        ),
-                        DropdownMenuItem(
-                          value: 'restricted',
-                          child: Text(_i18n.t('visibility_restricted')),
-                        ),
-                      ],
-                      onChanged: (value) {
-                        if (value != null) {
-                          setDialogState(() => visibility = value);
-                          if (value == 'restricted' && availableGroups.isEmpty) {
-                            _loadAvailableGroups().then((groups) {
-                              setDialogState(() => availableGroups = groups);
-                            });
-                          }
-                        }
-                      },
-                    ),
-
-                    // Restricted access pickers
-                    if (visibility == 'restricted')
-                      ..._buildRestrictedAccessWidgets(
-                        context: context,
-                        availableGroups: availableGroups,
-                        selectedGroups: selectedGroups,
-                        selectedContacts: selectedContacts,
-                        setDialogState: setDialogState,
-                      ),
-
-                    const SizedBox(height: 12),
-                    TextField(
-                      controller: descController,
-                      maxLines: 2,
-                      decoration: InputDecoration(
-                        labelText: _i18n.t('description'),
-                        prefixIcon: const Icon(Icons.notes),
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: Text(_i18n.t('cancel')),
-              ),
-              FilledButton(
-                onPressed: () {
-                  final title = titleController.text.trim();
-                  if (title.isEmpty) return;
-                  Navigator.pop(
-                    context,
-                    folder.copyWith(
-                      title: title,
-                      visibility:
-                          SharedFolderVisibility.fromValue(visibility),
-                      allowedGroups: selectedGroups.toList(),
-                      allowedReaders: visibility == 'restricted'
-                          ? _contactsToHexPubkeys(selectedContacts)
-                          : null,
-                      description: descController.text.trim(),
-                    ),
-                  );
-                },
-                child: Text(_i18n.t('save')),
-              ),
-            ],
-          );
-        },
+    final result = await Navigator.push<SharedFolder>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => _EditSharedFolderPage(
+          folder: folder,
+          i18n: _i18n,
+          initialVisibility: visibility,
+          initialGroups: selectedGroups,
+          initialContacts: selectedContacts,
+          availableGroups: availableGroups,
+          loadAvailableGroups: _loadAvailableGroups,
+          buildRestrictedAccessWidgets: _buildRestrictedAccessWidgets,
+          contactsToHexPubkeys: _contactsToHexPubkeys,
+        ),
       ),
     );
 
@@ -849,5 +726,213 @@ class _SharedBrowserPageState extends State<SharedBrowserPage> {
       await _service.update(updated);
       await _loadFolders();
     }
+  }
+}
+
+/// Full-screen page for editing a shared folder
+class _EditSharedFolderPage extends StatefulWidget {
+  final SharedFolder folder;
+  final I18nService i18n;
+  final String initialVisibility;
+  final Set<String> initialGroups;
+  final List<Contact> initialContacts;
+  final List<Group> availableGroups;
+  final Future<List<Group>> Function() loadAvailableGroups;
+  final List<Widget> Function({
+    required BuildContext context,
+    required List<Group> availableGroups,
+    required Set<String> selectedGroups,
+    required List<Contact> selectedContacts,
+    required void Function(void Function()) setDialogState,
+  }) buildRestrictedAccessWidgets;
+  final List<String> Function(List<Contact>) contactsToHexPubkeys;
+
+  const _EditSharedFolderPage({
+    required this.folder,
+    required this.i18n,
+    required this.initialVisibility,
+    required this.initialGroups,
+    required this.initialContacts,
+    required this.availableGroups,
+    required this.loadAvailableGroups,
+    required this.buildRestrictedAccessWidgets,
+    required this.contactsToHexPubkeys,
+  });
+
+  @override
+  State<_EditSharedFolderPage> createState() => _EditSharedFolderPageState();
+}
+
+class _EditSharedFolderPageState extends State<_EditSharedFolderPage> {
+  late final TextEditingController _titleController;
+  late final TextEditingController _descController;
+  late String _visibility;
+  late List<Group> _availableGroups;
+  late final Set<String> _selectedGroups;
+  late final List<Contact> _selectedContacts;
+
+  @override
+  void initState() {
+    super.initState();
+    _titleController = TextEditingController(text: widget.folder.title);
+    _descController = TextEditingController(text: widget.folder.description);
+    _visibility = widget.initialVisibility;
+    _availableGroups = List.from(widget.availableGroups);
+    _selectedGroups = Set.from(widget.initialGroups);
+    _selectedContacts = List.from(widget.initialContacts);
+  }
+
+  @override
+  void dispose() {
+    _titleController.dispose();
+    _descController.dispose();
+    super.dispose();
+  }
+
+  void _save() {
+    final title = _titleController.text.trim();
+    if (title.isEmpty) return;
+    Navigator.pop(
+      context,
+      widget.folder.copyWith(
+        title: title,
+        visibility: SharedFolderVisibility.fromValue(_visibility),
+        allowedGroups: _selectedGroups.toList(),
+        allowedReaders: _visibility == 'restricted'
+            ? widget.contactsToHexPubkeys(_selectedContacts)
+            : null,
+        description: _descController.text.trim(),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(widget.i18n.t('edit_shared_folder')),
+        actions: [
+          TextButton(
+            onPressed: _save,
+            child: Text(widget.i18n.t('save')),
+          ),
+        ],
+      ),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          // Title
+          TextField(
+            controller: _titleController,
+            autofocus: true,
+            decoration: InputDecoration(
+              labelText: widget.i18n.t('title'),
+              prefixIcon: const Icon(Icons.title),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+
+          // Location (read-only)
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: theme.colorScheme.surfaceContainerLow,
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Row(
+              children: [
+                const Icon(Icons.folder, size: 20),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    widget.folder.location,
+                    style: theme.textTheme.bodyMedium,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
+
+          // Visibility
+          DropdownButtonFormField<String>(
+            value: _visibility,
+            decoration: InputDecoration(
+              labelText: widget.i18n.t('visibility'),
+              prefixIcon: const Icon(Icons.visibility_outlined),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+            items: [
+              DropdownMenuItem(
+                value: 'public',
+                child: Text(widget.i18n.t('visibility_public')),
+              ),
+              DropdownMenuItem(
+                value: 'private',
+                child: Text(widget.i18n.t('visibility_private')),
+              ),
+              DropdownMenuItem(
+                value: 'restricted',
+                child: Text(widget.i18n.t('visibility_restricted')),
+              ),
+            ],
+            onChanged: (value) {
+              if (value != null) {
+                setState(() => _visibility = value);
+                if (value == 'restricted' && _availableGroups.isEmpty) {
+                  widget.loadAvailableGroups().then((groups) {
+                    setState(() => _availableGroups = groups);
+                  });
+                }
+              }
+            },
+          ),
+
+          // Restricted access pickers
+          if (_visibility == 'restricted')
+            ...widget.buildRestrictedAccessWidgets(
+              context: context,
+              availableGroups: _availableGroups,
+              selectedGroups: _selectedGroups,
+              selectedContacts: _selectedContacts,
+              setDialogState: (fn) => setState(fn),
+            ),
+
+          const SizedBox(height: 16),
+
+          // Description
+          TextField(
+            controller: _descController,
+            maxLines: 3,
+            decoration: InputDecoration(
+              labelText: widget.i18n.t('description'),
+              hintText: widget.i18n.t('optional'),
+              prefixIcon: const Icon(Icons.notes),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+          ),
+          const SizedBox(height: 24),
+
+          // Save button at the bottom
+          FilledButton.icon(
+            onPressed: _save,
+            icon: const Icon(Icons.save),
+            label: Text(widget.i18n.t('save')),
+            style: FilledButton.styleFrom(
+              minimumSize: const Size(double.infinity, 48),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }
