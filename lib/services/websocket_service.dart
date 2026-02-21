@@ -38,6 +38,7 @@ import '../models/blog_post.dart';
 import '../models/app.dart';
 import '../models/shared_folder.dart';
 import '../services/shared_folder_service.dart';
+import '../services/groups_service.dart';
 
 /// WebSocket service for station connections (singleton)
 class WebSocketService {
@@ -870,7 +871,7 @@ class WebSocketService {
 
       // For shared collection, resolve files from shared folder entries' disk locations
       if (appName == 'shared') {
-        await _handleSharedFolderRequest(requestId, filePath, storagePath);
+        await _handleSharedFolderRequest(requestId, filePath, storagePath, headersJson);
         return;
       }
 
@@ -952,7 +953,7 @@ class WebSocketService {
   /// Handle HTTP requests for the 'shared' app type.
   /// Resolves shared folder entries and serves files from their actual disk locations.
   /// Path format: /{folderSlug}/{filePath} or / for index
-  Future<void> _handleSharedFolderRequest(String requestId, String filePath, String storagePath) async {
+  Future<void> _handleSharedFolderRequest(String requestId, String filePath, String storagePath, String? headersStr) async {
     try {
       // Set up the shared folder service
       final profileStorage = AppService().profileStorage;
@@ -984,7 +985,7 @@ class WebSocketService {
 
       // Index page: list all shared folders
       if (filePath == '/' || filePath == '/index.html') {
-        final html = await _generateSharedIndexHtml(folders, storagePath);
+        final html = await _generateSharedIndexHtml(folders, storagePath, headersStr);
         _sendHttpResponse(requestId, 200, {'Content-Type': 'text/html'}, base64Encode(utf8.encode(html)), isBase64: true);
         return;
       }
@@ -1015,6 +1016,14 @@ class WebSocketService {
       if (entry.visibility == SharedFolderVisibility.private_) {
         _sendHttpResponse(requestId, 403, {'Content-Type': 'text/plain'}, 'Forbidden');
         return;
+      }
+
+      if (entry.visibility == SharedFolderVisibility.restricted) {
+        final visitorPubkey = _extractNostrPubkeyFromHeaders(headersStr);
+        if (!await _isAuthorizedReader(entry, visitorPubkey)) {
+          _sendHttpResponse(requestId, 403, {'Content-Type': 'text/plain'}, 'Forbidden');
+          return;
+        }
       }
 
       // Serve styles.css for subfolder paths (e.g., /{folderSlug}/styles.css)
@@ -1068,18 +1077,27 @@ class WebSocketService {
   }
 
   /// Generate an index page listing all shared folders (themed)
-  Future<String> _generateSharedIndexHtml(List<SharedFolder> folders, String storagePath) async {
+  Future<String> _generateSharedIndexHtml(List<SharedFolder> folders, String storagePath, String? headersStr) async {
     // Build folder cards HTML
     final contentBuf = StringBuffer();
-    final publicFolders = folders.where((f) => f.visibility != SharedFolderVisibility.private_).toList();
+    final visitorPubkey = _extractNostrPubkeyFromHeaders(headersStr);
+    final publicFolders = <SharedFolder>[];
+    for (final f in folders) {
+      if (f.visibility == SharedFolderVisibility.private_) continue;
+      if (f.visibility == SharedFolderVisibility.restricted) {
+        if (!await _isAuthorizedReader(f, visitorPubkey)) continue;
+      }
+      publicFolders.add(f);
+    }
 
     if (publicFolders.isEmpty) {
       contentBuf.writeln('<div class="shared-empty">No shared folders available.</div>');
     } else {
       for (final f in publicFolders) {
         final slug = f.sanitizedFilename;
+        final icon = f.visibility == SharedFolderVisibility.restricted ? '&#128274;' : '&#128193;';
         contentBuf.writeln('<a class="folder-card" href="$slug/">');
-        contentBuf.writeln('<div class="folder-card-icon">&#128193;</div>');
+        contentBuf.writeln('<div class="folder-card-icon">$icon</div>');
         contentBuf.writeln('<div class="folder-card-title">${_escapeHtml(f.title)}</div>');
         if (f.description.isNotEmpty) {
           contentBuf.writeln('<div class="folder-card-desc">${_escapeHtml(f.description)}</div>');
@@ -1209,6 +1227,74 @@ class WebSocketService {
         .replaceAll('<', '&lt;')
         .replaceAll('>', '&gt;')
         .replaceAll('"', '&quot;');
+  }
+
+  /// Extract Nostr pubkey from HTTP headers cookie string
+  String? _extractNostrPubkeyFromHeaders(String? headersStr) {
+    if (headersStr == null || headersStr.isEmpty) return null;
+    // Headers come as multi-line string from HttpHeaders.toString()
+    // Look for cookie: line containing geogram_nostr_pubkey=<64-char-hex>
+    final lines = headersStr.split('\n');
+    for (final line in lines) {
+      final lower = line.toLowerCase().trim();
+      if (lower.startsWith('cookie:')) {
+        final cookieStr = line.substring(line.indexOf(':') + 1).trim();
+        final cookies = cookieStr.split(';');
+        for (final cookie in cookies) {
+          final parts = cookie.trim().split('=');
+          if (parts.length == 2 && parts[0].trim() == 'geogram_nostr_pubkey') {
+            final value = parts[1].trim();
+            // Validate it's a 64-char hex string
+            if (value.length == 64 && RegExp(r'^[0-9a-fA-F]+$').hasMatch(value)) {
+              return value.toLowerCase();
+            }
+          }
+        }
+      }
+    }
+    return null;
+  }
+
+  /// Check if a visitor is authorized to access a restricted shared folder
+  Future<bool> _isAuthorizedReader(SharedFolder folder, String? visitorPubkey) async {
+    if (visitorPubkey == null) return false;
+
+    // Direct reader match (hex pubkeys)
+    if (folder.allowedReaders.contains(visitorPubkey)) return true;
+
+    // Group membership check
+    if (folder.allowedGroups.isNotEmpty) {
+      try {
+        final profileStorage = AppService().profileStorage;
+        if (profileStorage != null) {
+          // Find groups app storage
+          final apps = await AppService().loadApps();
+          final groupsApp = apps.cast<App?>().firstWhere(
+            (a) => a?.type == 'groups',
+            orElse: () => null,
+          );
+          if (groupsApp?.storagePath != null) {
+            final groupsStorage = ScopedProfileStorage.fromAbsolutePath(
+              profileStorage, groupsApp!.storagePath!,
+            );
+            final groupsService = GroupsService();
+            groupsService.setStorage(groupsStorage);
+
+            // Convert visitor hex pubkey to npub for isMember check
+            final visitorNpub = NostrCrypto.encodeNpub(visitorPubkey);
+
+            for (final groupName in folder.allowedGroups) {
+              final group = await groupsService.loadGroup(groupName);
+              if (group != null && group.isMember(visitorNpub)) return true;
+            }
+          }
+        }
+      } catch (e) {
+        LogService().log('Error checking group membership: $e');
+      }
+    }
+
+    return false;
   }
 
   /// Handle blog API request from station

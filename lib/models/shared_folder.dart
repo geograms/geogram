@@ -34,6 +34,7 @@ class SharedFolder {
   final String location;
   final SharedFolderVisibility visibility;
   final List<String> allowedReaders;
+  final List<String> allowedGroups;
   final String description;
   final DateTime createdAt;
   final DateTime modifiedAt;
@@ -47,12 +48,14 @@ class SharedFolder {
     required this.location,
     this.visibility = SharedFolderVisibility.public,
     List<String>? allowedReaders,
+    List<String>? allowedGroups,
     this.description = '',
     DateTime? createdAt,
     DateTime? modifiedAt,
     this.filePath,
   })  : id = id ?? const Uuid().v4(),
         allowedReaders = allowedReaders ?? [],
+        allowedGroups = allowedGroups ?? [],
         createdAt = createdAt ?? DateTime.now(),
         modifiedAt = modifiedAt ?? DateTime.now();
 
@@ -63,6 +66,7 @@ class SharedFolder {
     String? location,
     SharedFolderVisibility? visibility,
     List<String>? allowedReaders,
+    List<String>? allowedGroups,
     String? description,
     DateTime? createdAt,
     DateTime? modifiedAt,
@@ -74,6 +78,7 @@ class SharedFolder {
       location: location ?? this.location,
       visibility: visibility ?? this.visibility,
       allowedReaders: allowedReaders ?? List.from(this.allowedReaders),
+      allowedGroups: allowedGroups ?? List.from(this.allowedGroups),
       description: description ?? this.description,
       createdAt: createdAt ?? this.createdAt,
       modifiedAt: modifiedAt ?? DateTime.now(),
@@ -90,6 +95,7 @@ class SharedFolder {
       'location': location,
       'visibility': visibility.value,
       if (allowedReaders.isNotEmpty) 'allowedReaders': allowedReaders,
+      if (allowedGroups.isNotEmpty) 'allowedGroups': allowedGroups,
       if (description.isNotEmpty) 'description': description,
       'created': createdAt.toIso8601String(),
       'modified': modifiedAt.toIso8601String(),
@@ -107,6 +113,8 @@ class SharedFolder {
       ),
       allowedReaders:
           (json['allowedReaders'] as List<dynamic>?)?.cast<String>() ?? [],
+      allowedGroups:
+          (json['allowedGroups'] as List<dynamic>?)?.cast<String>() ?? [],
       description: json['description'] as String? ?? '',
       createdAt: DateTime.parse(json['created'] as String),
       modifiedAt: DateTime.parse(json['modified'] as String),

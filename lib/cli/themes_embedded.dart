@@ -2390,6 +2390,10 @@ class ThemesEmbedded {
     </div>
   </footer>
 </div>
+
+<script>
+{{NOSTR_SCRIPTS}}
+</script>
 </body>
 </html>
 ''';
@@ -2440,6 +2444,10 @@ class ThemesEmbedded {
     </div>
   </footer>
 </div>
+
+<script>
+{{NOSTR_SCRIPTS}}
+</script>
 </body>
 </html>
 ''';

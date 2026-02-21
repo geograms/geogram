@@ -7,11 +7,17 @@ import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
+import '../models/app.dart';
 import '../models/shared_folder.dart';
+import '../models/contact.dart';
+import '../models/group.dart';
 import '../services/app_service.dart';
 import '../services/i18n_service.dart';
+import '../services/groups_service.dart';
 import '../services/profile_storage.dart';
 import '../services/shared_folder_service.dart';
+import '../util/nostr_crypto.dart';
+import 'contact_picker_page.dart';
 import 'files_browser_page.dart';
 
 /// Browser page for the "Shared" app — lists shared folder entries
@@ -89,11 +95,150 @@ class _SharedBrowserPageState extends State<SharedBrowserPage> {
     }
   }
 
+  /// Load available groups for the restricted access picker
+  Future<List<Group>> _loadAvailableGroups() async {
+    try {
+      final profileStorage = AppService().profileStorage;
+      if (profileStorage == null) return [];
+      final apps = await AppService().loadApps();
+      final groupsApp = apps.cast<App?>().firstWhere(
+        (a) => a?.type == 'groups',
+        orElse: () => null,
+      );
+      if (groupsApp?.storagePath == null) return [];
+      final groupsStorage = ScopedProfileStorage.fromAbsolutePath(
+        profileStorage, groupsApp!.storagePath!,
+      );
+      final groupsService = GroupsService();
+      groupsService.setStorage(groupsStorage);
+      return await groupsService.loadGroups();
+    } catch (e) {
+      return [];
+    }
+  }
+
+  /// Build the restricted access picker widgets (groups + contacts)
+  List<Widget> _buildRestrictedAccessWidgets({
+    required BuildContext context,
+    required List<Group> availableGroups,
+    required Set<String> selectedGroups,
+    required List<Contact> selectedContacts,
+    required void Function(void Function()) setDialogState,
+  }) {
+    return [
+      const SizedBox(height: 16),
+
+      // Groups section
+      Text(
+        _i18n.t('allowed_groups'),
+        style: Theme.of(context).textTheme.titleSmall,
+      ),
+      const SizedBox(height: 8),
+      if (availableGroups.isEmpty)
+        Text(
+          _i18n.t('no_groups_available'),
+          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+            color: Theme.of(context).colorScheme.onSurfaceVariant,
+          ),
+        )
+      else
+        ...availableGroups.map((group) => CheckboxListTile(
+          dense: true,
+          contentPadding: EdgeInsets.zero,
+          title: Text(group.title),
+          subtitle: Text('${group.memberCount} members'),
+          value: selectedGroups.contains(group.name),
+          onChanged: (checked) {
+            setDialogState(() {
+              if (checked == true) {
+                selectedGroups.add(group.name);
+              } else {
+                selectedGroups.remove(group.name);
+              }
+            });
+          },
+        )),
+
+      const SizedBox(height: 16),
+
+      // Contacts section
+      Text(
+        _i18n.t('allowed_contacts'),
+        style: Theme.of(context).textTheme.titleSmall,
+      ),
+      const SizedBox(height: 8),
+      OutlinedButton.icon(
+        onPressed: () async {
+          final results = await Navigator.push<List<ContactPickerResult>>(
+            context,
+            MaterialPageRoute(
+              builder: (_) => ContactPickerPage(
+                i18n: _i18n,
+                multiSelect: true,
+                initialSelection: selectedContacts
+                    .map((c) => c.callsign)
+                    .toSet(),
+              ),
+            ),
+          );
+          if (results != null) {
+            setDialogState(() {
+              selectedContacts.clear();
+              selectedContacts.addAll(
+                results.map((r) => r.contact),
+              );
+            });
+          }
+        },
+        icon: const Icon(Icons.person_add),
+        label: Text(_i18n.t('add_contacts')),
+        style: OutlinedButton.styleFrom(
+          minimumSize: const Size(double.infinity, 40),
+        ),
+      ),
+      if (selectedContacts.isNotEmpty) ...[
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 6,
+          runSpacing: 4,
+          children: selectedContacts.map((contact) => Chip(
+            label: Text(contact.displayName.isNotEmpty
+                ? contact.displayName
+                : contact.callsign),
+            deleteIcon: const Icon(Icons.close, size: 16),
+            onDeleted: () {
+              setDialogState(() {
+                selectedContacts.remove(contact);
+              });
+            },
+          )).toList(),
+        ),
+      ],
+    ];
+  }
+
+  /// Convert selected contacts to hex pubkeys for storage
+  List<String> _contactsToHexPubkeys(List<Contact> contacts) {
+    final pubkeys = <String>[];
+    for (final contact in contacts) {
+      if (contact.npub != null && contact.npub!.isNotEmpty) {
+        try {
+          final hex = NostrCrypto.decodeNpub(contact.npub!);
+          if (hex.isNotEmpty) pubkeys.add(hex);
+        } catch (_) {}
+      }
+    }
+    return pubkeys;
+  }
+
   Future<void> _showAddDialog() async {
     final titleController = TextEditingController();
     final descController = TextEditingController();
     String? selectedPath;
     String visibility = 'public';
+    List<Group> availableGroups = [];
+    final selectedGroups = <String>{};
+    final selectedContacts = <Contact>[];
 
     final result = await showDialog<SharedFolder>(
       context: context,
@@ -101,126 +246,145 @@ class _SharedBrowserPageState extends State<SharedBrowserPage> {
         builder: (context, setDialogState) {
           return AlertDialog(
             title: Text(_i18n.t('add_shared_folder')),
-            content: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // Title field
-                  TextField(
-                    controller: titleController,
-                    autofocus: true,
-                    decoration: InputDecoration(
-                      labelText: _i18n.t('title'),
-                      hintText: _i18n.t('shared_folder_title_hint'),
-                      prefixIcon: const Icon(Icons.title),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
+            content: SizedBox(
+              width: double.maxFinite,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // Title field
+                    TextField(
+                      controller: titleController,
+                      autofocus: true,
+                      decoration: InputDecoration(
+                        labelText: _i18n.t('title'),
+                        hintText: _i18n.t('shared_folder_title_hint'),
+                        prefixIcon: const Icon(Icons.title),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
                       ),
                     ),
-                  ),
-                  const SizedBox(height: 16),
+                    const SizedBox(height: 16),
 
-                  // Folder picker
-                  OutlinedButton.icon(
-                    onPressed: () async {
-                      try {
-                        final path =
-                            await FilePicker.platform.getDirectoryPath(
-                          dialogTitle: _i18n.t('select_folder'),
-                        );
-                        if (path != null) {
-                          setDialogState(() => selectedPath = path);
+                    // Folder picker
+                    OutlinedButton.icon(
+                      onPressed: () async {
+                        try {
+                          final path =
+                              await FilePicker.platform.getDirectoryPath(
+                            dialogTitle: _i18n.t('select_folder'),
+                          );
+                          if (path != null) {
+                            setDialogState(() => selectedPath = path);
+                          }
+                        } catch (e) {
+                          // Ignore picker errors
                         }
-                      } catch (e) {
-                        // Ignore picker errors
-                      }
-                    },
-                    icon: const Icon(Icons.folder_open),
-                    label: Text(_i18n.t('choose_folder')),
-                    style: OutlinedButton.styleFrom(
-                      minimumSize: const Size(double.infinity, 48),
-                    ),
-                  ),
-                  if (selectedPath != null) ...[
-                    const SizedBox(height: 8),
-                    Container(
-                      padding: const EdgeInsets.all(10),
-                      decoration: BoxDecoration(
-                        color: Theme.of(context)
-                            .colorScheme
-                            .primaryContainer
-                            .withValues(alpha: 0.3),
-                        borderRadius: BorderRadius.circular(8),
+                      },
+                      icon: const Icon(Icons.folder_open),
+                      label: Text(_i18n.t('choose_folder')),
+                      style: OutlinedButton.styleFrom(
+                        minimumSize: const Size(double.infinity, 48),
                       ),
-                      child: Row(
-                        children: [
-                          Icon(
-                            Icons.folder,
-                            size: 18,
-                            color: Theme.of(context).colorScheme.primary,
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              selectedPath!,
-                              style: Theme.of(context).textTheme.bodySmall,
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
+                    ),
+                    if (selectedPath != null) ...[
+                      const SizedBox(height: 8),
+                      Container(
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: Theme.of(context)
+                              .colorScheme
+                              .primaryContainer
+                              .withValues(alpha: 0.3),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(
+                              Icons.folder,
+                              size: 18,
+                              color: Theme.of(context).colorScheme.primary,
                             ),
-                          ),
-                        ],
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                selectedPath!,
+                                style: Theme.of(context).textTheme.bodySmall,
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: 16),
+
+                    // Visibility dropdown
+                    DropdownButtonFormField<String>(
+                      value: visibility,
+                      decoration: InputDecoration(
+                        labelText: _i18n.t('visibility'),
+                        prefixIcon: const Icon(Icons.visibility_outlined),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                      items: [
+                        DropdownMenuItem(
+                          value: 'public',
+                          child: Text(_i18n.t('visibility_public')),
+                        ),
+                        DropdownMenuItem(
+                          value: 'private',
+                          child: Text(_i18n.t('visibility_private')),
+                        ),
+                        DropdownMenuItem(
+                          value: 'restricted',
+                          child: Text(_i18n.t('visibility_restricted')),
+                        ),
+                      ],
+                      onChanged: (value) {
+                        if (value != null) {
+                          setDialogState(() => visibility = value);
+                          if (value == 'restricted' && availableGroups.isEmpty) {
+                            _loadAvailableGroups().then((groups) {
+                              setDialogState(() => availableGroups = groups);
+                            });
+                          }
+                        }
+                      },
+                    ),
+
+                    // Restricted access pickers
+                    if (visibility == 'restricted')
+                      ..._buildRestrictedAccessWidgets(
+                        context: context,
+                        availableGroups: availableGroups,
+                        selectedGroups: selectedGroups,
+                        selectedContacts: selectedContacts,
+                        setDialogState: setDialogState,
+                      ),
+
+                    const SizedBox(height: 16),
+
+                    // Description field
+                    TextField(
+                      controller: descController,
+                      maxLines: 2,
+                      decoration: InputDecoration(
+                        labelText: _i18n.t('description'),
+                        hintText: _i18n.t('optional'),
+                        prefixIcon: const Icon(Icons.notes),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
                       ),
                     ),
                   ],
-                  const SizedBox(height: 16),
-
-                  // Visibility dropdown
-                  DropdownButtonFormField<String>(
-                    value: visibility,
-                    decoration: InputDecoration(
-                      labelText: _i18n.t('visibility'),
-                      prefixIcon: const Icon(Icons.visibility_outlined),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                    ),
-                    items: [
-                      DropdownMenuItem(
-                        value: 'public',
-                        child: Text(_i18n.t('visibility_public')),
-                      ),
-                      DropdownMenuItem(
-                        value: 'private',
-                        child: Text(_i18n.t('visibility_private')),
-                      ),
-                      DropdownMenuItem(
-                        value: 'restricted',
-                        child: Text(_i18n.t('visibility_restricted')),
-                      ),
-                    ],
-                    onChanged: (value) {
-                      if (value != null) {
-                        setDialogState(() => visibility = value);
-                      }
-                    },
-                  ),
-                  const SizedBox(height: 16),
-
-                  // Description field
-                  TextField(
-                    controller: descController,
-                    maxLines: 2,
-                    decoration: InputDecoration(
-                      labelText: _i18n.t('description'),
-                      hintText: _i18n.t('optional'),
-                      prefixIcon: const Icon(Icons.notes),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                    ),
-                  ),
-                ],
+                ),
               ),
             ),
             actions: [
@@ -240,6 +404,8 @@ class _SharedBrowserPageState extends State<SharedBrowserPage> {
                       location: selectedPath!,
                       visibility:
                           SharedFolderVisibility.fromValue(visibility),
+                      allowedGroups: selectedGroups.toList(),
+                      allowedReaders: _contactsToHexPubkeys(selectedContacts),
                       description: descController.text.trim(),
                     ),
                   );
@@ -262,6 +428,16 @@ class _SharedBrowserPageState extends State<SharedBrowserPage> {
     final titleController = TextEditingController(text: folder.title);
     final descController = TextEditingController(text: folder.description);
     String visibility = folder.visibility.value;
+    List<Group> availableGroups = [];
+    final selectedGroups = <String>{...folder.allowedGroups};
+    final selectedContacts = <Contact>[];
+
+    // Pre-load groups if editing a restricted folder
+    if (visibility == 'restricted') {
+      availableGroups = await _loadAvailableGroups();
+    }
+
+    if (!mounted) return;
 
     final result = await showDialog<SharedFolder>(
       context: context,
@@ -269,87 +445,107 @@ class _SharedBrowserPageState extends State<SharedBrowserPage> {
         builder: (context, setDialogState) {
           return AlertDialog(
             title: Text(_i18n.t('edit_shared_folder')),
-            content: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  TextField(
-                    controller: titleController,
-                    decoration: InputDecoration(
-                      labelText: _i18n.t('title'),
-                      prefixIcon: const Icon(Icons.title),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
+            content: SizedBox(
+              width: double.maxFinite,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    TextField(
+                      controller: titleController,
+                      decoration: InputDecoration(
+                        labelText: _i18n.t('title'),
+                        prefixIcon: const Icon(Icons.title),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
                       ),
                     ),
-                  ),
-                  const SizedBox(height: 12),
-                  Container(
-                    padding: const EdgeInsets.all(10),
-                    decoration: BoxDecoration(
-                      color: Theme.of(context)
-                          .colorScheme
-                          .surfaceContainerLow,
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Row(
-                      children: [
-                        const Icon(Icons.folder, size: 18),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            folder.location,
-                            style: Theme.of(context).textTheme.bodySmall,
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
+                    const SizedBox(height: 12),
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: Theme.of(context)
+                            .colorScheme
+                            .surfaceContainerLow,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.folder, size: 18),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              folder.location,
+                              style: Theme.of(context).textTheme.bodySmall,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                            ),
                           ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    DropdownButtonFormField<String>(
+                      value: visibility,
+                      decoration: InputDecoration(
+                        labelText: _i18n.t('visibility'),
+                        prefixIcon: const Icon(Icons.visibility_outlined),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                      items: [
+                        DropdownMenuItem(
+                          value: 'public',
+                          child: Text(_i18n.t('visibility_public')),
+                        ),
+                        DropdownMenuItem(
+                          value: 'private',
+                          child: Text(_i18n.t('visibility_private')),
+                        ),
+                        DropdownMenuItem(
+                          value: 'restricted',
+                          child: Text(_i18n.t('visibility_restricted')),
                         ),
                       ],
+                      onChanged: (value) {
+                        if (value != null) {
+                          setDialogState(() => visibility = value);
+                          if (value == 'restricted' && availableGroups.isEmpty) {
+                            _loadAvailableGroups().then((groups) {
+                              setDialogState(() => availableGroups = groups);
+                            });
+                          }
+                        }
+                      },
                     ),
-                  ),
-                  const SizedBox(height: 12),
-                  DropdownButtonFormField<String>(
-                    value: visibility,
-                    decoration: InputDecoration(
-                      labelText: _i18n.t('visibility'),
-                      prefixIcon: const Icon(Icons.visibility_outlined),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
+
+                    // Restricted access pickers
+                    if (visibility == 'restricted')
+                      ..._buildRestrictedAccessWidgets(
+                        context: context,
+                        availableGroups: availableGroups,
+                        selectedGroups: selectedGroups,
+                        selectedContacts: selectedContacts,
+                        setDialogState: setDialogState,
                       ),
-                    ),
-                    items: [
-                      DropdownMenuItem(
-                        value: 'public',
-                        child: Text(_i18n.t('visibility_public')),
-                      ),
-                      DropdownMenuItem(
-                        value: 'private',
-                        child: Text(_i18n.t('visibility_private')),
-                      ),
-                      DropdownMenuItem(
-                        value: 'restricted',
-                        child: Text(_i18n.t('visibility_restricted')),
-                      ),
-                    ],
-                    onChanged: (value) {
-                      if (value != null) {
-                        setDialogState(() => visibility = value);
-                      }
-                    },
-                  ),
-                  const SizedBox(height: 12),
-                  TextField(
-                    controller: descController,
-                    maxLines: 2,
-                    decoration: InputDecoration(
-                      labelText: _i18n.t('description'),
-                      prefixIcon: const Icon(Icons.notes),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
+
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: descController,
+                      maxLines: 2,
+                      decoration: InputDecoration(
+                        labelText: _i18n.t('description'),
+                        prefixIcon: const Icon(Icons.notes),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
                       ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
             actions: [
@@ -367,6 +563,10 @@ class _SharedBrowserPageState extends State<SharedBrowserPage> {
                       title: title,
                       visibility:
                           SharedFolderVisibility.fromValue(visibility),
+                      allowedGroups: selectedGroups.toList(),
+                      allowedReaders: visibility == 'restricted'
+                          ? _contactsToHexPubkeys(selectedContacts)
+                          : null,
                       description: descController.text.trim(),
                     ),
                   );
@@ -532,6 +732,16 @@ class _SharedBrowserPageState extends State<SharedBrowserPage> {
                   color: theme.colorScheme.onSurfaceVariant,
                 ),
               ),
+              if (folder.visibility == SharedFolderVisibility.restricted) ...[
+                const SizedBox(width: 8),
+                Text(
+                  '(${folder.allowedGroups.length} groups, ${folder.allowedReaders.length} contacts)',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                    fontSize: 11,
+                  ),
+                ),
+              ],
               if (folder.description.isNotEmpty) ...[
                 const SizedBox(width: 12),
                 Expanded(

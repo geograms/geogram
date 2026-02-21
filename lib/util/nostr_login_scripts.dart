@@ -204,7 +204,23 @@ String getNostrLoginScripts() {
     return bytesToHex(new Uint8Array(hash));
   }
 
-  window.GeogramNostr = { pubkey: null, callsign: null, nickname: null, connected: false, relayWs: null };
+  window.GeogramNostr = {
+    pubkey: null, callsign: null, nickname: null, connected: false, relayWs: null,
+    disconnect: function() {
+      try { localStorage.removeItem('geogram_nostr_pubkey'); } catch(e) {}
+      try { localStorage.removeItem('geogram_nostr_privkey'); } catch(e) {}
+      try { localStorage.removeItem('geogram_nostr_nickname'); } catch(e) {}
+      try { document.cookie = 'geogram_nostr_pubkey=;path=/;expires=Thu, 01 Jan 1970 00:00:00 GMT'; } catch(e) {}
+      window.GeogramNostr.pubkey = null;
+      window.GeogramNostr.callsign = null;
+      window.GeogramNostr.nickname = null;
+      window.GeogramNostr.connected = false;
+      var btn = document.getElementById('nostr-header-connect');
+      var wrapper = document.getElementById('nostr-profile-wrapper');
+      if (btn) btn.style.display = '';
+      if (wrapper) wrapper.style.display = 'none';
+    }
+  };
 
   // --- Relay WebSocket for kind 0 metadata events ---
 
@@ -304,6 +320,7 @@ String getNostrLoginScripts() {
     window.GeogramNostr.callsign = callsign;
     window.GeogramNostr.connected = true;
     try { localStorage.setItem('geogram_nostr_pubkey', pubkey); } catch(e) {}
+    try { document.cookie = 'geogram_nostr_pubkey=' + pubkey + ';path=/;SameSite=Lax'; } catch(e) {}
     try {
       var saved = localStorage.getItem('geogram_nostr_nickname');
       if (saved) window.GeogramNostr.nickname = saved;
@@ -424,6 +441,14 @@ String getNostrLoginScripts() {
   }
 
   document.addEventListener('DOMContentLoaded', function() {
+    // Clear stale cookie if no localStorage pubkey
+    try {
+      var savedPk = localStorage.getItem('geogram_nostr_pubkey');
+      if (!savedPk) {
+        document.cookie = 'geogram_nostr_pubkey=;path=/;expires=Thu, 01 Jan 1970 00:00:00 GMT';
+      }
+    } catch(e) {}
+
     var connectBtn = document.getElementById('nostr-header-connect');
 
     if (connectBtn) {

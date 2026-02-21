@@ -7297,7 +7297,7 @@ class PureStationServer with EmailHandlerMixin, BlogHandlerMixin, ConsoleCommand
       'requestId': requestId,
       'method': 'GET',
       'path': appPath,
-      'headers': '',
+      'headers': request.headers.toString(),
       'body': '',
     };
 
