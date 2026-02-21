@@ -23,9 +23,11 @@ import '../services/station_service.dart';
 import '../services/storage_config.dart';
 import '../services/webrtc_config.dart';
 import '../services/profile_storage.dart';
+import '../services/web_theme_service.dart';
 import '../util/html_utils.dart';
 import '../util/station_html_templates.dart';
 import '../util/nostr_event.dart';
+import '../util/nostr_login_scripts.dart';
 import '../util/tlsh.dart';
 import '../util/event_bus.dart';
 import '../util/feedback_folder_utils.dart';
@@ -968,9 +970,23 @@ class WebSocketService {
 
       final folders = await service.loadAll();
 
+      // Serve styles.css for the shared app
+      if (filePath == '/styles.css') {
+        try {
+          final themeService = WebThemeService();
+          await themeService.init();
+          final combinedStyles = await themeService.getCombinedStyles('shared');
+          _sendHttpResponse(requestId, 200, {'Content-Type': 'text/css'}, base64Encode(utf8.encode(combinedStyles)), isBase64: true);
+        } catch (e) {
+          LogService().log('Error serving shared styles.css: $e');
+          _sendHttpResponse(requestId, 404, {'Content-Type': 'text/plain'}, 'Not Found');
+        }
+        return;
+      }
+
       // Index page: list all shared folders
       if (filePath == '/' || filePath == '/index.html') {
-        final html = _generateSharedIndexHtml(folders);
+        final html = await _generateSharedIndexHtml(folders, storagePath);
         _sendHttpResponse(requestId, 200, {'Content-Type': 'text/html'}, base64Encode(utf8.encode(html)), isBase64: true);
         return;
       }
@@ -1003,11 +1019,24 @@ class WebSocketService {
         return;
       }
 
+      // Serve styles.css for subfolder paths (e.g., /{folderSlug}/styles.css)
+      if (remainingPath == 'styles.css') {
+        try {
+          final themeService = WebThemeService();
+          await themeService.init();
+          final combinedStyles = await themeService.getCombinedStyles('shared');
+          _sendHttpResponse(requestId, 200, {'Content-Type': 'text/css'}, base64Encode(utf8.encode(combinedStyles)), isBase64: true);
+        } catch (e) {
+          _sendHttpResponse(requestId, 404, {'Content-Type': 'text/plain'}, 'Not Found');
+        }
+        return;
+      }
+
       final diskPath = entry.location;
 
       // If no remaining path or index.html, generate directory listing
       if (remainingPath.isEmpty || remainingPath == 'index.html') {
-        final dirHtml = await _generateDirectoryListing(diskPath, entry.title, folderSlug);
+        final dirHtml = await _generateDirectoryListing(diskPath, entry.title, folderSlug, storagePath);
         _sendHttpResponse(requestId, 200, {'Content-Type': 'text/html'}, base64Encode(utf8.encode(dirHtml)), isBase64: true);
         return;
       }
@@ -1040,77 +1069,71 @@ class WebSocketService {
     }
   }
 
-  /// Generate an index page listing all shared folders
-  String _generateSharedIndexHtml(List<SharedFolder> folders) {
-    final buf = StringBuffer();
-    buf.writeln('<!DOCTYPE html><html><head>');
-    buf.writeln('<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">');
-    buf.writeln('<title>Shared Folders</title>');
-    buf.writeln('<style>');
-    buf.writeln('body{font-family:system-ui,sans-serif;max-width:800px;margin:40px auto;padding:0 20px;background:#f5f5f5;color:#333}');
-    buf.writeln('h1{border-bottom:2px solid #2196F3;padding-bottom:10px}');
-    buf.writeln('.folder{background:#fff;border-radius:8px;padding:16px;margin:12px 0;box-shadow:0 1px 3px rgba(0,0,0,.1);display:flex;align-items:center;text-decoration:none;color:inherit;transition:box-shadow .2s}');
-    buf.writeln('.folder:hover{box-shadow:0 2px 8px rgba(0,0,0,.15)}');
-    buf.writeln('.icon{font-size:32px;margin-right:16px}');
-    buf.writeln('.info{flex:1}.title{font-size:18px;font-weight:600;color:#1976D2}');
-    buf.writeln('.desc{color:#666;font-size:14px;margin-top:4px}');
-    buf.writeln('.badge{font-size:12px;padding:2px 8px;border-radius:12px;background:#e3f2fd;color:#1565C0}');
-    buf.writeln('.empty{text-align:center;color:#999;padding:40px}');
-    buf.writeln('</style></head><body>');
-    buf.writeln('<h1>Shared Folders</h1>');
+  /// Generate an index page listing all shared folders (themed)
+  Future<String> _generateSharedIndexHtml(List<SharedFolder> folders, String storagePath) async {
+    // Build folder cards HTML
+    final contentBuf = StringBuffer();
+    final publicFolders = folders.where((f) => f.visibility != SharedFolderVisibility.private_).toList();
 
-    if (folders.isEmpty) {
-      buf.writeln('<div class="empty">No shared folders available.</div>');
+    if (publicFolders.isEmpty) {
+      contentBuf.writeln('<div class="shared-empty">No shared folders available.</div>');
     } else {
-      for (final f in folders) {
-        if (f.visibility == SharedFolderVisibility.private_) continue;
+      for (final f in publicFolders) {
         final slug = f.sanitizedFilename;
-        buf.writeln('<a class="folder" href="$slug/">');
-        buf.writeln('<div class="icon">&#128193;</div>');
-        buf.writeln('<div class="info">');
-        buf.writeln('<div class="title">${_escapeHtml(f.title)}</div>');
+        contentBuf.writeln('<a class="folder-card" href="$slug/">');
+        contentBuf.writeln('<div class="folder-card-icon">&#128193;</div>');
+        contentBuf.writeln('<div class="folder-card-title">${_escapeHtml(f.title)}</div>');
         if (f.description.isNotEmpty) {
-          buf.writeln('<div class="desc">${_escapeHtml(f.description)}</div>');
+          contentBuf.writeln('<div class="folder-card-desc">${_escapeHtml(f.description)}</div>');
         }
-        buf.writeln('</div>');
-        buf.writeln('<span class="badge">${f.visibility.displayName}</span>');
-        buf.writeln('</a>');
+        contentBuf.writeln('<span class="folder-card-badge">${_escapeHtml(f.visibility.displayName)}</span>');
+        contentBuf.writeln('</a>');
       }
     }
 
-    buf.writeln('</body></html>');
-    return buf.toString();
+    // Try to load themed template
+    try {
+      final themeService = WebThemeService();
+      await themeService.init();
+      final template = await themeService.getTemplate('shared');
+      if (template != null) {
+        final profile = ProfileService().getProfile();
+        final collectionName = profile.nickname.isNotEmpty ? profile.nickname : profile.callsign;
+        final menuItems = await AppService().generateDeviceMenu(
+          activeApp: 'shared',
+          appsPath: p.dirname(storagePath),
+        );
+
+        return themeService.processTemplate(template, {
+          'COLLECTION_NAME': collectionName,
+          'CONTENT': contentBuf.toString(),
+          'MENU_ITEMS': menuItems,
+          'HOME_URL': '../',
+          'NOSTR_STYLES': getNostrLoginStyles(),
+          'NOSTR_HEADER': getNostrLoginHeaderHtml(),
+          'GENERATED_DATE': DateTime.now().toIso8601String().split('T').first,
+        });
+      }
+    } catch (e) {
+      LogService().log('Error loading shared template, using fallback: $e');
+    }
+
+    // Fallback: minimal inline HTML
+    return '<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Shared Folders</title></head><body><h1>Shared Folders</h1>${contentBuf.toString()}</body></html>';
   }
 
-  /// Generate a directory listing HTML for a shared folder's disk path
-  Future<String> _generateDirectoryListing(String dirPath, String title, String folderSlug) async {
+  /// Generate a directory listing HTML for a shared folder's disk path (themed)
+  Future<String> _generateDirectoryListing(String dirPath, String title, String folderSlug, String storagePath) async {
     final dir = Directory(dirPath);
-    final buf = StringBuffer();
-    buf.writeln('<!DOCTYPE html><html><head>');
-    buf.writeln('<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">');
-    buf.writeln('<title>$title</title>');
-    buf.writeln('<style>');
-    buf.writeln('body{font-family:system-ui,sans-serif;max-width:900px;margin:40px auto;padding:0 20px;background:#f5f5f5;color:#333}');
-    buf.writeln('h1{border-bottom:2px solid #2196F3;padding-bottom:10px}');
-    buf.writeln('table{width:100%;border-collapse:collapse;background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.1)}');
-    buf.writeln('th{background:#1976D2;color:#fff;text-align:left;padding:12px 16px}');
-    buf.writeln('td{padding:10px 16px;border-bottom:1px solid #eee}');
-    buf.writeln('tr:hover td{background:#f0f7ff}');
-    buf.writeln('a{color:#1565C0;text-decoration:none}a:hover{text-decoration:underline}');
-    buf.writeln('.back{margin-bottom:16px;display:inline-block}');
-    buf.writeln('.size{color:#666;font-size:13px}');
-    buf.writeln('</style></head><body>');
-    buf.writeln('<a class="back" href="../">&larr; Back to shared folders</a>');
-    buf.writeln('<h1>${_escapeHtml(title)}</h1>');
 
+    // Build file list HTML
+    final contentBuf = StringBuffer();
     if (!await dir.exists()) {
-      buf.writeln('<p>Directory not found on disk.</p>');
+      contentBuf.writeln('<div class="file-item"><span class="file-name">Directory not found on disk.</span></div>');
     } else {
-      buf.writeln('<table><tr><th>Name</th><th>Size</th></tr>');
       try {
         final entries = await dir.list().toList();
         entries.sort((a, b) {
-          // Directories first, then alphabetical
           final aIsDir = a is Directory;
           final bIsDir = b is Directory;
           if (aIsDir != bIsDir) return aIsDir ? -1 : 1;
@@ -1119,25 +1142,57 @@ class WebSocketService {
 
         for (final entity in entries) {
           final name = entity.path.split('/').last;
-          if (name.startsWith('.')) continue; // Skip hidden files
+          if (name.startsWith('.')) continue;
           final encodedName = Uri.encodeComponent(name);
           final escapedName = _escapeHtml(name);
           if (entity is Directory) {
-            buf.writeln('<tr><td><a href="$encodedName/">&#128193; $escapedName/</a></td><td class="size">-</td></tr>');
+            contentBuf.writeln('<div class="file-item"><a href="$encodedName/"><span class="file-icon">&#128193;</span><span class="file-name">$escapedName/</span></a><span class="file-size">-</span></div>');
           } else if (entity is File) {
             final stat = await entity.stat();
             final size = _formatFileSize(stat.size);
-            buf.writeln('<tr><td><a href="$encodedName">&#128196; $escapedName</a></td><td class="size">$size</td></tr>');
+            contentBuf.writeln('<div class="file-item"><a href="$encodedName"><span class="file-icon">&#128196;</span><span class="file-name">$escapedName</span></a><span class="file-size">$size</span></div>');
           }
         }
+
+        if (entries.where((e) => !e.path.split('/').last.startsWith('.')).isEmpty) {
+          contentBuf.writeln('<div class="file-item"><span class="file-name">Empty folder</span></div>');
+        }
       } catch (e) {
-        buf.writeln('<tr><td colspan="2">Error reading directory: $e</td></tr>');
+        contentBuf.writeln('<div class="file-item"><span class="file-name">Error reading directory: ${_escapeHtml(e.toString())}</span></div>');
       }
-      buf.writeln('</table>');
     }
 
-    buf.writeln('</body></html>');
-    return buf.toString();
+    // Try to load themed template
+    try {
+      final themeService = WebThemeService();
+      await themeService.init();
+      final template = await themeService.getNamedTemplate('shared', 'directory.html');
+      if (template != null) {
+        final profile = ProfileService().getProfile();
+        final collectionName = profile.nickname.isNotEmpty ? profile.nickname : profile.callsign;
+        final menuItems = await AppService().generateDeviceMenu(
+          activeApp: 'shared',
+          appsPath: p.dirname(storagePath),
+        );
+
+        return themeService.processTemplate(template, {
+          'COLLECTION_NAME': collectionName,
+          'FOLDER_NAME': _escapeHtml(title),
+          'FOLDER_SLUG': folderSlug,
+          'CONTENT': contentBuf.toString(),
+          'MENU_ITEMS': menuItems,
+          'HOME_URL': '../../',
+          'NOSTR_STYLES': getNostrLoginStyles(),
+          'NOSTR_HEADER': getNostrLoginHeaderHtml(),
+          'GENERATED_DATE': DateTime.now().toIso8601String().split('T').first,
+        });
+      }
+    } catch (e) {
+      LogService().log('Error loading shared directory template, using fallback: $e');
+    }
+
+    // Fallback: minimal inline HTML
+    return '<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${_escapeHtml(title)}</title></head><body><a href="../">&larr; Back</a><h1>${_escapeHtml(title)}</h1>${contentBuf.toString()}</body></html>';
   }
 
   String _formatFileSize(int bytes) {

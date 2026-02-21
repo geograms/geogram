@@ -18,7 +18,7 @@ class WebThemeService {
 
   /// List of app types that have theme templates
   static const List<String> appTypes = [
-    'home', 'chat', 'www', 'forum', 'blog', 'events', 'alerts', 'files', 'station'
+    'home', 'chat', 'www', 'forum', 'blog', 'events', 'alerts', 'files', 'station', 'shared'
   ];
 
   String? _themesDir;
@@ -180,6 +180,19 @@ class WebThemeService {
 
     final theme = themeName ?? getCurrentTheme();
     final file = File('$_themesDir/$theme/$appType/index.html');
+
+    if (await file.exists()) {
+      return await file.readAsString();
+    }
+    return null;
+  }
+
+  /// Get a named template (e.g. 'directory.html') for an app type
+  Future<String?> getNamedTemplate(String appType, String templateName, [String? themeName]) async {
+    if (_themesDir == null) return null;
+
+    final theme = themeName ?? getCurrentTheme();
+    final file = File('$_themesDir/$theme/$appType/$templateName');
 
     if (await file.exists()) {
       return await file.readAsString();

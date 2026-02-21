@@ -1,0 +1,196 @@
+/* Shared Folders App - Theme Overrides */
+
+/* Shared Index Page */
+.shared-index {
+  width: 100%;
+}
+
+.shared-heading {
+  color: var(--accent);
+  border-bottom: 2px dashed var(--accent);
+  padding-bottom: 15px;
+  margin-bottom: 20px;
+  font-weight: normal;
+}
+
+/* Folder Cards Grid */
+.shared-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  gap: 16px;
+}
+
+@media (max-width: 683px) {
+  .shared-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.folder-card {
+  display: block;
+  padding: 20px;
+  border: 1px solid var(--border-color);
+  text-decoration: none;
+  color: inherit;
+  transition: background-color 0.2s ease, border-color 0.2s ease;
+}
+
+.folder-card:hover {
+  background-color: var(--accent-alpha-20);
+  border-color: var(--accent);
+}
+
+.folder-card-icon {
+  font-size: 1.5rem;
+  margin-bottom: 8px;
+}
+
+.folder-card-title {
+  color: var(--accent);
+  font-weight: bold;
+  font-size: 1rem;
+  margin-bottom: 4px;
+}
+
+.folder-card-desc {
+  color: var(--accent-alpha-70);
+  font-size: 0.85rem;
+  line-height: 1.4;
+}
+
+.folder-card-badge {
+  display: inline-block;
+  font-size: 0.75rem;
+  padding: 2px 8px;
+  margin-top: 8px;
+  color: var(--accent-alpha-70);
+  border: 1px solid var(--border-color);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.shared-empty {
+  text-align: center;
+  color: var(--accent-alpha-70);
+  padding: 40px 0;
+}
+
+/* Directory Listing */
+.shared-directory {
+  width: 100%;
+}
+
+/* Breadcrumb */
+.breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 20px;
+  font-size: 0.95rem;
+}
+
+.breadcrumb-item {
+  color: var(--accent-alpha-70);
+  text-decoration: none;
+}
+
+.breadcrumb-item:hover {
+  color: var(--accent);
+}
+
+.breadcrumb-item.active {
+  color: var(--accent);
+  font-weight: bold;
+}
+
+.breadcrumb-item:not(:last-child)::after {
+  content: ' / ';
+  color: var(--accent-alpha-70);
+  margin-left: 4px;
+}
+
+/* File List Container */
+.file-list-container {
+  border: 1px solid var(--border-color);
+  overflow: hidden;
+}
+
+.file-list {
+  max-height: 70vh;
+  overflow-y: auto;
+}
+
+/* File Item */
+.file-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border-color);
+  transition: background-color 0.2s ease;
+}
+
+.file-item:last-child {
+  border-bottom: none;
+}
+
+.file-item:hover {
+  background-color: var(--accent-alpha-20);
+}
+
+.file-item a {
+  color: inherit;
+  text-decoration: none;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
+}
+
+.file-item a:hover {
+  color: var(--accent);
+}
+
+/* File Icon */
+.file-icon {
+  font-size: 1.2rem;
+  width: 28px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+/* File Name */
+.file-name {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* File Size */
+.file-size {
+  font-size: 0.85rem;
+  color: var(--accent-alpha-70);
+  white-space: nowrap;
+  min-width: 60px;
+  text-align: right;
+}
+
+/* Scrollbar */
+.file-list::-webkit-scrollbar {
+  width: 6px;
+}
+
+.file-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.file-list::-webkit-scrollbar-thumb {
+  background: var(--accent-alpha-20);
+  border-radius: 3px;
+}
+
+.file-list::-webkit-scrollbar-thumb:hover {
+  background: var(--accent-alpha-70);
+}

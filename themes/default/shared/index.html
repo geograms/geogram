@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1">
+  <title>Shared Folders - {{COLLECTION_NAME}}</title>
+  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="styles.css">
+  {{NOSTR_STYLES}}
+</head>
+<body>
+<div class="container">
+  <header class="header">
+    <div class="header__inner">
+      <div class="header__logo">
+        <a href="{{HOME_URL}}" style="text-decoration: none;">
+          <div class="logo">{{COLLECTION_NAME}}</div>
+        </a>
+      </div>
+      {{NOSTR_HEADER}}
+    </div>
+    <nav class="menu">
+      <ul class="menu__inner">
+        {{MENU_ITEMS}}
+      </ul>
+    </nav>
+  </header>
+
+  <div class="content">
+    <div class="shared-index">
+      <h2 class="shared-heading">Shared Folders</h2>
+      <div class="shared-grid">
+        {{CONTENT}}
+      </div>
+    </div>
+  </div>
+
+  <footer class="footer">
+    <div class="footer__inner">
+      <div class="copyright">
+        <span>published via geogram</span>
+      </div>
+    </div>
+  </footer>
+</div>
+</body>
+</html>
