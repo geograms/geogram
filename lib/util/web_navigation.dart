@@ -114,6 +114,7 @@ class WebNavigation {
     bool hasEvents = false,
     bool hasPlaces = false,
     bool hasFiles = false,
+    bool hasShared = false,
     bool hasAlerts = false,
     bool hasDownload = false,
     bool isRootLevel = false,
@@ -124,6 +125,7 @@ class WebNavigation {
     if (hasEvents) apps.add('events');
     if (hasPlaces) apps.add('places');
     if (hasFiles) apps.add('files');
+    if (hasShared) apps.add('shared');
     if (hasAlerts) apps.add('alerts');
     if (hasDownload) apps.add('download');
 
@@ -143,6 +145,7 @@ class WebNavigation {
     'events': NavItem(id: 'events', label: 'events', path: '/events/'),
     'places': NavItem(id: 'places', label: 'places', path: '/places/'),
     'files': NavItem(id: 'files', label: 'files', path: '/files/'),
+    'shared': NavItem(id: 'shared', label: 'shared', path: '/shared/'),
     'alerts': NavItem(id: 'alerts', label: 'alerts', path: '/alerts/'),
     'download': NavItem(id: 'download', label: 'download', path: '/download/'),
   };

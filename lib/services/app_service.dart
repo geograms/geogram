@@ -728,6 +728,7 @@ class AppService {
       'events': false,
       'places': false,
       'files': false,
+      'shared': false,
       'alerts': false,
     };
 
@@ -824,6 +825,7 @@ class AppService {
       hasEvents: apps['events']!,
       hasPlaces: apps['places']!,
       hasFiles: apps['files']!,
+      hasShared: apps['shared']!,
       hasAlerts: apps['alerts']!,
       isRootLevel: isRootLevel,
     );
