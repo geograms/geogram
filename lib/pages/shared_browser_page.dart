@@ -760,40 +760,94 @@ class _SharedBrowserPageState extends State<SharedBrowserPage> {
         ],
       ),
       isThreeLine: true,
+      trailing: PopupMenuButton<String>(
+        icon: const Icon(Icons.more_vert),
+        onSelected: (value) => _handleFolderMenuAction(folder, value),
+        itemBuilder: (context) => [
+          // Visibility options
+          for (final vis in SharedFolderVisibility.values)
+            PopupMenuItem(
+              value: 'visibility_${vis.value}',
+              child: Row(
+                children: [
+                  Icon(
+                    _getVisibilityIcon(vis),
+                    size: 18,
+                    color: folder.visibility == vis
+                        ? theme.colorScheme.primary
+                        : null,
+                  ),
+                  const SizedBox(width: 12),
+                  Text(
+                    _i18n.t('visibility_${vis.value}'),
+                    style: folder.visibility == vis
+                        ? TextStyle(
+                            fontWeight: FontWeight.bold,
+                            color: theme.colorScheme.primary,
+                          )
+                        : null,
+                  ),
+                  if (folder.visibility == vis) ...[
+                    const Spacer(),
+                    Icon(Icons.check, size: 18, color: theme.colorScheme.primary),
+                  ],
+                ],
+              ),
+            ),
+          const PopupMenuDivider(),
+          PopupMenuItem(
+            value: 'edit',
+            child: Row(
+              children: [
+                const Icon(Icons.edit, size: 18),
+                const SizedBox(width: 12),
+                Text(_i18n.t('edit')),
+              ],
+            ),
+          ),
+          PopupMenuItem(
+            value: 'delete',
+            child: Row(
+              children: [
+                const Icon(Icons.delete, size: 18, color: Colors.red),
+                const SizedBox(width: 12),
+                Text(
+                  _i18n.t('delete'),
+                  style: const TextStyle(color: Colors.red),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
       onTap: () => _openFolder(folder),
-      onLongPress: () => _showContextMenu(folder),
     );
   }
 
-  void _showContextMenu(SharedFolder folder) {
-    showModalBottomSheet(
-      context: context,
-      builder: (context) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: const Icon(Icons.edit),
-              title: Text(_i18n.t('edit')),
-              onTap: () {
-                Navigator.pop(context);
-                _showEditDialog(folder);
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.delete, color: Colors.red),
-              title: Text(
-                _i18n.t('delete'),
-                style: const TextStyle(color: Colors.red),
-              ),
-              onTap: () {
-                Navigator.pop(context);
-                _confirmDelete(folder);
-              },
-            ),
-          ],
-        ),
-      ),
-    );
+  Future<void> _handleFolderMenuAction(SharedFolder folder, String action) async {
+    if (action == 'edit') {
+      _showEditDialog(folder);
+      return;
+    }
+    if (action == 'delete') {
+      _confirmDelete(folder);
+      return;
+    }
+    if (action.startsWith('visibility_')) {
+      final visValue = action.substring('visibility_'.length);
+      final newVis = SharedFolderVisibility.fromValue(visValue);
+      if (newVis == folder.visibility) return;
+
+      // If changing to restricted, open edit dialog so user can configure access
+      if (newVis == SharedFolderVisibility.restricted) {
+        _showEditDialog(folder.copyWith(visibility: newVis));
+        return;
+      }
+
+      // For public/private, just update directly
+      final updated = folder.copyWith(visibility: newVis);
+      await _service.update(updated);
+      await _loadFolders();
+    }
   }
 }
