@@ -216,6 +216,7 @@ This document catalogs reusable UI components available in the Geogram codebase.
 - [DidService](#didservice) - DID:web document generation with Multikey verification
 - [AtprotoPdsMixin](#atprotopdsmixin) - Shared PDS mixin for station servers
 - [AtUri](#aturi) - AT-URI parser (at://authority/collection/rkey)
+- [FirehoseManager](#firehosemanager) - AT Protocol event stream manager with cursor replay
 
 ### Stories App Components
 - [SceneEditorCanvas](#sceneeditorcanvas) - Interactive scene canvas for Story Studio
@@ -9122,3 +9123,21 @@ Parser for AT-URI scheme strings (`at://authority/collection/rkey`). Supports DI
 - `isRecord` → `bool` — true if both collection and rkey are present
 - `isDid` → `bool` — true if authority starts with "did:"
 - `toString()` — reconstruct the AT-URI string
+
+### FirehoseManager
+
+**File:** `lib/atproto/firehose.dart`
+
+AT Protocol event stream manager. Encodes commit/identity/info events as binary frames, stores in sequence table, broadcasts to WebSocket subscribers, supports cursor-based reconnection.
+
+**API:**
+- `FirehoseManager({required storage, required did})` — create manager
+- `emitCommit({commitCid, rev, ops, prev})` → `int` — emit #commit event, returns seq
+- `emitInfo(name, message)` → `int` — emit #info event
+- `addSubscriber(WebSocket ws, {int? cursor})` — add subscriber, replays missed events
+- `removeSubscriber(WebSocket ws)` — remove subscriber
+- `getEventsSince(int cursor, {int? limit})` — replay events after cursor
+- `latestSeq` → `int?` — latest sequence number
+- `subscriberCount` → `int` — connected subscriber count
+- `close()` — close all subscribers
+- Static: `encodeCommitFrame(...)`, `encodeIdentityFrame(...)`, `encodeInfoFrame(...)`, `decodeFrame(Uint8List)` — frame encoding/decoding

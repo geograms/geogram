@@ -3690,6 +3690,14 @@ Standard AT Protocol XRPC endpoints at `/xrpc/{nsid}`:
 | `com.atproto.repo.describeRepo` | GET | No | Repo metadata and collections |
 | `com.atproto.repo.applyWrites` | POST | Bearer (access) | Batch create/update/delete |
 | `com.atproto.repo.uploadBlob` | POST | Bearer (access) | Store blob via Blossom |
+| `com.atproto.sync.getRepo` | GET | No | Full repo as CAR v1 file |
+| `com.atproto.sync.getRecord` | GET | No | Single record as CAR proof |
+| `com.atproto.sync.listRepos` | GET | No | List repos (single entry) |
+| `com.atproto.sync.listBlobs` | GET | No | Blob CIDs for a DID |
+| `com.atproto.sync.getBlob` | GET | No | Fetch blob bytes by CID |
+| `com.atproto.sync.getLatestCommit` | GET | No | Head CID + rev |
+| `com.atproto.sync.requestCrawl` | POST | No | Notify relay to crawl |
+| `com.atproto.sync.subscribeRepos` | GET (WS) | No | Firehose event stream |
 
 ### DID Document
 
