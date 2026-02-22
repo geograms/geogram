@@ -3,7 +3,7 @@
  *
  * Implements the IPLD DAG-CBOR codec subset:
  * - Map keys sorted by byte length, then lexicographic byte order
- * - No floating-point values (AT Proto forbids them in repo data)
+ * - IEEE 754 float64 for double values (used in record data e.g. coordinates)
  * - CID links encoded as CBOR tag 42 wrapping raw CID bytes
  * - Byte strings for binary data
  *
@@ -47,6 +47,7 @@ class DagCbor {
   /// - `null` → CBOR null
   /// - `bool` → CBOR bool
   /// - `int` → CBOR integer
+  /// - `double` → CBOR float64
   /// - `String` → CBOR text string
   /// - `Uint8List` → CBOR byte string
   /// - `List` → CBOR array (elements encoded recursively)
@@ -75,6 +76,8 @@ class DagCbor {
       builder.addBool(value);
     } else if (value is int) {
       builder.addInt(value);
+    } else if (value is double) {
+      builder.addFloat(value);
     } else if (value is String) {
       builder.addText(value);
     } else if (value is Uint8List) {
@@ -225,6 +228,13 @@ class CborEncoder {
 
   void addMapHeader(int length) {
     _writeUint(5, length);
+  }
+
+  /// Encode a 64-bit IEEE 754 float (CBOR major type 7, additional info 27).
+  void addFloat(double value) {
+    _buffer.addByte(0xfb); // major 7, additional 27 = float64
+    final bd = ByteData(8)..setFloat64(0, value, Endian.big);
+    _buffer.add(bd.buffer.asUint8List());
   }
 
   void _writeUint(int major, int value) {

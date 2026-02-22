@@ -21,6 +21,11 @@ import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
 
 import '../../atproto/atproto_storage.dart';
+import '../../atproto/collection_sync.dart';
+import '../../atproto/collections/alerts_collection.dart';
+import '../../atproto/collections/blog_collection.dart';
+import '../../atproto/collections/events_collection.dart';
+import '../../atproto/collections/places_collection.dart';
 import '../../atproto/did_service.dart';
 import '../../atproto/firehose.dart';
 import '../../atproto/jwt_service.dart';
@@ -31,6 +36,10 @@ import '../../atproto/xrpc/server_endpoints.dart';
 import '../../atproto/xrpc/identity_endpoints.dart';
 import '../../atproto/xrpc/repo_endpoints.dart';
 import '../../atproto/xrpc/sync_endpoints.dart';
+import '../../models/blog_post.dart';
+import '../../models/event.dart';
+import '../../models/place.dart';
+import '../../models/report.dart';
 import '../../services/nostr_blossom_service.dart';
 import '../station_settings.dart';
 
@@ -43,6 +52,12 @@ mixin AtprotoPdsMixin {
   String? get dataDir;
   NostrBlossomService? get blossom;
 
+  /// Content providers for collection sync (override in station implementations).
+  Future<List<BlogPost>> listBlogPosts() async => [];
+  Future<List<Place>> listPlaces() async => [];
+  Future<List<Event>> listEvents() async => [];
+  Future<List<Report>> listReports() async => [];
+
   // -- AT Proto state --
 
   XrpcRouter? _xrpcRouter;
@@ -51,6 +66,7 @@ mixin AtprotoPdsMixin {
   JwtService? _jwtService;
   DidService? _didService;
   FirehoseManager? _firehose;
+  CollectionSyncManager? _collectionSync;
   String? _adminPassword;
 
   /// Whether the AT Proto PDS is initialized and running.
@@ -126,11 +142,25 @@ mixin AtprotoPdsMixin {
         did: _didService!.did,
       );
 
+      // Initialize collection sync manager
+      _collectionSync = CollectionSyncManager(
+        repo: _atprotoRepo!,
+        firehose: _firehose,
+        log: log,
+      );
+      _collectionSync!.register(BlogCollection(listPosts: listBlogPosts));
+      _collectionSync!.register(PlacesCollection(listPlaces: listPlaces));
+      _collectionSync!.register(EventsCollection(listEvents: listEvents));
+      _collectionSync!.register(AlertsCollection(listReports: listReports));
+
       // Set up XRPC router
       _xrpcRouter = XrpcRouter();
       _registerEndpoints();
 
       log('INFO', 'AT Proto PDS started: ${_didService!.did} (handle: $handle)');
+
+      // Auto-sync existing content in the background
+      _autoSync();
     } catch (e) {
       log('ERROR', 'AT Proto: failed to start PDS: $e');
       await stopAtprotoPds();
@@ -143,6 +173,7 @@ mixin AtprotoPdsMixin {
     _jwtService = null;
     _didService = null;
     _atprotoRepo = null;
+    _collectionSync = null;
     await _firehose?.close();
     _firehose = null;
     _atprotoStorage?.close();
@@ -215,6 +246,16 @@ mixin AtprotoPdsMixin {
     // Debug: create a record and return the firehose event
     if (path == '/api/atproto/test-firehose' && method == 'GET') {
       return _handleTestFirehose(request);
+    }
+
+    // Debug: list collections with record counts
+    if (path == '/api/atproto/collections' && method == 'GET') {
+      return _handleCollectionsList(request);
+    }
+
+    // Debug: trigger sync for a specific collection or all
+    if (path == '/api/atproto/sync-collection' && method == 'POST') {
+      return await _handleSyncCollection(request);
     }
 
     return false;
@@ -328,6 +369,72 @@ mixin AtprotoPdsMixin {
     }
   }
 
+  bool _handleCollectionsList(HttpRequest request) {
+    if (_collectionSync == null) {
+      request.response.statusCode = 503;
+      request.response.write('AT Proto not running');
+      return true;
+    }
+
+    request.response.headers.contentType = ContentType.json;
+    request.response.write(jsonEncode({
+      'collections': _collectionSync!.getCollectionStatus(),
+    }));
+    return true;
+  }
+
+  Future<bool> _handleSyncCollection(HttpRequest request) async {
+    if (_collectionSync == null) {
+      request.response.statusCode = 503;
+      request.response.write('AT Proto not running');
+      return true;
+    }
+
+    try {
+      final nsid = request.uri.queryParameters['nsid'];
+
+      if (nsid != null && nsid.isNotEmpty) {
+        // Sync a specific collection
+        final created = await _collectionSync!.syncCollection(nsid);
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({
+          'nsid': nsid,
+          'created': created,
+          'error': created < 0 ? 'Collection not found or sync failed' : null,
+        }));
+      } else {
+        // Sync all collections
+        final results = await _collectionSync!.syncAll();
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({
+          'results': results,
+          'totalCreated': results.values.where((v) => v > 0).fold<int>(0, (a, b) => a + b),
+        }));
+      }
+      return true;
+    } catch (e) {
+      request.response.statusCode = 500;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({'error': '$e'}));
+      return true;
+    }
+  }
+
+  /// Auto-sync existing content into the AT Proto repo on startup.
+  Future<void> _autoSync() async {
+    if (_collectionSync == null) return;
+
+    try {
+      final results = await _collectionSync!.syncAll();
+      final total = results.values.where((v) => v > 0).fold<int>(0, (a, b) => a + b);
+      if (total > 0) {
+        log('INFO', 'AT Proto: auto-synced $total records on startup');
+      }
+    } catch (e) {
+      log('ERROR', 'AT Proto: auto-sync failed — $e');
+    }
+  }
+
   /// Get AT Proto PDS status for debug/monitoring.
   Map<String, dynamic> getAtprotoStatus() {
     if (!settings.atprotoEnabled) {
@@ -348,6 +455,7 @@ mixin AtprotoPdsMixin {
           .fold<int>(0, (sum, c) => sum + (_atprotoStorage?.countRecords(c) ?? 0)) ?? 0,
       'firehoseSubscribers': _firehose?.subscriberCount ?? 0,
       'latestSeq': _firehose?.latestSeq,
+      'syncedCollections': _collectionSync?.getCollectionStatus() ?? [],
     };
   }
 
