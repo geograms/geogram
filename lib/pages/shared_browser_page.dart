@@ -11,12 +11,14 @@ import '../models/app.dart';
 import '../models/shared_folder.dart';
 import '../models/group.dart';
 import '../services/app_service.dart';
+import '../services/devices_service.dart';
 import '../services/i18n_service.dart';
 import '../services/groups_service.dart';
 import '../services/contact_service.dart';
 import '../services/profile_storage.dart';
 import '../services/shared_folder_service.dart';
 import '../util/nostr_crypto.dart';
+import '../util/nostr_key_generator.dart';
 import 'contact_picker_page.dart';
 import 'files_browser_page.dart';
 
@@ -117,40 +119,24 @@ class _SharedBrowserPageState extends State<SharedBrowserPage> {
     }
   }
 
-  /// Resolve hex pubkeys to contact display labels by scanning all contacts
-  Future<Map<String, String>> _resolveHexToLabels(List<String> hexKeys) async {
+  /// Resolve hex pubkeys to display labels using device nicknames
+  Map<String, String> _resolveHexToLabels(List<String> hexKeys) {
     final result = <String, String>{};
-    final remaining = Set<String>.from(hexKeys);
-    try {
-      final appService = AppService();
-      final contactsApp = appService.getAppByType('contacts');
-      if (contactsApp?.storagePath == null) return result;
-      final contactService = ContactService();
-      final profileStorage = appService.profileStorage;
-      if (profileStorage != null) {
-        contactService.setStorage(ScopedProfileStorage.fromAbsolutePath(
-          profileStorage, contactsApp!.storagePath!));
-      } else {
-        contactService.setStorage(FilesystemProfileStorage(contactsApp!.storagePath!));
+    final devicesService = DevicesService();
+    for (final hex in hexKeys) {
+      try {
+        final npub = NostrCrypto.encodeNpub(hex);
+        final callsign = NostrKeyGenerator.deriveCallsign(npub);
+        final device = devicesService.getDevice(callsign);
+        if (device != null && device.nickname != null && device.nickname!.isNotEmpty) {
+          result[hex] = '${device.nickname} ($callsign)';
+        } else {
+          result[hex] = callsign;
+        }
+      } catch (_) {
+        result[hex] = '${hex.substring(0, 8)}...';
       }
-      await contactService.initializeApp(contactsApp.storagePath!);
-
-      await for (final contact in contactService.loadAllContactsStream()) {
-        if (remaining.isEmpty) break;
-        if (contact.npub == null || contact.npub!.isEmpty) continue;
-        try {
-          final hex = NostrCrypto.decodeNpub(contact.npub!);
-          if (remaining.contains(hex)) {
-            final label = contact.displayName.isNotEmpty &&
-                    contact.displayName != contact.callsign
-                ? '${contact.displayName} (${contact.callsign})'
-                : contact.callsign;
-            result[hex] = label;
-            remaining.remove(hex);
-          }
-        } catch (_) {}
-      }
-    } catch (_) {}
+    }
     return result;
   }
 
@@ -231,6 +217,7 @@ class _SharedBrowserPageState extends State<SharedBrowserPage> {
             }
             await contactService.initializeApp(contactsApp.storagePath!);
 
+            final devicesService = DevicesService();
             for (final r in results) {
               final fullContact = await contactService.loadContact(
                 r.contact.callsign, groupPath: r.contact.groupPath);
@@ -238,10 +225,12 @@ class _SharedBrowserPageState extends State<SharedBrowserPage> {
                 try {
                   final hex = NostrCrypto.decodeNpub(fullContact.npub!);
                   if (hex.isNotEmpty) {
-                    final label = fullContact.displayName.isNotEmpty &&
-                            fullContact.displayName != fullContact.callsign
-                        ? '${fullContact.displayName} (${fullContact.callsign})'
-                        : fullContact.callsign;
+                    final callsign = fullContact.callsign;
+                    final device = devicesService.getDevice(callsign);
+                    final nickname = device?.nickname;
+                    final label = nickname != null && nickname.isNotEmpty
+                        ? '$nickname ($callsign)'
+                        : callsign;
                     allowedReaders[hex] = label;
                   }
                 } catch (_) {}
@@ -474,14 +463,10 @@ class _SharedBrowserPageState extends State<SharedBrowserPage> {
     String visibility = folder.visibility.value;
     List<Group> availableGroups = [];
     final selectedGroups = <String>{...folder.allowedGroups};
-    // Resolve hex pubkeys to contact display names
-    final allowedReaders = <String, String>{};
-    if (folder.allowedReaders.isNotEmpty) {
-      final hexToLabel = await _resolveHexToLabels(folder.allowedReaders);
-      for (final hex in folder.allowedReaders) {
-        allowedReaders[hex] = hexToLabel[hex] ?? '${hex.substring(0, 8)}...';
-      }
-    }
+    // Resolve hex pubkeys to readable labels (nickname + callsign)
+    final allowedReaders = folder.allowedReaders.isNotEmpty
+        ? _resolveHexToLabels(folder.allowedReaders)
+        : <String, String>{};
 
     // Pre-load groups if editing a restricted folder
     if (visibility == 'restricted') {
