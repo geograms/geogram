@@ -28,6 +28,8 @@ import '../../atproto/signing.dart';
 import '../../atproto/xrpc_router.dart';
 import '../../atproto/xrpc/server_endpoints.dart';
 import '../../atproto/xrpc/identity_endpoints.dart';
+import '../../atproto/xrpc/repo_endpoints.dart';
+import '../../services/nostr_blossom_service.dart';
 import '../station_settings.dart';
 
 /// AT Protocol PDS mixin for station servers.
@@ -37,6 +39,7 @@ mixin AtprotoPdsMixin {
   void log(String level, String message);
   StationSettings get settings;
   String? get dataDir;
+  NostrBlossomService? get blossom;
 
   // -- AT Proto state --
 
@@ -193,7 +196,67 @@ mixin AtprotoPdsMixin {
       return true;
     }
 
+    // Debug: create a test record and read it back
+    if (path == '/api/atproto/test-record' && method == 'POST') {
+      return await _handleTestRecord(request);
+    }
+
     return false;
+  }
+
+  Future<bool> _handleTestRecord(HttpRequest request) async {
+    if (_atprotoRepo == null || _didService == null) {
+      request.response.statusCode = 503;
+      request.response.write('AT Proto not running');
+      return true;
+    }
+
+    try {
+      final body = await utf8.decodeStream(request);
+      Map<String, dynamic>? record;
+      String collection = 'radio.geogram.test';
+
+      if (body.isNotEmpty) {
+        final json = jsonDecode(body) as Map<String, dynamic>;
+        record = json['record'] as Map<String, dynamic>?;
+        collection = json['collection'] as String? ?? collection;
+      }
+
+      record ??= {
+        '\$type': collection,
+        'text': 'Test record created at ${DateTime.now().toIso8601String()}',
+        'createdAt': DateTime.now().toIso8601String(),
+      };
+
+      // Create record
+      final result = _atprotoRepo!.createRecord(collection, record);
+      _atprotoRepo!.commit();
+
+      // Read it back
+      final parts = result.uri.split('/');
+      final rkey = parts.last;
+      final readBack = _atprotoRepo!.getRecord(collection, rkey);
+
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({
+        'created': {
+          'uri': result.uri,
+          'cid': result.cid.toBase32(),
+        },
+        'readBack': readBack != null ? {
+          'uri': readBack.uri,
+          'cid': readBack.cid.toBase32(),
+          'value': readBack.value,
+        } : null,
+        'match': readBack != null && readBack.cid.toBase32() == result.cid.toBase32(),
+      }));
+      return true;
+    } catch (e) {
+      request.response.statusCode = 500;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({'error': '$e'}));
+      return true;
+    }
   }
 
   /// Get AT Proto PDS status for debug/monitoring.
@@ -230,6 +293,14 @@ mixin AtprotoPdsMixin {
     registerIdentityEndpoints(
       _xrpcRouter!,
       didService: _didService!,
+    );
+
+    registerRepoEndpoints(
+      _xrpcRouter!,
+      getRepo: () => _atprotoRepo!,
+      didService: _didService!,
+      jwtService: _jwtService!,
+      getBlossom: () => blossom,
     );
   }
 

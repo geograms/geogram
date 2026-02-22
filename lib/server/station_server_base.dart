@@ -78,6 +78,7 @@ abstract class StationServerBase {
   EventBus get eventBus => _eventBus;
   Map<String, StationClient> get clients => Map.unmodifiable(_clients);
   String? get dataDir => _dataDir;
+  NostrBlossomService? get blossom => _blossom;
 
   // ============ Abstract Methods (Platform-Specific) ============
 
