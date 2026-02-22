@@ -153,11 +153,21 @@ class _ContactPickerPageState extends State<ContactPickerPage> {
   }
 
   void _sortContacts() {
+    // Contacts with nicknames always sort above callsign-only contacts
+    int nicknameFirst(_ContactWithApp a, _ContactWithApp b) {
+      final aHas = _hasNickname(a.contact);
+      final bHas = _hasNickname(b.contact);
+      if (aHas && !bHas) return -1;
+      if (!aHas && bHas) return 1;
+      return 0; // equal tier
+    }
+
     switch (_sortMode) {
       case _SortMode.popular:
         if (widget.sortByEvents && _eventCounts.isNotEmpty) {
-          // Sort by event count first, then favorites, then alphabetically
           _contacts.sort((a, b) {
+            final n = nicknameFirst(a, b);
+            if (n != 0) return n;
             final aEvents = _eventCounts[a.contact.callsign] ?? 0;
             final bEvents = _eventCounts[b.contact.callsign] ?? 0;
             if (aEvents != bEvents) return bEvents.compareTo(aEvents);
@@ -170,8 +180,9 @@ class _ContactPickerPageState extends State<ContactPickerPage> {
                 .compareTo(b.contact.displayName.toLowerCase());
           });
         } else {
-          // Favorites first, then alphabetically
           _contacts.sort((a, b) {
+            final n = nicknameFirst(a, b);
+            if (n != 0) return n;
             final aIsFavorite = _favoriteCallsigns.contains(a.contact.callsign);
             final bIsFavorite = _favoriteCallsigns.contains(b.contact.callsign);
             if (aIsFavorite && !bIsFavorite) return -1;
@@ -184,6 +195,8 @@ class _ContactPickerPageState extends State<ContactPickerPage> {
         break;
       case _SortMode.alphabetical:
         _contacts.sort((a, b) {
+          final n = nicknameFirst(a, b);
+          if (n != 0) return n;
           return a.contact.displayName
               .toLowerCase()
               .compareTo(b.contact.displayName.toLowerCase());
@@ -191,9 +204,11 @@ class _ContactPickerPageState extends State<ContactPickerPage> {
         break;
       case _SortMode.recent:
         _contacts.sort((a, b) {
+          final n = nicknameFirst(a, b);
+          if (n != 0) return n;
           final aDate = a.contact.firstSeenDateTime;
           final bDate = b.contact.firstSeenDateTime;
-          return bDate.compareTo(aDate); // newest first
+          return bDate.compareTo(aDate);
         });
         break;
     }
@@ -463,7 +478,9 @@ class _ContactPickerPageState extends State<ContactPickerPage> {
         ],
       ),
       title: Text(
-        contact.displayName,
+        _hasNickname(contact)
+            ? '${contact.displayName} (${contact.callsign})'
+            : contact.callsign,
         style: TextStyle(
           fontWeight: isSelected ? FontWeight.bold : null,
         ),
@@ -491,8 +508,13 @@ class _ContactPickerPageState extends State<ContactPickerPage> {
     );
   }
 
+  bool _hasNickname(Contact contact) {
+    return contact.displayName.isNotEmpty &&
+        contact.displayName != contact.callsign;
+  }
+
   String _buildSubtitle(_ContactWithApp item) {
-    final parts = <String>[item.contact.callsign];
+    final parts = <String>[];
     if (item.contact.groupPath?.isNotEmpty == true) {
       parts.add(item.contact.groupPath!);
     }
