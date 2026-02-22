@@ -3816,6 +3816,39 @@ curl "http://localhost:8080/xrpc/com.atproto.repo.describeRepo?repo=$DID"
 curl "http://localhost:8080/xrpc/com.atproto.identity.resolveHandle?handle=$HANDLE"
 ```
 
+#### GET /api/atproto/collections
+
+List all registered content collections with record counts.
+
+```bash
+curl http://localhost:8080/api/atproto/collections
+```
+
+Response: `{"collections": [{"nsid": "radio.geogram.blog.post", "displayName": "Blog Posts", "recordCount": 5}, ...]}`
+
+#### POST /api/atproto/sync-collection
+
+Trigger sync for a specific collection (by `nsid` query parameter) or all collections.
+
+```bash
+# Sync a specific collection
+curl -X POST "http://localhost:8080/api/atproto/sync-collection?nsid=radio.geogram.blog.post"
+
+# Sync all collections
+curl -X POST http://localhost:8080/api/atproto/sync-collection
+```
+
+Response (specific): `{"nsid": "radio.geogram.blog.post", "created": 3, "error": null}`
+Response (all): `{"results": {"radio.geogram.blog.post": 3, "radio.geogram.places.entry": 1, ...}, "totalCreated": 5}`
+
+**Geogram content collection NSIDs:**
+| NSID | Geogram Content | Sync Filter |
+|------|----------------|-------------|
+| `radio.geogram.blog.post` | Blog posts | Published only |
+| `radio.geogram.places.entry` | Places | Public/restricted only |
+| `radio.geogram.events.entry` | Events | Public/group only |
+| `radio.geogram.alerts.report` | Alerts/Reports | Non-closed only |
+
 ---
 
 ## P2P File Transfer

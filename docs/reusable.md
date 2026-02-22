@@ -217,6 +217,12 @@ This document catalogs reusable UI components available in the Geogram codebase.
 - [AtprotoPdsMixin](#atprotopdsmixin) - Shared PDS mixin for station servers
 - [AtUri](#aturi) - AT-URI parser (at://authority/collection/rkey)
 - [FirehoseManager](#firehosemanager) - AT Protocol event stream manager with cursor replay
+- [CollectionAdapter](#collectionadapter) - Base class for mapping Geogram content to AT Proto records
+- [BlogCollection](#blogcollection) - Blog post adapter (radio.geogram.blog.post)
+- [PlacesCollection](#placescollection) - Places adapter (radio.geogram.places.entry)
+- [EventsCollection](#eventscollection) - Events adapter (radio.geogram.events.entry)
+- [AlertsCollection](#alertscollection) - Alerts adapter (radio.geogram.alerts.report)
+- [CollectionSyncManager](#collectionsyncmanager) - Orchestrates idempotent sync of all collections
 
 ### Stories App Components
 - [SceneEditorCanvas](#sceneeditorcanvas) - Interactive scene canvas for Story Studio
@@ -9141,3 +9147,78 @@ AT Protocol event stream manager. Encodes commit/identity/info events as binary 
 - `subscriberCount` → `int` — connected subscriber count
 - `close()` — close all subscribers
 - Static: `encodeCommitFrame(...)`, `encodeIdentityFrame(...)`, `encodeInfoFrame(...)`, `decodeFrame(Uint8List)` — frame encoding/decoding
+
+### CollectionAdapter
+
+**File:** `lib/atproto/collections/collection_adapter.dart`
+
+Base class for collection adapters that map Geogram content types to AT Proto records. Provides shared helpers for idempotent record creation and TID generation from Geogram timestamps.
+
+**API:**
+- `nsid` → `String` — AT Protocol NSID for this collection
+- `displayName` → `String` — human-readable name
+- `syncAll(AtprotoRepo repo)` → `Future<int>` — sync all content, returns records created
+- `createIfAbsent(repo, rkey, record)` → `bool` — create record if rkey doesn't exist
+- Static: `rkeyFromTimestamp(String timestamp)` → `String` — generate TID from Geogram timestamp
+
+### BlogCollection
+
+**File:** `lib/atproto/collections/blog_collection.dart`
+
+Maps BlogPost to `radio.geogram.blog.post` records. Only syncs published posts. Supports title, content, summary, tags, location (lat/lon), image reference, and edit timestamp.
+
+**API:**
+- `BlogCollection({required listPosts})` — create with post provider
+- Static: `toRecord(BlogPost post)` → `Map<String, dynamic>` — convert to AT Proto record
+- Static: `fromRecord(String rkey, Map record)` → `BlogPost` — convert from AT Proto record
+- `syncAll(repo)` → `Future<int>` — sync published posts
+
+### PlacesCollection
+
+**File:** `lib/atproto/collections/places_collection.dart`
+
+Maps Place to `radio.geogram.places.entry` records. Only syncs public/restricted places. Supports name, coordinates, radius, category, description, multilingual names/descriptions, address, history, hours.
+
+**API:**
+- `PlacesCollection({required listPlaces})` — create with place provider
+- Static: `toRecord(Place place)` → `Map<String, dynamic>`
+- Static: `fromRecord(String rkey, Map record)` → `Place`
+- `syncAll(repo)` → `Future<int>` — sync non-private places
+
+### EventsCollection
+
+**File:** `lib/atproto/collections/events_collection.dart`
+
+Maps Event to `radio.geogram.events.entry` records. Only syncs public/group events. Supports title, location, content, startDate/endDate, locationName, agenda, contacts.
+
+**API:**
+- `EventsCollection({required listEvents})` — create with event provider
+- Static: `toRecord(Event event)` → `Map<String, dynamic>`
+- Static: `fromRecord(String rkey, Map record)` → `Event`
+- `syncAll(repo)` → `Future<int>` — sync non-private events
+
+### AlertsCollection
+
+**File:** `lib/atproto/collections/alerts_collection.dart`
+
+Maps Report to `radio.geogram.alerts.report` records. Skips closed reports. Maps severity (emergency→critical, urgent/attention→warning, info→info). Derives region from coordinates.
+
+**API:**
+- `AlertsCollection({required listReports})` — create with report provider
+- Static: `toRecord(Report report)` → `Map<String, dynamic>`
+- Static: `fromRecord(String rkey, Map record)` → `Report`
+- `syncAll(repo)` → `Future<int>` — sync non-closed reports
+
+### CollectionSyncManager
+
+**File:** `lib/atproto/collection_sync.dart`
+
+Orchestrates syncing Geogram content collections into the AT Proto repository. Sync is idempotent — existing records matched by rkey are skipped. Creates a single commit for all new records across all collections.
+
+**API:**
+- `CollectionSyncManager({required repo, firehose, required log})` — create manager
+- `register(CollectionAdapter adapter)` — register a collection adapter
+- `adapters` → `List<CollectionAdapter>` — registered adapters
+- `syncAll()` → `Future<Map<String, int>>` — sync all collections, returns NSID→count map
+- `syncCollection(String nsid)` → `Future<int>` — sync single collection by NSID
+- `getCollectionStatus()` → `List<Map<String, dynamic>>` — status info for all collections
