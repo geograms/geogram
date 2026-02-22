@@ -202,6 +202,16 @@ This document catalogs reusable UI components available in the Geogram codebase.
 ### Platform Helpers
 - [file_image_helper](#file_image_helper) - Platform-aware file and memory image loading
 
+### AT Protocol Core (lib/atproto/)
+- [DagCbor](#dagcbor) - Deterministic CBOR encoder/decoder (DAG-CBOR with sorted keys, CID tag 42)
+- [Cid](#cid) - CID v1 content identifiers (SHA-256, base32lower, bytes/string round-trip)
+- [MerkleSearchTree](#merklesearchtree) - MST for content-addressed key-value storage
+- [CarWriter / CarReader](#carwriter--carreader) - CAR v1 archive format read/write
+- [Tid](#tid) - Timestamp ID generator (13-char base32-sortable)
+- [AtprotoSigning](#atprotosigning) - ECDSA-secp256k1 signing with low-S normalization and Multikey encoding
+- [AtprotoStorage](#atprotostorage) - SQLite block store implementing MstBlockStore
+- [AtprotoRepo](#atprotorepo) - Repository manager (MST + signing + storage + CAR export)
+
 ### Stories App Components
 - [SceneEditorCanvas](#sceneeditorcanvas) - Interactive scene canvas for Story Studio
 - [ElementPropertiesPanel](#elementpropertiespanel) - Properties editor for story elements
@@ -8926,3 +8936,109 @@ Browser page for the "Shared" app. Lists shared folder entries and allows add/ed
 - FAB to add new shared folders (title, folder picker, visibility)
 - Long-press context menu for edit/delete
 - Automatic legacy migration on first open
+
+---
+
+## AT Protocol Core
+
+### DagCbor
+
+**File:** `lib/atproto/dag_cbor.dart`
+
+Deterministic CBOR encoder/decoder implementing the IPLD DAG-CBOR codec. Guarantees identical bytes for identical data through sorted map keys and a custom byte-level encoder.
+
+**API:**
+- `DagCbor.encode(dynamic value)` → `Uint8List` — encode Dart value to DAG-CBOR bytes
+- `DagCbor.decode(Uint8List bytes)` → `dynamic` — decode DAG-CBOR bytes; CID links returned as `CidLink`
+- `CidLink(Cid cid)` — wrapper type for CID references (encoded as CBOR tag 42)
+
+### Cid
+
+**File:** `lib/atproto/cid.dart`
+
+CID v1 content identifiers using SHA-256 + DAG-CBOR codec. Includes base32lower multibase encoding and unsigned varint support.
+
+**API:**
+- `Cid.fromContent(Uint8List dagCborBytes)` — hash content to produce CID
+- `Cid.fromBytes(Uint8List)` / `Cid.fromString(String)` — parse from binary or multibase string
+- `toBytes()` / `toBase32()` — serialize to binary or `b`-prefixed base32lower string
+
+### MerkleSearchTree
+
+**File:** `lib/atproto/mst.dart`
+
+AT Protocol Merkle Search Tree. Deterministic tree shape from key hashing (SHA-256 leading zeros). Implements `MstBlockStore` interface for pluggable storage.
+
+**API:**
+- `MerkleSearchTree(MstBlockStore store)` — create new empty MST
+- `insert(String key, Cid valueCid)` / `delete(String key)` / `get(String key)`
+- `list({prefix, limit, cursor})` — paginated key listing
+- `entries` — all entries sorted
+- `MstBlockStore` — abstract interface: `getBlock(Cid)`, `putBlock(Uint8List)`
+- `MemoryBlockStore` — in-memory implementation for testing
+
+### CarWriter / CarReader
+
+**File:** `lib/atproto/car.dart`
+
+CAR v1 (Content-Addressable aRchive) format for bundling content-addressed blocks.
+
+**API:**
+- `CarWriter.write(Cid root, Map<Cid, Uint8List> blocks)` → `Uint8List`
+- `CarReader.read(Uint8List carBytes)` → `CarFile(roots, blocks)`
+
+### Tid
+
+**File:** `lib/atproto/tid.dart`
+
+Timestamp ID generator producing 13-character base32-sortable identifiers. Monotonic within a process.
+
+**API:**
+- `Tid.next()` → `String` — new TID for current microsecond
+- `Tid.fromDateTime(DateTime)` → `String` — TID from specific time
+- `Tid.parse(String)` → `DateTime` — extract timestamp from TID
+- `Tid.isValid(String)` → `bool`
+
+### AtprotoSigning
+
+**File:** `lib/atproto/signing.dart`
+
+ECDSA-secp256k1 signing with low-S normalization (required by AT Proto). Includes RFC 6979 deterministic nonces, Multikey encoding, and base58 support.
+
+**API:**
+- `generateKeyPair()` → `({Uint8List privateKey, Uint8List publicKey})`
+- `derivePublicKey(Uint8List privateKey)` → `Uint8List` (33-byte compressed)
+- `sign(Uint8List data, Uint8List privateKey)` → `Uint8List` (64-byte r||s)
+- `verify(Uint8List data, Uint8List signature, Uint8List publicKey)` → `bool`
+- `publicKeyToMultikey(Uint8List)` / `multikeyToPublicKey(String)` — Multikey round-trip
+
+### AtprotoStorage
+
+**File:** `lib/atproto/atproto_storage.dart`
+
+SQLite-backed block store implementing `MstBlockStore`. Tables: blocks, repos, records, sequence.
+
+**API:**
+- `AtprotoStorage.open(String dbPath)` / `openInMemory()`
+- Block ops: `getBlock(Cid)`, `putBlock(Uint8List)`, `hasBlock(Cid)`
+- Repo metadata: `getHead(did)`, `setHead(did, head, signingKey)`, `getSigningKey(did)`
+- Record index: `indexRecord(uri, cid, collection, rkey)`, `listRecords(collection, ...)`, `countRecords(collection)`
+- Firehose: `appendEvent(Uint8List)`, `getEventsSince(cursor)`, `getLatestSeq()`
+- `transaction<T>(T Function() fn)` — ACID transactions
+
+### AtprotoRepo
+
+**File:** `lib/atproto/repo.dart`
+
+Repository manager orchestrating MST, signing, and storage into a complete AT Proto repo.
+
+**API:**
+- `AtprotoRepo.create({did, storage, signingKey})` — new repo
+- `AtprotoRepo.open({did, storage})` — load existing repo
+- `createRecord(collection, record, {rkey})` → `({String uri, Cid cid})`
+- `getRecord(collection, rkey)` → `RepoRecord?`
+- `putRecord(collection, rkey, record)` — upsert
+- `deleteRecord(collection, rkey)` → `bool`
+- `listRecords(collection, {limit, cursor, reverse})` → `List<RepoRecord>`
+- `commit()` → `Cid` — create signed commit
+- `exportCar()` → `Uint8List` — full repo as CAR v1
