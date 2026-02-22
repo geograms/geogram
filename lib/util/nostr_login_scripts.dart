@@ -42,6 +42,10 @@ String getNostrLoginHeaderHtml() {
           <button class="nostr-qr-btn" id="nostr-qr-nsec" title="Show QR code"><svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><rect x="1" y="1" width="6" height="6"/><rect x="9" y="1" width="6" height="6"/><rect x="1" y="9" width="6" height="6"/><rect x="3" y="3" width="2" height="2" fill="var(--background,#1a1a2e)"/><rect x="11" y="3" width="2" height="2" fill="var(--background,#1a1a2e)"/><rect x="3" y="11" width="2" height="2" fill="var(--background,#1a1a2e)"/><rect x="9" y="9" width="2" height="2"/><rect x="13" y="9" width="2" height="2"/><rect x="9" y="13" width="2" height="2"/><rect x="13" y="13" width="2" height="2"/><rect x="11" y="11" width="2" height="2"/></svg></button>
         </div>
       </div>
+      <div class="nostr-profile-field" id="nostr-nsec-extension-hint" style="display:none;">
+        <label>nsec</label>
+        <span class="nostr-extension-hint">Managed by your browser extension</span>
+      </div>
       <button id="nostr-profile-save" class="nostr-header-btn">Save</button>
     </div>
   </div>
@@ -225,6 +229,13 @@ String getNostrLoginStyles() {
   font-size: 0.65rem;
   text-transform: none;
   letter-spacing: normal;
+}
+
+.nostr-extension-hint {
+  color: var(--foreground, #ccc);
+  font-size: 0.75rem;
+  opacity: 0.6;
+  font-style: italic;
 }
 
 .nostr-qr-overlay {
@@ -428,7 +439,14 @@ String getNostrLoginScripts() {
 
   function hexToNsec(hex) {
     var NT = window.NostrTools;
-    if (NT && NT.nip19 && NT.nip19.nsecEncode) return NT.nip19.nsecEncode(hexToBytes(hex));
+    if (NT && NT.nip19 && NT.nip19.nsecEncode) {
+      try {
+        return NT.nip19.nsecEncode(hexToBytes(hex));
+      } catch(e) {
+        console.error('nsecEncode failed:', e);
+        return null;
+      }
+    }
     return null;
   }
 
@@ -879,6 +897,7 @@ String getNostrLoginScripts() {
           // Populate nsec (only for locally generated keys)
           var nsecField = document.getElementById('nostr-nsec-field');
           var nsecEl = document.getElementById('nostr-profile-nsec');
+          var nsecExtHint = document.getElementById('nostr-nsec-extension-hint');
           var privkey = null;
           try { privkey = localStorage.getItem('geogram_nostr_privkey'); } catch(ex) {}
           if (privkey && nsecField && nsecEl) {
@@ -887,9 +906,15 @@ String getNostrLoginScripts() {
               nsecEl.textContent = truncateKey(nsec);
               nsecEl.setAttribute('data-full', nsec);
               nsecField.style.display = '';
+              if (nsecExtHint) nsecExtHint.style.display = 'none';
             }
-          } else if (nsecField) {
-            nsecField.style.display = 'none';
+          } else {
+            if (nsecField) nsecField.style.display = 'none';
+            // Show extension hint if using NIP-07 extension
+            if (nsecExtHint) {
+              var hasExtension = window.nostr && !window.nostr._geogramPolyfill;
+              nsecExtHint.style.display = hasExtension ? '' : 'none';
+            }
           }
         }
       });
