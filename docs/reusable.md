@@ -211,6 +211,10 @@ This document catalogs reusable UI components available in the Geogram codebase.
 - [AtprotoSigning](#atprotosigning) - ECDSA-secp256k1 signing with low-S normalization and Multikey encoding
 - [AtprotoStorage](#atprotostorage) - SQLite block store implementing MstBlockStore
 - [AtprotoRepo](#atprotorepo) - Repository manager (MST + signing + storage + CAR export)
+- [XrpcRouter](#xrpcrouter) - XRPC endpoint router for AT Protocol HTTP dispatch
+- [JwtService](#jwtservice) - HS256 JWT session management with refresh rotation
+- [DidService](#didservice) - DID:web document generation with Multikey verification
+- [AtprotoPdsMixin](#atprotopdsmixin) - Shared PDS mixin for station servers
 
 ### Stories App Components
 - [SceneEditorCanvas](#sceneeditorcanvas) - Interactive scene canvas for Story Studio
@@ -9042,3 +9046,62 @@ Repository manager orchestrating MST, signing, and storage into a complete AT Pr
 - `listRecords(collection, {limit, cursor, reverse})` → `List<RepoRecord>`
 - `commit()` → `Cid` — create signed commit
 - `exportCar()` → `Uint8List` — full repo as CAR v1
+
+### XrpcRouter
+
+**File:** `lib/atproto/xrpc_router.dart`
+
+XRPC endpoint router for AT Protocol. Maps NSID-based endpoints to handlers, dispatches HTTP GET (queries) and POST (procedures), and provides JSON/error response helpers.
+
+**API:**
+- `XrpcRouter()` — create router
+- `query(String nsid, XrpcHandler handler)` — register GET endpoint
+- `procedure(String nsid, XrpcHandler handler)` — register POST endpoint
+- `handle(HttpRequest request, String path)` → `Future<bool>` — dispatch request
+- `XrpcRouter.writeJson(request, Map data)` — write JSON response
+- `XrpcRouter.writeError(request, XrpcError error)` — write XRPC error response
+- `XrpcRouter.readJsonBody(request)` → `Future<Map?>` — read POST JSON body
+- `XrpcRouter.extractBearerToken(request)` → `String?` — extract Authorization bearer token
+
+### JwtService
+
+**File:** `lib/atproto/jwt_service.dart`
+
+HS256 JWT session management for single-user AT Proto PDS. Handles access/refresh token creation, verification, refresh rotation, and revocation.
+
+**API:**
+- `JwtService({required secret, required did, required handle})` — create service
+- `createSession()` → `SessionTokens` — issue access (5min) + refresh (90d) tokens
+- `refreshSession(String refreshJwt)` → `SessionTokens?` — rotate refresh token (old one revoked)
+- `deleteSession(String refreshJwt)` → `bool` — revoke refresh token
+- `verifyAccessToken(String jwt)` → `String?` — verify and return DID, or null
+- `SessionTokens({accessJwt, refreshJwt, did, handle})` — token bundle with `toJson()`
+
+### DidService
+
+**File:** `lib/atproto/did_service.dart`
+
+DID:web document generator for AT Protocol. Builds `/.well-known/did.json` with Multikey verification method and AtprotoPersonalDataServer service entry.
+
+**API:**
+- `DidService({required domain, required publicKey, required handle})` — create service
+- `did` → `String` — e.g. `did:web:example.com`
+- `handle` → `String` (settable)
+- `serviceEndpoint` → `String` — `https://{domain}`
+- `buildDidDocument()` → `Map<String, dynamic>` — full DID document
+- `isDid(String did)` → `bool` — check if DID matches this service
+- `DidService.resolveDomain(String did)` → `String?` — extract domain from did:web
+
+### AtprotoPdsMixin
+
+**File:** `lib/server/mixins/atproto_pds_mixin.dart`
+
+Shared mixin providing AT Protocol PDS lifecycle for both `AppStationServer` and `CliStationServer`. Initializes storage, signing, DID, JWT, repo, and XRPC router. Handles `/xrpc/*`, `/.well-known/did.json`, and `/api/atproto/*` debug routes.
+
+**API:**
+- `startAtprotoPds()` — initialize and start PDS (call from `onServerStart()`)
+- `stopAtprotoPds()` — shut down PDS (call from `onServerStop()`)
+- `handleAtprotoRequest(request, path, method)` → `Future<bool>` — route handler
+- `isAtprotoRunning` → `bool`
+- `atprotoDid` → `String?`
+- `getAtprotoStatus()` → `Map<String, dynamic>` — debug status info

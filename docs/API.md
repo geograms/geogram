@@ -3666,6 +3666,99 @@ curl -X POST http://localhost:3456/api/debug \
 
 ---
 
+## AT Protocol PDS
+
+When `atprotoEnabled` is true in station settings, the station runs an AT Protocol Personal Data Server. These endpoints are served on the station's HTTP port.
+
+### XRPC Endpoints
+
+Standard AT Protocol XRPC endpoints at `/xrpc/{nsid}`:
+
+| Endpoint | Method | Auth | Description |
+|---|---|---|---|
+| `com.atproto.server.describeServer` | GET | No | Server capabilities and DID |
+| `com.atproto.server.createSession` | POST | No | Login with identifier + password |
+| `com.atproto.server.refreshSession` | POST | Bearer (refresh) | Rotate refresh token |
+| `com.atproto.server.deleteSession` | POST | Bearer (refresh) | Revoke session |
+| `com.atproto.server.getSession` | GET | Bearer (access) | Get current session info |
+| `com.atproto.identity.resolveHandle` | GET | No | Resolve handle to DID |
+
+### DID Document
+
+#### GET /.well-known/did.json
+
+Returns the DID document for this PDS.
+
+```bash
+curl https://station.example.com/.well-known/did.json
+```
+
+### AT Proto Debug API
+
+#### GET /api/atproto/status
+
+Returns PDS status including DID, handle, repo head, collections, and record count.
+
+```bash
+curl http://localhost:8080/api/atproto/status
+```
+
+**Response:**
+```json
+{
+  "enabled": true,
+  "running": true,
+  "did": "did:web:station.example.com",
+  "handle": "user.example.com",
+  "headCid": "bafy...",
+  "collections": ["app.bsky.feed.post"],
+  "recordCount": 42
+}
+```
+
+#### GET /api/atproto/did
+
+Returns the full DID document (same as `/.well-known/did.json`).
+
+```bash
+curl http://localhost:8080/api/atproto/did
+```
+
+#### GET /api/atproto/admin-password
+
+Returns the auto-generated admin password for session creation (for testing).
+
+```bash
+curl http://localhost:8080/api/atproto/admin-password
+```
+
+**Response:**
+```json
+{
+  "password": "random-32-char-password",
+  "did": "did:web:station.example.com",
+  "handle": "user.example.com"
+}
+```
+
+### Testing AT Proto Session Flow
+
+```bash
+# 1. Get admin password
+ADMIN=$(curl -s http://localhost:8080/api/atproto/admin-password | jq -r .password)
+HANDLE=$(curl -s http://localhost:8080/api/atproto/admin-password | jq -r .handle)
+
+# 2. Create session
+curl -X POST http://localhost:8080/xrpc/com.atproto.server.createSession \
+  -H "Content-Type: application/json" \
+  -d "{\"identifier\": \"$HANDLE\", \"password\": \"$ADMIN\"}"
+
+# 3. Resolve handle
+curl "http://localhost:8080/xrpc/com.atproto.identity.resolveHandle?handle=$HANDLE"
+```
+
+---
+
 ## P2P File Transfer
 
 P2P file transfer enables direct file sharing between Geogram devices. The sender creates an offer, the receiver accepts and downloads files directly from the sender's HTTP API.
