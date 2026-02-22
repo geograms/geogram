@@ -22,6 +22,7 @@ import 'package:crypto/crypto.dart';
 
 import '../../atproto/atproto_storage.dart';
 import '../../atproto/did_service.dart';
+import '../../atproto/firehose.dart';
 import '../../atproto/jwt_service.dart';
 import '../../atproto/repo.dart';
 import '../../atproto/signing.dart';
@@ -29,6 +30,7 @@ import '../../atproto/xrpc_router.dart';
 import '../../atproto/xrpc/server_endpoints.dart';
 import '../../atproto/xrpc/identity_endpoints.dart';
 import '../../atproto/xrpc/repo_endpoints.dart';
+import '../../atproto/xrpc/sync_endpoints.dart';
 import '../../services/nostr_blossom_service.dart';
 import '../station_settings.dart';
 
@@ -48,6 +50,7 @@ mixin AtprotoPdsMixin {
   AtprotoRepo? _atprotoRepo;
   JwtService? _jwtService;
   DidService? _didService;
+  FirehoseManager? _firehose;
   String? _adminPassword;
 
   /// Whether the AT Proto PDS is initialized and running.
@@ -117,6 +120,12 @@ mixin AtprotoPdsMixin {
         log('INFO', 'AT Proto: opened existing repo for ${_didService!.did}');
       }
 
+      // Initialize firehose
+      _firehose = FirehoseManager(
+        storage: _atprotoStorage!,
+        did: _didService!.did,
+      );
+
       // Set up XRPC router
       _xrpcRouter = XrpcRouter();
       _registerEndpoints();
@@ -134,6 +143,8 @@ mixin AtprotoPdsMixin {
     _jwtService = null;
     _didService = null;
     _atprotoRepo = null;
+    await _firehose?.close();
+    _firehose = null;
     _atprotoStorage?.close();
     _atprotoStorage = null;
     _adminPassword = null;
@@ -201,6 +212,11 @@ mixin AtprotoPdsMixin {
       return await _handleTestRecord(request);
     }
 
+    // Debug: create a record and return the firehose event
+    if (path == '/api/atproto/test-firehose' && method == 'GET') {
+      return _handleTestFirehose(request);
+    }
+
     return false;
   }
 
@@ -259,6 +275,59 @@ mixin AtprotoPdsMixin {
     }
   }
 
+  bool _handleTestFirehose(HttpRequest request) {
+    if (_atprotoRepo == null || _firehose == null || _didService == null) {
+      request.response.statusCode = 503;
+      request.response.write('AT Proto not running');
+      return true;
+    }
+
+    try {
+      // Create a test record
+      final collection = 'radio.geogram.test';
+      final record = {
+        '\$type': collection,
+        'text': 'Firehose test at ${DateTime.now().toIso8601String()}',
+        'createdAt': DateTime.now().toIso8601String(),
+      };
+
+      final result = _atprotoRepo!.createRecord(collection, record);
+      final prevHead = _atprotoRepo!.headCid;
+      final commitCid = _atprotoRepo!.commit();
+
+      // Emit firehose event
+      final rkey = result.uri.split('/').last;
+      final seq = _firehose!.emitCommit(
+        commitCid: commitCid,
+        rev: '', // Could extract from commit
+        ops: [
+          FirehoseRecordOp(
+            action: FirehoseOp.create,
+            path: '$collection/$rkey',
+            cid: result.cid,
+          ),
+        ],
+        prev: prevHead,
+      );
+
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({
+        'seq': seq,
+        'commitCid': commitCid.toBase32(),
+        'recordUri': result.uri,
+        'recordCid': result.cid.toBase32(),
+        'subscriberCount': _firehose!.subscriberCount,
+        'latestSeq': _firehose!.latestSeq,
+      }));
+      return true;
+    } catch (e) {
+      request.response.statusCode = 500;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({'error': '$e'}));
+      return true;
+    }
+  }
+
   /// Get AT Proto PDS status for debug/monitoring.
   Map<String, dynamic> getAtprotoStatus() {
     if (!settings.atprotoEnabled) {
@@ -277,6 +346,8 @@ mixin AtprotoPdsMixin {
       'collections': _atprotoStorage?.listCollections() ?? [],
       'recordCount': _atprotoStorage?.listCollections()
           .fold<int>(0, (sum, c) => sum + (_atprotoStorage?.countRecords(c) ?? 0)) ?? 0,
+      'firehoseSubscribers': _firehose?.subscriberCount ?? 0,
+      'latestSeq': _firehose?.latestSeq,
     };
   }
 
@@ -301,6 +372,16 @@ mixin AtprotoPdsMixin {
       didService: _didService!,
       jwtService: _jwtService!,
       getBlossom: () => blossom,
+    );
+
+    registerSyncEndpoints(
+      _xrpcRouter!,
+      getRepo: () => _atprotoRepo!,
+      getStorage: () => _atprotoStorage!,
+      didService: _didService!,
+      getFirehose: () => _firehose!,
+      getBlossom: () => blossom,
+      log: log,
     );
   }
 
