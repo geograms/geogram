@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 
 # Geogram Desktop Launch Script
 # This script sets up the Flutter environment and launches the desktop app
@@ -17,7 +17,7 @@ if [ ! -f "$FLUTTER_BIN" ]; then
 fi
 
 # Check Dart SDK version (must be >= 3.10.0 as required by pubspec.yaml)
-DART_VERSION=$("$FLUTTER_BIN" --version 2>&1 | grep -oP 'Dart \K[0-9]+\.[0-9]+' | head -1)
+DART_VERSION=$("$FLUTTER_BIN" --version 2>&1 | sed -n 's/.*Dart \([0-9]*\.[0-9]*\).*/\1/p' | head -1)
 DART_MAJOR=$(echo "$DART_VERSION" | cut -d. -f1)
 DART_MINOR=$(echo "$DART_VERSION" | cut -d. -f2)
 
@@ -29,7 +29,7 @@ if [ "$DART_MAJOR" -lt 3 ] || ([ "$DART_MAJOR" -eq 3 ] && [ "$DART_MINOR" -lt 10
 fi
 
 # Get the directory where this script is located
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # Change to the geogram directory
 cd "$SCRIPT_DIR"
@@ -143,7 +143,11 @@ if ! "$FLUTTER_BIN" pub get --offline 2>/dev/null; then
 fi
 
 # Only clean if explicitly requested via --clean flag
-if [[ " $* " == *" --clean "* ]]; then
+CLEAN=false
+for arg in "$@"; do
+    case "$arg" in --clean) CLEAN=true ;; esac
+done
+if $CLEAN; then
     echo "🧹 Cleaning previous build..."
     # Cache native libs before cleaning
     cache_objectbox "debug"
@@ -168,15 +172,16 @@ echo ""
 echo "▶️  Starting app..."
 
 # Filter out our custom flags before passing to flutter
-FLUTTER_ARGS=()
+FLUTTER_ARGS=""
 for arg in "$@"; do
     if [ "$arg" != "--clean" ]; then
-        FLUTTER_ARGS+=("$arg")
+        FLUTTER_ARGS="$FLUTTER_ARGS $arg"
     fi
 done
 
 # Run the app on Linux desktop
-"$FLUTTER_BIN" run -d linux --no-pub "${FLUTTER_ARGS[@]}"
+# shellcheck disable=SC2086
+"$FLUTTER_BIN" run -d linux --no-pub $FLUTTER_ARGS
 
 # Cache native libs after successful run
 cache_objectbox "debug"
