@@ -6,9 +6,14 @@
 echo "📦 Installing Flutter Linux desktop build dependencies..."
 echo ""
 echo "The following packages will be installed:"
-echo "  - ninja-build (build system)"
 echo "  - clang (C/C++ compiler)"
+echo "  - cmake (build system generator)"
+echo "  - ninja-build (build system)"
+echo "  - pkg-config (library discovery)"
 echo "  - libgtk-3-dev (GTK development libraries)"
+echo "  - liblzma-dev (XZ compression library)"
+echo "  - libmpv-dev (media player library)"
+echo "  - lld (LLVM linker)"
 echo ""
 
 # Check if running with sudo or as root
@@ -29,10 +34,14 @@ $SUDO apt-get update
 echo ""
 echo "Installing dependencies..."
 $SUDO apt-get install -y \
-    ninja-build \
     clang \
+    cmake \
+    ninja-build \
+    pkg-config \
     libgtk-3-dev \
-    liblzma-dev
+    liblzma-dev \
+    libmpv-dev \
+    lld
 
 echo ""
 echo "✅ Dependencies installed successfully!"
