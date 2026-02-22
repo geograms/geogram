@@ -152,6 +152,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "0.3.5+2"
+  cbor:
+    dependency: "direct main"
+    description:
+      name: cbor
+      sha256: "259230d0c7f3ae58cb68cbc17b95484a038b2f63b15963b019d4bd9d28bf3fe0"
+      url: "https://pub.dev"
+    source: hosted
+    version: "6.5.0"
   characters:
     dependency: transitive
     description:
