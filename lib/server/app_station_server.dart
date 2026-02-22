@@ -10,6 +10,7 @@ import 'mixins/ssl_mixin.dart';
 import 'mixins/stun_mixin.dart';
 import 'mixins/rate_limit_mixin.dart';
 import 'mixins/health_watchdog_mixin.dart';
+import 'mixins/atproto_pds_mixin.dart';
 import '../services/log_service.dart';
 import '../services/config_service.dart';
 import '../services/storage_config.dart';
@@ -18,7 +19,7 @@ import '../services/profile_service.dart';
 /// App station server implementation
 /// Extends the unified base class with Flutter/App-specific features
 class AppStationServer extends StationServerBase
-    with SslMixin, StunMixin, RateLimitMixin, HealthWatchdogMixin {
+    with SslMixin, StunMixin, RateLimitMixin, HealthWatchdogMixin, AtprotoPdsMixin {
 
   // Singleton
   static final AppStationServer _instance = AppStationServer._internal();
@@ -102,6 +103,11 @@ class AppStationServer extends StationServerBase
     // Start health watchdog
     startHealthWatchdog();
 
+    // Start AT Proto PDS if enabled
+    if (settings.atprotoEnabled) {
+      await startAtprotoPds();
+    }
+
     log('INFO', 'App station server started');
   }
 
@@ -113,6 +119,9 @@ class AppStationServer extends StationServerBase
     // Stop HTTPS server
     await stopHttpsServer();
 
+    // Stop AT Proto PDS
+    await stopAtprotoPds();
+
     // Stop health watchdog
     stopHealthWatchdog();
 
@@ -121,8 +130,11 @@ class AppStationServer extends StationServerBase
 
   @override
   Future<bool> handlePlatformRoute(HttpRequest request, String path, String method) async {
-    // Handle App-specific routes here
-    // Return true if handled, false to continue to base routing
+    // AT Proto PDS routes
+    if (isAtprotoRunning) {
+      if (await handleAtprotoRequest(request, path, method)) return true;
+    }
+
     return false;
   }
 
@@ -217,6 +229,9 @@ class AppStationServer extends StationServerBase
       'stun_server_running': isStunRunning,
       'ssl_enabled': settings.enableSsl,
       'ssl_running': isHttpsRunning,
+      'atproto_enabled': settings.atprotoEnabled,
+      'atproto_running': isAtprotoRunning,
+      'atproto_did': atprotoDid,
     };
   }
 }

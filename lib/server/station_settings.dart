@@ -68,6 +68,10 @@ class StationSettings {
   bool smtpRelayStartTls;
   String? dkimPrivateKey;
 
+  // ============ AT Protocol PDS ============
+  bool atprotoEnabled;
+  String? atprotoHandle;
+
   // ============ STUN Server (App-only, CLI can inherit) ============
   bool stunServerEnabled;
   int stunServerPort;
@@ -117,6 +121,8 @@ class StationSettings {
     this.smtpRelayPassword,
     this.smtpRelayStartTls = true,
     this.dkimPrivateKey,
+    this.atprotoEnabled = false,
+    this.atprotoHandle,
     this.stunServerEnabled = true,
     this.stunServerPort = 3478,
   })  : npub = npub ?? _defaultKeys.npub,
@@ -176,6 +182,8 @@ class StationSettings {
       smtpRelayPassword: json['smtpRelayPassword'] as String?,
       smtpRelayStartTls: json['smtpRelayStartTls'] as bool? ?? true,
       dkimPrivateKey: json['dkimPrivateKey'] as String?,
+      atprotoEnabled: json['atprotoEnabled'] as bool? ?? false,
+      atprotoHandle: json['atprotoHandle'] as String?,
       stunServerEnabled: json['stunServerEnabled'] as bool? ?? true,
       stunServerPort: json['stunServerPort'] as int? ?? 3478,
     );
@@ -228,6 +236,8 @@ class StationSettings {
     'smtpRelayPassword': smtpRelayPassword,
     'smtpRelayStartTls': smtpRelayStartTls,
     'dkimPrivateKey': dkimPrivateKey,
+    'atprotoEnabled': atprotoEnabled,
+    'atprotoHandle': atprotoHandle,
     'stunServerEnabled': stunServerEnabled,
     'stunServerPort': stunServerPort,
   };
@@ -277,6 +287,8 @@ class StationSettings {
     String? smtpRelayPassword,
     bool? smtpRelayStartTls,
     String? dkimPrivateKey,
+    bool? atprotoEnabled,
+    String? atprotoHandle,
     bool? stunServerEnabled,
     int? stunServerPort,
   }) {
@@ -325,6 +337,8 @@ class StationSettings {
       smtpRelayPassword: smtpRelayPassword ?? this.smtpRelayPassword,
       smtpRelayStartTls: smtpRelayStartTls ?? this.smtpRelayStartTls,
       dkimPrivateKey: dkimPrivateKey ?? this.dkimPrivateKey,
+      atprotoEnabled: atprotoEnabled ?? this.atprotoEnabled,
+      atprotoHandle: atprotoHandle ?? this.atprotoHandle,
       stunServerEnabled: stunServerEnabled ?? this.stunServerEnabled,
       stunServerPort: stunServerPort ?? this.stunServerPort,
     );

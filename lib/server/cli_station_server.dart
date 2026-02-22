@@ -15,11 +15,12 @@ import 'mixins/ssl_mixin.dart';
 import 'mixins/smtp_mixin.dart';
 import 'mixins/rate_limit_mixin.dart';
 import 'mixins/health_watchdog_mixin.dart';
+import 'mixins/atproto_pds_mixin.dart';
 
 /// CLI station server implementation
 /// Extends the unified base class with CLI-specific features (SMTP, logging to file)
 class CliStationServer extends StationServerBase
-    with SslMixin, SmtpMixin, RateLimitMixin, HealthWatchdogMixin {
+    with SslMixin, SmtpMixin, RateLimitMixin, HealthWatchdogMixin, AtprotoPdsMixin {
 
   // CLI-specific state
   String? _configDir;
@@ -144,6 +145,11 @@ class CliStationServer extends StationServerBase
       await startHttpsServer();
     }
 
+    // Start AT Proto PDS if enabled
+    if (settings.atprotoEnabled) {
+      await startAtprotoPds();
+    }
+
     log('INFO', 'CLI station server started');
   }
 
@@ -154,6 +160,9 @@ class CliStationServer extends StationServerBase
 
     // Stop health watchdog
     stopHealthWatchdog();
+
+    // Stop AT Proto PDS
+    await stopAtprotoPds();
 
     // Stop SMTP server
     await stopSmtpServer();
@@ -188,6 +197,11 @@ class CliStationServer extends StationServerBase
     if (path == '/api/cli' && method == 'POST') {
       await _handleCliCommand(request);
       return true;
+    }
+
+    // AT Proto PDS routes
+    if (isAtprotoRunning) {
+      if (await handleAtprotoRequest(request, path, method)) return true;
     }
 
     return false;
