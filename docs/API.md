@@ -3682,6 +3682,14 @@ Standard AT Protocol XRPC endpoints at `/xrpc/{nsid}`:
 | `com.atproto.server.deleteSession` | POST | Bearer (refresh) | Revoke session |
 | `com.atproto.server.getSession` | GET | Bearer (access) | Get current session info |
 | `com.atproto.identity.resolveHandle` | GET | No | Resolve handle to DID |
+| `com.atproto.repo.createRecord` | POST | Bearer (access) | Create record in collection |
+| `com.atproto.repo.putRecord` | POST | Bearer (access) | Upsert record with explicit rkey |
+| `com.atproto.repo.deleteRecord` | POST | Bearer (access) | Remove record from repo |
+| `com.atproto.repo.getRecord` | GET | No | Fetch record by repo/collection/rkey |
+| `com.atproto.repo.listRecords` | GET | No | Paginated list by collection |
+| `com.atproto.repo.describeRepo` | GET | No | Repo metadata and collections |
+| `com.atproto.repo.applyWrites` | POST | Bearer (access) | Batch create/update/delete |
+| `com.atproto.repo.uploadBlob` | POST | Bearer (access) | Store blob via Blossom |
 
 ### DID Document
 
@@ -3741,19 +3749,62 @@ curl http://localhost:8080/api/atproto/admin-password
 }
 ```
 
-### Testing AT Proto Session Flow
+#### POST /api/atproto/test-record
+
+Creates a test record and reads it back (for verifying repo CRUD).
+
+```bash
+# Create a default test record
+curl -X POST http://localhost:8080/api/atproto/test-record
+
+# Create with custom content
+curl -X POST http://localhost:8080/api/atproto/test-record \
+  -H "Content-Type: application/json" \
+  -d '{"collection": "radio.geogram.blog.post", "record": {"$type": "radio.geogram.blog.post", "text": "Hello!"}}'
+```
+
+**Response:**
+```json
+{
+  "created": {
+    "uri": "at://did:web:station.example.com/radio.geogram.test/3kqfbu2hs4a7o",
+    "cid": "bafyrei..."
+  },
+  "readBack": {
+    "uri": "at://did:web:station.example.com/radio.geogram.test/3kqfbu2hs4a7o",
+    "cid": "bafyrei...",
+    "value": {"$type": "radio.geogram.test", "text": "Test record..."}
+  },
+  "match": true
+}
+```
+
+### Testing AT Proto Session + Repo Flow
 
 ```bash
 # 1. Get admin password
 ADMIN=$(curl -s http://localhost:8080/api/atproto/admin-password | jq -r .password)
 HANDLE=$(curl -s http://localhost:8080/api/atproto/admin-password | jq -r .handle)
+DID=$(curl -s http://localhost:8080/api/atproto/admin-password | jq -r .did)
 
 # 2. Create session
-curl -X POST http://localhost:8080/xrpc/com.atproto.server.createSession \
+TOKEN=$(curl -s -X POST http://localhost:8080/xrpc/com.atproto.server.createSession \
   -H "Content-Type: application/json" \
-  -d "{\"identifier\": \"$HANDLE\", \"password\": \"$ADMIN\"}"
+  -d "{\"identifier\": \"$HANDLE\", \"password\": \"$ADMIN\"}" | jq -r .accessJwt)
 
-# 3. Resolve handle
+# 3. Create a record
+curl -X POST http://localhost:8080/xrpc/com.atproto.repo.createRecord \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "{\"repo\": \"$DID\", \"collection\": \"radio.geogram.blog.post\", \"record\": {\"text\": \"Hello AT Proto!\"}}"
+
+# 4. List records
+curl "http://localhost:8080/xrpc/com.atproto.repo.listRecords?repo=$DID&collection=radio.geogram.blog.post"
+
+# 5. Describe repo
+curl "http://localhost:8080/xrpc/com.atproto.repo.describeRepo?repo=$DID"
+
+# 6. Resolve handle
 curl "http://localhost:8080/xrpc/com.atproto.identity.resolveHandle?handle=$HANDLE"
 ```
 

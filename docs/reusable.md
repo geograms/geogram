@@ -215,6 +215,7 @@ This document catalogs reusable UI components available in the Geogram codebase.
 - [JwtService](#jwtservice) - HS256 JWT session management with refresh rotation
 - [DidService](#didservice) - DID:web document generation with Multikey verification
 - [AtprotoPdsMixin](#atprotopdsmixin) - Shared PDS mixin for station servers
+- [AtUri](#aturi) - AT-URI parser (at://authority/collection/rkey)
 
 ### Stories App Components
 - [SceneEditorCanvas](#sceneeditorcanvas) - Interactive scene canvas for Story Studio
@@ -9105,3 +9106,19 @@ Shared mixin providing AT Protocol PDS lifecycle for both `AppStationServer` and
 - `isAtprotoRunning` → `bool`
 - `atprotoDid` → `String?`
 - `getAtprotoStatus()` → `Map<String, dynamic>` — debug status info
+
+### AtUri
+
+**File:** `lib/atproto/at_uri.dart`
+
+Parser for AT-URI scheme strings (`at://authority/collection/rkey`). Supports DID and handle authorities, optional collection and rkey components.
+
+**API:**
+- `AtUri.parse(String uri)` — parse AT-URI, throws `FormatException` on invalid
+- `AtUri.tryParse(String uri)` → `AtUri?` — parse, returns null on invalid
+- `authority` → `String` — DID or handle
+- `collection` → `String?` — NSID collection name
+- `rkey` → `String?` — record key
+- `isRecord` → `bool` — true if both collection and rkey are present
+- `isDid` → `bool` — true if authority starts with "did:"
+- `toString()` — reconstruct the AT-URI string
