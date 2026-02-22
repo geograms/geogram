@@ -117,6 +117,43 @@ class _SharedBrowserPageState extends State<SharedBrowserPage> {
     }
   }
 
+  /// Resolve hex pubkeys to contact display labels by scanning all contacts
+  Future<Map<String, String>> _resolveHexToLabels(List<String> hexKeys) async {
+    final result = <String, String>{};
+    final remaining = Set<String>.from(hexKeys);
+    try {
+      final appService = AppService();
+      final contactsApp = appService.getAppByType('contacts');
+      if (contactsApp?.storagePath == null) return result;
+      final contactService = ContactService();
+      final profileStorage = appService.profileStorage;
+      if (profileStorage != null) {
+        contactService.setStorage(ScopedProfileStorage.fromAbsolutePath(
+          profileStorage, contactsApp!.storagePath!));
+      } else {
+        contactService.setStorage(FilesystemProfileStorage(contactsApp!.storagePath!));
+      }
+      await contactService.initializeApp(contactsApp.storagePath!);
+
+      await for (final contact in contactService.loadAllContactsStream()) {
+        if (remaining.isEmpty) break;
+        if (contact.npub == null || contact.npub!.isEmpty) continue;
+        try {
+          final hex = NostrCrypto.decodeNpub(contact.npub!);
+          if (remaining.contains(hex)) {
+            final label = contact.displayName.isNotEmpty &&
+                    contact.displayName != contact.callsign
+                ? '${contact.displayName} (${contact.callsign})'
+                : contact.callsign;
+            result[hex] = label;
+            remaining.remove(hex);
+          }
+        } catch (_) {}
+      }
+    } catch (_) {}
+    return result;
+  }
+
   /// Build the restricted access picker widgets (groups + contacts)
   /// allowedReaders is a map of hex pubkey → display label
   List<Widget> _buildRestrictedAccessWidgets({
@@ -201,8 +238,9 @@ class _SharedBrowserPageState extends State<SharedBrowserPage> {
                 try {
                   final hex = NostrCrypto.decodeNpub(fullContact.npub!);
                   if (hex.isNotEmpty) {
-                    final label = fullContact.displayName.isNotEmpty
-                        ? fullContact.displayName
+                    final label = fullContact.displayName.isNotEmpty &&
+                            fullContact.displayName != fullContact.callsign
+                        ? '${fullContact.displayName} (${fullContact.callsign})'
                         : fullContact.callsign;
                     allowedReaders[hex] = label;
                   }
@@ -436,11 +474,13 @@ class _SharedBrowserPageState extends State<SharedBrowserPage> {
     String visibility = folder.visibility.value;
     List<Group> availableGroups = [];
     final selectedGroups = <String>{...folder.allowedGroups};
-    // Initialize allowed readers map: hex pubkey → display label
-    // For existing readers we show truncated hex as label (can't reverse to contact name)
+    // Resolve hex pubkeys to contact display names
     final allowedReaders = <String, String>{};
-    for (final hex in folder.allowedReaders) {
-      allowedReaders[hex] = '${hex.substring(0, 8)}...';
+    if (folder.allowedReaders.isNotEmpty) {
+      final hexToLabel = await _resolveHexToLabels(folder.allowedReaders);
+      for (final hex in folder.allowedReaders) {
+        allowedReaders[hex] = hexToLabel[hex] ?? '${hex.substring(0, 8)}...';
+      }
     }
 
     // Pre-load groups if editing a restricted folder
