@@ -3,6 +3,7 @@
  * License: Apache-2.0
  */
 
+import '../util/chat_format.dart';
 import '../util/reaction_utils.dart';
 
 /// Represents a single chat message following the Geogram chat format specification
@@ -57,7 +58,7 @@ class ChatMessage implements Comparable<ChatMessage> {
     Map<String, List<String>>? reactions,
   }) {
     final now = DateTime.now();
-    final timestamp = formatTimestamp(now);
+    final timestamp = ChatFormat.formatTimestamp(now);
 
     return ChatMessage(
       author: author,
@@ -66,19 +67,6 @@ class ChatMessage implements Comparable<ChatMessage> {
       metadata: metadata,
       reactions: reactions,
     );
-  }
-
-  /// Format DateTime to chat timestamp format: YYYY-MM-DD HH:MM_ss
-  /// Public static method for use by ChatService.editMessage()
-  static String formatTimestamp(DateTime dt) {
-    String year = dt.year.toString().padLeft(4, '0');
-    String month = dt.month.toString().padLeft(2, '0');
-    String day = dt.day.toString().padLeft(2, '0');
-    String hour = dt.hour.toString().padLeft(2, '0');
-    String minute = dt.minute.toString().padLeft(2, '0');
-    String second = dt.second.toString().padLeft(2, '0');
-
-    return '$year-$month-$day $hour:$minute\_$second';
   }
 
   /// Parse timestamp string to DateTime
@@ -379,7 +367,7 @@ class ChatMessage implements Comparable<ChatMessage> {
 
     return ChatMessage(
       author: (json['author'] ?? json['callsign'] ?? 'Unknown').toString(),
-      timestamp: _normalizeTimestamp(json['timestamp']),
+      timestamp: ChatFormat.normalizeTimestamp(json['timestamp']),
       content: (json['content'] ?? json['text'] ?? '').toString(),
       messageType: ChatMessageType.values.firstWhere(
         (type) => type.name == (json['messageType'] as String? ?? 'simple'),
@@ -388,47 +376,6 @@ class ChatMessage implements Comparable<ChatMessage> {
       metadata: metadata,
       reactions: ReactionUtils.normalizeReactionMap(reactions),
     );
-  }
-
-  static String _normalizeTimestamp(dynamic rawTimestamp) {
-    if (rawTimestamp is String && rawTimestamp.isNotEmpty) {
-      // Already in chat format (YYYY-MM-DD HH:MM_ss)
-      if (rawTimestamp.contains('-') && rawTimestamp.contains('_')) {
-        return rawTimestamp;
-      }
-
-      // Numeric string from APIs that return unix timestamps.
-      final parsed = int.tryParse(rawTimestamp);
-      if (parsed != null) {
-        return _epochToChatTimestamp(parsed);
-      }
-
-      // Unknown string format - keep as-is.
-      return rawTimestamp;
-    }
-
-    if (rawTimestamp is num) {
-      return _epochToChatTimestamp(rawTimestamp.toInt());
-    }
-
-    // Fallback to a valid current timestamp to avoid downstream parsing errors.
-    return formatTimestamp(DateTime.now());
-  }
-
-  static String _epochToChatTimestamp(int epochRaw) {
-    var epoch = epochRaw;
-
-    // If value looks like milliseconds, convert to seconds.
-    if (epoch > 1000000000000) {
-      epoch = (epoch / 1000).round();
-    }
-
-    if (epoch <= 0) {
-      return formatTimestamp(DateTime.now());
-    }
-
-    final dt = DateTime.fromMillisecondsSinceEpoch(epoch * 1000);
-    return formatTimestamp(dt);
   }
 
   /// Convert ChatMessage to JSON

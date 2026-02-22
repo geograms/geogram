@@ -38,6 +38,7 @@ import '../models/event.dart';
 import '../models/update_settings.dart';
 import '../util/nostr_event.dart';
 import '../util/nostr_crypto.dart';
+import '../util/chat_format.dart';
 import '../util/alert_folder_utils.dart';
 import '../util/feedback_folder_utils.dart';
 import '../util/reaction_utils.dart';
@@ -3034,8 +3035,7 @@ h2 { font-size: 1.2rem; margin: 0 0 20px 0; }
       // Create the message with the original timestamp from created_at
       ChatMessage message;
       if (createdAt != null) {
-        final dt = DateTime.fromMillisecondsSinceEpoch(createdAt * 1000);
-        final timestampStr = ChatMessage.formatTimestamp(dt);
+        final timestampStr = ChatFormat.epochToTimestamp(createdAt);
         message = ChatMessage(
           author: author,
           timestamp: timestampStr,

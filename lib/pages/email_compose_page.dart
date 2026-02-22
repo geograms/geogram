@@ -14,6 +14,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as p;
 
+import '../util/chat_format.dart';
 import '../models/email_account.dart';
 import '../models/email_message.dart';
 import '../models/email_thread.dart';
@@ -401,7 +402,7 @@ class _EmailComposePageState extends State<EmailComposePage> {
             subject: _subjectController.text.isEmpty
                 ? '(No Subject)'
                 : _subjectController.text,
-            created: EmailMessage.formatTimestamp(DateTime.now()),
+            created: ChatFormat.formatTimestamp(DateTime.now()),
             status: EmailStatus.draft,
             threadId:
                 DateTime.now().millisecondsSinceEpoch.toRadixString(36) +
@@ -514,7 +515,7 @@ class _EmailComposePageState extends State<EmailComposePage> {
         subject: _subjectController.text.isEmpty
             ? '(No Subject)'
             : _subjectController.text,
-        created: EmailMessage.formatTimestamp(DateTime.now()),
+        created: ChatFormat.formatTimestamp(DateTime.now()),
         status: EmailStatus.pending, // Directly to outbox
         threadId:
             DateTime.now().millisecondsSinceEpoch.toRadixString(36) +

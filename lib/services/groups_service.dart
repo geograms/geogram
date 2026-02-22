@@ -10,6 +10,7 @@ import '../models/group_area.dart';
 import '../models/group_application.dart';
 import '../models/reputation_entry.dart';
 import '../models/station_node.dart';
+import '../util/chat_format.dart';
 import '../util/nostr_key_generator.dart';
 import '../util/group_utils.dart';
 import 'log_service.dart';
@@ -592,7 +593,7 @@ class GroupsService {
 
   /// Format timestamp in geogram format
   String _formatTimestamp(DateTime dt) {
-    return GroupUtils.formatTimestamp(dt);
+    return ChatFormat.formatTimestamp(dt);
   }
 
   Future<String> _resolveGroupName(String name) async {

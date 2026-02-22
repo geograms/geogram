@@ -30,6 +30,7 @@ import '../services/group_sync_service.dart';
 import '../services/signing_service.dart';
 import '../services/chat_file_download_manager.dart';
 import '../models/device_source.dart';
+import '../util/chat_format.dart';
 import '../util/nostr_crypto.dart';
 import '../util/nostr_event.dart';
 import '../util/event_bus.dart';
@@ -1620,10 +1621,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
         // Optimistic update - use the SAME timestamp that was sent to the server
         // This ensures deduplication works when the server broadcasts the message back
         // IMPORTANT: Keep in UTC to match how server stores and cache normalizes timestamps
-        final dt = DateTime.fromMillisecondsSinceEpoch(createdAt * 1000, isUtc: true);
-        // Use normalized chat timestamp format: YYYY-MM-DD HH:MM_ss
-        final timestamp = '${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')} '
-            '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}_${dt.second.toString().padLeft(2, '0')}';
+        final timestamp = ChatFormat.epochToTimestamp(createdAt);
 
         final newMessage = StationChatMessage(
           timestamp: timestamp,

@@ -5,6 +5,7 @@
 library;
 
 import '../../models/chat_message.dart';
+import '../../util/chat_format.dart';
 import 'currency.dart';
 
 /// Types of debt ledger entries.
@@ -79,7 +80,7 @@ class DebtEntry implements Comparable<DebtEntry> {
     Map<String, String>? metadata,
   }) {
     final now = DateTime.now();
-    final timestamp = ChatMessage.formatTimestamp(now);
+    final timestamp = ChatFormat.formatTimestamp(now);
 
     return DebtEntry(
       author: author,

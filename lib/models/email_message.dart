@@ -5,6 +5,7 @@
  * Email Message Model - Represents a single message within an email thread
  */
 
+import '../util/chat_format.dart';
 import '../util/reaction_utils.dart';
 
 /// Represents a single message within an email thread.
@@ -50,21 +51,10 @@ class EmailMessage implements Comparable<EmailMessage> {
   }) {
     return EmailMessage(
       author: author,
-      timestamp: formatTimestamp(DateTime.now()),
+      timestamp: ChatFormat.formatTimestamp(DateTime.now()),
       content: content,
       metadata: metadata,
     );
-  }
-
-  /// Format DateTime to timestamp: YYYY-MM-DD HH:MM_ss
-  static String formatTimestamp(DateTime dt) {
-    final year = dt.year.toString().padLeft(4, '0');
-    final month = dt.month.toString().padLeft(2, '0');
-    final day = dt.day.toString().padLeft(2, '0');
-    final hour = dt.hour.toString().padLeft(2, '0');
-    final minute = dt.minute.toString().padLeft(2, '0');
-    final second = dt.second.toString().padLeft(2, '0');
-    return '$year-$month-$day $hour:$minute\_$second';
   }
 
   /// Parse timestamp string to DateTime

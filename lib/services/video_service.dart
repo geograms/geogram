@@ -7,6 +7,7 @@ import 'dart:io';
 
 import '../models/video.dart';
 import '../models/blog_comment.dart';
+import '../util/chat_format.dart';
 import '../util/video_parser.dart';
 import '../util/video_folder_utils.dart';
 import '../util/video_metadata_extractor.dart';
@@ -367,7 +368,7 @@ class VideoService {
 
       // Create video object
       final now = DateTime.now();
-      final timestamp = VideoFolderUtils.formatTimestamp(now);
+      final timestamp = ChatFormat.formatTimestamp(now);
 
       var video = Video(
         id: videoId,
@@ -445,7 +446,7 @@ class VideoService {
 
       // Update fields
       final now = DateTime.now();
-      final editedTimestamp = VideoFolderUtils.formatTimestamp(now);
+      final editedTimestamp = ChatFormat.formatTimestamp(now);
 
       // Handle title updates
       Map<String, String> finalTitles = video.titles;
@@ -643,7 +644,7 @@ class VideoService {
         final folderMetadata = '''
 # FOLDER: $name
 
-CREATED: ${VideoFolderUtils.formatTimestamp(DateTime.now())}
+CREATED: ${ChatFormat.formatTimestamp(DateTime.now())}
 AUTHOR: $targetCallsign
 
 $description

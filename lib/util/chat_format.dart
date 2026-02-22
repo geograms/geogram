@@ -273,6 +273,43 @@ class ChatFormat {
         '_$second';
   }
 
+  /// Convert Unix epoch (seconds) to chat timestamp string (UTC).
+  static String epochToTimestamp(int epochRaw) {
+    var epoch = epochRaw;
+    if (epoch > 1000000000000) {
+      epoch = (epoch / 1000).round();
+    }
+    if (epoch <= 0) {
+      return formatTimestamp(DateTime.now().toUtc());
+    }
+    final dt = DateTime.fromMillisecondsSinceEpoch(epoch * 1000, isUtc: true);
+    return formatTimestamp(dt);
+  }
+
+  /// Normalize a raw timestamp value (string, num, or epoch) to chat format.
+  static String normalizeTimestamp(dynamic rawTimestamp) {
+    if (rawTimestamp is String && rawTimestamp.isNotEmpty) {
+      if (rawTimestamp.contains('-') && rawTimestamp.contains('_')) {
+        return rawTimestamp;
+      }
+      // Try ISO 8601 parse
+      final dtParsed = DateTime.tryParse(rawTimestamp);
+      if (dtParsed != null) {
+        return formatTimestamp(dtParsed.toUtc());
+      }
+      // Numeric string
+      final parsed = int.tryParse(rawTimestamp);
+      if (parsed != null) {
+        return epochToTimestamp(parsed);
+      }
+      return rawTimestamp;
+    }
+    if (rawTimestamp is num) {
+      return epochToTimestamp(rawTimestamp.toInt());
+    }
+    return formatTimestamp(DateTime.now().toUtc());
+  }
+
   /// Parse timestamp string to DateTime (UTC)
   static DateTime parseTimestamp(String timestamp) {
     try {

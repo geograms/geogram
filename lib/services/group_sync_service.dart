@@ -13,7 +13,7 @@ import '../services/chat_service.dart';
 import '../services/app_service.dart';
 import '../services/profile_service.dart';
 import '../services/profile_storage.dart';
-import '../util/group_utils.dart';
+import '../util/chat_format.dart';
 import '../util/nostr_key_generator.dart';
 import 'log_service.dart';
 
@@ -91,7 +91,7 @@ class GroupSyncService {
       if (group.title != folder.name) {
         final updated = group.copyWith(
           title: folder.name,
-          updated: GroupUtils.formatTimestamp(DateTime.now()),
+          updated: ChatFormat.formatTimestamp(DateTime.now()),
         );
         await groupsService.saveGroup(updated);
         group = updated;
@@ -111,7 +111,7 @@ class GroupSyncService {
             callsign: device.callsign,
             npub: npub,
             role: GroupRole.guest,
-            joined: GroupUtils.formatTimestamp(DateTime.now()),
+            joined: ChatFormat.formatTimestamp(DateTime.now()),
           ),
         );
       }
@@ -200,7 +200,7 @@ class GroupSyncService {
           description: group.description.isEmpty
               ? (channel.description ?? '')
               : group.description,
-          updated: GroupUtils.formatTimestamp(DateTime.now()),
+          updated: ChatFormat.formatTimestamp(DateTime.now()),
         );
         await groupsService.saveGroup(updated);
         group = updated;
@@ -345,7 +345,7 @@ class GroupSyncService {
           callsign: callsign,
           npub: entry.key,
           role: entry.value,
-          joined: GroupUtils.formatTimestamp(DateTime.now()),
+          joined: ChatFormat.formatTimestamp(DateTime.now()),
         ),
       );
     }

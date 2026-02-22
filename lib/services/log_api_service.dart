@@ -29,6 +29,7 @@ import '../connection/connection_manager.dart';
 import '../version.dart';
 import '../models/chat_channel.dart';
 import '../models/chat_message.dart';
+import '../util/chat_format.dart';
 import '../util/html_utils.dart';
 import '../util/nostr_event.dart';
 import '../util/nostr_crypto.dart';
@@ -3979,8 +3980,7 @@ function cleanup() {
 
       ChatMessage message;
       if (createdAt != null) {
-        final dt = DateTime.fromMillisecondsSinceEpoch(createdAt * 1000);
-        final timestampStr = ChatMessage.formatTimestamp(dt);
+        final timestampStr = ChatFormat.epochToTimestamp(createdAt);
         message = ChatMessage(
           author: author,
           timestamp: timestampStr,

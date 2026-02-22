@@ -9,6 +9,7 @@ import '../models/forum_section.dart';
 import '../models/forum_thread.dart';
 import '../models/forum_post.dart';
 import '../models/chat_security.dart';
+import '../util/chat_format.dart';
 import 'profile_storage.dart';
 
 /// Service for managing forum collections and posts
@@ -233,7 +234,7 @@ class ForumService {
 
       if (!lines[3].startsWith('CREATED: ')) return null;
       final createdStr = lines[3].substring(9).trim();
-      final created = _parseTimestamp(createdStr);
+      final created = ChatFormat.parseTimestamp(createdStr);
 
       if (!lines[4].startsWith('SECTION: ')) return null;
       final section = lines[4].substring(9).trim();
@@ -249,7 +250,7 @@ class ForumService {
           try {
             final parts = line.trim().substring(2).split(' -- ');
             if (parts.isNotEmpty) {
-              final replyTimestamp = _parseTimestamp(parts[0].trim());
+              final replyTimestamp = ChatFormat.parseTimestamp(parts[0].trim());
               if (replyTimestamp.isAfter(lastReply)) {
                 lastReply = replyTimestamp;
               }
@@ -415,18 +416,6 @@ class ForumService {
       timestamp,
       false,
     );
-  }
-
-  /// Parse timestamp string to DateTime
-  static DateTime _parseTimestamp(String timestamp) {
-    try {
-      String datePart = timestamp.substring(0, 10); // YYYY-MM-DD
-      String timePart = timestamp.substring(11); // HH:MM_ss
-      timePart = timePart.replaceAll('_', ':');
-      return DateTime.parse('${datePart}T$timePart');
-    } catch (e) {
-      return DateTime.now();
-    }
   }
 
   /// Create a new thread

@@ -5,6 +5,7 @@
 /// evidence of a transaction at a specific time and place.
 library;
 
+import '../../util/chat_format.dart';
 import 'currency.dart';
 
 /// Represents a payment receipt.
@@ -167,7 +168,7 @@ class Receipt {
     buffer.writeln();
 
     // Main receipt entry
-    buffer.writeln('> ${formatTimestampForEntry(timestamp)} -- ${payer.callsign}');
+    buffer.writeln('> ${ChatFormat.formatTimestamp(timestamp)} -- ${payer.callsign}');
     buffer.writeln('--> type: receipt');
     buffer.writeln('--> status: ${status.name}');
     buffer.writeln('--> payer: ${payer.callsign}');
@@ -226,7 +227,7 @@ class Receipt {
 
     // Payee confirmation entry
     if (payeeSignature != null) {
-      buffer.writeln('> ${formatTimestampForEntry(payeeSignature!.timestamp)} -- ${payee.callsign}');
+      buffer.writeln('> ${ChatFormat.formatTimestamp(payeeSignature!.timestamp)} -- ${payee.callsign}');
       buffer.writeln('--> type: confirm_receipt');
       buffer.writeln('I confirm receiving this payment.');
       buffer.writeln('--> npub: ${payeeSignature!.npub}');
@@ -236,7 +237,7 @@ class Receipt {
 
     // Witness entries
     for (final witness in witnessSignatures) {
-      buffer.writeln('> ${formatTimestampForEntry(witness.timestamp)} -- ${witness.callsign ?? 'WITNESS'}');
+      buffer.writeln('> ${ChatFormat.formatTimestamp(witness.timestamp)} -- ${witness.callsign ?? 'WITNESS'}');
       buffer.writeln('--> type: witness');
       buffer.writeln('I witness this transaction.');
       buffer.writeln('--> npub: ${witness.npub}');
@@ -245,13 +246,6 @@ class Receipt {
     }
 
     return buffer.toString();
-  }
-
-  /// Format timestamp for entry header (YYYY-MM-DD HH:MM_SS)
-  static String formatTimestampForEntry(DateTime dt) {
-    return '${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')} '
-        '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}_'
-        '${dt.second.toString().padLeft(2, '0')}';
   }
 
   /// Convert to JSON.

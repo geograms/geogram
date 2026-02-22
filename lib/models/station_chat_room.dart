@@ -1,3 +1,4 @@
+import '../util/chat_format.dart';
 import '../util/reaction_utils.dart';
 
 /// Model for a chat room from a remote station
@@ -162,7 +163,7 @@ class StationChatMessage {
     }
 
     return StationChatMessage(
-      timestamp: _normalizeTimestamp(json['timestamp']),
+      timestamp: ChatFormat.normalizeTimestamp(json['timestamp']),
       callsign: (json['callsign'] ?? json['author'] ?? '').toString(),
       content: (json['content'] ?? json['text'] ?? '').toString(),
       roomId: roomId,
@@ -183,47 +184,6 @@ class StationChatMessage {
     if (raw is num) return raw.toInt();
     if (raw is String) return int.tryParse(raw);
     return null;
-  }
-
-  static String _normalizeTimestamp(dynamic rawTimestamp) {
-    if (rawTimestamp is String && rawTimestamp.isNotEmpty) {
-      if (rawTimestamp.contains('-') && rawTimestamp.contains('_')) {
-        return rawTimestamp;
-      }
-
-      final parsed = int.tryParse(rawTimestamp);
-      if (parsed != null) {
-        return _epochToChatTimestamp(parsed);
-      }
-
-      return rawTimestamp;
-    }
-
-    if (rawTimestamp is num) {
-      return _epochToChatTimestamp(rawTimestamp.toInt());
-    }
-
-    return _epochToChatTimestamp(DateTime.now().millisecondsSinceEpoch ~/ 1000);
-  }
-
-  static String _epochToChatTimestamp(int epochRaw) {
-    var epoch = epochRaw;
-    if (epoch > 1000000000000) {
-      epoch = (epoch / 1000).round();
-    }
-
-    if (epoch <= 0) {
-      epoch = DateTime.now().millisecondsSinceEpoch ~/ 1000;
-    }
-
-    final dt = DateTime.fromMillisecondsSinceEpoch(epoch * 1000);
-    final year = dt.year.toString().padLeft(4, '0');
-    final month = dt.month.toString().padLeft(2, '0');
-    final day = dt.day.toString().padLeft(2, '0');
-    final hour = dt.hour.toString().padLeft(2, '0');
-    final minute = dt.minute.toString().padLeft(2, '0');
-    final second = dt.second.toString().padLeft(2, '0');
-    return '$year-$month-$day $hour:$minute\_$second';
   }
 
   /// Create from a NOSTR event
@@ -249,11 +209,8 @@ class StationChatMessage {
       callsign = 'X1${pubkey.substring(0, 4).toUpperCase()}';
     }
 
-    // Format timestamp in geogram format
-    final dt = DateTime.fromMillisecondsSinceEpoch(createdAt * 1000);
-    final timestamp =
-        '${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')} '
-        '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}_${dt.second.toString().padLeft(2, '0')}';
+    // Format timestamp in geogram format (UTC)
+    final timestamp = ChatFormat.epochToTimestamp(createdAt);
 
     return StationChatMessage(
       timestamp: timestamp,

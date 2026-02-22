@@ -17,6 +17,7 @@ import '../utils/default_terms.dart';
 import '../../models/profile.dart';
 import '../../services/signing_service.dart';
 import '../../services/log_service.dart';
+import '../../util/chat_format.dart';
 import '../../util/nostr_crypto.dart';
 import '../../util/nostr_event.dart';
 
@@ -1509,7 +1510,7 @@ class WalletService {
     buffer.writeln();
 
     // Main receipt data
-    buffer.writeln('> ${Receipt.formatTimestampForEntry(receipt.timestamp)} -- ${receipt.payer.callsign}');
+    buffer.writeln('> ${ChatFormat.formatTimestamp(receipt.timestamp)} -- ${receipt.payer.callsign}');
     buffer.writeln('--> type: $entryType');
     buffer.writeln('--> payer: ${receipt.payer.callsign}');
     buffer.writeln('--> payer_npub: ${receipt.payer.npub}');

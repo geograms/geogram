@@ -1045,7 +1045,7 @@ class ChatService {
 
     // Create the edited_at timestamp
     final now = DateTime.now();
-    final editedAt = ChatMessage.formatTimestamp(now);
+    final editedAt = ChatFormat.formatTimestamp(now);
 
     // Create updated message with new content, edited_at, and new signature
     final updatedMetadata = Map<String, String>.from(targetMessage.metadata);

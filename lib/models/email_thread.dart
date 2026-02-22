@@ -5,6 +5,7 @@
  * Email Thread Model - Represents an email conversation with header and messages
  */
 
+import '../util/chat_format.dart';
 import 'email_message.dart';
 
 /// Email status values
@@ -132,7 +133,7 @@ class EmailThread implements Comparable<EmailThread> {
       cc: cc ?? [],
       bcc: bcc ?? [],
       subject: subject,
-      created: EmailMessage.formatTimestamp(now),
+      created: ChatFormat.formatTimestamp(now),
       status: EmailStatus.draft,
       threadId: _generateThreadId(),
       labels: [],

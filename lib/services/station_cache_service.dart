@@ -8,6 +8,7 @@ import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import '../models/station_chat_room.dart';
 import '../models/chat_message.dart';
+import '../util/chat_format.dart';
 import '../services/chat_service.dart';
 import 'log_service.dart';
 import 'storage_config.dart';
@@ -420,26 +421,8 @@ class RelayCacheService {
   }
 
   /// Normalize timestamp to chat format: YYYY-MM-DD HH:MM_ss
-  /// Handles ISO 8601 formats:
-  ///   2025-12-11T07:51:59.000Z -> 2025-12-11 07:51_59
-  ///   2025-12-11T07:51:59 -> 2025-12-11 07:51_59
-  ///   Already correct format passes through unchanged
   String _normalizeToChatTimestamp(String timestamp) {
-    // Already in correct format: YYYY-MM-DD HH:MM_ss (19 chars, with underscore)
-    if (timestamp.length == 19 && timestamp.contains('_')) {
-      return timestamp;
-    }
-
-    // Try to parse as ISO 8601
-    final parsed = DateTime.tryParse(timestamp);
-    if (parsed != null) {
-      // Convert to chat format: YYYY-MM-DD HH:MM_ss
-      return '${parsed.year}-${parsed.month.toString().padLeft(2, '0')}-${parsed.day.toString().padLeft(2, '0')} '
-          '${parsed.hour.toString().padLeft(2, '0')}:${parsed.minute.toString().padLeft(2, '0')}_${parsed.second.toString().padLeft(2, '0')}';
-    }
-
-    // Return as-is if can't parse
-    return timestamp;
+    return ChatFormat.normalizeTimestamp(timestamp);
   }
 
   /// Convert StationChatMessage to ChatMessage for export

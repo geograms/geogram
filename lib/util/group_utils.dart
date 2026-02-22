@@ -24,14 +24,4 @@ class GroupUtils {
     return sanitized;
   }
 
-  /// Format timestamp in geogram format (YYYY-MM-DD HH:MM_ss).
-  static String formatTimestamp(DateTime dt) {
-    final year = dt.year.toString().padLeft(4, '0');
-    final month = dt.month.toString().padLeft(2, '0');
-    final day = dt.day.toString().padLeft(2, '0');
-    final hour = dt.hour.toString().padLeft(2, '0');
-    final minute = dt.minute.toString().padLeft(2, '0');
-    final second = dt.second.toString().padLeft(2, '0');
-    return '$year-$month-$day $hour:$minute\_$second';
-  }
 }
