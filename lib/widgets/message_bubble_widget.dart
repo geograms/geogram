@@ -274,15 +274,10 @@ class _MessageBubbleWidgetState extends State<MessageBubbleWidget> {
     // Get sender's device info (for color and nickname)
     final device = !isOwnMessage ? DevicesService().getDevice(widget.message.author) : null;
 
-    final Color bubbleColor;
-    final Color textColor;
-    if (isOwnMessage) {
-      bubbleColor = theme.colorScheme.primaryContainer;
-      textColor = theme.colorScheme.onPrimaryContainer;
-    } else {
-      bubbleColor = _getBubbleColor(device?.preferredColor, theme);
-      textColor = _getTextColor(device?.preferredColor, theme);
-    }
+    final Color bubbleColor = isOwnMessage
+        ? const Color(0xFF2B5278)
+        : const Color(0xFF1E2D3D);
+    const Color textColor = Color(0xFFFFFFFF);
 
     final hasActions = (widget.onQuote != null) || (widget.onHide != null) || (widget.canDelete && widget.onDelete != null) || (widget.canEdit && widget.onEdit != null);
     final isImageAttachment = _isImageAttachment();
@@ -302,7 +297,7 @@ class _MessageBubbleWidgetState extends State<MessageBubbleWidget> {
     return Align(
       alignment: isOwnMessage ? Alignment.centerRight : Alignment.centerLeft,
       child: Container(
-        margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+        margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
         constraints: BoxConstraints(
           maxWidth: MediaQuery.of(context).size.width * 0.7,
         ),
@@ -310,40 +305,59 @@ class _MessageBubbleWidgetState extends State<MessageBubbleWidget> {
           crossAxisAlignment:
               isOwnMessage ? CrossAxisAlignment.end : CrossAxisAlignment.start,
           children: [
-            // Author name (only for group chats and other people's messages)
-            if (widget.isGroupChat && !isOwnMessage)
-              Padding(
-                padding: const EdgeInsets.only(left: 12, bottom: 4),
-                child: Builder(builder: (context) {
-                  final authorNickname = device?.nickname ?? widget.contactNickname;
-                  final isMod = widget.message.metadata['is_mod'] == 'true';
-                  final baseName = authorNickname != null
-                      ? '$authorNickname (${widget.message.author})'
-                      : widget.message.author;
-                  return Text(
-                    isMod ? '$baseName (mod)' : baseName,
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  );
-                }),
-              ),
             // Message bubble
             InkWell(
               onLongPress: () => _showMessageOptions(context),
+              borderRadius: BorderRadius.only(
+                topLeft: const Radius.circular(17),
+                topRight: const Radius.circular(17),
+                bottomLeft: Radius.circular(isOwnMessage ? 17 : 4),
+                bottomRight: Radius.circular(isOwnMessage ? 4 : 17),
+              ),
               child: Container(
                 padding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 10,
+                  horizontal: 12,
+                  vertical: 8,
                 ),
                 decoration: BoxDecoration(
                   color: bubbleColor,
-                  borderRadius: BorderRadius.circular(18),
+                  borderRadius: BorderRadius.only(
+                    topLeft: const Radius.circular(17),
+                    topRight: const Radius.circular(17),
+                    bottomLeft: Radius.circular(isOwnMessage ? 17 : 4),
+                    bottomRight: Radius.circular(isOwnMessage ? 4 : 17),
+                  ),
+                  boxShadow: const [
+                    BoxShadow(
+                      color: Color(0x12000000),
+                      blurRadius: 2,
+                      offset: Offset(0, 1),
+                    ),
+                  ],
                 ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
+                    // Author name inside bubble (Telegram style)
+                    if (widget.isGroupChat && !isOwnMessage)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 2),
+                        child: Builder(builder: (context) {
+                          final authorNickname = device?.nickname ?? widget.contactNickname;
+                          final isMod = widget.message.metadata['is_mod'] == 'true';
+                          final baseName = authorNickname != null
+                              ? '$authorNickname (${widget.message.author})'
+                              : widget.message.author;
+                          return Text(
+                            isMod ? '$baseName (mod)' : baseName,
+                            style: TextStyle(
+                              color: _getAuthorNameColor(widget.message.author),
+                              fontWeight: FontWeight.bold,
+                              fontSize: 13,
+                            ),
+                          );
+                        }),
+                      ),
                     if (widget.isHidden)
                       _buildHiddenMessage(theme, textColor)
                     else ...[
@@ -396,6 +410,7 @@ class _MessageBubbleWidgetState extends State<MessageBubbleWidget> {
                           widget.message.content,
                           theme.textTheme.bodyMedium?.copyWith(
                             color: textColor,
+                            fontSize: 16,
                           ),
                         ),
                       // Metadata chips (file, location, poll - but NOT signature)
@@ -416,8 +431,10 @@ class _MessageBubbleWidgetState extends State<MessageBubbleWidget> {
                           Text(
                             widget.message.displayTime,
                             style: theme.textTheme.bodySmall?.copyWith(
-                              color: textColor.withOpacity(0.7),
-                              fontSize: 11,
+                              color: isOwnMessage
+                                  ? const Color(0xFF6EB2E4)
+                                  : const Color(0xFF7D8B97),
+                              fontSize: 12,
                             ),
                           ),
                           // Verified indicator (signature verified by server)
@@ -1391,72 +1408,18 @@ class _MessageBubbleWidgetState extends State<MessageBubbleWidget> {
     );
   }
 
-  /// Convert color name to Material Color with appropriate shade for bubble background
-  Color _getBubbleColor(String? colorName, ThemeData theme) {
-    if (colorName == null || colorName.isEmpty) {
-      return theme.colorScheme.surfaceVariant;
-    }
+  /// Telegram-style author name color palette (7 colors, deterministic per callsign)
+  static const _authorNameColors = [
+    Color(0xFFCC5049),
+    Color(0xFFD67722),
+    Color(0xFF955CDB),
+    Color(0xFF40A920),
+    Color(0xFF309EBA),
+    Color(0xFF368AD1),
+    Color(0xFFC7508B),
+  ];
 
-    final MaterialColor baseColor;
-    switch (colorName.toLowerCase()) {
-      case 'red':
-        baseColor = Colors.red;
-        break;
-      case 'green':
-        baseColor = Colors.green;
-        break;
-      case 'yellow':
-        baseColor = Colors.amber;
-        break;
-      case 'purple':
-        baseColor = Colors.purple;
-        break;
-      case 'orange':
-        baseColor = Colors.orange;
-        break;
-      case 'pink':
-        baseColor = Colors.pink;
-        break;
-      case 'cyan':
-        baseColor = Colors.cyan;
-        break;
-      case 'blue':
-        baseColor = Colors.blue;
-        break;
-      default:
-        return theme.colorScheme.surfaceVariant;
-    }
-
-    // Use shade100 for a subtle bubble background
-    return baseColor.shade100;
-  }
-
-  /// Get high-contrast text color for bubble based on preferred color
-  Color _getTextColor(String? colorName, ThemeData theme) {
-    if (colorName == null || colorName.isEmpty) {
-      return theme.colorScheme.onSurfaceVariant;
-    }
-
-    // Use shade900 (very dark) for high contrast on shade100 backgrounds
-    switch (colorName.toLowerCase()) {
-      case 'red':
-        return Colors.red.shade900;
-      case 'green':
-        return Colors.green.shade900;
-      case 'yellow':
-        return Colors.amber.shade900;
-      case 'purple':
-        return Colors.purple.shade900;
-      case 'orange':
-        return Colors.orange.shade900;
-      case 'pink':
-        return Colors.pink.shade900;
-      case 'cyan':
-        return Colors.cyan.shade900;
-      case 'blue':
-        return Colors.blue.shade900;
-      default:
-        return theme.colorScheme.onSurfaceVariant;
-    }
+  Color _getAuthorNameColor(String callsign) {
+    return _authorNameColors[callsign.hashCode.abs() % _authorNameColors.length];
   }
 }

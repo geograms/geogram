@@ -340,37 +340,30 @@ class _MessageListWidgetState extends State<MessageListWidget> {
 
     if (difference == 0) return 'Today';
     if (difference == -1) return 'Yesterday';
-    return '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
+    const months = ['January', 'February', 'March', 'April', 'May', 'June',
+        'July', 'August', 'September', 'October', 'November', 'December'];
+    final monthName = months[date.month - 1];
+    if (date.year == now.year) return '$monthName ${date.day}';
+    return '$monthName ${date.day}, ${date.year}';
   }
 
   Widget _buildDateSeparator(ThemeData theme, String label) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 12),
-      child: Row(
-        children: [
-          Expanded(
-            child: Divider(
-              color: theme.colorScheme.outlineVariant,
-              thickness: 1,
-            ),
+    return Center(
+      child: Container(
+        margin: const EdgeInsets.symmetric(vertical: 10),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+        decoration: BoxDecoration(
+          color: const Color(0x2B525A6B),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Text(
+          label,
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 13,
+            fontWeight: FontWeight.w600,
           ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            child: Text(
-              label,
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ),
-          Expanded(
-            child: Divider(
-              color: theme.colorScheme.outlineVariant,
-              thickness: 1,
-            ),
-          ),
-        ],
+        ),
       ),
     );
   }
