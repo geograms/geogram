@@ -8,6 +8,7 @@
 use crate::handlers;
 use crate::types::AuthState;
 
+use presage::libsignal_service::prelude::Uuid;
 use presage::Manager;
 use presage_store_sqlite::SqliteStore;
 
@@ -38,6 +39,9 @@ pub struct SharedState {
 
     /// Outbound channel sender — push events/responses here.
     pub out_tx: mpsc::UnboundedSender<String>,
+
+    /// Our own UUID (ACI), set after successful link/registration.
+    pub self_uuid: Mutex<Option<Uuid>>,
 }
 
 /// The bridge object held behind the opaque FFI pointer.
@@ -78,6 +82,7 @@ impl SignalBridge {
             db_path: Mutex::new(None),
             device_name: Mutex::new("Geogram".to_string()),
             out_tx,
+            self_uuid: Mutex::new(None),
         });
 
         // Spawn the dispatch loop on a dedicated thread with a LocalSet.
@@ -158,7 +163,7 @@ impl SignalBridge {
     }
 
     /// Parse a JSON request and route by `@type`.
-    async fn handle_request(state: &SharedState, json: &str) {
+    async fn handle_request(state: &Arc<SharedState>, json: &str) {
         let val: serde_json::Value = match serde_json::from_str(json) {
             Ok(v) => v,
             Err(e) => {
@@ -177,7 +182,7 @@ impl SignalBridge {
                 handlers::set_signal_parameters(state, &val, extra).await;
             }
             "requestLinkDevice" => {
-                handlers::request_link_device(state, extra).await;
+                handlers::request_link_device(state.clone(), extra).await;
             }
             "getConversations" => {
                 handlers::get_conversations(state, extra).await;

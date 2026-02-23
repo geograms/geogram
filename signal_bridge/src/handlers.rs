@@ -4,10 +4,12 @@
 //! optional `@extra` field for request/response correlation.
 
 use crate::bridge::SharedState;
+use std::sync::Arc;
 use crate::types::AuthState;
 
 use base64::Engine as _;
 use futures::channel::oneshot;
+use futures::StreamExt;
 use presage::libsignal_service::content::ContentBody;
 use presage::libsignal_service::prelude::Uuid;
 use presage::libsignal_service::proto::DataMessage;
@@ -15,6 +17,7 @@ use presage::libsignal_service::protocol::{Aci, ServiceId};
 use presage::libsignal_service::sender::AttachmentSpec;
 use presage::manager::Registered;
 use presage::model::identity::OnNewIdentity;
+use presage::model::messages::Received;
 use presage::store::{ContentsStore, Thread};
 use presage::Manager;
 use presage_store_sqlite::SqliteStore;
@@ -50,15 +53,11 @@ fn emit_error(state: &SharedState, extra: Option<Value>, code: i32, message: &st
     );
 }
 
-/// Helper: emit auth state change event.
+/// Helper: emit auth state change event (flat structure for Dart).
 fn emit_auth_state(state: &SharedState, auth: &AuthState) {
-    emit(
-        state,
-        json!({
-            "@type": "updateAuthState",
-            "auth_state": auth.to_json(),
-        }),
-    );
+    let mut obj = auth.to_json();
+    obj["@type"] = serde_json::Value::String("updateAuthState".to_string());
+    emit(state, obj);
 }
 
 /// Helper: get current timestamp in milliseconds.
@@ -77,6 +76,79 @@ fn b64_encode(data: &[u8]) -> String {
 /// Helper: base64 decode string.
 fn b64_decode(s: &str) -> Result<Vec<u8>, base64::DecodeError> {
     base64::engine::general_purpose::STANDARD.decode(s)
+}
+
+/// Helper: read conversation/chat ID from request (Dart sends `conversation_id`,
+/// but also accept `chat_id` for backward compat).
+fn get_conversation_id<'a>(val: &'a Value) -> Option<&'a str> {
+    val["conversation_id"]
+        .as_str()
+        .or_else(|| val["chat_id"].as_str())
+}
+
+/// Background receive loop: consumes incoming messages from Signal servers,
+/// stores them in the SQLite store, and emits events to the Dart side.
+async fn run_receive_loop(
+    mut manager: Manager<SqliteStore, Registered>,
+    out_tx: tokio::sync::mpsc::UnboundedSender<String>,
+    self_uuid: Option<Uuid>,
+) {
+    tracing::info!("receive_loop: starting receive_messages...");
+
+    let stream = match manager.receive_messages().await {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!("receive_loop: receive_messages FAILED: {}", e);
+            let _ = out_tx.send(
+                json!({
+                    "@type": "updateSyncComplete",
+                    "success": false,
+                    "error": format!("{}", e),
+                })
+                .to_string(),
+            );
+            return;
+        }
+    };
+
+    tracing::info!("receive_loop: stream opened, processing events...");
+    futures::pin_mut!(stream);
+
+    while let Some(received) = stream.next().await {
+        match received {
+            Received::Contacts => {
+                tracing::info!("receive_loop: contacts synced");
+                let _ = out_tx.send(
+                    json!({
+                        "@type": "updateContacts",
+                    })
+                    .to_string(),
+                );
+            }
+            Received::Content(content) => {
+                let msg_json = content_to_json(&content, self_uuid);
+                let _ = out_tx.send(
+                    json!({
+                        "@type": "updateNewMessage",
+                        "message": msg_json,
+                    })
+                    .to_string(),
+                );
+            }
+            Received::QueueEmpty => {
+                tracing::info!("receive_loop: queue empty (initial sync complete)");
+                let _ = out_tx.send(
+                    json!({
+                        "@type": "updateSyncComplete",
+                        "success": true,
+                    })
+                    .to_string(),
+                );
+            }
+        }
+    }
+
+    tracing::info!("receive_loop: stream ended");
 }
 
 // ---------------------------------------------------------------------------
@@ -120,14 +192,18 @@ pub async fn set_signal_parameters(
 // requestLinkDevice
 // ---------------------------------------------------------------------------
 
-/// Start the secondary device linking flow.
-/// Emits `updateAuthState` with `waitingQrScan` containing the provisioning URL.
-pub async fn request_link_device(state: &SharedState, extra: Option<Value>) {
+/// Start the secondary device linking flow, or reconnect an existing registration.
+///
+/// 1. Opens the SQLite store.
+/// 2. Tries `Manager::load_registered()` — if device is already linked, emits
+///    `ready` and starts the receive loop immediately.
+/// 3. Otherwise, falls back to `link_secondary_device()` for QR-code provisioning.
+pub async fn request_link_device(state: Arc<SharedState>, extra: Option<Value>) {
     let db_path = match state.db_path.lock().unwrap().clone() {
         Some(p) => p,
         None => {
             emit_error(
-                state,
+                &state,
                 extra,
                 400,
                 "call setSignalParameters before requestLinkDevice",
@@ -137,37 +213,76 @@ pub async fn request_link_device(state: &SharedState, extra: Option<Value>) {
     };
     let device_name = state.device_name.lock().unwrap().clone();
 
-    // Create the provisioning URL channel
-    let (tx, rx) = oneshot::channel::<Url>();
-
     // Clone out_tx for use inside the spawned task
     let out_tx = state.out_tx.clone();
 
-    // Convert db_path to a sqlite: URL string for SqliteStore::open
+    // Convert db_path to a sqlite: URL string for SqliteStore
     let db_url = format!(
         "sqlite:{}",
         db_path.join("signal.db").to_string_lossy()
     );
 
-    tokio::task::spawn_local(async move {
-        // Open/create the SQLite store
-        let store = match SqliteStore::open(&db_url, OnNewIdentity::Trust).await {
-            Ok(s) => s,
-            Err(e) => {
-                let _ = out_tx.send(
-                    json!({
-                        "@type": "updateAuthState",
-                        "auth_state": AuthState::Error {
-                            message: format!("failed to open store: {}", e),
-                        }.to_json(),
-                    })
-                    .to_string(),
-                );
-                return;
-            }
-        };
+    tracing::info!("requestLinkDevice: db_url={}", db_url);
 
-        // Start linking as secondary device
+    // Open/create the SQLite store
+    tracing::info!("requestLinkDevice: opening SQLite store...");
+    let store = match SqliteStore::open_with_passphrase(&db_url, None, OnNewIdentity::Trust).await {
+        Ok(s) => {
+            tracing::info!("requestLinkDevice: store opened OK");
+            s
+        }
+        Err(e) => {
+            tracing::error!("requestLinkDevice: store open FAILED: {}", e);
+            let mut obj = AuthState::Error {
+                message: format!("failed to open store: {}", e),
+            }
+            .to_json();
+            obj["@type"] = serde_json::Value::String("updateAuthState".to_string());
+            emit(&state, obj);
+            emit_response(&state, extra, json!({"@type": "error", "code": 500, "message": "store open failed"}));
+            return;
+        }
+    };
+
+    // --- Try loading an existing registration first ---
+    tracing::info!("requestLinkDevice: trying load_registered...");
+    match Manager::load_registered(store.clone()).await {
+        Ok(manager) => {
+            tracing::info!("requestLinkDevice: already registered, skipping QR flow");
+
+            // Store our own UUID for is_outgoing detection
+            let self_uuid_val = manager.registration_data().service_ids.aci;
+            *state.self_uuid.lock().unwrap() = Some(self_uuid_val);
+
+            // Store a clone for query/send handlers
+            MANAGER_SLOT.with(|slot| {
+                slot.borrow_mut().replace(manager.clone());
+            });
+
+            // Emit ready
+            let ready = AuthState::Ready;
+            *state.auth_state.lock().unwrap() = ready.clone();
+            emit_auth_state(&state, &ready);
+            emit_response(&state, extra, json!({"@type": "ok"}));
+
+            // Start the receive loop in the background
+            let recv_tx = out_tx.clone();
+            tokio::task::spawn_local(async move {
+                run_receive_loop(manager, recv_tx, Some(self_uuid_val)).await;
+            });
+            return;
+        }
+        Err(e) => {
+            tracing::info!("requestLinkDevice: not registered ({}), proceeding with QR linking", e);
+        }
+    }
+
+    // --- Fresh linking via QR code ---
+    let (tx, rx) = oneshot::channel::<Url>();
+
+    let state_for_spawn = Arc::clone(&state);
+    tokio::task::spawn_local(async move {
+        tracing::info!("requestLinkDevice: calling link_secondary_device...");
         let manager = match Manager::link_secondary_device(
             store,
             presage::libsignal_service::configuration::SignalServers::Production,
@@ -176,34 +291,38 @@ pub async fn request_link_device(state: &SharedState, extra: Option<Value>) {
         )
         .await
         {
-            Ok(m) => m,
+            Ok(m) => {
+                tracing::info!("requestLinkDevice: link_secondary_device OK");
+                m
+            }
             Err(e) => {
-                let _ = out_tx.send(
-                    json!({
-                        "@type": "updateAuthState",
-                        "auth_state": AuthState::Error {
-                            message: format!("linking failed: {}", e),
-                        }.to_json(),
-                    })
-                    .to_string(),
-                );
+                tracing::error!("requestLinkDevice: link_secondary_device FAILED: {}", e);
+                let mut obj = AuthState::Error {
+                    message: format!("linking failed: {}", e),
+                }
+                .to_json();
+                obj["@type"] = serde_json::Value::String("updateAuthState".to_string());
+                let _ = out_tx.send(obj.to_string());
                 return;
             }
         };
 
-        // Store the manager in the thread-local slot
+        // Store our own UUID for is_outgoing detection
+        let self_uuid_val = manager.registration_data().service_ids.aci;
+        *state_for_spawn.self_uuid.lock().unwrap() = Some(self_uuid_val);
+
+        // Store a clone for query/send handlers
         MANAGER_SLOT.with(|slot| {
-            slot.borrow_mut().replace(manager);
+            slot.borrow_mut().replace(manager.clone());
         });
 
-        // Linking succeeded — emit ready state
-        let _ = out_tx.send(
-            json!({
-                "@type": "updateAuthState",
-                "auth_state": AuthState::Ready.to_json(),
-            })
-            .to_string(),
-        );
+        // Emit ready state
+        let mut obj = AuthState::Ready.to_json();
+        obj["@type"] = serde_json::Value::String("updateAuthState".to_string());
+        let _ = out_tx.send(obj.to_string());
+
+        // Start the receive loop with the original manager
+        run_receive_loop(manager, out_tx, Some(self_uuid_val)).await;
     });
 
     // Wait for the provisioning URL on this task
@@ -215,10 +334,10 @@ pub async fn request_link_device(state: &SharedState, extra: Option<Value>) {
 
             // Update shared auth state
             *state.auth_state.lock().unwrap() = qr_state.clone();
-            emit_auth_state(state, &qr_state);
+            emit_auth_state(&state, &qr_state);
 
             emit_response(
-                state,
+                &state,
                 extra,
                 json!({
                     "@type": "linkDeviceQrCode",
@@ -228,7 +347,7 @@ pub async fn request_link_device(state: &SharedState, extra: Option<Value>) {
         }
         Err(_) => {
             emit_error(
-                state,
+                &state,
                 extra,
                 500,
                 "provisioning channel closed unexpectedly",
@@ -348,14 +467,14 @@ pub async fn get_messages(state: &SharedState, val: &Value, extra: Option<Value>
         }
     };
 
-    let chat_id = match val["chat_id"].as_str() {
+    let chat_id = match get_conversation_id(val) {
         Some(id) => id,
         None => {
-            emit_error(state, extra, 400, "chat_id is required");
+            emit_error(state, extra, 400, "conversation_id is required");
             return;
         }
     };
-    let chat_type = val["chat_type"].as_str().unwrap_or("direct");
+    let chat_type = val["chat_type"].as_str().unwrap_or("auto");
 
     let thread = match parse_thread(chat_id, chat_type) {
         Ok(t) => t,
@@ -365,13 +484,27 @@ pub async fn get_messages(state: &SharedState, val: &Value, extra: Option<Value>
         }
     };
 
+    let self_uuid = *state.self_uuid.lock().unwrap();
+    let limit = val["limit"].as_u64().unwrap_or(50) as usize;
+    let before_timestamp = val["before_timestamp"].as_u64();
+
     let store = manager.store();
     match store.messages(&thread, ..).await {
         Ok(messages) => {
             let mut msg_list = Vec::new();
             for result in messages {
                 if let Ok(msg) = result {
-                    msg_list.push(content_to_json(&msg));
+                    let ts = msg.metadata.timestamp;
+                    // Filter by before_timestamp if specified
+                    if let Some(before_ts) = before_timestamp {
+                        if ts >= before_ts {
+                            continue;
+                        }
+                    }
+                    msg_list.push(content_to_json(&msg, self_uuid));
+                    if msg_list.len() >= limit {
+                        break;
+                    }
                 }
             }
 
@@ -380,7 +513,7 @@ pub async fn get_messages(state: &SharedState, val: &Value, extra: Option<Value>
                 extra,
                 json!({
                     "@type": "messages",
-                    "chat_id": chat_id,
+                    "conversation_id": chat_id,
                     "messages": msg_list,
                 }),
             );
@@ -397,6 +530,7 @@ pub async fn get_messages(state: &SharedState, val: &Value, extra: Option<Value>
 }
 
 /// Parse a chat_id + chat_type into a Thread.
+/// When chat_type is "auto" or empty, auto-detect: try UUID first, then base64 group key.
 fn parse_thread(chat_id: &str, chat_type: &str) -> Result<Thread, String> {
     match chat_type {
         "group" => {
@@ -408,22 +542,41 @@ fn parse_thread(chat_id: &str, chat_type: &str) -> Result<Thread, String> {
             key.copy_from_slice(&bytes[..32]);
             Ok(Thread::Group(key))
         }
-        _ => {
+        "direct" => {
             let uuid =
                 Uuid::parse_str(chat_id).map_err(|_| "invalid UUID".to_string())?;
             Ok(Thread::Contact(uuid))
+        }
+        _ => {
+            // Auto-detect: try UUID first, then base64 group key
+            if let Ok(uuid) = Uuid::parse_str(chat_id) {
+                return Ok(Thread::Contact(uuid));
+            }
+            if let Ok(bytes) = b64_decode(chat_id) {
+                if bytes.len() >= 32 {
+                    let mut key = [0u8; 32];
+                    key.copy_from_slice(&bytes[..32]);
+                    return Ok(Thread::Group(key));
+                }
+            }
+            Err(format!("cannot parse '{}' as UUID or group key", chat_id))
         }
     }
 }
 
 /// Convert a presage Content to our JSON message format.
-fn content_to_json(content: &presage::libsignal_service::content::Content) -> Value {
+fn content_to_json(content: &presage::libsignal_service::content::Content, self_uuid: Option<Uuid>) -> Value {
     let sender_uuid = content.metadata.sender.raw_uuid().to_string();
     let timestamp = content.metadata.timestamp;
+
+    let is_outgoing = self_uuid
+        .map(|su| content.metadata.sender.raw_uuid() == su)
+        .unwrap_or(false);
 
     let mut msg = json!({
         "sender_uuid": sender_uuid,
         "timestamp": timestamp,
+        "is_outgoing": is_outgoing,
     });
 
     // Extract text from the body if it's a DataMessage
@@ -480,10 +633,10 @@ pub async fn send_message(state: &SharedState, val: &Value, extra: Option<Value>
         }
     };
 
-    let chat_id = match val["chat_id"].as_str() {
+    let chat_id = match get_conversation_id(val) {
         Some(id) => id,
         None => {
-            emit_error(state, extra, 400, "chat_id is required");
+            emit_error(state, extra, 400, "conversation_id is required");
             return;
         }
     };
@@ -494,7 +647,7 @@ pub async fn send_message(state: &SharedState, val: &Value, extra: Option<Value>
             return;
         }
     };
-    let chat_type = val["chat_type"].as_str().unwrap_or("direct");
+    let chat_type = val["chat_type"].as_str().unwrap_or("auto");
     let timestamp = now_ms();
 
     let mut dm = DataMessage::default();
@@ -512,19 +665,38 @@ pub async fn send_message(state: &SharedState, val: &Value, extra: Option<Value>
         dm.quote = Some(quote);
     }
 
+    // Capture quote fields before sending
+    let quote_ts = val["quote_timestamp"].as_u64();
+    let quote_text_str = val["quote_text"].as_str().map(|s| s.to_string());
+
     let result = send_dm_to(&mut manager, chat_id, chat_type, dm, timestamp).await;
 
     match result {
         Ok(()) => {
-            emit_response(
-                state,
-                extra,
-                json!({
-                    "@type": "messageSent",
-                    "chat_id": chat_id,
-                    "timestamp": timestamp,
-                }),
-            );
+            let self_uuid_str = state
+                .self_uuid
+                .lock()
+                .unwrap()
+                .map(|u| u.to_string())
+                .unwrap_or_default();
+
+            let mut resp = json!({
+                "@type": "message",
+                "conversation_id": chat_id,
+                "timestamp": timestamp,
+                "text": text,
+                "sender_uuid": self_uuid_str,
+                "is_outgoing": true,
+                "content_type": "text",
+            });
+            if let Some(qt) = quote_ts {
+                resp["quote_timestamp"] = json!(qt);
+            }
+            if let Some(ref qt) = quote_text_str {
+                resp["quote_text"] = json!(qt);
+            }
+
+            emit_response(state, extra, resp);
         }
         Err(msg) => {
             emit_error(state, extra, 500, &msg);
@@ -578,10 +750,10 @@ pub async fn send_attachment(state: &SharedState, val: &Value, extra: Option<Val
         }
     };
 
-    let chat_id = match val["chat_id"].as_str() {
+    let chat_id = match get_conversation_id(val) {
         Some(id) => id,
         None => {
-            emit_error(state, extra, 400, "chat_id is required");
+            emit_error(state, extra, 400, "conversation_id is required");
             return;
         }
     };
@@ -592,7 +764,7 @@ pub async fn send_attachment(state: &SharedState, val: &Value, extra: Option<Val
             return;
         }
     };
-    let chat_type = val["chat_type"].as_str().unwrap_or("direct");
+    let chat_type = val["chat_type"].as_str().unwrap_or("auto");
     let caption = val["caption"].as_str().map(|s| s.to_string());
     let content_type = val["content_type"]
         .as_str()
@@ -701,10 +873,10 @@ pub async fn send_reaction(state: &SharedState, val: &Value, extra: Option<Value
         }
     };
 
-    let chat_id = match val["chat_id"].as_str() {
+    let chat_id = match get_conversation_id(val) {
         Some(id) => id,
         None => {
-            emit_error(state, extra, 400, "chat_id is required");
+            emit_error(state, extra, 400, "conversation_id is required");
             return;
         }
     };
@@ -723,7 +895,7 @@ pub async fn send_reaction(state: &SharedState, val: &Value, extra: Option<Value
         }
     };
     let target_uuid = val["target_sender_uuid"].as_str().unwrap_or("");
-    let chat_type = val["chat_type"].as_str().unwrap_or("direct");
+    let chat_type = val["chat_type"].as_str().unwrap_or("auto");
     let remove = val["remove"].as_bool().unwrap_or(false);
     let timestamp = now_ms();
 
@@ -797,6 +969,27 @@ pub async fn get_contact(state: &SharedState, val: &Value, extra: Option<Value>)
     let store = manager.store();
     match store.contact_by_id(&uuid).await {
         Ok(Some(contact)) => {
+            // Try to save avatar to disk if available
+            let mut avatar_path_str: Option<String> = None;
+            if let Some(ref avatar) = contact.avatar {
+                if let Some(ref db_path) = *state.db_path.lock().unwrap() {
+                    let avatars_dir = db_path.join("avatars");
+                    let _ = std::fs::create_dir_all(&avatars_dir);
+                    let dest = avatars_dir.join(format!("{}.jpg", uuid_str));
+                    if let Ok(()) = std::fs::write(&dest, &avatar.reader) {
+                        avatar_path_str = Some(dest.to_string_lossy().to_string());
+                    }
+                }
+            } else {
+                // Check if a previously saved avatar exists on disk
+                if let Some(ref db_path) = *state.db_path.lock().unwrap() {
+                    let dest = db_path.join("avatars").join(format!("{}.jpg", uuid_str));
+                    if dest.exists() {
+                        avatar_path_str = Some(dest.to_string_lossy().to_string());
+                    }
+                }
+            }
+
             emit_response(
                 state,
                 extra,
@@ -805,6 +998,7 @@ pub async fn get_contact(state: &SharedState, val: &Value, extra: Option<Value>)
                     "uuid": uuid_str,
                     "name": contact.name,
                     "phone_number": contact.phone_number.as_ref().map(|p| p.to_string()),
+                    "avatar_path": avatar_path_str,
                 }),
             );
         }

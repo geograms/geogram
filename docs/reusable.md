@@ -42,6 +42,10 @@ This document catalogs reusable UI components available in the Geogram codebase.
 - [SharedFolderService](#sharedfolderservice) - ProfileStorage CRUD for shared folder entries
 - [SharedBrowserPage](#sharedbrowserpage) - List, add, edit, delete shared folders; opens FilesBrowserPage
 
+### Hashing Utilities
+- [TLSH (Locality Sensitive Hash)](#tlsh-locality-sensitive-hash) - Fuzzy similarity hashing for binary data
+- [SHA1 Content Hashing](#sha1-content-hashing) - Exact content deduplication via crypto package
+
 ### Viewer Pages
 - [PhotoViewerPage](#photoviewerpage) - Image & video gallery
 - [LocationPickerPage](#locationpickerpage) - Map location selection
@@ -74,6 +78,7 @@ This document catalogs reusable UI components available in the Geogram codebase.
 
 ### Map Widgets
 - [TrackerMapCard](#trackermapcard) - Reusable satellite map miniature
+- [StaticMapService](#staticmapservice) - Generate static map images from coordinates using cached tiles
 
 ### Tree Widgets
 - [FolderTreeWidget](#foldertreewidget) - Folder navigation
@@ -117,6 +122,7 @@ This document catalogs reusable UI components available in the Geogram codebase.
 - [EmailRelayService Encrypted Cache](#emailrelayservice-encrypted-cache) - SQLite + ECIES offline email storage
 - [ProfileStorage](#profilestorage) - Abstraction layer for encrypted/filesystem storage
 - [TrayService](#trayservice) - System tray icon with minimize-to-tray and restore
+- [AprsIsClient](#aprsisclient) - APRS-IS TCP client with TNC2 parsing
 
 ### Desktop Patterns
 - [Desktop Platform Guard](#desktop-platform-guard) - Reusable check for Linux/Windows/macOS
@@ -1537,6 +1543,67 @@ The widget uses these tile layers in order:
 - `flutter_map: ^7.0.0` - Map widget
 - `latlong2: ^0.9.1` - Coordinates
 - `MapTileService` - Tile management and caching
+
+---
+
+### StaticMapService
+
+**File:** `lib/services/static_map_service.dart`
+
+Generates static map images (PNG bytes) for given coordinates by composing
+cached satellite/map tiles. Uses Esri World Imagery (satellite) with optional
+label overlays and a center pin marker.
+
+**Usage:**
+```dart
+final pngBytes = await StaticMapService.generateStaticMap(
+  lat: 51.5074,
+  lon: -0.1278,
+  width: 300,
+  height: 200,
+  zoom: 15,
+);
+if (pngBytes != null) {
+  // Use Image.memory(pngBytes) or store as BLOB
+}
+```
+
+**Parameters:**
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `lat` | double | required | Latitude of the center point |
+| `lon` | double | required | Longitude of the center point |
+| `width` | int | 300 | Output image width in pixels |
+| `height` | int | 200 | Output image height in pixels |
+| `zoom` | int | 15 | Tile zoom level (street-level detail) |
+| `withLabels` | bool | true | Overlay Esri place/boundary labels |
+| `withPin` | bool | true | Draw a location pin at center |
+
+**Features:**
+- Satellite imagery (Esri World Imagery) with labels overlay
+- Automatic tile cache integration (reads from MapTileService cache)
+- Downloads missing tiles on-demand with Esri fallback
+- Configurable dimensions, zoom level, pin marker
+- Web Mercator projection math (reusable static helpers)
+
+**Public Helpers (for reuse):**
+```dart
+// Web Mercator math
+StaticMapService.lonToTileX(lon, zoom)
+StaticMapService.latToTileY(lat, zoom)
+StaticMapService.tileXToLon(x, zoom)
+StaticMapService.tileYToLat(y, zoom)
+
+// Tile cache I/O
+StaticMapService.readCachedTile(tilesPath, layer, z, x, y)
+
+// Canvas drawing
+StaticMapService.drawTileLayer(canvas, tiles, tileToScreen, colorFilter)
+```
+
+**Used by:**
+- `TelegramCacheService` — generates map thumbnails for location/venue messages
+- `PathShareService` — composes satellite tile backgrounds for shared path images
 
 ---
 
@@ -8274,6 +8341,39 @@ if (TrayService().isSupported) { ... }
 
 ---
 
+### AprsIsClient
+
+**File**: `lib/teleport/aprs/aprs_is_client.dart`
+
+**Pattern**: TCP client for APRS Internet Service. Connects to APRS-IS servers, authenticates with computed passcode, receives and parses TNC2 packets, maintains keepalive, and auto-reconnects.
+
+**Usage**:
+```dart
+// Create client
+final client = AprsIsClient(
+  callsign: 'CR7BBQ-5',
+  latitude: 38.7,
+  longitude: -9.1,
+  radiusKm: 100,
+);
+
+// Connect (auto-reconnects on disconnect)
+await client.connect();
+
+// Compute APRS-IS passcode (static utility)
+final passcode = AprsIsClient.aprsPasscode('CR7BBQ-5'); // => 17827
+
+// Update server-side filter while connected
+client.updateFilter(radiusKm: 200);
+
+// Disconnect
+client.disconnect();
+```
+
+**Reuse potential**: The `aprsPasscode()` static method can be used anywhere an APRS-IS passcode is needed. The TCP client pattern (banner wait, line buffering, reconnect with fixed delay) is reusable for other line-oriented TCP protocols.
+
+---
+
 ### Desktop Platform Guard
 
 **Pattern**: Reusable platform check for desktop (Linux/Windows/macOS). Used in `DMNotificationService`, `BackupNotificationService`, `NotificationsPage`, and `TrayService`.
@@ -8296,6 +8396,34 @@ bool _isSupportedPlatform() {
 ```
 
 **Reuse potential**: Any service that should run on all native platforms (not just mobile) should use `_isSupportedPlatform()`. For desktop-only features, use `_isDesktopPlatform()`.
+
+---
+
+### TeleportChatUtils
+
+**File**: `lib/teleport/shared/teleport_chat_utils.dart`
+
+**Pattern**: Shared chat UI utilities for all teleport sources (Telegram, Signal, etc.).
+
+**Components**:
+- `teleportSenderColor(String name)` — Deterministic 7-color palette for sender names, consistent across messages
+- `TeleportDateSeparator` — Pill-shaped day separator widget with natural date labels (Today, Yesterday, month/day)
+
+**Usage**:
+```dart
+import 'package:geogram/teleport/shared/teleport_chat_utils.dart';
+
+// Get a sender color
+final color = teleportSenderColor('Alice');
+
+// Use the date separator in a chat list
+TeleportDateSeparator(date: message.dateTime);
+
+// Create a typedef alias for backward compat
+typedef TelegramDateSeparator = TeleportDateSeparator;
+```
+
+**Reuse potential**: Any new teleport source (WhatsApp, Matrix, etc.) should use these shared utilities instead of duplicating the color palette and date separator.
 
 ---
 
@@ -9222,3 +9350,30 @@ Orchestrates syncing Geogram content collections into the AT Proto repository. S
 - `syncAll()` → `Future<Map<String, int>>` — sync all collections, returns NSID→count map
 - `syncCollection(String nsid)` → `Future<int>` — sync single collection by NSID
 - `getCollectionStatus()` → `List<Map<String, dynamic>>` — status info for all collections
+
+---
+
+## Hashing Utilities
+
+### TLSH (Locality Sensitive Hash)
+
+**File:** `lib/util/tlsh.dart`
+
+Pure Dart implementation of TLSH (Trend Micro Locality Sensitive Hash). Produces fuzzy hashes that remain similar for similar inputs — useful for detecting near-duplicate media, documents, or binary data.
+
+**API:**
+- `TLSH.hash(Uint8List data)` → `String?` — returns uppercase hex hash string, or `null` if data is < 50 bytes
+
+**Usage:** Used in `TelegramCacheService.ingestMediaBlob()` for fuzzy similarity detection of media files stored as BLOBs.
+
+### SHA1 Content Hashing
+
+**Package:** `crypto` (already in pubspec.yaml)
+
+Standard SHA1 hashing for exact content deduplication.
+
+**API:**
+- `import 'package:crypto/crypto.dart';`
+- `sha1.convert(bytes).toString()` → lowercase hex SHA1 hash string
+
+**Usage:** Used in `TelegramCacheService.ingestMediaBlob()` to detect identical media files within the same per-chat SQLite database, avoiding duplicate BLOB storage for forwarded or re-sent media.

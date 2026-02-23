@@ -20,6 +20,7 @@ import '../../../pages/location_picker_page.dart';
 import '../../../services/file_launcher_service.dart';
 import '../../../util/file_icon_helper.dart';
 import '../../../widgets/voice_player_widget.dart';
+import '../../shared/teleport_chat_utils.dart';
 import '../models/telegram_message.dart';
 
 class TelegramMessageBubble extends StatefulWidget {
@@ -75,19 +76,7 @@ class TelegramMessageBubble extends StatefulWidget {
   static const _maxBubbleWidth = 440.0;
 
   /// Deterministic color for a sender name (consistent across messages).
-  static Color _senderColor(String name) {
-    const colors = [
-      Color(0xFFE53935), // red
-      Color(0xFF8E24AA), // purple
-      Color(0xFF3949AB), // indigo
-      Color(0xFF039BE5), // light blue
-      Color(0xFF00897B), // teal
-      Color(0xFF7CB342), // light green
-      Color(0xFFFB8C00), // orange
-    ];
-    final hash = name.hashCode.abs();
-    return colors[hash % colors.length];
-  }
+  static Color _senderColor(String name) => teleportSenderColor(name);
 
   @override
   State<TelegramMessageBubble> createState() => _TelegramMessageBubbleState();
@@ -1623,55 +1612,8 @@ class _TelegramMessageBubbleState extends State<TelegramMessageBubble> {
   }
 }
 
-/// Day separator widget shown between messages from different dates.
-class TelegramDateSeparator extends StatelessWidget {
-  final DateTime date;
-
-  const TelegramDateSeparator({super.key, required this.date});
-
-  String _formatDate(DateTime utcDate) {
-    final local = utcDate.toLocal();
-    final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
-    final msgDay = DateTime(local.year, local.month, local.day);
-
-    final diff = today.difference(msgDay).inDays;
-    if (diff == 0) return 'Today';
-    if (diff == 1) return 'Yesterday';
-
-    const months = [
-      'January', 'February', 'March', 'April', 'May', 'June',
-      'July', 'August', 'September', 'October', 'November', 'December',
-    ];
-    if (local.year == now.year) {
-      return '${months[local.month - 1]} ${local.day}';
-    }
-    return '${months[local.month - 1]} ${local.day}, ${local.year}';
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Center(
-      child: Container(
-        margin: const EdgeInsets.symmetric(vertical: 12),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-        decoration: BoxDecoration(
-          color: theme.colorScheme.surfaceContainerHighest
-              .withValues(alpha: 0.7),
-          borderRadius: BorderRadius.circular(12),
-        ),
-        child: Text(
-          _formatDate(date),
-          style: theme.textTheme.labelSmall?.copyWith(
-            color: theme.colorScheme.onSurfaceVariant,
-            fontWeight: FontWeight.w500,
-          ),
-        ),
-      ),
-    );
-  }
-}
+/// Day separator — delegates to the shared TeleportDateSeparator.
+typedef TelegramDateSeparator = TeleportDateSeparator;
 
 /// Service message widget for calls and pinned messages.
 /// Rendered as a centered pill (like date separators) with an icon + text.

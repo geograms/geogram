@@ -355,11 +355,19 @@ class _SignalChatPageState extends State<SignalChatPage> {
     _inputController.clear();
 
     try {
-      await chatService.sendMessage(
+      final sent = await chatService.sendMessage(
         widget.conversationId,
         text,
         quoteTimestamp: quoteTimestamp,
       );
+      // Local echo: insert the sent message at the top of the list
+      if (sent != null && mounted) {
+        final isDuplicate =
+            _messages.any((m) => m.primaryKey == sent.primaryKey);
+        if (!isDuplicate) {
+          setState(() => _messages.insert(0, sent));
+        }
+      }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -698,6 +706,7 @@ class _SignalChatPageState extends State<SignalChatPage> {
     final bubble = SignalMessageBubble(
       message: msg,
       senderName: widget.chatType == SignalChatType.group ? senderName : null,
+      senderPhotoPath: user?.avatarPath,
       showAvatar: widget.chatType == SignalChatType.group
           ? _shouldShowAvatar(index)
           : false,

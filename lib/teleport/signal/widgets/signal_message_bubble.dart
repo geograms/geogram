@@ -11,16 +11,20 @@
  *   - Reply preview bar, reactions row, day separators
  */
 
+import 'dart:io';
+
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../../services/file_launcher_service.dart';
+import '../../shared/teleport_chat_utils.dart';
 import '../models/signal_message.dart';
 
 class SignalMessageBubble extends StatefulWidget {
   final SignalMessage message;
   final String? senderName;
+  final String? senderPhotoPath;
 
   /// Whether to show the avatar (first message in a visual group from same sender).
   final bool showAvatar;
@@ -41,6 +45,7 @@ class SignalMessageBubble extends StatefulWidget {
     super.key,
     required this.message,
     this.senderName,
+    this.senderPhotoPath,
     this.showAvatar = false,
     this.onReply,
     this.onDelete,
@@ -63,19 +68,7 @@ class SignalMessageBubble extends StatefulWidget {
   static const _maxBubbleWidth = 440.0;
 
   /// Deterministic color for a sender name (consistent across messages).
-  static Color senderColor(String name) {
-    const colors = [
-      Color(0xFFE53935), // red
-      Color(0xFF8E24AA), // purple
-      Color(0xFF3949AB), // indigo
-      Color(0xFF039BE5), // light blue
-      Color(0xFF00897B), // teal
-      Color(0xFF7CB342), // light green
-      Color(0xFFFB8C00), // orange
-    ];
-    final hash = name.hashCode.abs();
-    return colors[hash % colors.length];
-  }
+  static Color senderColor(String name) => teleportSenderColor(name);
 
   @override
   State<SignalMessageBubble> createState() => _SignalMessageBubbleState();
@@ -592,6 +585,16 @@ class _SignalMessageBubbleState extends State<SignalMessageBubble> {
   }
 
   Widget _buildAvatar() {
+    if (widget.senderPhotoPath != null) {
+      final file = File(widget.senderPhotoPath!);
+      if (file.existsSync()) {
+        return CircleAvatar(
+          radius: SignalMessageBubble._avatarSize / 2,
+          backgroundImage: FileImage(file),
+        );
+      }
+    }
+
     final name = widget.senderName ?? '?';
     final color = SignalMessageBubble.senderColor(name);
     return CircleAvatar(
@@ -609,51 +612,5 @@ class _SignalMessageBubbleState extends State<SignalMessageBubble> {
   }
 }
 
-/// Day separator widget shown between messages from different dates.
-class SignalDateSeparator extends StatelessWidget {
-  final DateTime date;
-
-  const SignalDateSeparator({super.key, required this.date});
-
-  String _formatDate(DateTime utcDate) {
-    final local = utcDate.toLocal();
-    final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
-    final msgDay = DateTime(local.year, local.month, local.day);
-
-    final diff = today.difference(msgDay).inDays;
-    if (diff == 0) return 'Today';
-    if (diff == 1) return 'Yesterday';
-
-    const months = [
-      'January', 'February', 'March', 'April', 'May', 'June',
-      'July', 'August', 'September', 'October', 'November', 'December',
-    ];
-    if (local.year == now.year) {
-      return '${months[local.month - 1]} ${local.day}';
-    }
-    return '${months[local.month - 1]} ${local.day}, ${local.year}';
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: Container(
-        margin: const EdgeInsets.symmetric(vertical: 12),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-        decoration: BoxDecoration(
-          color: const Color(0xFF1A2733),
-          borderRadius: BorderRadius.circular(12),
-        ),
-        child: Text(
-          _formatDate(date),
-          style: const TextStyle(
-            color: Colors.white54,
-            fontWeight: FontWeight.w500,
-            fontSize: 11,
-          ),
-        ),
-      ),
-    );
-  }
-}
+/// Day separator — delegates to the shared TeleportDateSeparator.
+typedef SignalDateSeparator = TeleportDateSeparator;
