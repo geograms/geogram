@@ -441,17 +441,24 @@ class BlogPostDetailWidget extends StatelessWidget {
           children: [
             _buildEmojiReactionButton(
               theme: theme,
-              emoji: '❤️',
-              count: post.heartCount,
-              isActive: post.hasHearted,
-              onPressed: () => onReaction?.call('heart'),
-            ),
-            _buildEmojiReactionButton(
-              theme: theme,
               emoji: '👍',
               count: post.thumbsUpCount,
               isActive: post.hasThumbsUp,
               onPressed: () => onReaction?.call('thumbs-up'),
+            ),
+            _buildEmojiReactionButton(
+              theme: theme,
+              emoji: '👎',
+              count: post.thumbsDownCount,
+              isActive: post.hasThumbsDown,
+              onPressed: () => onReaction?.call('thumbs-down'),
+            ),
+            _buildEmojiReactionButton(
+              theme: theme,
+              emoji: '❤️',
+              count: post.heartCount,
+              isActive: post.hasHearted,
+              onPressed: () => onReaction?.call('heart'),
             ),
             _buildEmojiReactionButton(
               theme: theme,
@@ -462,7 +469,21 @@ class BlogPostDetailWidget extends StatelessWidget {
             ),
             _buildEmojiReactionButton(
               theme: theme,
-              emoji: '🎉',
+              emoji: '💯',
+              count: post.hundredCount,
+              isActive: post.hasHundred,
+              onPressed: () => onReaction?.call('hundred'),
+            ),
+            _buildEmojiReactionButton(
+              theme: theme,
+              emoji: '🤔',
+              count: post.curiousCount,
+              isActive: post.hasCurious,
+              onPressed: () => onReaction?.call('curious'),
+            ),
+            _buildEmojiReactionButton(
+              theme: theme,
+              emoji: '🥳',
               count: post.celebrateCount,
               isActive: post.hasCelebrated,
               onPressed: () => onReaction?.call('celebrate'),
@@ -483,7 +504,14 @@ class BlogPostDetailWidget extends StatelessWidget {
             ),
             _buildEmojiReactionButton(
               theme: theme,
-              emoji: '😲',
+              emoji: '🍻',
+              count: post.beerCheersCount,
+              isActive: post.hasBeerCheers,
+              onPressed: () => onReaction?.call('beer-cheers'),
+            ),
+            _buildEmojiReactionButton(
+              theme: theme,
+              emoji: '😱',
               count: post.surpriseCount,
               isActive: post.hasSurprised,
               onPressed: () => onReaction?.call('surprise'),
@@ -578,7 +606,7 @@ class BlogPostDetailWidget extends StatelessWidget {
           children: [
             Text(
               emoji,
-              style: const TextStyle(fontSize: 18),
+              style: const TextStyle(fontSize: 18, fontFamilyFallback: ['Noto Color Emoji', 'Apple Color Emoji', 'Segoe UI Emoji', 'sans-serif-emoji']),
             ),
             if (count > 0) ...[
               const SizedBox(width: 4),

@@ -20,14 +20,20 @@ import '../platform/file_image_helper.dart' as file_helper;
 
 /// Widget for displaying a single chat message bubble
 class MessageBubbleWidget extends StatefulWidget {
+  static const _emojiFontFallback = ['Noto Color Emoji', 'Apple Color Emoji', 'Segoe UI Emoji', 'sans-serif-emoji'];
+
   static const Map<String, String> reactionEmojiMap = {
     'thumbs-up': '👍',
+    'thumbs-down': '👎',
     'heart': '❤️',
     'fire': '🔥',
+    'hundred': '💯',
+    'curious': '🤔',
+    'celebrate': '🥳',
     'laugh': '😂',
-    'celebrate': '🎉',
-    'surprise': '😮',
     'sad': '😢',
+    'beer-cheers': '🍻',
+    'surprise': '😱',
   };
 
   final ChatMessage message;
@@ -1147,6 +1153,7 @@ class _MessageBubbleWidgetState extends State<MessageBubbleWidget> {
                 color: reacted
                     ? theme.colorScheme.primary
                     : theme.colorScheme.onSurfaceVariant,
+                fontFamilyFallback: MessageBubbleWidget._emojiFontFallback,
               ),
             ),
           ),
@@ -1200,7 +1207,7 @@ class _MessageBubbleWidgetState extends State<MessageBubbleWidget> {
                         ),
                         child: Text(
                           entry.value,
-                          style: const TextStyle(fontSize: 18),
+                          style: const TextStyle(fontSize: 18, fontFamilyFallback: MessageBubbleWidget._emojiFontFallback),
                         ),
                       ),
                     );
