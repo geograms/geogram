@@ -7,6 +7,7 @@
 
 import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
 
 import '../../services/log_service.dart';
 import 'models/telegram_chat.dart';
@@ -109,6 +110,94 @@ class TelegramChatService {
         _handleSupergroupUpdate(update);
         break;
 
+      case 'updateMessageEdited':
+        final chatId = update['chat_id'] as int?;
+        final messageId = update['message_id'] as int?;
+        final editDate = update['edit_date'] as int? ?? 0;
+        if (chatId != null && messageId != null && editDate != 0) {
+          _onEvent(TelegramEventType.messageEdited, {
+            'chat_id': chatId,
+            'message_id': messageId,
+            'edit_date': editDate,
+          });
+        }
+        break;
+
+      case 'updateMessageContent':
+        // Message content changed (e.g. edited text) — treat as edit event
+        final chatId = update['chat_id'] as int?;
+        final messageId = update['message_id'] as int?;
+        if (chatId != null && messageId != null) {
+          _onEvent(TelegramEventType.messageEdited, {
+            'chat_id': chatId,
+            'message_id': messageId,
+            'edit_date': DateTime.now().millisecondsSinceEpoch ~/ 1000,
+          });
+        }
+        break;
+
+      case 'updateDeleteMessages':
+        final isPermanent = update['is_permanent'] as bool? ?? false;
+        if (!isPermanent) break;
+        final chatId = update['chat_id'] as int?;
+        final messageIds = (update['message_ids'] as List<dynamic>?)
+            ?.whereType<int>()
+            .toList();
+        if (chatId != null && messageIds != null && messageIds.isNotEmpty) {
+          _cache?.deleteMessages(chatId, messageIds);
+          _onEvent(TelegramEventType.messagesDeleted, {
+            'chat_id': chatId,
+            'message_ids': messageIds,
+          });
+        }
+        break;
+
+      case 'updateMessageInteractionInfo':
+        final chatId = update['chat_id'] as int?;
+        final messageId = update['message_id'] as int?;
+        final interactionInfo =
+            update['interaction_info'] as Map<String, dynamic>?;
+        if (chatId != null && messageId != null) {
+          final reactionsObj =
+              interactionInfo?['reactions'] as Map<String, dynamic>?;
+          if (reactionsObj != null) {
+            stderr.writeln('TDLib: updateMessageInteractionInfo chat=$chatId '
+                'msg=$messageId reactions=$reactionsObj');
+          }
+          final reactionsList =
+              reactionsObj?['reactions'] as List<dynamic>?;
+          final reactions =
+              TelegramReaction.fromTdlibReactions(reactionsList);
+          if (reactions.isNotEmpty) {
+            stderr.writeln('TDLib: parsed ${reactions.length} reactions '
+                'for msg $messageId: ${reactions.map((r) => '${r.emoji}x${r.count}').join(', ')}');
+          }
+          _onEvent(TelegramEventType.reactionsUpdated, {
+            'chat_id': chatId,
+            'message_id': messageId,
+            'reactions': reactions,
+          });
+        }
+        break;
+
+      case 'updateUserChatAction':
+        final chatId = update['chat_id'] as int?;
+        final senderId = update['sender_id'] as Map<String, dynamic>?;
+        int userId = 0;
+        if (senderId != null && senderId['@type'] == 'messageSenderUser') {
+          userId = senderId['user_id'] as int? ?? 0;
+        }
+        final action = update['action'] as Map<String, dynamic>?;
+        final actionType = action?['@type'] as String? ?? '';
+        if (chatId != null && userId != 0) {
+          _onEvent(TelegramEventType.typingUpdate, {
+            'chat_id': chatId,
+            'user_id': userId,
+            'action': actionType,
+          });
+        }
+        break;
+
       default:
         break;
     }
@@ -168,6 +257,32 @@ class TelegramChatService {
       'chat_id': chatId,
     });
     stderr.writeln('TDLib: openChat($chatId) -> ${result['@type']}');
+  }
+
+  /// Mark messages as read in TDLib — clears unread count for the chat.
+  ///
+  /// [messageIds] should contain the IDs of messages the user has seen.
+  /// Passing the most recent message ID is sufficient to mark everything
+  /// up to (and including) that message as read.
+  Future<void> viewMessages(int chatId, List<int> messageIds, {
+    int? messageThreadId,
+    bool forceRead = true,
+  }) async {
+    if (messageIds.isEmpty) return;
+    try {
+      final request = <String, dynamic>{
+        '@type': 'viewMessages',
+        'chat_id': chatId,
+        'message_ids': messageIds,
+        'force_read': forceRead,
+      };
+      if (messageThreadId != null) {
+        request['message_thread_id'] = messageThreadId;
+      }
+      await _client.sendRequest(request);
+    } catch (e) {
+      stderr.writeln('TDLib: viewMessages error: $e');
+    }
   }
 
   /// Tell TDLib a chat is no longer being viewed.
@@ -320,11 +435,29 @@ class TelegramChatService {
     return messages;
   }
 
+  /// Get a single message by chat ID and message ID.
+  Future<TelegramMessage?> getMessage(int chatId, int messageId) async {
+    try {
+      final result = await _client.sendRequest({
+        '@type': 'getMessage',
+        'chat_id': chatId,
+        'message_id': messageId,
+      });
+      if (result['@type'] == 'message') {
+        return TelegramMessage.fromTdlib(result);
+      }
+    } catch (e) {
+      LogService().debug('TelegramChat: getMessage($chatId, $messageId) failed: $e');
+    }
+    return null;
+  }
+
   /// Send a text message to a chat (optionally within a forum topic thread).
   Future<TelegramMessage?> sendMessage(
     int chatId,
     String text, {
     int? messageThreadId,
+    int? replyToMessageId,
   }) async {
     final request = <String, dynamic>{
       '@type': 'sendMessage',
@@ -340,6 +473,12 @@ class TelegramChatService {
     if (messageThreadId != null) {
       request['message_thread_id'] = messageThreadId;
     }
+    if (replyToMessageId != null) {
+      request['reply_to'] = {
+        '@type': 'inputMessageReplyToMessage',
+        'message_id': replyToMessageId,
+      };
+    }
 
     final result = await _client.sendRequest(request);
 
@@ -347,6 +486,55 @@ class TelegramChatService {
       return TelegramMessage.fromTdlib(result);
     }
     return null;
+  }
+
+  /// Add an emoji reaction to a message.
+  Future<bool> addMessageReaction(
+    int chatId,
+    int messageId,
+    String emoji, {
+    bool isBig = false,
+  }) async {
+    try {
+      final result = await _client.sendRequest({
+        '@type': 'addMessageReaction',
+        'chat_id': chatId,
+        'message_id': messageId,
+        'reaction_type': {
+          '@type': 'reactionTypeEmoji',
+          'emoji': emoji,
+        },
+        'is_big': isBig,
+        'update_recent_reactions': true,
+      });
+      if (result['@type'] != 'ok') {
+        stderr.writeln('TDLib: addMessageReaction error: ${result['message'] ?? result}');
+      }
+      return result['@type'] == 'ok';
+    } catch (e) {
+      LogService().error('TelegramChat: addMessageReaction failed: $e');
+      return false;
+    }
+  }
+
+  /// Delete messages from a chat.
+  Future<bool> deleteMessages(
+    int chatId,
+    List<int> messageIds, {
+    bool revoke = true,
+  }) async {
+    try {
+      final result = await _client.sendRequest({
+        '@type': 'deleteMessages',
+        'chat_id': chatId,
+        'message_ids': messageIds,
+        'revoke': revoke,
+      });
+      return result['@type'] == 'ok';
+    } catch (e) {
+      LogService().error('TelegramChat: deleteMessages failed: $e');
+      return false;
+    }
   }
 
   /// Get a user by ID, with in-memory cache.
@@ -380,7 +568,7 @@ class TelegramChatService {
         'user_id': userId,
       });
       if (result['@type'] == 'user') {
-        // Extract profile photo path if already downloaded
+        // Extract profile photo path — download if needed
         String? profilePhotoPath;
         final profilePhoto = result['profile_photo'] as Map<String, dynamic>?;
         if (profilePhoto != null) {
@@ -392,21 +580,10 @@ class TelegramChatService {
           if (isDownloaded && path != null && path.isNotEmpty) {
             profilePhotoPath = path;
           } else if (small != null) {
-            // Kick off a background download of the profile photo
+            // Download the profile photo before returning
             final fileId = small['id'] as int? ?? 0;
             if (fileId != 0) {
-              _downloadFile(fileId).then((path) {
-                if (path != null) {
-                  _users[userId] = TelegramUser(
-                    id: userId,
-                    firstName: _users[userId]?.firstName ?? '',
-                    lastName: _users[userId]?.lastName,
-                    username: _users[userId]?.username,
-                    phoneNumber: _users[userId]?.phoneNumber,
-                    profilePhotoPath: path,
-                  );
-                }
-              });
+              profilePhotoPath = await _downloadFile(fileId);
             }
           }
         }
@@ -459,6 +636,101 @@ class TelegramChatService {
       LogService().debug('TelegramChat: downloadFile($fileId) failed: $e');
     }
     return null;
+  }
+
+  /// Download the chat photo (small variant) for a given chat ID.
+  /// Returns the local file path on success, or null.
+  /// Also caches the photo bytes in SQLite for offline access.
+  Future<String?> downloadChatPhoto(int chatId) async {
+    final chat = _chats[chatId];
+    if (chat == null || chat.photoSmallFileId == null || chat.photoSmallFileId == 0) return null;
+    if (chat.photoPath != null) return chat.photoPath;
+    final path = await _downloadFile(chat.photoSmallFileId!);
+    if (path != null) {
+      _chats[chatId] = chat.copyWith(photoPath: path);
+      // Cache photo blob for offline access
+      try {
+        final bytes = File(path).readAsBytesSync();
+        if (bytes.isNotEmpty) {
+          _cache?.storeChatPhoto(chatId, bytes);
+        }
+      } catch (_) {}
+    }
+    return path;
+  }
+
+  /// Download custom emoji icons for forum topics.
+  ///
+  /// Resolves custom emoji IDs via TDLib's `getCustomEmojiStickers`,
+  /// downloads each sticker file, and caches the bytes in the per-chat DB.
+  /// Returns a map of messageThreadId → icon bytes.
+  Future<Map<int, Uint8List>> downloadTopicIcons(
+    int chatId,
+    List<TelegramForumTopic> topics,
+  ) async {
+    final result = <int, Uint8List>{};
+
+    // Build a map of customEmojiId → list of messageThreadIds that use it
+    final emojiToThreads = <int, List<int>>{};
+    for (final t in topics) {
+      if (t.iconCustomEmojiId != 0) {
+        emojiToThreads.putIfAbsent(t.iconCustomEmojiId, () => []).add(t.messageThreadId);
+      }
+    }
+    if (emojiToThreads.isEmpty) return result;
+
+    try {
+      final emojiIds = emojiToThreads.keys.toList();
+      stderr.writeln('TDLib: getCustomEmojiStickers for ${emojiIds.length} IDs');
+
+      final response = await _client.sendRequest({
+        '@type': 'getCustomEmojiStickers',
+        'custom_emoji_ids': emojiIds,
+      });
+
+      if (response['@type'] != 'stickers') {
+        stderr.writeln('TDLib: getCustomEmojiStickers unexpected: ${response['@type']}');
+        return result;
+      }
+
+      final stickers = response['stickers'] as List<dynamic>? ?? [];
+      stderr.writeln('TDLib: got ${stickers.length} stickers for topic icons');
+
+      for (final s in stickers) {
+        final sticker = s as Map<String, dynamic>?;
+        if (sticker == null) continue;
+
+        // Extract custom_emoji_id from full_type to match back to topics
+        final fullType = sticker['full_type'] as Map<String, dynamic>?;
+        final emojiId = fullType?['custom_emoji_id'] as int? ?? 0;
+        final threadIds = emojiToThreads[emojiId];
+        if (threadIds == null || threadIds.isEmpty) continue;
+
+        final stickerFile = sticker['sticker'] as Map<String, dynamic>?;
+        final fileId = stickerFile?['id'] as int? ?? 0;
+        if (fileId == 0) continue;
+
+        final path = await _downloadFile(fileId);
+        if (path == null) continue;
+
+        try {
+          final bytes = File(path).readAsBytesSync();
+          if (bytes.isEmpty) continue;
+
+          for (final threadId in threadIds) {
+            result[threadId] = bytes;
+            _cache?.storeTopicPhoto(chatId, threadId, bytes);
+          }
+        } catch (e) {
+          stderr.writeln('TDLib: downloadTopicIcons read error: $e');
+        }
+      }
+    } catch (e) {
+      stderr.writeln('TDLib: downloadTopicIcons error: $e');
+      LogService().error('TelegramChat: downloadTopicIcons failed: $e');
+    }
+
+    return result;
   }
 
   /// Get a single chat by ID.

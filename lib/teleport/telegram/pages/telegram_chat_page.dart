@@ -15,11 +15,13 @@
 
 import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 
 import '../../../pages/document_viewer_editor_page.dart';
 import '../../../pages/photo_viewer_page.dart';
+import '../../../services/file_launcher_service.dart';
 import '../../../services/log_service.dart';
 import '../models/telegram_forum_topic.dart';
 import '../models/telegram_message.dart';
@@ -49,12 +51,36 @@ class TelegramChatPage extends StatefulWidget {
 class _TelegramChatPageState extends State<TelegramChatPage> {
   final _inputController = TextEditingController();
   final _scrollController = ScrollController();
+  final _inputFocusNode = FocusNode();
   StreamSubscription<TelegramEvent>? _eventSub;
   List<TelegramMessage> _messages = [];
   List<TelegramForumTopic> _topics = [];
+  Map<int, Uint8List> _topicPhotos = {};
   bool _loading = true;
   bool _sending = false;
   bool _isForum = false;
+  bool _loadingOlder = false;
+  bool _hasMoreMessages = true;
+
+  /// Message being replied to (shown in reply compose bar).
+  TelegramMessage? _replyTarget;
+
+  /// Message ID to briefly highlight after scrolling to it.
+  int? _highlightMessageId;
+  Timer? _highlightTimer;
+
+  /// GlobalKeys per message ID for ensureVisible scrolling.
+  final Map<int, GlobalKey> _messageKeys = {};
+
+  /// Whether this chat page is the active (visible) route.
+  bool _isActive = true;
+
+  /// Per-chat DB file size label.
+  String? _chatDbSize;
+
+  /// Currently typing users: userId → display name.
+  final Map<int, String> _typingUsers = {};
+  Timer? _typingClearTimer;
 
   /// Cached user info keyed by userId, resolved progressively.
   final Map<int, TelegramUser> _userCache = {};
@@ -62,10 +88,13 @@ class _TelegramChatPageState extends State<TelegramChatPage> {
   @override
   void initState() {
     super.initState();
+    _scrollController.addListener(_onScroll);
     _init();
   }
 
   Future<void> _init() async {
+    _isActive = true;
+    _computeChatDbSize();
     final chatService = TelegramService().chatService;
     if (chatService == null) {
       setState(() => _loading = false);
@@ -96,6 +125,26 @@ class _TelegramChatPageState extends State<TelegramChatPage> {
     await _loadHistory();
   }
 
+  Future<void> _computeChatDbSize() async {
+    final cache = TelegramService().cacheService;
+    if (cache == null) return;
+    // Defer to avoid blocking init
+    await Future.delayed(Duration.zero);
+    if (!mounted) return;
+    try {
+      final dbFile = File('${cache.cacheDirAbsolutePath}/chat_${widget.chatId}.db');
+      final len = await dbFile.length();
+      if (mounted) setState(() => _chatDbSize = _formatSize(len));
+    } catch (_) {}
+  }
+
+  static String _formatSize(int bytes) {
+    if (bytes < 1024) return '$bytes B';
+    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
+    if (bytes < 1024 * 1024 * 1024) return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+    return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(1)} GB';
+  }
+
   Future<void> _loadHistory() async {
     final chatService = TelegramService().chatService;
     if (chatService == null) {
@@ -114,35 +163,69 @@ class _TelegramChatPageState extends State<TelegramChatPage> {
           _loading = false;
         });
         _resolveUsers(cached);
+        _generateLocationThumbnails(cached);
       }
     }
 
-    // Step 2: Fetch from TDLib in background
+    // Step 2: Fetch from TDLib
     try {
       await chatService.openChat(widget.chatId);
-      var messages = await chatService.getChatHistory(widget.chatId);
+      TelegramService().cacheService?.recordVisit(widget.chatId);
+      final messages = await chatService.getChatHistory(widget.chatId);
       stderr.writeln('TelegramChatPage: got ${messages.length} messages');
 
-      // Retry once if empty — TDLib may still be syncing
-      if (messages.isEmpty) {
-        stderr.writeln('TelegramChatPage: retrying after 1s...');
-        await Future.delayed(const Duration(seconds: 1));
-        messages = await chatService.getChatHistory(widget.chatId);
-        stderr.writeln('TelegramChatPage: retry got ${messages.length} messages');
-      }
-
-      // Step 3: Update UI with fresh data
-      if (mounted && messages.isNotEmpty) {
+      // Stop the spinner immediately — don't block on retries
+      if (mounted) {
         setState(() {
-          _messages = messages;
+          if (messages.isNotEmpty) _messages = messages;
           _loading = false;
         });
-        _resolveUsers(messages);
-        _downloadMedia(messages);
+        if (messages.isNotEmpty) {
+          _markMessagesAsRead(messages);
+          _resolveUsers(messages);
+          _resolveReplyPreviews(messages);
+          _downloadMedia(messages);
+          _generateLocationThumbnails(messages);
+        }
+      }
+
+      // Step 3: If empty, retry in the background with longer coverage
+      if (messages.isEmpty) {
+        _retryLoadHistory();
       }
     } catch (e) {
       stderr.writeln('TelegramChatPage: load history EXCEPTION: $e');
       if (mounted) setState(() => _loading = false);
+      // Still attempt background retries after an exception
+      _retryLoadHistory();
+    }
+  }
+
+  /// Background retry loop for when initial getChatHistory returns empty.
+  /// Uses longer delays to give TDLib time to sync from the server.
+  Future<void> _retryLoadHistory() async {
+    final chatService = TelegramService().chatService;
+    if (chatService == null) return;
+
+    for (int attempt = 1; attempt <= 5; attempt++) {
+      final delay = attempt * 2; // 2s, 4s, 6s, 8s, 10s
+      await Future.delayed(Duration(seconds: delay));
+      if (!_isActive || !mounted) return;
+      // Skip if messages already arrived via events
+      if (_messages.isNotEmpty) return;
+
+      stderr.writeln('TelegramChatPage: background retry $attempt...');
+      final messages = await chatService.getChatHistory(widget.chatId);
+      stderr.writeln('TelegramChatPage: background retry $attempt got ${messages.length} messages');
+
+      if (messages.isNotEmpty && mounted) {
+        setState(() => _messages = messages);
+        _resolveUsers(messages);
+        _resolveReplyPreviews(messages);
+        _downloadMedia(messages);
+        _generateLocationThumbnails(messages);
+        return;
+      }
     }
   }
 
@@ -167,45 +250,95 @@ class _TelegramChatPageState extends State<TelegramChatPage> {
           _loading = false;
         });
         _resolveUsers(cached);
+        _generateLocationThumbnails(cached);
       }
     }
 
-    // Step 2: Fetch from TDLib in background
+    // Step 2: Fetch from TDLib
     try {
       await chatService.openChat(widget.chatId);
-      var messages = await chatService.getTopicHistory(
+      TelegramService().cacheService?.recordVisit(widget.chatId);
+      final messages = await chatService.getTopicHistory(
         widget.chatId,
         widget.messageThreadId!,
       );
       stderr.writeln('TelegramChatPage: topic got ${messages.length} messages');
 
-      // Retry once if empty
-      if (messages.isEmpty) {
-        stderr.writeln('TelegramChatPage: topic retrying after 1s...');
-        await Future.delayed(const Duration(seconds: 1));
-        messages = await chatService.getTopicHistory(
-          widget.chatId,
-          widget.messageThreadId!,
-        );
-        stderr.writeln('TelegramChatPage: topic retry got ${messages.length} messages');
-      }
-
-      // Step 3: Update UI with fresh data
-      if (mounted && messages.isNotEmpty) {
+      // Stop the spinner immediately
+      if (mounted) {
         setState(() {
-          _messages = messages;
+          if (messages.isNotEmpty) _messages = messages;
           _loading = false;
         });
-        _resolveUsers(messages);
-        _downloadMedia(messages);
+        if (messages.isNotEmpty) {
+          _markMessagesAsRead(messages);
+          _resolveUsers(messages);
+          _resolveReplyPreviews(messages);
+          _downloadMedia(messages);
+          _generateLocationThumbnails(messages);
+        }
+      }
+
+      // If empty, retry in the background
+      if (messages.isEmpty) {
+        _retryLoadTopicHistory();
       }
     } catch (e) {
       stderr.writeln('TelegramChatPage: load topic history EXCEPTION: $e');
       if (mounted) setState(() => _loading = false);
+      _retryLoadTopicHistory();
     }
   }
 
-  /// Resolve sender user info for messages.
+  /// Background retry loop for topic history.
+  Future<void> _retryLoadTopicHistory() async {
+    final chatService = TelegramService().chatService;
+    if (chatService == null || widget.messageThreadId == null) return;
+
+    for (int attempt = 1; attempt <= 5; attempt++) {
+      final delay = attempt * 2;
+      await Future.delayed(Duration(seconds: delay));
+      if (!_isActive || !mounted) return;
+      if (_messages.isNotEmpty) return;
+
+      stderr.writeln('TelegramChatPage: topic background retry $attempt...');
+      final messages = await chatService.getTopicHistory(
+        widget.chatId,
+        widget.messageThreadId!,
+      );
+      stderr.writeln('TelegramChatPage: topic background retry $attempt got ${messages.length} messages');
+
+      if (messages.isNotEmpty && mounted) {
+        setState(() => _messages = messages);
+        _resolveUsers(messages);
+        _resolveReplyPreviews(messages);
+        _downloadMedia(messages);
+        _generateLocationThumbnails(messages);
+        return;
+      }
+    }
+  }
+
+  /// Mark messages as read in both TDLib and the local SQLite cache.
+  void _markMessagesAsRead(List<TelegramMessage> messages) {
+    if (messages.isEmpty) return;
+
+    // Mark all messages as read in the local cache
+    TelegramService().cacheService?.markAllAsRead(widget.chatId);
+
+    // Tell TDLib the user has seen these messages — clears the server-side
+    // unread count and triggers updateChatReadInbox for the in-memory model.
+    final chatService = TelegramService().chatService;
+    if (chatService == null) return;
+    final ids = messages.map((m) => m.id).toList();
+    chatService.viewMessages(
+      widget.chatId,
+      ids,
+      messageThreadId: widget.messageThreadId,
+    );
+  }
+
+  /// Resolve sender user info for messages (throttled to avoid rate limits).
   Future<void> _resolveUsers(List<TelegramMessage> messages) async {
     final chatService = TelegramService().chatService;
     if (chatService == null) return;
@@ -219,44 +352,193 @@ class _TelegramChatPageState extends State<TelegramChatPage> {
     }
     if (ids.isEmpty) return;
 
-    for (final id in ids) {
-      final user = await chatService.getUser(id);
-      if (user != null && mounted) {
-        setState(() => _userCache[id] = user);
+    // Throttle: resolve in batches of 5 with small delays between batches
+    final idList = ids.toList();
+    for (int i = 0; i < idList.length; i += 5) {
+      if (!_isActive || !mounted) break;
+      final batch = idList.skip(i).take(5);
+      final futures = batch.map((id) async {
+        final user = await chatService.getUser(id);
+        if (user != null && mounted) {
+          setState(() => _userCache[id] = user);
+        }
+      });
+      await Future.wait(futures);
+      // Small delay between batches to avoid rate limiting
+      if (i + 5 < idList.length) {
+        await Future.delayed(const Duration(milliseconds: 200));
       }
     }
   }
 
-  /// Download media for messages that have media metadata but no local path.
-  Future<void> _downloadMedia(List<TelegramMessage> messages) async {
+  /// Resolve reply previews for messages that have replyToMessageId but no sender name.
+  Future<void> _resolveReplyPreviews(List<TelegramMessage> messages) async {
     final chatService = TelegramService().chatService;
     if (chatService == null) return;
 
     for (final msg in messages) {
-      if (msg.media == null || msg.media!.localPath != null) continue;
+      if (msg.replyToMessageId == null || msg.replyToSenderName != null) continue;
 
-      final path = await chatService.downloadFile(msg.media!.fileId);
-      if (path != null && mounted) {
+      // First try to find the target in our current message list
+      final target = _messages
+          .where((m) => m.id == msg.replyToMessageId)
+          .firstOrNull;
+
+      String? senderName;
+      String? previewText;
+
+      if (target != null) {
+        final user = _userCache[target.senderUserId];
+        senderName = user?.displayName ?? target.senderName ?? 'Unknown';
+        previewText = target.text;
+      } else {
+        // Fetch from TDLib
+        final fetched = await chatService.getMessage(
+            widget.chatId, msg.replyToMessageId!);
+        if (fetched != null) {
+          // Try to resolve the sender name
+          if (fetched.senderUserId != 0) {
+            final user = await chatService.getUser(fetched.senderUserId);
+            senderName = user?.displayName ?? 'Unknown';
+          } else {
+            senderName = fetched.senderName ?? 'Unknown';
+          }
+          previewText = fetched.text;
+        }
+      }
+
+      if (senderName != null && mounted) {
+        final truncated = previewText != null && previewText.length > 100
+            ? '${previewText.substring(0, 100)}...'
+            : previewText;
+
         setState(() {
           final idx = _messages.indexWhere((m) => m.id == msg.id);
           if (idx >= 0) {
-            final updated = _messages[idx].withMediaPath(path);
-            _messages[idx] = updated;
-            // Persist media path back to SQLite cache
-            TelegramService().cacheService?.cacheMessage(msg.chatId, updated);
+            _messages[idx] = _messages[idx].copyWith(
+              replyToSenderName: senderName,
+              replyToText: truncated ?? '',
+            );
+            // Persist back to cache
+            TelegramService().cacheService?.cacheMessage(
+                widget.chatId, _messages[idx]);
           }
         });
       }
     }
   }
 
+  /// Download media for messages that have media metadata but no local path
+  /// and no in-memory bytes. Throttled: downloads 3 at a time.
+  Future<void> _downloadMedia(List<TelegramMessage> messages) async {
+    final chatService = TelegramService().chatService;
+    if (chatService == null) return;
+
+    final pending = messages
+        .where((m) =>
+            m.media != null &&
+            m.media!.localPath == null &&
+            m.media!.mediaBytes == null)
+        .toList();
+
+    for (int i = 0; i < pending.length; i += 3) {
+      if (!_isActive || !mounted) break;
+      final batch = pending.skip(i).take(3);
+      final futures = batch.map((msg) async {
+        final path = await chatService.downloadFile(msg.media!.fileId);
+        if (path != null && mounted) {
+          final cache = TelegramService().cacheService;
+          final ingested = cache?.ingestMediaBlob(
+              msg.chatId, msg.id, path) ?? false;
+
+          setState(() {
+            final idx = _messages.indexWhere((m) => m.id == msg.id);
+            if (idx >= 0) {
+              if (ingested && cache != null) {
+                // Re-read from cache — gets mediaBytes for images or
+                // localPath for file-path types
+                final match = cache.getCachedMessage(msg.chatId, msg.id);
+                if (match != null) {
+                  _messages[idx] = match;
+                  return;
+                }
+              }
+              final updated = _messages[idx].withMediaPath(path);
+              _messages[idx] = updated;
+              cache?.cacheMessage(msg.chatId, updated);
+            }
+          });
+
+          // Generate thumbnail in background if missing
+          if (ingested) {
+            _generateThumbnailInBackground(msg.chatId, msg.id);
+          }
+        }
+      });
+      await Future.wait(futures);
+      if (i + 3 < pending.length) {
+        await Future.delayed(const Duration(milliseconds: 100));
+      }
+    }
+  }
+
+  /// Generate map thumbnails for location/venue messages that have no thumbnail.
+  Future<void> _generateLocationThumbnails(List<TelegramMessage> messages) async {
+    final cache = TelegramService().cacheService;
+    if (cache == null) return;
+
+    final pending = messages.where((m) =>
+        (m.contentType == TelegramMessageContentType.location ||
+         m.contentType == TelegramMessageContentType.venue) &&
+        m.media?.thumbnail == null).toList();
+
+    for (final msg in pending) {
+      if (!_isActive || !mounted) break;
+      _generateThumbnailInBackground(msg.chatId, msg.id);
+    }
+  }
+
+  /// Generate thumbnail in background and update the message in the list.
+  Future<void> _generateThumbnailInBackground(
+      int chatId, int messageId) async {
+    try {
+      final cache = TelegramService().cacheService;
+      if (cache == null) return;
+      final thumb = await cache.generateThumbnailIfMissing(chatId, messageId);
+      if (thumb != null && mounted) {
+        // Re-read the message to pick up the new thumbnail
+        setState(() {
+          final idx = _messages.indexWhere((m) => m.id == messageId);
+          if (idx >= 0) {
+            final match = cache.getCachedMessage(chatId, messageId);
+            if (match != null) {
+              _messages[idx] = match;
+            }
+          }
+        });
+      }
+    } catch (e) {
+      stderr.writeln('TelegramChatPage: _generateThumbnailInBackground error: $e');
+    }
+  }
+
+  /// Get a file path for a media message, extracting blob on-demand if needed.
+  String? _resolveMediaPath(TelegramMessage m) {
+    if (m.media?.localPath != null) return m.media!.localPath;
+    if (m.media?.mediaBytes != null) {
+      // On-demand extraction for gallery/document viewers that need a path
+      final cache = TelegramService().cacheService;
+      return cache?.extractBlobToFile(m.chatId, m.id);
+    }
+    return null;
+  }
+
   /// Open full-screen viewer for a media message.
   void _openMedia(TelegramMessage msg) {
-    final path = msg.media?.localPath;
-    if (path == null) return;
-
     // Documents → DocumentViewerWidget in a Scaffold
     if (msg.contentType == TelegramMessageContentType.document) {
+      final path = _resolveMediaPath(msg);
+      if (path == null) return;
       Navigator.of(context).push(
         MaterialPageRoute(
           builder: (_) => Scaffold(
@@ -273,29 +555,50 @@ class _TelegramChatPageState extends State<TelegramChatPage> {
       return;
     }
 
-    // Photos, videos, animations → PhotoViewerPage with gallery swipe
+    // Audio → open with system audio player
+    if (msg.contentType == TelegramMessageContentType.audio) {
+      final path = _resolveMediaPath(msg);
+      if (path == null) return;
+      FileLauncherService().openFile(path);
+      return;
+    }
+
+    // Photos, videos, animations, video notes → PhotoViewerPage with gallery swipe
     if (msg.contentType == TelegramMessageContentType.photo ||
         msg.contentType == TelegramMessageContentType.video ||
-        msg.contentType == TelegramMessageContentType.animation) {
-      // Collect all visual media paths from current messages
+        msg.contentType == TelegramMessageContentType.animation ||
+        msg.contentType == TelegramMessageContentType.videoNote) {
+      // Collect all visual media from current messages (has localPath or mediaBytes)
       final visualMedia = _messages
           .where((m) =>
               (m.contentType == TelegramMessageContentType.photo ||
                   m.contentType == TelegramMessageContentType.video ||
-                  m.contentType == TelegramMessageContentType.animation) &&
-              m.media?.localPath != null)
+                  m.contentType == TelegramMessageContentType.animation ||
+                  m.contentType == TelegramMessageContentType.videoNote) &&
+              (m.media?.localPath != null || m.media?.mediaBytes != null))
           .toList()
           .reversed // messages are newest-first, gallery should be chronological
           .toList();
 
-      final paths = visualMedia.map((m) => m.media!.localPath!).toList();
-      final idx = visualMedia.indexWhere((m) => m.id == msg.id);
+      // Resolve paths on-demand (extract blobs only when gallery opens)
+      final paths = <String>[];
+      int? tappedIdx;
+      for (int i = 0; i < visualMedia.length; i++) {
+        final m = visualMedia[i];
+        final path = _resolveMediaPath(m);
+        if (path != null) {
+          if (m.id == msg.id) tappedIdx = paths.length;
+          paths.add(path);
+        }
+      }
+
+      if (paths.isEmpty) return;
 
       Navigator.of(context).push(
         MaterialPageRoute(
           builder: (_) => PhotoViewerPage(
             imagePaths: paths,
-            initialIndex: idx >= 0 ? idx : 0,
+            initialIndex: tappedIdx ?? 0,
           ),
         ),
       );
@@ -311,36 +614,216 @@ class _TelegramChatPageState extends State<TelegramChatPage> {
 
     try {
       final topics = await chatService.getForumTopics(widget.chatId);
-      setState(() {
-        _topics = topics;
-        _loading = false;
-      });
+
+      // Phase 1: Load cached topic photos instantly (offline)
+      final cache = TelegramService().cacheService;
+      if (cache != null) {
+        _topicPhotos = cache.getAllTopicPhotos(widget.chatId);
+      }
+
+      if (mounted) {
+        setState(() {
+          _topics = topics;
+          _loading = false;
+        });
+      }
+
+      // Phase 2: Download missing custom emoji icons (async, online)
+      final needsDownload = topics
+          .where((t) => t.iconCustomEmojiId != 0 &&
+              !_topicPhotos.containsKey(t.messageThreadId))
+          .toList();
+      if (needsDownload.isNotEmpty) {
+        final downloaded = await chatService.downloadTopicIcons(
+            widget.chatId, needsDownload);
+        if (downloaded.isNotEmpty && mounted) {
+          setState(() { _topicPhotos.addAll(downloaded); });
+        }
+      }
     } catch (e) {
       LogService().error('TelegramChatPage: failed to load forum topics: $e');
-      setState(() => _loading = false);
+      if (mounted) setState(() => _loading = false);
     }
   }
 
   void _listenForNewMessages() {
     _eventSub = TelegramService().events.listen((event) {
-      if (event.type == TelegramEventType.newMessage) {
-        final msg = event.data as TelegramMessage;
-        if (msg.chatId == widget.chatId) {
-          setState(() {
-            _messages.insert(0, msg);
-          });
-          // Resolve user for new message
-          if (msg.senderUserId != 0 &&
-              !_userCache.containsKey(msg.senderUserId)) {
-            _resolveUsers([msg]);
+      switch (event.type) {
+        case TelegramEventType.newMessage:
+          final msg = event.data as TelegramMessage;
+          if (msg.chatId == widget.chatId) {
+            setState(() {
+              _messages.insert(0, msg);
+            });
+            // Only resolve users / download media when this chat is active
+            if (_isActive) {
+              // Mark the incoming message as read immediately since the
+              // user is actively viewing this chat
+              _markMessagesAsRead([msg]);
+              if (msg.senderUserId != 0 &&
+                  !_userCache.containsKey(msg.senderUserId)) {
+                _resolveUsers([msg]);
+              }
+              if (msg.replyToMessageId != null && msg.replyToSenderName == null) {
+                _resolveReplyPreviews([msg]);
+              }
+              if (msg.media != null && msg.media!.localPath == null) {
+                _downloadMedia([msg]);
+              }
+              if (msg.contentType == TelegramMessageContentType.location ||
+                  msg.contentType == TelegramMessageContentType.venue) {
+                _generateLocationThumbnails([msg]);
+              }
+            }
           }
-          // Download media if needed
-          if (msg.media != null && msg.media!.localPath == null) {
-            _downloadMedia([msg]);
+          break;
+
+        case TelegramEventType.messageEdited:
+          final data = event.data as Map<String, dynamic>;
+          final chatId = data['chat_id'] as int;
+          final messageId = data['message_id'] as int;
+          final editDate = data['edit_date'] as int;
+          if (chatId == widget.chatId && mounted) {
+            setState(() {
+              final idx = _messages.indexWhere((m) => m.id == messageId);
+              if (idx >= 0) {
+                _messages[idx] = _messages[idx].copyWith(editDate: editDate);
+              }
+            });
+          }
+          break;
+
+        case TelegramEventType.messagesDeleted:
+          final data = event.data as Map<String, dynamic>;
+          final chatId = data['chat_id'] as int;
+          final messageIds = (data['message_ids'] as List<int>).toSet();
+          if (chatId == widget.chatId && mounted) {
+            setState(() {
+              _messages.removeWhere((m) => messageIds.contains(m.id));
+            });
+          }
+          break;
+
+        case TelegramEventType.reactionsUpdated:
+          final data = event.data as Map<String, dynamic>;
+          final chatId = data['chat_id'] as int;
+          final messageId = data['message_id'] as int;
+          final reactions = data['reactions'] as List<TelegramReaction>;
+          if (chatId == widget.chatId && mounted) {
+            setState(() {
+              final idx = _messages.indexWhere((m) => m.id == messageId);
+              if (idx >= 0) {
+                _messages[idx] = _messages[idx].copyWith(reactions: reactions);
+                // Persist updated reactions to cache
+                TelegramService().cacheService?.cacheMessage(
+                    widget.chatId, _messages[idx]);
+              }
+            });
+          }
+          break;
+
+        case TelegramEventType.typingUpdate:
+          final data = event.data as Map<String, dynamic>;
+          final chatId = data['chat_id'] as int;
+          final userId = data['user_id'] as int;
+          final action = data['action'] as String;
+          if (chatId == widget.chatId && mounted) {
+            if (action == 'chatActionCancel' || action.isEmpty) {
+              setState(() => _typingUsers.remove(userId));
+            } else {
+              final user = _userCache[userId];
+              final name = user?.displayName ?? 'Someone';
+              setState(() => _typingUsers[userId] = name);
+              // Auto-clear after 5 seconds
+              _typingClearTimer?.cancel();
+              _typingClearTimer = Timer(const Duration(seconds: 5), () {
+                if (mounted) {
+                  setState(() => _typingUsers.remove(userId));
+                }
+              });
+            }
+          }
+          break;
+
+        default:
+          break;
+      }
+    });
+  }
+
+  /// Trigger older message loading when scrolled near the top (maxScrollExtent
+  /// in a reverse list).
+  void _onScroll() {
+    if (_loadingOlder || !_hasMoreMessages || _messages.isEmpty) return;
+    final pos = _scrollController.position;
+    if (pos.pixels >= pos.maxScrollExtent - 200) {
+      _loadOlderMessages();
+    }
+  }
+
+  /// Load older messages using a cache-first strategy.
+  Future<void> _loadOlderMessages() async {
+    if (_loadingOlder || !_hasMoreMessages || _messages.isEmpty) return;
+    setState(() => _loadingOlder = true);
+
+    try {
+      final oldestMsg = _messages.last;
+      final oldestDateMs = oldestMsg.date.millisecondsSinceEpoch;
+      final cache = TelegramService().cacheService;
+
+      // Step 1: Try cache first
+      List<TelegramMessage> older = [];
+      if (cache != null) {
+        older = cache.getOlderCachedMessages(
+          widget.chatId,
+          beforeDateMs: oldestDateMs,
+          messageThreadId: widget.messageThreadId,
+        );
+      }
+
+      if (older.isNotEmpty) {
+        // Cache hit — append and resolve
+        if (mounted) {
+          setState(() => _messages.addAll(older));
+          _resolveUsers(older);
+          _resolveReplyPreviews(older);
+          _downloadMedia(older);
+          _generateLocationThumbnails(older);
+        }
+      } else {
+        // Step 2: Cache exhausted — fetch from TDLib
+        final chatService = TelegramService().chatService;
+        if (chatService != null) {
+          final List<TelegramMessage> fetched;
+          if (widget.messageThreadId != null) {
+            fetched = await chatService.getTopicHistory(
+              widget.chatId,
+              widget.messageThreadId!,
+              fromMessageId: oldestMsg.id,
+            );
+          } else {
+            fetched = await chatService.getChatHistory(
+              widget.chatId,
+              fromMessageId: oldestMsg.id,
+            );
+          }
+
+          if (fetched.isEmpty) {
+            if (mounted) setState(() => _hasMoreMessages = false);
+          } else if (mounted) {
+            setState(() => _messages.addAll(fetched));
+            _resolveUsers(fetched);
+            _resolveReplyPreviews(fetched);
+            _downloadMedia(fetched);
+            _generateLocationThumbnails(fetched);
           }
         }
       }
-    });
+    } catch (e) {
+      stderr.writeln('TelegramChatPage: _loadOlderMessages error: $e');
+    } finally {
+      if (mounted) setState(() => _loadingOlder = false);
+    }
   }
 
   Future<void> _sendMessage() async {
@@ -350,7 +833,12 @@ class _TelegramChatPageState extends State<TelegramChatPage> {
     final chatService = TelegramService().chatService;
     if (chatService == null) return;
 
-    setState(() => _sending = true);
+    final replyId = _replyTarget?.id;
+
+    setState(() {
+      _sending = true;
+      _replyTarget = null;
+    });
     _inputController.clear();
 
     try {
@@ -358,6 +846,7 @@ class _TelegramChatPageState extends State<TelegramChatPage> {
         widget.chatId,
         text,
         messageThreadId: widget.messageThreadId,
+        replyToMessageId: replyId,
       );
     } catch (e) {
       if (mounted) {
@@ -366,25 +855,88 @@ class _TelegramChatPageState extends State<TelegramChatPage> {
         );
       }
     } finally {
-      if (mounted) setState(() => _sending = false);
+      if (mounted) {
+        setState(() => _sending = false);
+        _inputFocusNode.requestFocus();
+      }
+    }
+  }
+
+  /// Delete a message after user confirmation.
+  Future<void> _deleteMessage(TelegramMessage msg) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete message'),
+        content: const Text('Are you sure you want to delete this message?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Delete', style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
+    final chatService = TelegramService().chatService;
+    if (chatService == null) return;
+
+    final ok = await chatService.deleteMessages(widget.chatId, [msg.id]);
+    if (ok && mounted) {
+      setState(() {
+        _messages.removeWhere((m) => m.id == msg.id);
+      });
     }
   }
 
   @override
+  void deactivate() {
+    _isActive = false;
+    super.deactivate();
+  }
+
+  @override
   void dispose() {
+    _isActive = false;
+    _scrollController.removeListener(_onScroll);
     _eventSub?.cancel();
+    _typingClearTimer?.cancel();
+    _highlightTimer?.cancel();
+    _messageKeys.clear();
     TelegramService().chatService?.closeChat(widget.chatId);
     _inputController.dispose();
+    _inputFocusNode.dispose();
     _scrollController.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     final title = widget.topicName ?? widget.chatTitle;
 
     return Scaffold(
-      appBar: AppBar(title: Text(title)),
+      appBar: AppBar(
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(title),
+            if (_chatDbSize != null)
+              Text(
+                _chatDbSize!,
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+          ],
+        ),
+      ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : _isForum && widget.messageThreadId == null
@@ -417,15 +969,24 @@ class _TelegramChatPageState extends State<TelegramChatPage> {
   }
 
   Widget _buildTopicTile(TelegramForumTopic topic, ThemeData theme) {
-    return ListTile(
-      leading: CircleAvatar(
-        backgroundColor: const Color(0xFF0088CC).withValues(alpha: 0.15),
-        child: Icon(
-          topic.isGeneral ? Icons.forum : Icons.tag,
-          color: const Color(0xFF0088CC),
-          size: 20,
-        ),
-      ),
+    final cachedPhoto = topic.photoBytes ?? _topicPhotos[topic.messageThreadId];
+    final iconColorValue = topic.iconColor != 0
+        ? Color(topic.iconColor | 0xFF000000)
+        : const Color(0xFF0088CC);
+
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: ListTile(
+      leading: cachedPhoto != null
+          ? CircleAvatar(backgroundImage: MemoryImage(cachedPhoto))
+          : CircleAvatar(
+              backgroundColor: iconColorValue.withValues(alpha: 0.15),
+              child: Icon(
+                topic.isGeneral ? Icons.forum : Icons.tag,
+                color: iconColorValue,
+                size: 20,
+              ),
+            ),
       title: Text(
         topic.name,
         maxLines: 1,
@@ -474,6 +1035,7 @@ class _TelegramChatPageState extends State<TelegramChatPage> {
           ),
         );
       },
+    ),
     );
   }
 
@@ -499,6 +1061,89 @@ class _TelegramChatPageState extends State<TelegramChatPage> {
     return prev.senderUserId != msg.senderUserId || prev.isOutgoing;
   }
 
+  /// Build the typing indicator bar.
+  Widget _buildTypingIndicator(ThemeData theme) {
+    if (_typingUsers.isEmpty) return const SizedBox.shrink();
+
+    final names = _typingUsers.values.toList();
+    final String label;
+    if (names.length == 1) {
+      label = '${names[0]} is typing...';
+    } else {
+      label = '${names.join(", ")} are typing...';
+    }
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      child: Text(
+        label,
+        style: theme.textTheme.bodySmall?.copyWith(
+          fontStyle: FontStyle.italic,
+          color: theme.colorScheme.onSurfaceVariant,
+        ),
+      ),
+    );
+  }
+
+  /// Build the reply compose bar shown above the input.
+  Widget _buildReplyBar(ThemeData theme) {
+    if (_replyTarget == null) return const SizedBox.shrink();
+
+    final target = _replyTarget!;
+    final user = _userCache[target.senderUserId];
+    final senderName = target.isOutgoing
+        ? 'You'
+        : (user?.displayName ?? target.senderName ?? 'Unknown');
+    final previewText = target.text ?? '';
+
+    return Container(
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerHigh,
+        border: Border(
+          left: BorderSide(
+            color: const Color(0xFF0088CC),
+            width: 3,
+          ),
+        ),
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  senderName,
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    color: const Color(0xFF0088CC),
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                if (previewText.isNotEmpty)
+                  Text(
+                    previewText,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          IconButton(
+            icon: const Icon(Icons.close, size: 18),
+            onPressed: () => setState(() => _replyTarget = null),
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildMessageView() {
     final theme = Theme.of(context);
 
@@ -518,12 +1163,29 @@ class _TelegramChatPageState extends State<TelegramChatPage> {
                   controller: _scrollController,
                   reverse: true,
                   padding: const EdgeInsets.symmetric(vertical: 8),
-                  itemCount: _messages.length,
+                  itemCount: _messages.length + (_hasMoreMessages ? 1 : 0),
                   itemBuilder: (context, index) {
+                    if (index == _messages.length) {
+                      // Loading indicator at the top (oldest end)
+                      return const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 16),
+                        child: Center(
+                          child: SizedBox(
+                            width: 24,
+                            height: 24,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          ),
+                        ),
+                      );
+                    }
                     return _buildMessageItem(index);
                   },
                 ),
         ),
+        // Typing indicator
+        _buildTypingIndicator(theme),
+        // Reply compose bar
+        _buildReplyBar(theme),
         // Input bar
         Container(
           decoration: BoxDecoration(
@@ -541,6 +1203,7 @@ class _TelegramChatPageState extends State<TelegramChatPage> {
               Expanded(
                 child: TextField(
                   controller: _inputController,
+                  focusNode: _inputFocusNode,
                   decoration: const InputDecoration(
                     hintText: 'Message',
                     border: OutlineInputBorder(
@@ -575,17 +1238,207 @@ class _TelegramChatPageState extends State<TelegramChatPage> {
     );
   }
 
+  /// React to a message with an emoji.
+  Future<void> _reactToMessage(TelegramMessage msg, String emoji) async {
+    final chatService = TelegramService().chatService;
+    if (chatService == null) return;
+
+    // Optimistic local update — show the reaction immediately
+    setState(() {
+      final idx = _messages.indexWhere((m) => m.id == msg.id);
+      if (idx >= 0) {
+        final existing = _messages[idx].reactions;
+        final reactionIdx = existing.indexWhere((r) => r.emoji == emoji);
+        List<TelegramReaction> updated;
+        if (reactionIdx >= 0) {
+          // Toggle: if already chosen, remove our count; otherwise mark chosen
+          final r = existing[reactionIdx];
+          if (r.isChosen) {
+            updated = List.of(existing);
+            if (r.count <= 1) {
+              updated.removeAt(reactionIdx);
+            } else {
+              updated[reactionIdx] = TelegramReaction(
+                  emoji: emoji, count: r.count - 1, isChosen: false);
+            }
+          } else {
+            updated = List.of(existing);
+            updated[reactionIdx] = TelegramReaction(
+                emoji: emoji, count: r.count + 1, isChosen: true);
+          }
+        } else {
+          updated = [
+            ...existing,
+            TelegramReaction(emoji: emoji, count: 1, isChosen: true),
+          ];
+        }
+        _messages[idx] = _messages[idx].copyWith(reactions: updated);
+      }
+    });
+
+    final ok = await chatService.addMessageReaction(widget.chatId, msg.id, emoji);
+    stderr.writeln('TelegramChat: addMessageReaction($emoji) -> $ok');
+  }
+
+  /// Scroll to and highlight a message by its ID (used when tapping reply previews).
+  void _scrollToMessage(int messageId) {
+    // Find the target index in the loaded message list
+    var targetIndex = _messages.indexWhere((m) => m.id == messageId);
+
+    if (targetIndex < 0) {
+      // Message not in the loaded list — try loading from cache
+      final cache = TelegramService().cacheService;
+      if (cache != null) {
+        final cached = cache.getCachedMessage(widget.chatId, messageId);
+        if (cached != null) {
+          // Insert at the correct chronological position (list is newest-first)
+          int insertAt = _messages.length;
+          for (int i = 0; i < _messages.length; i++) {
+            if (_messages[i].date.isBefore(cached.date) ||
+                (_messages[i].date == cached.date && _messages[i].id < cached.id)) {
+              insertAt = i;
+              break;
+            }
+          }
+          setState(() => _messages.insert(insertAt, cached));
+          targetIndex = insertAt;
+          _resolveUsers([cached]);
+          _resolveReplyPreviews([cached]);
+        }
+      }
+    }
+
+    if (targetIndex < 0) return; // Could not find the message
+
+    // Set highlight
+    _highlightTimer?.cancel();
+    setState(() => _highlightMessageId = messageId);
+    _highlightTimer = Timer(const Duration(milliseconds: 1500), () {
+      if (mounted) setState(() => _highlightMessageId = null);
+    });
+
+    // Try ensureVisible with GlobalKey first
+    final key = _messageKeys[messageId];
+    if (key?.currentContext != null) {
+      Scrollable.ensureVisible(
+        key!.currentContext!,
+        alignment: 0.5,
+        duration: const Duration(milliseconds: 300),
+      );
+      return;
+    }
+
+    // Fallback: estimate scroll offset based on index (reverse list)
+    final estimatedOffset = targetIndex * 72.0;
+    _scrollController.animateTo(
+      estimatedOffset,
+      duration: const Duration(milliseconds: 300),
+      curve: Curves.easeOut,
+    ).then((_) {
+      // After scrolling, try ensureVisible once the widget is built
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        final k = _messageKeys[messageId];
+        if (k?.currentContext != null) {
+          Scrollable.ensureVisible(
+            k!.currentContext!,
+            alignment: 0.5,
+            duration: const Duration(milliseconds: 200),
+          );
+        }
+      });
+    });
+  }
+
   /// Build a single message row, possibly preceded by a day separator.
   Widget _buildMessageItem(int index) {
     final msg = _messages[index];
     final user = _userCache[msg.senderUserId];
+
+    // Service messages (call, pinMessage) → centered pill, not a bubble
+    if (msg.contentType == TelegramMessageContentType.call ||
+        msg.contentType == TelegramMessageContentType.pinMessage) {
+      final serviceWidget = TelegramServiceMessage(
+        message: msg,
+        senderName: user?.displayName,
+      );
+
+      final bool showSeparator;
+      if (index == _messages.length - 1) {
+        showSeparator = true;
+      } else {
+        final older = _messages[index + 1];
+        showSeparator = _isDifferentDay(msg.date, older.date);
+      }
+
+      if (showSeparator) {
+        return Column(
+          children: [
+            TelegramDateSeparator(date: msg.date),
+            serviceWidget,
+          ],
+        );
+      }
+      return serviceWidget;
+    }
+
+    // Assign a GlobalKey for scroll-to-message
+    _messageKeys[msg.id] ??= GlobalKey();
+    final msgKey = _messageKeys[msg.id]!;
+    final isHighlighted = msg.id == _highlightMessageId;
 
     final bubble = TelegramMessageBubble(
       message: msg,
       senderName: msg.isOutgoing ? null : user?.displayName,
       senderPhotoPath: user?.profilePhotoPath,
       showAvatar: _shouldShowAvatar(index),
-      onMediaTap: msg.media?.localPath != null ? () => _openMedia(msg) : null,
+      onMediaTap: (msg.media?.localPath != null || msg.media?.mediaBytes != null)
+          ? () => _openMedia(msg)
+          : null,
+      onReply: (m) => setState(() => _replyTarget = m),
+      onDelete: _deleteMessage,
+      onReact: _reactToMessage,
+      onReplyPreviewTap: _scrollToMessage,
+      onDownloadVoice: (m) async {
+        final chatService = TelegramService().chatService;
+        if (chatService == null || m.media == null) return null;
+        final path = await chatService.downloadFile(m.media!.fileId);
+        if (path != null && mounted) {
+          final cache = TelegramService().cacheService;
+          final ingested = cache?.ingestMediaBlob(
+              m.chatId, m.id, path) ?? false;
+
+          String? effectivePath = path;
+          if (ingested && cache != null) {
+            // Re-read from cache — voice notes are file-path types,
+            // so _rowToMessage extracts to extracted/ dir
+            final match = cache.getCachedMessage(m.chatId, m.id);
+            if (match?.media?.localPath != null) {
+              effectivePath = match!.media!.localPath;
+            }
+          }
+
+          setState(() {
+            final idx = _messages.indexWhere((x) => x.id == m.id);
+            if (idx >= 0) {
+              final updated = _messages[idx].withMediaPath(effectivePath!);
+              _messages[idx] = updated;
+              if (!ingested) {
+                cache?.cacheMessage(m.chatId, updated);
+              }
+            }
+          });
+          return effectivePath;
+        }
+        return path;
+      },
+    );
+
+    // Wrap bubble with key and highlight effect
+    final wrappedBubble = AnimatedContainer(
+      key: msgKey,
+      duration: const Duration(milliseconds: 500),
+      color: isHighlighted ? const Color(0x302B5278) : Colors.transparent,
+      child: bubble,
     );
 
     // Day separator: show above a message when the message above it
@@ -603,11 +1456,11 @@ class _TelegramChatPageState extends State<TelegramChatPage> {
       return Column(
         children: [
           TelegramDateSeparator(date: msg.date),
-          bubble,
+          wrappedBubble,
         ],
       );
     }
 
-    return bubble;
+    return wrappedBubble;
   }
 }

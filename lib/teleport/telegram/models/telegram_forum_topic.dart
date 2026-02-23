@@ -3,6 +3,8 @@
  * License: Apache-2.0
  */
 
+import 'dart:typed_data';
+
 /// A forum topic within a Telegram supergroup.
 class TelegramForumTopic {
   final int messageThreadId;
@@ -13,6 +15,9 @@ class TelegramForumTopic {
   final int unreadCount;
   final String? lastMessageText;
   final DateTime? lastMessageDate;
+  final int iconColor;
+  final int iconCustomEmojiId;
+  final Uint8List? photoBytes;
 
   const TelegramForumTopic({
     required this.messageThreadId,
@@ -23,6 +28,9 @@ class TelegramForumTopic {
     this.unreadCount = 0,
     this.lastMessageText,
     this.lastMessageDate,
+    this.iconColor = 0,
+    this.iconCustomEmojiId = 0,
+    this.photoBytes,
   });
 
   factory TelegramForumTopic.fromTdlib(Map<String, dynamic> json) {
@@ -49,6 +57,10 @@ class TelegramForumTopic {
       }
     }
 
+    final icon = info['icon'] as Map<String, dynamic>? ?? {};
+    final iconColor = icon['color'] as int? ?? 0;
+    final iconCustomEmojiId = icon['custom_emoji_id'] as int? ?? 0;
+
     return TelegramForumTopic(
       messageThreadId: info['message_thread_id'] as int? ?? 0,
       name: info['name'] as String? ?? 'Unknown',
@@ -58,6 +70,24 @@ class TelegramForumTopic {
       unreadCount: json['unread_count'] as int? ?? 0,
       lastMessageText: lastMsgText,
       lastMessageDate: lastMsgDate,
+      iconColor: iconColor,
+      iconCustomEmojiId: iconCustomEmojiId,
+    );
+  }
+
+  TelegramForumTopic copyWith({Uint8List? photoBytes}) {
+    return TelegramForumTopic(
+      messageThreadId: messageThreadId,
+      name: name,
+      isGeneral: isGeneral,
+      isClosed: isClosed,
+      isHidden: isHidden,
+      unreadCount: unreadCount,
+      lastMessageText: lastMessageText,
+      lastMessageDate: lastMessageDate,
+      iconColor: iconColor,
+      iconCustomEmojiId: iconCustomEmojiId,
+      photoBytes: photoBytes ?? this.photoBytes,
     );
   }
 
