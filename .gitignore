@@ -128,3 +128,4 @@ esp32/managed_components/
 # Claude memory (personal, not shared)
 CLAUDE.local.md
 memory/
+linux/tdlib/
