@@ -26,6 +26,8 @@ import 'device_apps_service.dart';
 import 'chat_file_upload_manager.dart';
 import 'app_args.dart';
 import '../connection/connection_manager.dart';
+import '../teleport/telegram/telegram_service.dart';
+import 'sqlite_loader.dart';
 import '../version.dart';
 import '../models/chat_channel.dart';
 import '../models/chat_message.dart';
@@ -2052,6 +2054,11 @@ function cleanup() {
       // Handle shared folder debug actions
       if (action.toLowerCase().startsWith('shared_')) {
         return await _handleSharedAction(action.toLowerCase(), params, headers);
+      }
+
+      // Handle Telegram cache debug actions
+      if (action.toLowerCase().startsWith('telegram_')) {
+        return await _handleTelegramAction(action.toLowerCase(), params, headers);
       }
 
       final debugController = DebugController();
@@ -16420,5 +16427,211 @@ function cleanup() {
         headers: headers,
       );
     }
+  }
+
+  Future<shelf.Response> _handleTelegramAction(
+    String action,
+    Map<String, dynamic> params,
+    Map<String, String> headers,
+  ) async {
+    try {
+      final cacheService = TelegramService().cacheService;
+
+      // Connect Telegram service programmatically (for debug testing)
+      if (action == 'telegram_connect') {
+        if (cacheService != null) {
+          return shelf.Response.ok(
+            jsonEncode({'success': true, 'message': 'Already connected'}),
+            headers: headers,
+          );
+        }
+        try {
+          final callsign = ProfileService().getProfile().callsign;
+          final profileStorage = AppService().profileStorage;
+          if (profileStorage == null) {
+            return shelf.Response.ok(
+              jsonEncode({'success': false, 'error': 'No profile storage'}),
+              headers: headers,
+            );
+          }
+          final service = TelegramService();
+          service.setStorage(profileStorage);
+          await service.initialize('teleport', callsign);
+          await service.connect();
+          return shelf.Response.ok(
+            jsonEncode({'success': true, 'message': 'Telegram connected'}),
+            headers: headers,
+          );
+        } catch (e) {
+          return shelf.Response.ok(
+            jsonEncode({'success': false, 'error': 'Connect failed: $e'}),
+            headers: headers,
+          );
+        }
+      }
+
+      // For inspect, fall back to direct filesystem access when service isn't running
+      if (action == 'telegram_cache_inspect' && cacheService == null) {
+        final result = _inspectCacheFromFilesystem(params);
+        return shelf.Response.ok(
+          jsonEncode({'success': true, 'note': 'offline inspection (service not running)', ...result}),
+          headers: headers,
+        );
+      }
+
+      if (cacheService == null) {
+        return shelf.Response.ok(
+          jsonEncode({'success': false, 'error': 'Telegram cache service not initialized'}),
+          headers: headers,
+        );
+      }
+
+      switch (action) {
+        case 'telegram_load_chat':
+          final chatIdParam = params['chat_id'];
+          final chatId = chatIdParam is int
+              ? chatIdParam
+              : chatIdParam is String
+                  ? int.tryParse(chatIdParam)
+                  : null;
+          if (chatId == null) {
+            return shelf.Response.ok(
+              jsonEncode({'success': false, 'error': 'chat_id required'}),
+              headers: headers,
+            );
+          }
+          try {
+            final chatService = TelegramService().chatService;
+            if (chatService == null) {
+              return shelf.Response.ok(
+                jsonEncode({'success': false, 'error': 'Chat service not available'}),
+                headers: headers,
+              );
+            }
+            await chatService.openChat(chatId);
+            final messages = await chatService.getChatHistory(chatId);
+            return shelf.Response.ok(
+              jsonEncode({
+                'success': true,
+                'chat_id': chatId,
+                'messages_loaded': messages.length,
+                'media_messages': messages.where((m) => m.media != null).length,
+              }),
+              headers: headers,
+            );
+          } catch (e) {
+            return shelf.Response.ok(
+              jsonEncode({'success': false, 'error': 'Load failed: $e'}),
+              headers: headers,
+            );
+          }
+
+        case 'telegram_cache_inspect':
+          final chatIdParam = params['chat_id'];
+          final chatId = chatIdParam is int
+              ? chatIdParam
+              : chatIdParam is String
+                  ? int.tryParse(chatIdParam)
+                  : null;
+          final result = cacheService.inspectCache(chatId: chatId);
+          return shelf.Response.ok(
+            jsonEncode({'success': true, ...result}),
+            headers: headers,
+          );
+
+        case 'telegram_cache_clear':
+          final chatIdParam = params['chat_id'];
+          final chatId = chatIdParam is int
+              ? chatIdParam
+              : chatIdParam is String
+                  ? int.tryParse(chatIdParam)
+                  : null;
+          final result = cacheService.clearCache(chatId: chatId);
+          return shelf.Response.ok(
+            jsonEncode({'success': true, ...result}),
+            headers: headers,
+          );
+
+        default:
+          return shelf.Response.ok(
+            jsonEncode({'success': false, 'error': 'Unknown telegram action: $action'}),
+            headers: headers,
+          );
+      }
+    } catch (e, stack) {
+      LogService().log('LogApiService: Telegram action error: $e');
+      LogService().log('Stack: $stack');
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'success': false, 'error': e.toString()}),
+        headers: headers,
+      );
+    }
+  }
+
+  /// Offline cache inspection — reads DB files directly from the profile directory.
+  Map<String, dynamic> _inspectCacheFromFilesystem(Map<String, dynamic> params) {
+    final profileStorage = AppService().profileStorage;
+    if (profileStorage == null) {
+      return {'error': 'No profile storage'};
+    }
+
+    // Find the telegram cache dir
+    final basePath = profileStorage.getAbsolutePath('');
+    final cacheDir = io.Directory(path.join(basePath, 'teleport', 'telegram', 'cache'));
+    if (!cacheDir.existsSync()) {
+      return {'error': 'Cache directory does not exist', 'path': cacheDir.path};
+    }
+
+    final chatIdParam = params['chat_id'];
+    final chatId = chatIdParam is int
+        ? chatIdParam
+        : chatIdParam is String
+            ? int.tryParse(chatIdParam)
+            : null;
+
+    if (chatId != null) {
+      final dbPath = path.join(cacheDir.path, 'chat_$chatId.db');
+      final dbFile = io.File(dbPath);
+      if (!dbFile.existsSync()) {
+        return {'error': 'No cache DB for chat $chatId'};
+      }
+      try {
+        final db = SQLiteLoader.openDatabase(dbPath);
+        try {
+          final countResult = db.select('SELECT count(*) as cnt FROM messages');
+          final count = countResult.first['cnt'] as int;
+          final sample = db.select(
+            'SELECT id, content_type, date, media_file_id, media_local_path '
+            'FROM messages ORDER BY date DESC LIMIT 5',
+          );
+          final rows = sample
+              .map((r) => {
+                    'id': r['id'],
+                    'content_type': r['content_type'],
+                    'date': r['date'],
+                    'media_file_id': r['media_file_id'],
+                    'media_local_path': r['media_local_path'],
+                  })
+              .toList();
+          return {'chat_id': chatId, 'message_count': count, 'sample': rows};
+        } finally {
+          db.dispose();
+        }
+      } catch (e) {
+        return {'error': 'Failed to inspect chat $chatId: $e'};
+      }
+    }
+
+    // List all DB files
+    final files = cacheDir
+        .listSync()
+        .whereType<io.File>()
+        .where((f) => f.path.endsWith('.db'))
+        .map((f) => {
+              'name': f.uri.pathSegments.last,
+              'size_bytes': f.lengthSync(),
+            })
+        .toList();
+    return {'cache_dir': cacheDir.path, 'databases': files};
   }
 }
