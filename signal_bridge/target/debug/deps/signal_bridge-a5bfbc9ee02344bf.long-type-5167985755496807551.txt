@@ -1,0 +1,4 @@
+Rc<UnsafeCell<rand::rngs::reseeding::ReseedingRng<rand_chacha::chacha::ChaCha12Core, rand_core::os::OsRng>>>
+{coroutine witness@manager::registered::<impl Manager<SqliteStore, Registered>>::upload_attachment::{closure#0}}
+{async fn body of manager::registered::<impl Manager<SqliteStore, Registered>>::upload_attachment()}
+impl Future<Output = Result<Result<AttachmentPointer, presage::libsignal_service::sender::AttachmentUploadError>, presage::Error<<SqliteStore as presage::store::Store>::Error>>>

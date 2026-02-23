@@ -1,0 +1,1 @@
+impl Future<Output = Result<std::option::Option<presage::model::contacts::Contact>, <SqliteStore as ContentsStore>::ContentsStoreError>>

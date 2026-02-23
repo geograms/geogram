@@ -1,0 +1,10 @@
+dyn Future<Output = Result<IdentityKeyPair, presage::libsignal_service::libsignal_protocol::SignalProtocolError>>
+Unique<dyn Future<Output = Result<IdentityKeyPair, presage::libsignal_service::libsignal_protocol::SignalProtocolError>>>
+Box<dyn Future<Output = Result<IdentityKeyPair, presage::libsignal_service::libsignal_protocol::SignalProtocolError>>>
+Pin<Box<dyn Future<Output = Result<IdentityKeyPair, presage::libsignal_service::libsignal_protocol::SignalProtocolError>>>>
+{coroutine witness@manager::registered::<impl Manager<SqliteStore, Registered>>::new_message_sender::{closure#0}}
+{async fn body of manager::registered::<impl Manager<SqliteStore, Registered>>::new_message_sender()}
+impl Future<Output = Result<MessageSender<<SqliteStore as presage::store::Store>::AciStore>, presage::Error<<SqliteStore as presage::store::Store>::Error>>>
+{coroutine witness@manager::registered::<impl Manager<SqliteStore, Registered>>::upload_attachment::{closure#0}}
+{async fn body of manager::registered::<impl Manager<SqliteStore, Registered>>::upload_attachment()}
+impl Future<Output = Result<Result<AttachmentPointer, presage::libsignal_service::sender::AttachmentUploadError>, presage::Error<<SqliteStore as presage::store::Store>::Error>>>

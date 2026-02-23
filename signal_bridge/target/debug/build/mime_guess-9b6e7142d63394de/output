@@ -1,0 +1,1 @@
+cargo:rustc-env=MIME_TYPES_GENERATED_PATH=/home/brito/code/geogram/geogram/signal_bridge/target/debug/build/mime_guess-9b6e7142d63394de/out/mime_types_generated.rs

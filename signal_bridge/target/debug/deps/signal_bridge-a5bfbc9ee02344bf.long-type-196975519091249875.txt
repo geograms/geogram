@@ -1,0 +1,1 @@
+impl Future<Output = Result<<SqliteStore as ContentsStore>::ContactsIter, <SqliteStore as ContentsStore>::ContentsStoreError>>

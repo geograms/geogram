@@ -1,0 +1,21 @@
+/home/brito/code/geogram/geogram/signal_bridge/target/debug/deps/presage-e64cab21803ae8aa.d: /home/brito/.cargo/git/checkouts/presage-ce211e77a0d9397d/b575f2e/presage/src/lib.rs /home/brito/.cargo/git/checkouts/presage-ce211e77a0d9397d/b575f2e/presage/src/errors.rs /home/brito/.cargo/git/checkouts/presage-ce211e77a0d9397d/b575f2e/presage/src/manager/mod.rs /home/brito/.cargo/git/checkouts/presage-ce211e77a0d9397d/b575f2e/presage/src/manager/confirmation.rs /home/brito/.cargo/git/checkouts/presage-ce211e77a0d9397d/b575f2e/presage/src/manager/linking.rs /home/brito/.cargo/git/checkouts/presage-ce211e77a0d9397d/b575f2e/presage/src/manager/registered.rs /home/brito/.cargo/git/checkouts/presage-ce211e77a0d9397d/b575f2e/presage/src/manager/registration.rs /home/brito/.cargo/git/checkouts/presage-ce211e77a0d9397d/b575f2e/presage/src/model/mod.rs /home/brito/.cargo/git/checkouts/presage-ce211e77a0d9397d/b575f2e/presage/src/model/contacts.rs /home/brito/.cargo/git/checkouts/presage-ce211e77a0d9397d/b575f2e/presage/src/model/groups.rs /home/brito/.cargo/git/checkouts/presage-ce211e77a0d9397d/b575f2e/presage/src/model/identity.rs /home/brito/.cargo/git/checkouts/presage-ce211e77a0d9397d/b575f2e/presage/src/model/messages.rs /home/brito/.cargo/git/checkouts/presage-ce211e77a0d9397d/b575f2e/presage/src/serde.rs /home/brito/.cargo/git/checkouts/presage-ce211e77a0d9397d/b575f2e/presage/src/store.rs
+
+/home/brito/code/geogram/geogram/signal_bridge/target/debug/deps/libpresage-e64cab21803ae8aa.rmeta: /home/brito/.cargo/git/checkouts/presage-ce211e77a0d9397d/b575f2e/presage/src/lib.rs /home/brito/.cargo/git/checkouts/presage-ce211e77a0d9397d/b575f2e/presage/src/errors.rs /home/brito/.cargo/git/checkouts/presage-ce211e77a0d9397d/b575f2e/presage/src/manager/mod.rs /home/brito/.cargo/git/checkouts/presage-ce211e77a0d9397d/b575f2e/presage/src/manager/confirmation.rs /home/brito/.cargo/git/checkouts/presage-ce211e77a0d9397d/b575f2e/presage/src/manager/linking.rs /home/brito/.cargo/git/checkouts/presage-ce211e77a0d9397d/b575f2e/presage/src/manager/registered.rs /home/brito/.cargo/git/checkouts/presage-ce211e77a0d9397d/b575f2e/presage/src/manager/registration.rs /home/brito/.cargo/git/checkouts/presage-ce211e77a0d9397d/b575f2e/presage/src/model/mod.rs /home/brito/.cargo/git/checkouts/presage-ce211e77a0d9397d/b575f2e/presage/src/model/contacts.rs /home/brito/.cargo/git/checkouts/presage-ce211e77a0d9397d/b575f2e/presage/src/model/groups.rs /home/brito/.cargo/git/checkouts/presage-ce211e77a0d9397d/b575f2e/presage/src/model/identity.rs /home/brito/.cargo/git/checkouts/presage-ce211e77a0d9397d/b575f2e/presage/src/model/messages.rs /home/brito/.cargo/git/checkouts/presage-ce211e77a0d9397d/b575f2e/presage/src/serde.rs /home/brito/.cargo/git/checkouts/presage-ce211e77a0d9397d/b575f2e/presage/src/store.rs
+
+/home/brito/.cargo/git/checkouts/presage-ce211e77a0d9397d/b575f2e/presage/src/lib.rs:
+/home/brito/.cargo/git/checkouts/presage-ce211e77a0d9397d/b575f2e/presage/src/errors.rs:
+/home/brito/.cargo/git/checkouts/presage-ce211e77a0d9397d/b575f2e/presage/src/manager/mod.rs:
+/home/brito/.cargo/git/checkouts/presage-ce211e77a0d9397d/b575f2e/presage/src/manager/confirmation.rs:
+/home/brito/.cargo/git/checkouts/presage-ce211e77a0d9397d/b575f2e/presage/src/manager/linking.rs:
+/home/brito/.cargo/git/checkouts/presage-ce211e77a0d9397d/b575f2e/presage/src/manager/registered.rs:
+/home/brito/.cargo/git/checkouts/presage-ce211e77a0d9397d/b575f2e/presage/src/manager/registration.rs:
+/home/brito/.cargo/git/checkouts/presage-ce211e77a0d9397d/b575f2e/presage/src/model/mod.rs:
+/home/brito/.cargo/git/checkouts/presage-ce211e77a0d9397d/b575f2e/presage/src/model/contacts.rs:
+/home/brito/.cargo/git/checkouts/presage-ce211e77a0d9397d/b575f2e/presage/src/model/groups.rs:
+/home/brito/.cargo/git/checkouts/presage-ce211e77a0d9397d/b575f2e/presage/src/model/identity.rs:
+/home/brito/.cargo/git/checkouts/presage-ce211e77a0d9397d/b575f2e/presage/src/model/messages.rs:
+/home/brito/.cargo/git/checkouts/presage-ce211e77a0d9397d/b575f2e/presage/src/serde.rs:
+/home/brito/.cargo/git/checkouts/presage-ce211e77a0d9397d/b575f2e/presage/src/store.rs:
+
+# env-dep:CARGO_PKG_NAME=presage
+# env-dep:CARGO_PKG_VERSION=0.8.0-dev

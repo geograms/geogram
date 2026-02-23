@@ -1,0 +1,9 @@
+/home/brito/code/geogram/geogram/signal_bridge/target/release/deps/partial_default_derive-51003db14bc862be.d: /home/brito/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/partial-default-derive-0.1.0/src/lib.rs /home/brito/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/partial-default-derive-0.1.0/src/body_impl.rs /home/brito/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/partial-default-derive-0.1.0/src/default_attr.rs /home/brito/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/partial-default-derive-0.1.0/src/util.rs /home/brito/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/partial-default-derive-0.1.0/src/../README.md
+
+/home/brito/code/geogram/geogram/signal_bridge/target/release/deps/libpartial_default_derive-51003db14bc862be.so: /home/brito/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/partial-default-derive-0.1.0/src/lib.rs /home/brito/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/partial-default-derive-0.1.0/src/body_impl.rs /home/brito/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/partial-default-derive-0.1.0/src/default_attr.rs /home/brito/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/partial-default-derive-0.1.0/src/util.rs /home/brito/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/partial-default-derive-0.1.0/src/../README.md
+
+/home/brito/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/partial-default-derive-0.1.0/src/lib.rs:
+/home/brito/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/partial-default-derive-0.1.0/src/body_impl.rs:
+/home/brito/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/partial-default-derive-0.1.0/src/default_attr.rs:
+/home/brito/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/partial-default-derive-0.1.0/src/util.rs:
+/home/brito/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/partial-default-derive-0.1.0/src/../README.md:

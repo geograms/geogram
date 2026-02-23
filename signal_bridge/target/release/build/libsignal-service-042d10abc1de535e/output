@@ -1,0 +1,8 @@
+cargo:rerun-if-changed=protobuf
+cargo:rerun-if-changed=src/proto.rs
+cargo:rerun-if-changed=protobuf/DeviceName.proto
+cargo:rerun-if-changed=protobuf/StickerResources.proto
+cargo:rerun-if-changed=protobuf/Groups.proto
+cargo:rerun-if-changed=protobuf/Provisioning.proto
+cargo:rerun-if-changed=protobuf/SignalService.proto
+cargo:rerun-if-changed=protobuf/WebSocketResources.proto

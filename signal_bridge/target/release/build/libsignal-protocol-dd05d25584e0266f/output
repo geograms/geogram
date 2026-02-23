@@ -1,0 +1,5 @@
+cargo:rerun-if-changed=src/proto/fingerprint.proto
+cargo:rerun-if-changed=src/proto/sealed_sender.proto
+cargo:rerun-if-changed=src/proto/service.proto
+cargo:rerun-if-changed=src/proto/storage.proto
+cargo:rerun-if-changed=src/proto/wire.proto

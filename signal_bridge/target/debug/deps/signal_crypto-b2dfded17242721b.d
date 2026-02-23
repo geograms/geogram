@@ -1,0 +1,12 @@
+/home/brito/code/geogram/geogram/signal_bridge/target/debug/deps/signal_crypto-b2dfded17242721b.d: /home/brito/.cargo/git/checkouts/libsignal-2a193a9867decbc4/1346a40/rust/crypto/src/lib.rs /home/brito/.cargo/git/checkouts/libsignal-2a193a9867decbc4/1346a40/rust/crypto/src/error.rs /home/brito/.cargo/git/checkouts/libsignal-2a193a9867decbc4/1346a40/rust/crypto/src/hash.rs /home/brito/.cargo/git/checkouts/libsignal-2a193a9867decbc4/1346a40/rust/crypto/src/hpke.rs /home/brito/.cargo/git/checkouts/libsignal-2a193a9867decbc4/1346a40/rust/crypto/src/hpke/provider.rs /home/brito/.cargo/git/checkouts/libsignal-2a193a9867decbc4/1346a40/rust/crypto/src/aes_cbc.rs /home/brito/.cargo/git/checkouts/libsignal-2a193a9867decbc4/1346a40/rust/crypto/src/aes_ctr.rs /home/brito/.cargo/git/checkouts/libsignal-2a193a9867decbc4/1346a40/rust/crypto/src/aes_gcm.rs
+
+/home/brito/code/geogram/geogram/signal_bridge/target/debug/deps/libsignal_crypto-b2dfded17242721b.rmeta: /home/brito/.cargo/git/checkouts/libsignal-2a193a9867decbc4/1346a40/rust/crypto/src/lib.rs /home/brito/.cargo/git/checkouts/libsignal-2a193a9867decbc4/1346a40/rust/crypto/src/error.rs /home/brito/.cargo/git/checkouts/libsignal-2a193a9867decbc4/1346a40/rust/crypto/src/hash.rs /home/brito/.cargo/git/checkouts/libsignal-2a193a9867decbc4/1346a40/rust/crypto/src/hpke.rs /home/brito/.cargo/git/checkouts/libsignal-2a193a9867decbc4/1346a40/rust/crypto/src/hpke/provider.rs /home/brito/.cargo/git/checkouts/libsignal-2a193a9867decbc4/1346a40/rust/crypto/src/aes_cbc.rs /home/brito/.cargo/git/checkouts/libsignal-2a193a9867decbc4/1346a40/rust/crypto/src/aes_ctr.rs /home/brito/.cargo/git/checkouts/libsignal-2a193a9867decbc4/1346a40/rust/crypto/src/aes_gcm.rs
+
+/home/brito/.cargo/git/checkouts/libsignal-2a193a9867decbc4/1346a40/rust/crypto/src/lib.rs:
+/home/brito/.cargo/git/checkouts/libsignal-2a193a9867decbc4/1346a40/rust/crypto/src/error.rs:
+/home/brito/.cargo/git/checkouts/libsignal-2a193a9867decbc4/1346a40/rust/crypto/src/hash.rs:
+/home/brito/.cargo/git/checkouts/libsignal-2a193a9867decbc4/1346a40/rust/crypto/src/hpke.rs:
+/home/brito/.cargo/git/checkouts/libsignal-2a193a9867decbc4/1346a40/rust/crypto/src/hpke/provider.rs:
+/home/brito/.cargo/git/checkouts/libsignal-2a193a9867decbc4/1346a40/rust/crypto/src/aes_cbc.rs:
+/home/brito/.cargo/git/checkouts/libsignal-2a193a9867decbc4/1346a40/rust/crypto/src/aes_ctr.rs:
+/home/brito/.cargo/git/checkouts/libsignal-2a193a9867decbc4/1346a40/rust/crypto/src/aes_gcm.rs:

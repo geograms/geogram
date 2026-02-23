@@ -1,0 +1,1 @@
+{"rustc":12013579709055016942,"features":"","declared_features":"","target":0,"profile":0,"path":0,"deps":[[4563546804296693191,"build_script_build",false,9226417640748064798]],"local":[{"RerunIfChanged":{"output":"release/build/phonenumber-6dc7d6da0b63500e/output","paths":["assets/PhoneNumberMetadata.xml"]}}],"rustflags":[],"config":0,"compile_kind":0}

@@ -1,0 +1,1 @@
+{"rustc":12013579709055016942,"features":"[]","declared_features":"[\"loom\"]","target":9855717379987801857,"profile":17984201634715228204,"path":8756964591549009213,"deps":[],"local":[{"CheckDepInfo":{"dep_info":"release/.fingerprint/parking-dc65855a348d8d17/dep-lib-parking","checksum":false}}],"rustflags":[],"config":2069994364910194474,"compile_kind":0}

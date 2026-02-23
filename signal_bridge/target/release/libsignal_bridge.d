@@ -1,0 +1,1 @@
+/home/brito/code/geogram/geogram/signal_bridge/target/release/libsignal_bridge.so: /home/brito/code/geogram/geogram/signal_bridge/src/bridge.rs /home/brito/code/geogram/geogram/signal_bridge/src/handlers.rs /home/brito/code/geogram/geogram/signal_bridge/src/lib.rs /home/brito/code/geogram/geogram/signal_bridge/src/types.rs

@@ -1,0 +1,24 @@
+# Memory
+
+## Key Decisions
+
+- Always use ProfileStorage methods (not raw File/Directory) when accessing files inside the {callsign} profile folder — the folder may be inside an encrypted SQLite storage. Use AppService().profileStorage to get the storage instance.
+- Station code reuse: Never implement feature code on either CLI or Desktop station directly. Always write to shared libraries/mixins (lib/server/mixins/) and have both stations use the same code.
+
+There is a script ./launch-desktop.sh to launch the client on this laptop and ./server-deploy.sh when needed to upload/update the server station.
+
+Read ./docs/API.md for the debug API that automates testing. When a debug API endpoint does not exist, create one.
+
+Never implement code features without testing them yourself first. Do the deployment, test that it works as intended.
+
+Use ./docs/reusable.md to reuse code instead of duplicating functionalities, document new reusable components there
+
+## Architecture Notes
+
+- ProfileStorage is an abstract class with two implementations: FilesystemProfileStorage (plain files) and EncryptedProfileStorage (encrypted SQLite archive)
+- AppService().profileStorage returns the correct instance for the current profile
+- Mirror sync service accepts optional ProfileStorage? storage parameter on all operations — falls back to raw filesystem when null
+- StorageEntry from listDirectory() has paths relative to the storage base
+- Two station implementations: PureStationServer (CLI, lib/cli/pure_station.dart) and StationServer (Desktop, lib/station.dart)
+- EmailHandlerMixin (lib/server/mixins/email_handler_mixin.dart) provides shared email methods for both stations
+- Other shared mixins in lib/server/mixins/: RateLimitMixin, HealthWatchdogMixin, SmtpMixin, SslMixin, StunMixin
