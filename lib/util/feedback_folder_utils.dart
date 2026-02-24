@@ -29,12 +29,16 @@ class _AsyncMutex {
 ///     ├── subscribe.txt              # NOSTR npub, one per line (toggle)
 ///     ├── verifications.txt          # NOSTR npub, one per line (add-only)
 ///     ├── views.txt                  # Signed NOSTR events (JSON), multiple entries (metric)
-///     ├── heart.txt                  # Emoji reaction: npub per line (toggle)
 ///     ├── thumbs-up.txt              # Emoji reaction: npub per line (toggle)
+///     ├── thumbs-down.txt            # Emoji reaction: npub per line (toggle)
+///     ├── heart.txt                  # Emoji reaction: npub per line (toggle)
 ///     ├── fire.txt                   # Emoji reaction: npub per line (toggle)
+///     ├── hundred.txt                # Emoji reaction: npub per line (toggle)
+///     ├── curious.txt                # Emoji reaction: npub per line (toggle)
 ///     ├── celebrate.txt              # Emoji reaction: npub per line (toggle)
 ///     ├── laugh.txt                  # Emoji reaction: npub per line (toggle)
 ///     ├── sad.txt                    # Emoji reaction: npub per line (toggle)
+///     ├── beer-cheers.txt            # Emoji reaction: npub per line (toggle)
 ///     ├── surprise.txt               # Emoji reaction: npub per line (toggle)
 ///     └── comments/
 ///         └── YYYY-MM-DD_HH-MM-SS_XXXXXX.txt
@@ -59,22 +63,30 @@ class FeedbackFolderUtils {
   static const String feedbackTypeViews = 'views';
 
   /// Emoji reaction types
-  static const String reactionHeart = 'heart';
   static const String reactionThumbsUp = 'thumbs-up';
+  static const String reactionThumbsDown = 'thumbs-down';
+  static const String reactionHeart = 'heart';
   static const String reactionFire = 'fire';
+  static const String reactionHundred = 'hundred';
+  static const String reactionCurious = 'curious';
   static const String reactionCelebrate = 'celebrate';
   static const String reactionLaugh = 'laugh';
   static const String reactionSad = 'sad';
+  static const String reactionBeerCheers = 'beer-cheers';
   static const String reactionSurprise = 'surprise';
 
   /// All supported emoji reactions
   static const List<String> supportedReactions = [
-    reactionHeart,
     reactionThumbsUp,
+    reactionThumbsDown,
+    reactionHeart,
     reactionFire,
+    reactionHundred,
+    reactionCurious,
     reactionCelebrate,
     reactionLaugh,
     reactionSad,
+    reactionBeerCheers,
     reactionSurprise,
   ];
 

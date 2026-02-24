@@ -3,6 +3,7 @@
  * License: Apache-2.0
  */
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'package:flutter/material.dart';
@@ -12,6 +13,13 @@ import '../teleport/telegram/telegram_service.dart';
 import '../teleport/telegram/telegram_storage_service.dart';
 import '../teleport/telegram/pages/telegram_auth_page.dart';
 import '../teleport/telegram/pages/telegram_chat_list_page.dart';
+import '../teleport/aprs/aprs_service.dart';
+import '../teleport/aprs/pages/aprs_main_page.dart';
+import '../teleport/signal/models/signal_auth_state.dart';
+import '../teleport/signal/signal_service.dart';
+import '../teleport/signal/signal_storage_service.dart';
+import '../teleport/signal/pages/signal_auth_page.dart';
+import '../teleport/signal/pages/signal_chat_list_page.dart';
 
 /// Browser page for the "Teleport" app — lists platform bridges
 class TeleportBrowserPage extends StatefulWidget {
@@ -31,6 +39,7 @@ class TeleportBrowserPage extends StatefulWidget {
 class _TeleportBrowserPageState extends State<TeleportBrowserPage> {
   Map<String, dynamic>? _config;
   bool _isLoading = true;
+  StreamSubscription<AprsEvent>? _aprsSub;
 
   /// Planned platform bridges
   static const List<_BridgeInfo> _bridges = [
@@ -47,6 +56,13 @@ class _TeleportBrowserPageState extends State<TeleportBrowserPage> {
       description: 'End-to-end encrypted messaging via Signal protocol',
       icon: Icons.security,
       color: Color(0xFF3A76F0),
+    ),
+    _BridgeInfo(
+      id: 'aprs',
+      name: 'APRS',
+      description: 'Amateur radio packet reporting and messaging',
+      icon: Icons.cell_tower,
+      color: Color(0xFFE65100),
     ),
     _BridgeInfo(
       id: 'whatsapp',
@@ -96,6 +112,15 @@ class _TeleportBrowserPageState extends State<TeleportBrowserPage> {
   void initState() {
     super.initState();
     _loadConfig();
+    _aprsSub = AprsService().events.listen((_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _aprsSub?.cancel();
+    super.dispose();
   }
 
   Future<void> _loadConfig() async {
@@ -251,11 +276,66 @@ class _TeleportBrowserPageState extends State<TeleportBrowserPage> {
     );
   }
 
+  /// Ensure Signal bridge config exists, creating with defaults if needed.
+  Future<void> _ensureSignalConfig() async {
+    final profileStorage = AppService().profileStorage;
+    if (profileStorage == null) return;
+    final scoped = ScopedProfileStorage.fromAbsolutePath(
+      profileStorage,
+      widget.appPath,
+    );
+    final storage = SignalStorageService.fromScoped(scoped);
+    if (await storage.hasConfig()) return;
+
+    await storage.ensureDirectories();
+    await storage.writeConfig({
+      'created': DateTime.now().toUtc().toIso8601String(),
+    });
+    await storage.registerBridge(enabled: false);
+  }
+
+  void _onAprsTap() {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => AprsMainPage(appPath: widget.appPath),
+      ),
+    );
+  }
+
+  void _onSignalTap() async {
+    final signalService = SignalService();
+    if ((_isBridgeActive('signal') || signalService.isRunning) &&
+        signalService.authState.state == SignalAuthState.ready) {
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => SignalChatListPage(appPath: widget.appPath),
+        ),
+      );
+      return;
+    }
+
+    try {
+      await _ensureSignalConfig();
+    } catch (_) {}
+    if (!mounted) return;
+
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => SignalAuthPage(appPath: widget.appPath),
+      ),
+    );
+  }
+
   Widget _buildBridgeCard(_BridgeInfo bridge, ThemeData theme) {
     final isActive = _isBridgeActive(bridge.id);
     final isTelegramRunning =
         bridge.id == 'telegram' && TelegramService().isRunning;
-    final showActive = isActive || isTelegramRunning;
+    final isSignalRunning =
+        bridge.id == 'signal' && SignalService().isRunning;
+    final isAprsEnabled =
+        bridge.id == 'aprs' && AprsService().isEnabled;
+    final showActive =
+        isActive || isTelegramRunning || isSignalRunning || isAprsEnabled;
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
@@ -267,6 +347,14 @@ class _TeleportBrowserPageState extends State<TeleportBrowserPage> {
           onTap: () {
             if (bridge.id == 'telegram') {
               _onTelegramTap();
+              return;
+            }
+            if (bridge.id == 'aprs') {
+              _onAprsTap();
+              return;
+            }
+            if (bridge.id == 'signal') {
+              _onSignalTap();
               return;
             }
             ScaffoldMessenger.of(context).showSnackBar(
@@ -331,7 +419,11 @@ class _TeleportBrowserPageState extends State<TeleportBrowserPage> {
                     borderRadius: BorderRadius.circular(20),
                   ),
                   child: Text(
-                    showActive ? 'Active' : 'Coming Soon',
+                    showActive
+                        ? 'Active'
+                        : bridge.id == 'aprs'
+                            ? 'Available'
+                            : 'Coming Soon',
                     style: TextStyle(
                       fontSize: 11,
                       fontWeight: FontWeight.w500,

@@ -94,7 +94,10 @@ class _SignalChatListPageState extends State<SignalChatListPage> {
           event.type == SignalEventType.newMessage) {
         _refreshDebounce?.cancel();
         _refreshDebounce =
-            Timer(const Duration(milliseconds: 500), _refreshChats);
+            Timer(const Duration(milliseconds: 500), () {
+          // Re-fetch from bridge to pick up newly synced contacts/groups
+          _loadConversations();
+        });
       }
       if (event.type == SignalEventType.authStateChanged) {
         final data = event.data as SignalAuthStateData;

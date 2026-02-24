@@ -14,6 +14,7 @@ echo "  - libgtk-3-dev (GTK development libraries)"
 echo "  - liblzma-dev (XZ compression library)"
 echo "  - libmpv-dev (media player library)"
 echo "  - lld (LLVM linker)"
+echo "  - protobuf-compiler (protobuf code generator, needed for Signal bridge)"
 echo ""
 
 # Check if running with sudo or as root
@@ -41,7 +42,8 @@ $SUDO apt-get install -y \
     libgtk-3-dev \
     liblzma-dev \
     libmpv-dev \
-    lld
+    lld \
+    protobuf-compiler
 
 echo ""
 echo "✅ Dependencies installed successfully!"

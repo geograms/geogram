@@ -16,6 +16,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
 
+import '../../services/log_service.dart';
 import 'aprs_service.dart';
 import 'models/aprs_packet.dart';
 
@@ -44,7 +45,7 @@ class _IsolateParams {
 
 class AprsIsClient {
   static const String _defaultHost = 'rotate.aprs2.net';
-  static const int _defaultPort = 10152;
+  static const int _defaultPort = 14580;
 
   final String callsign;
   double latitude;
@@ -107,7 +108,12 @@ class AprsIsClient {
     if (latitude != null) this.latitude = latitude;
     if (longitude != null) this.longitude = longitude;
     if (radiusKm != null) this.radiusKm = radiusKm;
-    _commandPort?.send({
+    if (_commandPort == null) {
+      LogService().log('AprsIsClient.updateFilter: _commandPort is NULL — filter not sent');
+      return;
+    }
+    LogService().log('AprsIsClient.updateFilter: sending filter lat=${this.latitude} lon=${this.longitude} r=${this.radiusKm}');
+    _commandPort!.send({
       'cmd': 'filter',
       'lat': this.latitude,
       'lon': this.longitude,
@@ -188,7 +194,10 @@ class AprsIsClient {
         // Isolate exited its run loop — respawn if still running
         _killIsolate();
         _scheduleRespawn();
+      } else if (msg.startsWith('filter_sent:')) {
+        LogService().log('AprsIsClient: ${msg.substring(12)}');
       } else if (msg.startsWith('error:')) {
+        LogService().log('AprsIsClient: ${msg.substring(6)}');
         AprsService().emitEvent(
           AprsEvent(AprsEventType.error, msg.substring(6)),
         );
@@ -234,12 +243,19 @@ class AprsIsClient {
           filterLat = (msg['lat'] as num).toDouble();
           filterLon = (msg['lon'] as num).toDouble();
           filterRadius = (msg['radius'] as num).toDouble();
-          try {
-            socket?.write(
-              '#filter r/$filterLat/$filterLon/$filterRadius\r\n',
-            );
-            socket?.flush();
-          } catch (_) {}
+          final filterLine =
+              '#filter r/$filterLat/$filterLon/$filterRadius';
+          if (socket != null) {
+            try {
+              socket!.write('$filterLine\r\n');
+              socket!.flush();
+              mainPort.send('filter_sent:$filterLine');
+            } catch (e) {
+              mainPort.send('error:Filter send failed: $e');
+            }
+          } else {
+            mainPort.send('error:Filter not sent — socket is null');
+          }
         } else if (cmd == 'stop') {
           running = false;
           keepaliveTimer?.cancel();
@@ -352,10 +368,14 @@ class AprsIsClient {
           continue;
         }
 
-        // Authenticate
+        // Authenticate — only include filter if we have a real position.
+        // On port 14580, no filter = no packets until a #filter is sent.
+        final hasPosition = filterLat != 0.0 || filterLon != 0.0;
+        final filterSuffix = hasPosition
+            ? ' filter r/$filterLat/$filterLon/$filterRadius'
+            : '';
         final authLine = 'user ${params.callsign} pass ${params.passcode} '
-            'vers Geogram 1.0 '
-            'filter r/$filterLat/$filterLon/$filterRadius';
+            'vers Geogram 1.0$filterSuffix';
         socket.write('$authLine\r\n');
         await socket.flush();
         authenticated = true;
@@ -451,6 +471,17 @@ class AprsIsClient {
       messageId = parsed?.$2;
     }
 
+    // Parse position from position packets
+    double? latitude;
+    double? longitude;
+    if (type == AprsPacketType.position) {
+      final pos = _parsePosition(infoField);
+      if (pos != null) {
+        latitude = pos.$1;
+        longitude = pos.$2;
+      }
+    }
+
     return AprsPacket(
       fromCallsign: fromCallsign,
       toCallsign: toCallsign,
@@ -459,6 +490,8 @@ class AprsIsClient {
       rawTnc2: raw,
       timestamp: DateTime.now().toUtc(),
       type: type,
+      latitude: latitude,
+      longitude: longitude,
       messageText: messageText,
       messageId: messageId,
     );
@@ -470,10 +503,14 @@ class AprsIsClient {
     if (c == '!' || c == '/' || c == '=' || c == '@') {
       return AprsPacketType.position;
     }
+    // Mic-E encoded position (current ` and old ')
+    if (c == '`' || c == '\x27') return AprsPacketType.position;
     if (c == ':') return AprsPacketType.message;
     if (c == '>') return AprsPacketType.status;
     if (c == '_') return AprsPacketType.weather;
     if (c == 'T') return AprsPacketType.telemetry;
+    // Object (;) and Item (]) also carry position
+    if (c == ';' || c == ')') return AprsPacketType.position;
     return AprsPacketType.other;
   }
 
@@ -490,4 +527,148 @@ class AprsIsClient {
     }
     return (body, null);
   }
+
+  // ---------------------------------------------------------------------------
+  // APRS position parser
+  // ---------------------------------------------------------------------------
+
+  /// Parse lat/lon from an APRS position info field.
+  /// Handles uncompressed and compressed formats.
+  ///
+  /// Uncompressed: `!DDMM.MMN/DDDMM.MMWx` or with timestamp `/DDHHMMzDDMM.MMN/DDDMM.MMWx`
+  /// Compressed:   `!/YYYYXXXX$csT`  (base-91 encoded)
+  static (double, double)? _parsePosition(String info) {
+    if (info.isEmpty) return null;
+
+    final c = info[0];
+
+    // Mic-E: position encoded in destination address + info field
+    // We can't decode Mic-E without the dest callsign, so skip for now.
+    // (Mic-E latitude is in the destination field, not the info field.)
+    if (c == '`' || c == '\x27') return null;
+
+    // Object: ;NAME_____*DDHHMMzDDMM.MMN/DDDMM.MMWs
+    if (c == ';') {
+      // Object name is 9 chars, then * or _, then optional timestamp
+      if (info.length < 11) return null;
+      final afterName = info.substring(10);
+      // afterName starts with * or _, then 7-char timestamp, then position
+      if (afterName.isEmpty) return null;
+      final tsByte = afterName[0];
+      if (tsByte == '*' || tsByte == '_') {
+        if (afterName.length < 8) return null;
+        final posData = afterName.substring(8);
+        if (posData.isNotEmpty && _isDigit(posData[0])) {
+          return _parseUncompressedPosition(posData);
+        } else if (posData.length >= 13) {
+          return _parseCompressedPosition(posData);
+        }
+      }
+      return null;
+    }
+
+    // Item: )NAME!DDMM.MMN/DDDMM.MMWs or )NAME_...
+    if (c == ')') {
+      // Find ! or _ delimiter after item name (3–9 chars)
+      final delimIdx = info.indexOf('!', 1);
+      final delimIdx2 = info.indexOf('_', 1);
+      int dIdx = -1;
+      if (delimIdx > 0 && delimIdx < 11) dIdx = delimIdx;
+      if (delimIdx2 > 0 && delimIdx2 < 11 && (dIdx < 0 || delimIdx2 < dIdx)) {
+        dIdx = delimIdx2;
+      }
+      if (dIdx < 0 || dIdx + 1 >= info.length) return null;
+      final posData = info.substring(dIdx + 1);
+      if (posData.isNotEmpty && _isDigit(posData[0])) {
+        return _parseUncompressedPosition(posData);
+      }
+      return null;
+    }
+
+    // Standard position formats
+    String posData;
+    if (c == '/' || c == '@') {
+      // Has timestamp — DTI (1 char) + DDHHMMz (7 chars) = 8 chars to skip
+      if (info.length < 9) return null;
+      posData = info.substring(8);
+    } else {
+      // '!' or '=' — position starts immediately after the indicator
+      posData = info.substring(1);
+    }
+
+    if (posData.isEmpty) return null;
+
+    if (_isDigit(posData[0])) {
+      return _parseUncompressedPosition(posData);
+    } else {
+      return _parseCompressedPosition(posData);
+    }
+  }
+
+  /// Parse uncompressed APRS position: `DDMM.MMNsDDDMM.MMWc`
+  /// where s = symbol table ID (any char), c = symbol code.
+  static (double, double)? _parseUncompressedPosition(String data) {
+    // Need at least: DDMM.MMN + symtable + DDDMM.MMW + symcode = 19 chars
+    if (data.length < 19) return null;
+
+    // Latitude: DDMM.MM[N/S] at indices 0–7
+    final latDeg = int.tryParse(data.substring(0, 2));
+    final latMin = double.tryParse(data.substring(2, 7));
+    final latHemi = data[7];
+    if (latDeg == null || latMin == null) return null;
+    if (latHemi != 'N' && latHemi != 'S') return null;
+
+    // Index 8 is the symbol table ID (any printable char, NOT necessarily '/')
+
+    // Longitude: DDDMM.MM[E/W] at indices 9–17
+    final lonDeg = int.tryParse(data.substring(9, 12));
+    final lonMin = double.tryParse(data.substring(12, 17));
+    final lonHemi = data[17];
+    if (lonDeg == null || lonMin == null) return null;
+    if (lonHemi != 'E' && lonHemi != 'W') return null;
+
+    double lat = latDeg + latMin / 60.0;
+    double lon = lonDeg + lonMin / 60.0;
+    if (latHemi == 'S') lat = -lat;
+    if (lonHemi == 'W') lon = -lon;
+
+    // Sanity check
+    if (lat < -90 || lat > 90 || lon < -180 || lon > 180) return null;
+    return (lat, lon);
+  }
+
+  /// Parse compressed APRS position: 13 chars `/YYYYXXXXcsT`
+  /// where YYYY=lat, XXXX=lon in base-91, c=symbol code, s=compressed
+  /// course/speed, T=compression type byte.
+  static (double, double)? _parseCompressedPosition(String data) {
+    // Need symbol table char + 4 lat + 4 lon + symbol code + 2 cs + type = 13
+    if (data.length < 13) return null;
+
+    // data[0] is symbol table identifier (e.g. '/' or '\')
+    // data[1..4] is base-91 latitude
+    // data[5..8] is base-91 longitude
+    final latVal = _base91Decode(data, 1, 4);
+    final lonVal = _base91Decode(data, 5, 4);
+    if (latVal == null || lonVal == null) return null;
+
+    final lat = 90.0 - latVal / 380926.0;
+    final lon = -180.0 + lonVal / 190463.0;
+
+    if (lat < -90 || lat > 90 || lon < -180 || lon > 180) return null;
+    return (lat, lon);
+  }
+
+  /// Decode a base-91 encoded value from [count] chars starting at [offset].
+  static double? _base91Decode(String data, int offset, int count) {
+    double val = 0;
+    for (int i = 0; i < count; i++) {
+      final ch = data.codeUnitAt(offset + i) - 33;
+      if (ch < 0 || ch > 90) return null;
+      val = val * 91 + ch;
+    }
+    return val;
+  }
+
+  static bool _isDigit(String ch) =>
+      ch.codeUnitAt(0) >= 48 && ch.codeUnitAt(0) <= 57;
 }

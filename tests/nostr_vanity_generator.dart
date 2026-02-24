@@ -3,7 +3,7 @@
  *
  * Usage:
  *   dart run tests/nostr_vanity_generator.dart ABCD
- *   dart run tests/nostr_vanity_generator.dart **xy --threads 8
+ *   dart run tests/nostr_vanity_generator.dart **xy --threads 4
  *
  * Pattern rules (matched against the npub payload after "npub1"):
  *   - Letters are case-insensitive.
@@ -15,6 +15,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:isolate';
+import 'dart:math';
 
 import 'package:geogram/util/nostr_key_generator.dart';
 
@@ -37,7 +38,8 @@ void main(List<String> args) async {
     exit(64);
   }
 
-  final threads = parsed.threads ?? Platform.numberOfProcessors;
+  // Default to half of CPU cores to avoid contention (min 1, max 8)
+  final threads = parsed.threads ?? max(1, min(Platform.numberOfProcessors ~/ 2, 8));
   final receivePort = ReceivePort();
   final errorPort = ReceivePort();
   final exitPort = ReceivePort();
@@ -53,17 +55,17 @@ void main(List<String> args) async {
   final startTime = DateTime.now();
   var lastAttempts = 0;
 
+  // Progress timer - updates the same line using \r
   final progressTimer = Timer.periodic(const Duration(seconds: 1), (_) {
     final attemptsDelta = totalAttempts - lastAttempts;
     lastAttempts = totalAttempts;
     final elapsed = DateTime.now().difference(startTime).inSeconds;
-    final rate = attemptsDelta;
-    stdout.writeln(
-      'Progress: ${totalAttempts} tries, '
-      '${initialMatches + totalMatches} matches, '
-      '${rate} keys/sec, ${elapsed}s elapsed, '
-      '${activeWorkers} workers',
-    );
+    final progress =
+        'Progress: $totalAttempts tries, '
+        '${initialMatches + totalMatches} matches, '
+        '$attemptsDelta keys/sec, ${elapsed}s elapsed, '
+        '$activeWorkers workers';
+    stdout.write('\r${progress.padRight(80)}');
   });
 
   receivePort.listen((message) {
@@ -79,19 +81,19 @@ void main(List<String> args) async {
           final nsec = message['nsec'] as String;
           final line = '$npub | $nsec';
           sink.writeln(line);
-          stdout.writeln('MATCH: $line');
+          // Print match on new line, then progress will resume on next line
+          stdout.write('\n$line\n');
           break;
       }
     }
   });
 
   errorPort.listen((message) {
-    stderr.writeln('Worker error: $message');
+    stderr.writeln('\nWorker error: $message');
   });
 
   exitPort.listen((_) {
     activeWorkers -= 1;
-    stderr.writeln('Worker exited. Active workers: $activeWorkers');
   });
 
   for (var i = 0; i < threads; i++) {
@@ -101,7 +103,7 @@ void main(List<String> args) async {
         'sendPort': receivePort.sendPort,
         'pattern': pattern,
         'patternLength': pattern.length,
-        'batch': 1000,
+        'batch': 100, // Smaller batch for more responsive progress
       },
       debugName: 'nostr-vanity-$i',
       onError: errorPort.sendPort,
@@ -114,12 +116,18 @@ void main(List<String> args) async {
   stdout.writeln(
     'Running with $threads workers. Writing matches to ${matchesFile.path}',
   );
+  stdout.writeln('Press Ctrl+C to stop.\n');
   if (initialMatches > 0) {
     stdout.writeln('Existing matches in file: $initialMatches');
   }
 
-  await ProcessSignal.sigint.watch().first;
-  stdout.writeln('Stopping...');
+  // Wait for SIGINT (Ctrl+C) or SIGTERM
+  await Future.any([
+    ProcessSignal.sigint.watch().first,
+    ProcessSignal.sigterm.watch().first,
+  ]);
+
+  stdout.write('\nStopping...\n');
 
   progressTimer.cancel();
   for (final isolate in isolates) {
@@ -237,7 +245,7 @@ void _workerMain(Map<String, dynamic> config) {
 void _printUsage() {
   stdout.writeln('Usage:');
   stdout.writeln('  dart run tests/nostr_vanity_generator.dart PATTERN');
-  stdout.writeln('  dart run tests/nostr_vanity_generator.dart PATTERN --threads 8');
+  stdout.writeln('  dart run tests/nostr_vanity_generator.dart PATTERN --threads 4');
   stdout.writeln('');
   stdout.writeln('Pattern rules:');
   stdout.writeln('  - Pattern is matched after "npub1".');

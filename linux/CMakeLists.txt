@@ -187,6 +187,30 @@ else()
   message(WARNING "libopus not found for ${OPUS_ARCH} at ${OPUS_LIB}")
 endif()
 
+# Bundle libtdjson for Telegram bridge (TDLib JSON client interface)
+# Reuses OPUS_ARCH which already detects the correct architecture
+set(TDLIB_LIB "${CMAKE_CURRENT_SOURCE_DIR}/tdlib/${OPUS_ARCH}/libtdjson.so")
+if(EXISTS ${TDLIB_LIB})
+  install(FILES "${TDLIB_LIB}"
+    DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
+    COMPONENT Runtime)
+  message(STATUS "Bundling libtdjson for ${OPUS_ARCH} from ${TDLIB_LIB}")
+else()
+  message(STATUS "libtdjson not found for ${OPUS_ARCH} at ${TDLIB_LIB} - Telegram bridge will not be available")
+endif()
+
+# Bundle libsignal_bridge for Signal bridge (presage JSON client interface)
+# Reuses OPUS_ARCH which already detects the correct architecture
+set(SIGNAL_LIB "${CMAKE_CURRENT_SOURCE_DIR}/signal/${OPUS_ARCH}/libsignal_bridge.so")
+if(EXISTS ${SIGNAL_LIB})
+  install(FILES "${SIGNAL_LIB}"
+    DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
+    COMPONENT Runtime)
+  message(STATUS "Bundling libsignal_bridge for ${OPUS_ARCH} from ${SIGNAL_LIB}")
+else()
+  message(STATUS "libsignal_bridge not found for ${OPUS_ARCH} at ${SIGNAL_LIB} - Signal bridge will not be available")
+endif()
+
 # Bundle TinyEMU for Console VM (lightweight x86 emulator - same as JSLinux)
 # TinyEMU is statically compiled so it has no dependencies
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")

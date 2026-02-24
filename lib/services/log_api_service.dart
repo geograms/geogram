@@ -26,7 +26,10 @@ import 'device_apps_service.dart';
 import 'chat_file_upload_manager.dart';
 import 'app_args.dart';
 import '../connection/connection_manager.dart';
+import '../teleport/aprs/aprs_service.dart';
 import '../teleport/telegram/telegram_service.dart';
+import '../teleport/signal/models/signal_auth_state.dart';
+import '../teleport/signal/signal_service.dart';
 import 'sqlite_loader.dart';
 import '../version.dart';
 import '../models/chat_channel.dart';
@@ -2059,6 +2062,16 @@ function cleanup() {
       // Handle Telegram cache debug actions
       if (action.toLowerCase().startsWith('telegram_')) {
         return await _handleTelegramAction(action.toLowerCase(), params, headers);
+      }
+
+      // Handle Signal bridge debug actions
+      if (action.toLowerCase().startsWith('signal_')) {
+        return await _handleSignalAction(action.toLowerCase(), params, headers);
+      }
+
+      // Handle APRS debug actions
+      if (action.toLowerCase().startsWith('aprs_')) {
+        return await _handleAprsAction(action.toLowerCase(), params, headers);
       }
 
       final debugController = DebugController();
@@ -16633,5 +16646,396 @@ function cleanup() {
             })
         .toList();
     return {'cache_dir': cacheDir.path, 'databases': files};
+  }
+
+  Future<shelf.Response> _handleSignalAction(
+    String action,
+    Map<String, dynamic> params,
+    Map<String, String> headers,
+  ) async {
+    try {
+      final service = SignalService();
+
+      switch (action) {
+        case 'signal_connect':
+          if (service.isRunning) {
+            // Already running — trigger requestLinkDevice if not yet ready
+            if (service.authState.state != SignalAuthState.ready) {
+              await service.authService?.requestLinkDevice();
+              await Future.delayed(const Duration(seconds: 3));
+            }
+            return shelf.Response.ok(
+              jsonEncode({
+                'success': true,
+                'message': 'Already connected',
+                'auth_state': service.authState.state.name,
+              }),
+              headers: headers,
+            );
+          }
+          try {
+            final callsign = ProfileService().getProfile().callsign;
+            final profileStorage = AppService().profileStorage;
+            if (profileStorage == null) {
+              return shelf.Response.ok(
+                jsonEncode({'success': false, 'error': 'No profile storage'}),
+                headers: headers,
+              );
+            }
+            service.setStorage(profileStorage);
+            await service.initialize('teleport', callsign);
+            await service.connect();
+            // Also trigger requestLinkDevice — detects existing
+            // registration and starts the receive loop
+            await service.authService?.requestLinkDevice();
+            // Wait briefly for auth state to propagate
+            await Future.delayed(const Duration(seconds: 3));
+            final authState = service.authState.state.name;
+            return shelf.Response.ok(
+              jsonEncode({
+                'success': true,
+                'message': 'Signal connected',
+                'auth_state': authState,
+              }),
+              headers: headers,
+            );
+          } catch (e) {
+            return shelf.Response.ok(
+              jsonEncode({'success': false, 'error': 'Connect failed: $e'}),
+              headers: headers,
+            );
+          }
+
+        case 'signal_status':
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'running': service.isRunning,
+              'auth_state': service.authService?.currentState?.state.name,
+            }),
+            headers: headers,
+          );
+
+        case 'signal_conversations':
+          try {
+            final chatService = service.chatService;
+            if (chatService == null) {
+              return shelf.Response.ok(
+                jsonEncode({'success': false, 'error': 'Chat service not available'}),
+                headers: headers,
+              );
+            }
+            final conversations = await chatService.loadConversations();
+            return shelf.Response.ok(
+              jsonEncode({
+                'success': true,
+                'total': conversations.length,
+                'conversations': conversations
+                    .map((c) => {
+                        'id': c.id,
+                        'title': c.title,
+                        'type': c.type.name,
+                        'phone_number': c.phoneNumber,
+                        'member_count': c.memberCount,
+                        'unread_count': c.unreadCount,
+                    })
+                    .toList(),
+              }),
+              headers: headers,
+            );
+          } catch (e) {
+            return shelf.Response.ok(
+              jsonEncode({'success': false, 'error': 'Failed: $e'}),
+              headers: headers,
+            );
+          }
+
+        case 'signal_load_chat':
+          final chatId = (params['conversation_id'] ?? params['chat_id']) as String?;
+          if (chatId == null) {
+            return shelf.Response.ok(
+              jsonEncode({'success': false, 'error': 'conversation_id required'}),
+              headers: headers,
+            );
+          }
+          try {
+            final chatService = service.chatService;
+            if (chatService == null) {
+              return shelf.Response.ok(
+                jsonEncode({'success': false, 'error': 'Chat service not available'}),
+                headers: headers,
+              );
+            }
+            final messages = await chatService.getMessages(chatId);
+            return shelf.Response.ok(
+              jsonEncode({
+                'success': true,
+                'conversation_id': chatId,
+                'messages_loaded': messages.length,
+                'messages': messages.map((m) => {
+                  'text': m.text,
+                  'sender': m.senderName ?? m.senderUuid,
+                  'timestamp': m.timestamp,
+                  'content_type': m.contentType,
+                  'is_outgoing': m.isOutgoing,
+                  'sender_uuid': m.senderUuid,
+                }).toList(),
+              }),
+              headers: headers,
+            );
+          } catch (e) {
+            return shelf.Response.ok(
+              jsonEncode({'success': false, 'error': 'Load failed: $e'}),
+              headers: headers,
+            );
+          }
+
+        case 'signal_cache_inspect':
+          final cacheService = service.cacheService;
+          if (cacheService == null) {
+            return shelf.Response.ok(
+              jsonEncode({'success': false, 'error': 'Signal cache service not initialized'}),
+              headers: headers,
+            );
+          }
+          final chatId = params['chat_id'] as String?;
+          final result = cacheService.inspectCache(conversationId: chatId);
+          return shelf.Response.ok(
+            jsonEncode({'success': true, ...result}),
+            headers: headers,
+          );
+
+        case 'signal_cache_clear':
+          final cacheService = service.cacheService;
+          if (cacheService == null) {
+            return shelf.Response.ok(
+              jsonEncode({'success': false, 'error': 'Signal cache service not initialized'}),
+              headers: headers,
+            );
+          }
+          final chatId = params['chat_id'] as String?;
+          final result = cacheService.clearCache(conversationId: chatId);
+          return shelf.Response.ok(
+            jsonEncode({'success': true, ...result}),
+            headers: headers,
+          );
+
+        case 'signal_send':
+          final chatId = (params['conversation_id'] ?? params['chat_id']) as String?;
+          final text = params['text'] as String?;
+          if (chatId == null || text == null) {
+            return shelf.Response.ok(
+              jsonEncode({'success': false, 'error': 'conversation_id and text required'}),
+              headers: headers,
+            );
+          }
+          try {
+            final chatService = service.chatService;
+            if (chatService == null) {
+              return shelf.Response.ok(
+                jsonEncode({'success': false, 'error': 'Chat service not available'}),
+                headers: headers,
+              );
+            }
+            final msg = await chatService.sendMessage(chatId, text);
+            return shelf.Response.ok(
+              jsonEncode({
+                'success': true,
+                'chat_id': chatId,
+                'text': text,
+                'message': msg != null
+                    ? {
+                        'text': msg.text,
+                        'timestamp': msg.timestamp,
+                        'is_outgoing': msg.isOutgoing,
+                        'sender_uuid': msg.senderUuid,
+                        'content_type': msg.contentType,
+                      }
+                    : null,
+              }),
+              headers: headers,
+            );
+          } catch (e) {
+            return shelf.Response.ok(
+              jsonEncode({'success': false, 'error': 'Send failed: $e'}),
+              headers: headers,
+            );
+          }
+
+        default:
+          return shelf.Response.ok(
+            jsonEncode({'success': false, 'error': 'Unknown signal action: $action'}),
+            headers: headers,
+          );
+      }
+    } catch (e, stack) {
+      LogService().log('LogApiService: Signal action error: $e');
+      LogService().log('Stack: $stack');
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'success': false, 'error': e.toString()}),
+        headers: headers,
+      );
+    }
+  }
+
+  // ============================================================
+  // APRS Debug Actions
+  // ============================================================
+
+  Future<shelf.Response> _handleAprsAction(
+    String action,
+    Map<String, dynamic> params,
+    Map<String, String> headers,
+  ) async {
+    try {
+      final aprs = AprsService();
+      switch (action) {
+        case 'aprs_status':
+          final loc = UserLocationService().currentLocation;
+          final myLat = loc?.latitude;
+          final myLon = loc?.longitude;
+
+          // Include last 5 stream packets with parsed positions + distance
+          final recentStream = <Map<String, dynamic>>[];
+          final pkts = aprs.streamPackets;
+          for (int i = pkts.length - 1; i >= 0 && recentStream.length < 5; i--) {
+            final p = pkts[i];
+            double? distKm;
+            if (p.hasPosition && myLat != null && myLon != null) {
+              distKm = _aprsHaversineKm(myLat, myLon, p.latitude!, p.longitude!);
+            }
+            recentStream.add({
+              'from': p.fromCallsign,
+              'type': p.type.name,
+              'lat': p.latitude,
+              'lon': p.longitude,
+              'distKm': distKm != null ? (distKm * 10).round() / 10.0 : null,
+              'info': p.infoField.length > 60
+                  ? '${p.infoField.substring(0, 60)}...'
+                  : p.infoField,
+            });
+          }
+
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'enabled': aprs.isEnabled,
+              'connected': aprs.isRunning,
+              'radiusKm': aprs.radiusKm,
+              'myLat': myLat,
+              'myLon': myLon,
+              'streamPackets': aprs.streamPackets.length,
+              'messages': aprs.messages.length,
+              'knownPositions': aprs.lastKnownPositions.length,
+              'recentStream': recentStream,
+            }),
+            headers: headers,
+          );
+
+        case 'aprs_set_radius':
+          final radius = (params['radiusKm'] as num?)?.toDouble();
+          if (radius == null) {
+            return shelf.Response.ok(
+              jsonEncode({'success': false, 'error': 'radiusKm required'}),
+              headers: headers,
+            );
+          }
+          aprs.radiusKm = radius;
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'radiusKm': aprs.radiusKm,
+            }),
+            headers: headers,
+          );
+
+        case 'aprs_set_location':
+          final lat = (params['lat'] as num?)?.toDouble();
+          final lon = (params['lon'] as num?)?.toDouble();
+          if (lat == null || lon == null) {
+            return shelf.Response.ok(
+              jsonEncode({'success': false, 'error': 'lat and lon required'}),
+              headers: headers,
+            );
+          }
+          // Set location — this triggers notifyListeners which
+          // invokes _onPositionUpdate in AprsService, sending the
+          // filter update to the APRS-IS isolate
+          UserLocationService().setManualLocation(lat, lon);
+          return shelf.Response.ok(
+            jsonEncode({'success': true, 'lat': lat, 'lon': lon}),
+            headers: headers,
+          );
+
+        case 'aprs_cache_inspect':
+          final cache = aprs.cacheService;
+          if (cache == null) {
+            return shelf.Response.ok(
+              jsonEncode({'success': false, 'error': 'Cache not initialized'}),
+              headers: headers,
+            );
+          }
+          final info = await cache.inspect();
+          return shelf.Response.ok(
+            jsonEncode({'success': true, ...info}),
+            headers: headers,
+          );
+
+        case 'aprs_cache_clear':
+          final cache = aprs.cacheService;
+          if (cache == null) {
+            return shelf.Response.ok(
+              jsonEncode({'success': false, 'error': 'Cache not initialized'}),
+              headers: headers,
+            );
+          }
+          await cache.clear();
+          return shelf.Response.ok(
+            jsonEncode({'success': true}),
+            headers: headers,
+          );
+
+        case 'aprs_logs':
+          final allLogs = LogService().messages;
+          final aprsLogs = allLogs
+              .where((l) =>
+                  l.toLowerCase().contains('aprs') ||
+                  l.toLowerCase().contains('filter') ||
+                  l.toLowerCase().contains('userlocation'))
+              .toList();
+          // Return last 30 APRS-related log entries
+          final recent = aprsLogs.length > 30
+              ? aprsLogs.sublist(aprsLogs.length - 30)
+              : aprsLogs;
+          return shelf.Response.ok(
+            jsonEncode({'success': true, 'count': recent.length, 'logs': recent}),
+            headers: headers,
+          );
+
+        default:
+          return shelf.Response.ok(
+            jsonEncode({'success': false, 'error': 'Unknown APRS action: $action'}),
+            headers: headers,
+          );
+      }
+    } catch (e) {
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'success': false, 'error': e.toString()}),
+        headers: headers,
+      );
+    }
+  }
+
+  static double _aprsHaversineKm(
+    double lat1, double lon1, double lat2, double lon2,
+  ) {
+    const earthRadius = 6371.0;
+    final dLat = (lat2 - lat1) * pi / 180;
+    final dLon = (lon2 - lon1) * pi / 180;
+    final a = sin(dLat / 2) * sin(dLat / 2) +
+        cos(lat1 * pi / 180) * cos(lat2 * pi / 180) *
+        sin(dLon / 2) * sin(dLon / 2);
+    final c = 2 * atan2(sqrt(a), sqrt(1 - a));
+    return earthRadius * c;
   }
 }

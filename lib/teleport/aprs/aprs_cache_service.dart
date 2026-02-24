@@ -84,11 +84,16 @@ class AprsCacheService {
         raw_tnc2 TEXT NOT NULL,
         timestamp INTEGER NOT NULL,
         type TEXT NOT NULL,
+        latitude REAL,
+        longitude REAL,
         message_text TEXT,
         message_id TEXT,
         is_acked INTEGER NOT NULL DEFAULT 0
       );
     ''');
+    // Migration: add lat/lon columns to existing DBs
+    _addColumnIfMissing('latitude', 'REAL');
+    _addColumnIfMissing('longitude', 'REAL');
     _db!.execute('''
       CREATE INDEX IF NOT EXISTS idx_packets_timestamp
       ON packets(timestamp DESC);
@@ -111,8 +116,8 @@ class AprsCacheService {
       db.execute(
         '''INSERT INTO packets
            (from_callsign, to_callsign, path, info_field, raw_tnc2,
-            timestamp, type, message_text, message_id, is_acked)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+            timestamp, type, latitude, longitude, message_text, message_id, is_acked)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
         [
           packet.fromCallsign,
           packet.toCallsign,
@@ -121,6 +126,8 @@ class AprsCacheService {
           packet.rawTnc2,
           packet.timestamp.millisecondsSinceEpoch,
           packet.type.name,
+          packet.latitude,
+          packet.longitude,
           packet.messageText,
           packet.messageId,
           packet.isAcked ? 1 : 0,
@@ -141,8 +148,8 @@ class AprsCacheService {
         final stmt = db.prepare(
           '''INSERT INTO packets
              (from_callsign, to_callsign, path, info_field, raw_tnc2,
-              timestamp, type, message_text, message_id, is_acked)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+              timestamp, type, latitude, longitude, message_text, message_id, is_acked)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
         );
         for (final packet in packets) {
           stmt.execute([
@@ -153,6 +160,8 @@ class AprsCacheService {
             packet.rawTnc2,
             packet.timestamp.millisecondsSinceEpoch,
             packet.type.name,
+            packet.latitude,
+            packet.longitude,
             packet.messageText,
             packet.messageId,
             packet.isAcked ? 1 : 0,
@@ -175,7 +184,8 @@ class AprsCacheService {
       final db = await _openDb();
       final result = db.select(
         '''SELECT from_callsign, to_callsign, path, info_field, raw_tnc2,
-                  timestamp, type, message_text, message_id, is_acked
+                  timestamp, type, latitude, longitude,
+                  message_text, message_id, is_acked
            FROM packets ORDER BY timestamp DESC LIMIT ?''',
         [limit],
       );
@@ -217,6 +227,17 @@ class AprsCacheService {
     }
   }
 
+  /// Add a column to the packets table if it doesn't already exist.
+  void _addColumnIfMissing(String column, String type) {
+    try {
+      final result = _db!.select("PRAGMA table_info('packets')");
+      final hasColumn = result.any((r) => r['name'] == column);
+      if (!hasColumn) {
+        _db!.execute('ALTER TABLE packets ADD COLUMN $column $type');
+      }
+    } catch (_) {}
+  }
+
   /// Prune to [_maxPackets] by deleting oldest rows.
   void _prune() {
     try {
@@ -254,6 +275,8 @@ class AprsCacheService {
         isUtc: true,
       ),
       type: type,
+      latitude: row['latitude'] as double?,
+      longitude: row['longitude'] as double?,
       messageText: row['message_text'] as String?,
       messageId: row['message_id'] as String?,
       isAcked: (row['is_acked'] as int) == 1,

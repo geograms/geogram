@@ -1957,6 +1957,10 @@ class AppService {
         // Initialize QR codes app structure
         await _initializeQrApp(appFolder);
         stderr.writeln('Created qr app skeleton');
+      } else if (type == 'teleport') {
+        // Initialize teleport app structure
+        await _initializeTeleportApp(appFolder);
+        stderr.writeln('Created teleport app skeleton');
       }
       // Add more skeleton templates for other types here
     } catch (e) {
@@ -2030,6 +2034,9 @@ class AppService {
       } else if (type == 'qr') {
         await _initializeQrAppWithStorage(folderName);
         stderr.writeln('Created qr app skeleton');
+      } else if (type == 'teleport') {
+        await _initializeTeleportAppWithStorage(folderName);
+        stderr.writeln('Created teleport app skeleton');
       }
     } catch (e) {
       stderr.writeln('Error creating skeleton files: $e');
@@ -2693,6 +2700,41 @@ ${currentProfile.callsign}
     await _profileStorage!.createDirectory('$folderName/scanned');
 
     stderr.writeln('QR app initialized');
+  }
+
+  /// Initialize teleport app structure
+  Future<void> _initializeTeleportApp(Directory appFolder) async {
+    await Directory('${appFolder.path}/bridges').create();
+    await Directory('${appFolder.path}/media').create();
+
+    final configFile = File('${appFolder.path}/config.json');
+    final configData = {
+      'version': '1.0',
+      'bridges': <Map<String, dynamic>>[],
+      'updated_at': DateTime.now().toIso8601String(),
+    };
+    await configFile.writeAsString(
+      const JsonEncoder.withIndent('  ').convert(configData),
+    );
+
+    stderr.writeln('Teleport app initialized');
+  }
+
+  /// Initialize teleport app using storage abstraction
+  Future<void> _initializeTeleportAppWithStorage(String folderName) async {
+    if (_profileStorage == null) return;
+
+    await _profileStorage!.createDirectory('$folderName/bridges');
+    await _profileStorage!.createDirectory('$folderName/media');
+
+    final configData = {
+      'version': '1.0',
+      'bridges': <Map<String, dynamic>>[],
+      'updated_at': DateTime.now().toIso8601String(),
+    };
+    await _profileStorage!.writeJson('$folderName/config.json', configData);
+
+    stderr.writeln('Teleport app initialized');
   }
 
   /// Generate and save tree.json using storage abstraction

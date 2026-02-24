@@ -80,24 +80,18 @@ class _SignalQrLinkWidgetState extends State<SignalQrLinkWidget> {
               child: const Text('Retry'),
             ),
           ] else if (url != null && url.isNotEmpty) ...[
-            LayoutBuilder(
-              builder: (context, constraints) {
-                final qrSize =
-                    (constraints.maxWidth - 48).clamp(200.0, 480.0);
-                return Container(
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                  child: QrImageView(
-                    data: url,
-                    version: QrVersions.auto,
-                    size: qrSize,
-                    backgroundColor: Colors.white,
-                  ),
-                );
-              },
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: QrImageView(
+                data: url,
+                version: QrVersions.auto,
+                size: 480,
+                backgroundColor: Colors.white,
+              ),
             ),
             const SizedBox(height: 24),
             Text(

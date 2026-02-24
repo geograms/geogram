@@ -240,6 +240,13 @@ class SignalService {
       _chatService?.handleUpdate(update);
       return;
     }
+
+    // Sync events — contacts synced or initial queue drained
+    if (type == 'updateContacts' || type == 'updateSyncComplete') {
+      LogService().log('SignalService: $type received');
+      _eventController.add(const SignalEvent(SignalEventType.chatListUpdated));
+      return;
+    }
   }
 
   void _onAuthStateChanged(SignalAuthStateData state) {

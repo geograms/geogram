@@ -25,6 +25,10 @@ enum TelegramEventType {
   authStateChanged,
   chatListUpdated,
   newMessage,
+  messageEdited,
+  messagesDeleted,
+  typingUpdate,
+  reactionsUpdated,
   error,
 }
 
@@ -247,7 +251,12 @@ class TelegramService {
     if (type.startsWith('updateChat') ||
         type == 'updateNewChat' ||
         type == 'updateNewMessage' ||
-        type == 'updateSupergroup') {
+        type == 'updateSupergroup' ||
+        type == 'updateMessageEdited' ||
+        type == 'updateMessageContent' ||
+        type == 'updateDeleteMessages' ||
+        type == 'updateUserChatAction' ||
+        type == 'updateMessageInteractionInfo') {
       _chatService?.handleUpdate(update);
       return;
     }

@@ -79,6 +79,8 @@ IconData getAppTypeIcon(String type) {
       return Icons.qr_code_2;
     case 'conference':
       return Icons.mic;
+    case 'teleport':
+      return Icons.rocket_launch;
     default:
       return Icons.folder;
   }
@@ -334,6 +336,14 @@ LinearGradient getAppTypeGradient(String type, bool isDark) {
         colors: isDark
             ? [const Color(0xFF00838F), const Color(0xFF00695C)]
             : [const Color(0xFF26C6DA), const Color(0xFF00BFA5)],
+      );
+    case 'teleport':
+      return LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: isDark
+            ? [const Color(0xFF283593), const Color(0xFF6A1B9A)]
+            : [const Color(0xFF5C6BC0), const Color(0xFFAB47BC)],
       );
     default:
       return LinearGradient(

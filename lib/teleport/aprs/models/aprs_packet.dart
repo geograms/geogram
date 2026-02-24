@@ -32,6 +32,14 @@ class AprsPacket {
   /// Packet type classification
   final AprsPacketType type;
 
+  // --- Position fields (set when type == position or parseable) ---
+
+  /// Latitude in decimal degrees (positive = N, negative = S)
+  final double? latitude;
+
+  /// Longitude in decimal degrees (positive = E, negative = W)
+  final double? longitude;
+
   // --- Directed-message fields (only set when type == message) ---
 
   /// Parsed message body text
@@ -51,10 +59,15 @@ class AprsPacket {
     required this.rawTnc2,
     required this.timestamp,
     required this.type,
+    this.latitude,
+    this.longitude,
     this.messageText,
     this.messageId,
     this.isAcked = false,
   });
+
+  /// Whether this packet has a valid parsed position.
+  bool get hasPosition => latitude != null && longitude != null;
 
   /// Create a copy with updated fields.
   AprsPacket copyWith({bool? isAcked}) {
@@ -66,6 +79,8 @@ class AprsPacket {
       rawTnc2: rawTnc2,
       timestamp: timestamp,
       type: type,
+      latitude: latitude,
+      longitude: longitude,
       messageText: messageText,
       messageId: messageId,
       isAcked: isAcked ?? this.isAcked,

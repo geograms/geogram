@@ -159,10 +159,14 @@ class Video {
   // Emoji reaction counts
   final int heartCount;
   final int thumbsUpCount;
+  final int thumbsDownCount;
   final int fireCount;
+  final int hundredCount;
+  final int curiousCount;
   final int celebrateCount;
   final int laughCount;
   final int sadCount;
+  final int beerCheersCount;
   final int surpriseCount;
 
   // Comment count
@@ -176,10 +180,14 @@ class Video {
   final bool hasVerified;
   final bool hasHearted;
   final bool hasThumbsUp;
+  final bool hasThumbsDown;
   final bool hasFired;
+  final bool hasHundred;
+  final bool hasCurious;
   final bool hasCelebrated;
   final bool hasLaughed;
   final bool hasSad;
+  final bool hasBeerCheers;
   final bool hasSurprised;
 
   Video({
@@ -218,10 +226,14 @@ class Video {
     this.viewsCount = 0,
     this.heartCount = 0,
     this.thumbsUpCount = 0,
+    this.thumbsDownCount = 0,
     this.fireCount = 0,
+    this.hundredCount = 0,
+    this.curiousCount = 0,
     this.celebrateCount = 0,
     this.laughCount = 0,
     this.sadCount = 0,
+    this.beerCheersCount = 0,
     this.surpriseCount = 0,
     this.commentCount = 0,
     // User feedback state
@@ -232,10 +244,14 @@ class Video {
     this.hasVerified = false,
     this.hasHearted = false,
     this.hasThumbsUp = false,
+    this.hasThumbsDown = false,
     this.hasFired = false,
+    this.hasHundred = false,
+    this.hasCurious = false,
     this.hasCelebrated = false,
     this.hasLaughed = false,
     this.hasSad = false,
+    this.hasBeerCheers = false,
     this.hasSurprised = false,
   });
 
@@ -468,10 +484,14 @@ class Video {
     int? viewsCount,
     int? heartCount,
     int? thumbsUpCount,
+    int? thumbsDownCount,
     int? fireCount,
+    int? hundredCount,
+    int? curiousCount,
     int? celebrateCount,
     int? laughCount,
     int? sadCount,
+    int? beerCheersCount,
     int? surpriseCount,
     int? commentCount,
     bool? hasLiked,
@@ -481,10 +501,14 @@ class Video {
     bool? hasVerified,
     bool? hasHearted,
     bool? hasThumbsUp,
+    bool? hasThumbsDown,
     bool? hasFired,
+    bool? hasHundred,
+    bool? hasCurious,
     bool? hasCelebrated,
     bool? hasLaughed,
     bool? hasSad,
+    bool? hasBeerCheers,
     bool? hasSurprised,
   }) {
     return Video(
@@ -522,10 +546,14 @@ class Video {
       viewsCount: viewsCount ?? this.viewsCount,
       heartCount: heartCount ?? this.heartCount,
       thumbsUpCount: thumbsUpCount ?? this.thumbsUpCount,
+      thumbsDownCount: thumbsDownCount ?? this.thumbsDownCount,
       fireCount: fireCount ?? this.fireCount,
+      hundredCount: hundredCount ?? this.hundredCount,
+      curiousCount: curiousCount ?? this.curiousCount,
       celebrateCount: celebrateCount ?? this.celebrateCount,
       laughCount: laughCount ?? this.laughCount,
       sadCount: sadCount ?? this.sadCount,
+      beerCheersCount: beerCheersCount ?? this.beerCheersCount,
       surpriseCount: surpriseCount ?? this.surpriseCount,
       commentCount: commentCount ?? this.commentCount,
       hasLiked: hasLiked ?? this.hasLiked,
@@ -535,10 +563,14 @@ class Video {
       hasVerified: hasVerified ?? this.hasVerified,
       hasHearted: hasHearted ?? this.hasHearted,
       hasThumbsUp: hasThumbsUp ?? this.hasThumbsUp,
+      hasThumbsDown: hasThumbsDown ?? this.hasThumbsDown,
       hasFired: hasFired ?? this.hasFired,
+      hasHundred: hasHundred ?? this.hasHundred,
+      hasCurious: hasCurious ?? this.hasCurious,
       hasCelebrated: hasCelebrated ?? this.hasCelebrated,
       hasLaughed: hasLaughed ?? this.hasLaughed,
       hasSad: hasSad ?? this.hasSad,
+      hasBeerCheers: hasBeerCheers ?? this.hasBeerCheers,
       hasSurprised: hasSurprised ?? this.hasSurprised,
     );
   }
@@ -581,10 +613,14 @@ class Video {
       'viewsCount': viewsCount,
       'heartCount': heartCount,
       'thumbsUpCount': thumbsUpCount,
+      'thumbsDownCount': thumbsDownCount,
       'fireCount': fireCount,
+      'hundredCount': hundredCount,
+      'curiousCount': curiousCount,
       'celebrateCount': celebrateCount,
       'laughCount': laughCount,
       'sadCount': sadCount,
+      'beerCheersCount': beerCheersCount,
       'surpriseCount': surpriseCount,
       'commentCount': commentCount,
     };
@@ -627,10 +663,14 @@ class Video {
       viewsCount: json['viewsCount'] as int? ?? 0,
       heartCount: json['heartCount'] as int? ?? 0,
       thumbsUpCount: json['thumbsUpCount'] as int? ?? 0,
+      thumbsDownCount: json['thumbsDownCount'] as int? ?? 0,
       fireCount: json['fireCount'] as int? ?? 0,
+      hundredCount: json['hundredCount'] as int? ?? 0,
+      curiousCount: json['curiousCount'] as int? ?? 0,
       celebrateCount: json['celebrateCount'] as int? ?? 0,
       laughCount: json['laughCount'] as int? ?? 0,
       sadCount: json['sadCount'] as int? ?? 0,
+      beerCheersCount: json['beerCheersCount'] as int? ?? 0,
       surpriseCount: json['surpriseCount'] as int? ?? 0,
       commentCount: json['commentCount'] as int? ?? 0,
     );

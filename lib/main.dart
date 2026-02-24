@@ -48,6 +48,7 @@ import 'services/direct_message_service.dart';
 import 'services/dm_queue_service.dart';
 import 'services/websocket_service.dart';
 import 'services/backup_service.dart';
+import 'teleport/aprs/aprs_service.dart';
 import 'services/window_state_service.dart';
 import 'services/tray_service.dart';
 import 'services/group_sync_service.dart';
@@ -109,6 +110,7 @@ import 'pages/files_browser_page.dart';
 import 'stories/pages/stories_home_page.dart';
 import 'pages/qr_browser_page.dart';
 import 'pages/shared_browser_page.dart';
+import 'pages/teleport_browser_page.dart';
 import 'pages/conference_home_page.dart';
 import 'pages/website_browser_page.dart';
 import 'pages/profile_management_page.dart';
@@ -649,6 +651,16 @@ void main() async {
       // Initialize DMQueueService for background DM delivery (optimistic UI)
       await DMQueueService().initialize();
       LogService().log('DMQueueService initialized');
+
+      // Auto-start APRS-IS if it was enabled in a previous session
+      if (firstLaunchComplete) {
+        final aprsStorage = AppService().profileStorage;
+        if (aprsStorage != null) {
+          AprsService().autoStart(aprsStorage).catchError((e) {
+            LogService().log('APRS auto-start failed: $e');
+          });
+        }
+      }
 
       // Ensure chat rooms exist for all device folders with chat enabled
       GroupSyncService()
@@ -2686,6 +2698,11 @@ class _AppsPageState extends State<AppsPage> {
                                       ? const ConferenceHomePage()
                                       : appEntry.type == 'shared'
                                       ? SharedBrowserPage(
+                                          appPath: appEntry.storagePath ?? '',
+                                          appTitle: appEntry.title,
+                                        )
+                                      : appEntry.type == 'teleport'
+                                      ? TeleportBrowserPage(
                                           appPath: appEntry.storagePath ?? '',
                                           appTitle: appEntry.title,
                                         )

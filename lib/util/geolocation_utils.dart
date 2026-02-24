@@ -11,13 +11,14 @@
  */
 
 import 'dart:convert';
-import 'dart:io' if (dart.library.html) '../platform/io_stub.dart' show Platform;
+import 'dart:io' if (dart.library.html) '../platform/io_stub.dart' show InternetAddressType, NetworkInterface, Platform;
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 
+import '../services/geoip_service.dart';
 import '../services/log_service.dart';
 import '../services/profile_service.dart';
 import '../services/websocket_service.dart';
@@ -245,15 +246,18 @@ class GeolocationUtils {
   /// Detect location via IP address using the connected station's GeoIP service
   /// This provides privacy-preserving IP geolocation without external API calls
   static Future<GeolocationResult?> detectViaIP() async {
+    // 1. Try local GeoIP database directly (no station connection needed)
+    final localResult = await _detectViaLocalGeoIP();
+    if (localResult != null) return localResult;
+
+    // 2. Fall back to station's /api/geoip endpoint
     try {
-      // Get the connected station URL
       final stationUrl = WebSocketService().connectedUrl;
       if (stationUrl == null) {
-        LogService().log('GeolocationUtils: Not connected to station, cannot detect IP location');
+        LogService().log('GeolocationUtils: No local GeoIP and not connected to station');
         return null;
       }
 
-      // Convert WebSocket URL to HTTP URL
       final httpUrl = stationUrl
           .replaceFirst('wss://', 'https://')
           .replaceFirst('ws://', 'http://');
@@ -289,6 +293,64 @@ class GeolocationUtils {
       return null;
     } catch (e) {
       LogService().log('GeolocationUtils: Station GeoIP failed: $e');
+      return null;
+    }
+  }
+
+  /// Try to geolocate using the local MMDB database + network interface IPs.
+  /// Works without any station connection — just needs GeoIpService initialized.
+  static Future<GeolocationResult?> _detectViaLocalGeoIP() async {
+    final geoip = GeoIpService();
+    if (!geoip.isInitialized) return null;
+
+    try {
+      if (kIsWeb) return null; // No NetworkInterface on web
+
+      final interfaces = await NetworkInterface.list(
+        includeLoopback: false,
+        includeLinkLocal: false,
+        type: InternetAddressType.IPv4,
+      );
+
+      for (final iface in interfaces) {
+        for (final addr in iface.addresses) {
+          final ip = addr.address;
+          // Skip private/loopback — GeoIpService handles this too but
+          // we avoid the log noise by skipping here.
+          if (ip.startsWith('127.') ||
+              ip.startsWith('10.') ||
+              ip.startsWith('192.168.') ||
+              ip.startsWith('169.254.')) continue;
+          if (ip.startsWith('172.')) {
+            final second = int.tryParse(ip.split('.')[1]) ?? 0;
+            if (second >= 16 && second <= 31) continue;
+          }
+
+          final result = await geoip.lookup(ip);
+          if (result != null && result.hasLocation) {
+            LogService().log(
+                'GeolocationUtils: Local GeoIP for $ip: ${result.latitude}, ${result.longitude} (${result.locationName})');
+            return GeolocationResult(
+              latitude: result.latitude!,
+              longitude: result.longitude!,
+              source: 'ip',
+              city: result.city,
+              country: result.country,
+              serviceName: 'local-geoip',
+            );
+          }
+        }
+      }
+
+      // No public IP found — try the default route IP
+      // On most home networks, the machine only has a private IP.
+      // Connect briefly to a public address to discover which interface is used,
+      // then lookup that interface's gateway (not supported directly).
+      // Instead, just look up a private IP — DB-IP sometimes has entries for
+      // ISP-assigned RFC1918 ranges, but usually not. Skip silently.
+      return null;
+    } catch (e) {
+      LogService().log('GeolocationUtils: Local GeoIP lookup failed: $e');
       return null;
     }
   }

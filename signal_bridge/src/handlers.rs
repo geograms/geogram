@@ -564,6 +564,43 @@ fn parse_thread(chat_id: &str, chat_type: &str) -> Result<Thread, String> {
     }
 }
 
+/// Extract fields from a DataMessage into the JSON object.
+fn apply_data_message(msg: &mut Value, dm: &DataMessage) {
+    if let Some(text) = &dm.body {
+        msg["text"] = Value::String(text.clone());
+    }
+    msg["content_type"] = Value::String("text".to_string());
+
+    // Attachments
+    if !dm.attachments.is_empty() {
+        msg["content_type"] = Value::String("attachment".to_string());
+        msg["attachment_count"] = json!(dm.attachments.len());
+    }
+
+    // Quote (reply)
+    if let Some(quote) = &dm.quote {
+        msg["quote_timestamp"] = json!(quote.id);
+        if let Some(text) = &quote.text {
+            msg["quote_text"] = Value::String(text.clone());
+        }
+    }
+
+    // Reactions
+    if let Some(reaction) = &dm.reaction {
+        msg["content_type"] = Value::String("reaction".to_string());
+        msg["reaction_emoji"] =
+            Value::String(reaction.emoji.clone().unwrap_or_default());
+        msg["reaction_target_timestamp"] = json!(reaction.target_sent_timestamp);
+    }
+
+    // Group context
+    if let Some(gv2) = &dm.group_v2 {
+        if let Some(key) = &gv2.master_key {
+            msg["group_key"] = Value::String(b64_encode(key));
+        }
+    }
+}
+
 /// Convert a presage Content to our JSON message format.
 fn content_to_json(content: &presage::libsignal_service::content::Content, self_uuid: Option<Uuid>) -> Value {
     let sender_uuid = content.metadata.sender.raw_uuid().to_string();
@@ -579,40 +616,27 @@ fn content_to_json(content: &presage::libsignal_service::content::Content, self_
         "is_outgoing": is_outgoing,
     });
 
-    // Extract text from the body if it's a DataMessage
-    if let ContentBody::DataMessage(dm) = &content.body {
-        if let Some(text) = &dm.body {
-            msg["text"] = Value::String(text.clone());
+    match &content.body {
+        // Regular incoming messages
+        ContentBody::DataMessage(dm) => {
+            apply_data_message(&mut msg, dm);
         }
-        msg["content_type"] = Value::String("text".to_string());
-
-        // Attachments
-        if !dm.attachments.is_empty() {
-            msg["content_type"] = Value::String("attachment".to_string());
-            msg["attachment_count"] = json!(dm.attachments.len());
-        }
-
-        // Quote (reply)
-        if let Some(quote) = &dm.quote {
-            msg["quote_timestamp"] = json!(quote.id);
-            if let Some(text) = &quote.text {
-                msg["quote_text"] = Value::String(text.clone());
+        // Outgoing messages synced to linked devices (sent from primary)
+        ContentBody::SynchronizeMessage(sm) => {
+            if let Some(sent) = &sm.sent {
+                if let Some(dm) = &sent.message {
+                    apply_data_message(&mut msg, dm);
+                }
+                // Use the sent timestamp if available (more accurate)
+                if let Some(ts) = sent.timestamp {
+                    msg["timestamp"] = json!(ts);
+                }
+                // These are always outgoing (sent by self on another device)
+                msg["is_outgoing"] = json!(true);
             }
         }
-
-        // Reactions
-        if let Some(reaction) = &dm.reaction {
-            msg["content_type"] = Value::String("reaction".to_string());
-            msg["reaction_emoji"] =
-                Value::String(reaction.emoji.clone().unwrap_or_default());
-            msg["reaction_target_timestamp"] = json!(reaction.target_sent_timestamp);
-        }
-
-        // Group context
-        if let Some(gv2) = &dm.group_v2 {
-            if let Some(key) = &gv2.master_key {
-                msg["group_key"] = Value::String(b64_encode(key));
-            }
+        _ => {
+            // ReceiptMessage, TypingMessage, etc. — skip silently
         }
     }
 

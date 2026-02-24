@@ -293,6 +293,11 @@ class UserLocationService extends ChangeNotifier {
     }
   }
 
+  /// Manually set location (for debug API / testing on devices without GPS).
+  void setManualLocation(double lat, double lon) {
+    _updateLocation(lat, lon, 'manual');
+  }
+
   /// Update the current location
   void _updateLocation(double lat, double lon, String source, {String? locationName}) {
     // Skip if coordinates are invalid

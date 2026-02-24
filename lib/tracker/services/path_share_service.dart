@@ -12,6 +12,7 @@ import '../models/tracker_models.dart';
 import '../models/tracker_path_type.dart';
 import '../../services/i18n_service.dart';
 import '../../services/map_tile_service.dart';
+import '../../services/static_map_service.dart';
 
 /// Service for generating and sharing path activity images
 class PathShareService {
@@ -253,28 +254,41 @@ class PathShareService {
         return Rect.fromLTWH(screenX, screenY, screenW, screenH);
       }
 
-      // Draw tiles positioned according to path bounds
-      await _drawTileLayerMapped(canvas, satelliteTiles, zoom, tileToScreen, null);
-      await _drawTileLayerMapped(canvas, bordersTiles, zoom, tileToScreen,
+      // Draw tiles positioned according to path bounds.
+      // Keep image handles alive until after toImage() — the recording canvas
+      // defers rendering, so early dispose invalidates pixel data.
+      final tileImages = <ui.Image>[];
+      tileImages.addAll(
+          await _drawTileLayerMapped(canvas, satelliteTiles, zoom, tileToScreen, null));
+      tileImages.addAll(
+          await _drawTileLayerMapped(canvas, bordersTiles, zoom, tileToScreen,
         const ColorFilter.matrix(<double>[
           1.2, 0, 0, 0, 0,
           0, 1.2, 0, 0, 0,
           0, 0, 1.2, 0, 0,
           0, 0, 0, 0.7, 0,
-        ]));
-      await _drawTileLayerMapped(canvas, labelsTiles, zoom, tileToScreen, null);
+        ])));
+      tileImages.addAll(
+          await _drawTileLayerMapped(canvas, labelsTiles, zoom, tileToScreen, null));
       if (totalDistanceMeters < 100000) {
-        await _drawTileLayerMapped(canvas, transportTiles, zoom, tileToScreen,
+        tileImages.addAll(
+            await _drawTileLayerMapped(canvas, transportTiles, zoom, tileToScreen,
           const ColorFilter.matrix(<double>[
             0.3, 0.3, 0.3, 0, 30,
             0.3, 0.3, 0.3, 0, 30,
             0.3, 0.3, 0.3, 0, 30,
             0, 0, 0, 1.0, 0,
-          ]));
+          ])));
       }
 
       final picture = recorder.endRecording();
-      return picture.toImage(width.toInt(), height.toInt());
+      final result = await picture.toImage(width.toInt(), height.toInt());
+
+      // Now safe to dispose tile images
+      for (final img in tileImages) {
+        img.dispose();
+      }
+      return result;
     } catch (e) {
       debugPrint('PathShareService: Error compositing map tiles: $e');
       return null;
@@ -282,70 +296,31 @@ class PathShareService {
   }
 
   /// Draw tiles using a mapping function from tile coords to screen rect
-  static Future<void> _drawTileLayerMapped(
+  /// (delegates to StaticMapService.drawTileLayer).
+  /// Returns decoded image handles — caller must dispose after toImage().
+  static Future<List<ui.Image>> _drawTileLayerMapped(
     Canvas canvas,
     List<_TileImage> tiles,
     int zoom,
     Rect Function(int tileX, int tileY) tileToScreen,
     ColorFilter? colorFilter,
   ) async {
-    final paint = Paint();
-    if (colorFilter != null) {
-      paint.colorFilter = colorFilter;
-    }
-
-    for (final tile in tiles) {
-      try {
-        final codec = await ui.instantiateImageCodec(tile.bytes);
-        final frame = await codec.getNextFrame();
-        final tileImage = frame.image;
-
-        final destRect = tileToScreen(tile.x, tile.y);
-
-        canvas.drawImageRect(
-          tileImage,
-          Rect.fromLTWH(0, 0, 256, 256),
-          destRect,
-          paint,
-        );
-
-        tileImage.dispose();
-      } catch (e) {
-        debugPrint('PathShareService: Error decoding tile: $e');
-      }
-    }
+    final converted = tiles
+        .map((t) => TileImage(x: t.x, y: t.y, bytes: t.bytes))
+        .toList();
+    return StaticMapService.drawTileLayer(
+        canvas, converted, tileToScreen, colorFilter);
   }
 
-  /// Read a tile from the cache (same cache used by FlutterMap)
-  static Future<Uint8List?> _readCachedTile(String tilesPath, String layer, int z, int x, int y) async {
-    try {
-      final cachePath = '$tilesPath/cache/$layer/$z/$x/$y.png';
-      final file = File(cachePath);
-      if (await file.exists()) {
-        return await file.readAsBytes();
-      }
-    } catch (e) {
-      // Tile not in cache, that's OK
-    }
-    return null;
-  }
+  /// Read a tile from the cache (delegates to StaticMapService).
+  static Future<Uint8List?> _readCachedTile(String tilesPath, String layer, int z, int x, int y) =>
+      StaticMapService.readCachedTile(tilesPath, layer, z, x, y);
 
-  static int _lonToTileX(double lon, int zoom) =>
-      ((lon + 180) / 360 * (1 << zoom)).floor();
-
-  static int _latToTileY(double lat, int zoom) {
-    final latRad = lat * math.pi / 180;
-    return ((1 - math.log(math.tan(latRad) + 1 / math.cos(latRad)) / math.pi) / 2 * (1 << zoom)).floor();
-  }
-
-  // Inverse functions: tile coordinates back to lat/lon
-  static double _tileXToLon(int x, int zoom) =>
-      x / (1 << zoom) * 360 - 180;
-
-  static double _tileYToLat(int y, int zoom) {
-    final n = math.pi - 2 * math.pi * y / (1 << zoom);
-    return 180 / math.pi * math.atan(0.5 * (math.exp(n) - math.exp(-n)));
-  }
+  // Web Mercator helpers (delegate to StaticMapService)
+  static int _lonToTileX(double lon, int zoom) => StaticMapService.lonToTileX(lon, zoom);
+  static int _latToTileY(double lat, int zoom) => StaticMapService.latToTileY(lat, zoom);
+  static double _tileXToLon(int x, int zoom) => StaticMapService.tileXToLon(x, zoom);
+  static double _tileYToLat(int y, int zoom) => StaticMapService.tileYToLat(y, zoom);
 
   /// Draw the share image on the canvas
   static void _drawShareImage({

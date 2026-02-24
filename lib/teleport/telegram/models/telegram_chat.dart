@@ -3,6 +3,8 @@
  * License: Apache-2.0
  */
 
+import 'dart:typed_data';
+
 /// Telegram chat types.
 enum TelegramChatType {
   private_,
@@ -21,6 +23,8 @@ class TelegramChat {
   final DateTime? lastMessageDate;
   final int unreadCount;
   final String? photoPath;
+  final int? photoSmallFileId;
+  final Uint8List? photoBytes;
   final int? supergroupId;
   final bool isForum;
 
@@ -32,6 +36,8 @@ class TelegramChat {
     this.lastMessageDate,
     this.unreadCount = 0,
     this.photoPath,
+    this.photoSmallFileId,
+    this.photoBytes,
     this.supergroupId,
     this.isForum = false,
   });
@@ -56,6 +62,21 @@ class TelegramChat {
       supergroupId = typeJson['supergroup_id'] as int?;
     }
 
+    // Extract chat photo
+    int? photoSmallFileId;
+    String? photoPath;
+    final photo = json['photo'] as Map<String, dynamic>?;
+    if (photo != null) {
+      final small = photo['small'] as Map<String, dynamic>?;
+      final local = small?['local'] as Map<String, dynamic>?;
+      final isDownloaded = local?['is_downloading_completed'] as bool? ?? false;
+      final path = local?['path'] as String?;
+      if (isDownloaded && path != null && path.isNotEmpty) {
+        photoPath = path;
+      }
+      photoSmallFileId = small?['id'] as int?;
+    }
+
     return TelegramChat(
       id: json['id'] as int,
       title: json['title'] as String? ?? '',
@@ -63,6 +84,8 @@ class TelegramChat {
       lastMessageText: lastMsgText,
       lastMessageDate: lastMsgDate,
       unreadCount: json['unread_count'] as int? ?? 0,
+      photoPath: photoPath,
+      photoSmallFileId: photoSmallFileId,
       supergroupId: supergroupId,
     );
   }
@@ -72,6 +95,9 @@ class TelegramChat {
     String? lastMessageText,
     DateTime? lastMessageDate,
     int? unreadCount,
+    String? photoPath,
+    int? photoSmallFileId,
+    Uint8List? photoBytes,
     bool? isForum,
   }) {
     return TelegramChat(
@@ -81,7 +107,9 @@ class TelegramChat {
       lastMessageText: lastMessageText ?? this.lastMessageText,
       lastMessageDate: lastMessageDate ?? this.lastMessageDate,
       unreadCount: unreadCount ?? this.unreadCount,
-      photoPath: photoPath,
+      photoPath: photoPath ?? this.photoPath,
+      photoSmallFileId: photoSmallFileId ?? this.photoSmallFileId,
+      photoBytes: photoBytes ?? this.photoBytes,
       supergroupId: supergroupId,
       isForum: isForum ?? this.isForum,
     );
@@ -123,6 +151,26 @@ class TelegramChat {
         return '[Sticker]';
       case 'messageAnimation':
         return '[GIF]';
+      case 'messageLocation':
+        final livePeriod = content['live_period'] as int? ?? 0;
+        return livePeriod > 0 ? '[Live Location]' : '[Location]';
+      case 'messageVenue':
+        return '[Venue]';
+      case 'messageVideoNote':
+        return '[Video message]';
+      case 'messageContact':
+        return '[Contact]';
+      case 'messageAudio':
+        return '[Audio]';
+      case 'messagePoll':
+        final poll = content['poll'] as Map<String, dynamic>?;
+        final question =
+            (poll?['question'] as Map<String, dynamic>?)?['text'] as String?;
+        return question != null ? '[Poll] $question' : '[Poll]';
+      case 'messageCall':
+        return '[Call]';
+      case 'messagePinMessage':
+        return 'pinned a message';
       default:
         return '[$type]';
     }

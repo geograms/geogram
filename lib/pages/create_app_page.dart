@@ -92,6 +92,7 @@ class _CreateAppPageState extends State<CreateAppPage> {
     _AppTypeInfo('files', Icons.snippet_folder),
     _AppTypeInfo('qr', Icons.qr_code_2),
     _AppTypeInfo('conference', Icons.mic),
+    _AppTypeInfo('teleport', Icons.rocket_launch),
   ];
 
   // Single-instance types - use centralized constant from app_constants.dart
@@ -606,6 +607,8 @@ class _CreateAppPageState extends State<CreateAppPage> {
         return 'Scan and generate QR codes and barcodes. Create WiFi sharing codes, URLs, contacts, and more. Organize your codes in folders and share them as images.';
       case 'conference':
         return 'Host or join P2P audio meetings. Create voice rooms on your local network or through your station. Share via link or QR code for up to 6 participants.';
+      case 'teleport':
+        return 'Bridge messages to and from external platforms like Signal, Telegram, WhatsApp, NOSTR, Bluesky, IRC, Matrix, and XMPP. A unified gateway for all your messaging.';
       default:
         return '';
     }
@@ -783,6 +786,14 @@ class _CreateAppPageState extends State<CreateAppPage> {
           'QR code sharing',
           'Web browser joining',
           'Up to 6 participants',
+        ];
+      case 'teleport':
+        return [
+          'Modular platform bridges',
+          'Unified messaging interface',
+          'Per-bridge credentials',
+          'Connection monitoring',
+          'Extensible architecture',
         ];
       default:
         return [];

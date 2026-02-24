@@ -68,4 +68,6 @@ if [[ -z "$dart_bin" ]]; then
   exit 127
 fi
 
-"$dart_bin" run nostr_vanity_generator.dart "${args[@]}"
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$script_dir/.."
+"$dart_bin" run "$script_dir/nostr_vanity_generator.dart" "${args[@]}"

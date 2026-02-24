@@ -93,6 +93,14 @@ class StorageConfig {
     return path.join(devicesDir, sanitized, 'usenet');
   }
 
+  /// Get the teleport telegram directory for a specific profile/callsign
+  ///
+  /// Returns path like: {devicesDir}/{CALLSIGN}/teleport/telegram
+  String teleportTelegramDirForProfile(String callsign) {
+    final sanitized = _sanitizeCallsign(callsign);
+    return path.join(devicesDir, sanitized, 'teleport', 'telegram');
+  }
+
   /// Get the email cache directory path (for offline email delivery)
   String get emailCacheDir => path.join(baseDir, 'email-cache');
 

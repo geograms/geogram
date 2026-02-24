@@ -5,7 +5,7 @@
  * Core APRS bridge service — singleton with event stream.
  * Unlike Telegram/Signal, APRS has no authentication flow.
  * Wires AprsIsClient for live APRS-IS connectivity.
- * Integrates GPS via UserLocationService and persists packets via AprsCacheService.
+ * Integrates GPS via LocationProviderService and persists packets via AprsCacheService.
  *
  * UI events are throttled (500ms) so high-volume packet streams don't freeze
  * the Flutter UI with per-packet setState rebuilds.
@@ -14,9 +14,11 @@
 import 'dart:async';
 import 'dart:math';
 
+import 'package:flutter/foundation.dart';
+
+import '../../services/location_provider_service.dart';
 import '../../services/log_service.dart';
 import '../../services/profile_storage.dart';
-import '../../services/user_location_service.dart';
 import 'aprs_cache_service.dart';
 import 'aprs_is_client.dart';
 import 'models/aprs_packet.dart';
@@ -55,8 +57,8 @@ class AprsService {
   String? _callsign;
   AprsIsClient? _client;
 
-  // GPS tracking
-  _VoidCallback? _locationDispose;
+  // GPS tracking via LocationProviderService
+  VoidCallback? _locationDispose;
   double? _lastFilterLat;
   double? _lastFilterLon;
   DateTime? _lastFilterTime;
@@ -64,9 +66,16 @@ class AprsService {
   // Persistence
   AprsCacheService? _cacheService;
 
+  /// Expose cache service for debug API inspection.
+  AprsCacheService? get cacheService => _cacheService;
+
   // Dedup — keeps recent rawTnc2 hashes to skip duplicates
   final Set<String> _recentPacketHashes = {};
   static const int _maxRecentHashes = 5000;
+
+  /// Last known position per callsign — updated from position packets.
+  /// Used to show distance for message packets (which don't carry coordinates).
+  final Map<String, (double, double)> lastKnownPositions = {};
 
   static const int _maxStreamPackets = 10000;
   static const int _maxMessages = 5000;
@@ -106,6 +115,7 @@ class AprsService {
   double get radiusKm => _radiusKm;
   set radiusKm(double value) {
     _radiusKm = value.clamp(1, 1000);
+    LogService().log('AprsService: radiusKm set to $_radiusKm, client=${_client != null}');
     _client?.updateFilter(radiusKm: _radiusKm);
   }
 
@@ -171,11 +181,33 @@ class AprsService {
       }
     }
 
-    // Get initial position from GPS service (fallback: 0,0)
-    final locService = UserLocationService();
-    final loc = locService.currentLocation;
-    final lat = loc?.latitude ?? 0.0;
-    final lon = loc?.longitude ?? 0.0;
+    // Register as a LocationProviderService consumer — this triggers
+    // GPS / IP-geolocation / profile fallback automatically.
+    final locProvider = LocationProviderService();
+    try {
+      final dispose = await locProvider.registerConsumer(
+        intervalSeconds: 120,
+        onPosition: (pos) => _onPositionUpdate(pos),
+      );
+      _locationDispose = dispose;
+    } catch (e) {
+      LogService().log('AprsService: LocationProvider registration failed: $e');
+    }
+
+    // Get the best position available right now.
+    // requestImmediatePosition() triggers _capturePosition which chains
+    // GPS → last-known → IP-geolocation → profile fallback.
+    LockedPosition? pos = locProvider.currentPosition;
+    if (pos == null || !pos.isFresh()) {
+      pos = await locProvider.requestImmediatePosition();
+    }
+    final lat = pos?.latitude ?? 0.0;
+    final lon = pos?.longitude ?? 0.0;
+    if (pos != null) {
+      LogService().log('AprsService: initial position ${pos.latitude.toStringAsFixed(4)}, ${pos.longitude.toStringAsFixed(4)} (source: ${pos.source})');
+    } else {
+      LogService().log('AprsService: no position available, connecting without filter');
+    }
 
     _client = AprsIsClient(
       callsign: callsign,
@@ -188,21 +220,14 @@ class AprsService {
     _lastFilterLat = lat;
     _lastFilterLon = lon;
     _lastFilterTime = DateTime.now();
-
-    // Register as GPS consumer — listen for location changes
-    void onLocationChange() {
-      _onPositionUpdate(locService.currentLocation);
-    }
-    locService.addListener(onLocationChange);
-    _locationDispose = () => locService.removeListener(onLocationChange);
   }
 
-  /// Handle GPS position update — update client and send filter if needed.
-  void _onPositionUpdate(UserLocation? location) {
-    if (location == null || !location.isValid || _client == null) return;
+  /// Handle position update from LocationProviderService.
+  void _onPositionUpdate(LockedPosition pos) {
+    if (_client == null) return;
 
-    final lat = location.latitude;
-    final lon = location.longitude;
+    final lat = pos.latitude;
+    final lon = pos.longitude;
 
     // Always keep client coordinates fresh (used on reconnect)
     _client!.latitude = lat;
@@ -258,6 +283,11 @@ class AprsService {
     _recentPacketHashes.add(packet.rawTnc2);
     if (_recentPacketHashes.length > _maxRecentHashes) {
       _recentPacketHashes.remove(_recentPacketHashes.first);
+    }
+
+    // Track last known position per callsign
+    if (packet.hasPosition) {
+      lastKnownPositions[packet.fromCallsign] = (packet.latitude!, packet.longitude!);
     }
 
     // Queue for batched SQLite write
@@ -364,4 +394,3 @@ class AprsService {
 }
 
 /// Typedef for dispose callbacks (private to avoid conflict with Flutter's VoidCallback).
-typedef _VoidCallback = void Function();

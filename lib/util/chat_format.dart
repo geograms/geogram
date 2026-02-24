@@ -295,7 +295,16 @@ class ChatFormat {
       // Try ISO 8601 parse
       final dtParsed = DateTime.tryParse(rawTimestamp);
       if (dtParsed != null) {
-        return formatTimestamp(dtParsed.toUtc());
+        // If no timezone indicator ('Z' or '+'/'-' offset), assume UTC.
+        // DateTime.tryParse treats bare strings as local time, which
+        // produces different results on machines in different timezones.
+        final dtUtc = dtParsed.isUtc
+            ? dtParsed
+            : DateTime.utc(
+                dtParsed.year, dtParsed.month, dtParsed.day,
+                dtParsed.hour, dtParsed.minute, dtParsed.second,
+              );
+        return formatTimestamp(dtUtc);
       }
       // Numeric string
       final parsed = int.tryParse(rawTimestamp);

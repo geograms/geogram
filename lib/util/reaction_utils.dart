@@ -6,21 +6,29 @@
 class ReactionUtils {
   ReactionUtils._();
 
-  static const String reactionHeart = 'heart';
   static const String reactionThumbsUp = 'thumbs-up';
+  static const String reactionThumbsDown = 'thumbs-down';
+  static const String reactionHeart = 'heart';
   static const String reactionFire = 'fire';
+  static const String reactionHundred = 'hundred';
+  static const String reactionCurious = 'curious';
   static const String reactionCelebrate = 'celebrate';
   static const String reactionLaugh = 'laugh';
   static const String reactionSad = 'sad';
+  static const String reactionBeerCheers = 'beer-cheers';
   static const String reactionSurprise = 'surprise';
 
   static const List<String> supportedReactions = [
-    reactionHeart,
     reactionThumbsUp,
+    reactionThumbsDown,
+    reactionHeart,
     reactionFire,
+    reactionHundred,
+    reactionCurious,
     reactionCelebrate,
     reactionLaugh,
     reactionSad,
+    reactionBeerCheers,
     reactionSurprise,
   ];
 
@@ -37,8 +45,24 @@ class ReactionUtils {
       return reactionThumbsUp;
     }
 
+    if (normalized == 'thumbsdown') {
+      return reactionThumbsDown;
+    }
+
+    if (normalized == 'beercheers') {
+      return reactionBeerCheers;
+    }
+
     if (normalized == reactionThumbsUp) {
       return reactionThumbsUp;
+    }
+
+    if (normalized == reactionThumbsDown) {
+      return reactionThumbsDown;
+    }
+
+    if (normalized == reactionBeerCheers) {
+      return reactionBeerCheers;
     }
 
     return normalized;

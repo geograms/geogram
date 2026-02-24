@@ -5,6 +5,8 @@
  * Chat list item tile: avatar, title, last message preview, unread badge.
  */
 
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 
 import '../models/telegram_chat.dart';
@@ -53,15 +55,23 @@ class TelegramChatTile extends StatelessWidget {
     final theme = Theme.of(context);
 
     return ListTile(
-      leading: CircleAvatar(
-        backgroundColor:
-            const Color(0xFF0088CC).withValues(alpha: 0.15),
-        child: Icon(
-          _iconForChat(),
-          color: const Color(0xFF0088CC),
-          size: 20,
-        ),
-      ),
+      leading: chat.photoPath != null
+          ? CircleAvatar(
+              backgroundImage: FileImage(File(chat.photoPath!)),
+            )
+          : chat.photoBytes != null
+              ? CircleAvatar(
+                  backgroundImage: MemoryImage(chat.photoBytes!),
+                )
+              : CircleAvatar(
+                  backgroundColor:
+                      const Color(0xFF0088CC).withValues(alpha: 0.15),
+                  child: Icon(
+                    _iconForChat(),
+                    color: const Color(0xFF0088CC),
+                    size: 20,
+                  ),
+                ),
       title: Text(
         chat.title,
         maxLines: 1,

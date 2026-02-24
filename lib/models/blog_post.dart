@@ -43,10 +43,14 @@ class BlogPost {
   // Emoji reaction counts
   final int heartCount;
   final int thumbsUpCount;
+  final int thumbsDownCount;
   final int fireCount;
+  final int hundredCount;
+  final int curiousCount;
   final int celebrateCount;
   final int laughCount;
   final int sadCount;
+  final int beerCheersCount;
   final int surpriseCount;
 
   // User-specific feedback state (optional, only populated for current user)
@@ -57,10 +61,14 @@ class BlogPost {
   final bool hasVerified;
   final bool hasHearted;
   final bool hasThumbsUp;
+  final bool hasThumbsDown;
   final bool hasFired;
+  final bool hasHundred;
+  final bool hasCurious;
   final bool hasCelebrated;
   final bool hasLaughed;
   final bool hasSad;
+  final bool hasBeerCheers;
   final bool hasSurprised;
 
   BlogPost({
@@ -84,10 +92,14 @@ class BlogPost {
     this.verificationsCount = 0,
     this.heartCount = 0,
     this.thumbsUpCount = 0,
+    this.thumbsDownCount = 0,
     this.fireCount = 0,
+    this.hundredCount = 0,
+    this.curiousCount = 0,
     this.celebrateCount = 0,
     this.laughCount = 0,
     this.sadCount = 0,
+    this.beerCheersCount = 0,
     this.surpriseCount = 0,
     // User feedback state with defaults
     this.hasLiked = false,
@@ -97,10 +109,14 @@ class BlogPost {
     this.hasVerified = false,
     this.hasHearted = false,
     this.hasThumbsUp = false,
+    this.hasThumbsDown = false,
     this.hasFired = false,
+    this.hasHundred = false,
+    this.hasCurious = false,
     this.hasCelebrated = false,
     this.hasLaughed = false,
     this.hasSad = false,
+    this.hasBeerCheers = false,
     this.hasSurprised = false,
   });
 
@@ -430,10 +446,14 @@ class BlogPost {
     int? verificationsCount,
     int? heartCount,
     int? thumbsUpCount,
+    int? thumbsDownCount,
     int? fireCount,
+    int? hundredCount,
+    int? curiousCount,
     int? celebrateCount,
     int? laughCount,
     int? sadCount,
+    int? beerCheersCount,
     int? surpriseCount,
     bool? hasLiked,
     bool? hasPointed,
@@ -442,10 +462,14 @@ class BlogPost {
     bool? hasVerified,
     bool? hasHearted,
     bool? hasThumbsUp,
+    bool? hasThumbsDown,
     bool? hasFired,
+    bool? hasHundred,
+    bool? hasCurious,
     bool? hasCelebrated,
     bool? hasLaughed,
     bool? hasSad,
+    bool? hasBeerCheers,
     bool? hasSurprised,
   }) {
     return BlogPost(
@@ -468,10 +492,14 @@ class BlogPost {
       verificationsCount: verificationsCount ?? this.verificationsCount,
       heartCount: heartCount ?? this.heartCount,
       thumbsUpCount: thumbsUpCount ?? this.thumbsUpCount,
+      thumbsDownCount: thumbsDownCount ?? this.thumbsDownCount,
       fireCount: fireCount ?? this.fireCount,
+      hundredCount: hundredCount ?? this.hundredCount,
+      curiousCount: curiousCount ?? this.curiousCount,
       celebrateCount: celebrateCount ?? this.celebrateCount,
       laughCount: laughCount ?? this.laughCount,
       sadCount: sadCount ?? this.sadCount,
+      beerCheersCount: beerCheersCount ?? this.beerCheersCount,
       surpriseCount: surpriseCount ?? this.surpriseCount,
       hasLiked: hasLiked ?? this.hasLiked,
       hasPointed: hasPointed ?? this.hasPointed,
@@ -480,10 +508,14 @@ class BlogPost {
       hasVerified: hasVerified ?? this.hasVerified,
       hasHearted: hasHearted ?? this.hasHearted,
       hasThumbsUp: hasThumbsUp ?? this.hasThumbsUp,
+      hasThumbsDown: hasThumbsDown ?? this.hasThumbsDown,
       hasFired: hasFired ?? this.hasFired,
+      hasHundred: hasHundred ?? this.hasHundred,
+      hasCurious: hasCurious ?? this.hasCurious,
       hasCelebrated: hasCelebrated ?? this.hasCelebrated,
       hasLaughed: hasLaughed ?? this.hasLaughed,
       hasSad: hasSad ?? this.hasSad,
+      hasBeerCheers: hasBeerCheers ?? this.hasBeerCheers,
       hasSurprised: hasSurprised ?? this.hasSurprised,
     );
   }
