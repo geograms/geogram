@@ -27,6 +27,7 @@ import 'chat_file_upload_manager.dart';
 import 'app_args.dart';
 import '../connection/connection_manager.dart';
 import '../teleport/aprs/aprs_service.dart';
+import 'location_provider_service.dart';
 import '../teleport/telegram/telegram_service.dart';
 import '../teleport/signal/models/signal_auth_state.dart';
 import '../teleport/signal/signal_service.dart';
@@ -16891,9 +16892,17 @@ function cleanup() {
       final aprs = AprsService();
       switch (action) {
         case 'aprs_status':
-          final loc = UserLocationService().currentLocation;
-          final myLat = loc?.latitude;
-          final myLon = loc?.longitude;
+          // Use saved APRS position first, then LocationProvider, then UserLocation.
+          final myLat = aprs.savedLatitude ??
+              LocationProviderService().currentPosition?.latitude ??
+              UserLocationService().currentLocation?.latitude;
+          final myLon = aprs.savedLongitude ??
+              LocationProviderService().currentPosition?.longitude ??
+              UserLocationService().currentLocation?.longitude;
+          final myLocSource = aprs.hasLocation
+              ? 'saved'
+              : (LocationProviderService().currentPosition?.source ??
+                  UserLocationService().currentLocation?.source);
 
           // Include last 5 stream packets with parsed positions + distance
           final recentStream = <Map<String, dynamic>>[];
@@ -16924,6 +16933,7 @@ function cleanup() {
               'radiusKm': aprs.radiusKm,
               'myLat': myLat,
               'myLon': myLon,
+              'myLocSource': myLocSource,
               'streamPackets': aprs.streamPackets.length,
               'messages': aprs.messages.length,
               'knownPositions': aprs.lastKnownPositions.length,
@@ -16958,12 +16968,37 @@ function cleanup() {
               headers: headers,
             );
           }
-          // Set location — this triggers notifyListeners which
-          // invokes _onPositionUpdate in AprsService, sending the
-          // filter update to the APRS-IS isolate
+          // Set location on both services — AprsService for immediate
+          // filter update, UserLocationService for UI display.
+          aprs.setLocation(lat, lon);
           UserLocationService().setManualLocation(lat, lon);
           return shelf.Response.ok(
             jsonEncode({'success': true, 'lat': lat, 'lon': lon}),
+            headers: headers,
+          );
+
+        case 'aprs_enable':
+          if (!aprs.hasLocation) {
+            return shelf.Response.ok(
+              jsonEncode({'success': false, 'error': 'Set location first'}),
+              headers: headers,
+            );
+          }
+          if (!aprs.isEnabled) {
+            final profileStorage = AppService().profileStorage;
+            if (profileStorage != null) aprs.setStorage(profileStorage);
+            final profile = ProfileService().getProfile();
+            aprs.enable(callsign: profile.fullCallsign);
+          }
+          return shelf.Response.ok(
+            jsonEncode({'success': true, 'enabled': aprs.isEnabled}),
+            headers: headers,
+          );
+
+        case 'aprs_disable':
+          aprs.disable();
+          return shelf.Response.ok(
+            jsonEncode({'success': true, 'enabled': aprs.isEnabled}),
             headers: headers,
           );
 
@@ -16998,10 +17033,17 @@ function cleanup() {
         case 'aprs_logs':
           final allLogs = LogService().messages;
           final aprsLogs = allLogs
-              .where((l) =>
-                  l.toLowerCase().contains('aprs') ||
-                  l.toLowerCase().contains('filter') ||
-                  l.toLowerCase().contains('userlocation'))
+              .where((l) {
+                final low = l.toLowerCase();
+                return low.contains('aprs') ||
+                    low.contains('filter') ||
+                    low.contains('userlocation') ||
+                    low.contains('geoip') ||
+                    low.contains('geolocation') ||
+                    low.contains('[location]') ||
+                    low.contains('locationprovider') ||
+                    low.contains('public ip');
+              })
               .toList();
           // Return last 30 APRS-related log entries
           final recent = aprsLogs.length > 30
@@ -17011,6 +17053,81 @@ function cleanup() {
             jsonEncode({'success': true, 'count': recent.length, 'logs': recent}),
             headers: headers,
           );
+
+        case 'aprs_send':
+          final destination = params['destination'] as String?;
+          final text = params['text'] as String?;
+          if (destination == null || text == null) {
+            return shelf.Response.ok(
+              jsonEncode({'success': false, 'error': 'destination and text required'}),
+              headers: headers,
+            );
+          }
+          if (!aprs.isEnabled || !aprs.isRunning) {
+            return shelf.Response.ok(
+              jsonEncode({'success': false, 'error': 'APRS not connected'}),
+              headers: headers,
+            );
+          }
+          final sent = aprs.sendMessage(destination, text);
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': sent != null,
+              'destination': destination,
+              'text': text,
+              'messageId': sent?.messageId,
+            }),
+            headers: headers,
+          );
+
+        case 'aprs_conversations':
+          final convos = aprs.getConversations();
+          final list = convos.map((c) => {
+            'id': c.id,
+            'type': c.type.name,
+            'messageCount': c.messageCount,
+            'lastMessage': c.lastMessage?.messageText,
+            'lastMessageTime': c.lastMessageTime?.toIso8601String(),
+          }).toList();
+          return shelf.Response.ok(
+            jsonEncode({'success': true, 'conversations': list}),
+            headers: headers,
+          );
+
+        case 'aprs_tags':
+          final op = params['op'] as String? ?? 'list';
+          final tag = params['tag'] as String?;
+          switch (op) {
+            case 'add':
+              if (tag == null) {
+                return shelf.Response.ok(
+                  jsonEncode({'success': false, 'error': 'tag required'}),
+                  headers: headers,
+                );
+              }
+              aprs.addTag(tag);
+              return shelf.Response.ok(
+                jsonEncode({'success': true, 'tags': aprs.subscribedTags.toList()}),
+                headers: headers,
+              );
+            case 'remove':
+              if (tag == null) {
+                return shelf.Response.ok(
+                  jsonEncode({'success': false, 'error': 'tag required'}),
+                  headers: headers,
+                );
+              }
+              aprs.removeTag(tag);
+              return shelf.Response.ok(
+                jsonEncode({'success': true, 'tags': aprs.subscribedTags.toList()}),
+                headers: headers,
+              );
+            default:
+              return shelf.Response.ok(
+                jsonEncode({'success': true, 'tags': aprs.subscribedTags.toList()}),
+                headers: headers,
+              );
+          }
 
         default:
           return shelf.Response.ok(

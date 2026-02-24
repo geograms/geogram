@@ -103,6 +103,15 @@ class AprsIsClient {
     _verified = false;
   }
 
+  /// Send a raw TNC2 line to the APRS-IS server.
+  void sendRaw(String line) {
+    if (_commandPort == null) {
+      LogService().log('AprsIsClient.sendRaw: _commandPort is NULL — not sent');
+      return;
+    }
+    _commandPort!.send({'cmd': 'send', 'line': line});
+  }
+
   /// Update the server-side filter while connected.
   void updateFilter({double? latitude, double? longitude, double? radiusKm}) {
     if (latitude != null) this.latitude = latitude;
@@ -194,6 +203,8 @@ class AprsIsClient {
         // Isolate exited its run loop — respawn if still running
         _killIsolate();
         _scheduleRespawn();
+      } else if (msg.startsWith('send_ok:')) {
+        LogService().log('AprsIsClient: sent ${msg.substring(8)}');
       } else if (msg.startsWith('filter_sent:')) {
         LogService().log('AprsIsClient: ${msg.substring(12)}');
       } else if (msg.startsWith('error:')) {
@@ -255,6 +266,19 @@ class AprsIsClient {
             }
           } else {
             mainPort.send('error:Filter not sent — socket is null');
+          }
+        } else if (cmd == 'send') {
+          final line = msg['line'] as String?;
+          if (line != null && socket != null) {
+            try {
+              socket!.write('$line\r\n');
+              socket!.flush();
+              mainPort.send('send_ok:$line');
+            } catch (e) {
+              mainPort.send('error:Send failed: $e');
+            }
+          } else {
+            mainPort.send('error:Send failed — socket is null');
           }
         } else if (cmd == 'stop') {
           running = false;
@@ -371,9 +395,10 @@ class AprsIsClient {
         // Authenticate — only include filter if we have a real position.
         // On port 14580, no filter = no packets until a #filter is sent.
         final hasPosition = filterLat != 0.0 || filterLon != 0.0;
+        final baseCallsign = params.callsign.toUpperCase();
         final filterSuffix = hasPosition
-            ? ' filter r/$filterLat/$filterLon/$filterRadius'
-            : '';
+            ? ' filter r/$filterLat/$filterLon/$filterRadius g/$baseCallsign'
+            : ' filter g/$baseCallsign';
         final authLine = 'user ${params.callsign} pass ${params.passcode} '
             'vers Geogram 1.0$filterSuffix';
         socket.write('$authLine\r\n');
@@ -463,12 +488,14 @@ class AprsIsClient {
 
     final type = _classifyInfoField(infoField);
 
+    String? messageAddressee;
     String? messageText;
     String? messageId;
     if (type == AprsPacketType.message) {
       final parsed = _parseMessage(infoField);
-      messageText = parsed?.$1;
-      messageId = parsed?.$2;
+      messageAddressee = parsed?.$1;
+      messageText = parsed?.$2;
+      messageId = parsed?.$3;
     }
 
     // Parse position from position packets
@@ -492,6 +519,7 @@ class AprsIsClient {
       type: type,
       latitude: latitude,
       longitude: longitude,
+      messageAddressee: messageAddressee,
       messageText: messageText,
       messageId: messageId,
     );
@@ -514,18 +542,20 @@ class AprsIsClient {
     return AprsPacketType.other;
   }
 
-  static (String, String?)? _parseMessage(String info) {
+  static (String, String, String?)? _parseMessage(String info) {
     if (info.length < 11 || info[0] != ':') return null;
     final secondColon = info.indexOf(':', 1);
     if (secondColon < 0) return null;
+    final addressee = info.substring(1, secondColon).trim();
+    if (addressee.isEmpty) return null;
 
     final body = info.substring(secondColon + 1);
 
     final braceIdx = body.indexOf('{');
     if (braceIdx >= 0) {
-      return (body.substring(0, braceIdx), body.substring(braceIdx + 1));
+      return (addressee, body.substring(0, braceIdx), body.substring(braceIdx + 1));
     }
-    return (body, null);
+    return (addressee, body, null);
   }
 
   // ---------------------------------------------------------------------------

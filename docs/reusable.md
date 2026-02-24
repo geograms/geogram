@@ -8427,6 +8427,39 @@ typedef TelegramDateSeparator = TeleportDateSeparator;
 
 ---
 
+### AprsMessageBubble
+
+**File**: `lib/teleport/aprs/widgets/aprs_message_bubble.dart`
+
+**Pattern**: Simplified dark-mode chat bubble for APRS messages. Same color scheme as Signal/Telegram (#2B5278 outgoing, #1E2D3D incoming). Asymmetric rounded corners, sender callsign via `teleportSenderColor`, timestamp + ACK status icons.
+
+**Usage**:
+```dart
+AprsMessageBubble(
+  message: aprsPacket,
+  isOutgoing: true,
+  showSender: false, // true in tag rooms for incoming
+)
+```
+
+---
+
+### AprsConversationList
+
+**File**: `lib/teleport/aprs/widgets/aprs_conversation_list.dart`
+
+**Pattern**: Conversation list widget for APRS Messages tab. Shows grouped conversations (direct 1:1 and tag rooms) with FAB for composing new messages. Uses `AprsService().getConversations()` for grouping.
+
+---
+
+### AprsConversationPage
+
+**File**: `lib/teleport/aprs/pages/aprs_conversation_page.dart`
+
+**Pattern**: Chat view for APRS conversations. Reversed ListView with message bubbles, TeleportDateSeparator between days, compose bar with 67-char APRS limit and auto-prepend for tag rooms.
+
+---
+
 ## Garmin Watch App (Monkey C)
 
 ### GeoUtils module

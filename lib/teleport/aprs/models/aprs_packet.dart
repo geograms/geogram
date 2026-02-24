@@ -42,6 +42,10 @@ class AprsPacket {
 
   // --- Directed-message fields (only set when type == message) ---
 
+  /// The addressee inside a directed message (trimmed of APRS 9-char padding).
+  /// This is the actual recipient, NOT the TNC2 header destination.
+  final String? messageAddressee;
+
   /// Parsed message body text
   final String? messageText;
 
@@ -50,6 +54,9 @@ class AprsPacket {
 
   /// Whether an ack has been received for this message
   final bool isAcked;
+
+  /// Whether this is a locally-generated outgoing message.
+  final bool isOutgoing;
 
   const AprsPacket({
     required this.fromCallsign,
@@ -61,16 +68,36 @@ class AprsPacket {
     required this.type,
     this.latitude,
     this.longitude,
+    this.messageAddressee,
     this.messageText,
     this.messageId,
     this.isAcked = false,
+    this.isOutgoing = false,
   });
 
   /// Whether this packet has a valid parsed position.
   bool get hasPosition => latitude != null && longitude != null;
 
+  /// Whether this is a hashtag group message (text starts with '#').
+  bool get isTagMessage => messageText != null && messageText!.startsWith('#');
+
+  /// Extract '#tag' from a tag message, lowercase. Null if not a tag message.
+  String? get messageTag {
+    if (!isTagMessage) return null;
+    final spaceIdx = messageText!.indexOf(' ');
+    return (spaceIdx < 0 ? messageText! : messageText!.substring(0, spaceIdx))
+        .toLowerCase();
+  }
+
+  /// Message body without the leading #tag prefix.
+  String? get messageBody {
+    if (!isTagMessage) return messageText;
+    final spaceIdx = messageText!.indexOf(' ');
+    return spaceIdx < 0 ? '' : messageText!.substring(spaceIdx + 1);
+  }
+
   /// Create a copy with updated fields.
-  AprsPacket copyWith({bool? isAcked}) {
+  AprsPacket copyWith({bool? isAcked, bool? isOutgoing}) {
     return AprsPacket(
       fromCallsign: fromCallsign,
       toCallsign: toCallsign,
@@ -81,9 +108,11 @@ class AprsPacket {
       type: type,
       latitude: latitude,
       longitude: longitude,
+      messageAddressee: messageAddressee,
       messageText: messageText,
       messageId: messageId,
       isAcked: isAcked ?? this.isAcked,
+      isOutgoing: isOutgoing ?? this.isOutgoing,
     );
   }
 

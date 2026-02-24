@@ -21,6 +21,7 @@ import '../../services/log_service.dart';
 import '../../services/profile_storage.dart';
 import 'aprs_cache_service.dart';
 import 'aprs_is_client.dart';
+import 'models/aprs_conversation.dart';
 import 'models/aprs_packet.dart';
 
 /// Event types emitted by the APRS bridge.
@@ -57,6 +58,10 @@ class AprsService {
   String? _callsign;
   AprsIsClient? _client;
 
+  // User-chosen position (persisted in config)
+  double? _savedLat;
+  double? _savedLon;
+
   // GPS tracking via LocationProviderService
   VoidCallback? _locationDispose;
   double? _lastFilterLat;
@@ -68,6 +73,12 @@ class AprsService {
 
   /// Expose cache service for debug API inspection.
   AprsCacheService? get cacheService => _cacheService;
+
+  // Tag subscriptions for hashtag group channels
+  Set<String> _subscribedTags = {'#cq'};
+
+  // Message sending sequence number
+  int _nextSeqNo = 1;
 
   // Dedup — keeps recent rawTnc2 hashes to skip duplicates
   final Set<String> _recentPacketHashes = {};
@@ -117,10 +128,42 @@ class AprsService {
     _radiusKm = value.clamp(1, 1000);
     LogService().log('AprsService: radiusKm set to $_radiusKm, client=${_client != null}');
     _client?.updateFilter(radiusKm: _radiusKm);
+    _clearPackets();
   }
 
   /// Whether the APRS-IS client is connected.
   bool get isRunning => _client?.isConnected ?? false;
+
+  /// Whether the user has set a location (required before enabling).
+  bool get hasLocation => _savedLat != null && _savedLon != null;
+
+  /// Saved user-chosen position (null if not set).
+  double? get savedLatitude => _savedLat;
+  double? get savedLongitude => _savedLon;
+
+  /// Current callsign (set when enabled).
+  String? get callsign => _callsign;
+
+  /// Currently subscribed hashtag channels.
+  Set<String> get subscribedTags => Set.unmodifiable(_subscribedTags);
+
+  /// Subscribe to a hashtag channel.
+  void addTag(String tag) {
+    final normalized = tag.toLowerCase().startsWith('#') ? tag.toLowerCase() : '#${tag.toLowerCase()}';
+    if (_subscribedTags.add(normalized)) {
+      _saveConfig();
+      _uiDirtyMessages = true;
+    }
+  }
+
+  /// Unsubscribe from a hashtag channel.
+  void removeTag(String tag) {
+    final normalized = tag.toLowerCase().startsWith('#') ? tag.toLowerCase() : '#${tag.toLowerCase()}';
+    if (_subscribedTags.remove(normalized)) {
+      _saveConfig();
+      _uiDirtyMessages = true;
+    }
+  }
 
   /// Emit an event into the service stream (used by AprsIsClient).
   void emitEvent(AprsEvent event) {
@@ -132,18 +175,30 @@ class AprsService {
     _cacheService = AprsCacheService(storage, '');
   }
 
-  /// Try to auto-start APRS if it was enabled in a previous session.
+  /// Restore saved config (position, radius) and optionally auto-start.
   /// Call from main.dart post-frame callback.
-  Future<void> autoStart(ProfileStorage storage) async {
+  Future<void> autoStart(ProfileStorage storage, {required String callsign}) async {
     if (_enabled) return;
     setStorage(storage);
     final config = await _cacheService!.loadConfig();
-    if (config == null || config['enabled'] != true) return;
-    final callsign = config['callsign'] as String?;
+    if (config == null) return;
     final radius = (config['radiusKm'] as num?)?.toDouble();
-    if (callsign == null || callsign.isEmpty) return;
     if (radius != null) _radiusKm = radius;
-    LogService().log('AprsService: auto-starting for $callsign');
+    _savedLat = (config['latitude'] as num?)?.toDouble();
+    _savedLon = (config['longitude'] as num?)?.toDouble();
+    // Restore tag subscriptions
+    final savedTags = config['subscribedTags'] as List?;
+    if (savedTags != null && savedTags.isNotEmpty) {
+      _subscribedTags = savedTags.map((t) => t.toString().toLowerCase()).toSet();
+    }
+    // Only auto-start if previously enabled AND location is set
+    if (config['enabled'] != true || !hasLocation) {
+      if (config['enabled'] == true && !hasLocation) {
+        LogService().log('AprsService: auto-start skipped — no saved location');
+      }
+      return;
+    }
+    LogService().log('AprsService: auto-starting for $callsign at $_savedLat, $_savedLon');
     enable(callsign: callsign);
   }
 
@@ -162,12 +217,37 @@ class AprsService {
   }
 
   /// Async initialization — runs after enable() returns.
+  /// Uses the saved user-chosen position (guaranteed non-null by enable gate).
   Future<void> _initAsync(String callsign) async {
-    // Load persisted packets from SQLite
+    final lat = _savedLat!;
+    final lon = _savedLon!;
+
+    // 1. Load cached packets FIRST so the UI has data immediately,
+    //    filtered by saved position + radius.
     if (_cacheService != null) {
       try {
         final cached = await _cacheService!.loadPackets();
+        // First pass: build position map from all cached position packets
         for (final pkt in cached) {
+          if (pkt.hasPosition) {
+            lastKnownPositions[pkt.fromCallsign] = (pkt.latitude!, pkt.longitude!);
+          }
+        }
+        // Second pass: only load packets with known coordinates within radius
+        for (final pkt in cached) {
+          final double? pLat;
+          final double? pLon;
+          if (pkt.hasPosition) {
+            pLat = pkt.latitude;
+            pLon = pkt.longitude;
+          } else {
+            final known = lastKnownPositions[pkt.fromCallsign];
+            pLat = known?.$1;
+            pLon = known?.$2;
+          }
+          if (pLat == null || pLon == null) continue;
+          final dist = _haversineKm(lat, lon, pLat, pLon);
+          if (dist > _radiusKm) continue;
           if (pkt.type == AprsPacketType.message && pkt.messageText != null) {
             messages.add(pkt);
             _uiDirtyMessages = true;
@@ -176,13 +256,13 @@ class AprsService {
             _uiDirtyStream = true;
           }
         }
+        LogService().log('AprsService: loaded ${streamPackets.length} stream + ${messages.length} messages from cache');
       } catch (e) {
         LogService().log('AprsService: cache load error: $e');
       }
     }
 
-    // Register as a LocationProviderService consumer — this triggers
-    // GPS / IP-geolocation / profile fallback automatically.
+    // 2. Register GPS consumer for ongoing position updates.
     final locProvider = LocationProviderService();
     try {
       final dispose = await locProvider.registerConsumer(
@@ -194,21 +274,7 @@ class AprsService {
       LogService().log('AprsService: LocationProvider registration failed: $e');
     }
 
-    // Get the best position available right now.
-    // requestImmediatePosition() triggers _capturePosition which chains
-    // GPS → last-known → IP-geolocation → profile fallback.
-    LockedPosition? pos = locProvider.currentPosition;
-    if (pos == null || !pos.isFresh()) {
-      pos = await locProvider.requestImmediatePosition();
-    }
-    final lat = pos?.latitude ?? 0.0;
-    final lon = pos?.longitude ?? 0.0;
-    if (pos != null) {
-      LogService().log('AprsService: initial position ${pos.latitude.toStringAsFixed(4)}, ${pos.longitude.toStringAsFixed(4)} (source: ${pos.source})');
-    } else {
-      LogService().log('AprsService: no position available, connecting without filter');
-    }
-
+    // 3. Connect to APRS-IS with saved position.
     _client = AprsIsClient(
       callsign: callsign,
       latitude: lat,
@@ -220,6 +286,24 @@ class AprsService {
     _lastFilterLat = lat;
     _lastFilterLon = lon;
     _lastFilterTime = DateTime.now();
+  }
+
+  /// Manually set location — persists to config and updates APRS-IS filter
+  /// if connected. Can be called before enable() to set initial position.
+  void setLocation(double lat, double lon) {
+    _savedLat = lat;
+    _savedLon = lon;
+    _lastFilterLat = lat;
+    _lastFilterLon = lon;
+    _lastFilterTime = DateTime.now();
+    _saveConfig();
+    if (_client != null) {
+      _client!.latitude = lat;
+      _client!.longitude = lon;
+      _client!.updateFilter(latitude: lat, longitude: lon);
+      _clearPackets();
+    }
+    LogService().log('AprsService: location set to $lat, $lon');
   }
 
   /// Handle position update from LocationProviderService.
@@ -275,19 +359,251 @@ class AprsService {
     _eventController.add(const AprsEvent(AprsEventType.disconnected));
   }
 
-  /// Add a packet — dedup, queue for persistence, classify, and append to
-  /// the appropriate list. Sets dirty flags; the UI timer emits batched events.
-  void addPacket(AprsPacket packet) {
-    // Dedup by rawTnc2
-    if (_recentPacketHashes.contains(packet.rawTnc2)) return;
-    _recentPacketHashes.add(packet.rawTnc2);
-    if (_recentPacketHashes.length > _maxRecentHashes) {
-      _recentPacketHashes.remove(_recentPacketHashes.first);
+  /// Clear in-memory packet lists and position cache.
+  /// Called when location or radius changes so stale data doesn't linger.
+  /// SQLite cache is preserved — only the display lists are wiped.
+  void _clearPackets() {
+    streamPackets.clear();
+    messages.clear();
+    lastKnownPositions.clear();
+    _recentPacketHashes.clear();
+    _uiDirtyStream = true;
+    _uiDirtyMessages = true;
+  }
+
+  /// Clear display lists only — dedup set is preserved so new packets
+  /// aren't re-added, but the UI gets a fresh start.
+  void clearDisplay() {
+    streamPackets.clear();
+    messages.clear();
+    lastKnownPositions.clear();
+    _eventController.add(const AprsEvent(AprsEventType.packetReceived));
+    _eventController.add(const AprsEvent(AprsEventType.messageReceived));
+  }
+
+  // ---------------------------------------------------------------------------
+  // Conversation grouping
+  // ---------------------------------------------------------------------------
+
+  /// Build grouped conversation list from the messages list.
+  /// Groups by: direct (messages where addressee == our callsign) keyed by
+  /// other callsign, and tag (messages whose text starts with a subscribed #tag).
+  List<AprsConversation> getConversations() {
+    final myCall = _callsign?.toUpperCase();
+    final directMap = <String, List<AprsPacket>>{};
+    final tagMap = <String, List<AprsPacket>>{};
+
+    for (final msg in messages) {
+      final addressee = msg.messageAddressee?.toUpperCase();
+
+      // Check if this is a message addressed to us (incoming) or sent by us (outgoing)
+      final isToUs = addressee == myCall;
+      final isFromUs = msg.fromCallsign.toUpperCase() == myCall || msg.isOutgoing;
+
+      if (isToUs || isFromUs) {
+        // Direct 1:1 conversation — key by the other party
+        final otherParty = isFromUs
+            ? (msg.messageAddressee ?? msg.toCallsign).toUpperCase()
+            : msg.fromCallsign.toUpperCase();
+        directMap.putIfAbsent(otherParty, () => []).add(msg);
+        continue;
+      }
+
+      // Check for tag messages matching subscribed tags
+      final tag = msg.messageTag;
+      if (tag != null && _subscribedTags.contains(tag)) {
+        tagMap.putIfAbsent(tag, () => []).add(msg);
+      }
     }
 
-    // Track last known position per callsign
+    final conversations = <AprsConversation>[];
+
+    // Build direct conversations
+    for (final entry in directMap.entries) {
+      final sorted = entry.value..sort((a, b) => a.timestamp.compareTo(b.timestamp));
+      conversations.add(AprsConversation(
+        id: entry.key,
+        type: AprsConversationType.direct,
+        lastMessage: sorted.last,
+        messageCount: sorted.length,
+        partnerPosition: lastKnownPositions[entry.key],
+      ));
+    }
+
+    // Build tag conversations (include subscribed tags even if empty)
+    for (final tag in _subscribedTags) {
+      final msgs = tagMap[tag] ?? [];
+      final sorted = msgs..sort((a, b) => a.timestamp.compareTo(b.timestamp));
+      conversations.add(AprsConversation(
+        id: tag,
+        type: AprsConversationType.tag,
+        lastMessage: sorted.isNotEmpty ? sorted.last : null,
+        messageCount: sorted.length,
+      ));
+    }
+
+    // Sort by most recent message timestamp (conversations with messages first)
+    conversations.sort((a, b) {
+      final aTime = a.lastMessageTime;
+      final bTime = b.lastMessageTime;
+      if (aTime == null && bTime == null) return a.id.compareTo(b.id);
+      if (aTime == null) return 1;
+      if (bTime == null) return -1;
+      return bTime.compareTo(aTime);
+    });
+
+    return conversations;
+  }
+
+  /// Get messages for a specific conversation.
+  List<AprsPacket> getConversationMessages(String conversationId) {
+    final myCall = _callsign?.toUpperCase();
+    final isTag = conversationId.startsWith('#');
+
+    final result = <AprsPacket>[];
+    for (final msg in messages) {
+      if (isTag) {
+        // Tag room: match messages with this tag
+        if (msg.messageTag == conversationId) {
+          result.add(msg);
+        }
+      } else {
+        // Direct: messages between us and the other callsign
+        final addressee = msg.messageAddressee?.toUpperCase();
+        final from = msg.fromCallsign.toUpperCase();
+        final otherUpper = conversationId.toUpperCase();
+
+        final isToUs = addressee == myCall && from == otherUpper;
+        final isFromUs = (from == myCall || msg.isOutgoing) && addressee == otherUpper;
+
+        if (isToUs || isFromUs) {
+          result.add(msg);
+        }
+      }
+    }
+
+    result.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+    return result;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Sending messages
+  // ---------------------------------------------------------------------------
+
+  /// Send an APRS message. Returns the local echo packet, or null on failure.
+  /// For tag rooms, [text] should NOT include the tag prefix — it's auto-prepended.
+  AprsPacket? sendMessage(String destination, String text) {
+    if (_client == null || _callsign == null) return null;
+
+    final isTag = destination.startsWith('#');
+    final fullText = isTag ? '$destination $text' : text;
+
+    // Enforce 67-char APRS message limit
+    if (fullText.length > 67) return null;
+
+    final seqNo = '${_nextSeqNo++}';
+    final destPadded = isTag
+        ? 'BLN1'.padRight(9) // Bulletin for tag messages
+        : destination.toUpperCase().padRight(9);
+
+    // Build TNC2 line: MYCALL>APRS::DEST_CALL :text{seqno
+    final line = '${_callsign!}>APRS::$destPadded:$fullText{$seqNo';
+
+    _client!.sendRaw(line);
+
+    // Create local echo packet
+    final echo = AprsPacket(
+      fromCallsign: _callsign!,
+      toCallsign: 'APRS',
+      infoField: ':$destPadded:$fullText{$seqNo',
+      rawTnc2: line,
+      timestamp: DateTime.now().toUtc(),
+      type: AprsPacketType.message,
+      messageAddressee: destination.toUpperCase(),
+      messageText: fullText,
+      messageId: seqNo,
+      isOutgoing: true,
+    );
+
+    // Add to messages list + write queue
+    messages.add(echo);
+    _writeQueue.add(echo);
+    if (_writeQueue.length >= _writeFlushThreshold) {
+      _flushWrites();
+    }
+    _uiDirtyMessages = true;
+
+    LogService().log('AprsService: sent message to $destination: $fullText');
+    return echo;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Packet ingestion with ACK handling
+  // ---------------------------------------------------------------------------
+
+  /// Add a packet — dedup, queue for persistence, classify, and append to
+  /// the appropriate list. Sets dirty flags; the UI timer emits batched events.
+  ///
+  /// Packets without coordinates are dropped entirely — they bypass the
+  /// radius filter and produce noise from distant stations.
+  /// Exception: messages addressed to our callsign skip the position requirement.
+  void addPacket(AprsPacket packet) {
+    // Track last known position per callsign (before any filtering)
     if (packet.hasPosition) {
       lastKnownPositions[packet.fromCallsign] = (packet.latitude!, packet.longitude!);
+    }
+
+    final isMessage = packet.type == AprsPacketType.message && packet.messageText != null;
+    final myCall = _callsign?.toUpperCase();
+    final isAddressedToUs = isMessage &&
+        packet.messageAddressee?.toUpperCase() == myCall;
+
+    // Handle incoming ACKs — update matching sent message, don't display
+    if (isMessage && packet.messageText != null &&
+        packet.messageText!.startsWith('ack') && isAddressedToUs) {
+      final ackedId = packet.messageText!.substring(3).trim();
+      _handleIncomingAck(ackedId);
+      return;
+    }
+
+    // Handle incoming rejection — same as ACK for display purposes
+    if (isMessage && packet.messageText != null &&
+        packet.messageText!.startsWith('rej') && isAddressedToUs) {
+      return; // Just suppress from display
+    }
+
+    // Auto-ACK: when receiving a message addressed to us with a messageId
+    if (isAddressedToUs && packet.messageId != null && _client != null) {
+      final ackDest = packet.fromCallsign.toUpperCase().padRight(9);
+      final ackLine = '${_callsign!}>APRS::$ackDest:ack${packet.messageId}';
+      _client!.sendRaw(ackLine);
+    }
+
+    // Resolve coordinates: direct from packet, or last known for messages
+    final double? lat;
+    final double? lon;
+    if (packet.hasPosition) {
+      lat = packet.latitude;
+      lon = packet.longitude;
+    } else if (isMessage) {
+      final known = lastKnownPositions[packet.fromCallsign];
+      lat = known?.$1;
+      lon = known?.$2;
+    } else {
+      lat = null;
+      lon = null;
+    }
+
+    // Messages addressed to us skip the coordinate requirement
+    if (!isAddressedToUs && (lat == null || lon == null)) return;
+
+    // Dedup by callsign + info field — catches the same packet relayed
+    // via different digipeater paths (different rawTnc2, same content).
+    final dedupKey = '${packet.fromCallsign}\x00${packet.infoField}';
+    if (_recentPacketHashes.contains(dedupKey)) return;
+    _recentPacketHashes.add(dedupKey);
+    if (_recentPacketHashes.length > _maxRecentHashes) {
+      _recentPacketHashes.remove(_recentPacketHashes.first);
     }
 
     // Queue for batched SQLite write
@@ -296,7 +612,7 @@ class AprsService {
       _flushWrites();
     }
 
-    if (packet.type == AprsPacketType.message && packet.messageText != null) {
+    if (isMessage) {
       messages.add(packet);
       if (messages.length > _maxMessages) {
         messages.removeRange(0, messages.length - _maxMessages);
@@ -308,6 +624,19 @@ class AprsService {
         streamPackets.removeRange(0, streamPackets.length - _maxStreamPackets);
       }
       _uiDirtyStream = true;
+    }
+  }
+
+  /// Mark a sent message as acknowledged.
+  void _handleIncomingAck(String messageId) {
+    for (int i = messages.length - 1; i >= 0; i--) {
+      final msg = messages[i];
+      if (msg.isOutgoing && msg.messageId == messageId && !msg.isAcked) {
+        messages[i] = msg.copyWith(isAcked: true);
+        _uiDirtyMessages = true;
+        LogService().log('AprsService: ACK received for message $messageId');
+        return;
+      }
     }
   }
 
@@ -358,6 +687,9 @@ class AprsService {
       'enabled': _enabled,
       'callsign': _callsign,
       'radiusKm': _radiusKm,
+      'latitude': _savedLat,
+      'longitude': _savedLon,
+      'subscribedTags': _subscribedTags.toList(),
     });
   }
 
