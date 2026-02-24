@@ -148,7 +148,9 @@ class _SignalChatListPageState extends State<SignalChatListPage> {
     final topVisited = cache?.getTopVisitedConversations() ?? {};
 
     setState(() {
-      final allChats = chatService.conversations.map((chat) {
+      final allChats = chatService.conversations
+          .where((chat) => chat.messageCount > 0)
+          .map((chat) {
         // Override unread count with local cache count when available
         if (cache != null) {
           final localUnread = cache.getUnreadCount(chat.id);
@@ -158,6 +160,10 @@ class _SignalChatListPageState extends State<SignalChatListPage> {
         }
         return chat;
       }).toList();
+
+      // Sort by last message timestamp descending (most recent first)
+      allChats.sort((a, b) =>
+          b.lastMessageTimestamp.compareTo(a.lastMessageTimestamp));
 
       // Partition into favorites (in top-30) and rest
       if (topVisited.isNotEmpty) {
@@ -175,9 +181,7 @@ class _SignalChatListPageState extends State<SignalChatListPage> {
           final ca = topVisited[a.id] ?? 0;
           final cb = topVisited[b.id] ?? 0;
           if (ca != cb) return cb.compareTo(ca);
-          final da = a.lastMessage?.timestamp ?? 0;
-          final db = b.lastMessage?.timestamp ?? 0;
-          return db.compareTo(da);
+          return b.lastMessageTimestamp.compareTo(a.lastMessageTimestamp);
         });
         _favoritesCount = favorites.length;
         _chats = [...favorites, ...rest];

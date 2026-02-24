@@ -14,6 +14,7 @@ import 'dart:convert';
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart' show InternetAddressType, NetworkInterface, Platform;
 
 import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/services.dart' show rootBundle; // for on-demand GeoIP DB loading
 import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
@@ -301,7 +302,18 @@ class GeolocationUtils {
   /// Works without any station connection — just needs GeoIpService initialized.
   static Future<GeolocationResult?> _detectViaLocalGeoIP() async {
     final geoip = GeoIpService();
-    if (!geoip.isInitialized) return null;
+
+    // Initialize GeoIpService from Flutter assets if not already loaded
+    // (station server loads this too, but may not have started yet)
+    if (!geoip.isInitialized) {
+      try {
+        final data = await rootBundle.load('assets/dbip-city-lite.mmdb');
+        await geoip.initFromBytes(data.buffer.asUint8List());
+      } catch (e) {
+        LogService().log('GeolocationUtils: GeoIP DB load failed: $e');
+        return null;
+      }
+    }
 
     try {
       if (kIsWeb) return null; // No NetworkInterface on web
@@ -342,12 +354,9 @@ class GeolocationUtils {
         }
       }
 
-      // No public IP found — try the default route IP
-      // On most home networks, the machine only has a private IP.
-      // Connect briefly to a public address to discover which interface is used,
-      // then lookup that interface's gateway (not supported directly).
-      // Instead, just look up a private IP — DB-IP sometimes has entries for
-      // ISP-assigned RFC1918 ranges, but usually not. Skip silently.
+      // No public IP on any interface — typical behind NAT.
+      // Will resolve once a station connection provides the public IP
+      // via /api/geoip, or the periodic timer retries.
       return null;
     } catch (e) {
       LogService().log('GeolocationUtils: Local GeoIP lookup failed: $e');

@@ -402,18 +402,39 @@ pub async fn get_conversations(state: &SharedState, extra: Option<Value>) {
     let store = manager.store();
     let mut conversations = Vec::new();
 
-    // Get contacts
+    // Get contacts (only those with messages in store)
     match store.contacts().await {
         Ok(contacts) => {
             for result in contacts {
                 if let Ok(contact) = result {
                     let uuid_str = contact.uuid.to_string();
-                    conversations.push(json!({
-                        "id": uuid_str,
-                        "type": "direct",
-                        "title": contact.name,
-                        "phone_number": contact.phone_number.as_ref().map(|p| p.to_string()),
-                    }));
+                    let thread = Thread::Contact(contact.uuid);
+                    let (msg_count, latest_ts) = match store.messages(&thread, ..).await {
+                        Ok(msgs) => {
+                            let mut count = 0u64;
+                            let mut latest = 0u64;
+                            for r in msgs {
+                                if let Ok(m) = r {
+                                    count += 1;
+                                    if m.metadata.timestamp > latest {
+                                        latest = m.metadata.timestamp;
+                                    }
+                                }
+                            }
+                            (count, latest)
+                        }
+                        Err(_) => (0, 0),
+                    };
+                    if msg_count > 0 {
+                        conversations.push(json!({
+                            "id": uuid_str,
+                            "type": "direct",
+                            "title": contact.name,
+                            "phone_number": contact.phone_number.as_ref().map(|p| p.to_string()),
+                            "message_count": msg_count,
+                            "last_message_timestamp": latest_ts,
+                        }));
+                    }
                 }
             }
         }
@@ -422,18 +443,39 @@ pub async fn get_conversations(state: &SharedState, extra: Option<Value>) {
         }
     }
 
-    // Get groups
+    // Get groups (only those with messages in store)
     match store.groups().await {
         Ok(groups) => {
             for result in groups {
                 if let Ok((key, group)) = result {
                     let key_b64 = b64_encode(&key);
-                    conversations.push(json!({
-                        "id": key_b64,
-                        "type": "group",
-                        "title": group.title,
-                        "member_count": group.members.len(),
-                    }));
+                    let thread = Thread::Group(key);
+                    let (msg_count, latest_ts) = match store.messages(&thread, ..).await {
+                        Ok(msgs) => {
+                            let mut count = 0u64;
+                            let mut latest = 0u64;
+                            for r in msgs {
+                                if let Ok(m) = r {
+                                    count += 1;
+                                    if m.metadata.timestamp > latest {
+                                        latest = m.metadata.timestamp;
+                                    }
+                                }
+                            }
+                            (count, latest)
+                        }
+                        Err(_) => (0, 0),
+                    };
+                    if msg_count > 0 {
+                        conversations.push(json!({
+                            "id": key_b64,
+                            "type": "group",
+                            "title": group.title,
+                            "member_count": group.members.len(),
+                            "message_count": msg_count,
+                            "last_message_timestamp": latest_ts,
+                        }));
+                    }
                 }
             }
         }

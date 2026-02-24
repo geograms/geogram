@@ -19,6 +19,8 @@ class SignalChat {
   final SignalChatType type;
   final String? phoneNumber;
   final int memberCount;
+  final int messageCount;
+  final int lastMessageTimestamp;
   final int unreadCount;
   final SignalMessage? lastMessage;
 
@@ -28,6 +30,8 @@ class SignalChat {
     required this.type,
     this.phoneNumber,
     this.memberCount = 0,
+    this.messageCount = 0,
+    this.lastMessageTimestamp = 0,
     this.unreadCount = 0,
     this.lastMessage,
   });
@@ -41,12 +45,16 @@ class SignalChat {
           : SignalChatType.direct,
       phoneNumber: json['phone_number'] as String?,
       memberCount: json['member_count'] as int? ?? 0,
+      messageCount: json['message_count'] as int? ?? 0,
+      lastMessageTimestamp: json['last_message_timestamp'] as int? ?? 0,
       unreadCount: json['unread_count'] as int? ?? 0,
     );
   }
 
   SignalChat copyWith({
     String? title,
+    int? messageCount,
+    int? lastMessageTimestamp,
     int? unreadCount,
     SignalMessage? lastMessage,
   }) {
@@ -56,6 +64,8 @@ class SignalChat {
       type: type,
       phoneNumber: phoneNumber,
       memberCount: memberCount,
+      messageCount: messageCount ?? this.messageCount,
+      lastMessageTimestamp: lastMessageTimestamp ?? this.lastMessageTimestamp,
       unreadCount: unreadCount ?? this.unreadCount,
       lastMessage: lastMessage ?? this.lastMessage,
     );

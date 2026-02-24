@@ -176,6 +176,9 @@ flutter:
     - assets/geogram_icon_transparent.png
     - assets/icon_file_send.svg
     - assets/icon_file_receive.svg
+    - assets/aprs_station.svg
+    - assets/aprs_lora.svg
+    - assets/aprs_pocsag.svg
     - assets/dbip-city-lite.mmdb
     - games/
     # Web themes for HTML/CSS customization

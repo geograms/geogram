@@ -698,18 +698,16 @@ class _SignalChatPageState extends State<SignalChatPage> {
     final msgKey = _messageKeys[msg.primaryKey]!;
     final isHighlighted = msg.timestamp == _highlightTimestamp;
 
-    // Determine sender name for group conversations
+    // Determine sender name for incoming messages
     final senderName = msg.isOutgoing
         ? null
         : (user?.name ?? msg.senderName);
 
     final bubble = SignalMessageBubble(
       message: msg,
-      senderName: widget.chatType == SignalChatType.group ? senderName : null,
+      senderName: senderName,
       senderPhotoPath: user?.avatarPath,
-      showAvatar: widget.chatType == SignalChatType.group
-          ? _shouldShowAvatar(index)
-          : false,
+      showAvatar: _shouldShowAvatar(index),
       onReply: (m) => setState(() => _replyTarget = m),
       onDelete: null, // Signal does not support remote deletion from linked devices
       onReact: _reactToMessage,

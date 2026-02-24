@@ -652,11 +652,14 @@ void main() async {
       await DMQueueService().initialize();
       LogService().log('DMQueueService initialized');
 
-      // Auto-start APRS-IS if it was enabled in a previous session
+      // Auto-start APRS-IS background service
       if (firstLaunchComplete) {
         final aprsStorage = AppService().profileStorage;
-        if (aprsStorage != null) {
-          AprsService().autoStart(aprsStorage).catchError((e) {
+        final profile = ProfileService().getProfile();
+        if (aprsStorage != null && profile.fullCallsign.isNotEmpty) {
+          AprsService()
+              .autoStart(aprsStorage, callsign: profile.fullCallsign)
+              .catchError((e) {
             LogService().log('APRS auto-start failed: $e');
           });
         }
