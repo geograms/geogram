@@ -59,19 +59,12 @@ class _NostrEventTileState extends State<NostrEventTile> {
     final pictureUrl = widget.item.authorPicture;
 
     if (pictureUrl != null && pictureUrl.isNotEmpty) {
-      return CircleAvatar(
+      return _buildImageAvatar(
+        pictureUrl,
+        name,
+        color,
         radius: 20,
-        backgroundColor: color.withValues(alpha: 0.2),
-        backgroundImage: NetworkImage(pictureUrl),
-        onBackgroundImageError: (_, _) {},
-        child: Text(
-          name.isNotEmpty ? name[0].toUpperCase() : '?',
-          style: TextStyle(
-            color: color,
-            fontWeight: FontWeight.w600,
-            fontSize: 16,
-          ),
-        ),
+        fontSize: 16,
       );
     }
 
@@ -84,6 +77,41 @@ class _NostrEventTileState extends State<NostrEventTile> {
           color: color,
           fontWeight: FontWeight.w600,
           fontSize: 16,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildImageAvatar(
+    String pictureUrl,
+    String name,
+    Color color, {
+    required double radius,
+    required double fontSize,
+  }) {
+    return Container(
+      width: radius * 2,
+      height: radius * 2,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: color.withValues(alpha: 0.2),
+      ),
+      child: ClipOval(
+        child: Image.network(
+          pictureUrl,
+          fit: BoxFit.cover,
+          errorBuilder: (_, __, ___) {
+            return Center(
+              child: Text(
+                name.isNotEmpty ? name[0].toUpperCase() : '?',
+                style: TextStyle(
+                  color: color,
+                  fontWeight: FontWeight.w600,
+                  fontSize: fontSize,
+                ),
+              ),
+            );
+          },
         ),
       ),
     );

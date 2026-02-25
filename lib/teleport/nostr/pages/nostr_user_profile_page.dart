@@ -109,6 +109,7 @@ class _NostrUserProfilePageState extends State<NostrUserProfilePage> {
     final nip05 = _profile?['nip05'] ?? '';
     final picture = _profile?['picture'] ?? '';
     final avatarColor = teleportSenderColor(widget.pubkey);
+    final displayName = _displayName();
 
     return Scaffold(
       appBar: AppBar(
@@ -136,19 +137,35 @@ class _NostrUserProfilePageState extends State<NostrUserProfilePage> {
                       CircleAvatar(
                         radius: 32,
                         backgroundColor: avatarColor.withValues(alpha: 0.2),
-                        backgroundImage:
-                            picture.isNotEmpty ? NetworkImage(picture) : null,
-                        onBackgroundImageError: (_, _) {},
                         child: picture.isEmpty
                             ? Text(
-                                _displayName().substring(0, 1).toUpperCase(),
+                                displayName.substring(0, 1).toUpperCase(),
                                 style: TextStyle(
                                   color: avatarColor,
                                   fontWeight: FontWeight.w600,
                                   fontSize: 22,
                                 ),
                               )
-                            : null,
+                            : ClipOval(
+                                child: Image.network(
+                                  picture,
+                                  width: 64,
+                                  height: 64,
+                                  fit: BoxFit.cover,
+                                  errorBuilder: (_, __, ___) {
+                                    return Center(
+                                      child: Text(
+                                        displayName.substring(0, 1).toUpperCase(),
+                                        style: TextStyle(
+                                          color: avatarColor,
+                                          fontWeight: FontWeight.w600,
+                                          fontSize: 22,
+                                        ),
+                                      ),
+                                    );
+                                  },
+                                ),
+                              ),
                       ),
                       const SizedBox(width: 16),
                       Expanded(
@@ -156,7 +173,7 @@ class _NostrUserProfilePageState extends State<NostrUserProfilePage> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              _displayName(),
+                              displayName,
                               style: theme.textTheme.titleLarge,
                             ),
                             const SizedBox(height: 4),
