@@ -828,7 +828,7 @@ class NostrClientService {
 
   
   /// Request recent posts for followed users from cache and connected relays.
-  Future<void> requestFollowFeed({int limit = 100}) async {
+  Future<void> requestFollowFeed({int limit = 100, int? until}) async {
     if (_follows.isEmpty) return;
 
     final follows = _follows.toList();
@@ -837,6 +837,7 @@ class NostrClientService {
         final cached = await _cacheService!.loadFeedByAuthors(
           relayId,
           authors: follows,
+          until: until,
           limit: limit,
         );
         for (final event in cached) {
@@ -855,11 +856,13 @@ class NostrClientService {
       final relayId = entry.key;
       final client = entry.value;
       if (!client.isConnected) continue;
-      client.subscribe({
+      final filter = <String, dynamic>{
         'kinds': [NostrEventKind.textNote],
         'authors': follows,
         'limit': limit,
-      }, subscriptionId: 'follows_${relayId}_${DateTime.now().millisecondsSinceEpoch}');
+        if (until != null) 'until': until,
+      };
+      client.subscribe(filter, subscriptionId: 'follows_${relayId}_${DateTime.now().millisecondsSinceEpoch}');
     }
   }
 

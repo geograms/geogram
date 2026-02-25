@@ -29,6 +29,7 @@ class NostrMainPage extends StatefulWidget {
 
 class _NostrMainPageState extends State<NostrMainPage> {
   final TextEditingController _textController = TextEditingController();
+  final ScrollController _scrollController = ScrollController();
   final FocusNode _focusNode = FocusNode();
   final TextEditingController _searchController = TextEditingController();
   final FocusNode _searchFocusNode = FocusNode();
@@ -37,6 +38,7 @@ class _NostrMainPageState extends State<NostrMainPage> {
 
   String? _ownPubkey;
   bool _isSearching = false;
+  bool _isLoadingMore = false;
   NostrFeedItem? _replyTarget;
 
   @override
@@ -47,6 +49,7 @@ class _NostrMainPageState extends State<NostrMainPage> {
       _scheduleSearch();
       if (mounted) setState(() {});
     });
+    _scrollController.addListener(_onScroll);
     _eventSub = NostrClientService().events.listen((event) {
       if (!mounted) return;
       setState(() {});
@@ -80,6 +83,7 @@ class _NostrMainPageState extends State<NostrMainPage> {
     _searchController.dispose();
     _searchFocusNode.dispose();
     _searchTimer?.cancel();
+    _scrollController.dispose();
     super.dispose();
   }
 
@@ -131,6 +135,31 @@ class _NostrMainPageState extends State<NostrMainPage> {
         builder: (_) => NostrUserProfilePage(pubkey: pubkey),
       ),
     );
+  }
+
+
+  void _onScroll() {
+    if (!_scrollController.hasClients) return;
+    if (_isLoadingMore) return;
+    if (NostrClientService().feedFilter != NostrFeedFilter.onlyFollows) return;
+
+    final position = _scrollController.position;
+    if (position.pixels < position.maxScrollExtent - 200) return;
+
+    final items = NostrClientService().feedItems;
+    int? oldest;
+    for (final item in items) {
+      if (!item.isFollowed) continue;
+      oldest = oldest == null ? item.createdAt : (item.createdAt < oldest ? item.createdAt : oldest);
+    }
+    if (oldest == null) return;
+
+    _isLoadingMore = true;
+    NostrClientService()
+        .requestFollowFeed(limit: 100, until: oldest)
+        .whenComplete(() {
+      _isLoadingMore = false;
+    });
   }
 
   void _toggleSearch() {
@@ -347,6 +376,7 @@ class _NostrMainPageState extends State<NostrMainPage> {
     final reversedItems = items.reversed.toList();
 
     return ListView.builder(
+      controller: _scrollController,
       padding: const EdgeInsets.only(top: 4),
       itemCount: reversedItems.length,
       itemBuilder: (context, index) {

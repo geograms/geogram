@@ -187,6 +187,7 @@ class NostrCacheService {
     String relayId, {
     List<int> kinds = const [1],
     int? since,
+    int? until,
     int limit = 500,
   }) async {
     try {
@@ -197,6 +198,10 @@ class NostrCacheService {
       if (since != null) {
         whereExtra = ' AND created_at > ?';
         args.add(since);
+      }
+      if (until != null) {
+        whereExtra += ' AND created_at < ?';
+        args.add(until);
       }
       args.add(limit);
       final result = db.select(
@@ -228,6 +233,7 @@ class NostrCacheService {
     required List<String> authors,
     List<int> kinds = const [1],
     int? since,
+    int? until,
     int limit = 100,
   }) async {
     if (authors.isEmpty) return [];
@@ -240,6 +246,10 @@ class NostrCacheService {
       if (since != null) {
         whereExtra = ' AND created_at > ?';
         args.add(since);
+      }
+      if (until != null) {
+        whereExtra += ' AND created_at < ?';
+        args.add(until);
       }
       args.add(limit);
       final result = db.select(
