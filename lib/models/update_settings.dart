@@ -167,6 +167,7 @@ class UpdateSettings {
   String? lastCheckedPublishedAt; // Release date ISO string
   bool? lastCheckedAssetAvailable; // Whether an asset existed for this platform
   String? currentVersionPublishedAt; // Release date of currently installed version
+  String? dismissedUpdateVersion; // Last update version the user dismissed
 
   UpdateSettings({
     this.autoCheckUpdates = true,
@@ -184,6 +185,7 @@ class UpdateSettings {
     this.lastCheckedPublishedAt,
     this.lastCheckedAssetAvailable,
     this.currentVersionPublishedAt,
+    this.dismissedUpdateVersion,
   });
 
   factory UpdateSettings.fromJson(Map<String, dynamic> json) {
@@ -206,6 +208,7 @@ class UpdateSettings {
       lastCheckedPublishedAt: json['lastCheckedPublishedAt'] as String?,
       lastCheckedAssetAvailable: json['lastCheckedAssetAvailable'] as bool?,
       currentVersionPublishedAt: json['currentVersionPublishedAt'] as String?,
+      dismissedUpdateVersion: json['dismissedUpdateVersion'] as String?,
     );
   }
 
@@ -226,6 +229,7 @@ class UpdateSettings {
       'lastCheckedPublishedAt': lastCheckedPublishedAt,
       'lastCheckedAssetAvailable': lastCheckedAssetAvailable,
       'currentVersionPublishedAt': currentVersionPublishedAt,
+      'dismissedUpdateVersion': dismissedUpdateVersion,
     };
   }
 
@@ -245,6 +249,7 @@ class UpdateSettings {
     String? lastCheckedPublishedAt,
     bool? lastCheckedAssetAvailable,
     String? currentVersionPublishedAt,
+    String? dismissedUpdateVersion,
   }) {
     return UpdateSettings(
       autoCheckUpdates: autoCheckUpdates ?? this.autoCheckUpdates,
@@ -262,6 +267,7 @@ class UpdateSettings {
       lastCheckedPublishedAt: lastCheckedPublishedAt ?? this.lastCheckedPublishedAt,
       lastCheckedAssetAvailable: lastCheckedAssetAvailable ?? this.lastCheckedAssetAvailable,
       currentVersionPublishedAt: currentVersionPublishedAt ?? this.currentVersionPublishedAt,
+      dismissedUpdateVersion: dismissedUpdateVersion ?? this.dismissedUpdateVersion,
     );
   }
 }

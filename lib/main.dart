@@ -1690,6 +1690,9 @@ class _HomePageState extends State<HomePage> {
 
     final latestRelease = updateService.getLatestRelease();
     if (latestRelease == null || !mounted) return;
+    if (!updateService.shouldNotifyForRelease(latestRelease)) {
+      return;
+    }
 
     // Show a MaterialBanner at the top of the screen
     ScaffoldMessenger.of(context).showMaterialBanner(
@@ -1718,6 +1721,9 @@ class _HomePageState extends State<HomePage> {
           TextButton(
             onPressed: () {
               ScaffoldMessenger.of(context).hideCurrentMaterialBanner();
+              unawaited(
+                updateService.dismissUpdateNotification(latestRelease.version),
+              );
             },
             child: Text(_i18n.t('later')),
           ),

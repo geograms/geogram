@@ -178,6 +178,21 @@ class UpdateService {
     _saveSettings();
   }
 
+  /// Persist a dismissed update version so we don't notify again until newer
+  Future<void> dismissUpdateNotification(String version) async {
+    if (version.isEmpty) return;
+    if (_settings?.dismissedUpdateVersion == version) return;
+    _settings = _settings?.copyWith(dismissedUpdateVersion: version);
+    _saveSettings();
+  }
+
+  /// Whether we should notify for this release (respects dismissal)
+  bool shouldNotifyForRelease(ReleaseInfo release) {
+    final dismissed = _settings?.dismissedUpdateVersion;
+    if (dismissed == null || dismissed.isEmpty) return true;
+    return isNewerVersion(dismissed, release.version);
+  }
+
   /// Detect current platform
   UpdatePlatform detectPlatform() {
     if (kIsWeb) {
