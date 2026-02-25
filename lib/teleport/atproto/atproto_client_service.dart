@@ -291,11 +291,12 @@ class AtprotoClientService {
   }
 
   Future<void> syncFeed() async {
-    if (!isAuthenticated || !_config.enabled) return;
+    if (!_config.enabled) return;
     final appView = _normalizeBaseUrl(_config.appViewUrl);
+    final actor = _resolveReadActor();
 
     final uri = Uri.parse(
-      '$appView/xrpc/app.bsky.feed.getAuthorFeed?actor=${Uri.encodeQueryComponent(_session!.did)}&limit=50',
+      '$appView/xrpc/app.bsky.feed.getAuthorFeed?actor=${Uri.encodeQueryComponent(actor)}&limit=50',
     );
 
     try {
@@ -352,6 +353,18 @@ class AtprotoClientService {
     } catch (e) {
       _emit(AtprotoClientEvent(AtprotoClientEventType.error, data: '$e'));
     }
+  }
+
+  String _resolveReadActor() {
+    if (_session?.did.isNotEmpty == true) {
+      return _session!.did;
+    }
+    final configured = _config.identifier.trim();
+    if (configured.startsWith('did:') || configured.contains('.')) {
+      return configured;
+    }
+    // Fallback so users always see posts even before login succeeds.
+    return 'bsky.app';
   }
 
   void dispose() {

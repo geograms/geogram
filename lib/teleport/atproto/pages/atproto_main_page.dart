@@ -167,7 +167,10 @@ class _AtprotoMainPageState extends State<AtprotoMainPage> {
               child: Card(
                 child: Padding(
                   padding: EdgeInsets.all(12),
-                  child: Text('Connecting automatically...'),
+                  child: Text(
+                    'Read-only mode: showing public posts.\n'
+                    'Publishing will activate automatically when local PDS auth succeeds.',
+                  ),
                 ),
               ),
             ),
