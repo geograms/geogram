@@ -44,6 +44,12 @@ Future<Map<String, dynamic>?> showImportNsecDialog({
             if (text.startsWith('nsec1')) {
               nsecController.text = text;
               setDialogState(() {});
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(i18n.t('import_nsec_pasted')),
+                  behavior: SnackBarBehavior.floating,
+                ),
+              );
             }
           });
         }

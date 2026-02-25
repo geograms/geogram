@@ -142,6 +142,7 @@
   "import_profile": "Profil importieren",
   "import_nsec_hint": "Fügen Sie den privaten NSEC-Schlüssel ein oder scannen Sie ihn, um eine bestehende Identität zu importieren",
   "import_nsec": "NSEC importieren",
+  "import_nsec_pasted": "NSEC aus der Zwischenablage eingefügt",
   "invalid_nsec_format": "Ungültiges NSEC-Format",
   "profile_type": "Profiltyp",
   "paste": "Einfügen",

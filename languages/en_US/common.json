@@ -142,6 +142,7 @@
   "import_profile": "Import Profile",
   "import_nsec_hint": "Paste or scan the NSEC private key to import an existing identity",
   "import_nsec": "Import NSEC",
+  "import_nsec_pasted": "NSEC pasted from clipboard",
   "invalid_nsec_format": "Invalid NSEC format",
   "profile_type": "Profile Type",
   "paste": "Paste",

@@ -80,6 +80,7 @@
   "import_profile": "Importar Perfil",
   "import_nsec_hint": "Cole ou digitalize a chave privada NSEC para importar uma identidade existente",
   "import_nsec": "Importar NSEC",
+  "import_nsec_pasted": "NSEC colado da área de transferência",
   "invalid_nsec_format": "Formato NSEC inválido",
   "profile_type": "Tipo de Perfil",
   "paste": "Colar",
