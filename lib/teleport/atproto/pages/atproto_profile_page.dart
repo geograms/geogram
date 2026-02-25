@@ -47,30 +47,41 @@ class _AtprotoProfilePageState extends State<AtprotoProfilePage> {
       _loading = true;
       _error = null;
     });
+    final service = AtprotoClientService();
+    AtprotoProfile? profile;
+    List<AtprotoFeedItem> posts = const [];
+    String? loadError;
     try {
-      final service = AtprotoClientService();
-      final profile = await service.fetchProfile(widget.actor);
-      final posts = await service.fetchAuthorFeed(widget.actor, limit: 50);
-      if (!mounted) return;
-      setState(() {
-        _profile = profile;
-        _posts = posts;
-        _isFollowing =
-            profile?.isFollowedByMe == true ||
-            service.isFollowingActor(
-              did: profile?.did,
-              handle: profile?.handle,
-              actor: widget.actor,
-            );
-      });
+      profile = await service.fetchProfile(widget.actor);
     } catch (e) {
-      if (!mounted) return;
-      setState(() => _error = '$e');
-    } finally {
-      if (mounted) {
-        setState(() => _loading = false);
-      }
+      loadError = '$e';
     }
+
+    try {
+      posts = await service.fetchAuthorFeed(widget.actor, limit: 50);
+    } catch (e) {
+      loadError ??= '$e';
+    }
+
+    if (profile == null && service.isLocalActor(widget.actor)) {
+      profile = service.localProfileSnapshot();
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _profile = profile;
+      _posts = posts;
+      _isFollowing =
+          profile?.isFollowedByMe == true ||
+          service.isFollowingActor(
+            did: profile?.did,
+            handle: profile?.handle,
+            actor: widget.actor,
+          );
+      // Avoid showing fatal error when we still have fallback local profile/posts.
+      _error = (_profile == null && _posts.isEmpty) ? loadError : null;
+      _loading = false;
+    });
   }
 
   @override

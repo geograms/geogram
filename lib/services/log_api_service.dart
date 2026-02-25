@@ -17922,6 +17922,49 @@ function cleanup() {
           headers: headers,
         );
 
+      case 'atproto_self_check':
+        final actor = ((params['actor'] as String?)?.trim().isNotEmpty == true)
+            ? (params['actor'] as String).trim()
+            : (atproto.session?.did.isNotEmpty == true
+                  ? atproto.session!.did
+                  : (atproto.session?.handle.isNotEmpty == true
+                        ? atproto.session!.handle
+                        : atproto.config.identifier));
+        if (actor.trim().isEmpty) {
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': false,
+              'error': 'No actor available for self check',
+            }),
+            headers: headers,
+          );
+        }
+        try {
+          final profile = await atproto.fetchProfile(actor);
+          final posts = await atproto.fetchAuthorFeed(actor, limit: 20);
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'actor': actor,
+              'isLocalActor': atproto.isLocalActor(actor),
+              'profile': profile?.toJson(),
+              'postCount': posts.length,
+              'items': posts.map((e) => e.toJson()).toList(),
+            }),
+            headers: headers,
+          );
+        } catch (e) {
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': false,
+              'error': 'Self check failed',
+              'details': '$e',
+              'actor': actor,
+            }),
+            headers: headers,
+          );
+        }
+
       case 'atproto_read_feed':
         final actor = (params['actor'] as String?)?.trim();
         if (actor == null || actor.isEmpty) {

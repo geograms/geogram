@@ -76,6 +76,10 @@ class AtprotoClientService {
       List.unmodifiable(_followedActors.toList());
   bool get isAuthenticated => _session?.isValid == true;
 
+  bool isLocalActor(String actor) => _isLocalActor(actor);
+
+  AtprotoProfile localProfileSnapshot() => _localProfileSnapshot();
+
   Future<void> autoStart(ProfileStorage storage) async {
     _storage = AtprotoStorageService(storage);
     await _storage!.ensureDirectories();
@@ -488,6 +492,9 @@ class AtprotoClientService {
     );
     final response = await http.get(uri);
     if (response.statusCode < 200 || response.statusCode >= 300) {
+      if (_shouldFallbackToLocal(actor, response.body)) {
+        return _fetchLocalProfilePosts(limit: limit);
+      }
       final details = response.body.length > 180
           ? '${response.body.substring(0, 180)}...'
           : response.body;
@@ -504,7 +511,12 @@ class AtprotoClientService {
       '?actor=${Uri.encodeQueryComponent(actor)}',
     );
     final response = await http.get(uri);
-    if (response.statusCode < 200 || response.statusCode >= 300) return null;
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      if (_shouldFallbackToLocal(actor, response.body)) {
+        return _localProfileSnapshot();
+      }
+      return null;
+    }
     final json = jsonDecode(response.body) as Map<String, dynamic>;
     return AtprotoProfile.fromJson(json);
   }
@@ -632,6 +644,103 @@ class AtprotoClientService {
     }
     // Fallback so users always see posts even before login succeeds.
     return 'bsky.app';
+  }
+
+  bool _isLocalActor(String actor) {
+    final value = actor.trim().toLowerCase();
+    if (value.isEmpty) return false;
+    final local = <String>{
+      _session?.did.toLowerCase() ?? '',
+      _session?.handle.toLowerCase() ?? '',
+      _config.identifier.toLowerCase(),
+    };
+    if (local.contains(value)) return true;
+
+    final normalizedId = _config.identifier.trim().toLowerCase();
+    if (normalizedId.isNotEmpty && value.startsWith('$normalizedId.')) {
+      return true;
+    }
+    if (value.contains('.p2p.radio')) return true;
+    return false;
+  }
+
+  bool _shouldFallbackToLocal(String actor, String responseBody) {
+    if (_isLocalActor(actor)) return true;
+    final lowered = responseBody.toLowerCase();
+    if (!lowered.contains('profile not found')) return false;
+    final value = actor.trim().toLowerCase();
+    if (value.isEmpty) return false;
+    final configuredId = _config.identifier.trim().toLowerCase();
+    if (configuredId.isNotEmpty && value == configuredId) return true;
+    final sessionHandle = _session?.handle.trim().toLowerCase() ?? '';
+    if (sessionHandle.isNotEmpty && value == sessionHandle) return true;
+    return value == (_session?.did.trim().toLowerCase() ?? '');
+  }
+
+  AtprotoProfile _localProfileSnapshot() {
+    final session = _session;
+    final displayName = _deriveIdentifierFromProfile();
+    return AtprotoProfile(
+      did: session?.did ?? '',
+      handle: session?.handle ?? _config.identifier,
+      displayName: displayName,
+      description: '',
+      followersCount: 0,
+      followsCount: _followedActors.length,
+      postsCount: 0,
+      isFollowedByMe: false,
+    );
+  }
+
+  Future<List<AtprotoFeedItem>> _fetchLocalProfilePosts({
+    int limit = 50,
+  }) async {
+    if (_session == null) return const [];
+    final pds = _normalizeBaseUrl(_config.pdsUrl);
+    final uri = Uri.parse(
+      '$pds/xrpc/com.atproto.repo.listRecords'
+      '?repo=${Uri.encodeQueryComponent(_session!.did)}'
+      '&collection=app.bsky.feed.post'
+      '&limit=${limit.clamp(1, 100)}'
+      '&reverse=true',
+    );
+    final response = await http.get(uri);
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw Exception('Feed read failed (${response.statusCode})');
+    }
+    final body = jsonDecode(response.body) as Map<String, dynamic>;
+    final records = body['records'] as List<dynamic>? ?? const [];
+    final items = <AtprotoFeedItem>[];
+    for (final entry in records) {
+      if (entry is! Map<String, dynamic>) continue;
+      final value = entry['value'];
+      if (value is! Map<String, dynamic>) continue;
+      final reply = value['reply'] as Map<String, dynamic>?;
+      final root = reply?['root'] as Map<String, dynamic>?;
+      final parent = reply?['parent'] as Map<String, dynamic>?;
+      final createdAt =
+          DateTime.tryParse(value['createdAt'] as String? ?? '') ??
+          DateTime.now().toUtc();
+
+      items.add(
+        AtprotoFeedItem(
+          uri: entry['uri'] as String? ?? '',
+          cid: entry['cid'] as String? ?? '',
+          authorDid: _session!.did,
+          authorHandle: _session!.handle,
+          displayName: _deriveIdentifierFromProfile(),
+          avatarUrl: null,
+          text: value['text'] as String? ?? '',
+          createdAt: createdAt,
+          replyCount: 0,
+          repostCount: 0,
+          likeCount: 0,
+          parentUri: parent?['uri'] as String?,
+          rootUri: root?['uri'] as String?,
+        ),
+      );
+    }
+    return items;
   }
 
   List<AtprotoFeedItem> _parseFeed(Map<String, dynamic> body) {
