@@ -86,6 +86,14 @@ class NostrClientService {
   // Event dedup: set of seen event IDs.
   final Set<String> _seenEventIds = {};
 
+  // Pubkeys we've already requested metadata for (avoid re-requesting).
+  final Set<String> _requestedProfilePubkeys = {};
+
+  // Pending pubkeys to batch-request metadata for.
+  final Set<String> _pendingProfileRequests = {};
+  Timer? _profileRequestTimer;
+  static const Duration _profileRequestInterval = Duration(seconds: 3);
+
   // UI throttle
   static const Duration _uiUpdateInterval = Duration(milliseconds: 500);
   Timer? _uiUpdateTimer;
@@ -129,6 +137,9 @@ class NostrClientService {
   /// Followed pubkeys.
   Set<String> get follows => Set.unmodifiable(_follows);
 
+  /// Get cached profile for a pubkey.
+  Map<String, String?>? getProfile(String pubkey) => _profileCache[pubkey];
+
   /// Whether the feed is paused.
   bool get isPaused => _paused;
 
@@ -149,8 +160,15 @@ class NostrClientService {
     final relays = await _cacheService!.loadRelays();
     for (final config in relays) {
       _configs[config.id] = config;
-      if (config.enabled) {
-        connect(config.id);
+    }
+    // Load cached profiles from first relay that has them
+    for (final config in relays) {
+      final profiles = await _cacheService!.loadAllProfiles(config.id);
+      if (profiles.isNotEmpty) {
+        _profileCache.addAll(profiles);
+        _requestedProfilePubkeys.addAll(profiles.keys);
+        LogService().log('NostrClientService: loaded ${profiles.length} cached profiles');
+        break;
       }
     }
     // Load follows from first relay that has them
@@ -159,6 +177,12 @@ class NostrClientService {
       if (f.isNotEmpty) {
         _follows.addAll(f);
         break;
+      }
+    }
+    // Connect enabled relays
+    for (final config in relays) {
+      if (config.enabled) {
+        connect(config.id);
       }
     }
     if (relays.isNotEmpty) {
@@ -350,11 +374,15 @@ class NostrClientService {
       isFollowed: _follows.contains(event.pubkey),
     );
 
-    // Resolve author name from cache
+    // Resolve author info from cache
     final profile = _profileCache[event.pubkey];
     if (profile != null) {
       item.authorName = profile['name'];
       item.authorNip05 = profile['nip05'];
+      item.authorPicture = profile['picture'];
+    } else {
+      // Queue metadata request for unknown author
+      _queueProfileRequest(event.pubkey);
     }
 
     // Insert in sorted order (by created_at)
@@ -376,6 +404,42 @@ class NostrClientService {
     _uiDirty = true;
   }
 
+  /// Queue a pubkey for metadata request (batched to avoid spamming relays).
+  void _queueProfileRequest(String pubkey) {
+    if (_requestedProfilePubkeys.contains(pubkey)) return;
+    _requestedProfilePubkeys.add(pubkey);
+    _pendingProfileRequests.add(pubkey);
+    _profileRequestTimer ??= Timer.periodic(
+      _profileRequestInterval,
+      (_) => _flushProfileRequests(),
+    );
+  }
+
+  /// Send batched metadata request for pending pubkeys.
+  void _flushProfileRequests() {
+    if (_pendingProfileRequests.isEmpty) {
+      _profileRequestTimer?.cancel();
+      _profileRequestTimer = null;
+      return;
+    }
+
+    // Take up to 50 pubkeys per batch to avoid huge filters
+    final batch = _pendingProfileRequests.take(50).toList();
+    _pendingProfileRequests.removeAll(batch);
+
+    // Send to all connected relays
+    final subId = 'profiles_${DateTime.now().millisecondsSinceEpoch}';
+    for (final client in _clients.values) {
+      if (client.isConnected) {
+        client.subscribe({
+          'kinds': [NostrEventKind.setMetadata],
+          'authors': batch,
+          'limit': batch.length,
+        }, subscriptionId: subId);
+      }
+    }
+  }
+
   void _handleMetadata(String relayId, NostrEvent event) {
     try {
       final meta = jsonDecode(event.content) as Map<String, dynamic>;
@@ -391,11 +455,12 @@ class NostrClientService {
         'nip05': nip05,
       };
 
-      // Update display names in existing feed items
+      // Update display info on existing feed items
       for (final item in _feedItems) {
         if (item.pubkey == event.pubkey) {
           item.authorName = name;
           item.authorNip05 = nip05;
+          item.authorPicture = picture;
         }
       }
 
@@ -472,6 +537,8 @@ class NostrClientService {
         final profileMeta = _profileCache[pubkeyHex];
         if (profileMeta != null) {
           item.authorName = profileMeta['name'];
+          item.authorNip05 = profileMeta['nip05'];
+          item.authorPicture = profileMeta['picture'];
         }
         _feedItems.add(item);
         if (signed.id != null) _seenEventIds.add(signed.id!);
@@ -525,6 +592,8 @@ class NostrClientService {
     _uiUpdateTimer = null;
     _writeTimer?.cancel();
     _writeTimer = null;
+    _profileRequestTimer?.cancel();
+    _profileRequestTimer = null;
     _flushAllWrites();
   }
 
@@ -574,6 +643,7 @@ class NostrClientService {
       'filter': feedFilter.name,
       'paused': _paused,
       'seenEvents': _seenEventIds.length,
+      'profilesLoaded': _profileCache.length,
     };
   }
 

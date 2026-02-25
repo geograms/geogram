@@ -271,6 +271,29 @@ class NostrCacheService {
     }
   }
 
+  /// Load all cached profiles for a relay (bulk load for startup).
+  Future<Map<String, Map<String, String?>>> loadAllProfiles(String relayId) async {
+    try {
+      final db = await _openDb(relayId);
+      final result = db.select(
+        'SELECT pubkey, name, about, picture, nip05 FROM profiles',
+      );
+      final profiles = <String, Map<String, String?>>{};
+      for (final row in result) {
+        profiles[row['pubkey'] as String] = {
+          'name': row['name'] as String?,
+          'about': row['about'] as String?,
+          'picture': row['picture'] as String?,
+          'nip05': row['nip05'] as String?,
+        };
+      }
+      return profiles;
+    } catch (e) {
+      LogService().log('NostrCacheService: loadAllProfiles error: $e');
+      return {};
+    }
+  }
+
   /// Load profile metadata.
   Future<Map<String, String?>?> loadProfile(String relayId, String pubkey) async {
     try {

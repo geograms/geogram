@@ -2,7 +2,7 @@
  * Copyright (c) geogram
  * License: Apache-2.0
  *
- * NOSTR main page — feed view with Firehose/Only Follows filter,
+ * NOSTR main page — social feed view with Firehose/Only Follows filter,
  * compose bar for publishing kind:1 notes.
  */
 
@@ -12,7 +12,6 @@ import 'package:flutter/material.dart';
 
 import '../../../services/profile_service.dart';
 import '../../../util/nostr_crypto.dart';
-import '../../shared/teleport_chat_utils.dart';
 import '../nostr_client_service.dart';
 import '../models/nostr_feed_item.dart';
 import '../widgets/nostr_event_tile.dart';
@@ -30,9 +29,7 @@ class NostrMainPage extends StatefulWidget {
 class _NostrMainPageState extends State<NostrMainPage> {
   final TextEditingController _textController = TextEditingController();
   final FocusNode _focusNode = FocusNode();
-  final ScrollController _scrollController = ScrollController();
   StreamSubscription<NostrClientEvent>? _eventSub;
-  bool _autoScroll = true;
 
   String? _ownPubkey;
 
@@ -44,15 +41,6 @@ class _NostrMainPageState extends State<NostrMainPage> {
       if (!mounted) return;
       setState(() {});
 
-      // Auto-scroll to bottom on new feed items
-      if (event.type == NostrClientEventType.feedUpdated && _autoScroll) {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (_scrollController.hasClients) {
-            _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
-          }
-        });
-      }
-
       if (event.type == NostrClientEventType.error) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -62,12 +50,6 @@ class _NostrMainPageState extends State<NostrMainPage> {
           ),
         );
       }
-    });
-
-    _scrollController.addListener(() {
-      if (!_scrollController.hasClients) return;
-      final pos = _scrollController.position;
-      _autoScroll = pos.pixels >= pos.maxScrollExtent - 100;
     });
   }
 
@@ -85,7 +67,6 @@ class _NostrMainPageState extends State<NostrMainPage> {
     _eventSub?.cancel();
     _textController.dispose();
     _focusNode.dispose();
-    _scrollController.dispose();
     super.dispose();
   }
 
@@ -122,7 +103,29 @@ class _NostrMainPageState extends State<NostrMainPage> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('NOSTR'),
+        title: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text('NOSTR'),
+            if (items.isNotEmpty) ...[
+              const SizedBox(width: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: theme.colorScheme.primary.withValues(alpha: 0.2),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Text(
+                  '${items.length}',
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: theme.colorScheme.primary,
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
         actions: [
           // Filter dropdown
           DropdownButton<NostrFeedFilter>(
@@ -248,39 +251,19 @@ class _NostrMainPageState extends State<NostrMainPage> {
       );
     }
 
+    // Newest-first feed (social media style)
+    final reversedItems = items.reversed.toList();
+
     return ListView.builder(
-      controller: _scrollController,
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      itemCount: items.length,
+      padding: const EdgeInsets.only(top: 4),
+      itemCount: reversedItems.length,
       itemBuilder: (context, index) {
-        final item = items[index];
-
-        // Date separator
-        Widget? separator;
-        if (index == 0) {
-          separator = TeleportDateSeparator(date: item.event.createdAtDateTime);
-        } else {
-          final prevItem = items[index - 1];
-          final prevDate = prevItem.event.createdAtDateTime;
-          final curDate = item.event.createdAtDateTime;
-          if (prevDate.toLocal().day != curDate.toLocal().day ||
-              prevDate.toLocal().month != curDate.toLocal().month ||
-              prevDate.toLocal().year != curDate.toLocal().year) {
-            separator = TeleportDateSeparator(date: curDate);
-          }
-        }
-
+        final item = reversedItems[index];
         final isOwn = _ownPubkey != null && item.pubkey == _ownPubkey;
 
-        return Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (separator != null) separator,
-            NostrEventTile(
-              item: item,
-              isOwnPost: isOwn,
-            ),
-          ],
+        return NostrEventTile(
+          item: item,
+          isOwnPost: isOwn,
         );
       },
     );

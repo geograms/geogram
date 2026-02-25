@@ -12,6 +12,7 @@ class NostrFeedItem {
   final String relayUrl;
   String? authorName;
   String? authorNip05;
+  String? authorPicture;
   bool isFollowed;
 
   NostrFeedItem({
@@ -19,6 +20,7 @@ class NostrFeedItem {
     required this.relayUrl,
     this.authorName,
     this.authorNip05,
+    this.authorPicture,
     this.isFollowed = false,
   });
 
