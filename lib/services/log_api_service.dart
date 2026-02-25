@@ -39,6 +39,7 @@ import '../teleport/xmpp/xmpp_service.dart';
 import '../teleport/xmpp/models/xmpp_server_config.dart';
 import '../teleport/nostr/nostr_client_service.dart';
 import '../teleport/nostr/models/nostr_relay_config.dart';
+import '../teleport/atproto/atproto_client_service.dart';
 import '../teleport/irc/models/irc_server_config.dart';
 import 'sqlite_loader.dart';
 import '../version.dart';
@@ -2097,6 +2098,11 @@ function cleanup() {
       // Handle NOSTR client debug actions
       if (action.toLowerCase().startsWith('nostr_')) {
         return _handleNostrAction(action.toLowerCase(), params, headers);
+      }
+
+      // Handle AT Proto / Bluesky debug actions
+      if (action.toLowerCase().startsWith('atproto_')) {
+        return await _handleAtprotoAction(action.toLowerCase(), params, headers);
       }
 
       // Handle task monitor debug actions
@@ -17569,6 +17575,28 @@ function cleanup() {
           headers: headers,
         );
 
+      case 'xmpp_register':
+        final regHost = params['host'] as String?;
+        if (regHost == null) {
+          return shelf.Response.ok(
+            jsonEncode({'success': false, 'error': 'host required'}),
+            headers: headers,
+          );
+        }
+        final regResult = await xmpp.registerAccount(
+          host: regHost,
+          port: (params['port'] as num?)?.toInt() ?? 5222,
+          username: params['username'] as String?,
+          password: params['password'] as String?,
+          directTls: params['directTls'] as bool? ?? false,
+          conferenceService: params['conferenceService'] as String?,
+          autoConnect: params['autoConnect'] as bool? ?? true,
+        );
+        return shelf.Response.ok(
+          jsonEncode(regResult),
+          headers: headers,
+        );
+
       case 'xmpp_add_server':
         final name = params['name'] as String?;
         final host = params['host'] as String?;
@@ -17661,6 +17689,124 @@ function cleanup() {
       default:
         return shelf.Response.ok(
           jsonEncode({'success': false, 'error': 'Unknown XMPP action: $action'}),
+          headers: headers,
+        );
+    }
+  }
+
+  // ============================================================
+  // AT Proto / Bluesky Debug Actions
+  // ============================================================
+
+  Future<shelf.Response> _handleAtprotoAction(
+    String action,
+    Map<String, dynamic> params,
+    Map<String, String> headers,
+  ) async {
+    final atproto = AtprotoClientService();
+
+    switch (action) {
+      case 'atproto_status':
+        return shelf.Response.ok(
+          jsonEncode({
+            'success': true,
+            'authenticated': atproto.isAuthenticated,
+            'enabled': atproto.config.enabled,
+            'pdsUrl': atproto.config.pdsUrl,
+            'appViewUrl': atproto.config.appViewUrl,
+            'did': atproto.session?.did,
+            'handle': atproto.session?.handle,
+            'feedCount': atproto.feed.length,
+          }),
+          headers: headers,
+        );
+
+      case 'atproto_read_feed':
+        final actor = (params['actor'] as String?)?.trim();
+        if (actor == null || actor.isEmpty) {
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': false,
+              'error': 'actor parameter required (handle or did)',
+            }),
+            headers: headers,
+          );
+        }
+
+        final limit = ((params['limit'] as num?)?.toInt() ?? 10).clamp(1, 100);
+        final appView = (params['appview'] as String?)?.trim().isNotEmpty == true
+            ? (params['appview'] as String).trim()
+            : atproto.config.appViewUrl;
+        final base = appView.endsWith('/') ? appView.substring(0, appView.length - 1) : appView;
+        final uri = Uri.parse(
+          '$base/xrpc/app.bsky.feed.getAuthorFeed'
+          '?actor=${Uri.encodeQueryComponent(actor)}'
+          '&limit=$limit',
+        );
+
+        try {
+          final response = await http.get(uri);
+          if (response.statusCode < 200 || response.statusCode >= 300) {
+            return shelf.Response.ok(
+              jsonEncode({
+                'success': false,
+                'status': response.statusCode,
+                'error': 'Failed to read feed',
+                'uri': uri.toString(),
+                'body': response.body,
+              }),
+              headers: headers,
+            );
+          }
+
+          final body = jsonDecode(response.body) as Map<String, dynamic>;
+          final raw = body['feed'] as List<dynamic>? ?? const [];
+          final items = <Map<String, dynamic>>[];
+          for (final entry in raw) {
+            if (entry is! Map<String, dynamic>) continue;
+            final postWrap = entry['post'];
+            if (postWrap is! Map<String, dynamic>) continue;
+            final author = postWrap['author'] as Map<String, dynamic>? ?? const {};
+            final record = postWrap['record'] as Map<String, dynamic>? ?? const {};
+
+            items.add({
+              'uri': postWrap['uri'],
+              'cid': postWrap['cid'],
+              'authorDid': author['did'],
+              'authorHandle': author['handle'],
+              'displayName': author['displayName'] ?? author['handle'],
+              'text': record['text'],
+              'createdAt': record['createdAt'],
+              'replyCount': postWrap['replyCount'] ?? 0,
+              'repostCount': postWrap['repostCount'] ?? 0,
+              'likeCount': postWrap['likeCount'] ?? 0,
+            });
+          }
+
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'actor': actor,
+              'appview': base,
+              'count': items.length,
+              'items': items,
+            }),
+            headers: headers,
+          );
+        } catch (e) {
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': false,
+              'error': 'Exception while reading feed',
+              'details': '$e',
+            }),
+            headers: headers,
+          );
+        }
+
+      default:
+        return shelf.Response.ok(
+          jsonEncode({'success': false, 'error': 'Unknown AT Proto action: $action'}),
           headers: headers,
         );
     }
