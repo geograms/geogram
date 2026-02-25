@@ -18047,6 +18047,27 @@ function cleanup() {
           headers: headers,
         );
 
+      case 'atproto_following_list':
+        return shelf.Response.ok(
+          jsonEncode({
+            'success': true,
+            'count': atproto.followedActors.length,
+            'actors': atproto.followedActors,
+          }),
+          headers: headers,
+        );
+
+      case 'atproto_following_activity':
+        final items = await atproto.fetchFollowingActivity();
+        return shelf.Response.ok(
+          jsonEncode({
+            'success': true,
+            'count': items.length,
+            'items': items.map((e) => e.toJson()).toList(),
+          }),
+          headers: headers,
+        );
+
       default:
         return shelf.Response.ok(
           jsonEncode({'success': false, 'error': 'Unknown AT Proto action: $action'}),

@@ -102,6 +102,35 @@ class AtprotoStorageService {
     );
   }
 
+  Future<List<String>> loadFollowedActors() async {
+    try {
+      final str = await _readStringWithLegacyFallback('cache/follows.json');
+      if (str == null || str.trim().isEmpty) return const [];
+      final list = jsonDecode(str) as List<dynamic>;
+      return list
+          .map((e) => e.toString().trim())
+          .where((e) => e.isNotEmpty)
+          .toSet()
+          .toList();
+    } catch (e) {
+      LogService().log('AtprotoStorageService: loadFollowedActors failed: $e');
+      return const [];
+    }
+  }
+
+  Future<void> saveFollowedActors(List<String> actors) async {
+    await ensureDirectories();
+    final normalized = actors
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty)
+        .toSet()
+        .toList();
+    await _storage.writeString(
+      _path('cache/follows.json'),
+      const JsonEncoder.withIndent('  ').convert(normalized),
+    );
+  }
+
   Future<Map<String, dynamic>?> loadStatus() {
     return _readJsonWithLegacyFallback('status.json');
   }

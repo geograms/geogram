@@ -60,6 +60,7 @@ class AtprotoClientService {
   AtprotoBridgeConfig _config = AtprotoBridgeConfig.defaults();
   AtprotoSession? _session;
   List<AtprotoFeedItem> _feed = const [];
+  Set<String> _followedActors = <String>{};
 
   MonitoredAsyncPeriodicTimer? _sessionRefreshTimer;
   MonitoredAsyncPeriodicTimer? _feedSyncTimer;
@@ -71,6 +72,8 @@ class AtprotoClientService {
   AtprotoBridgeConfig get config => _config;
   AtprotoSession? get session => _session;
   List<AtprotoFeedItem> get feed => List.unmodifiable(_feed);
+  List<String> get followedActors =>
+      List.unmodifiable(_followedActors.toList());
   bool get isAuthenticated => _session?.isValid == true;
 
   Future<void> autoStart(ProfileStorage storage) async {
@@ -79,6 +82,7 @@ class AtprotoClientService {
     _config = await _storage!.loadConfig();
     _session = await _storage!.loadSession();
     _feed = await _storage!.loadCachedFeed();
+    _followedActors = (await _storage!.loadFollowedActors()).toSet();
 
     await _ensureAutoCredentials();
     await AtprotoLocalPdsService().start(storage: storage, config: _config);
@@ -300,14 +304,16 @@ class AtprotoClientService {
     if (trimmed.isEmpty) return false;
 
     String did = trimmed;
+    String? handle;
     if (!did.startsWith('did:')) {
       final profile = await fetchProfile(trimmed);
       did = profile?.did ?? '';
+      handle = profile?.handle;
     }
     if (did.isEmpty) return false;
     if (did == _session?.did) return false;
 
-    return _createRecord(
+    final ok = await _createRecord(
       repo: _session!.did,
       collection: 'app.bsky.graph.follow',
       record: {
@@ -316,6 +322,60 @@ class AtprotoClientService {
         'createdAt': DateTime.now().toUtc().toIso8601String(),
       },
     );
+    if (ok) {
+      _followedActors.add(did);
+      if (handle != null && handle.isNotEmpty) {
+        _followedActors.add(handle);
+      }
+      await _storage?.saveFollowedActors(_followedActors.toList());
+      _emit(const AtprotoClientEvent(AtprotoClientEventType.configChanged));
+    }
+    return ok;
+  }
+
+  bool isFollowingActor({String? did, String? handle, String? actor}) {
+    final candidates = <String>[
+      if (did != null) did,
+      if (handle != null) handle,
+      if (actor != null) actor,
+    ].map((e) => e.trim().toLowerCase()).where((e) => e.isNotEmpty);
+
+    final normalized = _followedActors
+        .map((e) => e.trim().toLowerCase())
+        .toSet();
+    for (final candidate in candidates) {
+      if (normalized.contains(candidate)) return true;
+    }
+    return false;
+  }
+
+  Future<List<AtprotoFeedItem>> fetchFollowingActivity({
+    int perActorLimit = 20,
+    int maxActors = 30,
+  }) async {
+    final actors = _followedActors.where((e) => e.trim().isNotEmpty).toList()
+      ..sort();
+    if (actors.isEmpty) return const [];
+
+    final merged = <AtprotoFeedItem>[];
+    final seen = <String>{};
+    for (final actor in actors.take(maxActors)) {
+      try {
+        final feed = await fetchAuthorFeed(
+          actor,
+          limit: perActorLimit.clamp(1, 100),
+        );
+        for (final item in feed) {
+          if (item.uri.isEmpty || seen.contains(item.uri)) continue;
+          seen.add(item.uri);
+          merged.add(item);
+        }
+      } catch (_) {
+        // Ignore per-actor failures to keep timeline resilient.
+      }
+    }
+    merged.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    return merged;
   }
 
   Future<void> _ensureAutoCredentials() async {

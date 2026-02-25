@@ -55,7 +55,13 @@ class _AtprotoProfilePageState extends State<AtprotoProfilePage> {
       setState(() {
         _profile = profile;
         _posts = posts;
-        _isFollowing = profile?.isFollowedByMe ?? false;
+        _isFollowing =
+            profile?.isFollowedByMe == true ||
+            service.isFollowingActor(
+              did: profile?.did,
+              handle: profile?.handle,
+              actor: widget.actor,
+            );
       });
     } catch (e) {
       if (!mounted) return;

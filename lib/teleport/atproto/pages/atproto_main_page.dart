@@ -10,6 +10,7 @@ import 'package:flutter/material.dart';
 import '../atproto_client_service.dart';
 import '../models/atproto_feed_item.dart';
 import '../widgets/atproto_post_tile.dart';
+import 'atproto_following_activity_page.dart';
 import 'atproto_profile_page.dart';
 import 'atproto_settings_page.dart';
 import 'atproto_thread_page.dart';
@@ -103,6 +104,17 @@ class _AtprotoMainPageState extends State<AtprotoMainPage> {
             icon: const Icon(Icons.refresh),
             tooltip: 'Refresh',
             onPressed: () => service.syncFeed(),
+          ),
+          IconButton(
+            icon: const Icon(Icons.group),
+            tooltip: 'Following activity',
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => const AtprotoFollowingActivityPage(),
+                ),
+              );
+            },
           ),
           IconButton(
             icon: const Icon(Icons.settings),
