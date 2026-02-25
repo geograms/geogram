@@ -11,6 +11,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../../services/file_launcher_service.dart';
+import '../../../util/nostr_crypto.dart';
 import '../../../util/nostr_nip19.dart';
 import '../../shared/teleport_chat_utils.dart';
 import '../models/nostr_feed_item.dart';
@@ -46,6 +47,7 @@ class _NostrEventTileState extends State<NostrEventTile> {
   );
 
   List<TapGestureRecognizer> _linkRecognizers = [];
+  final Set<String> _requestedPreviewEventIds = {};
 
   @override
   void dispose() {
@@ -91,6 +93,20 @@ class _NostrEventTileState extends State<NostrEventTile> {
     required double radius,
     required double fontSize,
   }) {
+    if (pictureUrl.isEmpty) {
+      return CircleAvatar(
+        radius: radius,
+        backgroundColor: color.withValues(alpha: 0.2),
+        child: Text(
+          name.isNotEmpty ? name[0].toUpperCase() : '?',
+          style: TextStyle(
+            color: color,
+            fontWeight: FontWeight.w600,
+            fontSize: fontSize,
+          ),
+        ),
+      );
+    }
     return Container(
       width: radius * 2,
       height: radius * 2,
@@ -265,6 +281,235 @@ class _NostrEventTileState extends State<NostrEventTile> {
     );
   }
 
+
+  Widget _buildPreviews(String text) {
+    final matches = _linkRegex.allMatches(text).toList();
+    if (matches.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    final widgets = <Widget>[];
+    for (final match in matches) {
+      final raw = match.group(0);
+      if (raw == null) continue;
+
+      final isBareNip19 = RegExp(
+        r'^(note|npub|nevent|nprofile|naddr)1',
+        caseSensitive: false,
+      ).hasMatch(raw);
+      final uri = raw.startsWith('nostr:') ? raw : (isBareNip19 ? 'nostr:$raw' : raw);
+
+      if (uri.startsWith('nostr:')) {
+        final decoded = NostrNip19.decode(uri);
+        final eventId = decoded?.eventIdHex;
+        final pubkey = decoded?.pubkeyHex;
+        if (eventId != null && eventId != widget.item.id) {
+          widgets.add(_buildNostrEventPreview(eventId));
+        } else if (pubkey != null) {
+          widgets.add(_buildNostrProfilePreview(pubkey));
+        }
+        continue;
+      }
+
+      if (uri.startsWith('http') || uri.startsWith('www.')) {
+        widgets.add(_buildExternalPreview(uri));
+      }
+    }
+
+    if (widgets.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const SizedBox(height: 8),
+        ...widgets,
+      ],
+    );
+  }
+
+  Widget _buildNostrEventPreview(String eventId) {
+    final service = NostrClientService();
+    final item = service.findFeedItemById(eventId);
+    if (item == null && !_requestedPreviewEventIds.contains(eventId)) {
+      _requestedPreviewEventIds.add(eventId);
+      service.requestEventById(eventId);
+    }
+
+    return GestureDetector(
+      onTap: () => _showEventPreview(eventId),
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 8),
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: 0.05),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+        ),
+        child: item == null
+            ? Row(
+                children: [
+                  const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                  const SizedBox(width: 8),
+                  const Text(
+                    'Loading NOSTR event...',
+                    style: TextStyle(color: Colors.white70, fontSize: 12),
+                  ),
+                ],
+              )
+            : Row(
+                children: [
+                  _buildPreviewAvatar(item),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          item.displayName,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w600,
+                            fontSize: 12,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          item.content,
+                          style: const TextStyle(
+                            color: Colors.white70,
+                            fontSize: 12,
+                          ),
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+      ),
+    );
+  }
+
+  Widget _buildNostrProfilePreview(String pubkeyHex) {
+    final service = NostrClientService();
+    final profile = service.getProfile(pubkeyHex);
+    final npub = NostrCrypto.encodeNpub(pubkeyHex);
+    final displayName = (profile?['name'] ?? '').trim();
+    final name = displayName.isNotEmpty ? displayName : npub;
+    final picture = profile?['picture'] ?? '';
+
+    return GestureDetector(
+      onTap: () {
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => NostrUserProfilePage(pubkey: pubkeyHex),
+          ),
+        );
+      },
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 8),
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: 0.05),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+        ),
+        child: Row(
+          children: [
+            _buildImageAvatar(
+              picture,
+              name,
+              teleportSenderColor(pubkeyHex),
+              radius: 16,
+              fontSize: 12,
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                name,
+                style: const TextStyle(color: Colors.white70, fontSize: 12),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildExternalPreview(String rawUrl) {
+    final launchUrl = rawUrl.startsWith('http') ? rawUrl : 'https://$rawUrl';
+    final uri = Uri.tryParse(launchUrl);
+    final host = uri?.host ?? rawUrl;
+    final path = uri?.path ?? '';
+
+    return GestureDetector(
+      onTap: () => FileLauncherService().openUrl(launchUrl),
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 8),
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: 0.05),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+        ),
+        child: Row(
+          children: [
+            Icon(Icons.link, size: 16, color: Colors.white.withValues(alpha: 0.6)),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    host,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w600,
+                      fontSize: 12,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  if (path.isNotEmpty)
+                    Text(
+                      path,
+                      style: const TextStyle(color: Colors.white70, fontSize: 11),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPreviewAvatar(NostrFeedItem item) {
+    final name = item.displayName;
+    final color = teleportSenderColor(item.pubkey);
+    final pictureUrl = item.authorPicture;
+    return _buildImageAvatar(
+      pictureUrl ?? '',
+      name,
+      color,
+      radius: 16,
+      fontSize: 12,
+    );
+  }
+
   void _showSnack(String message) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(message)),
@@ -329,6 +574,7 @@ class _NostrEventTileState extends State<NostrEventTile> {
                     height: 1.4,
                   ),
                 ),
+                _buildPreviews(item.content),
                 const SizedBox(height: 6),
                 // Reaction bar
                 _buildReactionBar(item),
