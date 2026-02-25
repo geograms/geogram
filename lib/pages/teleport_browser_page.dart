@@ -20,6 +20,10 @@ import '../teleport/signal/signal_service.dart';
 import '../teleport/signal/signal_storage_service.dart';
 import '../teleport/signal/pages/signal_auth_page.dart';
 import '../teleport/signal/pages/signal_chat_list_page.dart';
+import '../teleport/irc/irc_service.dart';
+import '../teleport/irc/pages/irc_main_page.dart';
+import '../teleport/nostr/nostr_client_service.dart';
+import '../teleport/nostr/pages/nostr_main_page.dart';
 
 /// Browser page for the "Teleport" app — lists platform bridges
 class TeleportBrowserPage extends StatefulWidget {
@@ -40,6 +44,8 @@ class _TeleportBrowserPageState extends State<TeleportBrowserPage> {
   Map<String, dynamic>? _config;
   bool _isLoading = true;
   StreamSubscription<AprsEvent>? _aprsSub;
+  StreamSubscription<IrcEvent>? _ircSub;
+  StreamSubscription<NostrClientEvent>? _nostrSub;
 
   /// Planned platform bridges
   static const List<_BridgeInfo> _bridges = [
@@ -115,11 +121,19 @@ class _TeleportBrowserPageState extends State<TeleportBrowserPage> {
     _aprsSub = AprsService().events.listen((_) {
       if (mounted) setState(() {});
     });
+    _ircSub = IrcService().events.listen((_) {
+      if (mounted) setState(() {});
+    });
+    _nostrSub = NostrClientService().events.listen((_) {
+      if (mounted) setState(() {});
+    });
   }
 
   @override
   void dispose() {
     _aprsSub?.cancel();
+    _ircSub?.cancel();
+    _nostrSub?.cancel();
     super.dispose();
   }
 
@@ -302,6 +316,22 @@ class _TeleportBrowserPageState extends State<TeleportBrowserPage> {
     );
   }
 
+  void _onIrcTap() {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => IrcMainPage(appPath: widget.appPath),
+      ),
+    );
+  }
+
+  void _onNostrTap() {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => NostrMainPage(appPath: widget.appPath),
+      ),
+    );
+  }
+
   void _onSignalTap() async {
     final signalService = SignalService();
     if ((_isBridgeActive('signal') || signalService.isRunning) &&
@@ -334,8 +364,12 @@ class _TeleportBrowserPageState extends State<TeleportBrowserPage> {
         bridge.id == 'signal' && SignalService().isRunning;
     final isAprsEnabled =
         bridge.id == 'aprs' && AprsService().isEnabled;
+    final isIrcConnected =
+        bridge.id == 'irc' && IrcService().isAnyConnected;
+    final isNostrConnected =
+        bridge.id == 'nostr' && NostrClientService().isAnyConnected;
     final showActive =
-        isActive || isTelegramRunning || isSignalRunning || isAprsEnabled;
+        isActive || isTelegramRunning || isSignalRunning || isAprsEnabled || isIrcConnected || isNostrConnected;
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
@@ -355,6 +389,14 @@ class _TeleportBrowserPageState extends State<TeleportBrowserPage> {
             }
             if (bridge.id == 'signal') {
               _onSignalTap();
+              return;
+            }
+            if (bridge.id == 'irc') {
+              _onIrcTap();
+              return;
+            }
+            if (bridge.id == 'nostr') {
+              _onNostrTap();
               return;
             }
             ScaffoldMessenger.of(context).showSnackBar(
@@ -421,7 +463,7 @@ class _TeleportBrowserPageState extends State<TeleportBrowserPage> {
                   child: Text(
                     showActive
                         ? 'Active'
-                        : bridge.id == 'aprs'
+                        : (bridge.id == 'aprs' || bridge.id == 'irc' || bridge.id == 'nostr')
                             ? 'Available'
                             : 'Coming Soon',
                     style: TextStyle(

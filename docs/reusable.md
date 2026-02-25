@@ -42,6 +42,9 @@ This document catalogs reusable UI components available in the Geogram codebase.
 - [SharedFolderService](#sharedfolderservice) - ProfileStorage CRUD for shared folder entries
 - [SharedBrowserPage](#sharedbrowserpage) - List, add, edit, delete shared folders; opens FilesBrowserPage
 
+### Background Task Infrastructure
+- [Background Task Monitor](#background-task-monitor) - Centralized registry for all background tasks with pause/resume and debug API
+
 ### Hashing Utilities
 - [TLSH (Locality Sensitive Hash)](#tlsh-locality-sensitive-hash) - Fuzzy similarity hashing for binary data
 - [SHA1 Content Hashing](#sha1-content-hashing) - Exact content deduplication via crypto package
@@ -123,6 +126,10 @@ This document catalogs reusable UI components available in the Geogram codebase.
 - [ProfileStorage](#profilestorage) - Abstraction layer for encrypted/filesystem storage
 - [TrayService](#trayservice) - System tray icon with minimize-to-tray and restore
 - [AprsIsClient](#aprsisclient) - APRS-IS TCP client with TNC2 parsing
+- [AprsIsClient.sendOneShot](#sendoneshot-standalone-one-shot-sender) - Standalone one-shot APRS-IS message sender
+- [IrcClient](#ircclient) - IRC protocol client with background isolate TCP/TLS
+- [IrcService](#ircservice) - Multi-server IRC singleton service with event stream
+- [IrcMessageBubble](#ircmessagebubble) - Dark-mode IRC message bubble
 
 ### Desktop Patterns
 - [Desktop Platform Guard](#desktop-platform-guard) - Reusable check for Linux/Windows/macOS
@@ -8372,6 +8379,22 @@ client.disconnect();
 
 **Reuse potential**: The `aprsPasscode()` static method can be used anywhere an APRS-IS passcode is needed. The TCP client pattern (banner wait, line buffering, reconnect with fixed delay) is reusable for other line-oriented TCP protocols.
 
+#### sendOneShot (standalone one-shot sender)
+
+**Pattern**: Static utility method for sending a single APRS message via a short-lived TCP connection. Completely independent of `AprsService` — connects, authenticates, sends, optionally waits for ACK, then disconnects.
+
+```dart
+final result = await AprsIsClient.sendOneShot(
+  callsign: 'MYCALL',
+  destination: 'N0CALL',
+  message: 'Hello from Geogram!',
+  ackTimeout: Duration(seconds: 15), // optional
+);
+// result: {sent: true, acked: false, verified: true, line: '...', seqNo: 12345}
+```
+
+**Debug API**: `{"action":"aprs_send_oneshot","destination":"CR7BBQ","text":"Hello"}` — uses the running profile's callsign by default, or specify `"callsign":"MYCALL"` explicitly.
+
 ---
 
 ### Desktop Platform Guard
@@ -8457,6 +8480,34 @@ AprsMessageBubble(
 **File**: `lib/teleport/aprs/pages/aprs_conversation_page.dart`
 
 **Pattern**: Chat view for APRS conversations. Reversed ListView with message bubbles, TeleportDateSeparator between days, compose bar with 67-char APRS limit and auto-prepend for tag rooms.
+
+---
+
+### IrcClient
+
+**File**: `lib/teleport/irc/irc_client.dart`
+
+**Pattern**: Pure Dart IRC protocol client. Background isolate TCP/TLS socket, IRC registration (NICK+USER), PING/PONG keepalive, nick collision handling (433), NickServ IDENTIFY, CTCP ACTION. Same isolate pattern as `AprsIsClient`.
+
+**Reuse potential**: The IRC line parser (`_parseIrcLine`) and nick extraction (`_extractNick`) are reusable. The TLS/TCP isolate pattern is identical to APRS.
+
+---
+
+### IrcService
+
+**File**: `lib/teleport/irc/irc_service.dart`
+
+**Pattern**: Singleton multi-server IRC service with event stream. Manages `Map<String, IrcClient>` keyed by server config ID. 500ms UI throttle timer, batched SQLite writes, slash command routing.
+
+**Debug API**: `irc_status`, `irc_connect`, `irc_disconnect`, `irc_join`, `irc_part`, `irc_send`, `irc_list`, `irc_add_server`, `irc_cache_inspect`, `irc_cache_clear`
+
+---
+
+### IrcMessageBubble
+
+**File**: `lib/teleport/irc/widgets/irc_message_bubble.dart`
+
+**Pattern**: Dark-mode chat bubble matching the Telegram/Signal style (#2B5278 outgoing, #1E2D3D incoming). Sender colors via `teleportSenderColor()`. `/me` actions rendered in italics. `IrcSystemMessage` widget for join/part/quit as centered gray text.
 
 ---
 
@@ -9410,3 +9461,169 @@ Standard SHA1 hashing for exact content deduplication.
 - `sha1.convert(bytes).toString()` → lowercase hex SHA1 hash string
 
 **Usage:** Used in `TelegramCacheService.ingestMediaBlob()` to detect identical media files within the same per-chat SQLite database, avoiding duplicate BLOB storage for forwarded or re-sent media.
+
+---
+
+## Background Task Monitor
+
+**Files:**
+- `lib/models/monitored_task.dart` — Data model + enums
+- `lib/services/task_monitor_service.dart` — Singleton registry
+- `lib/util/task_monitor_helpers.dart` — Drop-in wrappers
+- `lib/pages/task_settings_page.dart` — Settings UI
+
+Centralized registry for all background tasks (Timer.periodic, Isolate, async loops). Provides visibility into what's running, success/fail counts, duration tracking, pause/resume, and a debug API.
+
+### Quick Start — Adopting Timer.periodic
+
+Replace a raw `Timer.periodic` with a monitored wrapper:
+
+```dart
+// Before:
+_timer = Timer.periodic(Duration(seconds: 10), (_) => processQueue());
+
+// After:
+import '../util/task_monitor_helpers.dart';
+import '../models/monitored_task.dart';
+
+_timer = MonitoredAsyncPeriodicTimer(
+  id: 'dm_queue.process',
+  name: 'DM Queue Processor',
+  description: 'Delivers queued direct messages via WebRTC or Station',
+  serviceName: 'DMQueueService',
+  interval: Duration(seconds: 10),
+  priority: TaskPriority.normal,
+  callback: (_) async => await processQueue(),
+);
+
+// Teardown (replaces _timer?.cancel()):
+_timer.cancel();
+```
+
+For sync callbacks, use `MonitoredPeriodicTimer` instead.
+
+### Isolate / FFI Task Registration
+
+For tasks running in isolates (APRS-IS, TDLib, Signal bridge) where the callback can't be wrapped:
+
+```dart
+import '../util/task_monitor_helpers.dart';
+import '../models/monitored_task.dart';
+
+final _handle = MonitoredIsolateHandle(
+  id: 'aprs.is_client',
+  name: 'APRS-IS Connection',
+  description: 'Maintains TCP connection to APRS-IS network',
+  serviceName: 'AprsService',
+  priority: TaskPriority.normal,
+);
+
+// Call from main isolate when status changes:
+_handle.markRunning();   // connection established
+_handle.markIdle();      // clean disconnect
+_handle.markError(e);    // connection lost
+
+// Teardown:
+_handle.dispose();
+```
+
+### API Reference
+
+**TaskMonitorService** (singleton):
+- `register(MonitoredTask)` / `unregister(id)` — add/remove tasks
+- `reportStart(id)` / `reportSuccess(id)` / `reportFailure(id, error)` — lifecycle hooks
+- `tasks` → `List<MonitoredTask>` — all registered tasks
+- `getTask(id)` → `MonitoredTask?`
+- `tasksByService` → `Map<String, List<MonitoredTask>>`
+- `tasksByPriority` → `Map<TaskPriority, List<MonitoredTask>>`
+- `pause(id)` → `bool` (refuses critical), `resume(id)` → `bool`
+- `pauseAllNonCritical()` → `int`, `resumeAll()` → `int`
+- `stateChanges` → `Stream<TaskStateChangedEvent>` (for UI)
+- `toJson()` → summary map with task list
+
+**MonitoredTask** fields: `id`, `name`, `description`, `serviceName`, `priority` (critical/normal/low), `type` (periodic/isolate/oneshot), `interval`, `status` (idle/running/paused/error), `lastRunAt`, `lastDuration`, `runCount`, `successCount`, `failCount`, `lastError`, `registeredAt`
+
+### Debug API
+
+```bash
+# List all tasks with summary counts
+curl -X POST http://localhost:8080/api/debug \
+  -d '{"action":"task_status"}'
+
+# Pause a specific task (refuses critical)
+curl -X POST http://localhost:8080/api/debug \
+  -d '{"action":"task_pause","id":"dm_queue.process"}'
+
+# Resume a paused task
+curl -X POST http://localhost:8080/api/debug \
+  -d '{"action":"task_resume","id":"dm_queue.process"}'
+```
+
+### Settings UI
+
+Available at Settings drawer → "Tasks". Shows summary card with colored status chips, grouped task list (by service or priority), expandable tiles with status dot, run stats, error details, and pause/resume switch per task.
+
+## NOSTR Client Bridge
+
+**Files:**
+- `lib/teleport/nostr/models/nostr_relay_config.dart` — Relay configuration model
+- `lib/teleport/nostr/models/nostr_feed_item.dart` — Feed item wrapper for UI
+- `lib/teleport/nostr/nostr_relay_client.dart` — WebSocket client per relay
+- `lib/teleport/nostr/nostr_cache_service.dart` — SQLite cache (per relay DB)
+- `lib/teleport/nostr/nostr_client_service.dart` — Main singleton service
+- `lib/teleport/nostr/pages/nostr_main_page.dart` — Feed page with compose bar
+- `lib/teleport/nostr/pages/nostr_settings_page.dart` — Relay management UI
+- `lib/teleport/nostr/widgets/nostr_event_tile.dart` — Dark-mode bubble widget
+- `lib/teleport/nostr/widgets/nostr_relay_list.dart` — Relay list with status
+
+Connects to external NOSTR relays via WebSocket, receives kind:1 text notes (+ kind:0 metadata, kind:3 contacts), and provides a feed UI with Firehose/Only-Follows filtering. Reuses existing `NostrEvent`, `NostrCrypto`, and `SigningService` for event signing.
+
+### Architecture
+
+- **Multi-relay**: One `NostrRelayClient` WebSocket per configured relay
+- **Singleton service**: `NostrClientService()` — same pattern as `IrcService()`
+- **SQLite per relay**: `teleport/nostr/cache/{relay_id}.db` via ProfileStorage
+- **UI throttle**: 500ms timer (same as IRC/APRS)
+- **Batch writes**: 2-second flush timer for SQLite
+- **Task monitor**: `MonitoredIsolateHandle` per relay connection
+- **Event dedup**: Global set of seen event IDs
+
+### Quick Start
+
+```dart
+// Service auto-starts in main.dart post-frame callback
+final nostr = NostrClientService();
+
+// Add a relay
+await nostr.addRelay(NostrRelayConfig(
+  id: NostrRelayConfig.idFromUrl('wss://relay.damus.io'),
+  url: 'wss://relay.damus.io',
+  name: 'relay.damus.io',
+));
+
+// Connect
+nostr.connect('relay_damus_io');
+
+// Listen to feed updates
+nostr.events.listen((event) {
+  if (event.type == NostrClientEventType.feedUpdated) {
+    final items = nostr.feedItems; // filtered by feedFilter
+  }
+});
+
+// Publish a note
+await nostr.publish('Hello NOSTR!');
+```
+
+### Debug API
+
+```bash
+# Get relay status, feed count, follows count
+curl localhost:PORT/debug?action=nostr_status
+
+# Connect to a relay by URL
+curl localhost:PORT/debug?action=nostr_connect&url=wss://relay.damus.io
+
+# Disconnect
+curl localhost:PORT/debug?action=nostr_disconnect&relayId=relay_damus_io
+```

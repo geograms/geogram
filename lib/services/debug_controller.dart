@@ -181,6 +181,15 @@ enum DebugAction {
   /// P2P Transfer: Get transfer status
   p2pStatus,
 
+  /// Get background task monitor status
+  taskStatus,
+
+  /// Pause a monitored background task
+  taskPause,
+
+  /// Resume a paused background task
+  taskResume,
+
   /// List all known devices with online status
   listDevices,
 
@@ -198,6 +207,15 @@ enum DebugAction {
 
   /// Delete a profile by callsign
   profileDelete,
+
+  /// Get NOSTR relay status and feed info
+  nostrStatus,
+
+  /// Connect to a NOSTR relay
+  nostrConnect,
+
+  /// Disconnect from a NOSTR relay
+  nostrDisconnect,
 }
 
 /// Toast message to be displayed

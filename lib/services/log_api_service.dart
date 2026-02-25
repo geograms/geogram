@@ -14,6 +14,7 @@ import 'profile_service.dart';
 import 'signing_service.dart';
 import 'app_service.dart';
 import 'debug_controller.dart';
+import 'task_monitor_service.dart';
 import 'security_service.dart';
 import 'storage_config.dart';
 import 'user_location_service.dart';
@@ -26,11 +27,16 @@ import 'device_apps_service.dart';
 import 'chat_file_upload_manager.dart';
 import 'app_args.dart';
 import '../connection/connection_manager.dart';
+import '../teleport/aprs/aprs_is_client.dart';
 import '../teleport/aprs/aprs_service.dart';
 import 'location_provider_service.dart';
 import '../teleport/telegram/telegram_service.dart';
 import '../teleport/signal/models/signal_auth_state.dart';
 import '../teleport/signal/signal_service.dart';
+import '../teleport/irc/irc_service.dart';
+import '../teleport/nostr/nostr_client_service.dart';
+import '../teleport/nostr/models/nostr_relay_config.dart';
+import '../teleport/irc/models/irc_server_config.dart';
 import 'sqlite_loader.dart';
 import '../version.dart';
 import '../models/chat_channel.dart';
@@ -2073,6 +2079,21 @@ function cleanup() {
       // Handle APRS debug actions
       if (action.toLowerCase().startsWith('aprs_')) {
         return await _handleAprsAction(action.toLowerCase(), params, headers);
+      }
+
+      // Handle IRC debug actions
+      if (action.toLowerCase().startsWith('irc_')) {
+        return await _handleIrcAction(action.toLowerCase(), params, headers);
+      }
+
+      // Handle NOSTR client debug actions
+      if (action.toLowerCase().startsWith('nostr_')) {
+        return _handleNostrAction(action.toLowerCase(), params, headers);
+      }
+
+      // Handle task monitor debug actions
+      if (action.toLowerCase().startsWith('task_')) {
+        return _handleTaskAction(action.toLowerCase(), params, headers);
       }
 
       final debugController = DebugController();
@@ -17080,6 +17101,26 @@ function cleanup() {
             headers: headers,
           );
 
+        case 'aprs_send_oneshot':
+          final destination = params['destination'] as String?;
+          final text = params['text'] as String?;
+          final callsign = params['callsign'] as String? ?? aprs.callsign;
+          if (destination == null || text == null || callsign == null) {
+            return shelf.Response.ok(
+              jsonEncode({'success': false, 'error': 'callsign, destination and text required'}),
+              headers: headers,
+            );
+          }
+          final result = await AprsIsClient.sendOneShot(
+            callsign: callsign,
+            destination: destination,
+            message: text,
+          );
+          return shelf.Response.ok(
+            jsonEncode({'success': result['sent'] == true, ...result}),
+            headers: headers,
+          );
+
         case 'aprs_conversations':
           final convos = aprs.getConversations();
           final list = convos.map((c) => {
@@ -17154,5 +17195,315 @@ function cleanup() {
         sin(dLon / 2) * sin(dLon / 2);
     final c = 2 * atan2(sqrt(a), sqrt(1 - a));
     return earthRadius * c;
+  }
+
+  // ============================================================
+  // IRC Debug Actions
+  // ============================================================
+
+  Future<shelf.Response> _handleIrcAction(
+    String action,
+    Map<String, dynamic> params,
+    Map<String, String> headers,
+  ) async {
+    final irc = IrcService();
+
+    switch (action) {
+      case 'irc_status':
+        return shelf.Response.ok(
+          jsonEncode({'success': true, ...irc.getStatus()}),
+          headers: headers,
+        );
+
+      case 'irc_connect':
+        final serverId = params['serverId'] as String?;
+        if (serverId == null) {
+          return shelf.Response.ok(
+            jsonEncode({'success': false, 'error': 'serverId required'}),
+            headers: headers,
+          );
+        }
+        irc.connect(serverId);
+        return shelf.Response.ok(
+          jsonEncode({'success': true, 'action': 'connecting', 'serverId': serverId}),
+          headers: headers,
+        );
+
+      case 'irc_disconnect':
+        final serverId = params['serverId'] as String?;
+        if (serverId == null) {
+          return shelf.Response.ok(
+            jsonEncode({'success': false, 'error': 'serverId required'}),
+            headers: headers,
+          );
+        }
+        irc.disconnect(serverId);
+        return shelf.Response.ok(
+          jsonEncode({'success': true, 'action': 'disconnected', 'serverId': serverId}),
+          headers: headers,
+        );
+
+      case 'irc_join':
+        final serverId = params['serverId'] as String?;
+        final channel = params['channel'] as String?;
+        if (serverId == null || channel == null) {
+          return shelf.Response.ok(
+            jsonEncode({'success': false, 'error': 'serverId and channel required'}),
+            headers: headers,
+          );
+        }
+        irc.joinChannel(serverId, channel);
+        return shelf.Response.ok(
+          jsonEncode({'success': true, 'action': 'joining', 'channel': channel}),
+          headers: headers,
+        );
+
+      case 'irc_part':
+        final serverId = params['serverId'] as String?;
+        final channel = params['channel'] as String?;
+        if (serverId == null || channel == null) {
+          return shelf.Response.ok(
+            jsonEncode({'success': false, 'error': 'serverId and channel required'}),
+            headers: headers,
+          );
+        }
+        irc.partChannel(serverId, channel);
+        return shelf.Response.ok(
+          jsonEncode({'success': true, 'action': 'parting', 'channel': channel}),
+          headers: headers,
+        );
+
+      case 'irc_send':
+        final serverId = params['serverId'] as String?;
+        final target = params['target'] as String? ?? params['channel'] as String?;
+        final text = params['text'] as String?;
+        if (serverId == null || target == null || text == null) {
+          return shelf.Response.ok(
+            jsonEncode({'success': false, 'error': 'serverId, target, and text required'}),
+            headers: headers,
+          );
+        }
+        final msg = irc.sendMessage(serverId, target, text);
+        return shelf.Response.ok(
+          jsonEncode({'success': msg != null, 'sent': msg != null}),
+          headers: headers,
+        );
+
+      case 'irc_list':
+        final serverId = params['serverId'] as String?;
+        if (serverId == null) {
+          return shelf.Response.ok(
+            jsonEncode({'success': false, 'error': 'serverId required'}),
+            headers: headers,
+          );
+        }
+        irc.requestChannelList(serverId);
+        return shelf.Response.ok(
+          jsonEncode({'success': true, 'action': 'requesting channel list'}),
+          headers: headers,
+        );
+
+      case 'irc_add_server':
+        final name = params['name'] as String?;
+        final host = params['host'] as String?;
+        final nickname = params['nickname'] as String?;
+        if (name == null || host == null || nickname == null) {
+          return shelf.Response.ok(
+            jsonEncode({'success': false, 'error': 'name, host, and nickname required'}),
+            headers: headers,
+          );
+        }
+        final port = (params['port'] as num?)?.toInt() ?? 6697;
+        final useTls = params['useTls'] as bool? ?? true;
+        final id = '${host}_${DateTime.now().millisecondsSinceEpoch}';
+        final config = IrcServerConfig(
+          id: id,
+          name: name,
+          host: host,
+          port: port,
+          useTls: useTls,
+          nickname: nickname,
+          password: params['password'] as String?,
+          autoJoinChannels: (params['autoJoinChannels'] as List<dynamic>?)
+                  ?.map((e) => e.toString())
+                  .toList() ??
+              [],
+          autoConnect: params['autoConnect'] as bool? ?? false,
+        );
+        await irc.addServer(config);
+        return shelf.Response.ok(
+          jsonEncode({'success': true, 'serverId': id}),
+          headers: headers,
+        );
+
+      case 'irc_cache_inspect':
+        final cache = irc.cacheService;
+        if (cache == null) {
+          return shelf.Response.ok(
+            jsonEncode({'success': false, 'error': 'cache not initialized'}),
+            headers: headers,
+          );
+        }
+        final info = await cache.inspect();
+        return shelf.Response.ok(
+          jsonEncode({'success': true, ...info}),
+          headers: headers,
+        );
+
+      case 'irc_cache_clear':
+        final cache = irc.cacheService;
+        if (cache == null) {
+          return shelf.Response.ok(
+            jsonEncode({'success': false, 'error': 'cache not initialized'}),
+            headers: headers,
+          );
+        }
+        await cache.clear();
+        return shelf.Response.ok(
+          jsonEncode({'success': true, 'action': 'cleared'}),
+          headers: headers,
+        );
+
+      default:
+        return shelf.Response.ok(
+          jsonEncode({'success': false, 'error': 'Unknown IRC action: $action'}),
+          headers: headers,
+        );
+    }
+  }
+
+  // ============================================================
+  // NOSTR Client Debug Actions
+  // ============================================================
+
+  Future<shelf.Response> _handleNostrAction(
+    String action,
+    Map<String, dynamic> params,
+    Map<String, String> headers,
+  ) async {
+    final nostr = NostrClientService();
+
+    switch (action) {
+      case 'nostr_status':
+        return shelf.Response.ok(
+          jsonEncode({'success': true, ...nostr.getStatus()}),
+          headers: headers,
+        );
+
+      case 'nostr_connect':
+        final relayId = params['relayId'] as String?;
+        final url = params['url'] as String?;
+        if (relayId == null && url == null) {
+          return shelf.Response.ok(
+            jsonEncode({'success': false, 'error': 'relayId or url required'}),
+            headers: headers,
+          );
+        }
+        if (relayId != null) {
+          nostr.connect(relayId);
+          return shelf.Response.ok(
+            jsonEncode({'success': true, 'action': 'connecting', 'relayId': relayId}),
+            headers: headers,
+          );
+        }
+        // Add and connect by URL
+        final relayUrl = url!;
+        final id = NostrRelayConfig.idFromUrl(relayUrl);
+        if (!nostr.relays.any((r) => r.id == id)) {
+          await nostr.addRelay(NostrRelayConfig(
+            id: id,
+            url: relayUrl,
+            name: NostrRelayConfig.nameFromUrl(relayUrl),
+          ));
+        }
+        nostr.connect(id);
+        return shelf.Response.ok(
+          jsonEncode({'success': true, 'action': 'connecting', 'relayId': id, 'url': relayUrl}),
+          headers: headers,
+        );
+
+      case 'nostr_disconnect':
+        final relayId = params['relayId'] as String?;
+        if (relayId == null) {
+          return shelf.Response.ok(
+            jsonEncode({'success': false, 'error': 'relayId required'}),
+            headers: headers,
+          );
+        }
+        nostr.disconnect(relayId);
+        return shelf.Response.ok(
+          jsonEncode({'success': true, 'action': 'disconnected', 'relayId': relayId}),
+          headers: headers,
+        );
+
+      default:
+        return shelf.Response.ok(
+          jsonEncode({'success': false, 'error': 'Unknown NOSTR action: $action'}),
+          headers: headers,
+        );
+    }
+  }
+
+  // ============================================================
+  // Task Monitor Debug Actions
+  // ============================================================
+
+  shelf.Response _handleTaskAction(
+    String action,
+    Map<String, dynamic> params,
+    Map<String, String> headers,
+  ) {
+    final monitor = TaskMonitorService();
+    switch (action) {
+      case 'task_status':
+        return shelf.Response.ok(
+          jsonEncode(monitor.toJson()),
+          headers: headers,
+        );
+
+      case 'task_pause':
+        final id = params['id'] as String?;
+        if (id == null) {
+          return shelf.Response.ok(
+            jsonEncode({'success': false, 'error': 'id parameter required'}),
+            headers: headers,
+          );
+        }
+        final ok = monitor.pause(id);
+        return shelf.Response.ok(
+          jsonEncode({
+            'success': ok,
+            if (!ok) 'error': monitor.getTask(id) == null
+                ? 'task not found'
+                : 'cannot pause critical task',
+          }),
+          headers: headers,
+        );
+
+      case 'task_resume':
+        final id = params['id'] as String?;
+        if (id == null) {
+          return shelf.Response.ok(
+            jsonEncode({'success': false, 'error': 'id parameter required'}),
+            headers: headers,
+          );
+        }
+        final ok = monitor.resume(id);
+        return shelf.Response.ok(
+          jsonEncode({
+            'success': ok,
+            if (!ok) 'error': monitor.getTask(id) == null
+                ? 'task not found'
+                : 'task is not paused',
+          }),
+          headers: headers,
+        );
+
+      default:
+        return shelf.Response.ok(
+          jsonEncode({'success': false, 'error': 'Unknown task action: $action'}),
+          headers: headers,
+        );
+    }
   }
 }

@@ -98,7 +98,7 @@ windows/onnx-cache/
 android-sync.sh
 
 # Runtime data directories
-nostr/
+/nostr/
 flasher/geogram/
 !downloads/flasher/
 !downloads/flasher/**/*.bin

@@ -49,6 +49,8 @@ import 'services/dm_queue_service.dart';
 import 'services/websocket_service.dart';
 import 'services/backup_service.dart';
 import 'teleport/aprs/aprs_service.dart';
+import 'teleport/irc/irc_service.dart';
+import 'teleport/nostr/nostr_client_service.dart';
 import 'services/window_state_service.dart';
 import 'services/tray_service.dart';
 import 'services/group_sync_service.dart';
@@ -119,6 +121,7 @@ import 'pages/onboarding_page.dart';
 import 'pages/welcome_page.dart';
 import 'pages/security_settings_page.dart';
 import 'pages/storage_settings_page.dart';
+import 'pages/task_settings_page.dart';
 import 'pages/theme_settings_page.dart';
 import 'pages/mirror_settings_page.dart';
 import 'pages/mirror_wizard_page.dart';
@@ -661,6 +664,22 @@ void main() async {
               .autoStart(aprsStorage, callsign: profile.fullCallsign)
               .catchError((e) {
             LogService().log('APRS auto-start failed: $e');
+          });
+        }
+
+        // Auto-start IRC background service
+        final ircStorage = AppService().profileStorage;
+        if (ircStorage != null) {
+          IrcService().autoStart(ircStorage).catchError((e) {
+            LogService().log('IRC auto-start failed: $e');
+          });
+        }
+
+        // Auto-start NOSTR client background service
+        final nostrStorage = AppService().profileStorage;
+        if (nostrStorage != null) {
+          NostrClientService().autoStart(nostrStorage).catchError((e) {
+            LogService().log('NOSTR auto-start failed: $e');
           });
         }
       }
@@ -1957,6 +1976,19 @@ class _HomePageState extends State<HomePage> {
                       context,
                       MaterialPageRoute(
                         builder: (context) => const StorageSettingsPage(),
+                      ),
+                    );
+                  },
+                ),
+                ListTile(
+                  leading: const Icon(Icons.task_alt),
+                  title: const Text('Tasks'),
+                  onTap: () {
+                    Navigator.pop(context);
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => const TaskSettingsPage(),
                       ),
                     );
                   },

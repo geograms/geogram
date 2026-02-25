@@ -451,6 +451,16 @@ class DevicesService {
       case DebugAction.openExternalFile:
         // External file viewer navigation is handled by main.dart
         break;
+      case DebugAction.taskStatus:
+      case DebugAction.taskPause:
+      case DebugAction.taskResume:
+        // Task monitor actions are handled directly by LogApiService
+        break;
+      case DebugAction.nostrStatus:
+      case DebugAction.nostrConnect:
+      case DebugAction.nostrDisconnect:
+        // NOSTR client actions are handled directly by LogApiService
+        break;
     }
   }
 
