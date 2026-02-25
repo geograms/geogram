@@ -22,6 +22,7 @@ Future<Map<String, dynamic>?> showImportNsecDialog({
   final formKey = GlobalKey<FormState>();
   var profileType = ProfileType.client;
   String? scannedNickname;
+  var didAutoPaste = false;
 
   bool shouldShowQr() {
     if (kIsWeb) return false;
@@ -33,7 +34,20 @@ Future<Map<String, dynamic>?> showImportNsecDialog({
   final result = await showDialog<Map<String, dynamic>>(
     context: context,
     builder: (context) => StatefulBuilder(
-      builder: (context, setDialogState) => AlertDialog(
+      builder: (context, setDialogState) {
+        if (!didAutoPaste) {
+          didAutoPaste = true;
+          WidgetsBinding.instance.addPostFrameCallback((_) async {
+            if (nsecController.text.trim().isNotEmpty) return;
+            final data = await Clipboard.getData(Clipboard.kTextPlain);
+            final text = data?.text?.trim() ?? '';
+            if (text.startsWith('nsec1')) {
+              nsecController.text = text;
+              setDialogState(() {});
+            }
+          });
+        }
+        return AlertDialog(
         title: Row(
           children: [
             const Icon(Icons.qr_code, size: 28),
@@ -181,7 +195,8 @@ Future<Map<String, dynamic>?> showImportNsecDialog({
             child: Text(i18n.t('import')),
           ),
         ],
-      ),
+      );
+      },
     ),
   );
 
