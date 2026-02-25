@@ -418,6 +418,33 @@ class AtprotoClientService {
     return AtprotoProfile.fromJson(json);
   }
 
+  Future<List<AtprotoFeedItem>> fetchReplies(
+    String postUri, {
+    int depth = 6,
+  }) async {
+    final appView = _normalizeBaseUrl(_config.appViewUrl);
+    final uri = Uri.parse(
+      '$appView/xrpc/app.bsky.feed.getPostThread'
+      '?uri=${Uri.encodeQueryComponent(postUri)}'
+      '&depth=${depth.clamp(1, 20)}',
+    );
+    final response = await http.get(uri);
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      final details = response.body.length > 180
+          ? '${response.body.substring(0, 180)}...'
+          : response.body;
+      throw Exception('Replies read failed (${response.statusCode}) $details');
+    }
+    final body = jsonDecode(response.body) as Map<String, dynamic>;
+    final thread = body['thread'];
+    if (thread is! Map<String, dynamic>) return const [];
+    final replies = <AtprotoFeedItem>[];
+    final seen = <String>{};
+    _collectReplies(thread, replies, seen, includeSelf: false);
+    replies.sort((a, b) => a.createdAt.compareTo(b.createdAt));
+    return replies;
+  }
+
   String _resolveReadActor() {
     if (_session?.did.isNotEmpty == true) {
       final did = _session!.did;
@@ -445,52 +472,85 @@ class AtprotoClientService {
       final postWrap = entry['post'];
       if (postWrap is! Map<String, dynamic>) continue;
 
-      final author = postWrap['author'] as Map<String, dynamic>? ?? const {};
-      final record = postWrap['record'] as Map<String, dynamic>? ?? const {};
-      final reply = record['reply'] as Map<String, dynamic>?;
-      final root = reply?['root'] as Map<String, dynamic>?;
-      final parent = reply?['parent'] as Map<String, dynamic>?;
-      final viewer = postWrap['viewer'] as Map<String, dynamic>?;
-      final embedData = _extractEmbedData(
-        postWrap['embed'] as Map<String, dynamic>?,
-      );
-
-      final links = _extractLinks(record);
-
-      parsed.add(
-        AtprotoFeedItem(
-          uri: postWrap['uri'] as String? ?? '',
-          cid: postWrap['cid'] as String? ?? '',
-          authorDid: author['did'] as String? ?? '',
-          authorHandle: author['handle'] as String? ?? '',
-          displayName:
-              author['displayName'] as String? ??
-              (author['handle'] as String? ?? ''),
-          avatarUrl: author['avatar'] as String?,
-          text: record['text'] as String? ?? '',
-          createdAt:
-              DateTime.tryParse(record['createdAt'] as String? ?? '') ??
-              DateTime.now().toUtc(),
-          replyCount: postWrap['replyCount'] as int? ?? 0,
-          repostCount: postWrap['repostCount'] as int? ?? 0,
-          likeCount: postWrap['likeCount'] as int? ?? 0,
-          indexedAt: postWrap['indexedAt'] as String?,
-          parentUri: parent?['uri'] as String?,
-          rootUri: root?['uri'] as String?,
-          externalUrl: embedData.externalUrl,
-          externalTitle: embedData.externalTitle,
-          externalDescription: embedData.externalDescription,
-          externalThumbUrl: embedData.externalThumbUrl,
-          imageThumbUrls: embedData.imageThumbUrls,
-          imageFullUrls: embedData.imageFullUrls,
-          imageAlts: embedData.imageAlts,
-          links: links,
-          isLikedByMe: viewer?['like'] != null,
-          isRepostedByMe: viewer?['repost'] != null,
-        ),
-      );
+      parsed.add(_parsePostWrap(postWrap));
     }
     return parsed;
+  }
+
+  void _collectReplies(
+    Map<String, dynamic> node,
+    List<AtprotoFeedItem> out,
+    Set<String> seen, {
+    required bool includeSelf,
+  }) {
+    final postWrap = node['post'];
+    if (postWrap is Map<String, dynamic>) {
+      final parsed = _parsePostWrap(postWrap);
+      if (parsed.uri.isNotEmpty && !seen.contains(parsed.uri)) {
+        if (includeSelf) {
+          out.add(parsed);
+        }
+        seen.add(parsed.uri);
+      }
+    }
+
+    final replies = node['replies'] as List<dynamic>? ?? const [];
+    for (final replyNode in replies) {
+      if (replyNode is! Map<String, dynamic>) continue;
+      final childPost = replyNode['post'];
+      if (childPost is Map<String, dynamic>) {
+        final parsed = _parsePostWrap(childPost);
+        if (parsed.uri.isNotEmpty && !seen.contains(parsed.uri)) {
+          out.add(parsed);
+          seen.add(parsed.uri);
+        }
+      }
+      _collectReplies(replyNode, out, seen, includeSelf: false);
+    }
+  }
+
+  AtprotoFeedItem _parsePostWrap(Map<String, dynamic> postWrap) {
+    final author = postWrap['author'] as Map<String, dynamic>? ?? const {};
+    final record = postWrap['record'] as Map<String, dynamic>? ?? const {};
+    final reply = record['reply'] as Map<String, dynamic>?;
+    final root = reply?['root'] as Map<String, dynamic>?;
+    final parent = reply?['parent'] as Map<String, dynamic>?;
+    final viewer = postWrap['viewer'] as Map<String, dynamic>?;
+    final embedData = _extractEmbedData(
+      postWrap['embed'] as Map<String, dynamic>?,
+    );
+    final links = _extractLinks(record);
+
+    return AtprotoFeedItem(
+      uri: postWrap['uri'] as String? ?? '',
+      cid: postWrap['cid'] as String? ?? '',
+      authorDid: author['did'] as String? ?? '',
+      authorHandle: author['handle'] as String? ?? '',
+      displayName:
+          author['displayName'] as String? ??
+          (author['handle'] as String? ?? ''),
+      avatarUrl: author['avatar'] as String?,
+      text: record['text'] as String? ?? '',
+      createdAt:
+          DateTime.tryParse(record['createdAt'] as String? ?? '') ??
+          DateTime.now().toUtc(),
+      replyCount: postWrap['replyCount'] as int? ?? 0,
+      repostCount: postWrap['repostCount'] as int? ?? 0,
+      likeCount: postWrap['likeCount'] as int? ?? 0,
+      indexedAt: postWrap['indexedAt'] as String?,
+      parentUri: parent?['uri'] as String?,
+      rootUri: root?['uri'] as String?,
+      externalUrl: embedData.externalUrl,
+      externalTitle: embedData.externalTitle,
+      externalDescription: embedData.externalDescription,
+      externalThumbUrl: embedData.externalThumbUrl,
+      imageThumbUrls: embedData.imageThumbUrls,
+      imageFullUrls: embedData.imageFullUrls,
+      imageAlts: embedData.imageAlts,
+      links: links,
+      isLikedByMe: viewer?['like'] != null,
+      isRepostedByMe: viewer?['repost'] != null,
+    );
   }
 
   List<String> _extractLinks(Map<String, dynamic> record) {

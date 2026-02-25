@@ -14,6 +14,7 @@ class AtprotoPostTile extends StatefulWidget {
   final VoidCallback? onLike;
   final VoidCallback? onRepost;
   final VoidCallback? onReply;
+  final VoidCallback? onOpenThread;
   final VoidCallback? onTapAuthor;
   final bool compact;
 
@@ -23,6 +24,7 @@ class AtprotoPostTile extends StatefulWidget {
     this.onLike,
     this.onRepost,
     this.onReply,
+    this.onOpenThread,
     this.onTapAuthor,
     this.compact = false,
   });
@@ -432,10 +434,19 @@ class _AtprotoPostTileState extends State<AtprotoPostTile> {
           activeIcon: Icons.chat_bubble,
           active: false,
           count: item.replyCount,
-          tooltip: 'Reply',
-          onTap: widget.onReply,
+          tooltip: 'Replies',
+          onTap: widget.onOpenThread ?? widget.onReply,
           activeColor: theme.colorScheme.primary,
         ),
+        if (widget.onReply != null) ...[
+          const SizedBox(width: 12),
+          _iconButton(
+            icon: Icons.reply,
+            tooltip: 'Write reply',
+            onTap: widget.onReply,
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
+        ],
         const SizedBox(width: 12),
         _actionButton(
           icon: Icons.repeat,
@@ -499,6 +510,25 @@ class _AtprotoPostTileState extends State<AtprotoPostTile> {
               ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+
+  Widget _iconButton({
+    required IconData icon,
+    required String tooltip,
+    required VoidCallback? onTap,
+    required Color color,
+  }) {
+    return InkWell(
+      borderRadius: BorderRadius.circular(16),
+      onTap: onTap,
+      child: Tooltip(
+        message: tooltip,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 3),
+          child: Icon(icon, size: 18, color: color),
         ),
       ),
     );

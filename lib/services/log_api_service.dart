@@ -17994,6 +17994,42 @@ function cleanup() {
           );
         }
 
+      case 'atproto_read_replies':
+        final uri = (params['uri'] as String?)?.trim();
+        if (uri == null || uri.isEmpty) {
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': false,
+              'error': 'uri parameter required (AT URI of a post)',
+            }),
+            headers: headers,
+          );
+        }
+        final depth = ((params['depth'] as num?)?.toInt() ?? 6).clamp(1, 20);
+        try {
+          final replies = await atproto.fetchReplies(uri, depth: depth);
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'uri': uri,
+              'depth': depth,
+              'count': replies.length,
+              'items': replies.map((e) => e.toJson()).toList(),
+            }),
+            headers: headers,
+          );
+        } catch (e) {
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': false,
+              'error': 'Replies read failed',
+              'details': '$e',
+              'uri': uri,
+            }),
+            headers: headers,
+          );
+        }
+
       default:
         return shelf.Response.ok(
           jsonEncode({'success': false, 'error': 'Unknown AT Proto action: $action'}),

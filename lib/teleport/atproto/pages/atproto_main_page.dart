@@ -12,6 +12,7 @@ import '../models/atproto_feed_item.dart';
 import '../widgets/atproto_post_tile.dart';
 import 'atproto_profile_page.dart';
 import 'atproto_settings_page.dart';
+import 'atproto_thread_page.dart';
 
 class AtprotoMainPage extends StatefulWidget {
   final String appPath;
@@ -191,6 +192,7 @@ class _AtprotoMainPageState extends State<AtprotoMainPage> {
                           onLike: () => _toggleLike(item),
                           onRepost: () => _toggleRepost(item),
                           onReply: () => setState(() => _replyTarget = item),
+                          onOpenThread: () => _openThread(item),
                           onTapAuthor: () => _openAuthorProfile(item),
                         );
                       },
@@ -369,5 +371,11 @@ class _AtprotoMainPageState extends State<AtprotoMainPage> {
         );
       }
     });
+  }
+
+  void _openThread(AtprotoFeedItem item) {
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => AtprotoThreadPage(rootPost: item)),
+    );
   }
 }

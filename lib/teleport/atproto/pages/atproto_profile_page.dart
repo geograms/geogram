@@ -9,6 +9,7 @@ import '../atproto_client_service.dart';
 import '../models/atproto_feed_item.dart';
 import '../models/atproto_profile.dart';
 import '../widgets/atproto_post_tile.dart';
+import 'atproto_thread_page.dart';
 
 class AtprotoProfilePage extends StatefulWidget {
   final String actor;
@@ -99,6 +100,7 @@ class _AtprotoProfilePageState extends State<AtprotoProfilePage> {
                   compact: true,
                   onLike: () => _like(item),
                   onRepost: () => _repost(item),
+                  onOpenThread: () => _openThread(item),
                 ),
               ),
           ],
@@ -252,5 +254,11 @@ class _AtprotoProfilePageState extends State<AtprotoProfilePage> {
         );
       }
     });
+  }
+
+  void _openThread(AtprotoFeedItem item) {
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => AtprotoThreadPage(rootPost: item)),
+    );
   }
 }
