@@ -531,7 +531,11 @@ class AprsService {
     if (_writeQueue.length >= _writeFlushThreshold) {
       _flushWrites();
     }
-    _uiDirtyMessages = true;
+
+    // Emit event immediately so the conversation list updates without waiting
+    // for the next UI tick (up to 500 ms). This ensures a new chat entry
+    // appears right away when the user sends to a fresh callsign.
+    _eventController.add(const AprsEvent(AprsEventType.messageReceived));
 
     LogService().log('AprsService: sent message to $destination: $fullText');
     return echo;
