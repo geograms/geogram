@@ -37,6 +37,7 @@ class _NostrMainPageState extends State<NostrMainPage> {
 
   String? _ownPubkey;
   bool _isSearching = false;
+  NostrFeedItem? _replyTarget;
 
   @override
   void initState() {
@@ -94,10 +95,16 @@ class _NostrMainPageState extends State<NostrMainPage> {
       return;
     }
 
-    final ok = await service.publish(text);
+    final target = _replyTarget;
+    final ok = target == null
+        ? await service.publish(text)
+        : await service.publishReply(text, target.event);
     if (ok) {
       _textController.clear();
       _focusNode.requestFocus();
+      if (target != null) {
+        setState(() => _replyTarget = null);
+      }
     } else {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -347,6 +354,10 @@ class _NostrMainPageState extends State<NostrMainPage> {
           item: item,
           isOwnPost: isOwn,
           onLike: () => _likePost(item),
+          onReply: () {
+            setState(() => _replyTarget = item);
+            _focusNode.requestFocus();
+          },
           onToggleFollow: () => _toggleFollow(item),
           onTapAuthor: () => _openUserProfile(item.pubkey),
         );
@@ -379,29 +390,63 @@ class _NostrMainPageState extends State<NostrMainPage> {
       ),
       child: SafeArea(
         top: false,
-        child: Row(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
-            Expanded(
-              child: TextField(
-                controller: _textController,
-                focusNode: _focusNode,
-                decoration: const InputDecoration(
-                  hintText: 'Write a note...',
-                  border: InputBorder.none,
-                  contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                  isDense: true,
+            if (_replyTarget != null)
+              Container(
+                margin: const EdgeInsets.fromLTRB(8, 0, 8, 6),
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: theme.colorScheme.surfaceContainerHighest,
+                  borderRadius: BorderRadius.circular(12),
                 ),
-                maxLines: null,
-                textInputAction: TextInputAction.send,
-                onSubmitted: (_) => _publish(),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        'Replying to ${_replyTarget!.displayName}',
+                        style: theme.textTheme.bodySmall,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.close, size: 16),
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+                      onPressed: () => setState(() => _replyTarget = null),
+                    ),
+                  ],
+                ),
               ),
-            ),
-            IconButton(
-              icon: Icon(
-                Icons.send,
-                color: theme.colorScheme.primary,
-              ),
-              onPressed: _publish,
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _textController,
+                    focusNode: _focusNode,
+                    decoration: InputDecoration(
+                      hintText: _replyTarget == null
+                          ? 'Write a note...'
+                          : 'Write a reply...',
+                      border: InputBorder.none,
+                      contentPadding:
+                          const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                      isDense: true,
+                    ),
+                    maxLines: null,
+                    textInputAction: TextInputAction.send,
+                    onSubmitted: (_) => _publish(),
+                  ),
+                ),
+                IconButton(
+                  icon: Icon(
+                    Icons.send,
+                    color: theme.colorScheme.primary,
+                  ),
+                  onPressed: _publish,
+                ),
+              ],
             ),
           ],
         ),

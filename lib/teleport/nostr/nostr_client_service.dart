@@ -829,6 +829,14 @@ class NostrClientService {
 
   /// Publish a kind:1 text note to all write-enabled relays.
   Future<bool> publish(String content) async {
+    return publishWithTags(content, tags: const []);
+  }
+
+  /// Publish a kind:1 text note with custom tags to all write-enabled relays.
+  Future<bool> publishWithTags(
+    String content, {
+    required List<List<String>> tags,
+  }) async {
     final profile = _getProfile();
     if (profile == null || profile.npub.isEmpty) return false;
 
@@ -837,6 +845,7 @@ class NostrClientService {
       final event = NostrEvent.textNote(
         pubkeyHex: pubkeyHex,
         content: content,
+        tags: tags,
       );
 
       final signed = await SigningService().signEvent(event, profile);
@@ -874,6 +883,33 @@ class NostrClientService {
       LogService().log('NostrClientService: publish error: $e');
       return false;
     }
+  }
+
+  /// Build NIP-10 reply tags from a target event.
+  List<List<String>> buildReplyTags(NostrEvent target) {
+    final targetId = target.id;
+    if (targetId == null) return const [];
+
+    String rootId = targetId;
+    for (final tag in target.tags) {
+      if (tag.length >= 4 && tag[0] == 'e' && tag[3] == 'root') {
+        rootId = tag[1];
+        break;
+      }
+    }
+
+    final tags = <List<String>>[
+      ['e', rootId, '', 'root'],
+      ['e', targetId, '', 'reply'],
+      ['p', target.pubkey],
+    ];
+    return tags;
+  }
+
+  /// Publish a reply to a target event (kind:1 with NIP-10 tags).
+  Future<bool> publishReply(String content, NostrEvent target) async {
+    final tags = buildReplyTags(target);
+    return publishWithTags(content, tags: tags);
   }
 
   // ---------------------------------------------------------------------------

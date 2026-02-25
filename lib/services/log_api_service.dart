@@ -17479,6 +17479,42 @@ function cleanup() {
           headers: headers,
         );
 
+
+      case 'nostr_reply':
+        final eventId = params['eventId'] as String?;
+        final authorPubkey = params['authorPubkey'] as String?;
+        final content = params['content'] as String?;
+        if (eventId == null || content == null) {
+          return shelf.Response.ok(
+            jsonEncode({'success': false, 'error': 'eventId and content required'}),
+            headers: headers,
+          );
+        }
+        final item = nostr.findFeedItemById(eventId);
+        if (item != null) {
+          final sent = await nostr.publishReply(content, item.event);
+          return shelf.Response.ok(
+            jsonEncode({'success': sent, 'action': 'reply', 'eventId': eventId}),
+            headers: headers,
+          );
+        }
+        if (authorPubkey == null) {
+          return shelf.Response.ok(
+            jsonEncode({'success': false, 'error': 'authorPubkey required if event not cached'}),
+            headers: headers,
+          );
+        }
+        final tags = [
+          ['e', eventId, '', 'root'],
+          ['e', eventId, '', 'reply'],
+          ['p', authorPubkey],
+        ];
+        final sent = await nostr.publishWithTags(content, tags: tags);
+        return shelf.Response.ok(
+          jsonEncode({'success': sent, 'action': 'reply', 'eventId': eventId}),
+          headers: headers,
+        );
+
       case 'nostr_search':
         final query = params['query'] as String? ?? '';
         final matches = nostr.searchFeed(query).map((item) {

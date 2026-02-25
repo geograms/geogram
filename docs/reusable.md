@@ -9672,6 +9672,19 @@ await NostrClientService().unfollowUser(pubkeyHex);
 await NostrClientService().likeEvent(eventId, authorPubkeyHex);
 ```
 
+
+### NostrClientService.publishReply
+
+**File:** `lib/teleport/nostr/nostr_client_service.dart`
+
+Publishes a NIP-10 reply (kind:1 with root/reply `e` tags and a `p` tag)
+for a target event.
+
+**Usage:**
+```dart
+await NostrClientService().publishReply('Reply text', targetEvent);
+```
+
 ### NostrUserProfilePage
 
 **File:** `lib/teleport/nostr/pages/nostr_user_profile_page.dart`
