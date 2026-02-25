@@ -5,11 +5,14 @@
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 
 import 'package:http/http.dart' as http;
 
+import '../../services/app_service.dart';
 import '../../models/monitored_task.dart';
 import '../../services/log_service.dart';
+import '../../services/profile_service.dart';
 import '../../services/profile_storage.dart';
 import '../../util/task_monitor_helpers.dart';
 import 'atproto_storage_service.dart';
@@ -67,9 +70,19 @@ class AtprotoClientService {
     _session = await _storage!.loadSession();
     _feed = await _storage!.loadCachedFeed();
 
+    await _ensureAutoCredentials();
     _startRecurringTasks();
-    if (_config.enabled && isAuthenticated) {
-      await syncFeed();
+    if (_config.enabled) {
+      if (!isAuthenticated) {
+        await login(
+          identifier: _config.identifier,
+          password: _config.password,
+          allowAutoPasswordDiscovery: true,
+        );
+      }
+      if (isAuthenticated) {
+        await syncFeed();
+      }
     }
     _emit(const AtprotoClientEvent(AtprotoClientEventType.configChanged));
   }
@@ -91,6 +104,7 @@ class AtprotoClientService {
   Future<bool> login({
     required String identifier,
     required String password,
+    bool allowAutoPasswordDiscovery = false,
   }) async {
     final pds = _normalizeBaseUrl(_config.pdsUrl);
     final uri = Uri.parse('$pds/xrpc/com.atproto.server.createSession');
@@ -103,6 +117,19 @@ class AtprotoClientService {
       );
 
       if (response.statusCode < 200 || response.statusCode >= 300) {
+        if (allowAutoPasswordDiscovery) {
+          final discovered = await _discoverServerPassword();
+          if (discovered != null &&
+              discovered.isNotEmpty &&
+              discovered != password) {
+            await saveConfig(_config.copyWith(password: discovered));
+            return login(
+              identifier: identifier,
+              password: discovered,
+              allowAutoPasswordDiscovery: false,
+            );
+          }
+        }
         _emit(
           AtprotoClientEvent(
             AtprotoClientEventType.error,
@@ -154,7 +181,7 @@ class AtprotoClientService {
     final did = _session!.did;
 
     final record = <String, dynamic>{
-      '4type': 'app.bsky.feed.post',
+      '\$type': 'app.bsky.feed.post',
       'text': text,
       'createdAt': DateTime.now().toUtc().toIso8601String(),
     };
@@ -181,7 +208,7 @@ class AtprotoClientService {
       repo: _session!.did,
       collection: 'app.bsky.feed.like',
       record: {
-        '4type': 'app.bsky.feed.like',
+        '\$type': 'app.bsky.feed.like',
         'createdAt': DateTime.now().toUtc().toIso8601String(),
         'subject': {'uri': item.uri, 'cid': item.cid},
       },
@@ -194,11 +221,73 @@ class AtprotoClientService {
       repo: _session!.did,
       collection: 'app.bsky.feed.repost',
       record: {
-        '4type': 'app.bsky.feed.repost',
+        '\$type': 'app.bsky.feed.repost',
         'createdAt': DateTime.now().toUtc().toIso8601String(),
         'subject': {'uri': item.uri, 'cid': item.cid},
       },
     );
+  }
+
+  Future<void> _ensureAutoCredentials() async {
+    final autoIdentifier = _deriveIdentifierFromProfile();
+    var next = _config;
+    var changed = false;
+
+    if (next.identifier.trim().isEmpty) {
+      next = next.copyWith(identifier: autoIdentifier);
+      changed = true;
+    }
+    if (next.password.trim().isEmpty) {
+      next = next.copyWith(password: _generatePassword());
+      changed = true;
+    }
+    if (!next.enabled) {
+      next = next.copyWith(enabled: true);
+      changed = true;
+    }
+
+    if (changed) {
+      await saveConfig(next);
+    }
+  }
+
+  String _deriveIdentifierFromProfile() {
+    try {
+      final profile = ProfileService().getProfile();
+      if (profile.nickname.trim().isNotEmpty) {
+        return profile.nickname.trim();
+      }
+      if (profile.callsign.trim().isNotEmpty) {
+        return profile.callsign.trim();
+      }
+    } catch (_) {}
+
+    final callsign = AppService().currentCallsign;
+    if (callsign != null && callsign.trim().isNotEmpty) {
+      return callsign.trim();
+    }
+    return 'geogram-user';
+  }
+
+  String _generatePassword() {
+    final random = Random.secure();
+    final bytes = List.generate(24, (_) => random.nextInt(256));
+    return base64Url.encode(bytes).replaceAll('=', '');
+  }
+
+  Future<String?> _discoverServerPassword() async {
+    final pds = _normalizeBaseUrl(_config.pdsUrl);
+    final uri = Uri.parse('$pds/api/atproto/admin-password');
+    try {
+      final response = await http.get(uri);
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        return null;
+      }
+      final json = jsonDecode(response.body) as Map<String, dynamic>;
+      return (json['password'] as String?)?.trim();
+    } catch (_) {
+      return null;
+    }
   }
 
   Future<void> syncFeed() async {

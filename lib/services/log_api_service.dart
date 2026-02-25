@@ -17714,6 +17714,8 @@ function cleanup() {
             'enabled': atproto.config.enabled,
             'pdsUrl': atproto.config.pdsUrl,
             'appViewUrl': atproto.config.appViewUrl,
+            'identifier': atproto.config.identifier,
+            'hasPassword': atproto.config.password.trim().isNotEmpty,
             'did': atproto.session?.did,
             'handle': atproto.session?.handle,
             'feedCount': atproto.feed.length,

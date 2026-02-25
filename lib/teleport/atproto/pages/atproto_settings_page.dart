@@ -19,8 +19,6 @@ class AtprotoSettingsPage extends StatefulWidget {
 class _AtprotoSettingsPageState extends State<AtprotoSettingsPage> {
   late final TextEditingController _pdsCtl;
   late final TextEditingController _appViewCtl;
-  late final TextEditingController _identifierCtl;
-  late final TextEditingController _passwordCtl;
   bool _enabled = false;
   bool _busy = false;
 
@@ -30,8 +28,6 @@ class _AtprotoSettingsPageState extends State<AtprotoSettingsPage> {
     final cfg = AtprotoClientService().config;
     _pdsCtl = TextEditingController(text: cfg.pdsUrl);
     _appViewCtl = TextEditingController(text: cfg.appViewUrl);
-    _identifierCtl = TextEditingController(text: cfg.identifier);
-    _passwordCtl = TextEditingController(text: cfg.password);
     _enabled = cfg.enabled;
   }
 
@@ -39,8 +35,6 @@ class _AtprotoSettingsPageState extends State<AtprotoSettingsPage> {
   void dispose() {
     _pdsCtl.dispose();
     _appViewCtl.dispose();
-    _identifierCtl.dispose();
-    _passwordCtl.dispose();
     super.dispose();
   }
 
@@ -80,20 +74,14 @@ class _AtprotoSettingsPageState extends State<AtprotoSettingsPage> {
             ),
           ),
           const SizedBox(height: 12),
-          TextField(
-            controller: _identifierCtl,
-            decoration: const InputDecoration(
-              labelText: 'Identifier (handle or DID)',
-              border: OutlineInputBorder(),
-            ),
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _passwordCtl,
-            obscureText: true,
-            decoration: const InputDecoration(
-              labelText: 'App password',
-              border: OutlineInputBorder(),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Text(
+                'Identifier and password are automatic.\n'
+                'Identifier uses nickname (or callsign fallback).\n'
+                'Password is generated and stored automatically.',
+              ),
             ),
           ),
           const SizedBox(height: 16),
@@ -146,8 +134,6 @@ class _AtprotoSettingsPageState extends State<AtprotoSettingsPage> {
       service.config.copyWith(
         pdsUrl: _pdsCtl.text.trim(),
         appViewUrl: _appViewCtl.text.trim(),
-        identifier: _identifierCtl.text.trim(),
-        password: _passwordCtl.text,
         enabled: _enabled,
       ),
     );
@@ -164,8 +150,9 @@ class _AtprotoSettingsPageState extends State<AtprotoSettingsPage> {
     final service = AtprotoClientService();
     await _save();
     final ok = await service.login(
-      identifier: _identifierCtl.text.trim(),
-      password: _passwordCtl.text,
+      identifier: service.config.identifier,
+      password: service.config.password,
+      allowAutoPasswordDiscovery: true,
     );
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(

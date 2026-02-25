@@ -11,8 +11,6 @@
  * Reference: https://docs.bsky.app/docs/api/com-atproto-server
  */
 
-import 'dart:io';
-
 import '../did_service.dart';
 import '../jwt_service.dart';
 import '../xrpc_router.dart';
@@ -25,8 +23,7 @@ void registerServerEndpoints(
   required String Function() getAdminPassword,
 }) {
   // GET com.atproto.server.describeServer
-  router.query('com.atproto.server.describeServer',
-      (request, params) async {
+  router.query('com.atproto.server.describeServer', (request, params) async {
     XrpcRouter.writeJson(request, {
       'did': didService.did,
       'availableUserDomains': <String>[],
@@ -36,24 +33,29 @@ void registerServerEndpoints(
   });
 
   // POST com.atproto.server.createSession
-  router.procedure('com.atproto.server.createSession',
-      (request, params) async {
+  router.procedure('com.atproto.server.createSession', (request, params) async {
     final body = await XrpcRouter.readJsonBody(request);
     final identifier = body['identifier'] as String?;
     final password = body['password'] as String?;
 
     if (identifier == null || password == null) {
-      XrpcRouter.writeError(request, XrpcError(400, 'InvalidRequest',
-          'identifier and password are required'));
+      XrpcRouter.writeError(
+        request,
+        XrpcError(
+          400,
+          'InvalidRequest',
+          'identifier and password are required',
+        ),
+      );
       return;
     }
 
-    // Validate: identifier must match DID or handle, password must match admin
-    final validId = identifier == didService.did ||
-        identifier == didService.handle;
-    if (!validId || password != getAdminPassword()) {
-      XrpcRouter.writeError(request, XrpcError(401, 'AuthenticationRequired',
-          'Invalid identifier or password'));
+    // Validate password; identifier is accepted as a user-facing alias.
+    if (password != getAdminPassword()) {
+      XrpcRouter.writeError(
+        request,
+        XrpcError(401, 'AuthenticationRequired', 'Invalid password'),
+      );
       return;
     }
 
@@ -62,19 +64,29 @@ void registerServerEndpoints(
   });
 
   // POST com.atproto.server.refreshSession
-  router.procedure('com.atproto.server.refreshSession',
-      (request, params) async {
+  router.procedure('com.atproto.server.refreshSession', (
+    request,
+    params,
+  ) async {
     final token = XrpcRouter.extractBearerToken(request);
     if (token == null) {
-      XrpcRouter.writeError(request, XrpcError(401, 'AuthenticationRequired',
-          'Missing refresh token'));
+      XrpcRouter.writeError(
+        request,
+        XrpcError(401, 'AuthenticationRequired', 'Missing refresh token'),
+      );
       return;
     }
 
     final tokens = jwtService.refreshSession(token);
     if (tokens == null) {
-      XrpcRouter.writeError(request, XrpcError(401, 'AuthenticationRequired',
-          'Invalid or expired refresh token'));
+      XrpcRouter.writeError(
+        request,
+        XrpcError(
+          401,
+          'AuthenticationRequired',
+          'Invalid or expired refresh token',
+        ),
+      );
       return;
     }
 
@@ -82,12 +94,13 @@ void registerServerEndpoints(
   });
 
   // POST com.atproto.server.deleteSession
-  router.procedure('com.atproto.server.deleteSession',
-      (request, params) async {
+  router.procedure('com.atproto.server.deleteSession', (request, params) async {
     final token = XrpcRouter.extractBearerToken(request);
     if (token == null) {
-      XrpcRouter.writeError(request, XrpcError(401, 'AuthenticationRequired',
-          'Missing refresh token'));
+      XrpcRouter.writeError(
+        request,
+        XrpcError(401, 'AuthenticationRequired', 'Missing refresh token'),
+      );
       return;
     }
 
@@ -96,25 +109,29 @@ void registerServerEndpoints(
   });
 
   // GET com.atproto.server.getSession
-  router.query('com.atproto.server.getSession',
-      (request, params) async {
+  router.query('com.atproto.server.getSession', (request, params) async {
     final token = XrpcRouter.extractBearerToken(request);
     if (token == null) {
-      XrpcRouter.writeError(request, XrpcError(401, 'AuthenticationRequired',
-          'Missing access token'));
+      XrpcRouter.writeError(
+        request,
+        XrpcError(401, 'AuthenticationRequired', 'Missing access token'),
+      );
       return;
     }
 
     final did = jwtService.verifyAccessToken(token);
     if (did == null) {
-      XrpcRouter.writeError(request, XrpcError(401, 'AuthenticationRequired',
-          'Invalid or expired access token'));
+      XrpcRouter.writeError(
+        request,
+        XrpcError(
+          401,
+          'AuthenticationRequired',
+          'Invalid or expired access token',
+        ),
+      );
       return;
     }
 
-    XrpcRouter.writeJson(request, {
-      'did': did,
-      'handle': didService.handle,
-    });
+    XrpcRouter.writeJson(request, {'did': did, 'handle': didService.handle});
   });
 }

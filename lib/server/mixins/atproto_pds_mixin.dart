@@ -113,7 +113,7 @@ mixin AtprotoPdsMixin {
       );
 
       // Generate or load admin password for session auth
-      _adminPassword = _generateAdminPassword();
+      _adminPassword = await _loadOrCreateAdminPassword();
 
       // Initialize JWT service
       _jwtService = JwtService(
@@ -532,11 +532,24 @@ mixin AtprotoPdsMixin {
     return Uint8List.fromList(derived.bytes);
   }
 
-  /// Generate a random admin password (persisted in memory only per session).
-  String _generateAdminPassword() {
+  /// Load persisted admin password or create one on first run.
+  Future<String> _loadOrCreateAdminPassword() async {
+    final filePath = '$dataDir/teleport/atproto/admin-password.txt';
+    try {
+      final file = File(filePath);
+      if (await file.exists()) {
+        final existing = (await file.readAsString()).trim();
+        if (existing.isNotEmpty) return existing;
+      }
+    } catch (_) {}
+
     final random = Random.secure();
     final bytes = List.generate(24, (_) => random.nextInt(256));
-    return base64Url.encode(bytes).substring(0, 32);
+    final generated = base64Url.encode(bytes).substring(0, 32);
+    try {
+      await File(filePath).writeAsString(generated, flush: true);
+    } catch (_) {}
+    return generated;
   }
 
   /// Generate a JWT secret deterministically from nsec.

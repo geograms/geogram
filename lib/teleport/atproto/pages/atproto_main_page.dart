@@ -29,6 +29,7 @@ class _AtprotoMainPageState extends State<AtprotoMainPage> {
   @override
   void initState() {
     super.initState();
+    _bootstrap();
     _sub = AtprotoClientService().events.listen((event) {
       if (!mounted) return;
       setState(() {});
@@ -42,6 +43,20 @@ class _AtprotoMainPageState extends State<AtprotoMainPage> {
         );
       }
     });
+  }
+
+  Future<void> _bootstrap() async {
+    final service = AtprotoClientService();
+    if (!service.config.enabled || service.isAuthenticated) {
+      await service.syncFeed();
+      return;
+    }
+    await service.login(
+      identifier: service.config.identifier,
+      password: service.config.password,
+      allowAutoPasswordDiscovery: true,
+    );
+    await service.syncFeed();
   }
 
   @override
@@ -91,7 +106,7 @@ class _AtprotoMainPageState extends State<AtprotoMainPage> {
               child: Card(
                 child: Padding(
                   padding: EdgeInsets.all(12),
-                  child: Text('Login in Settings to read and publish posts.'),
+                  child: Text('Connecting automatically...'),
                 ),
               ),
             ),
