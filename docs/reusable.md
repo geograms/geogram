@@ -8585,6 +8585,54 @@ AprsMessageBubble(
 
 ---
 
+### XmppServerMixin
+
+**File**: `lib/server/mixins/xmpp_server_mixin.dart`
+
+**Pattern**: Shared mixin for XMPP server lifecycle. Both `StationServer` (Desktop) and `PureStationServer` (CLI) mix this in. Handles `XmppServer` creation with S2S federation params, start/stop, admin auto-provisioning. Requires `void log(String level, String message)` from the host class.
+
+**Usage**:
+```dart
+class MyStation with XmppServerMixin {
+  void log(String level, String message) => print('[$level] $message');
+
+  Future<void> startServices() async {
+    await startXmppServer(
+      dataDir: '/data',
+      domain: 'example.com',
+      callsign: 'X1ABC',
+      port: 5222,         // C2S port (default 5222)
+      s2sEnabled: true,   // S2S federation (default true)
+      s2sPort: 5269,      // S2S port (default 5269)
+    );
+  }
+
+  Future<void> stopServices() async {
+    await stopXmppServer();
+  }
+}
+```
+
+---
+
+### XmppS2sManager
+
+**File**: `lib/services/xmpp_s2s.dart`
+
+**Pattern**: XMPP Server-to-Server federation manager. Handles outbound connections to remote XMPP servers (port 5269), inbound connections from remote servers, XEP-0220 dialback authentication, and connection pooling. Created and managed internally by `XmppServer` when `s2sEnabled: true`.
+
+**Key components**:
+- SRV lookup: `_xmpp-server._tcp.{domain}` via `dnsolve`, strips trailing dots
+- Dialback auth: HMAC-SHA256 key generation, persistent secret in `{dataDir}/xmpp/s2s_secret.txt`
+- Connection pool: one per remote domain, 30min idle timeout, 5min whitespace keepalive
+- Stanza relay: forwards C2S stanzas to remote domains, routes incoming S2S stanzas to local sessions
+
+**XML builders** in `lib/util/xmpp_s2s_xml.dart`: S2S stream open/close (`jabber:server` namespace), STARTTLS+dialback features, `db:result`/`db:verify` stanzas.
+
+**Debug API**: `xmpp_server_s2s_status`, `xmpp_server_s2s_connect`, `xmpp_server_s2s_test`
+
+---
+
 ## Garmin Watch App (Monkey C)
 
 ### GeoUtils module
