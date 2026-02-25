@@ -338,8 +338,12 @@ class XmppClient {
     required String username,
     String? password,
     bool directTls = false,
+    String? domain,
   }) async {
     password ??= generatePassword();
+    // domain is the XMPP domain for the stream header and JID;
+    // host is the server to connect to (may differ via SRV).
+    domain ??= host;
     final log = LogService();
 
     final buf = StringBuffer();
@@ -399,9 +403,9 @@ class XmppClient {
       Future<String> wait(String pattern, {int seconds = 15}) =>
           waitFor(secureSock ?? rawSock!, pattern, seconds: seconds);
 
-      // 2. Open stream
+      // 2. Open stream — use domain (XMPP domain), not host (server address)
       send("<?xml version='1.0'?>"
-          "<stream:stream to='$host' xmlns='jabber:client' "
+          "<stream:stream to='$domain' xmlns='jabber:client' "
           "xmlns:stream='http://etherx.jabber.org/streams' version='1.0'>");
 
       var response = await wait('</stream:features>');
@@ -415,14 +419,14 @@ class XmppClient {
         log.log('XmppRegister: TLS proceed received');
 
         buf.clear();
-        // Upgrade the existing RawSocket to TLS in-place
-        secureSock = await RawSecureSocket.secure(rawSock!, host: host);
+        // Upgrade the existing RawSocket to TLS in-place — use domain for SNI
+        secureSock = await RawSecureSocket.secure(rawSock!, host: domain);
         secureSock.readEventsEnabled = true;
         rawSock = null; // ownership transferred to secureSock
 
         // Re-open stream over TLS
         secureSock.write(utf8.encode("<?xml version='1.0'?>"
-            "<stream:stream to='$host' xmlns='jabber:client' "
+            "<stream:stream to='$domain' xmlns='jabber:client' "
             "xmlns:stream='http://etherx.jabber.org/streams' version='1.0'>"));
 
         response = await wait('</stream:features>');
@@ -482,7 +486,7 @@ class XmppClient {
           response.contains('type="result"')) {
         return {
           'success': true,
-          'jid': '$username@$host',
+          'jid': '$username@$domain',
           'password': password,
         };
       } else {

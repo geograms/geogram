@@ -245,12 +245,16 @@ class XmppService {
     username ??= _generateUsername();
     password ??= XmppClient.generatePassword();
 
+    // For DirectTLS, the caller passes the XMPP domain as host.
+    // The registration code connects to that host:port directly,
+    // using domain for stream header and JID.
     final result = await XmppClient.registerAccount(
       host: host,
       port: port,
       username: username,
       password: password,
       directTls: directTls,
+      domain: host,
     );
 
     if (result['success'] == true) {
