@@ -156,8 +156,10 @@ class _TelegramChatPageState extends State<TelegramChatPage> {
 
     // Step 1: Show cached messages instantly
     final cache = TelegramService().cacheService;
+    final int cachedCount;
     if (cache != null) {
       final cached = cache.getCachedMessages(widget.chatId);
+      cachedCount = cached.length;
       if (cached.isNotEmpty && mounted) {
         setState(() {
           _messages = cached;
@@ -166,6 +168,8 @@ class _TelegramChatPageState extends State<TelegramChatPage> {
         _resolveUsers(cached);
         _generateLocationThumbnails(cached);
       }
+    } else {
+      cachedCount = 0;
     }
 
     // Step 2: Fetch from TDLib
@@ -178,7 +182,10 @@ class _TelegramChatPageState extends State<TelegramChatPage> {
       // Stop the spinner immediately — don't block on retries
       if (mounted) {
         setState(() {
-          if (messages.isNotEmpty) _messages = messages;
+          if (messages.isNotEmpty &&
+              (cachedCount == 0 || messages.length >= cachedCount)) {
+            _messages = messages;
+          }
           _loading = false;
         });
         if (messages.isNotEmpty) {
@@ -240,11 +247,13 @@ class _TelegramChatPageState extends State<TelegramChatPage> {
 
     // Step 1: Show cached messages instantly
     final cache = TelegramService().cacheService;
+    final int cachedCount;
     if (cache != null) {
       final cached = cache.getCachedMessages(
         widget.chatId,
         messageThreadId: widget.messageThreadId,
       );
+      cachedCount = cached.length;
       if (cached.isNotEmpty && mounted) {
         setState(() {
           _messages = cached;
@@ -253,6 +262,8 @@ class _TelegramChatPageState extends State<TelegramChatPage> {
         _resolveUsers(cached);
         _generateLocationThumbnails(cached);
       }
+    } else {
+      cachedCount = 0;
     }
 
     // Step 2: Fetch from TDLib
@@ -268,7 +279,10 @@ class _TelegramChatPageState extends State<TelegramChatPage> {
       // Stop the spinner immediately
       if (mounted) {
         setState(() {
-          if (messages.isNotEmpty) _messages = messages;
+          if (messages.isNotEmpty &&
+              (cachedCount == 0 || messages.length >= cachedCount)) {
+            _messages = messages;
+          }
           _loading = false;
         });
         if (messages.isNotEmpty) {
