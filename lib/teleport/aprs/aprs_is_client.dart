@@ -17,6 +17,7 @@ import 'dart:io';
 import 'dart:isolate';
 
 import '../../services/log_service.dart';
+import 'aprs_message_utils.dart';
 import 'aprs_service.dart';
 import 'models/aprs_packet.dart';
 
@@ -777,7 +778,9 @@ class AprsIsClient {
     // Build the TNC2 message line
     final destPadded = destination.toUpperCase().padRight(9);
     final seqNo = DateTime.now().millisecondsSinceEpoch % 100000;
-    final fullText = message.length > 67 ? message.substring(0, 67) : message;
+    final fullText = message.length > aprsMaxMessageLen
+        ? message.substring(0, aprsMaxMessageLen)
+        : message;
     final line = '${callsign.toUpperCase()}>APRS,TCPIP*::$destPadded:$fullText{$seqNo';
 
     Socket? socket;

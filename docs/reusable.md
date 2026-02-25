@@ -46,6 +46,7 @@ This document catalogs reusable UI components available in the Geogram codebase.
 - [Background Task Monitor](#background-task-monitor) - Centralized registry for all background tasks with pause/resume and debug API
 
 ### APRS Components
+- [APRS Message Utils](#aprsmessageutils) - Constants, text splitting, and display merging for APRS messages
 - [APRS Geo-Chat Panel](#aprs-geo-chat-panel) - Floating map overlay for sending/receiving position reports with comments
 
 ### Hashing Utilities
@@ -8352,6 +8353,41 @@ if (TrayService().isSupported) { ... }
 ```
 
 **Reuse potential**: Any feature that needs to check window visibility or restore the window (e.g., notification tap handlers) should use `TrayService().restoreFromTray()`.
+
+---
+
+### AprsMessageUtils
+
+**File**: `lib/teleport/aprs/aprs_message_utils.dart`
+
+**Pattern**: Shared constants, text splitting, and display-side message merging for APRS messages. Used by `AprsService`, `AprsIsClient`, conversation page, geo-chat panel, and debug API.
+
+**Constants**:
+- `aprsMaxMessageLen` (67) — max chars in a single APRS message packet body
+- `aprsMaxCommentLen` (107) — max comment length in an APRS position report
+- `aprsAvailableChars(String? tag)` — available body chars accounting for `#tag ` prefix
+
+**Text Splitting**:
+```dart
+// Split long text into APRS-safe chunks at word boundaries
+final chunks = splitAprsText('long message text...', 67);
+// => ['long message', 'text...']
+
+// Count parts without splitting
+final n = aprsPartCount(text, aprsMaxMessageLen);
+```
+
+**Display Merge** (consecutive messages from same sender within 30s):
+```dart
+final merged = mergeConsecutiveMessages(
+  rawMessages,
+  myCallsign: 'MYCALL',
+  mergeWindow: Duration(seconds: 30),
+);
+// Merged packets have joined messageText, last timestamp, allAcked logic
+```
+
+**Reuse potential**: Any APRS UI or service that sends/displays messages should import this library instead of hard-coding constants or splitting logic.
 
 ---
 

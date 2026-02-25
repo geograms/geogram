@@ -12,6 +12,7 @@ import 'package:flutter/material.dart';
 
 import '../../../services/user_location_service.dart';
 import '../../shared/teleport_chat_utils.dart';
+import '../aprs_message_utils.dart';
 import '../aprs_service.dart';
 import '../models/aprs_conversation.dart';
 import '../models/aprs_packet.dart';
@@ -41,19 +42,12 @@ class _AprsConversationPageState extends State<AprsConversationPage> {
   final FocusNode _focusNode = FocusNode();
   StreamSubscription<AprsEvent>? _eventSub;
 
-  static const int _maxAprsMessageLen = 67;
-
   bool get _isTag => widget.conversationType == AprsConversationType.tag;
   String get _myCallsign => AprsService().callsign?.toUpperCase() ?? '';
 
-  /// Available characters for the compose bar — for tags, subtract tag prefix.
-  int get _availableChars {
-    if (_isTag) {
-      // tag + space prefix is auto-prepended
-      return _maxAprsMessageLen - widget.conversationId.length - 1;
-    }
-    return _maxAprsMessageLen;
-  }
+  /// Available characters per chunk — for tags, subtract tag prefix.
+  int get _availableChars =>
+      aprsAvailableChars(_isTag ? widget.conversationId : null);
 
   @override
   void initState() {
@@ -154,11 +148,14 @@ class _AprsConversationPageState extends State<AprsConversationPage> {
   }
 
   Widget _buildMessageList(List<AprsPacket> messages) {
+    // Merge consecutive messages from the same sender within 30s
+    final merged = mergeConsecutiveMessages(messages, myCallsign: _myCallsign);
+
     // Build items list with date separators
     final items = <Widget>[];
     DateTime? lastDate;
 
-    for (final msg in messages) {
+    for (final msg in merged) {
       final msgDate = msg.timestamp.toLocal();
       final msgDay = DateTime(msgDate.year, msgDate.month, msgDate.day);
 
@@ -198,6 +195,16 @@ class _AprsConversationPageState extends State<AprsConversationPage> {
     final textLen = _textController.text.length;
     final available = _availableChars;
     final remaining = available - textLen;
+    final parts = aprsPartCount(_textController.text, available);
+    final canSend = isConnected && textLen > 0;
+
+    // Counter: remaining chars for single part, "N parts" for multi-part
+    final counterText = parts <= 1 ? '$remaining' : '$parts parts';
+    final counterColor = parts > 9
+        ? theme.colorScheme.error
+        : (parts <= 1 && remaining < 10)
+            ? theme.colorScheme.error
+            : theme.colorScheme.onSurfaceVariant;
 
     return Container(
       decoration: BoxDecoration(
@@ -215,16 +222,13 @@ class _AprsConversationPageState extends State<AprsConversationPage> {
               child: TextField(
                 controller: _textController,
                 focusNode: _focusNode,
-                maxLength: available,
                 maxLines: 3,
                 minLines: 1,
                 textInputAction: TextInputAction.send,
                 onSubmitted: (_) => _sendMessage(),
                 onChanged: (_) => setState(() {}),
                 decoration: InputDecoration(
-                  hintText: _isTag
-                      ? 'Message ${widget.conversationId}'
-                      : 'Message ${widget.conversationId}',
+                  hintText: 'Message ${widget.conversationId}',
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(20),
                     borderSide: BorderSide.none,
@@ -235,12 +239,10 @@ class _AprsConversationPageState extends State<AprsConversationPage> {
                     horizontal: 16,
                     vertical: 10,
                   ),
-                  counterText: '$remaining',
+                  counterText: counterText,
                   counterStyle: TextStyle(
                     fontSize: 11,
-                    color: remaining < 10
-                        ? theme.colorScheme.error
-                        : theme.colorScheme.onSurfaceVariant,
+                    color: counterColor,
                   ),
                   isDense: true,
                 ),
@@ -249,12 +251,10 @@ class _AprsConversationPageState extends State<AprsConversationPage> {
             ),
             const SizedBox(width: 8),
             IconButton(
-              onPressed: isConnected && textLen > 0 && remaining >= 0
-                  ? _sendMessage
-                  : null,
+              onPressed: canSend ? _sendMessage : null,
               icon: Icon(
                 Icons.send,
-                color: isConnected && textLen > 0 && remaining >= 0
+                color: canSend
                     ? theme.colorScheme.primary
                     : theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.3),
               ),

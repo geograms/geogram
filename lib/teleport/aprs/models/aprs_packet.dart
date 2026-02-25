@@ -154,20 +154,26 @@ class AprsPacket {
   bool get isHumanGeoChat => isGeoChat && !isBeaconComment;
 
   /// Create a copy with updated fields.
-  AprsPacket copyWith({bool? isAcked, bool? isOutgoing}) {
+  AprsPacket copyWith({
+    String? messageText,
+    String? messageId,
+    DateTime? timestamp,
+    bool? isAcked,
+    bool? isOutgoing,
+  }) {
     return AprsPacket(
       fromCallsign: fromCallsign,
       toCallsign: toCallsign,
       path: path,
       infoField: infoField,
       rawTnc2: rawTnc2,
-      timestamp: timestamp,
+      timestamp: timestamp ?? this.timestamp,
       type: type,
       latitude: latitude,
       longitude: longitude,
       messageAddressee: messageAddressee,
-      messageText: messageText,
-      messageId: messageId,
+      messageText: messageText ?? this.messageText,
+      messageId: messageId ?? this.messageId,
       isAcked: isAcked ?? this.isAcked,
       isOutgoing: isOutgoing ?? this.isOutgoing,
       comment: comment,

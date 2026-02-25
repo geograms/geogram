@@ -22,6 +22,7 @@ import '../../services/profile_storage.dart';
 import 'aprs_cache_service.dart';
 import 'aprs_is_client.dart';
 import 'models/aprs_conversation.dart';
+import 'aprs_message_utils.dart';
 import 'models/aprs_packet.dart';
 
 /// Event types emitted by the APRS bridge.
@@ -499,55 +500,60 @@ class AprsService {
   // Sending messages
   // ---------------------------------------------------------------------------
 
-  /// Send an APRS message. Returns the local echo packet, or null on failure.
+  /// Send an APRS message. Returns the first local echo packet, or null on
+  /// failure. Long messages are automatically split into multiple packets.
   /// For tag rooms, [text] should NOT include the tag prefix — it's auto-prepended.
   AprsPacket? sendMessage(String destination, String text) {
     if (_client == null || _callsign == null) return null;
 
     final isTag = destination.startsWith('#');
-    final fullText = isTag ? '$destination $text' : text;
+    final maxChunkLen = aprsAvailableChars(isTag ? destination : null);
+    final chunks = splitAprsText(text, maxChunkLen);
 
-    // Enforce 67-char APRS message limit
-    if (fullText.length > 67) return null;
-
-    final seqNo = '${_nextSeqNo++}';
     final destPadded = isTag
         ? 'BLN9'.padRight(9) // Bulletin for tag messages
         : destination.toUpperCase().padRight(9);
 
-    // Build TNC2 line: MYCALL>APRS::DEST_CALL :text{seqno
-    final line = '${_callsign!}>APRS::$destPadded:$fullText{$seqNo';
+    AprsPacket? firstEcho;
 
-    _client!.sendRaw(line);
+    for (final chunk in chunks) {
+      final fullText = isTag ? '$destination $chunk' : chunk;
+      final seqNo = '${_nextSeqNo++}';
 
-    // Create local echo packet
-    final echo = AprsPacket(
-      fromCallsign: _callsign!,
-      toCallsign: 'APRS',
-      infoField: ':$destPadded:$fullText{$seqNo',
-      rawTnc2: line,
-      timestamp: DateTime.now().toUtc(),
-      type: AprsPacketType.message,
-      messageAddressee: destination.toUpperCase(),
-      messageText: fullText,
-      messageId: seqNo,
-      isOutgoing: true,
-    );
+      // Build TNC2 line: MYCALL>APRS::DEST_CALL :text{seqno
+      final line = '${_callsign!}>APRS::$destPadded:$fullText{$seqNo';
 
-    // Add to messages list + write queue
-    messages.add(echo);
-    _writeQueue.add(echo);
+      _client!.sendRaw(line);
+
+      // Create local echo packet
+      final echo = AprsPacket(
+        fromCallsign: _callsign!,
+        toCallsign: 'APRS',
+        infoField: ':$destPadded:$fullText{$seqNo',
+        rawTnc2: line,
+        timestamp: DateTime.now().toUtc(),
+        type: AprsPacketType.message,
+        messageAddressee: destination.toUpperCase(),
+        messageText: fullText,
+        messageId: seqNo,
+        isOutgoing: true,
+      );
+
+      messages.add(echo);
+      _writeQueue.add(echo);
+      firstEcho ??= echo;
+
+      LogService().log('AprsService: sent message to $destination: $fullText');
+    }
+
     if (_writeQueue.length >= _writeFlushThreshold) {
       _flushWrites();
     }
 
-    // Emit event immediately so the conversation list updates without waiting
-    // for the next UI tick (up to 500 ms). This ensures a new chat entry
-    // appears right away when the user sends to a fresh callsign.
+    // Emit event once for the whole batch
     _eventController.add(const AprsEvent(AprsEventType.messageReceived));
 
-    LogService().log('AprsService: sent message to $destination: $fullText');
-    return echo;
+    return firstEcho;
   }
 
   // ---------------------------------------------------------------------------
@@ -562,8 +568,10 @@ class AprsService {
     final lon = _savedLon;
     if (lat == null || lon == null) return null;
 
-    // Enforce max comment length (~107 chars after position block)
-    final trimmed = text.length > 107 ? text.substring(0, 107) : text;
+    // Enforce max comment length after position block
+    final trimmed = text.length > aprsMaxCommentLen
+        ? text.substring(0, aprsMaxCommentLen)
+        : text;
 
     // Build uncompressed APRS position: !DDMM.MMN/DDDMM.MMW$comment
     final latStr = _toAprsLat(lat);

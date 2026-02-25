@@ -28,6 +28,7 @@ import 'chat_file_upload_manager.dart';
 import 'app_args.dart';
 import '../connection/connection_manager.dart';
 import '../teleport/aprs/aprs_is_client.dart';
+import '../teleport/aprs/aprs_message_utils.dart';
 import '../teleport/aprs/aprs_service.dart';
 import 'location_provider_service.dart';
 import '../teleport/telegram/telegram_service.dart';
@@ -17090,6 +17091,10 @@ function cleanup() {
               headers: headers,
             );
           }
+          final maxChunk = aprsAvailableChars(
+            destination.startsWith('#') ? destination : null,
+          );
+          final parts = aprsPartCount(text, maxChunk);
           final sent = aprs.sendMessage(destination, text);
           return shelf.Response.ok(
             jsonEncode({
@@ -17097,6 +17102,7 @@ function cleanup() {
               'destination': destination,
               'text': text,
               'messageId': sent?.messageId,
+              'parts': parts,
             }),
             headers: headers,
           );
