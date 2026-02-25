@@ -36,17 +36,25 @@ class _TelegramChatListPageState extends State<TelegramChatListPage> {
   List<TelegramChat> _chats = [];
   List<TelegramChat> _filteredChats = [];
   final _searchController = TextEditingController();
+  final _listScrollController = ScrollController();
   bool _searching = false;
   bool _loading = true;
+  bool _loadingMoreChats = false;
   Timer? _refreshDebounce;
   String? _diskSizeLabel;
   int _favoritesCount = 0;
   Map<int, Uint8List> _cachedPhotos = {};
+  final Set<int> _photoRequestsInFlight = {};
+
+  static const int _initialChatLimit = 30;
+  static const int _chatPageSize = 30;
+  int _chatLoadLimit = _initialChatLimit;
 
   @override
   void initState() {
     super.initState();
     _searchController.addListener(_filterChats);
+    _listScrollController.addListener(_onScroll);
     _ensureConnectedAndLoad();
   }
 
@@ -123,7 +131,7 @@ class _TelegramChatListPageState extends State<TelegramChatListPage> {
     }
 
     try {
-      await chatService.loadChats();
+      await chatService.loadChats(limit: _chatLoadLimit);
       // Give TDLib a moment to send chat updates
       await Future.delayed(const Duration(milliseconds: 500));
       _refreshChats();
@@ -132,6 +140,30 @@ class _TelegramChatListPageState extends State<TelegramChatListPage> {
     }
 
     setState(() => _loading = false);
+  }
+
+  void _onScroll() {
+    if (!_listScrollController.hasClients) return;
+    if (_loadingMoreChats || _loading) return;
+    if (_listScrollController.position.extentAfter < 600) {
+      _loadMoreChats();
+    }
+  }
+
+  Future<void> _loadMoreChats() async {
+    final chatService = TelegramService().chatService;
+    if (chatService == null || _loadingMoreChats) return;
+    _loadingMoreChats = true;
+    _chatLoadLimit += _chatPageSize;
+    try {
+      await chatService.loadChats(limit: _chatLoadLimit);
+      await Future.delayed(const Duration(milliseconds: 300));
+      _refreshChats();
+    } catch (e) {
+      LogService().error('TelegramChatListPage: loadMoreChats failed: $e');
+    } finally {
+      _loadingMoreChats = false;
+    }
   }
 
   void _refreshChats() {
@@ -218,11 +250,7 @@ class _TelegramChatListPageState extends State<TelegramChatListPage> {
 
   /// Download chat photos progressively in batches of 5.
   /// Phase 1: instantly load cached photo blobs from SQLite (works offline).
-  /// Phase 2: download missing photos from TDLib (online).
   Future<void> _resolveChatPhotos() async {
-    final chatService = TelegramService().chatService;
-    if (chatService == null) return;
-
     // Phase 1: Load cached photo blobs from SQLite (instant, works offline)
     final cache = TelegramService().cacheService;
     if (cache != null) {
@@ -231,22 +259,23 @@ class _TelegramChatListPageState extends State<TelegramChatListPage> {
         setState(() { _cachedPhotos = photos; });
       }
     }
+  }
 
-    // Phase 2: Download missing photos from TDLib (online)
-    final needsPhoto = _chats
-        .where((c) => c.photoSmallFileId != null && c.photoSmallFileId != 0 && c.photoPath == null)
-        .toList();
+  void _maybeDownloadChatPhoto(TelegramChat chat) {
+    if (chat.photoSmallFileId == null || chat.photoSmallFileId == 0) return;
+    if (chat.photoPath != null) return;
+    if (_cachedPhotos.containsKey(chat.id)) return;
+    if (_photoRequestsInFlight.contains(chat.id)) return;
 
-    for (int i = 0; i < needsPhoto.length; i += 5) {
-      if (!mounted) break;
-      final batch = needsPhoto.skip(i).take(5);
-      final futures = batch.map((c) => chatService.downloadChatPhoto(c.id));
-      await Future.wait(futures);
+    final chatService = TelegramService().chatService;
+    if (chatService == null) return;
+
+    _photoRequestsInFlight.add(chat.id);
+    chatService.downloadChatPhoto(chat.id).then((_) {
       if (mounted) _refreshChats();
-      if (i + 5 < needsPhoto.length) {
-        await Future.delayed(const Duration(milliseconds: 200));
-      }
-    }
+    }).whenComplete(() {
+      _photoRequestsInFlight.remove(chat.id);
+    });
   }
 
   /// Compute total disk usage of the Telegram folder (async, non-blocking).
@@ -282,6 +311,7 @@ class _TelegramChatListPageState extends State<TelegramChatListPage> {
     _refreshDebounce?.cancel();
     _eventSub?.cancel();
     _searchController.dispose();
+    _listScrollController.dispose();
     super.dispose();
   }
 
@@ -353,6 +383,7 @@ class _TelegramChatListPageState extends State<TelegramChatListPage> {
                   ),
                 )
               : ListView.builder(
+                  controller: _listScrollController,
                   itemCount: _filteredChats.length +
                       (_favoritesCount > 0 &&
                               _favoritesCount < _filteredChats.length &&
@@ -402,6 +433,9 @@ class _TelegramChatListPageState extends State<TelegramChatListPage> {
                             : index;
                     final chat = _filteredChats[chatIndex];
                     final cachedBytes = chat.photoPath == null ? _cachedPhotos[chat.id] : null;
+                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                      _maybeDownloadChatPhoto(chat);
+                    });
                     return TelegramChatTile(
                       chat: cachedBytes != null ? chat.copyWith(photoBytes: cachedBytes) : chat,
                       onTap: () {
