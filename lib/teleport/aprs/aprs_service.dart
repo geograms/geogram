@@ -503,7 +503,7 @@ class AprsService {
 
     final seqNo = '${_nextSeqNo++}';
     final destPadded = isTag
-        ? 'BLN1'.padRight(9) // Bulletin for tag messages
+        ? 'BLN9'.padRight(9) // Bulletin for tag messages
         : destination.toUpperCase().padRight(9);
 
     // Build TNC2 line: MYCALL>APRS::DEST_CALL :text{seqno

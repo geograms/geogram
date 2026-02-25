@@ -397,8 +397,8 @@ class AprsIsClient {
         final hasPosition = filterLat != 0.0 || filterLon != 0.0;
         final baseCallsign = params.callsign.toUpperCase();
         final filterSuffix = hasPosition
-            ? ' filter r/$filterLat/$filterLon/$filterRadius g/$baseCallsign'
-            : ' filter g/$baseCallsign';
+            ? ' filter r/$filterLat/$filterLon/$filterRadius g/$baseCallsign/BLN*'
+            : ' filter g/$baseCallsign/BLN*';
         final authLine = 'user ${params.callsign} pass ${params.passcode} '
             'vers Geogram 1.0$filterSuffix';
         socket.write('$authLine\r\n');
@@ -701,4 +701,134 @@ class AprsIsClient {
 
   static bool _isDigit(String ch) =>
       ch.codeUnitAt(0) >= 48 && ch.codeUnitAt(0) <= 57;
+
+  // ---------------------------------------------------------------------------
+  // One-shot send — standalone function, no service singleton needed
+  // ---------------------------------------------------------------------------
+
+  /// Send a single APRS message via a short-lived TCP connection.
+  ///
+  /// Connects to APRS-IS, authenticates, sends the message, optionally waits
+  /// for an ACK, then disconnects. Completely independent of [AprsService].
+  ///
+  /// Returns a result map with:
+  ///   `sent`: true if the line was written to the socket
+  ///   `acked`: true if an ACK was received within [ackTimeout]
+  ///   `line`: the raw TNC2 line that was sent
+  ///   `error`: error message if something went wrong
+  ///
+  /// Example:
+  /// ```dart
+  /// final result = await AprsIsClient.sendOneShot(
+  ///   callsign: 'CR7BBQ',
+  ///   destination: 'N0CALL',
+  ///   message: 'Hello from Geogram!',
+  /// );
+  /// ```
+  static Future<Map<String, dynamic>> sendOneShot({
+    required String callsign,
+    required String destination,
+    required String message,
+    String host = _defaultHost,
+    int port = _defaultPort,
+    Duration ackTimeout = const Duration(seconds: 15),
+  }) async {
+    final passcode = aprsPasscode(callsign);
+
+    // Build the TNC2 message line
+    final destPadded = destination.toUpperCase().padRight(9);
+    final seqNo = DateTime.now().millisecondsSinceEpoch % 100000;
+    final fullText = message.length > 67 ? message.substring(0, 67) : message;
+    final line = '${callsign.toUpperCase()}>APRS,TCPIP*::$destPadded:$fullText{$seqNo';
+
+    Socket? socket;
+    try {
+      // Connect
+      socket = await Socket.connect(host, port,
+          timeout: const Duration(seconds: 10));
+
+      final lineBuffer = StringBuffer();
+      bool bannerSeen = false;
+      bool verified = false;
+      bool acked = false;
+      final completer = Completer<void>();
+
+      // Listen for server responses
+      final sub = socket.listen(
+        (data) {
+          lineBuffer.write(utf8.decode(data, allowMalformed: true));
+          final text = lineBuffer.toString();
+          final lines = text.split('\n');
+          lineBuffer.clear();
+          if (!text.endsWith('\n')) {
+            lineBuffer.write(lines.removeLast());
+          } else if (lines.isNotEmpty && lines.last.isEmpty) {
+            lines.removeLast();
+          }
+
+          for (final raw in lines) {
+            final l = raw.replaceAll('\r', '').trim();
+            if (l.isEmpty) continue;
+
+            if (l.startsWith('#')) {
+              bannerSeen = true;
+              if (l.contains('logresp') && l.contains('verified')) {
+                verified = true;
+              }
+              continue;
+            }
+
+            // Check for ACK addressed to us
+            if (l.contains(':ack$seqNo')) {
+              acked = true;
+              if (!completer.isCompleted) completer.complete();
+            }
+          }
+        },
+        onError: (_) {
+          if (!completer.isCompleted) completer.complete();
+        },
+        onDone: () {
+          if (!completer.isCompleted) completer.complete();
+        },
+      );
+
+      // Wait for banner
+      await Future.delayed(const Duration(seconds: 2));
+      if (!bannerSeen) {
+        await sub.cancel();
+        socket.destroy();
+        return {'sent': false, 'acked': false, 'line': line, 'error': 'No banner received'};
+      }
+
+      // Authenticate (no filter needed — we only send)
+      final authLine = 'user $callsign pass $passcode vers Geogram 1.0';
+      socket.write('$authLine\r\n');
+      await socket.flush();
+
+      // Brief pause for auth response
+      await Future.delayed(const Duration(milliseconds: 500));
+
+      // Send the message
+      socket.write('$line\r\n');
+      await socket.flush();
+
+      // Wait for ACK (or timeout)
+      await completer.future.timeout(ackTimeout, onTimeout: () {});
+
+      await sub.cancel();
+      socket.destroy();
+
+      return {
+        'sent': true,
+        'acked': acked,
+        'verified': verified,
+        'line': line,
+        'seqNo': seqNo,
+      };
+    } catch (e) {
+      socket?.destroy();
+      return {'sent': false, 'acked': false, 'line': line, 'error': '$e'};
+    }
+  }
 }
