@@ -722,6 +722,28 @@ class _NostrEventTileState extends State<NostrEventTile> {
             ],
           ),
         ),
+        const SizedBox(width: 12),
+        GestureDetector(
+          onTap: widget.onReply,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.reply,
+                size: 16,
+                color: Colors.white.withValues(alpha: 0.3),
+              ),
+              const SizedBox(width: 4),
+              Text(
+                'Reply',
+                style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.4),
+                  fontSize: 12,
+                ),
+              ),
+            ],
+          ),
+        ),
       ],
     );
   }
