@@ -391,6 +391,40 @@ class AprsService {
     _eventController.add(const AprsEvent(AprsEventType.messageReceived));
   }
 
+  /// Remove all messages (in-memory + cache). Stream/position packets are kept.
+  Future<void> clearAllMessages() async {
+    messages.clear();
+    await _cacheService?.deleteAllMessages();
+    _eventController.add(const AprsEvent(AprsEventType.messageReceived));
+  }
+
+  /// Remove messages for a specific conversation (in-memory + cache).
+  Future<void> clearConversation(String conversationId) async {
+    final isTag = conversationId.startsWith('#');
+    final upper = conversationId.toUpperCase();
+    final myCall = _callsign?.toUpperCase();
+
+    if (isTag) {
+      // Remove tag messages whose text starts with the tag
+      messages.removeWhere((m) {
+        final tag = m.messageTag;
+        return tag != null && tag == conversationId.toLowerCase();
+      });
+    } else {
+      // Remove direct messages involving this callsign
+      messages.removeWhere((m) {
+        final from = m.fromCallsign.toUpperCase();
+        final addr = m.messageAddressee?.toUpperCase();
+        final isToUs = addr == myCall && from == upper;
+        final isFromUs = (from == myCall || m.isOutgoing) && addr == upper;
+        return isToUs || isFromUs;
+      });
+      await _cacheService?.deleteByCallsign(conversationId);
+    }
+
+    _eventController.add(const AprsEvent(AprsEventType.messageReceived));
+  }
+
   // ---------------------------------------------------------------------------
   // Conversation grouping
   // ---------------------------------------------------------------------------

@@ -231,7 +231,7 @@ class AprsCacheService {
     }
   }
 
-  /// Debug: delete all cached packets.
+  /// Delete all cached packets.
   Future<void> clear() async {
     try {
       final db = await _openDb();
@@ -239,6 +239,31 @@ class AprsCacheService {
       db.execute('VACUUM');
     } catch (e) {
       LogService().log('AprsCacheService: clear error: $e');
+    }
+  }
+
+  /// Delete cached message packets involving [callsign] (as sender or addressee).
+  Future<void> deleteByCallsign(String callsign) async {
+    try {
+      final db = await _openDb();
+      final upper = callsign.toUpperCase();
+      db.execute(
+        '''DELETE FROM packets WHERE type = 'message'
+           AND (UPPER(from_callsign) = ? OR UPPER(message_addressee) = ?)''',
+        [upper, upper],
+      );
+    } catch (e) {
+      LogService().log('AprsCacheService: deleteByCallsign error: $e');
+    }
+  }
+
+  /// Delete all cached message-type packets (preserves stream/position packets).
+  Future<void> deleteAllMessages() async {
+    try {
+      final db = await _openDb();
+      db.execute("DELETE FROM packets WHERE type = 'message'");
+    } catch (e) {
+      LogService().log('AprsCacheService: deleteAllMessages error: $e');
     }
   }
 
