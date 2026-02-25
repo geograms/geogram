@@ -12,6 +12,7 @@ import '../models/atproto_feed_item.dart';
 import '../widgets/atproto_post_tile.dart';
 import 'atproto_following_activity_page.dart';
 import 'atproto_profile_page.dart';
+import 'atproto_search_page.dart';
 import 'atproto_settings_page.dart';
 import 'atproto_thread_page.dart';
 
@@ -115,6 +116,20 @@ class _AtprotoMainPageState extends State<AtprotoMainPage> {
                 ),
               );
             },
+          ),
+          IconButton(
+            icon: const Icon(Icons.search),
+            tooltip: 'Search network',
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const AtprotoSearchPage()),
+              );
+            },
+          ),
+          IconButton(
+            icon: const Icon(Icons.account_circle_outlined),
+            tooltip: 'My profile',
+            onPressed: _openMyProfile,
           ),
           IconButton(
             icon: const Icon(Icons.settings),
@@ -403,5 +418,16 @@ class _AtprotoMainPageState extends State<AtprotoMainPage> {
         builder: (_) => AtprotoThreadPage(rootPostUri: postUri),
       ),
     );
+  }
+
+  void _openMyProfile() {
+    final service = AtprotoClientService();
+    final actor = service.session?.did.isNotEmpty == true
+        ? service.session!.did
+        : (service.session?.handle.isNotEmpty == true
+              ? service.session!.handle
+              : service.config.identifier);
+    if (actor.trim().isEmpty) return;
+    _openProfileByActor(actor.trim());
   }
 }

@@ -43,4 +43,17 @@ class AtprotoProfile {
       isFollowedByMe: viewer?['following'] != null,
     );
   }
+
+  Map<String, dynamic> toJson() => {
+    'did': did,
+    'handle': handle,
+    'displayName': displayName,
+    'description': description,
+    'avatar': avatarUrl,
+    'banner': bannerUrl,
+    'followersCount': followersCount,
+    'followsCount': followsCount,
+    'postsCount': postsCount,
+    'isFollowedByMe': isFollowedByMe,
+  };
 }

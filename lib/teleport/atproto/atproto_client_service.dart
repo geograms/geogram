@@ -509,6 +509,72 @@ class AtprotoClientService {
     return AtprotoProfile.fromJson(json);
   }
 
+  Future<List<AtprotoProfile>> searchPeople(
+    String query, {
+    int limit = 25,
+  }) async {
+    final q = query.trim();
+    if (q.isEmpty) return const [];
+    final bases = _searchBaseCandidates();
+    Object? lastError;
+    for (final base in bases) {
+      final uri = Uri.parse(
+        '$base/xrpc/app.bsky.actor.searchActors'
+        '?q=${Uri.encodeQueryComponent(q)}'
+        '&limit=${limit.clamp(1, 100)}',
+      );
+      final response = await http.get(uri);
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        lastError = Exception('People search failed (${response.statusCode})');
+        continue;
+      }
+      final body = jsonDecode(response.body) as Map<String, dynamic>;
+      final actors = body['actors'] as List<dynamic>? ?? const [];
+      return actors
+          .whereType<Map>()
+          .map((e) => AtprotoProfile.fromJson(Map<String, dynamic>.from(e)))
+          .toList();
+    }
+    throw lastError ?? Exception('People search failed');
+  }
+
+  Future<List<AtprotoFeedItem>> searchPosts(
+    String query, {
+    int limit = 25,
+  }) async {
+    final q = query.trim();
+    if (q.isEmpty) return const [];
+    final bases = _searchBaseCandidates();
+    Object? lastError;
+    for (final base in bases) {
+      final uri = Uri.parse(
+        '$base/xrpc/app.bsky.feed.searchPosts'
+        '?q=${Uri.encodeQueryComponent(q)}'
+        '&limit=${limit.clamp(1, 100)}',
+      );
+      final response = await http.get(uri);
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        lastError = Exception('Post search failed (${response.statusCode})');
+        continue;
+      }
+      final body = jsonDecode(response.body) as Map<String, dynamic>;
+      final posts = body['posts'] as List<dynamic>? ?? const [];
+      return posts
+          .whereType<Map>()
+          .map((e) => _parsePostWrap(Map<String, dynamic>.from(e)))
+          .toList();
+    }
+    throw lastError ?? Exception('Post search failed');
+  }
+
+  List<String> _searchBaseCandidates() {
+    final configured = _normalizeBaseUrl(_config.appViewUrl);
+    return <String>[
+      configured,
+      'https://api.bsky.app',
+    ].where((e) => e.trim().isNotEmpty).toSet().toList();
+  }
+
   Future<List<AtprotoFeedItem>> fetchReplies(
     String postUri, {
     int depth = 6,

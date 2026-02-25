@@ -2512,6 +2512,8 @@ Triggers a debug action.
 | `atproto_follow_actor` | Follow an actor using bridge write flow | `actor` (required): Handle or DID |
 | `atproto_following_list` | List locally persisted followed actors | None |
 | `atproto_following_activity` | Get merged activity feed from followed actors | None |
+| `atproto_search_people` | Search actors/profiles across Bluesky network | `query` (required): Search text, `limit` (optional): 1-100 |
+| `atproto_search_posts` | Search posts/content across Bluesky network | `query` (required): Search text, `limit` (optional): 1-100 |
 | `shared_list` | List all shared folder entries with metadata | None |
 | `shared_test_access` | Test access control for a given pubkey | `pubkey` (optional): Hex pubkey to test. Returns accessibility per folder |
 | `shared_test_cookie` | Test cookie parsing from HTTP headers | `headers` (required): Raw HTTP headers string to parse for `geogram_nostr_pubkey` cookie |
@@ -2785,6 +2787,16 @@ curl -X POST http://localhost:3456/api/debug \
 curl -X POST http://localhost:3456/api/debug \
   -H "Content-Type: application/json" \
   -d '{"action":"atproto_following_activity"}'
+
+# Search people
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action":"atproto_search_people","query":"pfrazee","limit":5}'
+
+# Search posts
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action":"atproto_search_posts","query":"geogram","limit":5}'
 
 # Start BLE advertising
 curl -X POST http://localhost:3456/api/debug \

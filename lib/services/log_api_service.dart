@@ -18068,6 +18068,56 @@ function cleanup() {
           headers: headers,
         );
 
+      case 'atproto_search_people':
+        final query = (params['query'] as String?)?.trim();
+        if (query == null || query.isEmpty) {
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': false,
+              'error': 'query parameter required',
+            }),
+            headers: headers,
+          );
+        }
+        final people = await atproto.searchPeople(
+          query,
+          limit: ((params['limit'] as num?)?.toInt() ?? 25).clamp(1, 100),
+        );
+        return shelf.Response.ok(
+          jsonEncode({
+            'success': true,
+            'query': query,
+            'count': people.length,
+            'items': people.map((e) => e.toJson()).toList(),
+          }),
+          headers: headers,
+        );
+
+      case 'atproto_search_posts':
+        final query = (params['query'] as String?)?.trim();
+        if (query == null || query.isEmpty) {
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': false,
+              'error': 'query parameter required',
+            }),
+            headers: headers,
+          );
+        }
+        final posts = await atproto.searchPosts(
+          query,
+          limit: ((params['limit'] as num?)?.toInt() ?? 25).clamp(1, 100),
+        );
+        return shelf.Response.ok(
+          jsonEncode({
+            'success': true,
+            'query': query,
+            'count': posts.length,
+            'items': posts.map((e) => e.toJson()).toList(),
+          }),
+          headers: headers,
+        );
+
       default:
         return shelf.Response.ok(
           jsonEncode({'success': false, 'error': 'Unknown AT Proto action: $action'}),
