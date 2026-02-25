@@ -28,6 +28,7 @@ import '../../../services/user_location_service.dart';
 import '../aprs_service.dart';
 import '../models/aprs_packet.dart';
 import '../widgets/aprs_conversation_list.dart';
+import '../widgets/aprs_geo_chat_panel.dart';
 import 'aprs_settings_page.dart';
 
 class AprsMainPage extends StatefulWidget {
@@ -168,6 +169,7 @@ class _AprsMainPageState extends State<AprsMainPage> {
                     myLocation: myLoc,
                     lastKnownPositions: aprs.lastKnownPositions,
                     streamPackets: aprs.streamPackets,
+                    geoChatMessages: aprs.geoChatMessages,
                     radiusKm: effectiveRadius,
                   ),
                 ],
@@ -526,12 +528,14 @@ class _MapTab extends StatefulWidget {
   final UserLocation? myLocation;
   final Map<String, (double, double)> lastKnownPositions;
   final List<AprsPacket> streamPackets;
+  final List<AprsPacket> geoChatMessages;
   final double radiusKm;
 
   const _MapTab({
     this.myLocation,
     required this.lastKnownPositions,
     required this.streamPackets,
+    required this.geoChatMessages,
     required this.radiusKm,
   });
 
@@ -543,6 +547,7 @@ class _MapTabState extends State<_MapTab> with AutomaticKeepAliveClientMixin {
   final MapController _mapController = MapController();
   final MapTileService _mapTileService = MapTileService();
   bool _mapReady = false;
+  bool _showGeoChat = false;
 
   @override
   bool get wantKeepAlive => true;
@@ -632,110 +637,147 @@ class _MapTabState extends State<_MapTab> with AutomaticKeepAliveClientMixin {
       );
     });
 
-    return FlutterMap(
-      mapController: _mapController,
-      options: MapOptions(
-        initialCenter: center,
-        initialZoom: _zoomForRadius(widget.radiusKm),
-        minZoom: 1.0,
-        maxZoom: 18.0,
-        interactionOptions: const InteractionOptions(
-          flags: InteractiveFlag.all & ~InteractiveFlag.rotate,
-        ),
-        onMapReady: () {
-          if (mounted) setState(() => _mapReady = true);
-        },
-      ),
+    final isWideScreen = MediaQuery.of(context).size.width > 600;
+
+    return Stack(
       children: [
-        // Satellite tile layer
-        TileLayer(
-          urlTemplate: MapTileService.satelliteTileUrl,
-          userAgentPackageName: 'dev.geogram',
-          subdomains: const [],
-          keepBuffer: 3,
-          tileProvider: _mapTileService.getTileProvider(MapLayerType.satellite),
-        ),
-        // Labels overlay
-        TileLayer(
-          urlTemplate: _mapTileService.getLabelsUrl(),
-          userAgentPackageName: 'dev.geogram',
-          subdomains: const [],
-          keepBuffer: 3,
-          tileProvider: _mapTileService.getLabelsProvider(),
-        ),
-        // Radius circle
-        CircleLayer(
-          circles: [
-            CircleMarker(
-              point: center,
-              radius: widget.radiusKm * 1000,
-              useRadiusInMeter: true,
-              color: theme.colorScheme.primary.withValues(alpha: 0.08),
-              borderColor: theme.colorScheme.primary.withValues(alpha: 0.5),
-              borderStrokeWidth: 2,
+        FlutterMap(
+          mapController: _mapController,
+          options: MapOptions(
+            initialCenter: center,
+            initialZoom: _zoomForRadius(widget.radiusKm),
+            minZoom: 1.0,
+            maxZoom: 18.0,
+            interactionOptions: const InteractionOptions(
+              flags: InteractiveFlag.all & ~InteractiveFlag.rotate,
             ),
-          ],
-        ),
-        // Station markers (clustered)
-        MarkerClusterLayerWidget(
-          options: MarkerClusterLayerOptions(
-            maxClusterRadius: 80,
-            size: const Size(44, 44),
-            alignment: Alignment.center,
-            padding: const EdgeInsets.all(50),
-            maxZoom: 15,
-            markers: markers,
-            builder: (context, clusterMarkers) {
-              return Container(
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: const Color(0xFFFF6D00),
-                  border: Border.all(color: Colors.white, width: 2),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.4),
-                      blurRadius: 4,
-                      offset: const Offset(0, 2),
-                    ),
-                  ],
+            onMapReady: () {
+              if (mounted) setState(() => _mapReady = true);
+            },
+          ),
+          children: [
+            // Satellite tile layer
+            TileLayer(
+              urlTemplate: MapTileService.satelliteTileUrl,
+              userAgentPackageName: 'dev.geogram',
+              subdomains: const [],
+              keepBuffer: 3,
+              tileProvider: _mapTileService.getTileProvider(MapLayerType.satellite),
+            ),
+            // Labels overlay
+            TileLayer(
+              urlTemplate: _mapTileService.getLabelsUrl(),
+              userAgentPackageName: 'dev.geogram',
+              subdomains: const [],
+              keepBuffer: 3,
+              tileProvider: _mapTileService.getLabelsProvider(),
+            ),
+            // Radius circle
+            CircleLayer(
+              circles: [
+                CircleMarker(
+                  point: center,
+                  radius: widget.radiusKm * 1000,
+                  useRadiusInMeter: true,
+                  color: theme.colorScheme.primary.withValues(alpha: 0.08),
+                  borderColor: theme.colorScheme.primary.withValues(alpha: 0.5),
+                  borderStrokeWidth: 2,
                 ),
-                child: Center(
-                  child: Text(
-                    clusterMarkers.length.toString(),
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 14,
+              ],
+            ),
+            // Station markers (clustered)
+            MarkerClusterLayerWidget(
+              options: MarkerClusterLayerOptions(
+                maxClusterRadius: 80,
+                size: const Size(44, 44),
+                alignment: Alignment.center,
+                padding: const EdgeInsets.all(50),
+                maxZoom: 15,
+                markers: markers,
+                builder: (context, clusterMarkers) {
+                  return Container(
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: const Color(0xFFFF6D00),
+                      border: Border.all(color: Colors.white, width: 2),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.4),
+                          blurRadius: 4,
+                          offset: const Offset(0, 2),
+                        ),
+                      ],
+                    ),
+                    child: Center(
+                      child: Text(
+                        clusterMarkers.length.toString(),
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 14,
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+            // My position marker
+            MarkerLayer(
+              markers: [
+                Marker(
+                  point: center,
+                  width: 24,
+                  height: 24,
+                  child: Container(
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: theme.colorScheme.primary,
+                      border: Border.all(color: Colors.white, width: 2),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.3),
+                          blurRadius: 4,
+                        ),
+                      ],
                     ),
                   ),
                 ),
-              );
-            },
-          ),
-        ),
-        // My position marker
-        MarkerLayer(
-          markers: [
-            Marker(
-              point: center,
-              width: 24,
-              height: 24,
-              child: Container(
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: theme.colorScheme.primary,
-                  border: Border.all(color: Colors.white, width: 2),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.3),
-                      blurRadius: 4,
-                    ),
-                  ],
-                ),
-              ),
+              ],
             ),
           ],
         ),
+        // Geo-chat panel — always visible on desktop, toggled on mobile
+        if (_showGeoChat || isWideScreen)
+          Positioned(
+            right: 0,
+            top: 0,
+            bottom: 0,
+            width: 320,
+            child: AprsGeoChatPanel(
+              messages: widget.geoChatMessages,
+              myLocation: widget.myLocation,
+              onMessageTap: (lat, lon) {
+                if (_mapReady) {
+                  _mapController.move(
+                    LatLng(lat, lon),
+                    _mapController.camera.zoom,
+                  );
+                }
+              },
+              onClose: () => setState(() => _showGeoChat = false),
+            ),
+          ),
+        // Toggle FAB (mobile only)
+        if (!isWideScreen)
+          Positioned(
+            right: 12,
+            bottom: 12,
+            child: FloatingActionButton.small(
+              onPressed: () => setState(() => _showGeoChat = !_showGeoChat),
+              child: Icon(_showGeoChat ? Icons.close : Icons.chat_bubble_outline),
+            ),
+          ),
       ],
     );
   }

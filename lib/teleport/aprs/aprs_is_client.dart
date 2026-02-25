@@ -501,12 +501,14 @@ class AprsIsClient {
     // Parse position from position packets
     double? latitude;
     double? longitude;
+    String? comment;
     if (type == AprsPacketType.position) {
       final pos = _parsePosition(infoField);
       if (pos != null) {
         latitude = pos.$1;
         longitude = pos.$2;
       }
+      comment = _extractPositionComment(infoField);
     }
 
     return AprsPacket(
@@ -522,6 +524,7 @@ class AprsIsClient {
       messageAddressee: messageAddressee,
       messageText: messageText,
       messageId: messageId,
+      comment: comment,
     );
   }
 
@@ -697,6 +700,42 @@ class AprsIsClient {
       val = val * 91 + ch;
     }
     return val;
+  }
+
+  /// Extract comment text from a position info field.
+  /// Returns null or empty string when there is no comment.
+  static String? _extractPositionComment(String info) {
+    if (info.isEmpty) return null;
+    final c = info[0];
+
+    // Mic-E, Object, Item — skip (complex formats)
+    if (c == '`' || c == '\x27' || c == ';' || c == ')') return null;
+
+    String posData;
+    if (c == '/' || c == '@') {
+      // Timestamped: DTI (1 char) + DDHHMMz (7 chars) = skip 8
+      if (info.length < 9) return null;
+      posData = info.substring(8);
+    } else if (c == '!' || c == '=') {
+      posData = info.substring(1);
+    } else {
+      return null;
+    }
+
+    if (posData.isEmpty) return null;
+
+    int posLen;
+    if (_isDigit(posData[0])) {
+      // Uncompressed: 19 chars (DDMM.MMN/DDDMM.MMW + symbol code)
+      posLen = 19;
+    } else {
+      // Compressed: 13 chars (symtable + 4 lat + 4 lon + symbol + 2 cs + type)
+      posLen = 13;
+    }
+
+    if (posData.length <= posLen) return null;
+    final comment = posData.substring(posLen).trim();
+    return comment.isEmpty ? null : comment;
   }
 
   static bool _isDigit(String ch) =>

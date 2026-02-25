@@ -58,6 +58,9 @@ class AprsPacket {
   /// Whether this is a locally-generated outgoing message.
   final bool isOutgoing;
 
+  /// Comment text extracted from position reports (geo-chat).
+  final String? comment;
+
   const AprsPacket({
     required this.fromCallsign,
     required this.toCallsign,
@@ -73,6 +76,7 @@ class AprsPacket {
     this.messageId,
     this.isAcked = false,
     this.isOutgoing = false,
+    this.comment,
   });
 
   /// Whether this packet has a valid parsed position.
@@ -96,6 +100,9 @@ class AprsPacket {
     return spaceIdx < 0 ? '' : messageText!.substring(spaceIdx + 1);
   }
 
+  /// Whether this position packet carries a geo-chat comment.
+  bool get isGeoChat => comment != null && comment!.isNotEmpty;
+
   /// Create a copy with updated fields.
   AprsPacket copyWith({bool? isAcked, bool? isOutgoing}) {
     return AprsPacket(
@@ -113,6 +120,7 @@ class AprsPacket {
       messageId: messageId,
       isAcked: isAcked ?? this.isAcked,
       isOutgoing: isOutgoing ?? this.isOutgoing,
+      comment: comment,
     );
   }
 

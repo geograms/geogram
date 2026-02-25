@@ -116,6 +116,9 @@ class AprsService {
   /// Directed messages addressed to this station (messages tab).
   final List<AprsPacket> messages = [];
 
+  /// Position packets with non-empty comments (geo-chat on map).
+  final List<AprsPacket> geoChatMessages = [];
+
   /// Stream of APRS bridge events.
   Stream<AprsEvent> get events => _eventController.stream;
 
@@ -255,6 +258,10 @@ class AprsService {
             streamPackets.add(pkt);
             _uiDirtyStream = true;
           }
+          // Restore geo-chat messages from cached position packets with comments
+          if (pkt.isGeoChat) {
+            geoChatMessages.add(pkt);
+          }
         }
         LogService().log('AprsService: loaded ${streamPackets.length} stream + ${messages.length} messages from cache');
       } catch (e) {
@@ -365,6 +372,7 @@ class AprsService {
   void _clearPackets() {
     streamPackets.clear();
     messages.clear();
+    geoChatMessages.clear();
     lastKnownPositions.clear();
     _recentPacketHashes.clear();
     _uiDirtyStream = true;
@@ -376,6 +384,7 @@ class AprsService {
   void clearDisplay() {
     streamPackets.clear();
     messages.clear();
+    geoChatMessages.clear();
     lastKnownPositions.clear();
     _eventController.add(const AprsEvent(AprsEventType.packetReceived));
     _eventController.add(const AprsEvent(AprsEventType.messageReceived));
@@ -542,6 +551,74 @@ class AprsService {
   }
 
   // ---------------------------------------------------------------------------
+  // Geo-chat (position report with comment)
+  // ---------------------------------------------------------------------------
+
+  /// Send a geo-chat message — a position report with comment text.
+  /// Returns the local echo packet, or null on failure.
+  AprsPacket? sendGeoChat(String text) {
+    if (_client == null || _callsign == null) return null;
+    final lat = _savedLat;
+    final lon = _savedLon;
+    if (lat == null || lon == null) return null;
+
+    // Enforce max comment length (~107 chars after position block)
+    final trimmed = text.length > 107 ? text.substring(0, 107) : text;
+
+    // Build uncompressed APRS position: !DDMM.MMN/DDDMM.MMW$comment
+    final latStr = _toAprsLat(lat);
+    final lonStr = _toAprsLon(lon);
+    final line = '${_callsign!}>APRS,TCPIP*:!$latStr/$lonStr\$$trimmed';
+
+    _client!.sendRaw(line);
+
+    // Create local echo
+    final echo = AprsPacket(
+      fromCallsign: _callsign!,
+      toCallsign: 'APRS',
+      infoField: '!$latStr/$lonStr\$$trimmed',
+      rawTnc2: line,
+      timestamp: DateTime.now().toUtc(),
+      type: AprsPacketType.position,
+      latitude: lat,
+      longitude: lon,
+      comment: trimmed,
+      isOutgoing: true,
+    );
+
+    geoChatMessages.add(echo);
+    if (geoChatMessages.length > _maxMessages) {
+      geoChatMessages.removeRange(0, geoChatMessages.length - _maxMessages);
+    }
+    _writeQueue.add(echo);
+    if (_writeQueue.length >= _writeFlushThreshold) {
+      _flushWrites();
+    }
+    _uiDirtyMessages = true;
+
+    LogService().log('AprsService: sent geo-chat: $trimmed');
+    return echo;
+  }
+
+  /// Convert decimal latitude to APRS uncompressed format: DDMM.MMN
+  static String _toAprsLat(double lat) {
+    final hemi = lat >= 0 ? 'N' : 'S';
+    final absLat = lat.abs();
+    final deg = absLat.floor();
+    final min = (absLat - deg) * 60;
+    return '${deg.toString().padLeft(2, '0')}${min.toStringAsFixed(2).padLeft(5, '0')}$hemi';
+  }
+
+  /// Convert decimal longitude to APRS uncompressed format: DDDMM.MMW
+  static String _toAprsLon(double lon) {
+    final hemi = lon >= 0 ? 'E' : 'W';
+    final absLon = lon.abs();
+    final deg = absLon.floor();
+    final min = (absLon - deg) * 60;
+    return '${deg.toString().padLeft(3, '0')}${min.toStringAsFixed(2).padLeft(5, '0')}$hemi';
+  }
+
+  // ---------------------------------------------------------------------------
   // Packet ingestion with ACK handling
   // ---------------------------------------------------------------------------
 
@@ -628,6 +705,15 @@ class AprsService {
         streamPackets.removeRange(0, streamPackets.length - _maxStreamPackets);
       }
       _uiDirtyStream = true;
+    }
+
+    // Collect position packets with comments for geo-chat
+    if (packet.isGeoChat) {
+      geoChatMessages.add(packet);
+      if (geoChatMessages.length > _maxMessages) {
+        geoChatMessages.removeRange(0, geoChatMessages.length - _maxMessages);
+      }
+      _uiDirtyMessages = true;
     }
   }
 

@@ -96,6 +96,7 @@ class AprsCacheService {
     _addColumnIfMissing('longitude', 'REAL');
     _addColumnIfMissing('message_addressee', 'TEXT');
     _addColumnIfMissing('is_outgoing', 'INTEGER');
+    _addColumnIfMissing('comment', 'TEXT');
     _db!.execute('''
       CREATE INDEX IF NOT EXISTS idx_packets_timestamp
       ON packets(timestamp DESC);
@@ -123,8 +124,8 @@ class AprsCacheService {
         '''INSERT INTO packets
            (from_callsign, to_callsign, path, info_field, raw_tnc2,
             timestamp, type, latitude, longitude, message_addressee,
-            message_text, message_id, is_acked, is_outgoing)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+            message_text, message_id, is_acked, is_outgoing, comment)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
         [
           packet.fromCallsign,
           packet.toCallsign,
@@ -140,6 +141,7 @@ class AprsCacheService {
           packet.messageId,
           packet.isAcked ? 1 : 0,
           packet.isOutgoing ? 1 : 0,
+          packet.comment,
         ],
       );
     } catch (e) {
@@ -158,8 +160,8 @@ class AprsCacheService {
           '''INSERT INTO packets
              (from_callsign, to_callsign, path, info_field, raw_tnc2,
               timestamp, type, latitude, longitude, message_addressee,
-              message_text, message_id, is_acked, is_outgoing)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+              message_text, message_id, is_acked, is_outgoing, comment)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
         );
         for (final packet in packets) {
           stmt.execute([
@@ -177,6 +179,7 @@ class AprsCacheService {
             packet.messageId,
             packet.isAcked ? 1 : 0,
             packet.isOutgoing ? 1 : 0,
+            packet.comment,
           ]);
         }
         stmt.dispose();
@@ -197,7 +200,7 @@ class AprsCacheService {
       final result = db.select(
         '''SELECT from_callsign, to_callsign, path, info_field, raw_tnc2,
                   timestamp, type, latitude, longitude, message_addressee,
-                  message_text, message_id, is_acked, is_outgoing
+                  message_text, message_id, is_acked, is_outgoing, comment
            FROM packets ORDER BY timestamp DESC LIMIT ?''',
         [limit],
       );
@@ -294,6 +297,7 @@ class AprsCacheService {
       messageId: row['message_id'] as String?,
       isAcked: (row['is_acked'] as int) == 1,
       isOutgoing: (row['is_outgoing'] as int?) == 1,
+      comment: row['comment'] as String?,
     );
   }
 

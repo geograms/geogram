@@ -17121,6 +17121,58 @@ function cleanup() {
             headers: headers,
           );
 
+        case 'aprs_geochat':
+          final myLat = aprs.savedLatitude;
+          final myLon = aprs.savedLongitude;
+          final chatMsgs = aprs.geoChatMessages.map((m) {
+            double? distKm;
+            if (m.hasPosition && myLat != null && myLon != null) {
+              distKm = _aprsHaversineKm(myLat, myLon, m.latitude!, m.longitude!);
+            }
+            return {
+              'sender': m.fromCallsign,
+              'lat': m.latitude,
+              'lon': m.longitude,
+              'comment': m.comment,
+              'timestamp': m.timestamp.toIso8601String(),
+              'isOutgoing': m.isOutgoing,
+              'distKm': distKm != null ? (distKm * 10).round() / 10.0 : null,
+            };
+          }).toList();
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'count': chatMsgs.length,
+              'messages': chatMsgs,
+            }),
+            headers: headers,
+          );
+
+        case 'aprs_send_geochat':
+          final text = params['text'] as String?;
+          if (text == null || text.isEmpty) {
+            return shelf.Response.ok(
+              jsonEncode({'success': false, 'error': 'text required'}),
+              headers: headers,
+            );
+          }
+          if (!aprs.isEnabled || !aprs.isRunning) {
+            return shelf.Response.ok(
+              jsonEncode({'success': false, 'error': 'APRS not connected'}),
+              headers: headers,
+            );
+          }
+          final sent = aprs.sendGeoChat(text);
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': sent != null,
+              'text': text,
+              'lat': sent?.latitude,
+              'lon': sent?.longitude,
+            }),
+            headers: headers,
+          );
+
         case 'aprs_conversations':
           final convos = aprs.getConversations();
           final list = convos.map((c) => {

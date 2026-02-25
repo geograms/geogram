@@ -45,6 +45,9 @@ This document catalogs reusable UI components available in the Geogram codebase.
 ### Background Task Infrastructure
 - [Background Task Monitor](#background-task-monitor) - Centralized registry for all background tasks with pause/resume and debug API
 
+### APRS Components
+- [APRS Geo-Chat Panel](#aprs-geo-chat-panel) - Floating map overlay for sending/receiving position reports with comments
+
 ### Hashing Utilities
 - [TLSH (Locality Sensitive Hash)](#tlsh-locality-sensitive-hash) - Fuzzy similarity hashing for binary data
 - [SHA1 Content Hashing](#sha1-content-hashing) - Exact content deduplication via crypto package
@@ -9716,3 +9719,43 @@ if (decoded?.eventIdHex != null) {
   print(decoded!.eventIdHex);
 }
 ```
+
+---
+
+## APRS Geo-Chat Panel
+
+**Files:**
+- `lib/teleport/aprs/widgets/aprs_geo_chat_panel.dart` — Floating chat panel widget
+- `lib/teleport/aprs/aprs_service.dart` — `geoChatMessages` list + `sendGeoChat()` method
+- `lib/teleport/aprs/aprs_is_client.dart` — `_extractPositionComment()` parser
+- `lib/teleport/aprs/models/aprs_packet.dart` — `comment` field on `AprsPacket`
+
+Geo-chat uses standard APRS position reports with comment text (`!DDMM.MMN/DDDMM.MMW$comment`). Every station in the APRS-IS radius filter already receives these — the parser extracts the comment from position packets and collects them in `AprsService.geoChatMessages`.
+
+### Widget: AprsGeoChatPanel
+
+Floating overlay on the right side of the APRS Map tab. Desktop: always visible (320px wide). Mobile: toggled via FAB.
+
+```dart
+AprsGeoChatPanel(
+  messages: aprsService.geoChatMessages,
+  myLocation: myLocation,
+  onMessageTap: (lat, lon) => mapController.move(LatLng(lat, lon), zoom),
+  onClose: () => setState(() => showGeoChat = false),
+)
+```
+
+### Service: sendGeoChat()
+
+Builds and sends an APRS position report with comment text:
+
+```dart
+final echo = AprsService().sendGeoChat('Hello from here');
+// Sends: MYCALL>APRS,TCPIP*:!DDMM.MMN/DDDMM.MMW$Hello from here
+// Returns local echo AprsPacket with isOutgoing: true
+```
+
+### Debug API
+
+- `aprs_geochat` — List all geo-chat messages (sender, lat, lon, comment, timestamp, isOutgoing, distKm)
+- `aprs_send_geochat` — Send a geo-chat message: `{"action":"aprs_send_geochat","text":"Hello"}`
