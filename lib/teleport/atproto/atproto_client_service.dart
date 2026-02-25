@@ -18,6 +18,7 @@ import '../../util/task_monitor_helpers.dart';
 import 'atproto_storage_service.dart';
 import 'models/atproto_bridge_config.dart';
 import 'models/atproto_feed_item.dart';
+import 'models/atproto_profile.dart';
 import 'models/atproto_session.dart';
 
 enum AtprotoClientEventType {
@@ -292,67 +293,44 @@ class AtprotoClientService {
 
   Future<void> syncFeed() async {
     if (!_config.enabled) return;
-    final appView = _normalizeBaseUrl(_config.appViewUrl);
     final actor = _resolveReadActor();
-
-    final uri = Uri.parse(
-      '$appView/xrpc/app.bsky.feed.getAuthorFeed?actor=${Uri.encodeQueryComponent(actor)}&limit=50',
-    );
-
     try {
-      final response = await http.get(uri);
-      if (response.statusCode < 200 || response.statusCode >= 300) {
-        _emit(
-          AtprotoClientEvent(
-            AtprotoClientEventType.error,
-            data: 'Feed sync failed (${response.statusCode})',
-          ),
-        );
-        return;
-      }
-
-      final body = jsonDecode(response.body) as Map<String, dynamic>;
-      final rawFeed = body['feed'] as List<dynamic>? ?? const [];
-      final parsed = <AtprotoFeedItem>[];
-      for (final entry in rawFeed) {
-        if (entry is! Map<String, dynamic>) continue;
-        final postWrap = entry['post'];
-        if (postWrap is! Map<String, dynamic>) continue;
-
-        final author = postWrap['author'] as Map<String, dynamic>? ?? const {};
-        final record = postWrap['record'] as Map<String, dynamic>? ?? const {};
-        final reply = record['reply'] as Map<String, dynamic>?;
-        final root = reply?['root'] as Map<String, dynamic>?;
-        final parent = reply?['parent'] as Map<String, dynamic>?;
-
-        parsed.add(
-          AtprotoFeedItem(
-            uri: postWrap['uri'] as String? ?? '',
-            cid: postWrap['cid'] as String? ?? '',
-            authorDid: author['did'] as String? ?? '',
-            authorHandle: author['handle'] as String? ?? '',
-            displayName:
-                author['displayName'] as String? ??
-                (author['handle'] as String? ?? ''),
-            text: record['text'] as String? ?? '',
-            createdAt:
-                DateTime.tryParse(record['createdAt'] as String? ?? '') ??
-                DateTime.now().toUtc(),
-            replyCount: postWrap['replyCount'] as int? ?? 0,
-            repostCount: postWrap['repostCount'] as int? ?? 0,
-            likeCount: postWrap['likeCount'] as int? ?? 0,
-            parentUri: parent?['uri'] as String?,
-            rootUri: root?['uri'] as String?,
-          ),
-        );
-      }
-
-      _feed = parsed;
-      await _storage?.saveCachedFeed(parsed);
+      _feed = await fetchAuthorFeed(actor, limit: 50);
+      await _storage?.saveCachedFeed(_feed);
       _emit(const AtprotoClientEvent(AtprotoClientEventType.feedUpdated));
     } catch (e) {
       _emit(AtprotoClientEvent(AtprotoClientEventType.error, data: '$e'));
     }
+  }
+
+  Future<List<AtprotoFeedItem>> fetchAuthorFeed(
+    String actor, {
+    int limit = 50,
+  }) async {
+    final appView = _normalizeBaseUrl(_config.appViewUrl);
+    final uri = Uri.parse(
+      '$appView/xrpc/app.bsky.feed.getAuthorFeed'
+      '?actor=${Uri.encodeQueryComponent(actor)}'
+      '&limit=${limit.clamp(1, 100)}',
+    );
+    final response = await http.get(uri);
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw Exception('Feed read failed (${response.statusCode})');
+    }
+    final body = jsonDecode(response.body) as Map<String, dynamic>;
+    return _parseFeed(body);
+  }
+
+  Future<AtprotoProfile?> fetchProfile(String actor) async {
+    final appView = _normalizeBaseUrl(_config.appViewUrl);
+    final uri = Uri.parse(
+      '$appView/xrpc/app.bsky.actor.getProfile'
+      '?actor=${Uri.encodeQueryComponent(actor)}',
+    );
+    final response = await http.get(uri);
+    if (response.statusCode < 200 || response.statusCode >= 300) return null;
+    final json = jsonDecode(response.body) as Map<String, dynamic>;
+    return AtprotoProfile.fromJson(json);
   }
 
   String _resolveReadActor() {
@@ -365,6 +343,98 @@ class AtprotoClientService {
     }
     // Fallback so users always see posts even before login succeeds.
     return 'bsky.app';
+  }
+
+  List<AtprotoFeedItem> _parseFeed(Map<String, dynamic> body) {
+    final rawFeed = body['feed'] as List<dynamic>? ?? const [];
+    final parsed = <AtprotoFeedItem>[];
+    for (final entry in rawFeed) {
+      if (entry is! Map<String, dynamic>) continue;
+      final postWrap = entry['post'];
+      if (postWrap is! Map<String, dynamic>) continue;
+
+      final author = postWrap['author'] as Map<String, dynamic>? ?? const {};
+      final record = postWrap['record'] as Map<String, dynamic>? ?? const {};
+      final reply = record['reply'] as Map<String, dynamic>?;
+      final root = reply?['root'] as Map<String, dynamic>?;
+      final parent = reply?['parent'] as Map<String, dynamic>?;
+      final viewer = postWrap['viewer'] as Map<String, dynamic>?;
+
+      String? externalUrl;
+      String? externalTitle;
+      String? externalDescription;
+      String? externalThumbUrl;
+      final embed = postWrap['embed'] as Map<String, dynamic>?;
+      if (embed != null) {
+        final external = embed['external'] as Map<String, dynamic>?;
+        if (external != null) {
+          externalUrl = external['uri'] as String?;
+          externalTitle = external['title'] as String?;
+          externalDescription = external['description'] as String?;
+          final thumb = external['thumb'] as String?;
+          externalThumbUrl = thumb;
+        }
+      }
+
+      final links = _extractLinks(record);
+
+      parsed.add(
+        AtprotoFeedItem(
+          uri: postWrap['uri'] as String? ?? '',
+          cid: postWrap['cid'] as String? ?? '',
+          authorDid: author['did'] as String? ?? '',
+          authorHandle: author['handle'] as String? ?? '',
+          displayName:
+              author['displayName'] as String? ??
+              (author['handle'] as String? ?? ''),
+          avatarUrl: author['avatar'] as String?,
+          text: record['text'] as String? ?? '',
+          createdAt:
+              DateTime.tryParse(record['createdAt'] as String? ?? '') ??
+              DateTime.now().toUtc(),
+          replyCount: postWrap['replyCount'] as int? ?? 0,
+          repostCount: postWrap['repostCount'] as int? ?? 0,
+          likeCount: postWrap['likeCount'] as int? ?? 0,
+          indexedAt: postWrap['indexedAt'] as String?,
+          parentUri: parent?['uri'] as String?,
+          rootUri: root?['uri'] as String?,
+          externalUrl: externalUrl,
+          externalTitle: externalTitle,
+          externalDescription: externalDescription,
+          externalThumbUrl: externalThumbUrl,
+          links: links,
+          isLikedByMe: viewer?['like'] != null,
+          isRepostedByMe: viewer?['repost'] != null,
+        ),
+      );
+    }
+    return parsed;
+  }
+
+  List<String> _extractLinks(Map<String, dynamic> record) {
+    final links = <String>[];
+    final facets = record['facets'] as List<dynamic>? ?? const [];
+    for (final facet in facets) {
+      if (facet is! Map<String, dynamic>) continue;
+      final features = facet['features'] as List<dynamic>? ?? const [];
+      for (final feature in features) {
+        if (feature is! Map<String, dynamic>) continue;
+        final uri = feature['uri'] as String?;
+        if (uri != null && uri.isNotEmpty) links.add(uri);
+      }
+    }
+
+    final text = record['text'] as String? ?? '';
+    final regex = RegExp(
+      r'(https?://[^\s]+|www\.[^\s]+)',
+      caseSensitive: false,
+    );
+    for (final m in regex.allMatches(text)) {
+      final value = m.group(0);
+      if (value == null || value.isEmpty) continue;
+      links.add(value.startsWith('http') ? value : 'https://$value');
+    }
+    return links.toSet().toList();
   }
 
   void dispose() {

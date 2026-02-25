@@ -10,6 +10,7 @@ import 'package:flutter/material.dart';
 import '../atproto_client_service.dart';
 import '../models/atproto_feed_item.dart';
 import '../widgets/atproto_post_tile.dart';
+import 'atproto_profile_page.dart';
 import 'atproto_settings_page.dart';
 
 class AtprotoMainPage extends StatefulWidget {
@@ -86,6 +87,12 @@ class _AtprotoMainPageState extends State<AtprotoMainPage> {
   Widget build(BuildContext context) {
     final service = AtprotoClientService();
     final feed = service.feed;
+    final composerLength = _composer.text.trim().length;
+    final canPublish =
+        service.isAuthenticated &&
+        !_isBootstrapping &&
+        composerLength > 0 &&
+        composerLength <= 300;
 
     return Scaffold(
       appBar: AppBar(
@@ -161,42 +168,88 @@ class _AtprotoMainPageState extends State<AtprotoMainPage> {
                 ),
               ),
             ),
-          if (!service.isAuthenticated && !_isBootstrapping)
-            const Padding(
-              padding: EdgeInsets.all(12),
-              child: Card(
-                child: Padding(
-                  padding: EdgeInsets.all(12),
-                  child: Text(
-                    'Read-only mode: showing public posts.\n'
-                    'Publishing will activate automatically when local PDS auth succeeds.',
-                  ),
-                ),
-              ),
-            ),
-          Expanded(
-            child: feed.isEmpty
-                ? const Center(child: Text('No posts yet'))
-                : ListView.builder(
-                    itemCount: feed.length,
-                    itemBuilder: (context, index) {
-                      final item = feed[index];
-                      return AtprotoPostTile(
-                        item: item,
-                        onLike: () => service.likePost(item),
-                        onRepost: () => service.repost(item),
-                        onReply: () => setState(() => _replyTarget = item),
-                      );
-                    },
-                  ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 6, 12, 8),
+            child: _buildStatusBanner(context, service),
           ),
-          _buildComposer(service),
+          Expanded(
+            child: RefreshIndicator(
+              onRefresh: service.syncFeed,
+              child: feed.isEmpty
+                  ? ListView(
+                      children: const [
+                        SizedBox(height: 140),
+                        Center(child: Text('No posts yet')),
+                      ],
+                    )
+                  : ListView.builder(
+                      itemCount: feed.length,
+                      itemBuilder: (context, index) {
+                        final item = feed[index];
+                        return AtprotoPostTile(
+                          item: item,
+                          onLike: () => service.likePost(item),
+                          onRepost: () => service.repost(item),
+                          onReply: () => setState(() => _replyTarget = item),
+                          onTapAuthor: () => _openAuthorProfile(item),
+                        );
+                      },
+                    ),
+            ),
+          ),
+          _buildComposer(service, canPublish, composerLength),
         ],
       ),
     );
   }
 
-  Widget _buildComposer(AtprotoClientService service) {
+  Widget _buildStatusBanner(
+    BuildContext context,
+    AtprotoClientService service,
+  ) {
+    final theme = Theme.of(context);
+    final authenticated = service.isAuthenticated;
+    final icon = authenticated ? Icons.verified_user : Icons.public;
+    final color = authenticated
+        ? Colors.green.shade700
+        : theme.colorScheme.primary;
+    final text = authenticated
+        ? 'Connected as @${service.session?.handle ?? service.config.identifier}'
+        : 'Read-only feed active. Publishing unlocks automatically after local PDS auth.';
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color.withValues(alpha: 0.25)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, size: 16, color: color),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              text,
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurface,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildComposer(
+    AtprotoClientService service,
+    bool canPublish,
+    int composerLength,
+  ) {
+    final overLimit = composerLength > 300;
+
     return Material(
       elevation: 8,
       child: SafeArea(
@@ -227,21 +280,38 @@ class _AtprotoMainPageState extends State<AtprotoMainPage> {
                   Expanded(
                     child: TextField(
                       controller: _composer,
+                      onChanged: (_) => setState(() {}),
                       minLines: 1,
                       maxLines: 4,
-                      decoration: const InputDecoration(
+                      decoration: InputDecoration(
                         hintText: 'Write a post...',
-                        border: OutlineInputBorder(),
+                        helperText: overLimit
+                            ? 'Post is too long (max 300 chars)'
+                            : null,
+                        helperStyle: TextStyle(
+                          color: overLimit ? Colors.red.shade700 : null,
+                        ),
+                        border: const OutlineInputBorder(),
                         isDense: true,
                       ),
                     ),
                   ),
                   const SizedBox(width: 8),
-                  FilledButton(
-                    onPressed: service.isAuthenticated && !_isBootstrapping
-                        ? _publish
-                        : null,
-                    child: const Text('Post'),
+                  Column(
+                    children: [
+                      Text(
+                        '$composerLength/300',
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: overLimit ? Colors.red.shade700 : null,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      FilledButton(
+                        onPressed: canPublish ? _publish : null,
+                        child: const Text('Post'),
+                      ),
+                    ],
                   ),
                 ],
               ),
@@ -254,7 +324,7 @@ class _AtprotoMainPageState extends State<AtprotoMainPage> {
 
   void _publish() async {
     final text = _composer.text.trim();
-    if (text.isEmpty) return;
+    if (text.isEmpty || text.length > 300) return;
 
     final ok = await AtprotoClientService().publishPost(
       text,
@@ -270,5 +340,14 @@ class _AtprotoMainPageState extends State<AtprotoMainPage> {
         context,
       ).showSnackBar(const SnackBar(content: Text('Failed to publish post')));
     }
+  }
+
+  void _openAuthorProfile(AtprotoFeedItem item) {
+    final actor = item.authorDid.startsWith('did:')
+        ? item.authorDid
+        : item.authorHandle;
+    Navigator.of(
+      context,
+    ).push(MaterialPageRoute(builder: (_) => AtprotoProfilePage(actor: actor)));
   }
 }
