@@ -14,6 +14,7 @@ import 'dart:isolate';
 
 import 'package:ffi/ffi.dart';
 
+import '../../services/app_args.dart';
 import '../../services/log_service.dart';
 import 'telegram_log.dart';
 import 'tdlib_ffi.dart';
@@ -52,6 +53,8 @@ class TdlibClient {
     if (_client == null || _client == nullptr) {
       throw StateError('Failed to create TDLib client');
     }
+
+    _configureTdlibLogging();
 
     _running = true;
     _startReceiveLoop();
@@ -213,6 +216,34 @@ class TdlibClient {
       if (str.isNotEmpty) {
         params.sendPort.send(str);
       }
+    }
+  }
+
+  void _configureTdlibLogging() {
+    final verbose = AppArgs().verbose;
+    final level = verbose ? 2 : 0;
+    try {
+      final result = execute({
+        '@type': 'setLogVerbosityLevel',
+        'new_verbosity_level': level,
+      });
+      if (result != null && result['@type'] == 'error') {
+        telegramWarn('TdlibClient: setLogVerbosityLevel error: ${result['message'] ?? result}');
+      }
+    } catch (e) {
+      telegramWarn('TdlibClient: setLogVerbosityLevel failed: $e');
+    }
+
+    try {
+      final result = execute({
+        '@type': 'setLogStream',
+        'log_stream': {'@type': 'logStreamEmpty'},
+      });
+      if (result != null && result['@type'] == 'error') {
+        telegramWarn('TdlibClient: setLogStream error: ${result['message'] ?? result}');
+      }
+    } catch (e) {
+      telegramWarn('TdlibClient: setLogStream failed: $e');
     }
   }
 }
