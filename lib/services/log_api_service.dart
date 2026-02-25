@@ -37,6 +37,7 @@ import '../teleport/signal/signal_service.dart';
 import '../teleport/irc/irc_service.dart';
 import '../teleport/xmpp/xmpp_service.dart';
 import '../teleport/xmpp/models/xmpp_server_config.dart';
+import 'xmpp_server_stub.dart' if (dart.library.io) 'xmpp_server.dart';
 import '../teleport/nostr/nostr_client_service.dart';
 import '../teleport/nostr/models/nostr_relay_config.dart';
 import '../teleport/atproto/atproto_client_service.dart';
@@ -2088,6 +2089,11 @@ function cleanup() {
       // Handle IRC debug actions
       if (action.toLowerCase().startsWith('irc_')) {
         return await _handleIrcAction(action.toLowerCase(), params, headers);
+      }
+
+      // Handle XMPP server debug actions (must be before xmpp_ client actions)
+      if (action.toLowerCase().startsWith('xmpp_server_')) {
+        return await _handleXmppServerAction(action.toLowerCase(), params, headers);
       }
 
       // Handle XMPP debug actions
@@ -17465,6 +17471,108 @@ function cleanup() {
         return shelf.Response.ok(
           jsonEncode({'success': false, 'error': 'Unknown IRC action: $action'}),
           headers: headers,
+        );
+    }
+  }
+
+  // ============================================================
+  // XMPP Server Debug Actions
+  // ============================================================
+
+  Future<shelf.Response> _handleXmppServerAction(
+    String action,
+    Map<String, dynamic> params,
+    Map<String, String> headers,
+  ) async {
+    final xmppServer = XmppServer.instance;
+
+    switch (action) {
+      case 'xmpp_server_status':
+        if (xmppServer == null) {
+          return shelf.Response.ok(
+            jsonEncode({'success': true, 'running': false, 'enabled': false}),
+            headers: {'content-type': 'application/json'},
+          );
+        }
+        return shelf.Response.ok(
+          jsonEncode({'success': true, ...xmppServer.getStatus()}),
+          headers: {'content-type': 'application/json'},
+        );
+
+      case 'xmpp_server_register':
+        final username = params['username'] as String?;
+        final password = params['password'] as String?;
+        if (username == null || password == null) {
+          return shelf.Response.ok(
+            jsonEncode({'success': false, 'error': 'username and password required'}),
+            headers: {'content-type': 'application/json'},
+          );
+        }
+        if (xmppServer == null) {
+          return shelf.Response.ok(
+            jsonEncode({'success': false, 'error': 'XMPP server not running'}),
+            headers: {'content-type': 'application/json'},
+          );
+        }
+        final registered = await xmppServer.registerUser(username, password);
+        return shelf.Response.ok(
+          jsonEncode({
+            'success': registered,
+            'error': registered ? null : 'Registration failed (username may be taken)',
+            'jid': registered ? '$username@${xmppServer.domain}' : null,
+          }),
+          headers: {'content-type': 'application/json'},
+        );
+
+      case 'xmpp_server_users':
+        if (xmppServer == null) {
+          return shelf.Response.ok(
+            jsonEncode({'success': false, 'error': 'XMPP server not running'}),
+            headers: {'content-type': 'application/json'},
+          );
+        }
+        return shelf.Response.ok(
+          jsonEncode({'success': true, 'users': xmppServer.listUsers()}),
+          headers: {'content-type': 'application/json'},
+        );
+
+      case 'xmpp_server_rooms':
+        if (xmppServer == null) {
+          return shelf.Response.ok(
+            jsonEncode({'success': false, 'error': 'XMPP server not running'}),
+            headers: {'content-type': 'application/json'},
+          );
+        }
+        return shelf.Response.ok(
+          jsonEncode({'success': true, 'rooms': xmppServer.listRooms()}),
+          headers: {'content-type': 'application/json'},
+        );
+
+      case 'xmpp_server_kick':
+        final roomJid = params['roomJid'] as String?;
+        final bareJid = params['bareJid'] as String?;
+        if (roomJid == null || bareJid == null) {
+          return shelf.Response.ok(
+            jsonEncode({'success': false, 'error': 'roomJid and bareJid required'}),
+            headers: {'content-type': 'application/json'},
+          );
+        }
+        if (xmppServer == null) {
+          return shelf.Response.ok(
+            jsonEncode({'success': false, 'error': 'XMPP server not running'}),
+            headers: {'content-type': 'application/json'},
+          );
+        }
+        final kicked = xmppServer.kickFromRoom(roomJid, bareJid);
+        return shelf.Response.ok(
+          jsonEncode({'success': kicked, 'error': kicked ? null : 'User not found in room'}),
+          headers: {'content-type': 'application/json'},
+        );
+
+      default:
+        return shelf.Response.ok(
+          jsonEncode({'success': false, 'error': 'Unknown xmpp_server action: $action'}),
+          headers: {'content-type': 'application/json'},
         );
     }
   }

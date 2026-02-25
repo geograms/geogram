@@ -25,6 +25,7 @@ import '../api/common/station_info.dart';
 import '../services/nip05_registry_service.dart';
 import '../services/email_relay_service.dart';
 import '../services/smtp_server.dart';
+import '../services/xmpp_server.dart';
 import '../util/alert_folder_utils.dart';
 import '../util/feedback_folder_utils.dart';
 import '../util/nostr_key_generator.dart';
@@ -125,6 +126,10 @@ class PureRelaySettings implements StationSettingsReadable {
   // DKIM configuration (RSA private key in PEM format, base64 encoded)
   String? dkimPrivateKey;
 
+  // XMPP Server configuration
+  bool xmppServerEnabled;
+  int xmppServerPort;
+
   PureRelaySettings({
     this.httpPort = 8080,
     this.enabled = false,
@@ -170,6 +175,8 @@ class PureRelaySettings implements StationSettingsReadable {
     this.smtpRelayPassword,
     this.smtpRelayStartTls = true,
     this.dkimPrivateKey,
+    this.xmppServerEnabled = false,
+    this.xmppServerPort = 5222,
   }) : npub = npub ?? _defaultKeys.npub,
        nsec = nsec ?? _defaultKeys.nsec;
 
@@ -227,6 +234,8 @@ class PureRelaySettings implements StationSettingsReadable {
       smtpRelayPassword: json['smtpRelayPassword'] as String?,
       smtpRelayStartTls: json['smtpRelayStartTls'] as bool? ?? true,
       dkimPrivateKey: json['dkimPrivateKey'] as String?,
+      xmppServerEnabled: json['xmppServerEnabled'] as bool? ?? false,
+      xmppServerPort: json['xmppServerPort'] as int? ?? 5222,
     );
   }
 
@@ -277,6 +286,8 @@ class PureRelaySettings implements StationSettingsReadable {
         'smtpRelayPassword': smtpRelayPassword,
         'smtpRelayStartTls': smtpRelayStartTls,
         'dkimPrivateKey': dkimPrivateKey,
+        'xmppServerEnabled': xmppServerEnabled,
+        'xmppServerPort': xmppServerPort,
       };
 
   PureRelaySettings copyWith({
@@ -324,6 +335,8 @@ class PureRelaySettings implements StationSettingsReadable {
     String? smtpRelayPassword,
     bool? smtpRelayStartTls,
     String? dkimPrivateKey,
+    bool? xmppServerEnabled,
+    int? xmppServerPort,
   }) {
     return PureRelaySettings(
       httpPort: httpPort ?? this.httpPort,
@@ -370,6 +383,8 @@ class PureRelaySettings implements StationSettingsReadable {
       smtpRelayPassword: smtpRelayPassword ?? this.smtpRelayPassword,
       smtpRelayStartTls: smtpRelayStartTls ?? this.smtpRelayStartTls,
       dkimPrivateKey: dkimPrivateKey ?? this.dkimPrivateKey,
+      xmppServerEnabled: xmppServerEnabled ?? this.xmppServerEnabled,
+      xmppServerPort: xmppServerPort ?? this.xmppServerPort,
     );
   }
 
@@ -762,6 +777,7 @@ class PureStationServer with EmailHandlerMixin, BlogHandlerMixin, ConsoleCommand
   HttpServer? _httpServer;
   HttpServer? _httpsServer;
   SMTPServer? _smtpServer;
+  XmppServer? _xmppServer;
   PureRelaySettings _settings = PureRelaySettings();
   final Map<String, PureConnectedClient> _clients = {};
 
@@ -1843,6 +1859,27 @@ class PureStationServer with EmailHandlerMixin, BlogHandlerMixin, ConsoleCommand
         }
       }
 
+      // Start XMPP server if enabled
+      if (_settings.xmppServerEnabled && _settings.sslDomain != null) {
+        _xmppServer = XmppServer(
+          port: _settings.xmppServerPort,
+          domain: _settings.sslDomain!,
+          dataDir: _dataDir ?? '.',
+        );
+
+        final xmppStarted = await _xmppServer!.start();
+        if (xmppStarted) {
+          await _xmppServer!.autoProvisionAdmin(
+            _settings.callsign,
+            'station-${_settings.callsign}',
+          );
+          _log('INFO', 'XMPP server started on port ${_settings.xmppServerPort} for domain ${_settings.sslDomain}');
+        } else {
+          _log('WARN', 'Failed to start XMPP server on port ${_settings.xmppServerPort}');
+          _xmppServer = null;
+        }
+      }
+
       // Start HTTPS server if SSL is enabled
       if (_settings.enableSsl) {
         // Check if we need to request certificates first
@@ -2004,6 +2041,10 @@ class PureStationServer with EmailHandlerMixin, BlogHandlerMixin, ConsoleCommand
     // Stop SMTP server
     await _smtpServer?.stop();
     _smtpServer = null;
+
+    // Stop XMPP server
+    await _xmppServer?.stop();
+    _xmppServer = null;
 
     _nostrRelay = null;
     _nostrStorage?.close();

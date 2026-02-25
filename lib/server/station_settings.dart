@@ -72,6 +72,10 @@ class StationSettings {
   bool atprotoEnabled;
   String? atprotoHandle;
 
+  // ============ XMPP Server ============
+  bool xmppServerEnabled;
+  int xmppServerPort;
+
   // ============ STUN Server (App-only, CLI can inherit) ============
   bool stunServerEnabled;
   int stunServerPort;
@@ -123,6 +127,8 @@ class StationSettings {
     this.dkimPrivateKey,
     this.atprotoEnabled = false,
     this.atprotoHandle,
+    this.xmppServerEnabled = false,
+    this.xmppServerPort = 5222,
     this.stunServerEnabled = true,
     this.stunServerPort = 3478,
   })  : npub = npub ?? _defaultKeys.npub,
@@ -184,6 +190,8 @@ class StationSettings {
       dkimPrivateKey: json['dkimPrivateKey'] as String?,
       atprotoEnabled: json['atprotoEnabled'] as bool? ?? false,
       atprotoHandle: json['atprotoHandle'] as String?,
+      xmppServerEnabled: json['xmppServerEnabled'] as bool? ?? false,
+      xmppServerPort: json['xmppServerPort'] as int? ?? 5222,
       stunServerEnabled: json['stunServerEnabled'] as bool? ?? true,
       stunServerPort: json['stunServerPort'] as int? ?? 3478,
     );
@@ -238,6 +246,8 @@ class StationSettings {
     'dkimPrivateKey': dkimPrivateKey,
     'atprotoEnabled': atprotoEnabled,
     'atprotoHandle': atprotoHandle,
+    'xmppServerEnabled': xmppServerEnabled,
+    'xmppServerPort': xmppServerPort,
     'stunServerEnabled': stunServerEnabled,
     'stunServerPort': stunServerPort,
   };
@@ -289,6 +299,8 @@ class StationSettings {
     String? dkimPrivateKey,
     bool? atprotoEnabled,
     String? atprotoHandle,
+    bool? xmppServerEnabled,
+    int? xmppServerPort,
     bool? stunServerEnabled,
     int? stunServerPort,
   }) {
@@ -339,6 +351,8 @@ class StationSettings {
       dkimPrivateKey: dkimPrivateKey ?? this.dkimPrivateKey,
       atprotoEnabled: atprotoEnabled ?? this.atprotoEnabled,
       atprotoHandle: atprotoHandle ?? this.atprotoHandle,
+      xmppServerEnabled: xmppServerEnabled ?? this.xmppServerEnabled,
+      xmppServerPort: xmppServerPort ?? this.xmppServerPort,
       stunServerEnabled: stunServerEnabled ?? this.stunServerEnabled,
       stunServerPort: stunServerPort ?? this.stunServerPort,
     );

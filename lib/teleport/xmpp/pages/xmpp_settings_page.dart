@@ -8,9 +8,12 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../xmpp_service.dart';
+import '../xmpp_client.dart';
 import '../models/xmpp_server_config.dart';
+import '../../../services/xmpp_server_stub.dart' if (dart.library.io) '../../../services/xmpp_server.dart';
 
 class XmppSettingsPage extends StatefulWidget {
   final String appPath;
@@ -59,6 +62,11 @@ class _XmppSettingsPageState extends State<XmppSettingsPage> {
       appBar: AppBar(
         title: const Text('XMPP Settings'),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.person_add),
+            tooltip: 'Register Account',
+            onPressed: () => _showRegisterSheet(context),
+          ),
           IconButton(
             icon: const Icon(Icons.add),
             tooltip: 'Add Server',
@@ -179,6 +187,11 @@ class _XmppSettingsPageState extends State<XmppSettingsPage> {
                   ),
                   const SizedBox(width: 8),
                   IconButton(
+                    icon: const Icon(Icons.info_outline, size: 20),
+                    tooltip: 'Account Details',
+                    onPressed: () => _showAccountDetails(context, config),
+                  ),
+                  IconButton(
                     icon: const Icon(Icons.edit, size: 20),
                     tooltip: 'Edit',
                     onPressed: () => _showEditServerSheet(context, config),
@@ -195,6 +208,332 @@ class _XmppSettingsPageState extends State<XmppSettingsPage> {
         ),
       ),
     );
+  }
+
+  void _showAccountDetails(BuildContext context, XmppServerConfig config) {
+    bool showPassword = false;
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) {
+          final theme = Theme.of(ctx);
+          return AlertDialog(
+            title: Row(
+              children: [
+                const Icon(Icons.account_circle, size: 24),
+                const SizedBox(width: 12),
+                Expanded(child: Text(config.name, overflow: TextOverflow.ellipsis)),
+              ],
+            ),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _detailRow(theme, 'Server', '${config.host}:${config.port}'),
+                  _detailRow(theme, 'JID', config.jid ?? 'Not set'),
+                  _detailRow(
+                    theme,
+                    'Password',
+                    showPassword
+                        ? (config.password ?? 'Not set')
+                        : (config.password != null ? '\u2022' * 12 : 'Not set'),
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        IconButton(
+                          icon: Icon(
+                            showPassword ? Icons.visibility_off : Icons.visibility,
+                            size: 18,
+                          ),
+                          onPressed: () => setDialogState(() => showPassword = !showPassword),
+                          tooltip: showPassword ? 'Hide' : 'Show',
+                          constraints: const BoxConstraints(),
+                          padding: const EdgeInsets.all(4),
+                        ),
+                        if (config.password != null)
+                          IconButton(
+                            icon: const Icon(Icons.copy, size: 18),
+                            onPressed: () {
+                              Clipboard.setData(ClipboardData(text: config.password!));
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content: Text('Password copied'),
+                                  duration: Duration(seconds: 1),
+                                ),
+                              );
+                            },
+                            tooltip: 'Copy',
+                            constraints: const BoxConstraints(),
+                            padding: const EdgeInsets.all(4),
+                          ),
+                      ],
+                    ),
+                  ),
+                  _detailRow(theme, 'Conference', config.derivedConferenceService),
+                  _detailRow(theme, 'TLS', config.directTls ? 'Direct TLS' : 'STARTTLS'),
+                  _detailRow(theme, 'Auto-connect', config.autoConnect ? 'Yes' : 'No'),
+                  if (config.autoJoinRooms.isNotEmpty)
+                    _detailRow(theme, 'Auto-join', config.autoJoinRooms.join(', ')),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('Close'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _detailRow(ThemeData theme, String label, String value, {Widget? trailing}) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 100,
+            child: Text(
+              label,
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ),
+          Expanded(
+            child: SelectableText(
+              value,
+              style: theme.textTheme.bodyMedium,
+            ),
+          ),
+          if (trailing != null) trailing,
+        ],
+      ),
+    );
+  }
+
+  void _showRegisterSheet(BuildContext context) {
+    final usernameCtl = TextEditingController();
+    final stationServer = XmppServer.instance;
+    String? selectedHost = stationServer != null ? 'localhost' : null;
+    bool registering = false;
+    String? statusMessage;
+    bool success = false;
+    String? registeredJid;
+    String? registeredPassword;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheetState) {
+          return Padding(
+            padding: EdgeInsets.only(
+              left: 16,
+              right: 16,
+              top: 16,
+              bottom: MediaQuery.of(ctx).viewInsets.bottom + 16,
+            ),
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Register New Account',
+                    style: Theme.of(ctx).textTheme.titleLarge,
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Create a new XMPP account via in-band registration (XEP-0077).',
+                    style: Theme.of(ctx).textTheme.bodySmall?.copyWith(
+                      color: Theme.of(ctx).colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    'Server',
+                    style: Theme.of(ctx).textTheme.labelMedium?.copyWith(
+                      color: Theme.of(ctx).colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 4,
+                    children: [
+                      // Station server option (shown first when available)
+                      if (stationServer != null)
+                        ChoiceChip(
+                          label: Text('Station (${stationServer.domain})'),
+                          selected: selectedHost == 'localhost',
+                          avatar: const Icon(Icons.home, size: 16),
+                          onSelected: registering
+                              ? null
+                              : (v) {
+                                  setSheetState(() {
+                                    selectedHost = v ? 'localhost' : null;
+                                    statusMessage = null;
+                                    success = false;
+                                  });
+                                },
+                        ),
+                      ...XmppServerConfig.presets.map((preset) {
+                        final isSelected = selectedHost == preset.host;
+                        return ChoiceChip(
+                          label: Text(preset.name),
+                          selected: isSelected,
+                          onSelected: registering
+                              ? null
+                              : (v) {
+                                  setSheetState(() {
+                                    selectedHost = v ? preset.host : null;
+                                    statusMessage = null;
+                                    success = false;
+                                  });
+                                },
+                        );
+                      }),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  TextField(
+                    controller: usernameCtl,
+                    decoration: const InputDecoration(
+                      labelText: 'Username (optional)',
+                      hintText: 'Leave empty for auto-generated',
+                      border: OutlineInputBorder(),
+                      isDense: true,
+                    ),
+                    enabled: !registering,
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Password will be generated automatically.',
+                    style: Theme.of(ctx).textTheme.bodySmall?.copyWith(
+                      color: Theme.of(ctx).colorScheme.onSurfaceVariant,
+                      fontStyle: FontStyle.italic,
+                    ),
+                  ),
+                  if (statusMessage != null) ...[
+                    const SizedBox(height: 12),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: success
+                            ? Colors.green.withValues(alpha: 0.1)
+                            : Colors.red.withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            statusMessage!,
+                            style: TextStyle(
+                              color: success ? Colors.green : Colors.red.shade300,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                          if (success && registeredJid != null) ...[
+                            const SizedBox(height: 8),
+                            SelectableText('JID: $registeredJid'),
+                            const SizedBox(height: 4),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: SelectableText('Password: $registeredPassword'),
+                                ),
+                                IconButton(
+                                  icon: const Icon(Icons.copy, size: 18),
+                                  onPressed: () {
+                                    Clipboard.setData(
+                                      ClipboardData(text: registeredPassword ?? ''),
+                                    );
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(
+                                        content: Text('Password copied'),
+                                        duration: Duration(seconds: 1),
+                                      ),
+                                    );
+                                  },
+                                  tooltip: 'Copy password',
+                                  constraints: const BoxConstraints(),
+                                  padding: const EdgeInsets.all(4),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ],
+                  const SizedBox(height: 16),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      TextButton(
+                        onPressed: () => Navigator.pop(ctx),
+                        child: Text(success ? 'Done' : 'Cancel'),
+                      ),
+                      if (!success) ...[
+                        const SizedBox(width: 8),
+                        FilledButton(
+                          onPressed: registering || selectedHost == null
+                              ? null
+                              : () async {
+                                  setSheetState(() {
+                                    registering = true;
+                                    statusMessage = 'Registering on $selectedHost...';
+                                    success = false;
+                                  });
+                                  final user = usernameCtl.text.trim().isNotEmpty
+                                      ? usernameCtl.text.trim()
+                                      : null;
+                                  final result = await XmppService().registerAccount(
+                                    host: selectedHost!,
+                                    username: user,
+                                  );
+                                  if (!ctx.mounted) return;
+                                  setSheetState(() {
+                                    registering = false;
+                                    success = result['success'] == true;
+                                    if (success) {
+                                      registeredJid = result['jid'] as String?;
+                                      registeredPassword = result['password'] as String?;
+                                      statusMessage = 'Account created successfully!';
+                                    } else {
+                                      statusMessage = result['error'] as String? ?? 'Registration failed';
+                                    }
+                                  });
+                                },
+                          child: registering
+                              ? const SizedBox(
+                                  width: 18,
+                                  height: 18,
+                                  child: CircularProgressIndicator(strokeWidth: 2),
+                                )
+                              : const Text('Register'),
+                        ),
+                      ],
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    ).then((_) {
+      usernameCtl.dispose();
+    });
   }
 
   void _confirmRemove(BuildContext context, XmppServerConfig config) {
