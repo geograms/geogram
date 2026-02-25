@@ -52,6 +52,7 @@ import 'teleport/aprs/aprs_service.dart';
 import 'teleport/irc/irc_service.dart';
 import 'teleport/xmpp/xmpp_service.dart';
 import 'teleport/nostr/nostr_client_service.dart';
+import 'teleport/atproto/atproto_client_service.dart';
 import 'services/window_state_service.dart';
 import 'services/tray_service.dart';
 import 'services/group_sync_service.dart';
@@ -689,6 +690,14 @@ void main() async {
         if (nostrStorage != null) {
           NostrClientService().autoStart(nostrStorage).catchError((e) {
             LogService().log('NOSTR auto-start failed: $e');
+          });
+        }
+
+        // Auto-start AT Proto / Bluesky bridge background service
+        final atprotoStorage = AppService().profileStorage;
+        if (atprotoStorage != null) {
+          AtprotoClientService().autoStart(atprotoStorage).catchError((e) {
+            LogService().log('AT Proto auto-start failed: $e');
           });
         }
       }

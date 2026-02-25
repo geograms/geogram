@@ -3,11 +3,11 @@
  *
  * Provides AT Proto PDS functionality to both AppStationServer and
  * CliStationServer. Handles:
- * - XRPC routing (/xrpc/*)
+ * - XRPC routing under /xrpc/
  * - DID document serving (/.well-known/did.json)
  * - JWT-based session authentication
  * - Repository initialization and management
- * - Debug API endpoints (/api/atproto/*)
+ * - Debug API endpoints under /api/atproto/
  *
  * Usage:
  *   class MyServer extends StationServerBase with AtprotoPdsMixin { ... }
@@ -85,7 +85,10 @@ mixin AtprotoPdsMixin {
 
     final domain = settings.sslDomain ?? settings.atprotoHandle;
     if (domain == null || domain.isEmpty) {
-      log('WARN', 'AT Proto: cannot start without domain (sslDomain or atprotoHandle)');
+      log(
+        'WARN',
+        'AT Proto: cannot start without domain (sslDomain or atprotoHandle)',
+      );
       return;
     }
 
@@ -93,7 +96,8 @@ mixin AtprotoPdsMixin {
 
     try {
       // Open or create storage
-      final dbPath = '$dataDir/atproto/repo.db';
+      final dbPath = '$dataDir/teleport/atproto/repo.db';
+      await Directory('$dataDir/teleport/atproto').create(recursive: true);
       _atprotoStorage = AtprotoStorage.open(dbPath);
 
       // Derive or load signing key
@@ -157,7 +161,10 @@ mixin AtprotoPdsMixin {
       _xrpcRouter = XrpcRouter();
       _registerEndpoints();
 
-      log('INFO', 'AT Proto PDS started: ${_didService!.did} (handle: $handle)');
+      log(
+        'INFO',
+        'AT Proto PDS started: ${_didService!.did} (handle: $handle)',
+      );
 
       // Auto-sync existing content in the background
       _autoSync();
@@ -187,7 +194,11 @@ mixin AtprotoPdsMixin {
   ///
   /// Returns true if the request was handled, false otherwise.
   /// Call this from handlePlatformRoute().
-  Future<bool> handleAtprotoRequest(HttpRequest request, String path, String method) async {
+  Future<bool> handleAtprotoRequest(
+    HttpRequest request,
+    String path,
+    String method,
+  ) async {
     // XRPC endpoints
     if (path.startsWith('/xrpc/') && _xrpcRouter != null) {
       return await _xrpcRouter!.handle(request, path);
@@ -202,7 +213,7 @@ mixin AtprotoPdsMixin {
 
     // Debug API
     if (path.startsWith('/api/atproto/')) {
-      return _handleDebugApi(request, path, method);
+      return await _handleDebugApi(request, path, method);
     }
 
     return false;
@@ -210,7 +221,11 @@ mixin AtprotoPdsMixin {
 
   // -- Debug API --
 
-  bool _handleDebugApi(HttpRequest request, String path, String method) {
+  Future<bool> _handleDebugApi(
+    HttpRequest request,
+    String path,
+    String method,
+  ) async {
     if (path == '/api/atproto/status') {
       request.response.headers.contentType = ContentType.json;
       request.response.write(jsonEncode(getAtprotoStatus()));
@@ -230,11 +245,13 @@ mixin AtprotoPdsMixin {
 
     if (path == '/api/atproto/admin-password' && method == 'GET') {
       request.response.headers.contentType = ContentType.json;
-      request.response.write(jsonEncode({
-        'password': _adminPassword,
-        'did': _didService?.did,
-        'handle': _didService?.handle,
-      }));
+      request.response.write(
+        jsonEncode({
+          'password': _adminPassword,
+          'did': _didService?.did,
+          'handle': _didService?.handle,
+        }),
+      );
       return true;
     }
 
@@ -295,18 +312,21 @@ mixin AtprotoPdsMixin {
       final readBack = _atprotoRepo!.getRecord(collection, rkey);
 
       request.response.headers.contentType = ContentType.json;
-      request.response.write(jsonEncode({
-        'created': {
-          'uri': result.uri,
-          'cid': result.cid.toBase32(),
-        },
-        'readBack': readBack != null ? {
-          'uri': readBack.uri,
-          'cid': readBack.cid.toBase32(),
-          'value': readBack.value,
-        } : null,
-        'match': readBack != null && readBack.cid.toBase32() == result.cid.toBase32(),
-      }));
+      request.response.write(
+        jsonEncode({
+          'created': {'uri': result.uri, 'cid': result.cid.toBase32()},
+          'readBack': readBack != null
+              ? {
+                  'uri': readBack.uri,
+                  'cid': readBack.cid.toBase32(),
+                  'value': readBack.value,
+                }
+              : null,
+          'match':
+              readBack != null &&
+              readBack.cid.toBase32() == result.cid.toBase32(),
+        }),
+      );
       return true;
     } catch (e) {
       request.response.statusCode = 500;
@@ -352,14 +372,16 @@ mixin AtprotoPdsMixin {
       );
 
       request.response.headers.contentType = ContentType.json;
-      request.response.write(jsonEncode({
-        'seq': seq,
-        'commitCid': commitCid.toBase32(),
-        'recordUri': result.uri,
-        'recordCid': result.cid.toBase32(),
-        'subscriberCount': _firehose!.subscriberCount,
-        'latestSeq': _firehose!.latestSeq,
-      }));
+      request.response.write(
+        jsonEncode({
+          'seq': seq,
+          'commitCid': commitCid.toBase32(),
+          'recordUri': result.uri,
+          'recordCid': result.cid.toBase32(),
+          'subscriberCount': _firehose!.subscriberCount,
+          'latestSeq': _firehose!.latestSeq,
+        }),
+      );
       return true;
     } catch (e) {
       request.response.statusCode = 500;
@@ -377,9 +399,9 @@ mixin AtprotoPdsMixin {
     }
 
     request.response.headers.contentType = ContentType.json;
-    request.response.write(jsonEncode({
-      'collections': _collectionSync!.getCollectionStatus(),
-    }));
+    request.response.write(
+      jsonEncode({'collections': _collectionSync!.getCollectionStatus()}),
+    );
     return true;
   }
 
@@ -397,19 +419,25 @@ mixin AtprotoPdsMixin {
         // Sync a specific collection
         final created = await _collectionSync!.syncCollection(nsid);
         request.response.headers.contentType = ContentType.json;
-        request.response.write(jsonEncode({
-          'nsid': nsid,
-          'created': created,
-          'error': created < 0 ? 'Collection not found or sync failed' : null,
-        }));
+        request.response.write(
+          jsonEncode({
+            'nsid': nsid,
+            'created': created,
+            'error': created < 0 ? 'Collection not found or sync failed' : null,
+          }),
+        );
       } else {
         // Sync all collections
         final results = await _collectionSync!.syncAll();
         request.response.headers.contentType = ContentType.json;
-        request.response.write(jsonEncode({
-          'results': results,
-          'totalCreated': results.values.where((v) => v > 0).fold<int>(0, (a, b) => a + b),
-        }));
+        request.response.write(
+          jsonEncode({
+            'results': results,
+            'totalCreated': results.values
+                .where((v) => v > 0)
+                .fold<int>(0, (a, b) => a + b),
+          }),
+        );
       }
       return true;
     } catch (e) {
@@ -426,7 +454,9 @@ mixin AtprotoPdsMixin {
 
     try {
       final results = await _collectionSync!.syncAll();
-      final total = results.values.where((v) => v > 0).fold<int>(0, (a, b) => a + b);
+      final total = results.values
+          .where((v) => v > 0)
+          .fold<int>(0, (a, b) => a + b);
       if (total > 0) {
         log('INFO', 'AT Proto: auto-synced $total records on startup');
       }
@@ -438,10 +468,7 @@ mixin AtprotoPdsMixin {
   /// Get AT Proto PDS status for debug/monitoring.
   Map<String, dynamic> getAtprotoStatus() {
     if (!settings.atprotoEnabled) {
-      return {
-        'enabled': false,
-        'running': false,
-      };
+      return {'enabled': false, 'running': false};
     }
 
     return {
@@ -451,8 +478,12 @@ mixin AtprotoPdsMixin {
       'handle': _didService?.handle,
       'headCid': _atprotoRepo?.headCid?.toBase32(),
       'collections': _atprotoStorage?.listCollections() ?? [],
-      'recordCount': _atprotoStorage?.listCollections()
-          .fold<int>(0, (sum, c) => sum + (_atprotoStorage?.countRecords(c) ?? 0)) ?? 0,
+      'recordCount':
+          _atprotoStorage?.listCollections().fold<int>(
+            0,
+            (sum, c) => sum + (_atprotoStorage?.countRecords(c) ?? 0),
+          ) ??
+          0,
       'firehoseSubscribers': _firehose?.subscriberCount ?? 0,
       'latestSeq': _firehose?.latestSeq,
       'syncedCollections': _collectionSync?.getCollectionStatus() ?? [],
@@ -469,10 +500,7 @@ mixin AtprotoPdsMixin {
       getAdminPassword: () => _adminPassword ?? '',
     );
 
-    registerIdentityEndpoints(
-      _xrpcRouter!,
-      didService: _didService!,
-    );
+    registerIdentityEndpoints(_xrpcRouter!, didService: _didService!);
 
     registerRepoEndpoints(
       _xrpcRouter!,

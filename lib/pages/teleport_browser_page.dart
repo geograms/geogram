@@ -26,6 +26,8 @@ import '../teleport/xmpp/xmpp_service.dart';
 import '../teleport/xmpp/pages/xmpp_main_page.dart';
 import '../teleport/nostr/nostr_client_service.dart';
 import '../teleport/nostr/pages/nostr_main_page.dart';
+import '../teleport/atproto/atproto_client_service.dart';
+import '../teleport/atproto/pages/atproto_main_page.dart';
 
 /// Browser page for the "Teleport" app — lists platform bridges
 class TeleportBrowserPage extends StatefulWidget {
@@ -49,6 +51,7 @@ class _TeleportBrowserPageState extends State<TeleportBrowserPage> {
   StreamSubscription<IrcEvent>? _ircSub;
   StreamSubscription<XmppEvent>? _xmppSub;
   StreamSubscription<NostrClientEvent>? _nostrSub;
+  StreamSubscription<AtprotoClientEvent>? _atprotoSub;
 
   /// Planned platform bridges
   static const List<_BridgeInfo> _bridges = [
@@ -118,7 +121,15 @@ class _TeleportBrowserPageState extends State<TeleportBrowserPage> {
   ];
 
   /// IDs of implemented bridges (not "Coming Soon").
-  static const _implementedIds = {'telegram', 'signal', 'aprs', 'irc', 'xmpp', 'nostr'};
+  static const _implementedIds = {
+    'telegram',
+    'signal',
+    'aprs',
+    'irc',
+    'xmpp',
+    'nostr',
+    'bluesky',
+  };
 
   /// Bridges sorted: implemented first, "Coming Soon" at the bottom.
   static final List<_BridgeInfo> _sortedBridges = [
@@ -142,6 +153,9 @@ class _TeleportBrowserPageState extends State<TeleportBrowserPage> {
     _nostrSub = NostrClientService().events.listen((_) {
       if (mounted) setState(() {});
     });
+    _atprotoSub = AtprotoClientService().events.listen((_) {
+      if (mounted) setState(() {});
+    });
   }
 
   @override
@@ -150,6 +164,7 @@ class _TeleportBrowserPageState extends State<TeleportBrowserPage> {
     _ircSub?.cancel();
     _xmppSub?.cancel();
     _nostrSub?.cancel();
+    _atprotoSub?.cancel();
     super.dispose();
   }
 
@@ -190,7 +205,10 @@ class _TeleportBrowserPageState extends State<TeleportBrowserPage> {
     if (_config == null) return false;
     final bridges = _config!['bridges'] as List<dynamic>? ?? [];
     return bridges.any(
-      (b) => b is Map<String, dynamic> && b['platform'] == bridgeId && b['enabled'] == true,
+      (b) =>
+          b is Map<String, dynamic> &&
+          b['platform'] == bridgeId &&
+          b['enabled'] == true,
     );
   }
 
@@ -326,32 +344,32 @@ class _TeleportBrowserPageState extends State<TeleportBrowserPage> {
 
   void _onAprsTap() {
     Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => AprsMainPage(appPath: widget.appPath),
-      ),
+      MaterialPageRoute(builder: (_) => AprsMainPage(appPath: widget.appPath)),
     );
   }
 
   void _onIrcTap() {
     Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => IrcMainPage(appPath: widget.appPath),
-      ),
+      MaterialPageRoute(builder: (_) => IrcMainPage(appPath: widget.appPath)),
     );
   }
 
   void _onXmppTap() {
     Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => XmppMainPage(appPath: widget.appPath),
-      ),
+      MaterialPageRoute(builder: (_) => XmppMainPage(appPath: widget.appPath)),
     );
   }
 
   void _onNostrTap() {
     Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => NostrMainPage(appPath: widget.appPath)),
+    );
+  }
+
+  void _onAtprotoTap() {
+    Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (_) => NostrMainPage(appPath: widget.appPath),
+        builder: (_) => AtprotoMainPage(appPath: widget.appPath),
       ),
     );
   }
@@ -384,18 +402,23 @@ class _TeleportBrowserPageState extends State<TeleportBrowserPage> {
     final isActive = _isBridgeActive(bridge.id);
     final isTelegramRunning =
         bridge.id == 'telegram' && TelegramService().isRunning;
-    final isSignalRunning =
-        bridge.id == 'signal' && SignalService().isRunning;
-    final isAprsEnabled =
-        bridge.id == 'aprs' && AprsService().isEnabled;
-    final isIrcConnected =
-        bridge.id == 'irc' && IrcService().isAnyConnected;
-    final isXmppConnected =
-        bridge.id == 'xmpp' && XmppService().isAnyConnected;
+    final isSignalRunning = bridge.id == 'signal' && SignalService().isRunning;
+    final isAprsEnabled = bridge.id == 'aprs' && AprsService().isEnabled;
+    final isIrcConnected = bridge.id == 'irc' && IrcService().isAnyConnected;
+    final isXmppConnected = bridge.id == 'xmpp' && XmppService().isAnyConnected;
     final isNostrConnected =
         bridge.id == 'nostr' && NostrClientService().isAnyConnected;
+    final isAtprotoConnected =
+        bridge.id == 'bluesky' && AtprotoClientService().isAuthenticated;
     final showActive =
-        isActive || isTelegramRunning || isSignalRunning || isAprsEnabled || isIrcConnected || isXmppConnected || isNostrConnected;
+        isActive ||
+        isTelegramRunning ||
+        isSignalRunning ||
+        isAprsEnabled ||
+        isIrcConnected ||
+        isXmppConnected ||
+        isNostrConnected ||
+        isAtprotoConnected;
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
@@ -429,6 +452,10 @@ class _TeleportBrowserPageState extends State<TeleportBrowserPage> {
               _onNostrTap();
               return;
             }
+            if (bridge.id == 'bluesky') {
+              _onAtprotoTap();
+              return;
+            }
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
                 content: Text('${bridge.name} bridge coming soon'),
@@ -449,11 +476,7 @@ class _TeleportBrowserPageState extends State<TeleportBrowserPage> {
                     color: bridge.color.withValues(alpha: 0.15),
                     shape: BoxShape.circle,
                   ),
-                  child: Icon(
-                    bridge.icon,
-                    size: 24,
-                    color: bridge.color,
-                  ),
+                  child: Icon(bridge.icon, size: 24, color: bridge.color),
                 ),
                 const SizedBox(width: 16),
                 // Name and description
@@ -493,9 +516,13 @@ class _TeleportBrowserPageState extends State<TeleportBrowserPage> {
                   child: Text(
                     showActive
                         ? 'Active'
-                        : (bridge.id == 'aprs' || bridge.id == 'irc' || bridge.id == 'xmpp' || bridge.id == 'nostr')
-                            ? 'Available'
-                            : 'Coming Soon',
+                        : (bridge.id == 'aprs' ||
+                              bridge.id == 'irc' ||
+                              bridge.id == 'xmpp' ||
+                              bridge.id == 'nostr' ||
+                              bridge.id == 'bluesky')
+                        ? 'Available'
+                        : 'Coming Soon',
                     style: TextStyle(
                       fontSize: 11,
                       fontWeight: FontWeight.w500,
