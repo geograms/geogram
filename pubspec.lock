@@ -328,6 +328,22 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "2.1.1"
+  dnsolve:
+    dependency: transitive
+    description:
+      name: dnsolve
+      sha256: "51209db239a2242285b7ca7bccc7c452ff30f3ed80d14c05900e3bc97146d97f"
+      url: "https://pub.dev"
+    source: hosted
+    version: "2.0.0"
+  drift:
+    dependency: transitive
+    description:
+      name: drift
+      sha256: "970cd188fddb111b26ea6a9b07a62bf5c2432d74147b8122c67044ae3b97e99e"
+      url: "https://pub.dev"
+    source: hosted
+    version: "2.31.0"
   duration:
     dependency: transitive
     description:
@@ -395,10 +411,10 @@ packages:
     dependency: "direct main"
     description:
       name: ffi
-      sha256: "289279317b4b16eb2bb7e271abccd4bf84ec9bdcbe999e278a94b804f5630418"
+      sha256: "6d7fd89431262d8f3125e81b50d3847a091d846eafcd4fdb88dd06f36d705a45"
       url: "https://pub.dev"
     source: hosted
-    version: "2.1.4"
+    version: "2.2.0"
   file:
     dependency: transitive
     description:
@@ -1217,6 +1233,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "2.0.1"
+  memoize:
+    dependency: transitive
+    description:
+      name: memoize
+      sha256: "51481d328c86cbdc59711369179bac88551ca0556569249be5317e66fc796cac"
+      url: "https://pub.dev"
+    source: hosted
+    version: "3.0.0"
   menu_base:
     dependency: transitive
     description:
@@ -1449,13 +1473,13 @@ packages:
     source: hosted
     version: "0.2.1"
   petitparser:
-    dependency: transitive
+    dependency: "direct overridden"
     description:
       name: petitparser
-      sha256: "07c8f0b1913bcde1ff0d26e57ace2f3012ccbf2b204e070290dad3bb22797646"
+      sha256: "91bd59303e9f769f108f8df05e371341b15d59e995e6806aefab827b58336675"
       url: "https://pub.dev"
     source: hosted
-    version: "6.1.0"
+    version: "7.0.2"
   photo_view:
     dependency: transitive
     description:
@@ -2268,6 +2292,14 @@ packages:
       relative: true
     source: path
     version: "1.0.1"
+  whixp:
+    dependency: "direct main"
+    description:
+      name: whixp
+      sha256: b2eb27e0c36bf23875c832c59fee0bca197b929fef72c033bc6d0384f05d2184
+      url: "https://pub.dev"
+    source: hosted
+    version: "3.0.0"
   win32:
     dependency: transitive
     description:
@@ -2304,10 +2336,10 @@ packages:
     dependency: transitive
     description:
       name: xml
-      sha256: b015a8ad1c488f66851d762d3090a21c600e479dc75e68328c52774040cf9226
+      sha256: "971043b3a0d3da28727e40ed3e0b5d18b742fa5a68665cca88e74b7876d5e025"
       url: "https://pub.dev"
     source: hosted
-    version: "6.5.0"
+    version: "6.6.1"
   xterm:
     dependency: "direct main"
     description:

@@ -22,6 +22,8 @@ import '../teleport/signal/pages/signal_auth_page.dart';
 import '../teleport/signal/pages/signal_chat_list_page.dart';
 import '../teleport/irc/irc_service.dart';
 import '../teleport/irc/pages/irc_main_page.dart';
+import '../teleport/xmpp/xmpp_service.dart';
+import '../teleport/xmpp/pages/xmpp_main_page.dart';
 import '../teleport/nostr/nostr_client_service.dart';
 import '../teleport/nostr/pages/nostr_main_page.dart';
 
@@ -45,6 +47,7 @@ class _TeleportBrowserPageState extends State<TeleportBrowserPage> {
   bool _isLoading = true;
   StreamSubscription<AprsEvent>? _aprsSub;
   StreamSubscription<IrcEvent>? _ircSub;
+  StreamSubscription<XmppEvent>? _xmppSub;
   StreamSubscription<NostrClientEvent>? _nostrSub;
 
   /// Planned platform bridges
@@ -114,6 +117,15 @@ class _TeleportBrowserPageState extends State<TeleportBrowserPage> {
     ),
   ];
 
+  /// IDs of implemented bridges (not "Coming Soon").
+  static const _implementedIds = {'telegram', 'signal', 'aprs', 'irc', 'xmpp', 'nostr'};
+
+  /// Bridges sorted: implemented first, "Coming Soon" at the bottom.
+  static final List<_BridgeInfo> _sortedBridges = [
+    ..._bridges.where((b) => _implementedIds.contains(b.id)),
+    ..._bridges.where((b) => !_implementedIds.contains(b.id)),
+  ];
+
   @override
   void initState() {
     super.initState();
@@ -122,6 +134,9 @@ class _TeleportBrowserPageState extends State<TeleportBrowserPage> {
       if (mounted) setState(() {});
     });
     _ircSub = IrcService().events.listen((_) {
+      if (mounted) setState(() {});
+    });
+    _xmppSub = XmppService().events.listen((_) {
       if (mounted) setState(() {});
     });
     _nostrSub = NostrClientService().events.listen((_) {
@@ -133,6 +148,7 @@ class _TeleportBrowserPageState extends State<TeleportBrowserPage> {
   void dispose() {
     _aprsSub?.cancel();
     _ircSub?.cancel();
+    _xmppSub?.cancel();
     _nostrSub?.cancel();
     super.dispose();
   }
@@ -241,9 +257,9 @@ class _TeleportBrowserPageState extends State<TeleportBrowserPage> {
           ? const Center(child: CircularProgressIndicator())
           : ListView.builder(
               padding: const EdgeInsets.symmetric(vertical: 8),
-              itemCount: _bridges.length,
+              itemCount: _sortedBridges.length,
               itemBuilder: (context, index) =>
-                  _buildBridgeCard(_bridges[index], theme),
+                  _buildBridgeCard(_sortedBridges[index], theme),
             ),
     );
   }
@@ -324,6 +340,14 @@ class _TeleportBrowserPageState extends State<TeleportBrowserPage> {
     );
   }
 
+  void _onXmppTap() {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => XmppMainPage(appPath: widget.appPath),
+      ),
+    );
+  }
+
   void _onNostrTap() {
     Navigator.of(context).push(
       MaterialPageRoute(
@@ -366,10 +390,12 @@ class _TeleportBrowserPageState extends State<TeleportBrowserPage> {
         bridge.id == 'aprs' && AprsService().isEnabled;
     final isIrcConnected =
         bridge.id == 'irc' && IrcService().isAnyConnected;
+    final isXmppConnected =
+        bridge.id == 'xmpp' && XmppService().isAnyConnected;
     final isNostrConnected =
         bridge.id == 'nostr' && NostrClientService().isAnyConnected;
     final showActive =
-        isActive || isTelegramRunning || isSignalRunning || isAprsEnabled || isIrcConnected || isNostrConnected;
+        isActive || isTelegramRunning || isSignalRunning || isAprsEnabled || isIrcConnected || isXmppConnected || isNostrConnected;
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
@@ -393,6 +419,10 @@ class _TeleportBrowserPageState extends State<TeleportBrowserPage> {
             }
             if (bridge.id == 'irc') {
               _onIrcTap();
+              return;
+            }
+            if (bridge.id == 'xmpp') {
+              _onXmppTap();
               return;
             }
             if (bridge.id == 'nostr') {
@@ -463,7 +493,7 @@ class _TeleportBrowserPageState extends State<TeleportBrowserPage> {
                   child: Text(
                     showActive
                         ? 'Active'
-                        : (bridge.id == 'aprs' || bridge.id == 'irc' || bridge.id == 'nostr')
+                        : (bridge.id == 'aprs' || bridge.id == 'irc' || bridge.id == 'xmpp' || bridge.id == 'nostr')
                             ? 'Available'
                             : 'Coming Soon',
                     style: TextStyle(

@@ -138,6 +138,9 @@ This document catalogs reusable UI components available in the Geogram codebase.
 - [IrcClient](#ircclient) - IRC protocol client with background isolate TCP/TLS
 - [IrcService](#ircservice) - Multi-server IRC singleton service with event stream
 - [IrcMessageBubble](#ircmessagebubble) - Dark-mode IRC message bubble
+- [XmppClient](#xmppclient) - XMPP protocol client wrapping whixp (STARTTLS, SASL, MUC)
+- [XmppService](#xmppservice) - Multi-server XMPP singleton service with event stream
+- [XmppMessageBubble](#xmppmessagebubble) - Dark-mode XMPP message bubble
 
 ### Desktop Patterns
 - [Desktop Platform Guard](#desktop-platform-guard) - Reusable check for Linux/Windows/macOS
@@ -8551,6 +8554,34 @@ AprsMessageBubble(
 **File**: `lib/teleport/irc/widgets/irc_message_bubble.dart`
 
 **Pattern**: Dark-mode chat bubble matching the Telegram/Signal style (#2B5278 outgoing, #1E2D3D incoming). Sender colors via `teleportSenderColor()`. `/me` actions rendered in italics. `IrcSystemMessage` widget for join/part/quit as centered gray text.
+
+---
+
+### XmppClient
+
+**File**: `lib/teleport/xmpp/xmpp_client.dart`
+
+**Pattern**: Pure Dart XMPP client wrapping the whixp library. Handles STARTTLS, SASL auth, stream management, and auto-reconnection internally (no isolate needed). MUC (XEP-0045) via standard stanzas: `sendPresence` for join/leave, `sendMessage` with `MessageType.groupchat` for room messages.
+
+**Reuse potential**: The MUC join/leave/send pattern is encapsulated in methods (`joinRoom`, `leaveRoom`, `sendGroupMessage`). The event callback pattern (`onEvent` map emission) is identical to IrcClient and AprsIsClient.
+
+---
+
+### XmppService
+
+**File**: `lib/teleport/xmpp/xmpp_service.dart`
+
+**Pattern**: Singleton multi-server XMPP service with event stream. Manages `Map<String, XmppClient>` keyed by server config ID. 500ms UI throttle timer, batched SQLite writes (2s + 50-msg threshold), slash command routing (`/join`, `/part`, `/subject`, `/msg`). Max 5000 messages in memory per room.
+
+**Debug API**: `xmpp_status`, `xmpp_connect`, `xmpp_disconnect`, `xmpp_join`, `xmpp_part`, `xmpp_send`, `xmpp_discover`, `xmpp_add_server`, `xmpp_load_chat`, `xmpp_cache_inspect`, `xmpp_cache_clear`
+
+---
+
+### XmppMessageBubble
+
+**File**: `lib/teleport/xmpp/widgets/xmpp_message_bubble.dart`
+
+**Pattern**: Dark-mode chat bubble matching the Telegram/Signal/IRC style (#2B5278 outgoing, #1E2D3D incoming). Sender colors via `teleportSenderColor()`. Clickable URLs via regex. `XmppSystemMessage` widget for join/leave/subject as centered gray italic text.
 
 ---
 

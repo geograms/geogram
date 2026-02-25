@@ -35,6 +35,8 @@ import '../teleport/telegram/telegram_service.dart';
 import '../teleport/signal/models/signal_auth_state.dart';
 import '../teleport/signal/signal_service.dart';
 import '../teleport/irc/irc_service.dart';
+import '../teleport/xmpp/xmpp_service.dart';
+import '../teleport/xmpp/models/xmpp_server_config.dart';
 import '../teleport/nostr/nostr_client_service.dart';
 import '../teleport/nostr/models/nostr_relay_config.dart';
 import '../teleport/irc/models/irc_server_config.dart';
@@ -2085,6 +2087,11 @@ function cleanup() {
       // Handle IRC debug actions
       if (action.toLowerCase().startsWith('irc_')) {
         return await _handleIrcAction(action.toLowerCase(), params, headers);
+      }
+
+      // Handle XMPP debug actions
+      if (action.toLowerCase().startsWith('xmpp_')) {
+        return await _handleXmppAction(action.toLowerCase(), params, headers);
       }
 
       // Handle NOSTR client debug actions
@@ -17364,10 +17371,9 @@ function cleanup() {
       case 'irc_add_server':
         final name = params['name'] as String?;
         final host = params['host'] as String?;
-        final nickname = params['nickname'] as String?;
-        if (name == null || host == null || nickname == null) {
+        if (name == null || host == null) {
           return shelf.Response.ok(
-            jsonEncode({'success': false, 'error': 'name, host, and nickname required'}),
+            jsonEncode({'success': false, 'error': 'name and host required'}),
             headers: headers,
           );
         }
@@ -17380,7 +17386,6 @@ function cleanup() {
           host: host,
           port: port,
           useTls: useTls,
-          nickname: nickname,
           password: params['password'] as String?,
           autoJoinChannels: (params['autoJoinChannels'] as List<dynamic>?)
                   ?.map((e) => e.toString())
@@ -17391,6 +17396,34 @@ function cleanup() {
         await irc.addServer(config);
         return shelf.Response.ok(
           jsonEncode({'success': true, 'serverId': id}),
+          headers: headers,
+        );
+
+      case 'irc_load_chat':
+        final loadServerId = params['serverId'] as String?;
+        final loadChannel = params['channel'] as String?;
+        if (loadServerId == null || loadChannel == null) {
+          return shelf.Response.ok(
+            jsonEncode({'success': false, 'error': 'serverId and channel required'}),
+            headers: headers,
+          );
+        }
+        await irc.loadCachedMessages(loadServerId, loadChannel);
+        irc.markChannelRead(loadServerId, loadChannel);
+        final msgs = irc.getMessages(loadServerId, loadChannel);
+        return shelf.Response.ok(
+          jsonEncode({
+            'success': true,
+            'channel': loadChannel,
+            'messagesLoaded': msgs.length,
+            'messages': msgs.take(30).map((m) => {
+                  'sender': m.sender,
+                  'text': m.text.length > 80 ? m.text.substring(0, 80) : m.text,
+                  'isOutgoing': m.isOutgoing,
+                  'type': m.type.name,
+                  'timestamp': m.timestamp.toIso8601String(),
+                }).toList(),
+          }),
           headers: headers,
         );
 
@@ -17425,6 +17458,209 @@ function cleanup() {
       default:
         return shelf.Response.ok(
           jsonEncode({'success': false, 'error': 'Unknown IRC action: $action'}),
+          headers: headers,
+        );
+    }
+  }
+
+  // ============================================================
+  // XMPP Debug Actions
+  // ============================================================
+
+  Future<shelf.Response> _handleXmppAction(
+    String action,
+    Map<String, dynamic> params,
+    Map<String, String> headers,
+  ) async {
+    final xmpp = XmppService();
+
+    switch (action) {
+      case 'xmpp_status':
+        return shelf.Response.ok(
+          jsonEncode({'success': true, ...xmpp.getStatus()}),
+          headers: headers,
+        );
+
+      case 'xmpp_connect':
+        final serverId = params['serverId'] as String?;
+        if (serverId == null) {
+          return shelf.Response.ok(
+            jsonEncode({'success': false, 'error': 'serverId required'}),
+            headers: headers,
+          );
+        }
+        xmpp.connect(serverId);
+        return shelf.Response.ok(
+          jsonEncode({'success': true, 'action': 'connecting', 'serverId': serverId}),
+          headers: headers,
+        );
+
+      case 'xmpp_disconnect':
+        final serverId = params['serverId'] as String?;
+        if (serverId == null) {
+          return shelf.Response.ok(
+            jsonEncode({'success': false, 'error': 'serverId required'}),
+            headers: headers,
+          );
+        }
+        await xmpp.disconnectServer(serverId);
+        return shelf.Response.ok(
+          jsonEncode({'success': true, 'action': 'disconnected', 'serverId': serverId}),
+          headers: headers,
+        );
+
+      case 'xmpp_join':
+        final serverId = params['serverId'] as String?;
+        final roomJid = params['roomJid'] as String?;
+        if (serverId == null || roomJid == null) {
+          return shelf.Response.ok(
+            jsonEncode({'success': false, 'error': 'serverId and roomJid required'}),
+            headers: headers,
+          );
+        }
+        xmpp.joinRoom(serverId, roomJid);
+        return shelf.Response.ok(
+          jsonEncode({'success': true, 'action': 'joining', 'roomJid': roomJid}),
+          headers: headers,
+        );
+
+      case 'xmpp_part':
+        final serverId = params['serverId'] as String?;
+        final roomJid = params['roomJid'] as String?;
+        if (serverId == null || roomJid == null) {
+          return shelf.Response.ok(
+            jsonEncode({'success': false, 'error': 'serverId and roomJid required'}),
+            headers: headers,
+          );
+        }
+        xmpp.leaveRoom(serverId, roomJid);
+        return shelf.Response.ok(
+          jsonEncode({'success': true, 'action': 'leaving', 'roomJid': roomJid}),
+          headers: headers,
+        );
+
+      case 'xmpp_send':
+        final serverId = params['serverId'] as String?;
+        final roomJid = params['roomJid'] as String?;
+        final text = params['text'] as String?;
+        if (serverId == null || roomJid == null || text == null) {
+          return shelf.Response.ok(
+            jsonEncode({'success': false, 'error': 'serverId, roomJid, and text required'}),
+            headers: headers,
+          );
+        }
+        final msg = xmpp.sendMessage(serverId, roomJid, text);
+        return shelf.Response.ok(
+          jsonEncode({'success': msg != null, 'sent': msg != null}),
+          headers: headers,
+        );
+
+      case 'xmpp_discover':
+        final serverId = params['serverId'] as String?;
+        if (serverId == null) {
+          return shelf.Response.ok(
+            jsonEncode({'success': false, 'error': 'serverId required'}),
+            headers: headers,
+          );
+        }
+        xmpp.discoverRooms(serverId);
+        return shelf.Response.ok(
+          jsonEncode({'success': true, 'action': 'discovering rooms'}),
+          headers: headers,
+        );
+
+      case 'xmpp_add_server':
+        final name = params['name'] as String?;
+        final host = params['host'] as String?;
+        final jid = params['jid'] as String?;
+        if (name == null || host == null) {
+          return shelf.Response.ok(
+            jsonEncode({'success': false, 'error': 'name and host required'}),
+            headers: headers,
+          );
+        }
+        final port = (params['port'] as num?)?.toInt() ?? 5222;
+        final id = '${host}_${DateTime.now().millisecondsSinceEpoch}';
+        final config = XmppServerConfig(
+          id: id,
+          name: name,
+          host: host,
+          port: port,
+          directTls: params['directTls'] as bool? ?? false,
+          jid: jid,
+          password: params['password'] as String?,
+          conferenceService: params['conferenceService'] as String?,
+          autoJoinRooms: (params['autoJoinRooms'] as List<dynamic>?)
+                  ?.map((e) => e.toString())
+                  .toList() ??
+              [],
+          autoConnect: params['autoConnect'] as bool? ?? false,
+        );
+        await xmpp.addServer(config);
+        return shelf.Response.ok(
+          jsonEncode({'success': true, 'serverId': id}),
+          headers: headers,
+        );
+
+      case 'xmpp_load_chat':
+        final loadServerId = params['serverId'] as String?;
+        final loadRoomJid = params['roomJid'] as String?;
+        if (loadServerId == null || loadRoomJid == null) {
+          return shelf.Response.ok(
+            jsonEncode({'success': false, 'error': 'serverId and roomJid required'}),
+            headers: headers,
+          );
+        }
+        await xmpp.loadCachedMessages(loadServerId, loadRoomJid);
+        xmpp.markRoomRead(loadServerId, loadRoomJid);
+        final msgs = xmpp.getMessages(loadServerId, loadRoomJid);
+        return shelf.Response.ok(
+          jsonEncode({
+            'success': true,
+            'roomJid': loadRoomJid,
+            'messagesLoaded': msgs.length,
+            'messages': msgs.take(30).map((m) => {
+                  'sender': m.sender,
+                  'text': m.text.length > 80 ? m.text.substring(0, 80) : m.text,
+                  'isOutgoing': m.isOutgoing,
+                  'type': m.type.name,
+                  'timestamp': m.timestamp.toIso8601String(),
+                }).toList(),
+          }),
+          headers: headers,
+        );
+
+      case 'xmpp_cache_inspect':
+        final cache = xmpp.cacheService;
+        if (cache == null) {
+          return shelf.Response.ok(
+            jsonEncode({'success': false, 'error': 'cache not initialized'}),
+            headers: headers,
+          );
+        }
+        final info = await cache.inspect();
+        return shelf.Response.ok(
+          jsonEncode({'success': true, ...info}),
+          headers: headers,
+        );
+
+      case 'xmpp_cache_clear':
+        final cache = xmpp.cacheService;
+        if (cache == null) {
+          return shelf.Response.ok(
+            jsonEncode({'success': false, 'error': 'cache not initialized'}),
+            headers: headers,
+          );
+        }
+        await cache.clear();
+        return shelf.Response.ok(
+          jsonEncode({'success': true, 'action': 'cleared'}),
+          headers: headers,
+        );
+
+      default:
+        return shelf.Response.ok(
+          jsonEncode({'success': false, 'error': 'Unknown XMPP action: $action'}),
           headers: headers,
         );
     }

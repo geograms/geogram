@@ -111,6 +111,7 @@ dependencies:
   cryptography: ^2.7.0           # AES-GCM encryption and HKDF key derivation
   encrypted_archive:             # Encrypted SQLite-based archive storage
     path: packages/encrypted_archive
+  whixp: 3.0.0                   # Pure Dart XMPP client (STARTTLS, SASL, stream management)
   nntp:                          # NNTP/Usenet client protocol
     path: packages/nntp
   geoblue:
@@ -229,3 +230,4 @@ dependency_overrides:
   ble_peripheral:
     path: third_party/ble_peripheral  # Patched to skip bonding/pairing
   intl: 0.20.2  # Override webf's intl ^0.19.0 constraint (compatible at runtime)
+  petitparser: ^7.0.0  # Override ensemble_ts_interpreter's ^6.0.1 constraint (whixp needs ^7.0.0 via xml)

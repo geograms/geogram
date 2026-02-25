@@ -50,6 +50,7 @@ import 'services/websocket_service.dart';
 import 'services/backup_service.dart';
 import 'teleport/aprs/aprs_service.dart';
 import 'teleport/irc/irc_service.dart';
+import 'teleport/xmpp/xmpp_service.dart';
 import 'teleport/nostr/nostr_client_service.dart';
 import 'services/window_state_service.dart';
 import 'services/tray_service.dart';
@@ -675,6 +676,14 @@ void main() async {
           });
         }
 
+        // Auto-start XMPP background service
+        final xmppStorage = AppService().profileStorage;
+        if (xmppStorage != null) {
+          XmppService().autoStart(xmppStorage).catchError((e) {
+            LogService().log('XMPP auto-start failed: $e');
+          });
+        }
+
         // Auto-start NOSTR client background service
         final nostrStorage = AppService().profileStorage;
         if (nostrStorage != null) {
@@ -851,6 +860,14 @@ class _GeogramAppState extends State<GeogramApp> with WidgetsBindingObserver {
     print(
       'NOTIFICATION_DEBUG: ${DateTime.now()} didChangeAppLifecycleState: $state',
     );
+    // Flush IRC/XMPP message queues on app suspend/close to avoid data loss
+    if (state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.paused ||
+        state == AppLifecycleState.detached) {
+      IrcService().flushWrites();
+      XmppService().flushWrites();
+    }
+
     if (state == AppLifecycleState.resumed) {
       // Verify native channel is working (may be stale after Android killed the engine)
       if (!kIsWeb && Platform.isAndroid) {
