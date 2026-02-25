@@ -139,13 +139,30 @@ class XmppService {
   Future<void> autoStart(ProfileStorage storage) async {
     setStorage(storage);
     final servers = await _cacheService!.loadServers();
-    for (final config in servers) {
+    var migrated = false;
+    for (var config in servers) {
+      // Migrate preset servers from STARTTLS (5222) to DirectTLS (5223)
+      // — whixp 3.0.0 has a STARTTLS race condition causing TLS failures.
+      if (!config.directTls && config.port == 5222) {
+        final preset = XmppServerConfig.presets.cast<XmppServerConfig?>().firstWhere(
+          (p) => p!.host == config.host,
+          orElse: () => null,
+        );
+        if (preset != null && preset.directTls) {
+          config = config.copyWith(port: 5223, directTls: true);
+          migrated = true;
+        }
+      }
       _configs[config.id] = config;
       // Restore cached rooms for each server
       await _loadCachedRooms(config.id);
       if (config.autoConnect) {
         connect(config.id);
       }
+    }
+    if (migrated) {
+      await _saveConfigs();
+      LogService().log('XmppService: migrated servers to DirectTLS (port 5223)');
     }
     if (servers.isNotEmpty) {
       LogService().log('XmppService: loaded ${servers.length} server configs');
@@ -210,6 +227,62 @@ class XmppService {
   }
 
   // ---------------------------------------------------------------------------
+  // Account registration
+  // ---------------------------------------------------------------------------
+
+  /// Attempt XEP-0077 in-band registration on a server, then save config.
+  /// Returns result map with 'success', 'jid', 'password', or 'error'.
+  Future<Map<String, dynamic>> registerAccount({
+    required String host,
+    int port = 5222,
+    String? username,
+    String? password,
+    bool directTls = false,
+    String? conferenceService,
+    bool autoConnect = true,
+  }) async {
+    // Generate username from callsign + random suffix if not provided
+    username ??= _generateUsername();
+    password ??= XmppClient.generatePassword();
+
+    final result = await XmppClient.registerAccount(
+      host: host,
+      port: port,
+      username: username,
+      password: password,
+      directTls: directTls,
+    );
+
+    if (result['success'] == true) {
+      final jid = result['jid'] as String;
+      final id = '${host}_${DateTime.now().millisecondsSinceEpoch}';
+      final config = XmppServerConfig(
+        id: id,
+        name: host,
+        host: host,
+        port: port,
+        directTls: directTls,
+        jid: jid,
+        password: result['password'] as String,
+        conferenceService: conferenceService ?? 'conference.$host',
+        autoConnect: autoConnect,
+      );
+      await addServer(config);
+      result['serverId'] = id;
+    }
+    return result;
+  }
+
+  /// Generate a username from the profile callsign + random suffix.
+  String _generateUsername() {
+    final callsign = AppService().currentCallsign ?? 'geogram';
+    // Sanitize: lowercase, only alphanumeric and underscores
+    final base = callsign.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
+    final suffix = DateTime.now().millisecondsSinceEpoch % 10000;
+    return '${base.isNotEmpty ? base : 'geogram'}_$suffix';
+  }
+
+  // ---------------------------------------------------------------------------
   // Connection lifecycle
   // ---------------------------------------------------------------------------
 
@@ -239,7 +312,11 @@ class XmppService {
     _startWriteTimer();
 
     final nick = _getProfileNickname();
-    final client = XmppClient(config: config, nickname: nick);
+    // Provide a writable database path for Whixp's internal DB
+    final dbPath = _cacheService != null
+        ? _cacheService!.getWhixpDbPath(serverId)
+        : '';
+    final client = XmppClient(config: config, nickname: nick, databasePath: dbPath);
     client.onEvent = (event) => _handleClientEvent(serverId, event);
     _clients[serverId] = client;
     client.connect();

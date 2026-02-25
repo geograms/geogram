@@ -40,6 +40,15 @@ class XmppCacheService {
   String _dbPath(String serverId) => '${_cacheDirPath()}/$serverId.db';
   String _configPath() => '${_baseDirPath()}/config.json';
 
+  /// Absolute directory path for Whixp's internal database for a server.
+  /// Whixp appends its own filename to this path.
+  String getWhixpDbPath(String serverId) {
+    final absDir = _storage.getAbsolutePath('${_cacheDirPath()}/whixp_$serverId');
+    final dir = Directory(absDir);
+    if (!dir.existsSync()) dir.createSync(recursive: true);
+    return absDir;
+  }
+
   // ---------------------------------------------------------------------------
   // Config persistence (server list + settings) — global, not per-server
   // ---------------------------------------------------------------------------
