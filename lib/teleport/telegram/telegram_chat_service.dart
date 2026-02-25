@@ -341,11 +341,16 @@ class TelegramChatService {
     }
 
     final topics = result['topics'] as List<dynamic>? ?? [];
-    return topics
+    final all = topics
         .whereType<Map<String, dynamic>>()
         .map(TelegramForumTopic.fromTdlib)
-        .where((t) => !t.isHidden)
         .toList();
+    if (all.isEmpty) return all;
+
+    final visible = all.where((t) => !t.isHidden).toList();
+    // If filtering hides everything, fall back to showing all topics.
+    if (visible.isEmpty) return all;
+    return visible;
   }
 
   /// Get message history for a chat.

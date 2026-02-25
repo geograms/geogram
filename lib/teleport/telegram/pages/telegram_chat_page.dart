@@ -197,8 +197,18 @@ class _TelegramChatPageState extends State<TelegramChatPage> {
         }
       }
 
-      // Step 3: If empty, retry in the background with longer coverage
+      // Step 3: If empty, check forum status and/or retry in background
       if (messages.isEmpty) {
+        try {
+          final isForum = await chatService.isChatForum(widget.chatId);
+          if (isForum && mounted) {
+            setState(() => _isForum = true);
+            await _loadForumTopics();
+            return;
+          }
+        } catch (e) {
+          telegramDebug('TelegramChatPage: forum recheck failed: $e');
+        }
         _retryLoadHistory();
       }
     } catch (e) {
@@ -628,7 +638,10 @@ class _TelegramChatPageState extends State<TelegramChatPage> {
     }
 
     try {
+      await chatService.openChat(widget.chatId);
       final topics = await chatService.getForumTopics(widget.chatId);
+      telegramDebug(
+          'TelegramChatPage: forum topics initial count=${topics.length}');
 
       // Phase 1: Load cached topic photos instantly (offline)
       final cache = TelegramService().cacheService;
@@ -655,9 +668,50 @@ class _TelegramChatPageState extends State<TelegramChatPage> {
           setState(() { _topicPhotos.addAll(downloaded); });
         }
       }
+
+      if (topics.isEmpty) {
+        _retryLoadForumTopics();
+      }
     } catch (e) {
       LogService().error('TelegramChatPage: failed to load forum topics: $e');
       if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _retryLoadForumTopics() async {
+    final chatService = TelegramService().chatService;
+    if (chatService == null) return;
+
+    for (int attempt = 1; attempt <= 4; attempt++) {
+      final delay = attempt * 2;
+      await Future.delayed(Duration(seconds: delay));
+      if (!_isActive || !mounted) return;
+      if (_topics.isNotEmpty) return;
+
+      telegramDebug('TelegramChatPage: forum retry $attempt...');
+      final topics = await chatService.getForumTopics(widget.chatId);
+      telegramDebug(
+          'TelegramChatPage: forum retry $attempt count=${topics.length}');
+
+      if (topics.isNotEmpty && mounted) {
+        setState(() {
+          _topics = topics;
+        });
+
+        // Download missing custom emoji icons on retry
+        final needsDownload = topics
+            .where((t) => t.iconCustomEmojiId != 0 &&
+                !_topicPhotos.containsKey(t.messageThreadId))
+            .toList();
+        if (needsDownload.isNotEmpty) {
+          final downloaded = await chatService.downloadTopicIcons(
+              widget.chatId, needsDownload);
+          if (downloaded.isNotEmpty && mounted) {
+            setState(() { _topicPhotos.addAll(downloaded); });
+          }
+        }
+        return;
+      }
     }
   }
 
