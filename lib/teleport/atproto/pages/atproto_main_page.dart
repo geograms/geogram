@@ -25,6 +25,8 @@ class _AtprotoMainPageState extends State<AtprotoMainPage> {
   final TextEditingController _composer = TextEditingController();
   StreamSubscription<AtprotoClientEvent>? _sub;
   AtprotoFeedItem? _replyTarget;
+  bool _isBootstrapping = true;
+  String? _bootstrapError;
 
   @override
   void initState() {
@@ -47,16 +49,30 @@ class _AtprotoMainPageState extends State<AtprotoMainPage> {
 
   Future<void> _bootstrap() async {
     final service = AtprotoClientService();
-    if (!service.config.enabled || service.isAuthenticated) {
-      await service.syncFeed();
-      return;
+    setState(() {
+      _isBootstrapping = true;
+      _bootstrapError = null;
+    });
+    try {
+      if (!service.config.enabled || service.isAuthenticated) {
+        await service.syncFeed();
+      } else {
+        await service.login(
+          identifier: service.config.identifier,
+          password: service.config.password,
+          allowAutoPasswordDiscovery: true,
+        );
+        await service.syncFeed();
+      }
+    } catch (e) {
+      _bootstrapError = '$e';
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isBootstrapping = false;
+        });
+      }
     }
-    await service.login(
-      identifier: service.config.identifier,
-      password: service.config.password,
-      allowAutoPasswordDiscovery: true,
-    );
-    await service.syncFeed();
   }
 
   @override
@@ -100,7 +116,52 @@ class _AtprotoMainPageState extends State<AtprotoMainPage> {
       ),
       body: Column(
         children: [
-          if (!service.isAuthenticated)
+          if (_isBootstrapping)
+            const Padding(
+              padding: EdgeInsets.all(12),
+              child: Card(
+                child: Padding(
+                  padding: EdgeInsets.all(12),
+                  child: Row(
+                    children: [
+                      SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                      SizedBox(width: 12),
+                      Expanded(child: Text('Starting Bluesky integration...')),
+                    ],
+                  ),
+                ),
+              ),
+            )
+          else if (_bootstrapError != null)
+            Padding(
+              padding: const EdgeInsets.all(12),
+              child: Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('Could not initialize integration.'),
+                      const SizedBox(height: 6),
+                      Text(
+                        _bootstrapError!,
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                      const SizedBox(height: 8),
+                      FilledButton(
+                        onPressed: _bootstrap,
+                        child: const Text('Retry'),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          if (!service.isAuthenticated && !_isBootstrapping)
             const Padding(
               padding: EdgeInsets.all(12),
               child: Card(
@@ -174,7 +235,9 @@ class _AtprotoMainPageState extends State<AtprotoMainPage> {
                   ),
                   const SizedBox(width: 8),
                   FilledButton(
-                    onPressed: service.isAuthenticated ? _publish : null,
+                    onPressed: service.isAuthenticated && !_isBootstrapping
+                        ? _publish
+                        : null,
                     child: const Text('Post'),
                   ),
                 ],
