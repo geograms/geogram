@@ -22,6 +22,9 @@ class AtprotoFeedItem {
   final String? externalTitle;
   final String? externalDescription;
   final String? externalThumbUrl;
+  final List<String> imageThumbUrls;
+  final List<String> imageFullUrls;
+  final List<String> imageAlts;
   final List<String> links;
   final bool isLikedByMe;
   final bool isRepostedByMe;
@@ -45,6 +48,9 @@ class AtprotoFeedItem {
     this.externalTitle,
     this.externalDescription,
     this.externalThumbUrl,
+    this.imageThumbUrls = const [],
+    this.imageFullUrls = const [],
+    this.imageAlts = const [],
     this.links = const [],
     this.isLikedByMe = false,
     this.isRepostedByMe = false,
@@ -72,6 +78,15 @@ class AtprotoFeedItem {
       externalTitle: json['externalTitle'] as String?,
       externalDescription: json['externalDescription'] as String?,
       externalThumbUrl: json['externalThumbUrl'] as String?,
+      imageThumbUrls: (json['imageThumbUrls'] as List<dynamic>? ?? const [])
+          .map((e) => e.toString())
+          .toList(),
+      imageFullUrls: (json['imageFullUrls'] as List<dynamic>? ?? const [])
+          .map((e) => e.toString())
+          .toList(),
+      imageAlts: (json['imageAlts'] as List<dynamic>? ?? const [])
+          .map((e) => e.toString())
+          .toList(),
       links: (json['links'] as List<dynamic>? ?? const [])
           .map((e) => e.toString())
           .toList(),
@@ -99,6 +114,9 @@ class AtprotoFeedItem {
     'externalTitle': externalTitle,
     'externalDescription': externalDescription,
     'externalThumbUrl': externalThumbUrl,
+    'imageThumbUrls': imageThumbUrls,
+    'imageFullUrls': imageFullUrls,
+    'imageAlts': imageAlts,
     'links': links,
     'isLikedByMe': isLikedByMe,
     'isRepostedByMe': isRepostedByMe,

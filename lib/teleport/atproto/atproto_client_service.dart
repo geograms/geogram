@@ -359,22 +359,9 @@ class AtprotoClientService {
       final root = reply?['root'] as Map<String, dynamic>?;
       final parent = reply?['parent'] as Map<String, dynamic>?;
       final viewer = postWrap['viewer'] as Map<String, dynamic>?;
-
-      String? externalUrl;
-      String? externalTitle;
-      String? externalDescription;
-      String? externalThumbUrl;
-      final embed = postWrap['embed'] as Map<String, dynamic>?;
-      if (embed != null) {
-        final external = embed['external'] as Map<String, dynamic>?;
-        if (external != null) {
-          externalUrl = external['uri'] as String?;
-          externalTitle = external['title'] as String?;
-          externalDescription = external['description'] as String?;
-          final thumb = external['thumb'] as String?;
-          externalThumbUrl = thumb;
-        }
-      }
+      final embedData = _extractEmbedData(
+        postWrap['embed'] as Map<String, dynamic>?,
+      );
 
       final links = _extractLinks(record);
 
@@ -398,10 +385,13 @@ class AtprotoClientService {
           indexedAt: postWrap['indexedAt'] as String?,
           parentUri: parent?['uri'] as String?,
           rootUri: root?['uri'] as String?,
-          externalUrl: externalUrl,
-          externalTitle: externalTitle,
-          externalDescription: externalDescription,
-          externalThumbUrl: externalThumbUrl,
+          externalUrl: embedData.externalUrl,
+          externalTitle: embedData.externalTitle,
+          externalDescription: embedData.externalDescription,
+          externalThumbUrl: embedData.externalThumbUrl,
+          imageThumbUrls: embedData.imageThumbUrls,
+          imageFullUrls: embedData.imageFullUrls,
+          imageAlts: embedData.imageAlts,
           links: links,
           isLikedByMe: viewer?['like'] != null,
           isRepostedByMe: viewer?['repost'] != null,
@@ -435,6 +425,59 @@ class AtprotoClientService {
       links.add(value.startsWith('http') ? value : 'https://$value');
     }
     return links.toSet().toList();
+  }
+
+  _ParsedEmbedData _extractEmbedData(Map<String, dynamic>? embed) {
+    if (embed == null) return const _ParsedEmbedData();
+
+    String? externalUrl;
+    String? externalTitle;
+    String? externalDescription;
+    String? externalThumbUrl;
+    final imageThumbUrls = <String>[];
+    final imageFullUrls = <String>[];
+    final imageAlts = <String>[];
+
+    void parseNode(Map<String, dynamic>? node) {
+      if (node == null) return;
+
+      final external = node['external'] as Map<String, dynamic>?;
+      if (external != null && externalUrl == null) {
+        externalUrl = external['uri'] as String?;
+        externalTitle = external['title'] as String?;
+        externalDescription = external['description'] as String?;
+        externalThumbUrl = external['thumb'] as String?;
+      }
+
+      final images = node['images'] as List<dynamic>?;
+      if (images != null) {
+        for (final image in images) {
+          if (image is! Map<String, dynamic>) continue;
+          final thumb = image['thumb'] as String?;
+          final full = image['fullsize'] as String?;
+          final alt = image['alt'] as String?;
+          if (thumb != null && thumb.isNotEmpty) imageThumbUrls.add(thumb);
+          if (full != null && full.isNotEmpty) imageFullUrls.add(full);
+          if (alt != null && alt.isNotEmpty) imageAlts.add(alt);
+        }
+      }
+
+      parseNode(node['media'] as Map<String, dynamic>?);
+      parseNode(node['view'] as Map<String, dynamic>?);
+      parseNode(node['record'] as Map<String, dynamic>?);
+    }
+
+    parseNode(embed);
+
+    return _ParsedEmbedData(
+      externalUrl: externalUrl,
+      externalTitle: externalTitle,
+      externalDescription: externalDescription,
+      externalThumbUrl: externalThumbUrl,
+      imageThumbUrls: imageThumbUrls.toSet().toList(),
+      imageFullUrls: imageFullUrls.toSet().toList(),
+      imageAlts: imageAlts,
+    );
   }
 
   void dispose() {
@@ -611,4 +654,24 @@ class AtprotoClientService {
       LogService().log('AtprotoClientService: failed to emit event: $e');
     }
   }
+}
+
+class _ParsedEmbedData {
+  final String? externalUrl;
+  final String? externalTitle;
+  final String? externalDescription;
+  final String? externalThumbUrl;
+  final List<String> imageThumbUrls;
+  final List<String> imageFullUrls;
+  final List<String> imageAlts;
+
+  const _ParsedEmbedData({
+    this.externalUrl,
+    this.externalTitle,
+    this.externalDescription,
+    this.externalThumbUrl,
+    this.imageThumbUrls = const [],
+    this.imageFullUrls = const [],
+    this.imageAlts = const [],
+  });
 }

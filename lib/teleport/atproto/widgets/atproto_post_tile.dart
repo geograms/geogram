@@ -37,6 +37,7 @@ class _AtprotoPostTileState extends State<AtprotoPostTile> {
     caseSensitive: false,
   );
   final List<TapGestureRecognizer> _recognizers = [];
+  int _imagePage = 0;
 
   @override
   void dispose() {
@@ -44,6 +45,14 @@ class _AtprotoPostTileState extends State<AtprotoPostTile> {
       recognizer.dispose();
     }
     super.dispose();
+  }
+
+  @override
+  void didUpdateWidget(covariant AtprotoPostTile oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.item.uri != widget.item.uri) {
+      _imagePage = 0;
+    }
   }
 
   @override
@@ -84,6 +93,11 @@ class _AtprotoPostTileState extends State<AtprotoPostTile> {
                   _buildHeader(theme, item),
                   const SizedBox(height: 6),
                   _buildBody(theme, item),
+                  if (_imageCount(item) > 0)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 8),
+                      child: _buildImageGallery(theme, item),
+                    ),
                   if (item.externalUrl != null && item.externalUrl!.isNotEmpty)
                     Padding(
                       padding: const EdgeInsets.only(top: 8),
@@ -281,6 +295,118 @@ class _AtprotoPostTileState extends State<AtprotoPostTile> {
     );
   }
 
+  Widget _buildImageGallery(ThemeData theme, AtprotoFeedItem item) {
+    final count = _imageCount(item);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        ClipRRect(
+          borderRadius: BorderRadius.circular(14),
+          child: SizedBox(
+            height: 220,
+            child: PageView.builder(
+              itemCount: count,
+              onPageChanged: (index) => setState(() => _imagePage = index),
+              itemBuilder: (context, index) {
+                final thumb = _imageThumb(item, index);
+                final full = _imageFull(item, index);
+                final alt = _imageAlt(item, index);
+                return Material(
+                  color: theme.colorScheme.surfaceContainerLowest,
+                  child: InkWell(
+                    onTap: () => _openImagePreview(item, initialIndex: index),
+                    child: Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        if (thumb != null)
+                          Image.network(
+                            thumb,
+                            fit: BoxFit.cover,
+                            errorBuilder: (context, error, stackTrace) {
+                              if (full != null && full != thumb) {
+                                return Image.network(
+                                  full,
+                                  fit: BoxFit.cover,
+                                  errorBuilder: (context, error, stackTrace) =>
+                                      _imageFallback(theme),
+                                );
+                              }
+                              return _imageFallback(theme);
+                            },
+                          )
+                        else if (full != null)
+                          Image.network(
+                            full,
+                            fit: BoxFit.cover,
+                            errorBuilder: (context, error, stackTrace) =>
+                                _imageFallback(theme),
+                          )
+                        else
+                          _imageFallback(theme),
+                        if (alt != null && alt.isNotEmpty)
+                          Positioned(
+                            left: 8,
+                            right: 8,
+                            bottom: 8,
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 5,
+                              ),
+                              decoration: BoxDecoration(
+                                color: Colors.black.withValues(alpha: 0.55),
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                              child: Text(
+                                alt,
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 12,
+                                ),
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        ),
+        if (count > 1) ...[
+          const SizedBox(height: 6),
+          Row(
+            children: List.generate(count, (index) {
+              final active = index == _imagePage;
+              return Container(
+                width: active ? 14 : 7,
+                height: 7,
+                margin: const EdgeInsets.only(right: 5),
+                decoration: BoxDecoration(
+                  color: active
+                      ? theme.colorScheme.primary
+                      : theme.colorScheme.outlineVariant,
+                  borderRadius: BorderRadius.circular(7),
+                ),
+              );
+            }),
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _imageFallback(ThemeData theme) {
+    return Container(
+      color: theme.colorScheme.surfaceContainer,
+      alignment: Alignment.center,
+      child: Icon(Icons.image, color: theme.colorScheme.outline, size: 28),
+    );
+  }
+
   Widget _buildLinkList(ThemeData theme, List<String> links) {
     return Wrap(
       spacing: 6,
@@ -403,5 +529,126 @@ class _AtprotoPostTileState extends State<AtprotoPostTile> {
     final uri = Uri.tryParse(raw);
     if (uri == null) return;
     await launchUrl(uri, mode: LaunchMode.externalApplication);
+  }
+
+  int _imageCount(AtprotoFeedItem item) {
+    final thumbCount = item.imageThumbUrls.length;
+    final fullCount = item.imageFullUrls.length;
+    return thumbCount > fullCount ? thumbCount : fullCount;
+  }
+
+  String? _imageThumb(AtprotoFeedItem item, int index) {
+    if (index >= 0 && index < item.imageThumbUrls.length) {
+      return item.imageThumbUrls[index];
+    }
+    return null;
+  }
+
+  String? _imageFull(AtprotoFeedItem item, int index) {
+    if (index >= 0 && index < item.imageFullUrls.length) {
+      return item.imageFullUrls[index];
+    }
+    return null;
+  }
+
+  String? _imageAlt(AtprotoFeedItem item, int index) {
+    if (index >= 0 && index < item.imageAlts.length) {
+      return item.imageAlts[index];
+    }
+    return null;
+  }
+
+  Future<void> _openImagePreview(
+    AtprotoFeedItem item, {
+    required int initialIndex,
+  }) async {
+    final count = _imageCount(item);
+    if (count == 0 || !mounted) return;
+
+    final controller = PageController(initialPage: initialIndex);
+    await showDialog<void>(
+      context: context,
+      barrierColor: Colors.black.withValues(alpha: 0.92),
+      builder: (context) {
+        var current = initialIndex;
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return Stack(
+              children: [
+                Positioned.fill(
+                  child: PageView.builder(
+                    controller: controller,
+                    itemCount: count,
+                    onPageChanged: (index) =>
+                        setDialogState(() => current = index),
+                    itemBuilder: (context, index) {
+                      final full = _imageFull(item, index);
+                      final thumb = _imageThumb(item, index);
+                      final target = full ?? thumb;
+                      if (target == null) {
+                        return const Center(
+                          child: Icon(
+                            Icons.broken_image,
+                            color: Colors.white70,
+                            size: 42,
+                          ),
+                        );
+                      }
+                      return InteractiveViewer(
+                        minScale: 1,
+                        maxScale: 4,
+                        child: Center(
+                          child: Image.network(
+                            target,
+                            fit: BoxFit.contain,
+                            errorBuilder: (context, error, stackTrace) =>
+                                const Icon(
+                                  Icons.broken_image,
+                                  color: Colors.white70,
+                                  size: 42,
+                                ),
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+                Positioned(
+                  top: 16,
+                  right: 16,
+                  child: IconButton(
+                    onPressed: () => Navigator.of(context).pop(),
+                    icon: const Icon(Icons.close, color: Colors.white),
+                  ),
+                ),
+                if (count > 1)
+                  Positioned(
+                    bottom: 22,
+                    left: 0,
+                    right: 0,
+                    child: Center(
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 4,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.black.withValues(alpha: 0.5),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Text(
+                          '${current + 1}/$count',
+                          style: const TextStyle(color: Colors.white),
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            );
+          },
+        );
+      },
+    );
+    controller.dispose();
   }
 }
