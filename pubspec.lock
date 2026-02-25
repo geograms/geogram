@@ -329,7 +329,7 @@ packages:
     source: hosted
     version: "2.1.1"
   dnsolve:
-    dependency: transitive
+    dependency: "direct main"
     description:
       name: dnsolve
       sha256: "51209db239a2242285b7ca7bccc7c452ff30f3ed80d14c05900e3bc97146d97f"

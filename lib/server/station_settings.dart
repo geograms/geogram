@@ -75,6 +75,8 @@ class StationSettings {
   // ============ XMPP Server ============
   bool xmppServerEnabled;
   int xmppServerPort;
+  bool xmppS2sEnabled;
+  int xmppS2sPort;
 
   // ============ STUN Server (App-only, CLI can inherit) ============
   bool stunServerEnabled;
@@ -129,6 +131,8 @@ class StationSettings {
     this.atprotoHandle,
     this.xmppServerEnabled = false,
     this.xmppServerPort = 5222,
+    this.xmppS2sEnabled = false,
+    this.xmppS2sPort = 5269,
     this.stunServerEnabled = true,
     this.stunServerPort = 3478,
   })  : npub = npub ?? _defaultKeys.npub,
@@ -192,6 +196,8 @@ class StationSettings {
       atprotoHandle: json['atprotoHandle'] as String?,
       xmppServerEnabled: json['xmppServerEnabled'] as bool? ?? false,
       xmppServerPort: json['xmppServerPort'] as int? ?? 5222,
+      xmppS2sEnabled: json['xmppS2sEnabled'] as bool? ?? false,
+      xmppS2sPort: json['xmppS2sPort'] as int? ?? 5269,
       stunServerEnabled: json['stunServerEnabled'] as bool? ?? true,
       stunServerPort: json['stunServerPort'] as int? ?? 3478,
     );
@@ -248,6 +254,8 @@ class StationSettings {
     'atprotoHandle': atprotoHandle,
     'xmppServerEnabled': xmppServerEnabled,
     'xmppServerPort': xmppServerPort,
+    'xmppS2sEnabled': xmppS2sEnabled,
+    'xmppS2sPort': xmppS2sPort,
     'stunServerEnabled': stunServerEnabled,
     'stunServerPort': stunServerPort,
   };
@@ -301,6 +309,8 @@ class StationSettings {
     String? atprotoHandle,
     bool? xmppServerEnabled,
     int? xmppServerPort,
+    bool? xmppS2sEnabled,
+    int? xmppS2sPort,
     bool? stunServerEnabled,
     int? stunServerPort,
   }) {
@@ -353,6 +363,8 @@ class StationSettings {
       atprotoHandle: atprotoHandle ?? this.atprotoHandle,
       xmppServerEnabled: xmppServerEnabled ?? this.xmppServerEnabled,
       xmppServerPort: xmppServerPort ?? this.xmppServerPort,
+      xmppS2sEnabled: xmppS2sEnabled ?? this.xmppS2sEnabled,
+      xmppS2sPort: xmppS2sPort ?? this.xmppS2sPort,
       stunServerEnabled: stunServerEnabled ?? this.stunServerEnabled,
       stunServerPort: stunServerPort ?? this.stunServerPort,
     );

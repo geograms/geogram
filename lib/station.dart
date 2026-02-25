@@ -139,6 +139,8 @@ class PureRelaySettings implements StationSettingsReadable {
   // XMPP Server configuration
   bool xmppServerEnabled;
   int xmppServerPort;
+  bool xmppS2sEnabled;
+  int xmppS2sPort;
 
   PureRelaySettings({
     this.httpPort = 8080,
@@ -187,6 +189,8 @@ class PureRelaySettings implements StationSettingsReadable {
     this.dkimPrivateKey,
     this.xmppServerEnabled = false,
     this.xmppServerPort = 5222,
+    this.xmppS2sEnabled = false,
+    this.xmppS2sPort = 5269,
   }) : npub = npub ?? _defaultKeys.npub,
        nsec = nsec ?? _defaultKeys.nsec;
 
@@ -246,6 +250,8 @@ class PureRelaySettings implements StationSettingsReadable {
       dkimPrivateKey: json['dkimPrivateKey'] as String?,
       xmppServerEnabled: json['xmppServerEnabled'] as bool? ?? false,
       xmppServerPort: json['xmppServerPort'] as int? ?? 5222,
+      xmppS2sEnabled: json['xmppS2sEnabled'] as bool? ?? false,
+      xmppS2sPort: json['xmppS2sPort'] as int? ?? 5269,
     );
   }
 
@@ -298,6 +304,8 @@ class PureRelaySettings implements StationSettingsReadable {
         'dkimPrivateKey': dkimPrivateKey,
         'xmppServerEnabled': xmppServerEnabled,
         'xmppServerPort': xmppServerPort,
+        'xmppS2sEnabled': xmppS2sEnabled,
+        'xmppS2sPort': xmppS2sPort,
       };
 
   PureRelaySettings copyWith({
@@ -347,6 +355,8 @@ class PureRelaySettings implements StationSettingsReadable {
     String? dkimPrivateKey,
     bool? xmppServerEnabled,
     int? xmppServerPort,
+    bool? xmppS2sEnabled,
+    int? xmppS2sPort,
   }) {
     return PureRelaySettings(
       httpPort: httpPort ?? this.httpPort,
@@ -395,6 +405,8 @@ class PureRelaySettings implements StationSettingsReadable {
       dkimPrivateKey: dkimPrivateKey ?? this.dkimPrivateKey,
       xmppServerEnabled: xmppServerEnabled ?? this.xmppServerEnabled,
       xmppServerPort: xmppServerPort ?? this.xmppServerPort,
+      xmppS2sEnabled: xmppS2sEnabled ?? this.xmppS2sEnabled,
+      xmppS2sPort: xmppS2sPort ?? this.xmppS2sPort,
     );
   }
 
@@ -1749,6 +1761,8 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, EmailHandlerMixin,
           port: _settings.xmppServerPort,
           domain: _settings.sslDomain!,
           dataDir: _dataDir ?? '.',
+          s2sEnabled: _settings.xmppS2sEnabled,
+          s2sPort: _settings.xmppS2sPort,
         );
 
         final xmppStarted = await _xmppServer!.start();

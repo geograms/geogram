@@ -45,6 +45,7 @@ dependencies:
   latlong2: ^0.9.1
   web_socket_channel: ^3.0.1
   crypto: ^3.0.6
+  dnsolve: ^2.0.0
   pointycastle: ^3.9.1
   hex: ^0.2.0
   bech32: ^0.2.2

@@ -33,6 +33,8 @@ class XmppNs {
   static const String ping = 'urn:xmpp:ping';
   static const String roster = 'jabber:iq:roster';
   static const String vcard = 'vcard-temp';
+  static const String server = 'jabber:server';
+  static const String dialback = 'jabber:server:dialback';
 }
 
 // ---------------------------------------------------------------------------
@@ -122,13 +124,13 @@ class XmppStanza {
 class XmppStanzaExtractor {
   /// Stanza closing tags we watch for
   static final _closingTags = RegExp(
-    r'</(?:iq|message|presence|auth|response|starttls|register)>',
+    r'</(?:iq|message|presence|auth|response|starttls|register|db:result|db:verify)>',
     caseSensitive: false,
   );
 
   /// Self-closing stanzas (e.g. <presence/>, <iq .../>)
   static final _selfClosing = RegExp(
-    r'<(iq|message|presence|auth|response|starttls|register)\b[^>]*/\s*>',
+    r'<(?:iq|message|presence|auth|response|starttls|register|db:result|db:verify)\b[^>]*/\s*>',
     caseSensitive: false,
   );
 
@@ -205,8 +207,10 @@ class XmppStanzaParser {
     }
 
     var name = tagMatch.group(1)!;
-    // Strip namespace prefix for convenience
-    if (name.contains(':')) {
+    // Preserve db: prefix for dialback stanzas, strip other namespace prefixes
+    if (name.startsWith('db:')) {
+      // keep as-is (db:result, db:verify)
+    } else if (name.contains(':')) {
       name = name.split(':').last;
     }
 

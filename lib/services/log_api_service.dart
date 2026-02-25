@@ -17598,6 +17598,68 @@ function cleanup() {
           headers: {'content-type': 'application/json'},
         );
 
+      case 'xmpp_server_s2s_status':
+        if (xmppServer == null) {
+          return shelf.Response.ok(
+            jsonEncode({'success': false, 'error': 'XMPP server not running'}),
+            headers: {'content-type': 'application/json'},
+          );
+        }
+        final s2sStatus = xmppServer.getS2sStatus();
+        return shelf.Response.ok(
+          jsonEncode({
+            'success': true,
+            's2s_enabled': xmppServer.s2sEnabled,
+            ...?s2sStatus,
+          }),
+          headers: {'content-type': 'application/json'},
+        );
+
+      case 'xmpp_server_s2s_connect':
+        final domain = params['domain'] as String?;
+        if (domain == null || domain.isEmpty) {
+          return shelf.Response.ok(
+            jsonEncode({'success': false, 'error': 'domain required'}),
+            headers: {'content-type': 'application/json'},
+          );
+        }
+        if (xmppServer == null || xmppServer.s2sManager == null) {
+          return shelf.Response.ok(
+            jsonEncode({'success': false, 'error': 'XMPP S2S not running'}),
+            headers: {'content-type': 'application/json'},
+          );
+        }
+        final result = await xmppServer.s2sManager!.testConnect(domain);
+        return shelf.Response.ok(
+          jsonEncode(result),
+          headers: {'content-type': 'application/json'},
+        );
+
+      case 'xmpp_server_s2s_test':
+        final domain = params['domain'] as String?;
+        if (domain == null || domain.isEmpty) {
+          return shelf.Response.ok(
+            jsonEncode({'success': false, 'error': 'domain required'}),
+            headers: {'content-type': 'application/json'},
+          );
+        }
+        if (xmppServer == null || xmppServer.s2sManager == null) {
+          return shelf.Response.ok(
+            jsonEncode({'success': false, 'error': 'XMPP S2S not running'}),
+            headers: {'content-type': 'application/json'},
+          );
+        }
+        // Test by initiating connection and checking state
+        final testResult = await xmppServer.s2sManager!.testConnect(domain);
+        final status = xmppServer.s2sManager!.getStatus();
+        return shelf.Response.ok(
+          jsonEncode({
+            ...testResult,
+            'connections': status,
+          }),
+          headers: {'content-type': 'application/json'},
+        );
+
       default:
         return shelf.Response.ok(
           jsonEncode({'success': false, 'error': 'Unknown xmpp_server action: $action'}),

@@ -8,7 +8,7 @@
  * Mirrors the SMTPServer pattern: raw ServerSocket, per-IP rate limiting,
  * STARTTLS via SecureSocket.secureServer(), regex-based stanza parsing.
  *
- * No S2S federation in v1. All users connect to the same station.
+ * S2S federation via XmppS2sManager for connecting to remote XMPP servers.
  */
 
 import 'dart:async';
@@ -18,6 +18,7 @@ import 'dart:math';
 
 import '../util/xmpp_server_protocol.dart';
 import 'log_service.dart';
+import 'xmpp_s2s.dart';
 
 // ---------------------------------------------------------------------------
 // User account model
@@ -94,6 +95,13 @@ class XmppServer {
   final int maxConnectionsPerIp;
   final Duration connectionTimeout;
 
+  /// S2S federation settings
+  final bool s2sEnabled;
+  final int s2sPort;
+
+  /// S2S federation manager
+  XmppS2sManager? _s2sManager;
+
   ServerSocket? _server;
   final Map<String, List<XmppServerSession>> _sessionsByIp = {};
   final Map<String, int> _connectionCounts = {};
@@ -119,6 +127,8 @@ class XmppServer {
     required this.dataDir,
     this.maxConnectionsPerIp = 20,
     this.connectionTimeout = const Duration(minutes: 10),
+    this.s2sEnabled = false,
+    this.s2sPort = 5269,
   });
 
   // -------------------------------------------------------------------------
@@ -155,6 +165,25 @@ class XmppServer {
 
       instance = this;
       _log('Listening on port $port for domain $domain');
+
+      // Start S2S federation if enabled
+      if (s2sEnabled) {
+        _s2sManager = XmppS2sManager(
+          localDomain: domain,
+          dataDir: dataDir,
+          port: s2sPort,
+          securityContext: _securityContext,
+          onIncomingStanza: _handleIncomingS2sStanza,
+        );
+        final s2sStarted = await _s2sManager!.start();
+        if (s2sStarted) {
+          _log('S2S federation started on port $s2sPort');
+        } else {
+          _log('Failed to start S2S federation on port $s2sPort');
+          _s2sManager = null;
+        }
+      }
+
       return true;
     } catch (e) {
       _log('Failed to start on port $port: $e');
@@ -163,6 +192,9 @@ class XmppServer {
   }
 
   Future<void> stop() async {
+    await _s2sManager?.stop();
+    _s2sManager = null;
+
     await _server?.close();
     _server = null;
 
@@ -804,6 +836,12 @@ class XmppServer {
     final toJid = Jid.parse(stanza.to!);
     if (toJid == null) return;
 
+    // Forward to remote domain via S2S if not local
+    if (toJid.domain != domain && _s2sManager != null) {
+      _forwardViaS2s(session, stanza);
+      return;
+    }
+
     final targetSessions = _sessionsByJid[toJid.bare] ?? [];
     if (targetSessions.isEmpty) {
       // User offline — silently drop for now (no offline storage in v1)
@@ -829,6 +867,19 @@ class XmppServer {
     final roomJid = Jid.parse(stanza.to!)?.bare ?? stanza.to!;
     // Strip resource from room JID if present
     final actualRoomJid = roomJid.contains('/') ? roomJid.split('/').first : roomJid;
+
+    // Check if this is a remote MUC room — forward via S2S
+    final roomDomain = actualRoomJid.contains('@')
+        ? actualRoomJid.split('@').last
+        : '';
+    if (roomDomain.isNotEmpty &&
+        roomDomain != conferenceDomain &&
+        roomDomain != domain &&
+        _s2sManager != null) {
+      _forwardViaS2s(session, stanza);
+      return;
+    }
+
     final room = _rooms[actualRoomJid];
     if (room == null) return;
 
@@ -863,6 +914,20 @@ class XmppServer {
 
     final to = stanza.to;
     final type = stanza.type;
+
+    // Check for remote MUC join/leave — forward via S2S
+    if (to != null && _s2sManager != null) {
+      final toJid = Jid.parse(to);
+      if (toJid != null) {
+        final targetDomain = toJid.domain;
+        if (targetDomain != conferenceDomain &&
+            targetDomain != domain &&
+            targetDomain.isNotEmpty) {
+          _forwardViaS2s(session, stanza);
+          return;
+        }
+      }
+    }
 
     // MUC join — presence to room@conference.domain/nickname
     if (to != null && to.contains(conferenceDomain)) {
@@ -1060,6 +1125,72 @@ class XmppServer {
   }
 
   // -------------------------------------------------------------------------
+  // S2S forwarding
+  // -------------------------------------------------------------------------
+
+  /// Forward a C2S stanza to a remote domain via S2S federation
+  void _forwardViaS2s(XmppServerSession session, XmppStanza stanza) {
+    if (_s2sManager == null) return;
+
+    final to = stanza.to;
+    if (to == null) return;
+
+    // Determine the remote domain from the 'to' JID
+    final toJid = Jid.parse(to);
+    final remoteDomain = toJid?.domain ?? '';
+    if (remoteDomain.isEmpty) return;
+
+    // Rewrite the 'from' attribute to use the server-assigned JID
+    // and forward the raw XML with corrected from
+    final fromJid = session.fullJid ?? session.bareJid ?? '';
+    final rewritten = stanza.rawXml
+        .replaceFirst(RegExp(r"from='[^']*'"), "from='$fromJid'")
+        .replaceFirst(RegExp(r'from="[^"]*"'), 'from="$fromJid"');
+
+    // If there was no from attribute, add one
+    final xml = rewritten.contains('from=')
+        ? rewritten
+        : rewritten.replaceFirst('<${stanza.name}', "<${stanza.name} from='$fromJid'");
+
+    _s2sManager!.sendToRemote(remoteDomain, xml);
+    _log('S2S forward: ${stanza.name} from $fromJid to $to via $remoteDomain');
+  }
+
+  /// Handle an incoming stanza from a remote server via S2S
+  void _handleIncomingS2sStanza(XmppStanza stanza, String fromDomain) {
+    final to = stanza.to;
+    if (to == null) return;
+
+    final toJid = Jid.parse(to);
+    if (toJid == null) return;
+
+    // Route to local C2S sessions
+    final targetSessions = _sessionsByJid[toJid.bare] ?? [];
+    if (targetSessions.isEmpty) {
+      // Also check by full JID (for presence directed to specific resource)
+      for (final sessions in _sessionsByJid.values) {
+        for (final s in sessions) {
+          if (s.fullJid == to) {
+            s.send(stanza.rawXml);
+            return;
+          }
+        }
+      }
+      return;
+    }
+
+    for (final target in targetSessions) {
+      target.send(stanza.rawXml);
+    }
+  }
+
+  /// Get S2S manager status (for debug API)
+  Map<String, dynamic>? getS2sStatus() => _s2sManager?.getStatus();
+
+  /// Get S2S manager (for debug API)
+  XmppS2sManager? get s2sManager => _s2sManager;
+
+  // -------------------------------------------------------------------------
   // Session cleanup
   // -------------------------------------------------------------------------
 
@@ -1132,6 +1263,9 @@ class XmppServer {
       'rooms': _rooms.length,
       'room_list': _rooms.keys.toList(),
       'online_jids': _sessionsByJid.keys.toList(),
+      's2s_enabled': s2sEnabled,
+      's2s_port': s2sPort,
+      's2s_running': _s2sManager?.isRunning ?? false,
     };
   }
 

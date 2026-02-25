@@ -37,6 +37,8 @@ mixin XmppServerMixin {
         port: settings.xmppServerPort,
         domain: settings.sslDomain!,
         dataDir: dataDir,
+        s2sEnabled: settings.xmppS2sEnabled,
+        s2sPort: settings.xmppS2sPort,
       );
 
       final started = await _xmppServer!.start();
