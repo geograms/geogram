@@ -17436,6 +17436,67 @@ function cleanup() {
           headers: headers,
         );
 
+      case 'nostr_follow':
+        final pubkey = params['pubkey'] as String?;
+        if (pubkey == null || pubkey.isEmpty) {
+          return shelf.Response.ok(
+            jsonEncode({'success': false, 'error': 'pubkey required'}),
+            headers: headers,
+          );
+        }
+        final followed = await nostr.followUser(pubkey);
+        return shelf.Response.ok(
+          jsonEncode({'success': followed, 'action': 'follow', 'pubkey': pubkey}),
+          headers: headers,
+        );
+
+      case 'nostr_unfollow':
+        final pubkey = params['pubkey'] as String?;
+        if (pubkey == null || pubkey.isEmpty) {
+          return shelf.Response.ok(
+            jsonEncode({'success': false, 'error': 'pubkey required'}),
+            headers: headers,
+          );
+        }
+        final unfollowed = await nostr.unfollowUser(pubkey);
+        return shelf.Response.ok(
+          jsonEncode({'success': unfollowed, 'action': 'unfollow', 'pubkey': pubkey}),
+          headers: headers,
+        );
+
+      case 'nostr_like':
+        final eventId = params['eventId'] as String?;
+        final authorPubkey = params['authorPubkey'] as String?;
+        if (eventId == null || authorPubkey == null) {
+          return shelf.Response.ok(
+            jsonEncode({'success': false, 'error': 'eventId and authorPubkey required'}),
+            headers: headers,
+          );
+        }
+        final liked = await nostr.likeEvent(eventId, authorPubkey);
+        return shelf.Response.ok(
+          jsonEncode({'success': liked, 'action': 'like', 'eventId': eventId}),
+          headers: headers,
+        );
+
+      case 'nostr_search':
+        final query = params['query'] as String? ?? '';
+        final matches = nostr.searchFeed(query).map((item) {
+          return {
+            'id': item.id,
+            'pubkey': item.pubkey,
+            'npub': item.event.npub,
+            'created_at': item.createdAt,
+            'content': item.content,
+            'relay': item.relayUrl,
+            'display_name': item.displayName,
+          };
+        }).toList();
+        return shelf.Response.ok(
+          jsonEncode({'success': true, 'query': query, 'items': matches}),
+          headers: headers,
+        );
+
       default:
         return shelf.Response.ok(
           jsonEncode({'success': false, 'error': 'Unknown NOSTR action: $action'}),

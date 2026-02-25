@@ -16,6 +16,7 @@ import '../nostr_client_service.dart';
 import '../models/nostr_feed_item.dart';
 import '../widgets/nostr_event_tile.dart';
 import 'nostr_settings_page.dart';
+import 'nostr_user_profile_page.dart';
 
 class NostrMainPage extends StatefulWidget {
   final String appPath;
@@ -29,14 +30,20 @@ class NostrMainPage extends StatefulWidget {
 class _NostrMainPageState extends State<NostrMainPage> {
   final TextEditingController _textController = TextEditingController();
   final FocusNode _focusNode = FocusNode();
+  final TextEditingController _searchController = TextEditingController();
+  final FocusNode _searchFocusNode = FocusNode();
   StreamSubscription<NostrClientEvent>? _eventSub;
 
   String? _ownPubkey;
+  bool _isSearching = false;
 
   @override
   void initState() {
     super.initState();
     _resolveOwnPubkey();
+    _searchController.addListener(() {
+      if (mounted) setState(() {});
+    });
     _eventSub = NostrClientService().events.listen((event) {
       if (!mounted) return;
       setState(() {});
@@ -67,6 +74,8 @@ class _NostrMainPageState extends State<NostrMainPage> {
     _eventSub?.cancel();
     _textController.dispose();
     _focusNode.dispose();
+    _searchController.dispose();
+    _searchFocusNode.dispose();
     super.dispose();
   }
 
@@ -95,38 +104,85 @@ class _NostrMainPageState extends State<NostrMainPage> {
     }
   }
 
+  Future<void> _likePost(NostrFeedItem item) async {
+    final eventId = item.id;
+    if (eventId == null) return;
+    final ok = await NostrClientService().likeEvent(eventId, item.pubkey);
+    if (!ok && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Failed to like post')),
+      );
+    }
+  }
+
+  void _openUserProfile(String pubkey) {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => NostrUserProfilePage(pubkey: pubkey),
+      ),
+    );
+  }
+
+  void _toggleSearch() {
+    setState(() {
+      _isSearching = !_isSearching;
+      if (!_isSearching) {
+        _searchController.clear();
+        _searchFocusNode.unfocus();
+      } else {
+        _searchFocusNode.requestFocus();
+      }
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final service = NostrClientService();
-    final items = service.feedItems;
+    final items = service.searchFeed(_searchController.text);
     final theme = Theme.of(context);
 
     return Scaffold(
       appBar: AppBar(
-        title: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Text('NOSTR'),
-            if (items.isNotEmpty) ...[
-              const SizedBox(width: 8),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                decoration: BoxDecoration(
-                  color: theme.colorScheme.primary.withValues(alpha: 0.2),
-                  borderRadius: BorderRadius.circular(10),
+        title: _isSearching
+            ? TextField(
+                controller: _searchController,
+                focusNode: _searchFocusNode,
+                decoration: const InputDecoration(
+                  hintText: 'Search NOSTR',
+                  border: InputBorder.none,
                 ),
-                child: Text(
-                  '${items.length}',
-                  style: TextStyle(
-                    fontSize: 11,
-                    color: theme.colorScheme.primary,
-                  ),
-                ),
+                style: theme.textTheme.titleMedium,
+              )
+            : Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text('NOSTR'),
+                  if (items.isNotEmpty) ...[
+                    const SizedBox(width: 8),
+                    Container(
+                      padding:
+                          const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: theme.colorScheme.primary.withValues(alpha: 0.2),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Text(
+                        '${items.length}',
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: theme.colorScheme.primary,
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
               ),
-            ],
-          ],
-        ),
         actions: [
+          IconButton(
+            icon: Icon(_isSearching ? Icons.close : Icons.search),
+            tooltip: _isSearching ? 'Close search' : 'Search',
+            onPressed: _toggleSearch,
+          ),
           // Filter dropdown
           DropdownButton<NostrFeedFilter>(
             value: service.feedFilter,
@@ -238,14 +294,29 @@ class _NostrMainPageState extends State<NostrMainPage> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const CircularProgressIndicator(),
-            const SizedBox(height: 16),
-            Text(
-              'Waiting for events...',
-              style: theme.textTheme.bodyMedium?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
+            if (_searchController.text.trim().isEmpty) ...[
+              const CircularProgressIndicator(),
+              const SizedBox(height: 16),
+              Text(
+                'Waiting for events...',
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
               ),
-            ),
+            ] else ...[
+              Icon(
+                Icons.search_off,
+                size: 40,
+                color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.5),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                'No results',
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ],
           ],
         ),
       );
@@ -264,6 +335,8 @@ class _NostrMainPageState extends State<NostrMainPage> {
         return NostrEventTile(
           item: item,
           isOwnPost: isOwn,
+          onLike: () => _likePost(item),
+          onTapAuthor: () => _openUserProfile(item.pubkey),
         );
       },
     );

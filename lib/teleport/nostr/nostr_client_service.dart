@@ -86,6 +86,12 @@ class NostrClientService {
   // Event dedup: set of seen event IDs.
   final Set<String> _seenEventIds = {};
 
+  /// Reaction counts per event ID.
+  final Map<String, int> _reactionCounts = {};
+
+  /// Event IDs liked by the current user.
+  final Set<String> _myLikes = {};
+
   // Pubkeys we've already requested metadata for (avoid re-requesting).
   final Set<String> _requestedProfilePubkeys = {};
 
@@ -132,6 +138,24 @@ class NostrClientService {
       return _feedItems.where((item) => item.isFollowed).toList();
     }
     return List.unmodifiable(_feedItems);
+  }
+
+  /// Search in-memory feed items by content, author, or npub.
+  List<NostrFeedItem> searchFeed(String query) {
+    final needle = query.trim().toLowerCase();
+    if (needle.isEmpty) return feedItems;
+    return feedItems.where((item) {
+      final content = item.content.toLowerCase();
+      final name = item.displayName.toLowerCase();
+      final nip05 = (item.authorNip05 ?? '').toLowerCase();
+      final npub = item.event.npub.toLowerCase();
+      final pubkey = item.pubkey.toLowerCase();
+      return content.contains(needle) ||
+          name.contains(needle) ||
+          nip05.contains(needle) ||
+          npub.contains(needle) ||
+          pubkey.contains(needle);
+    }).toList();
   }
 
   /// Followed pubkeys.
@@ -286,9 +310,9 @@ class NostrClientService {
     final client = _clients[relayId];
     if (client == null) return;
 
-    // Subscribe to kind:1 (text notes) — recent notes
+    // Subscribe to kind:1 (text notes) and kind:7 (reactions) — recent activity
     client.subscribe({
-      'kinds': [NostrEventKind.textNote],
+      'kinds': [NostrEventKind.textNote, NostrEventKind.reaction],
       'limit': 200,
     }, subscriptionId: 'feed_$relayId');
 
@@ -359,6 +383,9 @@ class NostrClientService {
       case NostrEventKind.contacts:
         _handleContacts(relayId, event);
         break;
+      case NostrEventKind.reaction:
+        _handleReaction(relayId, event);
+        break;
     }
 
     // Queue for batch write
@@ -373,6 +400,10 @@ class NostrClientService {
       relayUrl: _configs[relayId]?.url ?? relayId,
       isFollowed: _follows.contains(event.pubkey),
     );
+    if (event.id != null) {
+      item.reactionCount = _reactionCounts[event.id!] ?? 0;
+      item.isLikedByMe = _myLikes.contains(event.id);
+    }
 
     // Resolve author info from cache
     final profile = _profileCache[event.pubkey];
@@ -401,7 +432,40 @@ class NostrClientService {
       _feedItems.removeRange(0, _feedItems.length - _maxFeedItems);
     }
 
+    _primeReactionState(relayId, item);
     _uiDirty = true;
+  }
+
+  void _primeReactionState(String relayId, NostrFeedItem item) {
+    final cache = _cacheService;
+    final eventId = item.id;
+    if (cache == null || eventId == null) return;
+
+    () async {
+      try {
+        final counts = await cache.loadReactionCounts(relayId, [eventId]);
+        final cachedCount = counts[eventId] ?? 0;
+        if (cachedCount > (_reactionCounts[eventId] ?? 0)) {
+          _reactionCounts[eventId] = cachedCount;
+          item.reactionCount = cachedCount;
+        }
+
+        final profile = _getProfile();
+        if (profile != null && profile.npub.isNotEmpty) {
+          final ownPubkey = NostrCrypto.decodeNpub(profile.npub);
+          final liked = await cache.hasReacted(
+            relayId,
+            eventId: eventId,
+            pubkey: ownPubkey,
+          );
+          if (liked) {
+            _myLikes.add(eventId);
+            item.isLikedByMe = true;
+          }
+        }
+        _uiDirty = true;
+      } catch (_) {}
+    }();
   }
 
   /// Queue a pubkey for metadata request (batched to avoid spamming relays).
@@ -497,6 +561,211 @@ class NostrClientService {
 
     _cacheService?.saveFollows(relayId, newFollows.toList());
     _uiDirty = true;
+  }
+
+  void _handleReaction(String relayId, NostrEvent event) {
+    // Extract target event ID from 'e' tag
+    final targetEventId = event.getTagValue('e');
+    if (targetEventId == null) return;
+
+    // Update in-memory count
+    _reactionCounts[targetEventId] = (_reactionCounts[targetEventId] ?? 0) + 1;
+
+    // Check if this is our own reaction
+    final profile = _getProfile();
+    if (profile != null && profile.npub.isNotEmpty) {
+      try {
+        final ownPubkey = NostrCrypto.decodeNpub(profile.npub);
+        if (event.pubkey == ownPubkey) {
+          _myLikes.add(targetEventId);
+        }
+      } catch (_) {}
+    }
+
+    // Update matching feed item
+    for (final item in _feedItems) {
+      if (item.id == targetEventId) {
+        item.reactionCount = _reactionCounts[targetEventId] ?? 0;
+        if (_myLikes.contains(targetEventId)) {
+          item.isLikedByMe = true;
+        }
+        break;
+      }
+    }
+
+    // Persist to cache
+    _cacheService?.saveReaction(
+      relayId,
+      eventId: targetEventId,
+      reactorPubkey: event.pubkey,
+      content: event.content,
+      createdAt: event.createdAt,
+    );
+
+    _uiDirty = true;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Follow / Unfollow
+  // ---------------------------------------------------------------------------
+
+  /// Follow a user by pubkey and publish kind:3 contact list.
+  Future<bool> followUser(String pubkey) async {
+    if (_follows.contains(pubkey)) return true;
+    _follows.add(pubkey);
+
+    // Update isFollowed on existing feed items
+    for (final item in _feedItems) {
+      if (item.pubkey == pubkey) item.isFollowed = true;
+    }
+
+    _uiDirty = true;
+    _emitEvent(const NostrClientEvent(NostrClientEventType.feedUpdated));
+
+    return _publishContactList();
+  }
+
+  /// Unfollow a user by pubkey and publish kind:3 contact list.
+  Future<bool> unfollowUser(String pubkey) async {
+    if (!_follows.contains(pubkey)) return true;
+    _follows.remove(pubkey);
+
+    // Update isFollowed on existing feed items
+    for (final item in _feedItems) {
+      if (item.pubkey == pubkey) item.isFollowed = false;
+    }
+
+    _uiDirty = true;
+    _emitEvent(const NostrClientEvent(NostrClientEventType.feedUpdated));
+
+    return _publishContactList();
+  }
+
+  /// Publish the current contact list as a kind:3 event.
+  Future<bool> _publishContactList() async {
+    final profile = _getProfile();
+    if (profile == null || profile.npub.isEmpty) return false;
+
+    try {
+      final pubkeyHex = NostrCrypto.decodeNpub(profile.npub);
+      final event = NostrEvent.contacts(
+        pubkeyHex: pubkeyHex,
+        followedPubkeys: _follows.toList(),
+      );
+
+      final signed = await SigningService().signEvent(event, profile);
+      if (signed == null) return false;
+
+      int published = 0;
+      for (final entry in _clients.entries) {
+        final config = _configs[entry.key];
+        if (config != null && config.write && entry.value.isConnected) {
+          entry.value.publish(signed);
+          published++;
+        }
+      }
+
+      // Persist follows locally
+      for (final relayId in _configs.keys) {
+        _cacheService?.saveFollows(relayId, _follows.toList());
+      }
+
+      return published > 0;
+    } catch (e) {
+      LogService().log('NostrClientService: publishContactList error: $e');
+      return false;
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Like (Reaction)
+  // ---------------------------------------------------------------------------
+
+  /// Like a post by publishing a kind:7 reaction.
+  Future<bool> likeEvent(String eventId, String authorPubkey) async {
+    if (_myLikes.contains(eventId)) return true; // already liked
+
+    final profile = _getProfile();
+    if (profile == null || profile.npub.isEmpty) return false;
+
+    try {
+      final pubkeyHex = NostrCrypto.decodeNpub(profile.npub);
+      final event = NostrEvent.reaction(
+        pubkeyHex: pubkeyHex,
+        targetEventId: eventId,
+        targetPubkey: authorPubkey,
+      );
+
+      final signed = await SigningService().signEvent(event, profile);
+      if (signed == null) return false;
+
+      int published = 0;
+      for (final entry in _clients.entries) {
+        final config = _configs[entry.key];
+        if (config != null && config.write && entry.value.isConnected) {
+          entry.value.publish(signed);
+          published++;
+          _cacheService?.saveReaction(
+            entry.key,
+            eventId: eventId,
+            reactorPubkey: pubkeyHex,
+            content: signed.content,
+            createdAt: signed.createdAt,
+          );
+        }
+      }
+
+      if (published > 0) {
+        // Optimistic update
+        _myLikes.add(eventId);
+        _reactionCounts[eventId] = (_reactionCounts[eventId] ?? 0) + 1;
+        for (final item in _feedItems) {
+          if (item.id == eventId) {
+            item.isLikedByMe = true;
+            item.reactionCount = _reactionCounts[eventId]!;
+            break;
+          }
+        }
+        if (signed.id != null) _seenEventIds.add(signed.id!);
+        _uiDirty = true;
+      }
+
+      return published > 0;
+    } catch (e) {
+      LogService().log('NostrClientService: likeEvent error: $e');
+      return false;
+    }
+  }
+
+  /// Whether the current user has liked a given event.
+  bool isLikedByMe(String eventId) => _myLikes.contains(eventId);
+
+  /// Get the reaction count for an event.
+  int getReactionCount(String eventId) => _reactionCounts[eventId] ?? 0;
+
+  // ---------------------------------------------------------------------------
+  // User posts
+  // ---------------------------------------------------------------------------
+
+  /// Get posts from a specific pubkey from the in-memory feed.
+  List<NostrFeedItem> getPostsByPubkey(String pubkey) {
+    return _feedItems.where((item) => item.pubkey == pubkey).toList();
+  }
+
+  /// Request posts from a specific pubkey from connected relays.
+  void requestUserPosts(String pubkey) {
+    final subId = 'user_${pubkey.substring(0, 8)}_${DateTime.now().millisecondsSinceEpoch}';
+    for (final client in _clients.values) {
+      if (client.isConnected) {
+        client.subscribe({
+          'kinds': [NostrEventKind.textNote],
+          'authors': [pubkey],
+          'limit': 50,
+        }, subscriptionId: subId);
+      }
+    }
+    // Also request their metadata if not cached
+    _queueProfileRequest(pubkey);
   }
 
   // ---------------------------------------------------------------------------
@@ -644,6 +913,8 @@ class NostrClientService {
       'paused': _paused,
       'seenEvents': _seenEventIds.length,
       'profilesLoaded': _profileCache.length,
+      'reactionsTracked': _reactionCounts.length,
+      'myLikes': _myLikes.length,
     };
   }
 

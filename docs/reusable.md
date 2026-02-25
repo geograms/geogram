@@ -57,6 +57,7 @@ This document catalogs reusable UI components available in the Geogram codebase.
 - [DocumentViewerWidget](#documentviewerwidget) - Embeddable document viewer (no Scaffold)
 - [DocumentViewerEditorPage](#documentviewereditorpage) - PDF, text, markdown viewer
 - [ContractDocumentPage](#contractdocumentpage) - Markdown document viewer
+- [NostrUserProfilePage](#nostruserprofilepage) - NOSTR profile view with follow/unfollow and posts
 
 ### Player Widgets
 - [VoicePlayerWidget](#voiceplayerwidget) - Voice messages
@@ -117,6 +118,8 @@ This document catalogs reusable UI components available in the Geogram codebase.
 - [ChatFileDownloadManager](#chatfiledownloadmanager) - Connection-aware file downloads with progress and resume
 - [TransferService](#transferservice) - Centralized multi-transport transfers with caching and resume
 - [MirrorSyncService](#mirrorsyncservice) - Simple one-way folder sync with NOSTR authentication
+- [NostrClientService.searchFeed](#nostrclientservicesearchfeed) - Search in-memory NOSTR feed items
+- [NostrClientService.followUser/unfollowUser/likeEvent](#nostrclientservicefollowuserunfollowuserlikeevent) - Follow/unfollow users and like posts
 - [GeogramApi](#geogramapi) - Unified transport-agnostic API facade
 - [FileBrowserCacheService](#filebrowsercacheservice) - Persistent cache for file browser operations
 - [SQLiteLoader](#sqliteloader) - Platform-aware SQLite database loading
@@ -9626,4 +9629,49 @@ curl localhost:PORT/debug?action=nostr_connect&url=wss://relay.damus.io
 
 # Disconnect
 curl localhost:PORT/debug?action=nostr_disconnect&relayId=relay_damus_io
+```
+
+### NostrClientService.searchFeed
+
+**File:** `lib/teleport/nostr/nostr_client_service.dart`
+
+Searches the in-memory NOSTR feed using a case-insensitive match on content,
+author display name, NIP-05, npub, and pubkey hex. Honors the current feed
+filter (firehose vs. follows).
+
+**Usage:**
+```dart
+final results = NostrClientService().searchFeed('mesh');
+```
+
+### NostrClientService.followUser/unfollowUser/likeEvent
+
+**File:** `lib/teleport/nostr/nostr_client_service.dart`
+
+Reusable helpers for NIP-02 follow/unfollow (kind:3 contact list) and
+NIP-25 reactions (kind:7). These publish to write-enabled relays and
+update the in-memory feed optimistically.
+
+**Usage:**
+```dart
+await NostrClientService().followUser(pubkeyHex);
+await NostrClientService().unfollowUser(pubkeyHex);
+await NostrClientService().likeEvent(eventId, authorPubkeyHex);
+```
+
+### NostrUserProfilePage
+
+**File:** `lib/teleport/nostr/pages/nostr_user_profile_page.dart`
+
+Profile view for a NOSTR user showing avatar, display name, NIP-05, bio,
+follow/unfollow action, and recent posts (with like support). Calls
+`requestUserPosts(pubkey)` to fetch from relays.
+
+**Usage:**
+```dart
+Navigator.of(context).push(
+  MaterialPageRoute(
+    builder: (_) => NostrUserProfilePage(pubkey: pubkeyHex),
+  ),
+);
 ```
