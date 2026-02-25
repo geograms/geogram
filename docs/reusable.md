@@ -8621,13 +8621,21 @@ class MyStation with XmppServerMixin {
 
 **Pattern**: XMPP Server-to-Server federation manager. Handles outbound connections to remote XMPP servers (port 5269), inbound connections from remote servers, XEP-0220 dialback authentication, and connection pooling. Created and managed internally by `XmppServer` when `s2sEnabled: true`.
 
+**Verified working**: Tested with conversations.im — full flow including STARTTLS, dialback auth, MUC join/leave, message send/receive, room discovery via disco#items, and disco#info responses to remote servers.
+
 **Key components**:
 - SRV lookup: `_xmpp-server._tcp.{domain}` via `dnsolve`, strips trailing dots
 - Dialback auth: HMAC-SHA256 key generation, persistent secret in `{dataDir}/xmpp/s2s_secret.txt`
 - Connection pool: one per remote domain, 30min idle timeout, 5min whitespace keepalive
 - Stanza relay: forwards C2S stanzas to remote domains, routes incoming S2S stanzas to local sessions
+- IQ routing: remote-addressed IQs (disco, etc.) forwarded via S2S; server-directed IQs answered locally
 
 **XML builders** in `lib/util/xmpp_s2s_xml.dart`: S2S stream open/close (`jabber:server` namespace), STARTTLS+dialback features, `db:result`/`db:verify` stanzas.
+
+**Critical bugs fixed**:
+- STARTTLS race condition: must `await conn.pendingWrite` before TLS upgrade (both C2S and S2S)
+- `XmppStanzaExtractor`: `_closingTags` must include `stream:features|features|failure`; `_selfClosing` must include `proceed|failure`
+- Bare domain routing: `Jid.parse` returns null for bare domains (no `@`); `_forwardViaS2s` uses `to.split('/').first` as fallback
 
 **Debug API**: `xmpp_server_s2s_status`, `xmpp_server_s2s_connect`, `xmpp_server_s2s_test`
 

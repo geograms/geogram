@@ -124,13 +124,13 @@ class XmppStanza {
 class XmppStanzaExtractor {
   /// Stanza closing tags we watch for
   static final _closingTags = RegExp(
-    r'</(?:iq|message|presence|auth|response|starttls|register|db:result|db:verify)>',
+    r'</(?:iq|message|presence|auth|response|starttls|register|db:result|db:verify|stream:features|features|failure)>',
     caseSensitive: false,
   );
 
   /// Self-closing stanzas (e.g. <presence/>, <iq .../>)
   static final _selfClosing = RegExp(
-    r'<(?:iq|message|presence|auth|response|starttls|register|db:result|db:verify)\b[^>]*/\s*>',
+    r'<(?:iq|message|presence|auth|response|starttls|register|db:result|db:verify|proceed|failure)\b[^>]*/\s*>',
     caseSensitive: false,
   );
 
@@ -568,6 +568,9 @@ class XmppServerSession {
 
   /// Write serialization to avoid concurrent IOSink writes
   Future<void> _pendingWrite = Future.value();
+
+  /// Await all pending writes (e.g. before STARTTLS upgrade)
+  Future<void> get pendingWrite => _pendingWrite;
 
   /// Rooms this session has joined: roomJid -> nickname
   final Map<String, String> joinedRooms = {};

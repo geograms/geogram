@@ -46,14 +46,17 @@ class XmppS2sXml {
   static String streamOpenResponse({
     required String from,
     required String id,
+    String? to,
     String version = '1.0',
   }) {
+    final toAttr = to != null ? "to='$to' " : '';
     return "<?xml version='1.0'?>"
         "<stream:stream "
         "xmlns='${XmppS2sNs.server}' "
         "xmlns:stream='${XmppNs.stream}' "
         "xmlns:db='${XmppS2sNs.dialback}' "
         "from='$from' "
+        "$toAttr"
         "id='$id' "
         "version='$version' "
         "xml:lang='en'>";

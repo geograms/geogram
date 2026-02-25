@@ -54,6 +54,9 @@ class XmppS2sConnection {
   /// Write serialization
   Future<void> _pendingWrite = Future.value();
 
+  /// Await all pending writes (e.g. before STARTTLS upgrade)
+  Future<void> get pendingWrite => _pendingWrite;
+
   /// Last activity for idle timeout
   DateTime lastActivity = DateTime.now();
 
@@ -338,7 +341,6 @@ class XmppS2sManager {
       case 'stream':
         // Remote server opened stream — extract stream ID
         conn.streamId = stanza.attributes['id'] ?? _generateId();
-        // Check if features include STARTTLS
         break;
 
       case 'features':
@@ -547,13 +549,13 @@ class XmppS2sManager {
     final fromDomain = stanza.from ?? '';
     // Use the existing remoteDomain if already set, otherwise take from stream open
     if (conn.remoteDomain.isEmpty) {
-      // We can't just use reflection to set it, so we track it in verifiedDomain
       conn.verifiedDomain = fromDomain;
     }
 
     // Respond with our stream open + features
     conn.send(XmppS2sXml.streamOpenResponse(
       from: localDomain,
+      to: fromDomain.isNotEmpty ? fromDomain : null,
       id: conn.streamId,
     ));
 
@@ -566,7 +568,7 @@ class XmppS2sManager {
     conn.state = S2sConnectionState.streamOpened;
   }
 
-  void _handleInboundStartTls(XmppS2sConnection conn) {
+  void _handleInboundStartTls(XmppS2sConnection conn) async {
     if (securityContext == null) {
       conn.send(XmppS2sXml.tlsFailure());
       return;
@@ -574,7 +576,11 @@ class XmppS2sManager {
 
     conn.send(XmppS2sXml.tlsProceed());
 
-    SecureSocket.secureServer(conn.socket, securityContext!).then((secure) {
+    // Wait for <proceed/> to be flushed before TLS upgrade
+    await conn.pendingWrite;
+
+    try {
+      final secure = await SecureSocket.secureServer(conn.socket, securityContext!);
       conn.secureSocket = secure;
       conn.isTls = true;
       conn.state = S2sConnectionState.connecting; // reset for new stream
@@ -597,10 +603,10 @@ class XmppS2sManager {
       );
 
       _log('Inbound TLS upgraded from ${conn.verifiedDomain ?? "unknown"}');
-    }).catchError((e) {
+    } catch (e) {
       _log('Inbound TLS upgrade failed: $e');
       _closeInbound(conn);
-    });
+    }
   }
 
   void _handleInboundDialbackResult(XmppS2sConnection conn, XmppStanza stanza) {
@@ -666,6 +672,8 @@ class XmppS2sManager {
     // Verify: check if the key matches what we would have generated
     final expectedKey = _generateDialbackKey(fromDomain, streamId);
     final valid = receivedKey == expectedKey;
+
+    _log('Dialback verify from $fromDomain: ${valid ? 'valid' : 'invalid'}');
 
     conn.send(XmppS2sXml.dbVerifyResponse(
       from: toDomain,
@@ -772,5 +780,7 @@ class XmppS2sManager {
 
   void _log(String message) {
     LogService().log('XMPP S2S: $message');
+    // Also write to stderr for CLI station visibility
+    stderr.writeln('[${DateTime.now()}] XMPP S2S: $message');
   }
 }

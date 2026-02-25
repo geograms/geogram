@@ -560,13 +560,16 @@ class XmppServer {
   // STARTTLS
   // -------------------------------------------------------------------------
 
-  void _handleStartTls(XmppServerSession session) {
+  void _handleStartTls(XmppServerSession session) async {
     if (session.state != XmppServerState.streamOpened || !hasTls) {
       session.send(XmppXml.tlsFailure());
       return;
     }
 
     session.send(XmppXml.tlsProceed());
+
+    // Wait for <proceed/> to be flushed before upgrading the socket
+    await session.pendingWrite;
 
     // Upgrade to TLS
     SecureSocket.secureServer(session.socket, _securityContext!).then((secure) {
@@ -677,6 +680,17 @@ class XmppServer {
     if (stanza.hasChild('session')) {
       session.send(XmppXml.sessionResult(id: id, to: session.fullJid));
       return;
+    }
+
+    // Forward IQ to remote domain via S2S if the 'to' is not local
+    final iqTo = stanza.to ?? '';
+    if (iqTo.isNotEmpty && _s2sManager != null) {
+      final toJid = Jid.parse(iqTo);
+      final toDomain = toJid?.domain ?? iqTo;
+      if (toDomain != domain && toDomain != conferenceDomain) {
+        _forwardViaS2s(session, stanza);
+        return;
+      }
     }
 
     // Disco#info
@@ -1137,7 +1151,8 @@ class XmppServer {
 
     // Determine the remote domain from the 'to' JID
     final toJid = Jid.parse(to);
-    final remoteDomain = toJid?.domain ?? '';
+    // For bare domains (no @), use the full 'to' as the domain
+    final remoteDomain = toJid?.domain ?? to.split('/').first;
     if (remoteDomain.isEmpty) return;
 
     // Rewrite the 'from' attribute to use the server-assigned JID
@@ -1161,6 +1176,12 @@ class XmppServer {
     final to = stanza.to;
     if (to == null) return;
 
+    // Handle IQ queries directed at our server domain
+    if (stanza.name == 'iq' && (to == domain || to == conferenceDomain)) {
+      _handleS2sIq(stanza, fromDomain);
+      return;
+    }
+
     final toJid = Jid.parse(to);
     if (toJid == null) return;
 
@@ -1181,6 +1202,33 @@ class XmppServer {
 
     for (final target in targetSessions) {
       target.send(stanza.rawXml);
+    }
+  }
+
+  /// Handle IQ queries from remote servers directed at our domain
+  void _handleS2sIq(XmppStanza stanza, String fromDomain) {
+    final id = stanza.id ?? '';
+    final from = stanza.from ?? '';
+    final to = stanza.to ?? domain;
+    final type = stanza.type;
+    final queryNs = stanza.childXmlns('query');
+
+    if (type == 'get' && queryNs == XmppNs.discoInfo) {
+      // Respond with server disco#info via S2S
+      final response = "<iq type='result' id='$id' to='$from' from='$to'>"
+          "<query xmlns='${XmppNs.discoInfo}'>"
+          "<identity category='server' type='im' name='Geogram XMPP'/>"
+          "<feature var='${XmppNs.discoInfo}'/>"
+          "<feature var='${XmppNs.discoItems}'/>"
+          "<feature var='${XmppNs.muc}'/>"
+          "<feature var='${XmppNs.ping}'/>"
+          "</query></iq>";
+      _s2sManager?.sendToRemote(fromDomain, response);
+    } else if (type == 'get' && queryNs == XmppNs.discoItems) {
+      // Empty items response
+      final response = "<iq type='result' id='$id' to='$from' from='$to'>"
+          "<query xmlns='${XmppNs.discoItems}'/></iq>";
+      _s2sManager?.sendToRemote(fromDomain, response);
     }
   }
 
@@ -1282,5 +1330,7 @@ class XmppServer {
 
   void _log(String message) {
     LogService().log('XMPP Server: $message');
+    // Also write to stderr for CLI station visibility
+    stderr.writeln('[${DateTime.now()}] XMPP Server: $message');
   }
 }
