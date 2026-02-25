@@ -41,7 +41,7 @@ class NostrEventTile extends StatefulWidget {
 
 class _NostrEventTileState extends State<NostrEventTile> {
   static final _linkRegex = RegExp(
-    r'(https?://[^\s<>\[\]{}|\\^`]+|www\.[^\s<>\[\]{}|\\^`]+|nostr:[a-z0-9]+)',
+    r'(https?://[^\s<>\[\]{}|\\^`]+|www\.[^\s<>\[\]{}|\\^`]+|nostr:[a-z0-9]+|(?:note|npub|nevent|nprofile|naddr)1[a-z0-9]+)',
     caseSensitive: false,
   );
 
@@ -141,8 +141,12 @@ class _NostrEventTileState extends State<NostrEventTile> {
       final urlText = match.group(0)!;
       final recognizer = TapGestureRecognizer()
         ..onTap = () {
-          if (urlText.startsWith('nostr:')) {
-            _handleNostrUri(urlText);
+          if (urlText.startsWith('nostr:') ||
+              RegExp(r'^(note|npub|nevent|nprofile|naddr)1',
+                      caseSensitive: false)
+                  .hasMatch(urlText)) {
+            final uri = urlText.startsWith('nostr:') ? urlText : 'nostr:$urlText';
+            _handleNostrUri(uri);
             return;
           }
           final launchUrl =
