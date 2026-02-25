@@ -602,6 +602,9 @@ class NostrClientService {
     }
 
     _cacheService?.saveFollows(relayId, newFollows.toList());
+    if (feedFilter == NostrFeedFilter.onlyFollows) {
+      requestFollowFeed();
+    }
     _uiDirty = true;
   }
 
@@ -823,7 +826,44 @@ class NostrClientService {
     }
   }
 
-  // ---------------------------------------------------------------------------
+  
+  /// Request recent posts for followed users from cache and connected relays.
+  Future<void> requestFollowFeed({int limit = 100}) async {
+    if (_follows.isEmpty) return;
+
+    final follows = _follows.toList();
+    if (_cacheService != null) {
+      for (final relayId in _configs.keys) {
+        final cached = await _cacheService!.loadFeedByAuthors(
+          relayId,
+          authors: follows,
+          limit: limit,
+        );
+        for (final event in cached) {
+          if (event.id != null && _seenEventIds.contains(event.id)) {
+            continue;
+          }
+          if (event.id != null) {
+            _seenEventIds.add(event.id!);
+          }
+          _handleTextNote(relayId, event);
+        }
+      }
+    }
+
+    for (final entry in _clients.entries) {
+      final relayId = entry.key;
+      final client = entry.value;
+      if (!client.isConnected) continue;
+      client.subscribe({
+        'kinds': [NostrEventKind.textNote],
+        'authors': follows,
+        'limit': limit,
+      }, subscriptionId: 'follows_${relayId}_${DateTime.now().millisecondsSinceEpoch}');
+    }
+  }
+
+// ---------------------------------------------------------------------------
   // Publishing
   // ---------------------------------------------------------------------------
 

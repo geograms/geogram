@@ -221,6 +221,9 @@ class _NostrMainPageState extends State<NostrMainPage> {
                 setState(() {
                   service.feedFilter = filter;
                 });
+                if (filter == NostrFeedFilter.onlyFollows) {
+                  service.requestFollowFeed();
+                }
               }
             },
           ),

@@ -127,6 +127,20 @@ class NostrCacheService {
       );
     ''');
 
+    db.execute('''
+      CREATE TABLE IF NOT EXISTS reactions (
+        event_id TEXT NOT NULL,
+        reactor_pubkey TEXT NOT NULL,
+        content TEXT NOT NULL DEFAULT '+',
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (event_id, reactor_pubkey)
+      );
+    ''');
+    db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_reactions_event
+      ON reactions(event_id);
+    ''');
+
     _dbs[relayId] = db;
     _prune(relayId);
     return db;
@@ -203,6 +217,50 @@ class NostrCacheService {
       return events.reversed.toList(); // oldest-first for UI
     } catch (e) {
       LogService().log('NostrCacheService: loadFeed error: $e');
+      return [];
+    }
+  }
+
+
+  /// Load feed events for specific authors, newest first.
+  Future<List<NostrEvent>> loadFeedByAuthors(
+    String relayId, {
+    required List<String> authors,
+    List<int> kinds = const [1],
+    int? since,
+    int limit = 100,
+  }) async {
+    if (authors.isEmpty) return [];
+    try {
+      final db = await _openDb(relayId);
+      final kindPlaceholders = kinds.map((_) => '?').join(', ');
+      final authorPlaceholders = authors.map((_) => '?').join(', ');
+      final args = <dynamic>[...kinds, ...authors];
+      String whereExtra = '';
+      if (since != null) {
+        whereExtra = ' AND created_at > ?';
+        args.add(since);
+      }
+      args.add(limit);
+      final result = db.select(
+        '''SELECT raw FROM events
+           WHERE kind IN ($kindPlaceholders)
+           AND pubkey IN ($authorPlaceholders)$whereExtra
+           ORDER BY created_at DESC LIMIT ?''',
+        args,
+      );
+
+      final events = <NostrEvent>[];
+      for (final row in result) {
+        try {
+          events.add(
+            NostrEvent.fromJson(jsonDecode(row['raw'] as String)),
+          );
+        } catch (_) {}
+      }
+      return events.reversed.toList();
+    } catch (e) {
+      LogService().log('NostrCacheService: loadFeedByAuthors error: $e');
       return [];
     }
   }
@@ -316,6 +374,76 @@ class NostrCacheService {
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // Reactions
+  // ---------------------------------------------------------------------------
+
+  /// Save a reaction (kind:7) to the cache.
+  Future<void> saveReaction(
+    String relayId, {
+    required String eventId,
+    required String reactorPubkey,
+    String content = '+',
+    required int createdAt,
+  }) async {
+    try {
+      final db = await _openDb(relayId);
+      db.execute(
+        '''INSERT OR IGNORE INTO reactions
+           (event_id, reactor_pubkey, content, created_at)
+           VALUES (?, ?, ?, ?)''',
+        [eventId, reactorPubkey, content, createdAt],
+      );
+    } catch (e) {
+      LogService().log('NostrCacheService: saveReaction error: $e');
+    }
+  }
+
+  /// Load reaction counts for a list of event IDs.
+  Future<Map<String, int>> loadReactionCounts(
+    String relayId,
+    List<String> eventIds,
+  ) async {
+    if (eventIds.isEmpty) return {};
+    try {
+      final db = await _openDb(relayId);
+      final placeholders = eventIds.map((_) => '?').join(', ');
+      final result = db.select(
+        '''SELECT event_id, COUNT(*) as cnt FROM reactions
+           WHERE event_id IN ($placeholders)
+           GROUP BY event_id''',
+        eventIds,
+      );
+      final counts = <String, int>{};
+      for (final row in result) {
+        counts[row['event_id'] as String] = row['cnt'] as int;
+      }
+      return counts;
+    } catch (e) {
+      LogService().log('NostrCacheService: loadReactionCounts error: $e');
+      return {};
+    }
+  }
+
+  /// Check if a specific pubkey has reacted to an event.
+  Future<bool> hasReacted(
+    String relayId, {
+    required String eventId,
+    required String pubkey,
+  }) async {
+    try {
+      final db = await _openDb(relayId);
+      final result = db.select(
+        'SELECT 1 FROM reactions WHERE event_id = ? AND reactor_pubkey = ? LIMIT 1',
+        [eventId, pubkey],
+      );
+      return result.isNotEmpty;
+    } catch (e) {
+      LogService().log('NostrCacheService: hasReacted error: $e');
+      return false;
+    }
+  }
+
   /// Debug: return row count and DB file size for a relay.
   Future<Map<String, dynamic>> inspect(String relayId) async {
     try {
@@ -338,6 +466,7 @@ class NostrCacheService {
       db.execute('DELETE FROM events');
       db.execute('DELETE FROM profiles');
       db.execute('DELETE FROM contacts');
+      db.execute('DELETE FROM reactions');
       db.execute('VACUUM');
     } catch (e) {
       LogService().log('NostrCacheService: clear error: $e');
