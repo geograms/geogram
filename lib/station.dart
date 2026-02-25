@@ -23,7 +23,7 @@ import 'api/handlers/feedback_handler.dart';
 import 'services/nip05_registry_service.dart';
 import 'services/email_relay_service.dart';
 import 'services/smtp_server.dart';
-import 'services/xmpp_server.dart';
+import 'server/mixins/xmpp_server_mixin.dart';
 import 'util/alert_folder_utils.dart';
 import 'util/feedback_folder_utils.dart';
 import 'util/nostr_key_generator.dart';
@@ -139,8 +139,6 @@ class PureRelaySettings implements StationSettingsReadable {
   // XMPP Server configuration
   bool xmppServerEnabled;
   int xmppServerPort;
-  bool xmppS2sEnabled;
-  int xmppS2sPort;
 
   PureRelaySettings({
     this.httpPort = 8080,
@@ -189,8 +187,6 @@ class PureRelaySettings implements StationSettingsReadable {
     this.dkimPrivateKey,
     this.xmppServerEnabled = false,
     this.xmppServerPort = 5222,
-    this.xmppS2sEnabled = true,
-    this.xmppS2sPort = 5269,
   }) : npub = npub ?? _defaultKeys.npub,
        nsec = nsec ?? _defaultKeys.nsec;
 
@@ -250,8 +246,6 @@ class PureRelaySettings implements StationSettingsReadable {
       dkimPrivateKey: json['dkimPrivateKey'] as String?,
       xmppServerEnabled: json['xmppServerEnabled'] as bool? ?? false,
       xmppServerPort: json['xmppServerPort'] as int? ?? 5222,
-      xmppS2sEnabled: json['xmppS2sEnabled'] as bool? ?? true,
-      xmppS2sPort: json['xmppS2sPort'] as int? ?? 5269,
     );
   }
 
@@ -304,8 +298,6 @@ class PureRelaySettings implements StationSettingsReadable {
         'dkimPrivateKey': dkimPrivateKey,
         'xmppServerEnabled': xmppServerEnabled,
         'xmppServerPort': xmppServerPort,
-        'xmppS2sEnabled': xmppS2sEnabled,
-        'xmppS2sPort': xmppS2sPort,
       };
 
   PureRelaySettings copyWith({
@@ -355,8 +347,6 @@ class PureRelaySettings implements StationSettingsReadable {
     String? dkimPrivateKey,
     bool? xmppServerEnabled,
     int? xmppServerPort,
-    bool? xmppS2sEnabled,
-    int? xmppS2sPort,
   }) {
     return PureRelaySettings(
       httpPort: httpPort ?? this.httpPort,
@@ -405,8 +395,6 @@ class PureRelaySettings implements StationSettingsReadable {
       dkimPrivateKey: dkimPrivateKey ?? this.dkimPrivateKey,
       xmppServerEnabled: xmppServerEnabled ?? this.xmppServerEnabled,
       xmppServerPort: xmppServerPort ?? this.xmppServerPort,
-      xmppS2sEnabled: xmppS2sEnabled ?? this.xmppS2sEnabled,
-      xmppS2sPort: xmppS2sPort ?? this.xmppS2sPort,
     );
   }
 
@@ -608,12 +596,11 @@ class PureTileCache {
 }
 
 /// Unified station server for CLI and Android modes
-class StationServer with RateLimitMixin, HealthWatchdogMixin, EmailHandlerMixin, BlogHandlerMixin, ConsoleCommandMixin, ChatNip05Mixin, ChatModerationMixin, ConferenceMixin
+class StationServer with RateLimitMixin, HealthWatchdogMixin, EmailHandlerMixin, BlogHandlerMixin, ConsoleCommandMixin, ChatNip05Mixin, ChatModerationMixin, ConferenceMixin, XmppServerMixin
     implements StationCommandInterface {
   HttpServer? _httpServer;
   HttpServer? _httpsServer;
   SMTPServer? _smtpServer;
-  XmppServer? _xmppServer;
   PureRelaySettings _settings = PureRelaySettings();
   final Map<String, PureConnectedClient> _clients = {};
 
@@ -1755,28 +1742,14 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, EmailHandlerMixin,
         }
       }
 
-      // Start XMPP server if enabled
+      // Start XMPP server if enabled (via XmppServerMixin)
       if (_settings.xmppServerEnabled && _settings.sslDomain != null) {
-        _xmppServer = XmppServer(
-          port: _settings.xmppServerPort,
-          domain: _settings.sslDomain!,
+        await startXmppServer(
           dataDir: _dataDir ?? '.',
-          s2sEnabled: _settings.xmppS2sEnabled,
-          s2sPort: _settings.xmppS2sPort,
+          domain: _settings.sslDomain!,
+          callsign: _settings.callsign,
+          port: _settings.xmppServerPort,
         );
-
-        final xmppStarted = await _xmppServer!.start();
-        if (xmppStarted) {
-          // Auto-provision station callsign as admin
-          await _xmppServer!.autoProvisionAdmin(
-            _settings.callsign,
-            'station-${_settings.callsign}',
-          );
-          _log('INFO', 'XMPP server started on port ${_settings.xmppServerPort} for domain ${_settings.sslDomain}');
-        } else {
-          _log('WARN', 'Failed to start XMPP server on port ${_settings.xmppServerPort}');
-          _xmppServer = null;
-        }
       }
 
       // Start HTTPS server if SSL is enabled
@@ -1942,8 +1915,7 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, EmailHandlerMixin,
     _smtpServer = null;
 
     // Stop XMPP server
-    await _xmppServer?.stop();
-    _xmppServer = null;
+    await stopXmppServer();
 
     _nostrRelay = null;
     _nostrStorage?.close();
