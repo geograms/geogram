@@ -118,6 +118,9 @@ enum DebugAction {
   /// Open external file in viewer (images, videos, PDFs from Android intent)
   openExternalFile,
 
+  /// Open welcome page (first-launch screen)
+  openWelcomePage,
+
   /// Open local chat collection (for testing encrypted storage)
   openLocalChat,
 
@@ -470,6 +473,11 @@ class DebugController {
   /// Trigger opening local chat collection (for testing encrypted storage)
   void triggerOpenLocalChat() {
     triggerAction(DebugAction.openLocalChat);
+  }
+
+  /// Trigger opening the welcome page (for testing onboarding flow)
+  void triggerOpenWelcomePage() {
+    triggerAction(DebugAction.openWelcomePage);
   }
 
   /// Trigger selecting a chat room by ID
@@ -834,6 +842,11 @@ class DebugController {
         'action': 'open_station_chat',
         'description':
             'Open chat app and first chat room of the connected station',
+        'params': {},
+      },
+      {
+        'action': 'welcome_open',
+        'description': 'Open the Welcome page (first-launch screen)',
         'params': {},
       },
       {
@@ -1376,6 +1389,13 @@ class DebugController {
         return {
           'success': true,
           'message': 'Opening local chat collection',
+        };
+
+      case 'welcome_open':
+        triggerOpenWelcomePage();
+        return {
+          'success': true,
+          'message': 'Opening welcome page',
         };
 
       case 'select_chat_room':

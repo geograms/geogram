@@ -1231,6 +1231,15 @@ class _HomePageState extends State<HomePage> {
       _handleOpenStationChat();
     } else if (event.action == DebugAction.openLocalChat) {
       _handleOpenLocalChat();
+    } else if (event.action == DebugAction.openWelcomePage) {
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => WelcomePage(
+            onComplete: () => Navigator.of(context).pop(),
+          ),
+        ),
+      );
     } else if (event.action == DebugAction.openDM) {
       final callsign = event.params['callsign'] as String?;
       if (callsign != null) {

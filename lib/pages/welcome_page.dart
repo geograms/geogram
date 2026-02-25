@@ -14,6 +14,7 @@ import '../services/i18n_service.dart';
 import '../services/log_service.dart';
 import '../util/nostr_key_generator.dart';
 import '../util/nostr_crypto.dart';
+import '../dialogs/import_nsec_dialog.dart';
 
 /// Isolate entry point for vanity key generation
 void _vanityGeneratorIsolate(SendPort mainSendPort) {
@@ -320,6 +321,51 @@ class _WelcomePageState extends State<WelcomePage> {
     });
   }
 
+  Future<void> _importNsecAndFinalize() async {
+    if (_isFinalizing) return;
+
+    if (_vanityRunning) {
+      _stopVanityGenerator();
+    }
+
+    final result = await showImportNsecDialog(
+      context: context,
+      i18n: _i18n,
+      allowProfileType: false,
+      showQrOnMobileOnly: true,
+    );
+    if (result == null || !mounted) return;
+
+    setState(() => _isFinalizing = true);
+
+    try {
+      final profile = _profileService.getProfile();
+      profile.npub = result['npub'] as String;
+      profile.nsec = result['nsec'] as String;
+      profile.callsign = result['callsign'] as String;
+      final nickname = result['nickname'] as String?;
+      if (nickname != null && nickname.isNotEmpty) {
+        profile.nickname = nickname;
+      }
+
+      await _profileService.saveProfile(profile);
+      await _profileService.finalizeProfileIdentity(profile);
+
+      final firstLaunchComplete = ConfigService().getNestedValue('firstLaunchComplete', false);
+      if (firstLaunchComplete != true) {
+        ConfigService().set('firstLaunchComplete', true);
+      }
+
+      LogService().log('WelcomePage: Imported profile with callsign: ${profile.callsign}');
+      widget.onComplete();
+    } catch (e) {
+      LogService().log('WelcomePage: Error importing profile: $e');
+      if (mounted) {
+        setState(() => _isFinalizing = false);
+      }
+    }
+  }
+
   String _formatDuration(Duration d) {
     final minutes = d.inMinutes;
     final seconds = d.inSeconds % 60;
@@ -503,6 +549,11 @@ class _WelcomePageState extends State<WelcomePage> {
                                       : const Icon(Icons.refresh, size: 18),
                                   label: Text(_i18n.t('generate_new')),
                                 ),
+                                OutlinedButton.icon(
+                                  onPressed: _isFinalizing ? null : _importNsecAndFinalize,
+                                  icon: const Icon(Icons.key, size: 18),
+                                  label: Text(_i18n.t('import_nsec')),
+                                ),
                                 FilledButton.icon(
                                   onPressed: _isFinalizing || _vanityRunning ? null : _finalizeProfile,
                                   icon: _isFinalizing
@@ -518,6 +569,14 @@ class _WelcomePageState extends State<WelcomePage> {
                                   label: Text(_i18n.t('onboarding_continue')),
                                 ),
                               ],
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              _i18n.t('welcome_import_existing'),
+                              textAlign: TextAlign.center,
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                color: theme.colorScheme.onSurfaceVariant,
+                              ),
                             ),
                           ],
                         ),

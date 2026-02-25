@@ -401,6 +401,9 @@ class DevicesService {
       case DebugAction.openLocalChat:
         // Local chat navigation is handled by main.dart
         break;
+      case DebugAction.openWelcomePage:
+        // Welcome page navigation is handled by main.dart
+        break;
       case DebugAction.selectChatRoom:
         // Chat room selection is handled by ChatBrowserPage
         break;
