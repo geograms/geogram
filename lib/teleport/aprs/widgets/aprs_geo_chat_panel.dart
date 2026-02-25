@@ -8,6 +8,7 @@
  */
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../../services/user_location_service.dart';
 import '../../shared/teleport_chat_utils.dart';
@@ -156,6 +157,18 @@ class _AprsGeoChatPanelState extends State<AprsGeoChatPanel> {
       onTap: () {
         if (msg.hasPosition) {
           widget.onMessageTap(msg.latitude!, msg.longitude!);
+        }
+      },
+      onLongPress: () {
+        final text = msg.comment ?? '';
+        if (text.isNotEmpty) {
+          Clipboard.setData(ClipboardData(text: text));
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Copied to clipboard'),
+              duration: Duration(seconds: 1),
+            ),
+          );
         }
       },
       child: Container(

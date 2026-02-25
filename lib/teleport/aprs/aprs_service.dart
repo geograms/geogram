@@ -258,8 +258,8 @@ class AprsService {
             streamPackets.add(pkt);
             _uiDirtyStream = true;
           }
-          // Restore geo-chat messages from cached position packets with comments
-          if (pkt.isGeoChat) {
+          // Restore human geo-chat messages from cache (skip beacons)
+          if (pkt.isHumanGeoChat) {
             geoChatMessages.add(pkt);
           }
         }
@@ -707,8 +707,8 @@ class AprsService {
       _uiDirtyStream = true;
     }
 
-    // Collect position packets with comments for geo-chat
-    if (packet.isGeoChat) {
+    // Collect human-authored position comments for geo-chat (skip beacons)
+    if (packet.isHumanGeoChat) {
       geoChatMessages.add(packet);
       if (geoChatMessages.length > _maxMessages) {
         geoChatMessages.removeRange(0, geoChatMessages.length - _maxMessages);
