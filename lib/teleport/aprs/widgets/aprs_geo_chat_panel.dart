@@ -73,6 +73,23 @@ class _AprsGeoChatPanelState extends State<AprsGeoChatPanel> {
     });
   }
 
+  void _confirmClear() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Clear geo-chat'),
+        content: const Text('Remove all geo-chat messages from the display?'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Clear')),
+        ],
+      ),
+    );
+    if (confirmed == true) {
+      AprsService().clearGeoChat();
+    }
+  }
+
   void _send() {
     final text = _textController.text.trim();
     if (text.isEmpty) return;
@@ -136,6 +153,14 @@ class _AprsGeoChatPanelState extends State<AprsGeoChatPanel> {
                   ),
                 ),
                 const Spacer(),
+                if (widget.messages.isNotEmpty)
+                  GestureDetector(
+                    onTap: _confirmClear,
+                    child: const Padding(
+                      padding: EdgeInsets.only(right: 12),
+                      child: Icon(Icons.delete_sweep, color: Colors.white70, size: 20),
+                    ),
+                  ),
                 if (!isWide)
                   GestureDetector(
                     onTap: widget.onClose,

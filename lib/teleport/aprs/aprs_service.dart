@@ -391,6 +391,12 @@ class AprsService {
     _eventController.add(const AprsEvent(AprsEventType.messageReceived));
   }
 
+  /// Clear geo-chat messages from the display list.
+  void clearGeoChat() {
+    geoChatMessages.clear();
+    _eventController.add(const AprsEvent(AprsEventType.packetReceived));
+  }
+
   /// Remove all messages (in-memory + cache). Stream/position packets are kept.
   Future<void> clearAllMessages() async {
     messages.clear();
