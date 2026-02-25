@@ -179,7 +179,7 @@ class PureRelaySettings implements StationSettingsReadable {
     this.dkimPrivateKey,
     this.xmppServerEnabled = false,
     this.xmppServerPort = 5222,
-    this.xmppS2sEnabled = false,
+    this.xmppS2sEnabled = true,
     this.xmppS2sPort = 5269,
   }) : npub = npub ?? _defaultKeys.npub,
        nsec = nsec ?? _defaultKeys.nsec;
@@ -240,7 +240,7 @@ class PureRelaySettings implements StationSettingsReadable {
       dkimPrivateKey: json['dkimPrivateKey'] as String?,
       xmppServerEnabled: json['xmppServerEnabled'] as bool? ?? false,
       xmppServerPort: json['xmppServerPort'] as int? ?? 5222,
-      xmppS2sEnabled: json['xmppS2sEnabled'] as bool? ?? false,
+      xmppS2sEnabled: json['xmppS2sEnabled'] as bool? ?? true,
       xmppS2sPort: json['xmppS2sPort'] as int? ?? 5269,
     );
   }
