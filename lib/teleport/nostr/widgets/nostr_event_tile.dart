@@ -22,6 +22,7 @@ class NostrEventTile extends StatefulWidget {
   final bool isOwnPost;
   final VoidCallback? onLike;
   final VoidCallback? onTapAuthor;
+  final VoidCallback? onToggleFollow;
 
   const NostrEventTile({
     super.key,
@@ -29,6 +30,7 @@ class NostrEventTile extends StatefulWidget {
     this.isOwnPost = false,
     this.onLike,
     this.onTapAuthor,
+    this.onToggleFollow,
   });
 
   @override
@@ -460,6 +462,11 @@ class _NostrEventTileState extends State<NostrEventTile> {
         const PopupMenuItem(value: 'copy', child: Text('Copy text')),
         const PopupMenuItem(value: 'copy_id', child: Text('Copy event ID')),
         const PopupMenuItem(value: 'copy_npub', child: Text('Copy npub')),
+        if (!widget.isOwnPost && widget.onToggleFollow != null)
+          PopupMenuItem(
+            value: 'follow',
+            child: Text(widget.item.isFollowed ? 'Unfollow' : 'Follow'),
+          ),
         if (widget.onTapAuthor != null)
           const PopupMenuItem(value: 'profile', child: Text('View profile')),
       ],
@@ -476,6 +483,9 @@ class _NostrEventTileState extends State<NostrEventTile> {
           break;
         case 'copy_npub':
           Clipboard.setData(ClipboardData(text: widget.item.event.npub));
+          break;
+        case 'follow':
+          widget.onToggleFollow?.call();
           break;
         case 'profile':
           widget.onTapAuthor?.call();

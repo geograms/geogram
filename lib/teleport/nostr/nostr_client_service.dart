@@ -111,6 +111,9 @@ class NostrClientService {
   final Map<String, List<NostrEvent>> _writeQueues = {};
   Timer? _writeTimer;
 
+  // Active NOSTR search subscriptions per relay
+  final Map<String, String> _searchSubIds = {};
+
   // Max in-memory feed items
   static const int _maxFeedItems = 5000;
 
@@ -156,6 +159,37 @@ class NostrClientService {
           npub.contains(needle) ||
           pubkey.contains(needle);
     }).toList();
+  }
+
+  /// Query connected relays using the NIP-50 "search" filter.
+  void requestSearch(String query) {
+    final trimmed = query.trim();
+    if (trimmed.isEmpty) {
+      _clearSearchSubscriptions();
+      return;
+    }
+
+    for (final entry in _clients.entries) {
+      final relayId = entry.key;
+      final client = entry.value;
+      final existing = _searchSubIds[relayId];
+      if (existing != null) {
+        client.unsubscribe(existing);
+      }
+      final subId = client.subscribe({
+        'kinds': [NostrEventKind.textNote],
+        'search': trimmed,
+        'limit': 50,
+      }, subscriptionId: 'search_${DateTime.now().millisecondsSinceEpoch}_$relayId');
+      _searchSubIds[relayId] = subId;
+    }
+  }
+
+  void _clearSearchSubscriptions() {
+    for (final entry in _searchSubIds.entries) {
+      _clients[entry.key]?.unsubscribe(entry.value);
+    }
+    _searchSubIds.clear();
   }
 
   /// Followed pubkeys.

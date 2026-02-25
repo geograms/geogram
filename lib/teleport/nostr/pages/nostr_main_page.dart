@@ -33,6 +33,7 @@ class _NostrMainPageState extends State<NostrMainPage> {
   final TextEditingController _searchController = TextEditingController();
   final FocusNode _searchFocusNode = FocusNode();
   StreamSubscription<NostrClientEvent>? _eventSub;
+  Timer? _searchTimer;
 
   String? _ownPubkey;
   bool _isSearching = false;
@@ -42,6 +43,7 @@ class _NostrMainPageState extends State<NostrMainPage> {
     super.initState();
     _resolveOwnPubkey();
     _searchController.addListener(() {
+      _scheduleSearch();
       if (mounted) setState(() {});
     });
     _eventSub = NostrClientService().events.listen((event) {
@@ -76,6 +78,7 @@ class _NostrMainPageState extends State<NostrMainPage> {
     _focusNode.dispose();
     _searchController.dispose();
     _searchFocusNode.dispose();
+    _searchTimer?.cancel();
     super.dispose();
   }
 
@@ -129,9 +132,17 @@ class _NostrMainPageState extends State<NostrMainPage> {
       if (!_isSearching) {
         _searchController.clear();
         _searchFocusNode.unfocus();
+        NostrClientService().requestSearch('');
       } else {
         _searchFocusNode.requestFocus();
       }
+    });
+  }
+
+  void _scheduleSearch() {
+    _searchTimer?.cancel();
+    _searchTimer = Timer(const Duration(milliseconds: 400), () {
+      NostrClientService().requestSearch(_searchController.text);
     });
   }
 
@@ -336,10 +347,23 @@ class _NostrMainPageState extends State<NostrMainPage> {
           item: item,
           isOwnPost: isOwn,
           onLike: () => _likePost(item),
+          onToggleFollow: () => _toggleFollow(item),
           onTapAuthor: () => _openUserProfile(item.pubkey),
         );
       },
     );
+  }
+
+  Future<void> _toggleFollow(NostrFeedItem item) async {
+    final service = NostrClientService();
+    final ok = item.isFollowed
+        ? await service.unfollowUser(item.pubkey)
+        : await service.followUser(item.pubkey);
+    if (!ok && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Failed to update follow status')),
+      );
+    }
   }
 
   Widget _buildComposeBar(ThemeData theme) {

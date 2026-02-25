@@ -9645,6 +9645,18 @@ filter (firehose vs. follows).
 final results = NostrClientService().searchFeed('mesh');
 ```
 
+### NostrClientService.requestSearch
+
+**File:** `lib/teleport/nostr/nostr_client_service.dart`
+
+Queries connected relays using the NIP-50 `search` filter for text notes.
+Pairs with `searchFeed()` for local cached filtering.
+
+**Usage:**
+```dart
+NostrClientService().requestSearch('mesh');
+```
+
 ### NostrClientService.followUser/unfollowUser/likeEvent
 
 **File:** `lib/teleport/nostr/nostr_client_service.dart`
