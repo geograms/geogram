@@ -97,8 +97,8 @@ class _AtprotoProfilePageState extends State<AtprotoProfilePage> {
                 (item) => AtprotoPostTile(
                   item: item,
                   compact: true,
-                  onLike: () => AtprotoClientService().likePost(item),
-                  onRepost: () => AtprotoClientService().repost(item),
+                  onLike: () => _like(item),
+                  onRepost: () => _repost(item),
                 ),
               ),
           ],
@@ -232,5 +232,25 @@ class _AtprotoProfilePageState extends State<AtprotoProfilePage> {
             .trim();
     if (seed.isEmpty) return '?';
     return seed.substring(0, 1).toUpperCase();
+  }
+
+  void _like(AtprotoFeedItem item) {
+    AtprotoClientService().likePost(item).then((ok) {
+      if (!ok && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Could not like this post')),
+        );
+      }
+    });
+  }
+
+  void _repost(AtprotoFeedItem item) {
+    AtprotoClientService().repost(item).then((ok) {
+      if (!ok && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Could not repost this post')),
+        );
+      }
+    });
   }
 }

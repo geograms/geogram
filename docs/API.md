@@ -2506,6 +2506,8 @@ Triggers a debug action.
 | `conference_demote` | Demote a speaker to listener (host only) | `callsign` (required): Callsign of participant to demote |
 | `atproto_status` | Get Teleport AT Proto bridge status | None |
 | `atproto_read_feed` | Read public Bluesky/AT feed for an actor | `actor` (required): Handle or DID, `limit` (optional): 1-100, `appview` (optional): Base URL override |
+| `atproto_sync_feed` | Trigger bridge-managed feed sync with fallback actor logic | None |
+| `atproto_like_from_feed` | Test like write flow against first post from actor feed | `actor` (optional): Handle or DID (default: `bsky.app`) |
 | `shared_list` | List all shared folder entries with metadata | None |
 | `shared_test_access` | Test access control for a given pubkey | `pubkey` (optional): Hex pubkey to test. Returns accessibility per folder |
 | `shared_test_cookie` | Test cookie parsing from HTTP headers | `headers` (required): Raw HTTP headers string to parse for `geogram_nostr_pubkey` cookie |
@@ -2749,6 +2751,16 @@ curl -X POST http://localhost:3456/api/debug \
 curl -X POST http://localhost:3456/api/debug \
   -H "Content-Type: application/json" \
   -d '{"action":"atproto_read_feed","actor":"bsky.app","limit":5}'
+
+# Trigger bridge feed sync (uses configured actor with fallback)
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action":"atproto_sync_feed"}'
+
+# Test like flow using first post from actor feed
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action":"atproto_like_from_feed","actor":"bsky.app"}'
 
 # Start BLE advertising
 curl -X POST http://localhost:3456/api/debug \

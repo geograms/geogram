@@ -17943,6 +17943,57 @@ function cleanup() {
           );
         }
 
+      case 'atproto_sync_feed':
+        await atproto.syncFeed();
+        return shelf.Response.ok(
+          jsonEncode({
+            'success': true,
+            'authenticated': atproto.isAuthenticated,
+            'feedCount': atproto.feed.length,
+            'did': atproto.session?.did,
+            'handle': atproto.session?.handle,
+          }),
+          headers: headers,
+        );
+
+      case 'atproto_like_from_feed':
+        final actor = (params['actor'] as String?)?.trim();
+        final targetActor = (actor == null || actor.isEmpty) ? 'bsky.app' : actor;
+        try {
+          final feed = await atproto.fetchAuthorFeed(targetActor, limit: 1);
+          if (feed.isEmpty) {
+            return shelf.Response.ok(
+              jsonEncode({
+                'success': false,
+                'error': 'No posts found for actor',
+                'actor': targetActor,
+              }),
+              headers: headers,
+            );
+          }
+          final target = feed.first;
+          final ok = await atproto.likePost(target);
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': ok,
+              'actor': targetActor,
+              'subjectUri': target.uri,
+              'subjectCid': target.cid,
+            }),
+            headers: headers,
+          );
+        } catch (e) {
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': false,
+              'error': 'Like test failed',
+              'details': '$e',
+              'actor': targetActor,
+            }),
+            headers: headers,
+          );
+        }
+
       default:
         return shelf.Response.ok(
           jsonEncode({'success': false, 'error': 'Unknown AT Proto action: $action'}),

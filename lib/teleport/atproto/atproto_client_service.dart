@@ -77,7 +77,8 @@ class AtprotoClientService {
     await AtprotoLocalPdsService().start(storage: storage, config: _config);
     _startRecurringTasks();
     if (_config.enabled) {
-      if (!isAuthenticated) {
+      final validSession = await _hasUsableSession();
+      if (!validSession) {
         await login(
           identifier: _config.identifier,
           password: _config.password,
@@ -242,7 +243,7 @@ class AtprotoClientService {
 
   Future<bool> likePost(AtprotoFeedItem item) async {
     if (!await _ensureAuthenticated()) return false;
-    return _createRecord(
+    final ok = await _createRecord(
       repo: _session!.did,
       collection: 'app.bsky.feed.like',
       record: {
@@ -251,11 +252,21 @@ class AtprotoClientService {
         'subject': {'uri': item.uri, 'cid': item.cid},
       },
     );
+    if (ok) {
+      _applyFeedPatch(
+        item.uri,
+        (current) => current.copyWith(
+          isLikedByMe: true,
+          likeCount: current.likeCount + 1,
+        ),
+      );
+    }
+    return ok;
   }
 
   Future<bool> repost(AtprotoFeedItem item) async {
     if (!await _ensureAuthenticated()) return false;
-    return _createRecord(
+    final ok = await _createRecord(
       repo: _session!.did,
       collection: 'app.bsky.feed.repost',
       record: {
@@ -264,6 +275,16 @@ class AtprotoClientService {
         'subject': {'uri': item.uri, 'cid': item.cid},
       },
     );
+    if (ok) {
+      _applyFeedPatch(
+        item.uri,
+        (current) => current.copyWith(
+          isRepostedByMe: true,
+          repostCount: current.repostCount + 1,
+        ),
+      );
+    }
+    return ok;
   }
 
   Future<void> _ensureAutoCredentials() async {
@@ -340,13 +361,27 @@ class AtprotoClientService {
 
   Future<void> syncFeed() async {
     if (!_config.enabled) return;
-    final actor = _resolveReadActor();
-    try {
-      _feed = await fetchAuthorFeed(actor, limit: 50);
-      await _storage?.saveCachedFeed(_feed);
-      _emit(const AtprotoClientEvent(AtprotoClientEventType.feedUpdated));
-    } catch (e) {
-      _emit(AtprotoClientEvent(AtprotoClientEventType.error, data: '$e'));
+    final candidates = <String>[
+      _resolveReadActor(),
+      'bsky.app',
+    ].where((e) => e.trim().isNotEmpty).toSet().toList();
+
+    Object? lastError;
+    for (final actor in candidates) {
+      try {
+        _feed = await fetchAuthorFeed(actor, limit: 50);
+        await _storage?.saveCachedFeed(_feed);
+        _emit(const AtprotoClientEvent(AtprotoClientEventType.feedUpdated));
+        return;
+      } catch (e) {
+        lastError = e;
+      }
+    }
+
+    if (lastError != null) {
+      _emit(
+        AtprotoClientEvent(AtprotoClientEventType.error, data: '$lastError'),
+      );
     }
   }
 
@@ -362,7 +397,10 @@ class AtprotoClientService {
     );
     final response = await http.get(uri);
     if (response.statusCode < 200 || response.statusCode >= 300) {
-      throw Exception('Feed read failed (${response.statusCode})');
+      final details = response.body.length > 180
+          ? '${response.body.substring(0, 180)}...'
+          : response.body;
+      throw Exception('Feed read failed (${response.statusCode}) $details');
     }
     final body = jsonDecode(response.body) as Map<String, dynamic>;
     return _parseFeed(body);
@@ -382,7 +420,14 @@ class AtprotoClientService {
 
   String _resolveReadActor() {
     if (_session?.did.isNotEmpty == true) {
-      return _session!.did;
+      final did = _session!.did;
+      if (did.startsWith('did:plc:') || did.startsWith('did:')) {
+        // AppView can reliably read PLC DIDs; local did:web may not resolve.
+        if (!did.startsWith('did:web:')) return did;
+      }
+    }
+    if (_session?.handle.isNotEmpty == true && _session!.handle.contains('.')) {
+      return _session!.handle;
     }
     final configured = _config.identifier.trim();
     if (configured.startsWith('did:') || configured.contains('.')) {
@@ -613,6 +658,29 @@ class AtprotoClientService {
             return true;
           }
         }
+        final reloginOk = await login(
+          identifier: _config.identifier,
+          password: _config.password,
+          allowAutoPasswordDiscovery: true,
+        );
+        if (reloginOk && _session != null) {
+          final retry = await http.post(
+            uri,
+            headers: {
+              'Authorization': 'Bearer ${_session!.accessJwt}',
+              'Content-Type': 'application/json',
+            },
+            body: jsonEncode({
+              'repo': repo,
+              'collection': collection,
+              'record': record,
+            }),
+          );
+          if (retry.statusCode >= 200 && retry.statusCode < 300) {
+            await syncFeed();
+            return true;
+          }
+        }
       }
 
       _emit(
@@ -629,13 +697,45 @@ class AtprotoClientService {
   }
 
   Future<bool> _ensureAuthenticated() async {
-    if (_session?.isValid == true) return true;
+    if (await _hasUsableSession()) return true;
     await _ensureAutoCredentials();
     return login(
       identifier: _config.identifier,
       password: _config.password,
       allowAutoPasswordDiscovery: true,
     );
+  }
+
+  Future<bool> _hasUsableSession() async {
+    if (_session?.isValid != true) return false;
+    final pds = _normalizeBaseUrl(_config.pdsUrl);
+    final uri = Uri.parse('$pds/xrpc/com.atproto.server.getSession');
+    try {
+      final response = await http.get(
+        uri,
+        headers: {'Authorization': 'Bearer ${_session!.accessJwt}'},
+      );
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        return true;
+      }
+    } catch (_) {}
+    return false;
+  }
+
+  void _applyFeedPatch(
+    String uri,
+    AtprotoFeedItem Function(AtprotoFeedItem current) mapper,
+  ) {
+    var changed = false;
+    final updated = _feed.map((item) {
+      if (item.uri != uri) return item;
+      changed = true;
+      return mapper(item);
+    }).toList();
+    if (!changed) return;
+    _feed = updated;
+    _emit(const AtprotoClientEvent(AtprotoClientEventType.feedUpdated));
+    _storage?.saveCachedFeed(_feed);
   }
 
   void _startRecurringTasks() {

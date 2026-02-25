@@ -188,8 +188,8 @@ class _AtprotoMainPageState extends State<AtprotoMainPage> {
                         final item = feed[index];
                         return AtprotoPostTile(
                           item: item,
-                          onLike: () => service.likePost(item),
-                          onRepost: () => service.repost(item),
+                          onLike: () => _toggleLike(item),
+                          onRepost: () => _toggleRepost(item),
                           onReply: () => setState(() => _replyTarget = item),
                           onTapAuthor: () => _openAuthorProfile(item),
                         );
@@ -349,5 +349,25 @@ class _AtprotoMainPageState extends State<AtprotoMainPage> {
     Navigator.of(
       context,
     ).push(MaterialPageRoute(builder: (_) => AtprotoProfilePage(actor: actor)));
+  }
+
+  void _toggleLike(AtprotoFeedItem item) {
+    AtprotoClientService().likePost(item).then((ok) {
+      if (!ok && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Could not like this post')),
+        );
+      }
+    });
+  }
+
+  void _toggleRepost(AtprotoFeedItem item) {
+    AtprotoClientService().repost(item).then((ok) {
+      if (!ok && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Could not repost this post')),
+        );
+      }
+    });
   }
 }
