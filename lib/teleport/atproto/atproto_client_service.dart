@@ -10,11 +10,13 @@ import 'dart:math';
 import 'package:http/http.dart' as http;
 
 import '../../services/app_service.dart';
+import '../../services/app_args.dart';
 import '../../models/monitored_task.dart';
 import '../../services/log_service.dart';
 import '../../services/profile_service.dart';
 import '../../services/profile_storage.dart';
 import '../../util/task_monitor_helpers.dart';
+import 'atproto_local_pds_service.dart';
 import 'atproto_storage_service.dart';
 import 'models/atproto_bridge_config.dart';
 import 'models/atproto_feed_item.dart';
@@ -72,6 +74,7 @@ class AtprotoClientService {
     _feed = await _storage!.loadCachedFeed();
 
     await _ensureAutoCredentials();
+    await AtprotoLocalPdsService().start(storage: storage, config: _config);
     _startRecurringTasks();
     if (_config.enabled) {
       if (!isAuthenticated) {
@@ -89,12 +92,32 @@ class AtprotoClientService {
   }
 
   Future<void> saveConfig(AtprotoBridgeConfig newConfig) async {
-    _config = newConfig;
-    await _storage?.saveConfig(newConfig);
-    await _storage?.registerBridge(enabled: newConfig.enabled);
+    var normalized = newConfig.copyWith(pdsUrl: _localPdsBaseUrl());
+    if (normalized.identifier.trim().isEmpty) {
+      normalized = normalized.copyWith(
+        identifier: _deriveIdentifierFromProfile(),
+      );
+    }
+    if (normalized.password.trim().isEmpty) {
+      normalized = normalized.copyWith(password: _generatePassword());
+    }
+    if (!normalized.enabled) {
+      normalized = normalized.copyWith(enabled: true);
+    }
+
+    _config = normalized;
+    await _storage?.saveConfig(normalized);
+    final profileStorage = AppService().profileStorage;
+    if (profileStorage != null) {
+      await AtprotoLocalPdsService().start(
+        storage: profileStorage,
+        config: normalized,
+      );
+    }
+    await _storage?.registerBridge(enabled: normalized.enabled);
     await _storage?.saveStatus({
       'platform': 'bluesky',
-      'state': newConfig.enabled ? 'connected' : 'disconnected',
+      'state': normalized.enabled ? 'connected' : 'disconnected',
       'updated_at': DateTime.now().toUtc().toIso8601String(),
       'did': _session?.did,
       'handle': _session?.handle,
@@ -107,6 +130,20 @@ class AtprotoClientService {
     required String password,
     bool allowAutoPasswordDiscovery = false,
   }) async {
+    if (identifier.trim().isEmpty || password.trim().isEmpty) {
+      await _ensureAutoCredentials();
+      identifier = _config.identifier;
+      password = _config.password;
+    }
+
+    final profileStorage = AppService().profileStorage;
+    if (profileStorage != null) {
+      await AtprotoLocalPdsService().start(
+        storage: profileStorage,
+        config: _config,
+      );
+    }
+
     final pds = _normalizeBaseUrl(_config.pdsUrl);
     final uri = Uri.parse('$pds/xrpc/com.atproto.server.createSession');
 
@@ -134,7 +171,7 @@ class AtprotoClientService {
         _emit(
           AtprotoClientEvent(
             AtprotoClientEventType.error,
-            data: 'Login failed (${response.statusCode})',
+            data: 'Login failed (${response.statusCode}): ${response.body}',
           ),
         );
         return false;
@@ -178,7 +215,7 @@ class AtprotoClientService {
   }
 
   Future<bool> publishPost(String text, {AtprotoFeedItem? replyTo}) async {
-    if (_session == null) return false;
+    if (!await _ensureAuthenticated()) return false;
     final did = _session!.did;
 
     final record = <String, dynamic>{
@@ -204,7 +241,7 @@ class AtprotoClientService {
   }
 
   Future<bool> likePost(AtprotoFeedItem item) async {
-    if (_session == null) return false;
+    if (!await _ensureAuthenticated()) return false;
     return _createRecord(
       repo: _session!.did,
       collection: 'app.bsky.feed.like',
@@ -217,7 +254,7 @@ class AtprotoClientService {
   }
 
   Future<bool> repost(AtprotoFeedItem item) async {
-    if (_session == null) return false;
+    if (!await _ensureAuthenticated()) return false;
     return _createRecord(
       repo: _session!.did,
       collection: 'app.bsky.feed.repost',
@@ -231,9 +268,14 @@ class AtprotoClientService {
 
   Future<void> _ensureAutoCredentials() async {
     final autoIdentifier = _deriveIdentifierFromProfile();
+    final autoPdsUrl = _localPdsBaseUrl();
     var next = _config;
     var changed = false;
 
+    if (next.pdsUrl.trim() != autoPdsUrl) {
+      next = next.copyWith(pdsUrl: autoPdsUrl);
+      changed = true;
+    }
     if (next.identifier.trim().isEmpty) {
       next = next.copyWith(identifier: autoIdentifier);
       changed = true;
@@ -250,6 +292,11 @@ class AtprotoClientService {
     if (changed) {
       await saveConfig(next);
     }
+  }
+
+  String _localPdsBaseUrl() {
+    final apiPort = AppArgs().port;
+    return 'http://127.0.0.1:$apiPort';
   }
 
   String _deriveIdentifierFromProfile() {
@@ -522,7 +569,7 @@ class AtprotoClientService {
     required String collection,
     required Map<String, dynamic> record,
   }) async {
-    if (_session == null) return false;
+    if (!await _ensureAuthenticated()) return false;
 
     final pds = _normalizeBaseUrl(_config.pdsUrl);
     final uri = Uri.parse('$pds/xrpc/com.atproto.repo.createRecord');
@@ -548,6 +595,24 @@ class AtprotoClientService {
 
       if (response.statusCode == 401) {
         await _refreshSession();
+        if (_session != null) {
+          final retry = await http.post(
+            uri,
+            headers: {
+              'Authorization': 'Bearer ${_session!.accessJwt}',
+              'Content-Type': 'application/json',
+            },
+            body: jsonEncode({
+              'repo': repo,
+              'collection': collection,
+              'record': record,
+            }),
+          );
+          if (retry.statusCode >= 200 && retry.statusCode < 300) {
+            await syncFeed();
+            return true;
+          }
+        }
       }
 
       _emit(
@@ -561,6 +626,16 @@ class AtprotoClientService {
       _emit(AtprotoClientEvent(AtprotoClientEventType.error, data: '$e'));
       return false;
     }
+  }
+
+  Future<bool> _ensureAuthenticated() async {
+    if (_session?.isValid == true) return true;
+    await _ensureAutoCredentials();
+    return login(
+      identifier: _config.identifier,
+      password: _config.password,
+      allowAutoPasswordDiscovery: true,
+    );
   }
 
   void _startRecurringTasks() {

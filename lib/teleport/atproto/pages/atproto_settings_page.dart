@@ -17,23 +17,18 @@ class AtprotoSettingsPage extends StatefulWidget {
 }
 
 class _AtprotoSettingsPageState extends State<AtprotoSettingsPage> {
-  late final TextEditingController _pdsCtl;
   late final TextEditingController _appViewCtl;
-  bool _enabled = false;
   bool _busy = false;
 
   @override
   void initState() {
     super.initState();
     final cfg = AtprotoClientService().config;
-    _pdsCtl = TextEditingController(text: cfg.pdsUrl);
     _appViewCtl = TextEditingController(text: cfg.appViewUrl);
-    _enabled = cfg.enabled;
   }
 
   @override
   void dispose() {
-    _pdsCtl.dispose();
     _appViewCtl.dispose();
     super.dispose();
   }
@@ -48,21 +43,18 @@ class _AtprotoSettingsPageState extends State<AtprotoSettingsPage> {
         padding: const EdgeInsets.all(16),
         children: [
           SwitchListTile(
-            value: _enabled,
+            value: true,
             title: const Text('Enable bridge'),
             subtitle: const Text(
               'Use teleport/atproto storage and background sync',
             ),
-            onChanged: (value) => setState(() => _enabled = value),
+            onChanged: null,
           ),
           const SizedBox(height: 12),
-          TextField(
-            controller: _pdsCtl,
-            decoration: const InputDecoration(
-              labelText: 'PDS URL',
-              hintText: 'http://127.0.0.1:8080',
-              border: OutlineInputBorder(),
-            ),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('PDS URL'),
+            subtitle: Text(service.config.pdsUrl),
           ),
           const SizedBox(height: 12),
           TextField(
@@ -89,12 +81,6 @@ class _AtprotoSettingsPageState extends State<AtprotoSettingsPage> {
             onPressed: _busy ? null : _save,
             icon: const Icon(Icons.save),
             label: const Text('Save Settings'),
-          ),
-          const SizedBox(height: 8),
-          FilledButton.icon(
-            onPressed: _busy ? null : _login,
-            icon: const Icon(Icons.login),
-            label: const Text('Login'),
           ),
           const SizedBox(height: 8),
           OutlinedButton.icon(
@@ -132,9 +118,8 @@ class _AtprotoSettingsPageState extends State<AtprotoSettingsPage> {
     final service = AtprotoClientService();
     await service.saveConfig(
       service.config.copyWith(
-        pdsUrl: _pdsCtl.text.trim(),
         appViewUrl: _appViewCtl.text.trim(),
-        enabled: _enabled,
+        enabled: true,
       ),
     );
     if (mounted) {
@@ -143,21 +128,5 @@ class _AtprotoSettingsPageState extends State<AtprotoSettingsPage> {
       ).showSnackBar(const SnackBar(content: Text('AT Proto settings saved')));
       setState(() => _busy = false);
     }
-  }
-
-  Future<void> _login() async {
-    setState(() => _busy = true);
-    final service = AtprotoClientService();
-    await _save();
-    final ok = await service.login(
-      identifier: service.config.identifier,
-      password: service.config.password,
-      allowAutoPasswordDiscovery: true,
-    );
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(ok ? 'Login successful' : 'Login failed')),
-    );
-    setState(() => _busy = false);
   }
 }

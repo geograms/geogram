@@ -20,7 +20,7 @@ class AtprotoBridgeConfig {
 
   factory AtprotoBridgeConfig.defaults() {
     return const AtprotoBridgeConfig(
-      pdsUrl: 'http://127.0.0.1:8080',
+      pdsUrl: 'http://127.0.0.1:3456',
       appViewUrl: 'https://public.api.bsky.app',
       identifier: '',
       password: '',
@@ -30,7 +30,7 @@ class AtprotoBridgeConfig {
 
   factory AtprotoBridgeConfig.fromJson(Map<String, dynamic> json) {
     return AtprotoBridgeConfig(
-      pdsUrl: json['pdsUrl'] as String? ?? 'http://127.0.0.1:8080',
+      pdsUrl: json['pdsUrl'] as String? ?? 'http://127.0.0.1:3456',
       appViewUrl:
           json['appViewUrl'] as String? ?? 'https://public.api.bsky.app',
       identifier: json['identifier'] as String? ?? '',

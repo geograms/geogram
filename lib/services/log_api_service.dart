@@ -41,6 +41,7 @@ import 'xmpp_server_stub.dart' if (dart.library.io) 'xmpp_server.dart';
 import '../teleport/nostr/nostr_client_service.dart';
 import '../teleport/nostr/models/nostr_relay_config.dart';
 import '../teleport/atproto/atproto_client_service.dart';
+import '../teleport/atproto/atproto_local_pds_service.dart';
 import '../teleport/irc/models/irc_server_config.dart';
 import 'sqlite_loader.dart';
 import '../version.dart';
@@ -121,6 +122,7 @@ class LogApiService with ChatModificationMixin {
 
   /// Console controller for /api/cli
   CliConsoleController? _cliController;
+  final AtprotoLocalPdsService _atprotoLocalPds = AtprotoLocalPdsService();
 
   /// Get the configured port from AppArgs (defaults to 3456)
   int get port => AppArgs().port;
@@ -305,6 +307,22 @@ class LogApiService with ChatModificationMixin {
     }
 
     final urlPath = request.url.path;
+
+    // Local AT Proto PDS endpoints (served on device API port, e.g. 3456)
+    if (urlPath.startsWith('xrpc/') ||
+        urlPath.startsWith('api/atproto/') ||
+        urlPath == 'did.json' ||
+        urlPath == '.well-known/did.json') {
+      await _ensureAtprotoPdsStarted();
+      final atprotoResponse = await _atprotoLocalPds.handleRequest(
+        request,
+        urlPath,
+        headers,
+      );
+      if (atprotoResponse != null) {
+        return atprotoResponse;
+      }
+    }
 
     // All API endpoints are under /api/
     // Legacy endpoints (without /api/) are also supported for backward compatibility
@@ -576,6 +594,17 @@ class LogApiService with ChatModificationMixin {
       jsonEncode({'error': 'Not found', 'hint': 'API endpoints are available at /api/'}),
       headers: headers,
     );
+  }
+
+  Future<void> _ensureAtprotoPdsStarted() async {
+    try {
+      final storage = AppService().profileStorage;
+      if (storage == null) return;
+      final atproto = AtprotoClientService();
+      await _atprotoLocalPds.start(storage: storage, config: atproto.config);
+    } catch (e) {
+      LogService().log('LogApiService: failed to start local AT Proto PDS: $e');
+    }
   }
 
   /// Handle /api/cli endpoint - execute console commands

@@ -19,10 +19,11 @@ class AtprotoStorageService {
 
   AtprotoStorageService(this._storage);
 
-  static const String root = 'atproto';
-  static const String cacheDir = 'atproto/cache';
-  static const String queueDir = 'atproto/queue';
-  static const String repoDir = 'atproto/repo';
+  static const String root = 'teleport/atproto';
+  static const String cacheDir = '$root/cache';
+  static const String queueDir = '$root/queue';
+  static const String repoDir = '$root/repo';
+  static const String _legacyRoot = 'atproto';
 
   String _path(String relativePath) => '$root/$relativePath';
 
@@ -35,7 +36,7 @@ class AtprotoStorageService {
 
   Future<AtprotoBridgeConfig> loadConfig() async {
     try {
-      final str = await _storage.readString(_path('config.json'));
+      final str = await _readStringWithLegacyFallback('config.json');
       if (str == null) return AtprotoBridgeConfig.defaults();
       final json = jsonDecode(str) as Map<String, dynamic>;
       return AtprotoBridgeConfig.fromJson(json);
@@ -55,7 +56,7 @@ class AtprotoStorageService {
 
   Future<AtprotoSession?> loadSession() async {
     try {
-      final str = await _storage.readString(_path('session.json'));
+      final str = await _readStringWithLegacyFallback('session.json');
       if (str == null) return null;
       return AtprotoSession.fromJson(jsonDecode(str) as Map<String, dynamic>);
     } catch (e) {
@@ -78,7 +79,7 @@ class AtprotoStorageService {
 
   Future<List<AtprotoFeedItem>> loadCachedFeed() async {
     try {
-      final str = await _storage.readString(_path('cache/feed.json'));
+      final str = await _readStringWithLegacyFallback('cache/feed.json');
       if (str == null) return const [];
       final list = jsonDecode(str) as List<dynamic>;
       return list
@@ -102,7 +103,7 @@ class AtprotoStorageService {
   }
 
   Future<Map<String, dynamic>?> loadStatus() {
-    return _storage.readJson(_path('status.json'));
+    return _readJsonWithLegacyFallback('status.json');
   }
 
   Future<void> saveStatus(Map<String, dynamic> status) async {
@@ -142,5 +143,29 @@ class AtprotoStorageService {
     config['updated_at'] = DateTime.now().toUtc().toIso8601String();
 
     await _storage.writeJson('config.json', config);
+  }
+
+  Future<String?> _readStringWithLegacyFallback(String relativePath) async {
+    final current = await _storage.readString(_path(relativePath));
+    if (current != null) return current;
+    final legacy = await _storage.readString('$_legacyRoot/$relativePath');
+    if (legacy != null) {
+      await ensureDirectories();
+      await _storage.writeString(_path(relativePath), legacy);
+    }
+    return legacy;
+  }
+
+  Future<Map<String, dynamic>?> _readJsonWithLegacyFallback(
+    String relativePath,
+  ) async {
+    final current = await _storage.readJson(_path(relativePath));
+    if (current != null) return current;
+    final legacy = await _storage.readJson('$_legacyRoot/$relativePath');
+    if (legacy != null) {
+      await ensureDirectories();
+      await _storage.writeJson(_path(relativePath), legacy);
+    }
+    return legacy;
   }
 }
