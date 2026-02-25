@@ -164,6 +164,14 @@ class NostrClientService {
   /// Get cached profile for a pubkey.
   Map<String, String?>? getProfile(String pubkey) => _profileCache[pubkey];
 
+  /// Find an event in the in-memory feed by event ID.
+  NostrFeedItem? findFeedItemById(String eventId) {
+    for (final item in _feedItems) {
+      if (item.id == eventId) return item;
+    }
+    return null;
+  }
+
   /// Whether the feed is paused.
   bool get isPaused => _paused;
 
@@ -766,6 +774,19 @@ class NostrClientService {
     }
     // Also request their metadata if not cached
     _queueProfileRequest(pubkey);
+  }
+
+  /// Request a specific event by ID from connected relays.
+  void requestEventById(String eventId) {
+    final subId = 'event_${eventId}_${DateTime.now().millisecondsSinceEpoch}';
+    for (final client in _clients.values) {
+      if (client.isConnected) {
+        client.subscribe({
+          'ids': [eventId],
+          'limit': 1,
+        }, subscriptionId: subId);
+      }
+    }
   }
 
   // ---------------------------------------------------------------------------

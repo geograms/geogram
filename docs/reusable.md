@@ -120,6 +120,7 @@ This document catalogs reusable UI components available in the Geogram codebase.
 - [MirrorSyncService](#mirrorsyncservice) - Simple one-way folder sync with NOSTR authentication
 - [NostrClientService.searchFeed](#nostrclientservicesearchfeed) - Search in-memory NOSTR feed items
 - [NostrClientService.followUser/unfollowUser/likeEvent](#nostrclientservicefollowuserunfollowuserlikeevent) - Follow/unfollow users and like posts
+- [NostrNip19.decode](#nostrnip19decode) - Decode nostr: URIs (note/npub/nevent/nprofile/naddr)
 - [GeogramApi](#geogramapi) - Unified transport-agnostic API facade
 - [FileBrowserCacheService](#filebrowsercacheservice) - Persistent cache for file browser operations
 - [SQLiteLoader](#sqliteloader) - Platform-aware SQLite database loading
@@ -9674,4 +9675,19 @@ Navigator.of(context).push(
     builder: (_) => NostrUserProfilePage(pubkey: pubkeyHex),
   ),
 );
+```
+
+### NostrNip19.decode
+
+**File:** `lib/util/nostr_nip19.dart`
+
+Decode NIP-19 `nostr:` URIs and extract event IDs or pubkeys. Supports
+`note`, `npub`, `nevent`, `nprofile`, and `naddr`.
+
+**Usage:**
+```dart
+final decoded = NostrNip19.decode('nostr:nevent1...');
+if (decoded?.eventIdHex != null) {
+  print(decoded!.eventIdHex);
+}
 ```

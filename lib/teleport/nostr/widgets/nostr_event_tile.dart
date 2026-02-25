@@ -11,17 +11,24 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../../services/file_launcher_service.dart';
+import '../../../util/nostr_nip19.dart';
 import '../../shared/teleport_chat_utils.dart';
 import '../models/nostr_feed_item.dart';
+import '../nostr_client_service.dart';
+import '../pages/nostr_user_profile_page.dart';
 
 class NostrEventTile extends StatefulWidget {
   final NostrFeedItem item;
   final bool isOwnPost;
+  final VoidCallback? onLike;
+  final VoidCallback? onTapAuthor;
 
   const NostrEventTile({
     super.key,
     required this.item,
     this.isOwnPost = false,
+    this.onLike,
+    this.onTapAuthor,
   });
 
   @override
@@ -29,8 +36,8 @@ class NostrEventTile extends StatefulWidget {
 }
 
 class _NostrEventTileState extends State<NostrEventTile> {
-  static final _urlRegex = RegExp(
-    r'(https?://[^\s<>\[\]{}|\\^`]+|www\.[^\s<>\[\]{}|\\^`]+)',
+  static final _linkRegex = RegExp(
+    r'(https?://[^\s<>\[\]{}|\\^`]+|www\.[^\s<>\[\]{}|\\^`]+|nostr:[a-z0-9]+)',
     caseSensitive: false,
   );
 
@@ -86,7 +93,7 @@ class _NostrEventTileState extends State<NostrEventTile> {
     }
     _linkRecognizers = [];
 
-    final matches = _urlRegex.allMatches(text).toList();
+    final matches = _linkRegex.allMatches(text).toList();
     if (matches.isEmpty) {
       return SelectableText(text, style: baseStyle);
     }
@@ -100,11 +107,16 @@ class _NostrEventTileState extends State<NostrEventTile> {
       }
 
       final urlText = match.group(0)!;
-      final launchUrl =
-          urlText.startsWith('http') ? urlText : 'https://$urlText';
-
       final recognizer = TapGestureRecognizer()
-        ..onTap = () => FileLauncherService().openUrl(launchUrl);
+        ..onTap = () {
+          if (urlText.startsWith('nostr:')) {
+            _handleNostrUri(urlText);
+            return;
+          }
+          final launchUrl =
+              urlText.startsWith('http') ? urlText : 'https://$urlText';
+          FileLauncherService().openUrl(launchUrl);
+        };
       _linkRecognizers.add(recognizer);
 
       spans.add(TextSpan(
@@ -125,6 +137,102 @@ class _NostrEventTileState extends State<NostrEventTile> {
     }
 
     return Text.rich(TextSpan(style: baseStyle, children: spans));
+  }
+
+  void _handleNostrUri(String uri) {
+    final decoded = NostrNip19.decode(uri);
+    if (decoded == null) {
+      _showSnack('Invalid NOSTR link');
+      return;
+    }
+
+    final pubkeyHex = decoded.pubkeyHex;
+    final eventId = decoded.eventIdHex;
+    if (pubkeyHex != null) {
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => NostrUserProfilePage(pubkey: pubkeyHex),
+        ),
+      );
+      return;
+    }
+    if (eventId != null) {
+      _showEventPreview(eventId);
+      return;
+    }
+
+    _showSnack('Unsupported NOSTR link');
+  }
+
+  Future<void> _showEventPreview(String eventId) async {
+    final service = NostrClientService();
+    service.requestEventById(eventId);
+
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (ctx) {
+        return StreamBuilder<NostrClientEvent>(
+          stream: service.events,
+          builder: (context, snapshot) {
+            final item = service.findFeedItemById(eventId);
+            if (item == null) {
+              return Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const CircularProgressIndicator(),
+                    const SizedBox(height: 12),
+                    const Text('Fetching event from relays...'),
+                    const SizedBox(height: 8),
+                    TextButton(
+                      onPressed: () => service.requestEventById(eventId),
+                      child: const Text('Retry'),
+                    ),
+                  ],
+                ),
+              );
+            }
+
+            return SafeArea(
+              top: false,
+              child: Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: NostrEventTile(
+                  item: item,
+                  onLike: item.id == null
+                      ? null
+                      : () {
+                          NostrClientService().likeEvent(
+                            item.id!,
+                            item.pubkey,
+                          );
+                        },
+                  onTapAuthor: () {
+                    Navigator.of(ctx).pop();
+                    if (item.pubkey.isNotEmpty) {
+                      Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) =>
+                              NostrUserProfilePage(pubkey: item.pubkey),
+                        ),
+                      );
+                    }
+                  },
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  void _showSnack(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
+    );
   }
 
   String _formatTime(DateTime utcDate) {
@@ -161,8 +269,11 @@ class _NostrEventTileState extends State<NostrEventTile> {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Avatar
-          _buildAvatar(),
+          // Avatar (tappable for profile)
+          GestureDetector(
+            onTap: widget.onTapAuthor,
+            child: _buildAvatar(),
+          ),
           const SizedBox(width: 12),
           // Content column
           Expanded(
@@ -183,6 +294,9 @@ class _NostrEventTileState extends State<NostrEventTile> {
                   ),
                 ),
                 const SizedBox(height: 6),
+                // Reaction bar
+                _buildReactionBar(item),
+                const SizedBox(height: 4),
                 // Footer: relay source
                 _buildFooter(item),
               ],
@@ -209,17 +323,20 @@ class _NostrEventTileState extends State<NostrEventTile> {
 
     return Row(
       children: [
-        // Display name
+        // Display name (tappable for profile)
         Flexible(
-          child: Text(
-            item.displayName,
-            style: TextStyle(
-              color: nameColor,
-              fontWeight: FontWeight.w600,
-              fontSize: 14,
+          child: GestureDetector(
+            onTap: widget.onTapAuthor,
+            child: Text(
+              item.displayName,
+              style: TextStyle(
+                color: nameColor,
+                fontWeight: FontWeight.w600,
+                fontSize: 14,
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
             ),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
           ),
         ),
         // NIP-05 verification
@@ -293,6 +410,40 @@ class _NostrEventTileState extends State<NostrEventTile> {
     );
   }
 
+  Widget _buildReactionBar(NostrFeedItem item) {
+    return Row(
+      children: [
+        GestureDetector(
+          onTap: widget.onLike,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                item.isLikedByMe ? Icons.favorite : Icons.favorite_border,
+                size: 16,
+                color: item.isLikedByMe
+                    ? Colors.red.shade400
+                    : Colors.white.withValues(alpha: 0.3),
+              ),
+              if (item.reactionCount > 0) ...[
+                const SizedBox(width: 4),
+                Text(
+                  '${item.reactionCount}',
+                  style: TextStyle(
+                    color: item.isLikedByMe
+                        ? Colors.red.shade400
+                        : Colors.white.withValues(alpha: 0.4),
+                    fontSize: 12,
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
   void _showMenu(BuildContext context) {
     final box = context.findRenderObject() as RenderBox;
     final overlay =
@@ -305,10 +456,12 @@ class _NostrEventTileState extends State<NostrEventTile> {
     showMenu<String>(
       context: context,
       position: position,
-      items: const [
-        PopupMenuItem(value: 'copy', child: Text('Copy text')),
-        PopupMenuItem(value: 'copy_id', child: Text('Copy event ID')),
-        PopupMenuItem(value: 'copy_npub', child: Text('Copy npub')),
+      items: [
+        const PopupMenuItem(value: 'copy', child: Text('Copy text')),
+        const PopupMenuItem(value: 'copy_id', child: Text('Copy event ID')),
+        const PopupMenuItem(value: 'copy_npub', child: Text('Copy npub')),
+        if (widget.onTapAuthor != null)
+          const PopupMenuItem(value: 'profile', child: Text('View profile')),
       ],
     ).then((value) {
       if (value == null) return;
@@ -323,6 +476,9 @@ class _NostrEventTileState extends State<NostrEventTile> {
           break;
         case 'copy_npub':
           Clipboard.setData(ClipboardData(text: widget.item.event.npub));
+          break;
+        case 'profile':
+          widget.onTapAuthor?.call();
           break;
       }
     });
