@@ -287,6 +287,30 @@ class AtprotoClientService {
     return ok;
   }
 
+  Future<bool> followActor(String actorOrDid) async {
+    if (!await _ensureAuthenticated()) return false;
+    final trimmed = actorOrDid.trim();
+    if (trimmed.isEmpty) return false;
+
+    String did = trimmed;
+    if (!did.startsWith('did:')) {
+      final profile = await fetchProfile(trimmed);
+      did = profile?.did ?? '';
+    }
+    if (did.isEmpty) return false;
+    if (did == _session?.did) return false;
+
+    return _createRecord(
+      repo: _session!.did,
+      collection: 'app.bsky.graph.follow',
+      record: {
+        '\$type': 'app.bsky.graph.follow',
+        'subject': did,
+        'createdAt': DateTime.now().toUtc().toIso8601String(),
+      },
+    );
+  }
+
   Future<void> _ensureAutoCredentials() async {
     final autoIdentifier = _deriveIdentifierFromProfile();
     final autoPdsUrl = _localPdsBaseUrl();

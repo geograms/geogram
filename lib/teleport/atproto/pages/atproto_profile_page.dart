@@ -24,6 +24,8 @@ class _AtprotoProfilePageState extends State<AtprotoProfilePage> {
   AtprotoProfile? _profile;
   List<AtprotoFeedItem> _posts = const [];
   bool _loading = true;
+  bool _followBusy = false;
+  bool _isFollowing = false;
   String? _error;
 
   @override
@@ -45,6 +47,7 @@ class _AtprotoProfilePageState extends State<AtprotoProfilePage> {
       setState(() {
         _profile = profile;
         _posts = posts;
+        _isFollowing = profile?.isFollowedByMe ?? false;
       });
     } catch (e) {
       if (!mounted) return;
@@ -101,6 +104,7 @@ class _AtprotoProfilePageState extends State<AtprotoProfilePage> {
                   onLike: () => _like(item),
                   onRepost: () => _repost(item),
                   onOpenThread: () => _openThread(item),
+                  onTapAuthor: () => _openAuthorProfile(item),
                 ),
               ),
           ],
@@ -176,6 +180,8 @@ class _AtprotoProfilePageState extends State<AtprotoProfilePage> {
                     color: theme.colorScheme.onSurfaceVariant,
                   ),
                 ),
+                const SizedBox(height: 10),
+                _buildFollowButton(profile),
                 if (profile?.description.isNotEmpty == true) ...[
                   const SizedBox(height: 8),
                   Text(profile!.description, style: theme.textTheme.bodyMedium),
@@ -236,6 +242,29 @@ class _AtprotoProfilePageState extends State<AtprotoProfilePage> {
     return seed.substring(0, 1).toUpperCase();
   }
 
+  Widget _buildFollowButton(AtprotoProfile? profile) {
+    final service = AtprotoClientService();
+    final targetDid = profile?.did ?? '';
+    final isSelf = targetDid.isNotEmpty && targetDid == service.session?.did;
+    if (isSelf) return const SizedBox.shrink();
+
+    return SizedBox(
+      height: 34,
+      child: FilledButton.icon(
+        onPressed: _followBusy
+            ? null
+            : () => _follow(
+                profile?.did.isNotEmpty == true ? profile!.did : widget.actor,
+              ),
+        icon: Icon(
+          _isFollowing ? Icons.check : Icons.person_add_alt_1,
+          size: 16,
+        ),
+        label: Text(_isFollowing ? 'Following' : 'Follow'),
+      ),
+    );
+  }
+
   void _like(AtprotoFeedItem item) {
     AtprotoClientService().likePost(item).then((ok) {
       if (!ok && mounted) {
@@ -260,5 +289,31 @@ class _AtprotoProfilePageState extends State<AtprotoProfilePage> {
     Navigator.of(context).push(
       MaterialPageRoute(builder: (_) => AtprotoThreadPage(rootPost: item)),
     );
+  }
+
+  void _openAuthorProfile(AtprotoFeedItem item) {
+    final actor = item.authorDid.startsWith('did:')
+        ? item.authorDid
+        : item.authorHandle;
+    Navigator.of(
+      context,
+    ).push(MaterialPageRoute(builder: (_) => AtprotoProfilePage(actor: actor)));
+  }
+
+  Future<void> _follow(String actor) async {
+    setState(() => _followBusy = true);
+    final ok = await AtprotoClientService().followActor(actor);
+    if (!mounted) return;
+    if (ok) {
+      setState(() => _isFollowing = true);
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Followed profile')));
+    } else {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Could not follow profile')));
+    }
+    setState(() => _followBusy = false);
   }
 }

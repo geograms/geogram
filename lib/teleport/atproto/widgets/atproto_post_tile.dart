@@ -75,16 +75,22 @@ class _AtprotoPostTileState extends State<AtprotoPostTile> {
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            GestureDetector(
+            _withCursor(
               onTap: widget.onTapAuthor,
-              child: CircleAvatar(
-                radius: widget.compact ? 18 : 21,
-                backgroundImage: item.avatarUrl != null
-                    ? NetworkImage(item.avatarUrl!)
-                    : null,
-                child: item.avatarUrl == null
-                    ? Text(_initial(item), style: const TextStyle(fontSize: 13))
-                    : null,
+              child: GestureDetector(
+                onTap: widget.onTapAuthor,
+                child: CircleAvatar(
+                  radius: widget.compact ? 18 : 21,
+                  backgroundImage: item.avatarUrl != null
+                      ? NetworkImage(item.avatarUrl!)
+                      : null,
+                  child: item.avatarUrl == null
+                      ? Text(
+                          _initial(item),
+                          style: const TextStyle(fontSize: 13),
+                        )
+                      : null,
+                ),
               ),
             ),
             const SizedBox(width: 10),
@@ -125,32 +131,35 @@ class _AtprotoPostTileState extends State<AtprotoPostTile> {
     return Row(
       children: [
         Expanded(
-          child: GestureDetector(
+          child: _withCursor(
             onTap: widget.onTapAuthor,
-            child: Row(
-              children: [
-                Flexible(
-                  child: Text(
-                    item.displayName.isNotEmpty
-                        ? item.displayName
-                        : item.authorHandle,
-                    overflow: TextOverflow.ellipsis,
-                    style: theme.textTheme.titleSmall?.copyWith(
-                      fontWeight: FontWeight.w700,
+            child: GestureDetector(
+              onTap: widget.onTapAuthor,
+              child: Row(
+                children: [
+                  Flexible(
+                    child: Text(
+                      item.displayName.isNotEmpty
+                          ? item.displayName
+                          : item.authorHandle,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.titleSmall?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
                     ),
                   ),
-                ),
-                const SizedBox(width: 6),
-                Flexible(
-                  child: Text(
-                    '@${item.authorHandle}',
-                    overflow: TextOverflow.ellipsis,
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant,
+                  const SizedBox(width: 6),
+                  Flexible(
+                    child: Text(
+                      '@${item.authorHandle}',
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
                     ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         ),
@@ -215,7 +224,12 @@ class _AtprotoPostTileState extends State<AtprotoPostTile> {
       spans.add(TextSpan(text: text, style: theme.textTheme.bodyMedium));
     }
 
-    return Text.rich(TextSpan(children: spans));
+    final content = Text.rich(TextSpan(children: spans));
+    if (widget.onOpenThread == null) return content;
+    return _withCursor(
+      onTap: widget.onOpenThread,
+      child: GestureDetector(onTap: widget.onOpenThread, child: content),
+    );
   }
 
   Widget _buildExternalPreview(ThemeData theme, AtprotoFeedItem item) {
@@ -223,6 +237,7 @@ class _AtprotoPostTileState extends State<AtprotoPostTile> {
     final host = uri?.host.isNotEmpty == true ? uri!.host : item.externalUrl!;
     return InkWell(
       onTap: () => _openExternal(item.externalUrl!),
+      mouseCursor: SystemMouseCursors.click,
       borderRadius: BorderRadius.circular(14),
       child: Container(
         decoration: BoxDecoration(
@@ -317,6 +332,7 @@ class _AtprotoPostTileState extends State<AtprotoPostTile> {
                   color: theme.colorScheme.surfaceContainerLowest,
                   child: InkWell(
                     onTap: () => _openImagePreview(item, initialIndex: index),
+                    mouseCursor: SystemMouseCursors.click,
                     child: Stack(
                       fit: StackFit.expand,
                       children: [
@@ -419,6 +435,7 @@ class _AtprotoPostTileState extends State<AtprotoPostTile> {
           avatar: const Icon(Icons.link, size: 14),
           label: Text(display, overflow: TextOverflow.ellipsis),
           onPressed: () => _openExternal(link),
+          mouseCursor: SystemMouseCursors.click,
           side: BorderSide(color: theme.colorScheme.outlineVariant),
           backgroundColor: theme.colorScheme.surfaceContainerLowest,
         );
@@ -483,6 +500,7 @@ class _AtprotoPostTileState extends State<AtprotoPostTile> {
     return InkWell(
       borderRadius: BorderRadius.circular(16),
       onTap: onTap,
+      mouseCursor: onTap != null ? SystemMouseCursors.click : MouseCursor.defer,
       child: Tooltip(
         message: tooltip,
         child: Padding(
@@ -524,6 +542,7 @@ class _AtprotoPostTileState extends State<AtprotoPostTile> {
     return InkWell(
       borderRadius: BorderRadius.circular(16),
       onTap: onTap,
+      mouseCursor: onTap != null ? SystemMouseCursors.click : MouseCursor.defer,
       child: Tooltip(
         message: tooltip,
         child: Padding(
@@ -559,6 +578,11 @@ class _AtprotoPostTileState extends State<AtprotoPostTile> {
     final uri = Uri.tryParse(raw);
     if (uri == null) return;
     await launchUrl(uri, mode: LaunchMode.externalApplication);
+  }
+
+  Widget _withCursor({required Widget child, VoidCallback? onTap}) {
+    if (onTap == null) return child;
+    return MouseRegion(cursor: SystemMouseCursors.click, child: child);
   }
 
   int _imageCount(AtprotoFeedItem item) {

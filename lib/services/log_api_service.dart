@@ -18030,6 +18030,23 @@ function cleanup() {
           );
         }
 
+      case 'atproto_follow_actor':
+        final actor = (params['actor'] as String?)?.trim();
+        if (actor == null || actor.isEmpty) {
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': false,
+              'error': 'actor parameter required (handle or DID)',
+            }),
+            headers: headers,
+          );
+        }
+        final ok = await atproto.followActor(actor);
+        return shelf.Response.ok(
+          jsonEncode({'success': ok, 'actor': actor}),
+          headers: headers,
+        );
+
       default:
         return shelf.Response.ok(
           jsonEncode({'success': false, 'error': 'Unknown AT Proto action: $action'}),

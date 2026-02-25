@@ -13,6 +13,7 @@ class AtprotoProfile {
   final int followersCount;
   final int followsCount;
   final int postsCount;
+  final bool isFollowedByMe;
 
   const AtprotoProfile({
     required this.did,
@@ -24,9 +25,11 @@ class AtprotoProfile {
     this.followersCount = 0,
     this.followsCount = 0,
     this.postsCount = 0,
+    this.isFollowedByMe = false,
   });
 
   factory AtprotoProfile.fromJson(Map<String, dynamic> json) {
+    final viewer = json['viewer'] as Map<String, dynamic>?;
     return AtprotoProfile(
       did: json['did'] as String? ?? '',
       handle: json['handle'] as String? ?? '',
@@ -37,6 +40,7 @@ class AtprotoProfile {
       followersCount: json['followersCount'] as int? ?? 0,
       followsCount: json['followsCount'] as int? ?? 0,
       postsCount: json['postsCount'] as int? ?? 0,
+      isFollowedByMe: viewer?['following'] != null,
     );
   }
 }

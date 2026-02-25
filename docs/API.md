@@ -2509,6 +2509,7 @@ Triggers a debug action.
 | `atproto_sync_feed` | Trigger bridge-managed feed sync with fallback actor logic | None |
 | `atproto_like_from_feed` | Test like write flow against first post from actor feed | `actor` (optional): Handle or DID (default: `bsky.app`) |
 | `atproto_read_replies` | Read replies for a given post URI using AT thread endpoint | `uri` (required): AT URI of root post, `depth` (optional): 1-20 |
+| `atproto_follow_actor` | Follow an actor using bridge write flow | `actor` (required): Handle or DID |
 | `shared_list` | List all shared folder entries with metadata | None |
 | `shared_test_access` | Test access control for a given pubkey | `pubkey` (optional): Hex pubkey to test. Returns accessibility per folder |
 | `shared_test_cookie` | Test cookie parsing from HTTP headers | `headers` (required): Raw HTTP headers string to parse for `geogram_nostr_pubkey` cookie |
@@ -2767,6 +2768,11 @@ curl -X POST http://localhost:3456/api/debug \
 curl -X POST http://localhost:3456/api/debug \
   -H "Content-Type: application/json" \
   -d '{"action":"atproto_read_replies","uri":"at://did:plc:.../app.bsky.feed.post/3abc","depth":6}'
+
+# Follow an actor
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action":"atproto_follow_actor","actor":"bsky.app"}'
 
 # Start BLE advertising
 curl -X POST http://localhost:3456/api/debug \
