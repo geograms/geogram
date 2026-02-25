@@ -194,6 +194,8 @@ class _AtprotoMainPageState extends State<AtprotoMainPage> {
                           onReply: () => setState(() => _replyTarget = item),
                           onOpenThread: () => _openThread(item),
                           onTapAuthor: () => _openAuthorProfile(item),
+                          onOpenProfileActor: _openProfileByActor,
+                          onOpenPostUri: _openThreadByUri,
                         );
                       },
                     ),
@@ -348,6 +350,10 @@ class _AtprotoMainPageState extends State<AtprotoMainPage> {
     final actor = item.authorDid.startsWith('did:')
         ? item.authorDid
         : item.authorHandle;
+    _openProfileByActor(actor);
+  }
+
+  void _openProfileByActor(String actor) {
     Navigator.of(
       context,
     ).push(MaterialPageRoute(builder: (_) => AtprotoProfilePage(actor: actor)));
@@ -376,6 +382,14 @@ class _AtprotoMainPageState extends State<AtprotoMainPage> {
   void _openThread(AtprotoFeedItem item) {
     Navigator.of(context).push(
       MaterialPageRoute(builder: (_) => AtprotoThreadPage(rootPost: item)),
+    );
+  }
+
+  void _openThreadByUri(String postUri) {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => AtprotoThreadPage(rootPostUri: postUri),
+      ),
     );
   }
 }

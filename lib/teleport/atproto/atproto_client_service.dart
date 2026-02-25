@@ -38,6 +38,13 @@ class AtprotoClientEvent {
   const AtprotoClientEvent(this.type, {this.data});
 }
 
+class AtprotoThreadData {
+  final AtprotoFeedItem rootPost;
+  final List<AtprotoFeedItem> replies;
+
+  const AtprotoThreadData({required this.rootPost, required this.replies});
+}
+
 class AtprotoClientService {
   static final AtprotoClientService _instance =
       AtprotoClientService._internal();
@@ -446,6 +453,11 @@ class AtprotoClientService {
     String postUri, {
     int depth = 6,
   }) async {
+    final thread = await fetchThread(postUri, depth: depth);
+    return thread.replies;
+  }
+
+  Future<AtprotoThreadData> fetchThread(String postUri, {int depth = 6}) async {
     final appView = _normalizeBaseUrl(_config.appViewUrl);
     final uri = Uri.parse(
       '$appView/xrpc/app.bsky.feed.getPostThread'
@@ -461,12 +473,20 @@ class AtprotoClientService {
     }
     final body = jsonDecode(response.body) as Map<String, dynamic>;
     final thread = body['thread'];
-    if (thread is! Map<String, dynamic>) return const [];
+    if (thread is! Map<String, dynamic>) {
+      throw Exception('Thread payload not found for post');
+    }
+    final rootWrap = thread['post'];
+    if (rootWrap is! Map<String, dynamic>) {
+      throw Exception('Root post not found in thread');
+    }
+    final root = _parsePostWrap(rootWrap);
     final replies = <AtprotoFeedItem>[];
     final seen = <String>{};
+    seen.add(root.uri);
     _collectReplies(thread, replies, seen, includeSelf: false);
     replies.sort((a, b) => a.createdAt.compareTo(b.createdAt));
-    return replies;
+    return AtprotoThreadData(rootPost: root, replies: replies);
   }
 
   String _resolveReadActor() {

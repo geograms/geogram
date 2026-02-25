@@ -4,7 +4,10 @@
  */
 
 import 'package:flutter/material.dart';
+import 'package:flutter/gestures.dart';
+import 'package:url_launcher/url_launcher.dart';
 
+import '../atproto_link_parser.dart';
 import '../atproto_client_service.dart';
 import '../models/atproto_feed_item.dart';
 import '../models/atproto_profile.dart';
@@ -21,6 +24,11 @@ class AtprotoProfilePage extends StatefulWidget {
 }
 
 class _AtprotoProfilePageState extends State<AtprotoProfilePage> {
+  static final RegExp _urlRegex = RegExp(
+    r'(https?://[^\s]+|www\.[^\s]+|bsky\.app/[^\s]+)',
+    caseSensitive: false,
+  );
+  final List<TapGestureRecognizer> _descriptionRecognizers = [];
   AtprotoProfile? _profile;
   List<AtprotoFeedItem> _posts = const [];
   bool _loading = true;
@@ -57,6 +65,14 @@ class _AtprotoProfilePageState extends State<AtprotoProfilePage> {
         setState(() => _loading = false);
       }
     }
+  }
+
+  @override
+  void dispose() {
+    for (final recognizer in _descriptionRecognizers) {
+      recognizer.dispose();
+    }
+    super.dispose();
   }
 
   @override
@@ -105,6 +121,8 @@ class _AtprotoProfilePageState extends State<AtprotoProfilePage> {
                   onRepost: () => _repost(item),
                   onOpenThread: () => _openThread(item),
                   onTapAuthor: () => _openAuthorProfile(item),
+                  onOpenProfileActor: _openProfileByActor,
+                  onOpenPostUri: _openThreadByUri,
                 ),
               ),
           ],
@@ -184,7 +202,7 @@ class _AtprotoProfilePageState extends State<AtprotoProfilePage> {
                 _buildFollowButton(profile),
                 if (profile?.description.isNotEmpty == true) ...[
                   const SizedBox(height: 8),
-                  Text(profile!.description, style: theme.textTheme.bodyMedium),
+                  _buildDescriptionText(theme, profile!.description),
                 ],
                 const SizedBox(height: 10),
                 Wrap(
@@ -295,9 +313,87 @@ class _AtprotoProfilePageState extends State<AtprotoProfilePage> {
     final actor = item.authorDid.startsWith('did:')
         ? item.authorDid
         : item.authorHandle;
+    _openProfileByActor(actor);
+  }
+
+  void _openProfileByActor(String actor) {
     Navigator.of(
       context,
     ).push(MaterialPageRoute(builder: (_) => AtprotoProfilePage(actor: actor)));
+  }
+
+  void _openThreadByUri(String postUri) {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => AtprotoThreadPage(rootPostUri: postUri),
+      ),
+    );
+  }
+
+  Widget _buildDescriptionText(ThemeData theme, String text) {
+    for (final recognizer in _descriptionRecognizers) {
+      recognizer.dispose();
+    }
+    _descriptionRecognizers.clear();
+
+    final spans = <InlineSpan>[];
+    var cursor = 0;
+    for (final match in _urlRegex.allMatches(text)) {
+      if (match.start > cursor) {
+        spans.add(
+          TextSpan(
+            text: text.substring(cursor, match.start),
+            style: theme.textTheme.bodyMedium,
+          ),
+        );
+      }
+      final raw = match.group(0)!;
+      final normalized = raw.startsWith('http') ? raw : 'https://$raw';
+      final recognizer = TapGestureRecognizer()
+        ..onTap = () => _openDescriptionLink(normalized);
+      _descriptionRecognizers.add(recognizer);
+      spans.add(
+        TextSpan(
+          text: raw,
+          recognizer: recognizer,
+          style: theme.textTheme.bodyMedium?.copyWith(
+            color: theme.colorScheme.primary,
+            decoration: TextDecoration.underline,
+          ),
+        ),
+      );
+      cursor = match.end;
+    }
+    if (cursor < text.length) {
+      spans.add(
+        TextSpan(
+          text: text.substring(cursor),
+          style: theme.textTheme.bodyMedium,
+        ),
+      );
+    }
+    if (spans.isEmpty) {
+      spans.add(TextSpan(text: text, style: theme.textTheme.bodyMedium));
+    }
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: Text.rich(TextSpan(children: spans)),
+    );
+  }
+
+  Future<void> _openDescriptionLink(String url) async {
+    final internal = AtprotoLinkParser.parse(url);
+    if (internal.postUri != null) {
+      _openThreadByUri(internal.postUri!);
+      return;
+    }
+    if (internal.profileActor != null) {
+      _openProfileByActor(internal.profileActor!);
+      return;
+    }
+    final uri = Uri.tryParse(url);
+    if (uri == null) return;
+    await launchUrl(uri, mode: LaunchMode.externalApplication);
   }
 
   Future<void> _follow(String actor) async {

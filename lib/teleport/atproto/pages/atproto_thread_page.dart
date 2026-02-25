@@ -11,9 +11,11 @@ import '../widgets/atproto_post_tile.dart';
 import 'atproto_profile_page.dart';
 
 class AtprotoThreadPage extends StatefulWidget {
-  final AtprotoFeedItem rootPost;
+  final AtprotoFeedItem? rootPost;
+  final String? rootPostUri;
 
-  const AtprotoThreadPage({super.key, required this.rootPost});
+  const AtprotoThreadPage({super.key, this.rootPost, this.rootPostUri})
+    : assert(rootPost != null || rootPostUri != null);
 
   @override
   State<AtprotoThreadPage> createState() => _AtprotoThreadPageState();
@@ -21,6 +23,7 @@ class AtprotoThreadPage extends StatefulWidget {
 
 class _AtprotoThreadPageState extends State<AtprotoThreadPage> {
   final TextEditingController _composer = TextEditingController();
+  AtprotoFeedItem? _rootPost;
   List<AtprotoFeedItem> _replies = const [];
   AtprotoFeedItem? _replyTarget;
   bool _loading = true;
@@ -44,11 +47,22 @@ class _AtprotoThreadPageState extends State<AtprotoThreadPage> {
       _error = null;
     });
     try {
-      final replies = await AtprotoClientService().fetchReplies(
-        widget.rootPost.uri,
-      );
+      final service = AtprotoClientService();
+      AtprotoFeedItem root;
+      List<AtprotoFeedItem> replies;
+      if (widget.rootPost != null) {
+        root = widget.rootPost!;
+        replies = await service.fetchReplies(root.uri);
+      } else {
+        final thread = await service.fetchThread(widget.rootPostUri!);
+        root = thread.rootPost;
+        replies = thread.replies;
+      }
       if (!mounted) return;
-      setState(() => _replies = replies);
+      setState(() {
+        _rootPost = root;
+        _replies = replies;
+      });
     } catch (e) {
       if (!mounted) return;
       setState(() => _error = '$e');
@@ -61,6 +75,7 @@ class _AtprotoThreadPageState extends State<AtprotoThreadPage> {
   Widget build(BuildContext context) {
     final composerLength = _composer.text.trim().length;
     final canPublish = composerLength > 0 && composerLength <= 300;
+    final rootPost = _rootPost ?? widget.rootPost;
 
     return Scaffold(
       appBar: AppBar(title: const Text('Post Thread')),
@@ -71,14 +86,17 @@ class _AtprotoThreadPageState extends State<AtprotoThreadPage> {
               onRefresh: _loadReplies,
               child: ListView(
                 children: [
-                  AtprotoPostTile(
-                    item: widget.rootPost,
-                    onLike: () => _like(widget.rootPost),
-                    onRepost: () => _repost(widget.rootPost),
-                    onReply: () =>
-                        setState(() => _replyTarget = widget.rootPost),
-                    onTapAuthor: () => _openAuthorProfile(widget.rootPost),
-                  ),
+                  if (rootPost != null)
+                    AtprotoPostTile(
+                      item: rootPost,
+                      onLike: () => _like(rootPost),
+                      onRepost: () => _repost(rootPost),
+                      onReply: () => setState(() => _replyTarget = rootPost),
+                      onTapAuthor: () => _openAuthorProfile(rootPost),
+                      onOpenThread: () => _openThread(rootPost),
+                      onOpenProfileActor: _openProfileByActor,
+                      onOpenPostUri: _openThreadByUri,
+                    ),
                   Padding(
                     padding: const EdgeInsets.fromLTRB(14, 10, 14, 8),
                     child: Text(
@@ -118,6 +136,8 @@ class _AtprotoThreadPageState extends State<AtprotoThreadPage> {
                         onReply: () => setState(() => _replyTarget = item),
                         onOpenThread: () => _openThread(item),
                         onTapAuthor: () => _openAuthorProfile(item),
+                        onOpenProfileActor: _openProfileByActor,
+                        onOpenPostUri: _openThreadByUri,
                       ),
                     ),
                 ],
@@ -229,7 +249,8 @@ class _AtprotoThreadPageState extends State<AtprotoThreadPage> {
   Future<void> _publish() async {
     final text = _composer.text.trim();
     if (text.isEmpty || text.length > 300) return;
-    final target = _replyTarget ?? widget.rootPost;
+    final target = _replyTarget ?? _rootPost ?? widget.rootPost;
+    if (target == null) return;
     final ok = await AtprotoClientService().publishPost(text, replyTo: target);
     if (!mounted) return;
     if (!ok) {
@@ -241,5 +262,19 @@ class _AtprotoThreadPageState extends State<AtprotoThreadPage> {
     _composer.clear();
     setState(() => _replyTarget = null);
     await _loadReplies();
+  }
+
+  void _openProfileByActor(String actor) {
+    Navigator.of(
+      context,
+    ).push(MaterialPageRoute(builder: (_) => AtprotoProfilePage(actor: actor)));
+  }
+
+  void _openThreadByUri(String postUri) {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => AtprotoThreadPage(rootPostUri: postUri),
+      ),
+    );
   }
 }

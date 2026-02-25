@@ -7,6 +7,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../atproto_link_parser.dart';
 import '../models/atproto_feed_item.dart';
 
 class AtprotoPostTile extends StatefulWidget {
@@ -16,6 +17,8 @@ class AtprotoPostTile extends StatefulWidget {
   final VoidCallback? onReply;
   final VoidCallback? onOpenThread;
   final VoidCallback? onTapAuthor;
+  final ValueChanged<String>? onOpenProfileActor;
+  final ValueChanged<String>? onOpenPostUri;
   final bool compact;
 
   const AtprotoPostTile({
@@ -26,6 +29,8 @@ class AtprotoPostTile extends StatefulWidget {
     this.onReply,
     this.onOpenThread,
     this.onTapAuthor,
+    this.onOpenProfileActor,
+    this.onOpenPostUri,
     this.compact = false,
   });
 
@@ -194,8 +199,7 @@ class _AtprotoPostTileState extends State<AtprotoPostTile> {
       }
       final raw = match.group(0)!;
       final url = raw.startsWith('http') ? raw : 'https://$raw';
-      final recognizer = TapGestureRecognizer()
-        ..onTap = () => _openExternal(url);
+      final recognizer = TapGestureRecognizer()..onTap = () => _openLink(url);
       _recognizers.add(recognizer);
       spans.add(
         TextSpan(
@@ -236,7 +240,7 @@ class _AtprotoPostTileState extends State<AtprotoPostTile> {
     final uri = Uri.tryParse(item.externalUrl!);
     final host = uri?.host.isNotEmpty == true ? uri!.host : item.externalUrl!;
     return InkWell(
-      onTap: () => _openExternal(item.externalUrl!),
+      onTap: () => _openLink(item.externalUrl!),
       mouseCursor: SystemMouseCursors.click,
       borderRadius: BorderRadius.circular(14),
       child: Container(
@@ -434,7 +438,7 @@ class _AtprotoPostTileState extends State<AtprotoPostTile> {
         return ActionChip(
           avatar: const Icon(Icons.link, size: 14),
           label: Text(display, overflow: TextOverflow.ellipsis),
-          onPressed: () => _openExternal(link),
+          onPressed: () => _openLink(link),
           mouseCursor: SystemMouseCursors.click,
           side: BorderSide(color: theme.colorScheme.outlineVariant),
           backgroundColor: theme.colorScheme.surfaceContainerLowest,
@@ -574,8 +578,18 @@ class _AtprotoPostTileState extends State<AtprotoPostTile> {
     return source.substring(0, 1).toUpperCase();
   }
 
-  Future<void> _openExternal(String raw) async {
-    final uri = Uri.tryParse(raw);
+  Future<void> _openLink(String raw) async {
+    final internal = AtprotoLinkParser.parse(raw);
+    if (internal.postUri != null && widget.onOpenPostUri != null) {
+      widget.onOpenPostUri!(internal.postUri!);
+      return;
+    }
+    if (internal.profileActor != null && widget.onOpenProfileActor != null) {
+      widget.onOpenProfileActor!(internal.profileActor!);
+      return;
+    }
+    final normalized = raw.startsWith('www.') ? 'https://$raw' : raw;
+    final uri = Uri.tryParse(normalized);
     if (uri == null) return;
     await launchUrl(uri, mode: LaunchMode.externalApplication);
   }
