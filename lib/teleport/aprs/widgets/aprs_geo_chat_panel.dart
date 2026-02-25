@@ -12,6 +12,7 @@ import 'package:flutter/services.dart';
 
 import '../../../services/user_location_service.dart';
 import '../../shared/teleport_chat_utils.dart';
+import '../aprs_message_utils.dart';
 import '../aprs_service.dart';
 import '../models/aprs_packet.dart';
 import '../pages/aprs_main_page.dart' show distanceKm, formatDistanceKm, linkifiedText;
@@ -37,7 +38,17 @@ class AprsGeoChatPanel extends StatefulWidget {
 class _AprsGeoChatPanelState extends State<AprsGeoChatPanel> {
   final TextEditingController _textController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
-  static const int _maxCommentLength = 107;
+  static const int _maxCommentLength = aprsMaxCommentLen;
+  int _lastMessageCount = 0;
+
+  @override
+  void didUpdateWidget(covariant AprsGeoChatPanel oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.messages.length > _lastMessageCount) {
+      _lastMessageCount = widget.messages.length;
+      _scrollToBottomIfNear();
+    }
+  }
 
   @override
   void dispose() {
@@ -46,12 +57,28 @@ class _AprsGeoChatPanelState extends State<AprsGeoChatPanel> {
     super.dispose();
   }
 
+  /// Auto-scroll when new messages arrive, but only if the user is already
+  /// near the bottom (within 80px). Avoids hijacking manual scroll-back.
+  void _scrollToBottomIfNear() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!_scrollController.hasClients) return;
+      final pos = _scrollController.position;
+      if (pos.maxScrollExtent - pos.pixels < 80) {
+        _scrollController.animateTo(
+          pos.maxScrollExtent,
+          duration: const Duration(milliseconds: 200),
+          curve: Curves.easeOut,
+        );
+      }
+    });
+  }
+
   void _send() {
     final text = _textController.text.trim();
     if (text.isEmpty) return;
     AprsService().sendGeoChat(text);
     _textController.clear();
-    // Scroll to bottom after sending
+    // Always scroll to bottom after sending own message
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_scrollController.hasClients) {
         _scrollController.animateTo(
