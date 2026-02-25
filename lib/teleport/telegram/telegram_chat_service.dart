@@ -10,6 +10,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import '../../services/log_service.dart';
+import 'telegram_log.dart';
 import 'models/telegram_chat.dart';
 import 'models/telegram_forum_topic.dart';
 import 'models/telegram_message.dart';
@@ -161,7 +162,7 @@ class TelegramChatService {
           final reactionsObj =
               interactionInfo?['reactions'] as Map<String, dynamic>?;
           if (reactionsObj != null) {
-            stderr.writeln('TDLib: updateMessageInteractionInfo chat=$chatId '
+            telegramDebug('TDLib: updateMessageInteractionInfo chat=$chatId '
                 'msg=$messageId reactions=$reactionsObj');
           }
           final reactionsList =
@@ -169,7 +170,7 @@ class TelegramChatService {
           final reactions =
               TelegramReaction.fromTdlibReactions(reactionsList);
           if (reactions.isNotEmpty) {
-            stderr.writeln('TDLib: parsed ${reactions.length} reactions '
+            telegramDebug('TDLib: parsed ${reactions.length} reactions '
                 'for msg $messageId: ${reactions.map((r) => '${r.emoji}x${r.count}').join(', ')}');
           }
           _onEvent(TelegramEventType.reactionsUpdated, {
@@ -256,7 +257,7 @@ class TelegramChatService {
       '@type': 'openChat',
       'chat_id': chatId,
     });
-    stderr.writeln('TDLib: openChat($chatId) -> ${result['@type']}');
+    telegramDebug('TDLib: openChat($chatId) -> ${result['@type']}');
   }
 
   /// Mark messages as read in TDLib — clears unread count for the chat.
@@ -281,7 +282,7 @@ class TelegramChatService {
       }
       await _client.sendRequest(request);
     } catch (e) {
-      stderr.writeln('TDLib: viewMessages error: $e');
+      telegramDebug('TDLib: viewMessages error: $e');
     }
   }
 
@@ -353,7 +354,7 @@ class TelegramChatService {
     int fromMessageId = 0,
     int limit = 50,
   }) async {
-    stderr.writeln('TDLib: getChatHistory chatId=$chatId fromMsg=$fromMessageId limit=$limit');
+    telegramDebug('TDLib: getChatHistory chatId=$chatId fromMsg=$fromMessageId limit=$limit');
 
     final result = await _client.sendRequest({
       '@type': 'getChatHistory',
@@ -365,18 +366,18 @@ class TelegramChatService {
     });
 
     final rtype = result['@type'];
-    stderr.writeln('TDLib: getChatHistory response @type=$rtype');
+    telegramDebug('TDLib: getChatHistory response @type=$rtype');
 
     if (rtype == 'error') {
       final msg = result['message'] ?? result['code'];
-      stderr.writeln('TDLib: getChatHistory ERROR: $msg');
+      telegramError('TDLib: getChatHistory ERROR: $msg');
       return [];
     }
 
     final rawMessages = result['messages'] as List<dynamic>? ?? [];
     final nonNull = rawMessages.where((m) => m != null).length;
     final totalCount = result['total_count'] ?? '?';
-    stderr.writeln('TDLib: getChatHistory total_count=$totalCount '
+    telegramDebug('TDLib: getChatHistory total_count=$totalCount '
         'rawLength=${rawMessages.length} nonNull=$nonNull');
 
     if (rawMessages.isNotEmpty) {
@@ -384,7 +385,7 @@ class TelegramChatService {
       final first = rawMessages.firstWhere((m) => m != null, orElse: () => null);
       if (first is Map<String, dynamic>) {
         final content = first['content'] as Map<String, dynamic>?;
-        stderr.writeln('TDLib: first message content @type=${content?['@type']}');
+        telegramDebug('TDLib: first message content @type=${content?['@type']}');
       }
     }
 
@@ -403,7 +404,7 @@ class TelegramChatService {
     int fromMessageId = 0,
     int limit = 50,
   }) async {
-    stderr.writeln('TDLib: getTopicHistory chatId=$chatId thread=$messageThreadId');
+    telegramDebug('TDLib: getTopicHistory chatId=$chatId thread=$messageThreadId');
 
     final result = await _client.sendRequest({
       '@type': 'getMessageThreadHistory',
@@ -415,17 +416,17 @@ class TelegramChatService {
     });
 
     final rtype = result['@type'];
-    stderr.writeln('TDLib: getTopicHistory response @type=$rtype');
+    telegramDebug('TDLib: getTopicHistory response @type=$rtype');
 
     if (rtype == 'error') {
       final msg = result['message'] ?? result['code'];
-      stderr.writeln('TDLib: getTopicHistory ERROR: $msg');
+      telegramError('TDLib: getTopicHistory ERROR: $msg');
       return [];
     }
 
     final rawMessages = result['messages'] as List<dynamic>? ?? [];
     final nonNull = rawMessages.where((m) => m != null).length;
-    stderr.writeln('TDLib: getTopicHistory rawLength=${rawMessages.length} nonNull=$nonNull');
+    telegramDebug('TDLib: getTopicHistory rawLength=${rawMessages.length} nonNull=$nonNull');
 
     final messages = rawMessages
         .whereType<Map<String, dynamic>>()
@@ -508,7 +509,7 @@ class TelegramChatService {
         'update_recent_reactions': true,
       });
       if (result['@type'] != 'ok') {
-        stderr.writeln('TDLib: addMessageReaction error: ${result['message'] ?? result}');
+        telegramError('TDLib: addMessageReaction error: ${result['message'] ?? result}');
       }
       return result['@type'] == 'ok';
     } catch (e) {
@@ -681,7 +682,7 @@ class TelegramChatService {
 
     try {
       final emojiIds = emojiToThreads.keys.toList();
-      stderr.writeln('TDLib: getCustomEmojiStickers for ${emojiIds.length} IDs');
+      telegramDebug('TDLib: getCustomEmojiStickers for ${emojiIds.length} IDs');
 
       final response = await _client.sendRequest({
         '@type': 'getCustomEmojiStickers',
@@ -689,12 +690,12 @@ class TelegramChatService {
       });
 
       if (response['@type'] != 'stickers') {
-        stderr.writeln('TDLib: getCustomEmojiStickers unexpected: ${response['@type']}');
+        telegramDebug('TDLib: getCustomEmojiStickers unexpected: ${response['@type']}');
         return result;
       }
 
       final stickers = response['stickers'] as List<dynamic>? ?? [];
-      stderr.writeln('TDLib: got ${stickers.length} stickers for topic icons');
+      telegramDebug('TDLib: got ${stickers.length} stickers for topic icons');
 
       for (final s in stickers) {
         final sticker = s as Map<String, dynamic>?;
@@ -722,11 +723,11 @@ class TelegramChatService {
             _cache?.storeTopicPhoto(chatId, threadId, bytes);
           }
         } catch (e) {
-          stderr.writeln('TDLib: downloadTopicIcons read error: $e');
+          telegramDebug('TDLib: downloadTopicIcons read error: $e');
         }
       }
     } catch (e) {
-      stderr.writeln('TDLib: downloadTopicIcons error: $e');
+      telegramError('TDLib: downloadTopicIcons error: $e');
       LogService().error('TelegramChat: downloadTopicIcons failed: $e');
     }
 

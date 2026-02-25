@@ -15,6 +15,7 @@ import 'dart:isolate';
 import 'package:ffi/ffi.dart';
 
 import '../../services/log_service.dart';
+import 'telegram_log.dart';
 import 'tdlib_ffi.dart';
 
 /// High-level TDLib JSON client.
@@ -86,7 +87,7 @@ class TdlibClient {
     // Time out so the UI never hangs indefinitely
     return completer.future.timeout(timeout, onTimeout: () {
       _pendingRequests.remove(id);
-      stderr.writeln('TdlibClient: request $reqType ($id) timed out');
+      telegramWarn('TdlibClient: request $reqType ($id) timed out');
       return <String, dynamic>{
         '@type': 'error',
         'code': 408,

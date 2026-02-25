@@ -5,6 +5,7 @@
 
 import 'dart:io';
 import 'dart:typed_data';
+import '../telegram_log.dart';
 
 /// Content types for Telegram messages.
 enum TelegramMessageContentType {
@@ -518,12 +519,12 @@ class TelegramMessage {
     final reactionsList =
         reactionsObj?['reactions'] as List<dynamic>?;
     if (interactionInfo != null && reactionsObj != null) {
-      stderr.writeln('TelegramMessage.fromTdlib: msg ${json['id']} '
+      telegramDebug('TelegramMessage.fromTdlib: msg ${json['id']} '
           'interaction_info.reactions=$reactionsObj');
     }
     final reactions = TelegramReaction.fromTdlibReactions(reactionsList);
     if (reactions.isNotEmpty) {
-      stderr.writeln('TelegramMessage.fromTdlib: msg ${json['id']} has '
+      telegramDebug('TelegramMessage.fromTdlib: msg ${json['id']} has '
           '${reactions.length} reactions: ${reactions.map((r) => '${r.emoji}x${r.count}').join(', ')}');
     }
 

@@ -27,6 +27,7 @@ import '../models/telegram_forum_topic.dart';
 import '../models/telegram_message.dart';
 import '../models/telegram_user.dart';
 import '../telegram_service.dart';
+import '../telegram_log.dart';
 import '../widgets/telegram_message_bubble.dart';
 
 class TelegramChatPage extends StatefulWidget {
@@ -148,7 +149,7 @@ class _TelegramChatPageState extends State<TelegramChatPage> {
   Future<void> _loadHistory() async {
     final chatService = TelegramService().chatService;
     if (chatService == null) {
-      stderr.writeln('TelegramChatPage: chatService is null');
+      telegramDebug('TelegramChatPage: chatService is null');
       setState(() => _loading = false);
       return;
     }
@@ -172,7 +173,7 @@ class _TelegramChatPageState extends State<TelegramChatPage> {
       await chatService.openChat(widget.chatId);
       TelegramService().cacheService?.recordVisit(widget.chatId);
       final messages = await chatService.getChatHistory(widget.chatId);
-      stderr.writeln('TelegramChatPage: got ${messages.length} messages');
+      telegramDebug('TelegramChatPage: got ${messages.length} messages');
 
       // Stop the spinner immediately — don't block on retries
       if (mounted) {
@@ -194,7 +195,7 @@ class _TelegramChatPageState extends State<TelegramChatPage> {
         _retryLoadHistory();
       }
     } catch (e) {
-      stderr.writeln('TelegramChatPage: load history EXCEPTION: $e');
+      telegramError('TelegramChatPage: load history EXCEPTION: $e');
       if (mounted) setState(() => _loading = false);
       // Still attempt background retries after an exception
       _retryLoadHistory();
@@ -214,9 +215,9 @@ class _TelegramChatPageState extends State<TelegramChatPage> {
       // Skip if messages already arrived via events
       if (_messages.isNotEmpty) return;
 
-      stderr.writeln('TelegramChatPage: background retry $attempt...');
+      telegramDebug('TelegramChatPage: background retry $attempt...');
       final messages = await chatService.getChatHistory(widget.chatId);
-      stderr.writeln('TelegramChatPage: background retry $attempt got ${messages.length} messages');
+      telegramDebug('TelegramChatPage: background retry $attempt got ${messages.length} messages');
 
       if (messages.isNotEmpty && mounted) {
         setState(() => _messages = messages);
@@ -232,7 +233,7 @@ class _TelegramChatPageState extends State<TelegramChatPage> {
   Future<void> _loadTopicHistory() async {
     final chatService = TelegramService().chatService;
     if (chatService == null) {
-      stderr.writeln('TelegramChatPage: chatService is null (topic)');
+      telegramDebug('TelegramChatPage: chatService is null (topic)');
       setState(() => _loading = false);
       return;
     }
@@ -262,7 +263,7 @@ class _TelegramChatPageState extends State<TelegramChatPage> {
         widget.chatId,
         widget.messageThreadId!,
       );
-      stderr.writeln('TelegramChatPage: topic got ${messages.length} messages');
+      telegramDebug('TelegramChatPage: topic got ${messages.length} messages');
 
       // Stop the spinner immediately
       if (mounted) {
@@ -284,7 +285,7 @@ class _TelegramChatPageState extends State<TelegramChatPage> {
         _retryLoadTopicHistory();
       }
     } catch (e) {
-      stderr.writeln('TelegramChatPage: load topic history EXCEPTION: $e');
+      telegramError('TelegramChatPage: load topic history EXCEPTION: $e');
       if (mounted) setState(() => _loading = false);
       _retryLoadTopicHistory();
     }
@@ -301,12 +302,12 @@ class _TelegramChatPageState extends State<TelegramChatPage> {
       if (!_isActive || !mounted) return;
       if (_messages.isNotEmpty) return;
 
-      stderr.writeln('TelegramChatPage: topic background retry $attempt...');
+      telegramDebug('TelegramChatPage: topic background retry $attempt...');
       final messages = await chatService.getTopicHistory(
         widget.chatId,
         widget.messageThreadId!,
       );
-      stderr.writeln('TelegramChatPage: topic background retry $attempt got ${messages.length} messages');
+      telegramDebug('TelegramChatPage: topic background retry $attempt got ${messages.length} messages');
 
       if (messages.isNotEmpty && mounted) {
         setState(() => _messages = messages);
@@ -518,7 +519,7 @@ class _TelegramChatPageState extends State<TelegramChatPage> {
         });
       }
     } catch (e) {
-      stderr.writeln('TelegramChatPage: _generateThumbnailInBackground error: $e');
+      telegramError('TelegramChatPage: _generateThumbnailInBackground error: $e');
     }
   }
 
@@ -820,7 +821,7 @@ class _TelegramChatPageState extends State<TelegramChatPage> {
         }
       }
     } catch (e) {
-      stderr.writeln('TelegramChatPage: _loadOlderMessages error: $e');
+      telegramError('TelegramChatPage: _loadOlderMessages error: $e');
     } finally {
       if (mounted) setState(() => _loadingOlder = false);
     }
@@ -1277,7 +1278,7 @@ class _TelegramChatPageState extends State<TelegramChatPage> {
     });
 
     final ok = await chatService.addMessageReaction(widget.chatId, msg.id, emoji);
-    stderr.writeln('TelegramChat: addMessageReaction($emoji) -> $ok');
+    telegramDebug('TelegramChat: addMessageReaction($emoji) -> $ok');
   }
 
   /// Scroll to and highlight a message by its ID (used when tapping reply previews).

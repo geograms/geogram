@@ -15,6 +15,7 @@ import 'package:image/image.dart' as img;
 import 'package:sqlite3/sqlite3.dart';
 
 import '../../services/log_service.dart';
+import 'telegram_log.dart';
 import '../../services/profile_storage.dart';
 import '../../services/sqlite_loader.dart';
 import '../../services/static_map_service.dart';
@@ -122,10 +123,10 @@ class TelegramCacheService {
       } on SqliteException catch (e) {
         // Error code 1 = "duplicate column name" — safe to ignore
         if (!e.message.contains('duplicate column name')) {
-          stderr.writeln('TelegramCache: migration warning for "$col": $e');
+          telegramWarn('TelegramCache: migration warning for "$col": $e');
         }
       } catch (e) {
-        stderr.writeln('TelegramCache: unexpected migration error for "$col": $e');
+        telegramWarn('TelegramCache: unexpected migration error for "$col": $e');
       }
     }
   }
@@ -144,10 +145,10 @@ class TelegramCacheService {
         db.execute('ALTER TABLE messages ADD COLUMN $col');
       } on SqliteException catch (e) {
         if (!e.message.contains('duplicate column name')) {
-          stderr.writeln('TelegramCache: migration warning for "$col": $e');
+          telegramWarn('TelegramCache: migration warning for "$col": $e');
         }
       } catch (e) {
-        stderr.writeln('TelegramCache: unexpected migration error for "$col": $e');
+        telegramWarn('TelegramCache: unexpected migration error for "$col": $e');
       }
     }
   }
@@ -158,10 +159,10 @@ class TelegramCacheService {
       db.execute('ALTER TABLE messages ADD COLUMN reactions_json TEXT');
     } on SqliteException catch (e) {
       if (!e.message.contains('duplicate column name')) {
-        stderr.writeln('TelegramCache: migration warning for "reactions_json": $e');
+        telegramWarn('TelegramCache: migration warning for "reactions_json": $e');
       }
     } catch (e) {
-      stderr.writeln('TelegramCache: unexpected migration error for "reactions_json": $e');
+      telegramWarn('TelegramCache: unexpected migration error for "reactions_json": $e');
     }
   }
 
@@ -181,10 +182,10 @@ class TelegramCacheService {
         db.execute('ALTER TABLE messages ADD COLUMN $col');
       } on SqliteException catch (e) {
         if (!e.message.contains('duplicate column name')) {
-          stderr.writeln('TelegramCache: blob migration warning for "$col": $e');
+          telegramWarn('TelegramCache: blob migration warning for "$col": $e');
         }
       } catch (e) {
-        stderr.writeln('TelegramCache: blob migration error for "$col": $e');
+        telegramWarn('TelegramCache: blob migration error for "$col": $e');
       }
     }
   }
@@ -195,10 +196,10 @@ class TelegramCacheService {
       db.execute('ALTER TABLE messages ADD COLUMN is_read INTEGER DEFAULT 0');
     } on SqliteException catch (e) {
       if (!e.message.contains('duplicate column name')) {
-        stderr.writeln('TelegramCache: migration warning for "is_read": $e');
+        telegramWarn('TelegramCache: migration warning for "is_read": $e');
       }
     } catch (e) {
-      stderr.writeln('TelegramCache: unexpected migration error for "is_read": $e');
+      telegramWarn('TelegramCache: unexpected migration error for "is_read": $e');
     }
   }
 
@@ -214,7 +215,7 @@ class TelegramCacheService {
         )
       ''');
     } catch (e) {
-      stderr.writeln('TelegramCache: topic_photos migration error: $e');
+      telegramWarn('TelegramCache: topic_photos migration error: $e');
     }
   }
 
@@ -228,11 +229,11 @@ class TelegramCacheService {
       final count = result.first['cnt'] as int;
       if (count > 0) {
         db.execute("DELETE FROM messages WHERE content_type = 'other'");
-        stderr.writeln(
+        telegramDebug(
             'TelegramCache: purged $count stale "other" messages for re-fetch');
       }
     } catch (e) {
-      stderr.writeln('TelegramCache: _purgeOtherMessages error: $e');
+      telegramWarn('TelegramCache: _purgeOtherMessages error: $e');
     }
   }
 
@@ -268,7 +269,7 @@ class TelegramCacheService {
       final rows = db.select(sql, args);
       return rows.map((row) => _rowToMessage(chatId, row)).toList();
     } catch (e) {
-      stderr.writeln('TelegramCache: getCachedMessages error: $e');
+      telegramWarn('TelegramCache: getCachedMessages error: $e');
       LogService().error('TelegramCache: getCachedMessages error: $e');
       return [];
     }
@@ -282,7 +283,7 @@ class TelegramCacheService {
       if (rows.isEmpty) return null;
       return _rowToMessage(chatId, rows.first);
     } catch (e) {
-      stderr.writeln('TelegramCache: getCachedMessage error: $e');
+      telegramWarn('TelegramCache: getCachedMessage error: $e');
       LogService().error('TelegramCache: getCachedMessage error: $e');
       return null;
     }
@@ -322,7 +323,7 @@ class TelegramCacheService {
       final rows = db.select(sql, args);
       return rows.map((row) => _rowToMessage(chatId, row)).toList();
     } catch (e) {
-      stderr.writeln('TelegramCache: getOlderCachedMessages error: $e');
+      telegramWarn('TelegramCache: getOlderCachedMessages error: $e');
       LogService().error('TelegramCache: getOlderCachedMessages error: $e');
       return [];
     }
@@ -340,12 +341,12 @@ class TelegramCacheService {
         }
         db.execute('COMMIT');
       } catch (e) {
-        stderr.writeln('TelegramCache: cacheMessages INSERT error, rolling back: $e');
+        telegramWarn('TelegramCache: cacheMessages INSERT error, rolling back: $e');
         db.execute('ROLLBACK');
         rethrow;
       }
     } catch (e) {
-      stderr.writeln('TelegramCache: cacheMessages error: $e');
+      telegramWarn('TelegramCache: cacheMessages error: $e');
       LogService().error('TelegramCache: cacheMessages error: $e');
     }
   }
@@ -603,7 +604,7 @@ class TelegramCacheService {
       file.writeAsBytesSync(bytes);
       return filePath;
     } catch (e) {
-      stderr.writeln('TelegramCache: _extractBlobToFile error: $e');
+      telegramWarn('TelegramCache: _extractBlobToFile error: $e');
       return null;
     }
   }
@@ -627,7 +628,7 @@ class TelegramCacheService {
       final fileName = row['media_file_name'] as String?;
       return _extractBlobToFile(chatId, messageId, blobData, mime, fileName);
     } catch (e) {
-      stderr.writeln('TelegramCache: extractBlobToFile error: $e');
+      telegramWarn('TelegramCache: extractBlobToFile error: $e');
       return null;
     }
   }
@@ -641,7 +642,7 @@ class TelegramCacheService {
         [thumbnailBytes, messageId],
       );
     } catch (e) {
-      stderr.writeln('TelegramCache: storeThumbnail error: $e');
+      telegramWarn('TelegramCache: storeThumbnail error: $e');
     }
   }
 
@@ -699,7 +700,7 @@ class TelegramCacheService {
 
       return null;
     } catch (e) {
-      stderr.writeln('TelegramCache: generateThumbnailIfMissing error: $e');
+      telegramWarn('TelegramCache: generateThumbnailIfMissing error: $e');
       return null;
     }
   }
@@ -726,7 +727,7 @@ class TelegramCacheService {
       );
       return jpegBytes;
     } catch (e) {
-      stderr.writeln('TelegramCache: _generateImageThumbnail error: $e');
+      telegramWarn('TelegramCache: _generateImageThumbnail error: $e');
       return null;
     }
   }
@@ -776,7 +777,7 @@ class TelegramCacheService {
       );
       return thumbBytes;
     } catch (e) {
-      stderr.writeln('TelegramCache: _generateVideoThumbnail error: $e');
+      telegramWarn('TelegramCache: _generateVideoThumbnail error: $e');
       return null;
     }
   }
@@ -789,7 +790,7 @@ class TelegramCacheService {
     String? text,
   ) async {
     if (text == null || text.isEmpty) {
-      stderr.writeln('TelegramCache: _generateLocationThumbnail: no text for msg $messageId');
+      telegramDebug('TelegramCache: _generateLocationThumbnail: no text for msg $messageId');
       return null;
     }
     try {
@@ -812,11 +813,11 @@ class TelegramCacheService {
       }
 
       if (lat == null || lon == null) {
-        stderr.writeln('TelegramCache: _generateLocationThumbnail: could not parse coords from "$text"');
+        telegramDebug('TelegramCache: _generateLocationThumbnail: could not parse coords from "$text"');
         return null;
       }
 
-      stderr.writeln('TelegramCache: generating map thumbnail for msg $messageId at $lat, $lon');
+      telegramDebug('TelegramCache: generating map thumbnail for msg $messageId at $lat, $lon');
       final pngBytes = await StaticMapService.generateStaticMap(
         lat: lat,
         lon: lon,
@@ -825,10 +826,10 @@ class TelegramCacheService {
         zoom: 15,
       );
       if (pngBytes == null) {
-        stderr.writeln('TelegramCache: StaticMapService returned null for msg $messageId');
+        telegramDebug('TelegramCache: StaticMapService returned null for msg $messageId');
         return null;
       }
-      stderr.writeln('TelegramCache: map thumbnail generated for msg $messageId (${pngBytes.length} bytes)');
+      telegramDebug('TelegramCache: map thumbnail generated for msg $messageId (${pngBytes.length} bytes)');
 
       db.execute(
         'UPDATE messages SET media_thumbnail = ? WHERE id = ?',
@@ -836,7 +837,7 @@ class TelegramCacheService {
       );
       return pngBytes;
     } catch (e) {
-      stderr.writeln('TelegramCache: _generateLocationThumbnail error: $e');
+      telegramWarn('TelegramCache: _generateLocationThumbnail error: $e');
       return null;
     }
   }
@@ -947,7 +948,7 @@ class TelegramCacheService {
           'media_data_size = ?, media_extension = ? WHERE id = ?',
           [bytes, sha1Hex, tlshHex, size, ext, messageId],
         );
-        stderr.writeln('TelegramCache: dedup hit for msg $messageId '
+        telegramDebug('TelegramCache: dedup hit for msg $messageId '
             '(sha1=$sha1Hex), skipping blob storage');
       } else {
         db.execute(
@@ -961,15 +962,15 @@ class TelegramCacheService {
       try {
         file.deleteSync();
       } catch (e) {
-        stderr.writeln('TelegramCache: could not delete original file '
+        telegramDebug('TelegramCache: could not delete original file '
             '$filePath: $e');
       }
 
-      stderr.writeln('TelegramCache: ingested ${size ~/ 1024}KB blob for '
+      telegramDebug('TelegramCache: ingested ${size ~/ 1024}KB blob for '
           'msg $messageId (sha1=$sha1Hex)');
       return true;
     } catch (e) {
-      stderr.writeln('TelegramCache: ingestMediaBlob error: $e');
+      telegramWarn('TelegramCache: ingestMediaBlob error: $e');
       LogService().error('TelegramCache: ingestMediaBlob error: $e');
       return false;
     }
@@ -985,9 +986,9 @@ class TelegramCacheService {
         'DELETE FROM messages WHERE id IN ($placeholders)',
         messageIds,
       );
-      stderr.writeln('TelegramCache: deleted ${messageIds.length} messages from chat $chatId');
+      telegramDebug('TelegramCache: deleted ${messageIds.length} messages from chat $chatId');
     } catch (e) {
-      stderr.writeln('TelegramCache: deleteMessages error: $e');
+      telegramWarn('TelegramCache: deleteMessages error: $e');
       LogService().error('TelegramCache: deleteMessages error: $e');
     }
   }
@@ -998,7 +999,7 @@ class TelegramCacheService {
       final db = _openDb(chatId);
       db.execute('UPDATE messages SET is_read = 1 WHERE is_read = 0');
     } catch (e) {
-      stderr.writeln('TelegramCache: markAllAsRead error: $e');
+      telegramWarn('TelegramCache: markAllAsRead error: $e');
     }
   }
 
@@ -1011,7 +1012,7 @@ class TelegramCacheService {
       );
       return result.first['cnt'] as int;
     } catch (e) {
-      stderr.writeln('TelegramCache: getUnreadCount error: $e');
+      telegramWarn('TelegramCache: getUnreadCount error: $e');
       return 0;
     }
   }
@@ -1028,7 +1029,7 @@ class TelegramCacheService {
          DateTime.now().toUtc().millisecondsSinceEpoch],
       );
     } catch (e) {
-      stderr.writeln('TelegramCache: storeTopicPhoto error: $e');
+      telegramWarn('TelegramCache: storeTopicPhoto error: $e');
     }
   }
 
@@ -1048,7 +1049,7 @@ class TelegramCacheService {
       }
       return result;
     } catch (e) {
-      stderr.writeln('TelegramCache: getAllTopicPhotos error: $e');
+      telegramWarn('TelegramCache: getAllTopicPhotos error: $e');
       return {};
     }
   }
@@ -1206,15 +1207,15 @@ class TelegramCacheService {
         }
         db.execute('COMMIT');
         if (migrated > 0) {
-          stderr.writeln('TelegramCache: auto-migrated $migrated media files '
+          telegramDebug('TelegramCache: auto-migrated $migrated media files '
               'to BLOBs for chat $chatId (skipped $skipped)');
         }
       } catch (e) {
         db.execute('ROLLBACK');
-        stderr.writeln('TelegramCache: _autoMigrateMedia rollback: $e');
+        telegramWarn('TelegramCache: _autoMigrateMedia rollback: $e');
       }
     } catch (e) {
-      stderr.writeln('TelegramCache: _autoMigrateMedia error: $e');
+      telegramWarn('TelegramCache: _autoMigrateMedia error: $e');
     }
   }
 
@@ -1245,7 +1246,7 @@ class TelegramCacheService {
         totalSkipped += remaining.first['cnt'] as int;
       } catch (e) {
         totalErrors++;
-        stderr.writeln('TelegramCache: migrateAll error for chat $chatId: $e');
+        telegramWarn('TelegramCache: migrateAll error for chat $chatId: $e');
       }
     }
     return {
@@ -1389,7 +1390,7 @@ class TelegramCacheService {
         [chatId, photoBytes, photoBytes.length, DateTime.now().toUtc().millisecondsSinceEpoch],
       );
     } catch (e) {
-      stderr.writeln('TelegramCache: storeChatPhoto error: $e');
+      telegramWarn('TelegramCache: storeChatPhoto error: $e');
     }
   }
 
@@ -1401,7 +1402,7 @@ class TelegramCacheService {
       if (rows.isEmpty) return null;
       return rows.first['photo_data'] as Uint8List?;
     } catch (e) {
-      stderr.writeln('TelegramCache: getChatPhoto error: $e');
+      telegramWarn('TelegramCache: getChatPhoto error: $e');
       return null;
     }
   }
@@ -1420,7 +1421,7 @@ class TelegramCacheService {
       }
       return result;
     } catch (e) {
-      stderr.writeln('TelegramCache: getAllCachedChatPhotos error: $e');
+      telegramWarn('TelegramCache: getAllCachedChatPhotos error: $e');
       return {};
     }
   }
@@ -1435,7 +1436,7 @@ class TelegramCacheService {
         [chatId, nowSec],
       );
     } catch (e) {
-      stderr.writeln('TelegramCache: recordVisit error: $e');
+      telegramWarn('TelegramCache: recordVisit error: $e');
     }
   }
 
@@ -1462,7 +1463,7 @@ class TelegramCacheService {
       }
       return result;
     } catch (e) {
-      stderr.writeln('TelegramCache: getTopVisitedChats error: $e');
+      telegramWarn('TelegramCache: getTopVisitedChats error: $e');
       return {};
     }
   }
@@ -1521,7 +1522,7 @@ class TelegramCacheService {
         dir.deleteSync(recursive: true);
       }
     } catch (e) {
-      stderr.writeln('TelegramCache: dispose extracted cleanup error: $e');
+      telegramWarn('TelegramCache: dispose extracted cleanup error: $e');
     }
     for (final db in _openDbs.values) {
       db.dispose();
