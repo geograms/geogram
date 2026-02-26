@@ -1745,13 +1745,13 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
   }
 
   String _stationMessageKey(StationChatMessage msg) {
-    final eventId = msg.eventId ?? msg.metadata['event_id'];
-    if (eventId != null && eventId.isNotEmpty) {
-      return 'event:$eventId';
-    }
     final signature = msg.signature ?? msg.metadata['signature'];
     if (signature != null && signature.isNotEmpty) {
       return 'sig:$signature';
+    }
+    final eventId = msg.eventId ?? msg.metadata['event_id'];
+    if (eventId != null && eventId.isNotEmpty) {
+      return 'event:$eventId';
     }
     final createdAt = msg.metadata['created_at'];
     if (createdAt != null && createdAt.isNotEmpty) {

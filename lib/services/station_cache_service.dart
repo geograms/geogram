@@ -58,16 +58,19 @@ class RelayCacheService {
     try {
       final devicesDir = Directory(_basePath!);
       if (!await devicesDir.exists()) return;
-      final deviceDirs = await devicesDir.list().whereType<Directory>().toList();
+      final deviceEntities = await devicesDir.list().toList();
+      final deviceDirs = deviceEntities.whereType<Directory>().toList();
       for (final device in deviceDirs) {
         final chatDir = Directory('${device.path}/chat');
         if (!await chatDir.exists()) continue;
-        final roomDirs = await chatDir.list().whereType<Directory>().toList();
+        final roomEntities = await chatDir.list().toList();
+        final roomDirs = roomEntities.whereType<Directory>().toList();
         for (final roomDir in roomDirs) {
-          final yearDirs = await roomDir.list().whereType<Directory>().toList();
+          final yearEntities = await roomDir.list().toList();
+          final yearDirs = yearEntities.whereType<Directory>().toList();
           for (final yearDir in yearDirs) {
-            final files = await yearDir
-                .list()
+            final yearEntities = await yearDir.list().toList();
+            final files = yearEntities
                 .whereType<File>()
                 .where((f) => f.path.endsWith('_chat.txt'))
                 .toList();
@@ -580,13 +583,13 @@ class RelayCacheService {
   }
 
   String _messageDedupeKey(ChatMessage msg) {
-    final eventId = msg.getMeta('event_id');
-    if (eventId != null && eventId.isNotEmpty) {
-      return 'event:$eventId';
-    }
     final signature = msg.getMeta('signature');
     if (signature != null && signature.isNotEmpty) {
       return 'sig:$signature';
+    }
+    final eventId = msg.getMeta('event_id');
+    if (eventId != null && eventId.isNotEmpty) {
+      return 'event:$eventId';
     }
     final createdAt = msg.getMeta('created_at');
     if (createdAt != null && createdAt.isNotEmpty) {
