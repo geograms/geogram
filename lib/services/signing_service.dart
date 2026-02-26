@@ -197,9 +197,9 @@ class SigningService {
   ///
   /// On success, sets message.metadata['verified'] = 'true'
   bool verifyMessageSignature(ChatMessage message, {String? roomId}) {
-    // If no signature, accept the message (unsigned messages are valid)
+    // If no signature, message is valid but not verified
     if (!message.isSigned) {
-      return true;
+      return false;
     }
 
     try {
@@ -207,7 +207,7 @@ class SigningService {
       final signature = message.signature;
 
       if (npub == null || signature == null) {
-        return true; // Can't verify without both, accept it
+        return false; // Can't verify without both
       }
 
       // Derive hex pubkey from npub
@@ -248,8 +248,25 @@ class SigningService {
       return verified;
     } catch (e) {
       LogService().log('SigningService: Error verifying signature: $e');
-      return true; // On error, accept the message but don't mark as verified
+      return false;
     }
+  }
+
+  /// Verify a station chat message using existing chat signature verification.
+  bool verifyStationMessage({
+    required String roomId,
+    required String callsign,
+    required String content,
+    required String timestamp,
+    required Map<String, String> metadata,
+  }) {
+    final chatMessage = ChatMessage(
+      author: callsign,
+      timestamp: timestamp,
+      content: content,
+      metadata: Map<String, String>.from(metadata),
+    );
+    return verifyMessageSignature(chatMessage, roomId: roomId);
   }
 
   /// Get relays from extension (if available)

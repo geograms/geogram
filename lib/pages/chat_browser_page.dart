@@ -46,6 +46,7 @@ import '../services/contact_service.dart';
 import '../services/nip05_resolver_service.dart';
 import '../services/websocket_service.dart';
 import '../services/station_chat_queue_service.dart';
+import '../services/signing_service.dart';
 import '../models/contact.dart';
 import 'chat_settings_page.dart';
 import 'room_management_page.dart';
@@ -1643,6 +1644,14 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       pendingMeta['status'] = 'pending';
       pendingMeta['queued_at'] = DateTime.now().toUtc().toIso8601String();
 
+      final verified = _verifyStationMessage(
+        roomId: _selectedStationRoom!.id,
+        callsign: currentProfile.callsign,
+        content: content,
+        timestamp: timestamp,
+        metadata: pendingMeta,
+      );
+
       final newMessage = StationChatMessage(
         timestamp: timestamp,
         callsign: currentProfile.callsign,
@@ -1653,7 +1662,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
         signature: pendingMeta['signature'],
         eventId: pendingMeta['event_id'],
         createdAt: createdAt,
-        verified: false,
+        verified: verified,
         hasSignature: true,
       );
 
@@ -1678,23 +1687,6 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
           _selectedStationRoom!.id,
           [newMessage],
         );
-      }
-
-      if (!_stationReachable) {
-        final queued = QueuedStationChatMessage(
-          stationUrl: _selectedStationRoom!.stationUrl,
-          stationCallsign: _lastRelayCacheKey ?? '',
-          roomId: _selectedStationRoom!.id,
-          callsign: currentProfile.callsign,
-          content: content,
-          metadata: pendingMeta,
-          eventJson: signedEvent.toJson(),
-          retryCount: 0,
-          queuedAt: DateTime.now().toUtc(),
-          nextAttemptAt: null,
-        );
-        await StationChatQueueService().enqueue(queued);
-        return;
       }
 
       final sent = await _stationService.sendSignedChatEvent(
@@ -1819,6 +1811,22 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     return result;
   }
 
+  bool _verifyStationMessage({
+    required String roomId,
+    required String callsign,
+    required String content,
+    required String timestamp,
+    required Map<String, String> metadata,
+  }) {
+    return SigningService().verifyStationMessage(
+      roomId: roomId,
+      callsign: callsign,
+      content: content,
+      timestamp: timestamp,
+      metadata: metadata,
+    );
+  }
+
   Future<void> _updatePendingStationMessage(
     String roomId,
     String? eventId,
@@ -1845,6 +1853,13 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       if (existing.metadata['event_id'] != null) {
         updatedMeta['event_id'] = existing.metadata['event_id']!;
       }
+      final verified = _verifyStationMessage(
+        roomId: roomId,
+        callsign: existing.callsign,
+        content: existing.content,
+        timestamp: existing.timestamp,
+        metadata: updatedMeta,
+      );
       updatedMessage = StationChatMessage(
         roomId: existing.roomId,
         callsign: existing.callsign,
@@ -1857,7 +1872,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
         eventId: updatedMeta['event_id'] ?? existing.eventId,
         createdAt: existing.createdAt,
         hasSignature: (updatedMeta['signature'] ?? existing.signature)?.isNotEmpty == true,
-        verified: existing.verified,
+        verified: verified,
       );
       cached[index] = updatedMessage;
     }

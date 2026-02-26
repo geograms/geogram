@@ -9,6 +9,7 @@ import '../services/log_service.dart';
 import '../services/station_cache_service.dart';
 import '../services/station_service.dart';
 import '../services/storage_config.dart';
+import '../services/signing_service.dart';
 import '../util/nostr_event.dart';
 import '../util/nostr_crypto.dart';
 import '../util/chat_format.dart';
@@ -200,7 +201,13 @@ class StationChatQueueService {
           eventId: updatedMetadata['event_id'],
           createdAt: event.createdAt,
           hasSignature: true,
-          verified: false,
+          verified: SigningService().verifyStationMessage(
+            roomId: msg.roomId,
+            callsign: msg.callsign,
+            content: msg.content,
+            timestamp: timestamp,
+            metadata: updatedMetadata,
+          ),
         );
 
         await _cacheService.mergeMessages(msg.stationCallsign, msg.roomId, [updated]);
@@ -241,7 +248,13 @@ class StationChatQueueService {
         eventId: metadata['event_id'],
         createdAt: event.createdAt,
         hasSignature: true,
-        verified: false,
+        verified: SigningService().verifyStationMessage(
+          roomId: msg.roomId,
+          callsign: msg.callsign,
+          content: msg.content,
+          timestamp: timestamp,
+          metadata: metadata,
+        ),
       );
       await _cacheService.mergeMessages(msg.stationCallsign, msg.roomId, [failed]);
     } catch (e) {
