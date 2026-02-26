@@ -464,7 +464,11 @@ class AtprotoClientService {
     Object? lastError;
     for (final actor in candidates) {
       try {
-        _feed = await fetchAuthorFeed(actor, limit: 50);
+        _feed = await fetchAuthorFeed(
+          actor,
+          limit: 50,
+          allowLocalFallback: false,
+        );
         await _storage?.saveCachedFeed(_feed);
         _emit(const AtprotoClientEvent(AtprotoClientEventType.feedUpdated));
         return;
@@ -483,6 +487,7 @@ class AtprotoClientService {
   Future<List<AtprotoFeedItem>> fetchAuthorFeed(
     String actor, {
     int limit = 50,
+    bool allowLocalFallback = true,
   }) async {
     final appView = _normalizeBaseUrl(_config.appViewUrl);
     final uri = Uri.parse(
@@ -492,7 +497,7 @@ class AtprotoClientService {
     );
     final response = await http.get(uri);
     if (response.statusCode < 200 || response.statusCode >= 300) {
-      if (_shouldFallbackToLocal(actor, response.body)) {
+      if (allowLocalFallback && _shouldFallbackToLocal(actor, response.body)) {
         return _fetchLocalProfilePosts(limit: limit);
       }
       final details = response.body.length > 180
