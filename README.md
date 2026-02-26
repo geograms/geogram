@@ -201,6 +201,12 @@ The result: a larger download that works anywhere, requires no accounts, makes n
 
 ---
 
+## Verifiable Builds
+
+Geogram's builds are designed to be independently verifiable. The Flutter SDK version is pinned, all dependencies are locked, build numbers are deterministic, and every CI pipeline is in the repository. Anyone can clone the source at a release tag, follow the same build steps, and confirm the output matches the published binary. See [docs/verifiable.md](docs/verifiable.md) for details.
+
+---
+
 ## Download
 
 Grab the latest release from the [releases page](https://github.com/geograms/geogram/releases).

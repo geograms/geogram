@@ -14,6 +14,8 @@ class NostrFeedItem {
   String? authorNip05;
   String? authorPicture;
   bool isFollowed;
+  int reactionCount;
+  bool isLikedByMe;
 
   NostrFeedItem({
     required this.event,
@@ -22,6 +24,8 @@ class NostrFeedItem {
     this.authorNip05,
     this.authorPicture,
     this.isFollowed = false,
+    this.reactionCount = 0,
+    this.isLikedByMe = false,
   });
 
   /// Display name: resolved author name, or truncated npub.

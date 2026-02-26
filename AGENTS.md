@@ -12,37 +12,19 @@
 ## Build, Test, and Development Commands
 
 ```bash
-./setup.sh                  # Install Flutter + platform deps on Linux
-./rebuild-desktop.sh        # Build and run desktop (Linux)
 ./launch-desktop.sh         # Run desktop with version checks
-./launch-web.sh             # Run web target
 ./launch-android.sh         # Run Android target
+./server-deploy.sh          # Deploy a new server station and see credentials
 ```
 
-```bash
-flutter pub get             # Install Dart/Flutter dependencies
-flutter run -d linux         # Run a specific platform target
-flutter build web            # Build web output into build/web/
-```
+## Do not forget
 
-```bash
-./run_tests.sh              # Run station API tests (default)
-./run_tests.sh all           # Run station + tile + alert tests
-```
+- Always run the compiler on your code changes to make sure they compile
+- Don't say that code is "working" until you wrote debug API (see ./docs/API.md) to test by yourself that a feature is implemented
+- always commit your code changes after each task
+- do an end-to-end planning and verification of the functionalities, don't wait for the user to tell you each step that needs to be implemented
+- always run ./launch-desktop.sh to launch the linux instance
 
-## Coding Style & Naming Conventions
-
-- Dart/Flutter style with `flutter_lints` (see `analysis_options.yaml`).
-- Format with `dart format` (or `flutter format`) before committing.
-- Naming: `lower_snake_case.dart` files, `UpperCamelCase` types, `lowerCamelCase` members.
-- Indentation follows Dart defaults (2 spaces).
-
-## Testing Guidelines
-
-- Primary test entrypoints are in `bin/*_test.dart` and `tests/`.
-- Use `_test.dart` naming; shell helpers in `tests/*.sh`.
-- Run `./run_tests.sh station` for station API coverage and `./run_tests.sh all` for broader coverage.
-- Widget tests are currently placeholder; prefer API/integration tests when adding coverage.
 
 ## Commit & Pull Request Guidelines
 

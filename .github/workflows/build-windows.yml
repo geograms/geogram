@@ -22,10 +22,15 @@ jobs:
       with:
         fetch-depth: 0
 
+    - name: Read Flutter version
+      id: flutter-version
+      shell: bash
+      run: echo "version=$(cat .flutter-version)" >> $GITHUB_OUTPUT
+
     - name: Setup Flutter
       uses: subosito/flutter-action@v2
       with:
-        flutter-version: '3.38.5'
+        flutter-version: ${{ steps.flutter-version.outputs.version }}
         cache: true
 
     - name: Update version from git
@@ -50,8 +55,7 @@ jobs:
       shell: powershell
       run: |
         # The flutter_onnxruntime plugin expects ONNX Runtime at a specific path
-        # Using v1.21.0 which has Windows binaries available
-        $onnxVersion = "1.21.0"
+        $onnxVersion = "1.22.0"
         $onnxDir = "build\windows\x64\plugins\flutter_onnxruntime\onnxruntime"
         $extractDir = "$onnxDir\onnxruntime-win-x64-$onnxVersion"
 

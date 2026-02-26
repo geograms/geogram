@@ -6,8 +6,14 @@
 set -e
 
 # Configuration
-# Flutter 3.38.3 includes Dart 3.10 which is required by geogram (pubspec.yaml requires SDK ^3.10.0)
-FLUTTER_VERSION="3.38.3"
+# Read pinned version from .flutter-version (single source of truth)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -f "$SCRIPT_DIR/.flutter-version" ]; then
+  FLUTTER_VERSION="$(cat "$SCRIPT_DIR/.flutter-version" | tr -d '[:space:]')"
+else
+  echo "Error: .flutter-version file not found in $SCRIPT_DIR"
+  exit 1
+fi
 FLUTTER_HOME="$HOME/flutter"
 DOWNLOAD_DIR="$HOME"
 FLUTTER_ARCHIVE="flutter.tar.xz"

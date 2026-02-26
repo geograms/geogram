@@ -61,7 +61,7 @@ jobs:
         mkdir -p dist/geogram-cli
         cp build/geogram-cli dist/geogram-cli/
         cp -r games dist/geogram-cli/
-        cd dist && tar -czf ../geogram-cli-linux-x64.tar.gz geogram-cli/
+        cd dist && tar --sort=name --owner=0 --group=0 --mtime='1970-01-01' -czf ../geogram-cli-linux-x64.tar.gz geogram-cli/
 
     - name: Upload artifact
       uses: actions/upload-artifact@v4

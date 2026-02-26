@@ -7,11 +7,17 @@
 
 There is a script ./launch-desktop.sh to launch the client on this laptop and ./server-deploy.sh when needed to upload/update the server station.
 
+Always use ./launch-desktop.sh for testing the code and client implementations, don't launch it separately without that script
+
 Read ./docs/API.md for the debug API that automates testing. When a debug API endpoint does not exist, create one.
 
 Never implement code features without testing them yourself first. Do the deployment, test that it works as intended.
 
 Use ./docs/reusable.md to reuse code instead of duplicating functionalities, document new reusable components there
+
+Always commit your changes with a proper change log
+
+Write code that is based on DART and can run from the command line for libraries, so we can reuse it in other platforms
 
 ## Architecture Notes
 

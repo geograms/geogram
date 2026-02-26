@@ -188,6 +188,48 @@ class NostrEvent {
     );
   }
 
+  /// Create a reaction event (NIP-25, kind 7)
+  ///
+  /// Tags: ['e', targetEventId], ['p', targetPubkey]
+  /// Content: '+' for like, or emoji string.
+  factory NostrEvent.reaction({
+    required String pubkeyHex,
+    required String targetEventId,
+    required String targetPubkey,
+    String content = '+',
+    int? createdAt,
+  }) {
+    return NostrEvent(
+      pubkey: pubkeyHex,
+      createdAt: createdAt ?? (DateTime.now().millisecondsSinceEpoch ~/ 1000),
+      kind: NostrEventKind.reaction,
+      tags: [
+        ['e', targetEventId],
+        ['p', targetPubkey],
+      ],
+      content: content,
+    );
+  }
+
+  /// Create a contact list event (NIP-02, kind 3)
+  ///
+  /// Each followed pubkey gets a ['p', pubkeyHex] tag.
+  factory NostrEvent.contacts({
+    required String pubkeyHex,
+    required List<String> followedPubkeys,
+    int? createdAt,
+  }) {
+    return NostrEvent(
+      pubkey: pubkeyHex,
+      createdAt: createdAt ?? (DateTime.now().millisecondsSinceEpoch ~/ 1000),
+      kind: NostrEventKind.contacts,
+      tags: [
+        for (final pk in followedPubkeys) ['p', pk],
+      ],
+      content: '',
+    );
+  }
+
   /// Create alert event (kind 30078) for sharing reports to relays
   ///
   /// This creates a NIP-78 application-specific event with:
