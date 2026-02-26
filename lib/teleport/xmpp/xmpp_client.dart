@@ -16,6 +16,7 @@ import 'dart:io';
 import 'dart:math';
 
 import 'package:dnsolve/dnsolve.dart';
+import 'package:whixp/src/handler/handler.dart';
 import 'package:whixp/whixp.dart';
 
 import '../../services/log_service.dart';
@@ -202,23 +203,68 @@ class XmppClient {
     );
   }
 
-  /// Discover MUC rooms on a conference service via disco#items.
+  /// Discover MUC rooms on a conference service via disco#items IQ.
+  /// Uses raw IQ sending + handler registration for reliable response matching.
   void discoverRooms(String conferenceService) {
     if (_whixp == null || !_connected) return;
-    // Use service discovery - build disco#items IQ query
-    // For now, emit a placeholder - whixp doesn't expose raw IQ building easily
-    // We'll use sendPresence to probe the conference service
     LogService().log('XmppClient[${config.id}]: discovering rooms on $conferenceService');
     _emitEvent({
       'type': 'discover_started',
       'conferenceService': conferenceService,
     });
-    // TODO: Use whixp's disco support if available, or implement via raw IQ
-    // For now, rooms are joined manually or via auto-join
-    _emitEvent({
-      'type': 'room_list',
-      'conferenceService': conferenceService,
-      'rooms': <Map<String, dynamic>>[],
+
+    final iq = IQ(generateID: true)
+      ..type = 'get'
+      ..to = JabberID(conferenceService)
+      ..payload = DiscoItems();
+
+    final iqId = iq.id!;
+    var handled = false;
+
+    // Register a one-shot handler for the response IQ
+    _whixp!.transport.registerHandler(
+      Handler(
+        'disco_rooms_$iqId',
+        (stanza) {
+          if (handled) return;
+          handled = true;
+          _whixp?.transport.removeHandler('disco_rooms_$iqId');
+          final result = stanza as IQ;
+          final rooms = <Map<String, dynamic>>[];
+          if (result.payload is DiscoItems) {
+            for (final item in (result.payload as DiscoItems).items) {
+              rooms.add({
+                'jid': item.jid ?? '',
+                'name': item.name ?? item.jid?.split('@').first ?? '',
+              });
+            }
+          }
+          LogService().log('XmppClient[${config.id}]: discovered ${rooms.length} rooms on $conferenceService');
+          _emitEvent({
+            'type': 'room_list',
+            'conferenceService': conferenceService,
+            'rooms': rooms,
+          });
+        },
+      )..id(iqId),
+    );
+
+    // Send the IQ
+    _whixp!.transport.send(iq);
+
+    // Timeout fallback
+    Future.delayed(const Duration(seconds: 15), () {
+      if (!handled) {
+        handled = true;
+        _whixp?.transport.removeHandler('disco_rooms_$iqId');
+        LogService().log('XmppClient[${config.id}]: room discovery timeout for $conferenceService');
+        _emitEvent({
+          'type': 'room_list',
+          'conferenceService': conferenceService,
+          'rooms': <Map<String, dynamic>>[],
+          'error': 'Discovery timed out',
+        });
+      }
     });
   }
 

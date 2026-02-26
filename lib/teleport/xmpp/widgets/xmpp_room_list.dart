@@ -140,64 +140,214 @@ class _XmppRoomListState extends State<XmppRoomList> {
   }
 
   void _showJoinDialog(BuildContext context) {
-    final controller = TextEditingController();
     final xmpp = XmppService();
     final config = xmpp.servers.where((s) => s.id == widget.serverId).firstOrNull;
     final confService = config?.derivedConferenceService ?? '';
 
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Join Room'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: controller,
-              decoration: InputDecoration(
-                labelText: 'Room JID',
-                hintText: 'room@$confService',
-                border: const OutlineInputBorder(),
-                isDense: true,
-              ),
-              autofocus: true,
-              onSubmitted: (value) {
-                _joinRoom(ctx, controller.text.trim(), confService);
-              },
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'Enter the full room JID (e.g., room@$confService)',
-              style: Theme.of(ctx).textTheme.bodySmall?.copyWith(
-                color: Theme.of(ctx).colorScheme.onSurfaceVariant,
-              ),
-            ),
-          ],
+    // Trigger room discovery
+    xmpp.discoverRooms(widget.serverId);
+
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => _RoomBrowserPage(
+          serverId: widget.serverId,
+          confService: confService,
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () {
-              _joinRoom(ctx, controller.text.trim(), confService);
-            },
-            child: const Text('Join'),
-          ),
-        ],
       ),
-    ).then((_) => controller.dispose());
+    );
+  }
+}
+
+/// Full-page room browser with search and discovery results.
+class _RoomBrowserPage extends StatefulWidget {
+  final String serverId;
+  final String confService;
+
+  const _RoomBrowserPage({required this.serverId, required this.confService});
+
+  @override
+  State<_RoomBrowserPage> createState() => _RoomBrowserPageState();
+}
+
+class _RoomBrowserPageState extends State<_RoomBrowserPage> {
+  final _searchCtl = TextEditingController();
+  StreamSubscription<XmppEvent>? _eventSub;
+  List<Map<String, dynamic>> _rooms = [];
+  bool _loading = true;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _rooms = XmppService().getRoomList(widget.serverId);
+    if (_rooms.isNotEmpty) _loading = false;
+
+    _eventSub = XmppService().events.listen((event) {
+      if (event.type == XmppEventType.roomListReceived &&
+          event.serverId == widget.serverId) {
+        if (!mounted) return;
+        setState(() {
+          _rooms = XmppService().getRoomList(widget.serverId);
+          _loading = false;
+          if (_rooms.isEmpty && event.data is Map && event.data['error'] != null) {
+            _error = event.data['error'].toString();
+          }
+        });
+      }
+    });
   }
 
-  void _joinRoom(BuildContext ctx, String roomJid, String confService) {
+  @override
+  void dispose() {
+    _searchCtl.dispose();
+    _eventSub?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final query = _searchCtl.text.toLowerCase();
+    final filtered = query.isEmpty
+        ? _rooms
+        : _rooms.where((r) {
+            final name = (r['name'] as String? ?? '').toLowerCase();
+            final jid = (r['jid'] as String? ?? '').toLowerCase();
+            return name.contains(query) || jid.contains(query);
+          }).toList();
+
+    return Scaffold(
+      appBar: AppBar(
+        title: Text('Browse Rooms (${widget.confService})'),
+      ),
+      body: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+            child: TextField(
+              controller: _searchCtl,
+              decoration: InputDecoration(
+                hintText: 'Search or enter room JID...',
+                prefixIcon: const Icon(Icons.search, size: 20),
+                border: const OutlineInputBorder(),
+                isDense: true,
+                suffixIcon: _searchCtl.text.isNotEmpty
+                    ? IconButton(
+                        icon: const Icon(Icons.clear, size: 18),
+                        onPressed: () {
+                          _searchCtl.clear();
+                          setState(() {});
+                        },
+                      )
+                    : null,
+              ),
+              onChanged: (_) => setState(() {}),
+              onSubmitted: (value) {
+                final jid = value.trim();
+                if (jid.isNotEmpty) _joinRoom(jid);
+              },
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+            child: Row(
+              children: [
+                Text(
+                  _loading
+                      ? 'Discovering rooms...'
+                      : _error != null
+                          ? 'Error: $_error'
+                          : '${filtered.length} rooms${query.isNotEmpty ? ' matching' : ''}',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                const Spacer(),
+                if (!_loading)
+                  TextButton.icon(
+                    onPressed: () {
+                      setState(() {
+                        _loading = true;
+                        _error = null;
+                      });
+                      XmppService().discoverRooms(widget.serverId);
+                    },
+                    icon: const Icon(Icons.refresh, size: 16),
+                    label: const Text('Refresh'),
+                  ),
+              ],
+            ),
+          ),
+          if (_loading)
+            const Padding(
+              padding: EdgeInsets.all(32),
+              child: CircularProgressIndicator(),
+            )
+          else
+            Expanded(
+              child: filtered.isEmpty
+                  ? Center(
+                      child: Text(
+                        query.isNotEmpty ? 'No rooms match "$query"' : 'No rooms found',
+                        style: theme.textTheme.bodyLarge?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                    )
+                  : ListView.builder(
+                      itemCount: filtered.length,
+                      itemBuilder: (context, index) {
+                        final room = filtered[index];
+                        final jid = room['jid'] as String? ?? '';
+                        final name = room['name'] as String? ?? jid.split('@').first;
+                        final alreadyJoined = XmppService()
+                            .getRooms(widget.serverId)
+                            .any((r) => r.jid == jid);
+
+                        return ListTile(
+                          leading: CircleAvatar(
+                            backgroundColor: alreadyJoined
+                                ? Colors.green.withValues(alpha: 0.15)
+                                : const Color(0xFFFF6600).withValues(alpha: 0.15),
+                            child: Icon(
+                              alreadyJoined ? Icons.check : Icons.forum,
+                              size: 20,
+                              color: alreadyJoined ? Colors.green : const Color(0xFFFF6600),
+                            ),
+                          ),
+                          title: Text(
+                            name,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          subtitle: Text(
+                            jid,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                          trailing: alreadyJoined
+                              ? const Text('Joined', style: TextStyle(color: Colors.green))
+                              : null,
+                          onTap: alreadyJoined ? null : () => _joinRoom(jid),
+                        );
+                      },
+                    ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  void _joinRoom(String roomJid) {
     if (roomJid.isEmpty) return;
-    // Auto-append conference service if no @ present
-    if (!roomJid.contains('@') && confService.isNotEmpty) {
-      roomJid = '$roomJid@$confService';
+    if (!roomJid.contains('@') && widget.confService.isNotEmpty) {
+      roomJid = '$roomJid@${widget.confService}';
     }
     XmppService().joinRoom(widget.serverId, roomJid);
-    Navigator.pop(ctx);
+    Navigator.pop(context);
   }
 }
 
