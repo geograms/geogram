@@ -3,6 +3,7 @@
  * License: Apache-2.0
  */
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -46,8 +47,45 @@ class RelayCacheService {
       _initialized = true;
       LogService().log('RelayCacheService initialized at: $_basePath');
       print('DEBUG RelayCacheService: initialized at $_basePath');
+      unawaited(_cleanupDuplicateChatFiles());
     } catch (e) {
       LogService().log('Error initializing RelayCacheService: $e');
+    }
+  }
+
+  Future<void> _cleanupDuplicateChatFiles() async {
+    if (kIsWeb || _basePath == null) return;
+    try {
+      final devicesDir = Directory(_basePath!);
+      if (!await devicesDir.exists()) return;
+      final deviceDirs = await devicesDir.list().whereType<Directory>().toList();
+      for (final device in deviceDirs) {
+        final chatDir = Directory('${device.path}/chat');
+        if (!await chatDir.exists()) continue;
+        final roomDirs = await chatDir.list().whereType<Directory>().toList();
+        for (final roomDir in roomDirs) {
+          final yearDirs = await roomDir.list().whereType<Directory>().toList();
+          for (final yearDir in yearDirs) {
+            final files = await yearDir
+                .list()
+                .whereType<File>()
+                .where((f) => f.path.endsWith('_chat.txt'))
+                .toList();
+            for (final file in files) {
+              final content = await file.readAsString();
+              var messages = ChatService.parseMessageText(content);
+              final dateStr = _extractDateFromFilename(file.path);
+              if (dateStr == null) continue;
+              final deduped = _dedupeChatMessages(messages);
+              if (deduped.length != messages.length) {
+                await _rewriteChatFile(file, roomDir.path.split('/').last, dateStr, deduped);
+              }
+            }
+          }
+        }
+      }
+    } catch (e) {
+      LogService().log('RelayCacheService: Cleanup failed: $e');
     }
   }
 
@@ -359,7 +397,15 @@ class RelayCacheService {
       // Read files newest-first, stop when we have enough messages
       for (final file in chatFiles) {
         final content = await file.readAsString();
-        final chatMessages = ChatService.parseMessageText(content);
+        var chatMessages = ChatService.parseMessageText(content);
+        final dateStr = _extractDateFromFilename(file.path);
+        if (dateStr != null) {
+          final deduped = _dedupeChatMessages(chatMessages);
+          if (deduped.length != chatMessages.length) {
+            await _rewriteChatFile(file, roomId, dateStr, deduped);
+          }
+          chatMessages = deduped;
+        }
         allMessages.addAll(
           chatMessages.map((msg) => _chatMessageToRelayChat(msg, roomId)),
         );
@@ -381,6 +427,46 @@ class RelayCacheService {
       LogService().log('Error loading cached messages: $e');
       return [];
     }
+  }
+
+  String? _extractDateFromFilename(String path) {
+    final name = path.split('/').last;
+    if (name.length < 10) return null;
+    final dateStr = name.substring(0, 10);
+    return RegExp(r'^\\d{4}-\\d{2}-\\d{2}$').hasMatch(dateStr) ? dateStr : null;
+  }
+
+  List<ChatMessage> _dedupeChatMessages(List<ChatMessage> messages) {
+    final merged = <String, ChatMessage>{};
+    for (final msg in messages) {
+      final key = _messageDedupeKey(msg);
+      final existing = merged[key];
+      if (existing == null) {
+        merged[key] = msg;
+        continue;
+      }
+      final currentScore = _messageQualityScore(existing);
+      final incomingScore = _messageQualityScore(msg);
+      if (incomingScore > currentScore) {
+        merged[key] = msg;
+      }
+    }
+
+    var mergedMessages = merged.values.toList()
+      ..sort((a, b) => a.timestamp.compareTo(b.timestamp));
+    mergedMessages = _removeUnsignedNearDuplicates(mergedMessages);
+    return mergedMessages;
+  }
+
+  Future<void> _rewriteChatFile(File file, String roomId, String dateStr, List<ChatMessage> messages) async {
+    final buffer = StringBuffer();
+    buffer.writeln('# ${roomId.toUpperCase()}: $roomId from $dateStr');
+    for (final msg in messages) {
+      buffer.writeln();
+      buffer.writeln();
+      buffer.write(msg.exportAsText());
+    }
+    await file.writeAsString(buffer.toString());
   }
 
   /// Load the most recent cached chat message for a room

@@ -542,8 +542,9 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
             _pendingDeletions.contains(_deletionKey(msg.timestamp, msg.callsign)));
       }
 
-      _stationMessageCache[roomId] = existing;
-      _applyStationMessageLimit(existing);
+      final deduped = _dedupeStationMessages(existing);
+      _stationMessageCache[roomId] = deduped;
+      _applyStationMessageLimit(deduped);
 
       // Persist to disk in background (non-blocking)
       unawaited(_cacheService.mergeMessages(cacheKey, roomId, newMessages));
@@ -1103,8 +1104,9 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
         cachedMessages.removeWhere((msg) =>
             _pendingDeletions.contains(_deletionKey(msg.timestamp, msg.callsign)));
       }
-      _stationMessageCache[roomId] = cachedMessages;
-      _applyStationMessageLimit(cachedMessages, limit: limit);
+      final deduped = _dedupeStationMessages(cachedMessages);
+      _stationMessageCache[roomId] = deduped;
+      _applyStationMessageLimit(deduped, limit: limit);
     } else {
       LogService().log('No cache key available');
       _setStateIfMounted(() {
@@ -1119,9 +1121,10 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
 
   void _applyStationMessageLimit(List<StationChatMessage> messages, {int? limit}) {
     final effectiveLimit = limit ?? _stationMessageLimit;
-    final trimmed = messages.length > effectiveLimit
-        ? messages.sublist(messages.length - effectiveLimit)
-        : messages;
+    final deduped = _dedupeStationMessages(messages);
+    final trimmed = deduped.length > effectiveLimit
+        ? deduped.sublist(deduped.length - effectiveLimit)
+        : deduped;
     _setStateIfMounted(() {
       _stationMessages = trimmed;
       _isLoading = false;
@@ -1739,6 +1742,81 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     cleaned.remove('retry_count');
     cleaned.remove('queued_at');
     return cleaned;
+  }
+
+  String _stationMessageKey(StationChatMessage msg) {
+    final eventId = msg.eventId ?? msg.metadata['event_id'];
+    if (eventId != null && eventId.isNotEmpty) {
+      return 'event:$eventId';
+    }
+    final signature = msg.signature ?? msg.metadata['signature'];
+    if (signature != null && signature.isNotEmpty) {
+      return 'sig:$signature';
+    }
+    final createdAt = msg.metadata['created_at'];
+    if (createdAt != null && createdAt.isNotEmpty) {
+      return 'created:$createdAt|${msg.callsign.toUpperCase()}';
+    }
+    return 'ts:${msg.timestamp}|${msg.callsign.toUpperCase()}|${msg.content}';
+  }
+
+  bool _isUnsignedOrPending(StationChatMessage msg) {
+    final hasSignature = (msg.signature ?? '').isNotEmpty ||
+        (msg.metadata['signature'] ?? '').isNotEmpty ||
+        msg.hasSignature;
+    if (!hasSignature) return true;
+    return msg.metadata['status'] == 'pending';
+  }
+
+  List<StationChatMessage> _dedupeStationMessages(List<StationChatMessage> messages) {
+    final merged = <String, StationChatMessage>{};
+    for (final msg in messages) {
+      final key = _stationMessageKey(msg);
+      final existing = merged[key];
+      if (existing == null) {
+        merged[key] = msg;
+        continue;
+      }
+      final existingBetter = !_isUnsignedOrPending(existing);
+      final msgBetter = !_isUnsignedOrPending(msg);
+      if (msgBetter && !existingBetter) {
+        merged[key] = msg;
+      }
+    }
+
+    final list = merged.values.toList()..sort((a, b) => a.timestamp.compareTo(b.timestamp));
+
+    // Remove unsigned/pending duplicates near a signed version
+    final result = <StationChatMessage>[];
+    for (final msg in list) {
+      bool replaced = false;
+      for (int i = 0; i < result.length; i++) {
+        final existing = result[i];
+        if (existing.callsign.toUpperCase() != msg.callsign.toUpperCase()) continue;
+        if (existing.content != msg.content) continue;
+
+        final dtA = ChatFormat.parseTimestamp(existing.timestamp);
+        final dtB = ChatFormat.parseTimestamp(msg.timestamp);
+        final seconds = dtA.difference(dtB).abs().inSeconds;
+        if (seconds > 300) continue;
+
+        final existingBetter = !_isUnsignedOrPending(existing);
+        final msgBetter = !_isUnsignedOrPending(msg);
+        if (existingBetter && !msgBetter) {
+          replaced = true;
+          break;
+        }
+        if (msgBetter && !existingBetter) {
+          result[i] = msg;
+          replaced = true;
+          break;
+        }
+      }
+      if (!replaced) {
+        result.add(msg);
+      }
+    }
+    return result;
   }
 
   Future<void> _updatePendingStationMessage(
