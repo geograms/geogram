@@ -456,6 +456,15 @@ class AtprotoClientService {
 
   Future<void> syncFeed() async {
     if (!_config.enabled) return;
+    try {
+      _feed = await fetchGlobalFeed(limit: 50);
+      if (_feed.isNotEmpty) {
+        await _storage?.saveCachedFeed(_feed);
+        _emit(const AtprotoClientEvent(AtprotoClientEventType.feedUpdated));
+        return;
+      }
+    } catch (_) {}
+
     final candidates = <String>[
       _resolveReadActor(),
       'bsky.app',
@@ -482,6 +491,37 @@ class AtprotoClientService {
         AtprotoClientEvent(AtprotoClientEventType.error, data: '$lastError'),
       );
     }
+  }
+
+  Future<List<AtprotoFeedItem>> fetchGlobalFeed({int limit = 50}) async {
+    final appView = _normalizeBaseUrl(_config.appViewUrl);
+    final generators = <String>[
+      'at://did:plc:z72i7hdynmk6r22z27h6tvur/app.bsky.feed.generator/whats-hot',
+      'at://did:plc:z72i7hdynmk6r22z27h6tvur/app.bsky.feed.generator/with-friends',
+    ];
+    Object? lastError;
+    for (final generator in generators) {
+      final uri = Uri.parse(
+        '$appView/xrpc/app.bsky.feed.getFeed'
+        '?feed=${Uri.encodeQueryComponent(generator)}'
+        '&limit=${limit.clamp(1, 100)}',
+      );
+      final response = await http.get(uri);
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        final details = response.body.length > 180
+            ? '${response.body.substring(0, 180)}...'
+            : response.body;
+        lastError = Exception(
+          'Global feed read failed (${response.statusCode}) $details',
+        );
+        continue;
+      }
+      final body = jsonDecode(response.body) as Map<String, dynamic>;
+      final parsed = _parseFeed(body);
+      if (parsed.isNotEmpty) return parsed;
+    }
+    if (lastError != null) throw lastError;
+    return const [];
   }
 
   Future<List<AtprotoFeedItem>> fetchAuthorFeed(

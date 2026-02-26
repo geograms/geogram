@@ -5,6 +5,7 @@
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../atproto_link_parser.dart';
@@ -39,8 +40,8 @@ class AtprotoPostTile extends StatefulWidget {
 }
 
 class _AtprotoPostTileState extends State<AtprotoPostTile> {
-  static final RegExp _urlRegex = RegExp(
-    r'(https?://[^\s]+|www\.[^\s]+)',
+  static final RegExp _tokenRegex = RegExp(
+    r'(https?://[^\s]+|www\.[^\s]+|@[A-Za-z0-9_](?:[A-Za-z0-9_.-]*[A-Za-z0-9_])?)',
     caseSensitive: false,
   );
   final List<TapGestureRecognizer> _recognizers = [];
@@ -188,7 +189,7 @@ class _AtprotoPostTileState extends State<AtprotoPostTile> {
     final text = item.text;
     var cursor = 0;
 
-    for (final match in _urlRegex.allMatches(text)) {
+    for (final match in _tokenRegex.allMatches(text)) {
       if (match.start > cursor) {
         spans.add(
           TextSpan(
@@ -198,8 +199,15 @@ class _AtprotoPostTileState extends State<AtprotoPostTile> {
         );
       }
       final raw = match.group(0)!;
-      final url = raw.startsWith('http') ? raw : 'https://$raw';
-      final recognizer = TapGestureRecognizer()..onTap = () => _openLink(url);
+      final recognizer = TapGestureRecognizer()
+        ..onTap = () {
+          if (raw.startsWith('@')) {
+            _openMention(raw);
+            return;
+          }
+          final url = raw.startsWith('http') ? raw : 'https://$raw';
+          _openLink(url);
+        };
       _recognizers.add(recognizer);
       spans.add(
         TextSpan(
@@ -488,6 +496,13 @@ class _AtprotoPostTileState extends State<AtprotoPostTile> {
           onTap: widget.onLike,
           activeColor: Colors.red.shade500,
         ),
+        const SizedBox(width: 12),
+        _iconButton(
+          icon: Icons.copy,
+          tooltip: 'Copy text',
+          onTap: () => _copyPostText(item.text),
+          color: theme.colorScheme.onSurfaceVariant,
+        ),
       ],
     );
   }
@@ -592,6 +607,28 @@ class _AtprotoPostTileState extends State<AtprotoPostTile> {
     final uri = Uri.tryParse(normalized);
     if (uri == null) return;
     await launchUrl(uri, mode: LaunchMode.externalApplication);
+  }
+
+  void _openMention(String raw) {
+    final mention = raw.trim();
+    if (mention.length <= 1) return;
+    final handle = mention.substring(1);
+    final actor = handle.contains('.') ? handle : '$handle.bsky.social';
+    if (widget.onOpenProfileActor != null) {
+      widget.onOpenProfileActor!(actor);
+      return;
+    }
+    _openLink('https://bsky.app/profile/$actor');
+  }
+
+  Future<void> _copyPostText(String text) async {
+    final value = text.trim();
+    if (value.isEmpty) return;
+    await Clipboard.setData(ClipboardData(text: value));
+    if (!mounted) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('Post text copied')));
   }
 
   Widget _withCursor({required Widget child, VoidCallback? onTap}) {
