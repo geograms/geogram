@@ -82,20 +82,29 @@ class _AtprotoPostTileState extends State<AtprotoPostTile> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             _withCursor(
-              onTap: widget.onTapAuthor,
+              onTap: item.avatarUrl?.isNotEmpty == true
+                  ? () => _openImagePreviewFromUrl(item.avatarUrl!)
+                  : null,
               child: GestureDetector(
-                onTap: widget.onTapAuthor,
-                child: CircleAvatar(
-                  radius: widget.compact ? 18 : 21,
-                  backgroundImage: item.avatarUrl != null
-                      ? NetworkImage(item.avatarUrl!)
-                      : null,
-                  child: item.avatarUrl == null
-                      ? Text(
-                          _initial(item),
-                          style: const TextStyle(fontSize: 13),
-                        )
-                      : null,
+                onTap: item.avatarUrl?.isNotEmpty == true
+                    ? () => _openImagePreviewFromUrl(item.avatarUrl!)
+                    : null,
+                child: MouseRegion(
+                  cursor: item.avatarUrl?.isNotEmpty == true
+                      ? SystemMouseCursors.click
+                      : MouseCursor.defer,
+                  child: CircleAvatar(
+                    radius: widget.compact ? 18 : 21,
+                    backgroundImage: item.avatarUrl != null
+                        ? NetworkImage(item.avatarUrl!)
+                        : null,
+                    child: item.avatarUrl == null
+                        ? Text(
+                            _initial(item),
+                            style: const TextStyle(fontSize: 13),
+                          )
+                        : null,
+                  ),
                 ),
               ),
             ),
@@ -755,5 +764,44 @@ class _AtprotoPostTileState extends State<AtprotoPostTile> {
       },
     );
     controller.dispose();
+  }
+
+  Future<void> _openImagePreviewFromUrl(String imageUrl) async {
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      barrierColor: Colors.black.withValues(alpha: 0.92),
+      builder: (context) {
+        return Stack(
+          children: [
+            Positioned.fill(
+              child: InteractiveViewer(
+                minScale: 1,
+                maxScale: 4,
+                child: Center(
+                  child: Image.network(
+                    imageUrl,
+                    fit: BoxFit.contain,
+                    errorBuilder: (context, error, stackTrace) => const Icon(
+                      Icons.broken_image,
+                      color: Colors.white70,
+                      size: 42,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            Positioned(
+              top: 16,
+              right: 16,
+              child: IconButton(
+                onPressed: () => Navigator.of(context).pop(),
+                icon: const Icon(Icons.close, color: Colors.white),
+              ),
+            ),
+          ],
+        );
+      },
+    );
   }
 }

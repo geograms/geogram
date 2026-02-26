@@ -528,12 +528,16 @@ class AtprotoClientService {
     String actor, {
     int limit = 50,
     bool allowLocalFallback = true,
+    String? filter,
   }) async {
+    final filterParam = (filter == null || filter.trim().isEmpty)
+        ? ''
+        : '&filter=${Uri.encodeQueryComponent(filter.trim())}';
     final appView = _normalizeBaseUrl(_config.appViewUrl);
     final uri = Uri.parse(
       '$appView/xrpc/app.bsky.feed.getAuthorFeed'
       '?actor=${Uri.encodeQueryComponent(actor)}'
-      '&limit=${limit.clamp(1, 100)}',
+      '&limit=${limit.clamp(1, 100)}$filterParam',
     );
     final response = await http.get(uri);
     if (response.statusCode < 200 || response.statusCode >= 300) {
@@ -547,6 +551,18 @@ class AtprotoClientService {
     }
     final body = jsonDecode(response.body) as Map<String, dynamic>;
     return _parseFeed(body);
+  }
+
+  Future<List<AtprotoFeedItem>> fetchAuthorMediaFeed(
+    String actor, {
+    int limit = 50,
+  }) {
+    return fetchAuthorFeed(
+      actor,
+      limit: limit,
+      allowLocalFallback: false,
+      filter: 'posts_with_media',
+    );
   }
 
   Future<AtprotoProfile?> fetchProfile(String actor) async {
@@ -593,6 +609,57 @@ class AtprotoClientService {
           .toList();
     }
     throw lastError ?? Exception('People search failed');
+  }
+
+  Future<List<AtprotoProfile>> fetchFollowers(
+    String actor, {
+    int limit = 50,
+  }) async {
+    return _fetchGraphList(
+      actor,
+      endpoint: 'app.bsky.graph.getFollowers',
+      field: 'followers',
+      limit: limit,
+    );
+  }
+
+  Future<List<AtprotoProfile>> fetchFollowing(
+    String actor, {
+    int limit = 50,
+  }) async {
+    return _fetchGraphList(
+      actor,
+      endpoint: 'app.bsky.graph.getFollows',
+      field: 'follows',
+      limit: limit,
+    );
+  }
+
+  Future<List<AtprotoProfile>> _fetchGraphList(
+    String actor, {
+    required String endpoint,
+    required String field,
+    int limit = 50,
+  }) async {
+    final appView = _normalizeBaseUrl(_config.appViewUrl);
+    final uri = Uri.parse(
+      '$appView/xrpc/$endpoint'
+      '?actor=${Uri.encodeQueryComponent(actor)}'
+      '&limit=${limit.clamp(1, 100)}',
+    );
+    final response = await http.get(uri);
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      final details = response.body.length > 180
+          ? '${response.body.substring(0, 180)}...'
+          : response.body;
+      throw Exception('Graph read failed (${response.statusCode}) $details');
+    }
+    final body = jsonDecode(response.body) as Map<String, dynamic>;
+    final raw = body[field] as List<dynamic>? ?? const [];
+    return raw
+        .whereType<Map>()
+        .map((e) => AtprotoProfile.fromJson(Map<String, dynamic>.from(e)))
+        .toList();
   }
 
   Future<List<AtprotoFeedItem>> searchPosts(

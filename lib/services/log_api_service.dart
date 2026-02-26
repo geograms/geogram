@@ -18135,6 +18135,95 @@ function cleanup() {
           );
         }
 
+      case 'atproto_read_media':
+        final actor = (params['actor'] as String?)?.trim();
+        if (actor == null || actor.isEmpty) {
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': false,
+              'error': 'actor parameter required (handle or DID)',
+            }),
+            headers: headers,
+          );
+        }
+        try {
+          final posts = await atproto.fetchAuthorMediaFeed(
+            actor,
+            limit: ((params['limit'] as num?)?.toInt() ?? 20).clamp(1, 100),
+          );
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'actor': actor,
+              'count': posts.length,
+              'items': posts.map((e) => e.toJson()).toList(),
+            }),
+            headers: headers,
+          );
+        } catch (e) {
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': false,
+              'error': 'Media read failed',
+              'details': '$e',
+              'actor': actor,
+            }),
+            headers: headers,
+          );
+        }
+
+      case 'atproto_list_followers':
+      case 'atproto_list_following':
+        final actor = (params['actor'] as String?)?.trim();
+        if (actor == null || actor.isEmpty) {
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': false,
+              'error': 'actor parameter required (handle or DID)',
+            }),
+            headers: headers,
+          );
+        }
+        try {
+          final list = action == 'atproto_list_followers'
+              ? await atproto.fetchFollowers(
+                  actor,
+                  limit: ((params['limit'] as num?)?.toInt() ?? 50).clamp(
+                    1,
+                    100,
+                  ),
+                )
+              : await atproto.fetchFollowing(
+                  actor,
+                  limit: ((params['limit'] as num?)?.toInt() ?? 50).clamp(
+                    1,
+                    100,
+                  ),
+                );
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'actor': actor,
+              'type': action == 'atproto_list_followers'
+                  ? 'followers'
+                  : 'following',
+              'count': list.length,
+              'items': list.map((e) => e.toJson()).toList(),
+            }),
+            headers: headers,
+          );
+        } catch (e) {
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': false,
+              'error': 'Graph list failed',
+              'details': '$e',
+              'actor': actor,
+            }),
+            headers: headers,
+          );
+        }
+
       case 'atproto_follow_actor':
         final actor = (params['actor'] as String?)?.trim();
         if (actor == null || actor.isEmpty) {

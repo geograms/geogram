@@ -12,6 +12,7 @@ import '../atproto_client_service.dart';
 import '../models/atproto_feed_item.dart';
 import '../models/atproto_profile.dart';
 import '../widgets/atproto_post_tile.dart';
+import 'atproto_actor_list_page.dart';
 import 'atproto_thread_page.dart';
 
 class AtprotoProfilePage extends StatefulWidget {
@@ -31,6 +32,7 @@ class _AtprotoProfilePageState extends State<AtprotoProfilePage> {
   final List<TapGestureRecognizer> _descriptionRecognizers = [];
   AtprotoProfile? _profile;
   List<AtprotoFeedItem> _posts = const [];
+  List<AtprotoFeedItem> _mediaPosts = const [];
   bool _loading = true;
   bool _followBusy = false;
   bool _isFollowing = false;
@@ -50,6 +52,7 @@ class _AtprotoProfilePageState extends State<AtprotoProfilePage> {
     final service = AtprotoClientService();
     AtprotoProfile? profile;
     List<AtprotoFeedItem> posts = const [];
+    List<AtprotoFeedItem> mediaPosts = const [];
     String? loadError;
     try {
       profile = await service.fetchProfile(widget.actor);
@@ -62,6 +65,11 @@ class _AtprotoProfilePageState extends State<AtprotoProfilePage> {
     } catch (e) {
       loadError ??= '$e';
     }
+    try {
+      mediaPosts = await service.fetchAuthorMediaFeed(widget.actor, limit: 50);
+    } catch (e) {
+      loadError ??= '$e';
+    }
 
     if (profile == null && service.isLocalActor(widget.actor)) {
       profile = service.localProfileSnapshot();
@@ -71,6 +79,7 @@ class _AtprotoProfilePageState extends State<AtprotoProfilePage> {
     setState(() {
       _profile = profile;
       _posts = posts;
+      _mediaPosts = mediaPosts;
       _isFollowing =
           profile?.isFollowedByMe == true ||
           service.isFollowingActor(
@@ -104,46 +113,66 @@ class _AtprotoProfilePageState extends State<AtprotoProfilePage> {
               : '@${profile?.handle.isNotEmpty == true ? profile!.handle : widget.actor}',
         ),
       ),
-      body: RefreshIndicator(
-        onRefresh: _load,
-        child: ListView(
+      body: DefaultTabController(
+        length: 2,
+        child: Column(
           children: [
             _buildHeader(context, profile),
-            if (_loading)
-              const Padding(
-                padding: EdgeInsets.all(24),
-                child: Center(child: CircularProgressIndicator()),
+            const TabBar(
+              tabs: [
+                Tab(text: 'Posts'),
+                Tab(text: 'Media'),
+              ],
+            ),
+            Expanded(
+              child: TabBarView(
+                children: [_buildPostList(_posts), _buildPostList(_mediaPosts)],
               ),
-            if (_error != null)
-              Padding(
-                padding: const EdgeInsets.all(14),
-                child: Card(
-                  child: Padding(
-                    padding: const EdgeInsets.all(12),
-                    child: Text('Failed to load profile: $_error'),
-                  ),
-                ),
-              ),
-            if (!_loading && _error == null && _posts.isEmpty)
-              const Padding(
-                padding: EdgeInsets.all(24),
-                child: Center(child: Text('No publications yet')),
-              ),
-            if (_posts.isNotEmpty)
-              ..._posts.map(
-                (item) => AtprotoPostTile(
-                  item: item,
-                  compact: true,
-                  onLike: () => _like(item),
-                  onRepost: () => _repost(item),
-                  onOpenThread: () => _openThread(item),
-                  onTapAuthor: () => _openAuthorProfile(item),
-                  onOpenProfileActor: _openProfileByActor,
-                  onOpenPostUri: _openThreadByUri,
-                ),
-              ),
+            ),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildPostList(List<AtprotoFeedItem> posts) {
+    return RefreshIndicator(
+      onRefresh: _load,
+      child: ListView(
+        children: [
+          if (_loading)
+            const Padding(
+              padding: EdgeInsets.all(24),
+              child: Center(child: CircularProgressIndicator()),
+            ),
+          if (_error != null)
+            Padding(
+              padding: const EdgeInsets.all(14),
+              child: Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Text('Failed to load profile: $_error'),
+                ),
+              ),
+            ),
+          if (!_loading && _error == null && posts.isEmpty)
+            const Padding(
+              padding: EdgeInsets.all(24),
+              child: Center(child: Text('No publications yet')),
+            ),
+          ...posts.map(
+            (item) => AtprotoPostTile(
+              item: item,
+              compact: true,
+              onLike: () => _like(item),
+              onRepost: () => _repost(item),
+              onOpenThread: () => _openThread(item),
+              onTapAuthor: () => _openAuthorProfile(item),
+              onOpenProfileActor: _openProfileByActor,
+              onOpenPostUri: _openThreadByUri,
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -181,20 +210,30 @@ class _AtprotoProfilePageState extends State<AtprotoProfilePage> {
               children: [
                 Transform.translate(
                   offset: const Offset(0, -24),
-                  child: CircleAvatar(
-                    radius: 34,
-                    backgroundColor: theme.colorScheme.surface,
-                    child: CircleAvatar(
-                      radius: 30,
-                      backgroundImage: profile?.avatarUrl != null
-                          ? NetworkImage(profile!.avatarUrl!)
+                  child: MouseRegion(
+                    cursor: profile?.avatarUrl?.isNotEmpty == true
+                        ? SystemMouseCursors.click
+                        : MouseCursor.defer,
+                    child: GestureDetector(
+                      onTap: profile?.avatarUrl?.isNotEmpty == true
+                          ? () => _openImagePreview(profile!.avatarUrl!)
                           : null,
-                      child: profile?.avatarUrl == null
-                          ? Text(
-                              _profileInitial(profile),
-                              style: const TextStyle(fontSize: 18),
-                            )
-                          : null,
+                      child: CircleAvatar(
+                        radius: 34,
+                        backgroundColor: theme.colorScheme.surface,
+                        child: CircleAvatar(
+                          radius: 30,
+                          backgroundImage: profile?.avatarUrl != null
+                              ? NetworkImage(profile!.avatarUrl!)
+                              : null,
+                          child: profile?.avatarUrl == null
+                              ? Text(
+                                  _profileInitial(profile),
+                                  style: const TextStyle(fontSize: 18),
+                                )
+                              : null,
+                        ),
+                      ),
                     ),
                   ),
                 ),
@@ -234,8 +273,16 @@ class _AtprotoProfilePageState extends State<AtprotoProfilePage> {
                       theme,
                       '${profile?.followersCount ?? 0}',
                       'Followers',
+                      onTap: () =>
+                          _openActorList(AtprotoActorListType.followers),
                     ),
-                    _stat(theme, '${profile?.followsCount ?? 0}', 'Following'),
+                    _stat(
+                      theme,
+                      '${profile?.followsCount ?? 0}',
+                      'Following',
+                      onTap: () =>
+                          _openActorList(AtprotoActorListType.following),
+                    ),
                   ],
                 ),
               ],
@@ -246,8 +293,13 @@ class _AtprotoProfilePageState extends State<AtprotoProfilePage> {
     );
   }
 
-  Widget _stat(ThemeData theme, String value, String label) {
-    return RichText(
+  Widget _stat(
+    ThemeData theme,
+    String value,
+    String label, {
+    VoidCallback? onTap,
+  }) {
+    final content = RichText(
       text: TextSpan(
         children: [
           TextSpan(
@@ -264,6 +316,11 @@ class _AtprotoProfilePageState extends State<AtprotoProfilePage> {
           ),
         ],
       ),
+    );
+    if (onTap == null) return content;
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(onTap: onTap, child: content),
     );
   }
 
@@ -428,5 +485,56 @@ class _AtprotoProfilePageState extends State<AtprotoProfilePage> {
       ).showSnackBar(const SnackBar(content: Text('Could not follow profile')));
     }
     setState(() => _followBusy = false);
+  }
+
+  void _openActorList(AtprotoActorListType type) {
+    final profile = _profile;
+    final actor = profile?.did.isNotEmpty == true
+        ? profile!.did
+        : (profile?.handle.isNotEmpty == true ? profile!.handle : widget.actor);
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => AtprotoActorListPage(actor: actor, type: type),
+      ),
+    );
+  }
+
+  Future<void> _openImagePreview(String imageUrl) async {
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      barrierColor: Colors.black.withValues(alpha: 0.92),
+      builder: (context) {
+        return Stack(
+          children: [
+            Positioned.fill(
+              child: InteractiveViewer(
+                minScale: 1,
+                maxScale: 4,
+                child: Center(
+                  child: Image.network(
+                    imageUrl,
+                    fit: BoxFit.contain,
+                    errorBuilder: (context, error, stackTrace) => const Icon(
+                      Icons.broken_image,
+                      color: Colors.white70,
+                      size: 42,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            Positioned(
+              top: 16,
+              right: 16,
+              child: IconButton(
+                onPressed: () => Navigator.of(context).pop(),
+                icon: const Icon(Icons.close, color: Colors.white),
+              ),
+            ),
+          ],
+        );
+      },
+    );
   }
 }
