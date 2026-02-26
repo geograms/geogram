@@ -61,6 +61,7 @@ class AtprotoClientService {
   AtprotoSession? _session;
   List<AtprotoFeedItem> _feed = const [];
   Set<String> _followedActors = <String>{};
+  String? _lastError;
 
   MonitoredAsyncPeriodicTimer? _sessionRefreshTimer;
   MonitoredAsyncPeriodicTimer? _feedSyncTimer;
@@ -75,6 +76,7 @@ class AtprotoClientService {
   List<String> get followedActors =>
       List.unmodifiable(_followedActors.toList());
   bool get isAuthenticated => _session?.isValid == true;
+  String? get lastError => _lastError;
 
   bool isLocalActor(String actor) => _isLocalActor(actor);
 
@@ -716,6 +718,9 @@ class AtprotoClientService {
     );
     final response = await http.get(uri);
     if (response.statusCode < 200 || response.statusCode >= 300) {
+      if (_isLikelyLocalPostUri(postUri)) {
+        return _buildLocalThreadFallback(postUri);
+      }
       final details = response.body.length > 180
           ? '${response.body.substring(0, 180)}...'
           : response.body;
@@ -749,6 +754,43 @@ class AtprotoClientService {
       }
     } catch (_) {}
     replies.sort((a, b) => a.createdAt.compareTo(b.createdAt));
+    return AtprotoThreadData(rootPost: root, replies: replies);
+  }
+
+  bool _isLikelyLocalPostUri(String postUri) {
+    final value = postUri.trim().toLowerCase();
+    if (!value.startsWith('at://')) return false;
+    return value.contains('did:web:') || value.contains('.p2p.radio/');
+  }
+
+  Future<AtprotoThreadData> _buildLocalThreadFallback(String postUri) async {
+    final localPosts = await _fetchLocalProfilePosts(limit: 200);
+    AtprotoFeedItem? root;
+    for (final item in localPosts) {
+      if (item.uri == postUri) {
+        root = item;
+        break;
+      }
+    }
+    root ??= AtprotoFeedItem(
+      uri: postUri,
+      cid: '',
+      authorDid: _session?.did ?? '',
+      authorHandle: _session?.handle ?? _config.identifier,
+      displayName: _deriveIdentifierFromProfile(),
+      text: '',
+      createdAt: DateTime.now().toUtc(),
+    );
+
+    final replies =
+        localPosts
+            .where(
+              (item) =>
+                  item.uri != postUri &&
+                  (item.rootUri == postUri || item.parentUri == postUri),
+            )
+            .toList()
+          ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
     return AtprotoThreadData(rootPost: root, replies: replies);
   }
 
@@ -1098,6 +1140,7 @@ class AtprotoClientService {
       );
 
       if (response.statusCode >= 200 && response.statusCode < 300) {
+        _lastError = null;
         await syncFeed();
         return true;
       }
@@ -1118,6 +1161,7 @@ class AtprotoClientService {
             }),
           );
           if (retry.statusCode >= 200 && retry.statusCode < 300) {
+            _lastError = null;
             await syncFeed();
             return true;
           }
@@ -1141,21 +1185,22 @@ class AtprotoClientService {
             }),
           );
           if (retry.statusCode >= 200 && retry.statusCode < 300) {
+            _lastError = null;
             await syncFeed();
             return true;
           }
         }
       }
 
-      _emit(
-        AtprotoClientEvent(
-          AtprotoClientEventType.error,
-          data: 'Publish failed (${response.statusCode})',
-        ),
-      );
+      final details = response.body.length > 220
+          ? '${response.body.substring(0, 220)}...'
+          : response.body;
+      _lastError = 'Publish failed (${response.statusCode}) $details';
+      _emit(AtprotoClientEvent(AtprotoClientEventType.error, data: _lastError));
       return false;
     } catch (e) {
-      _emit(AtprotoClientEvent(AtprotoClientEventType.error, data: '$e'));
+      _lastError = '$e';
+      _emit(AtprotoClientEvent(AtprotoClientEventType.error, data: _lastError));
       return false;
     }
   }

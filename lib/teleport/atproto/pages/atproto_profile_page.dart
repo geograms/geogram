@@ -5,6 +5,7 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter/gestures.dart';
+import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../atproto_link_parser.dart';
@@ -151,7 +152,7 @@ class _AtprotoProfilePageState extends State<AtprotoProfilePage> {
               child: Card(
                 child: Padding(
                   padding: const EdgeInsets.all(12),
-                  child: Text('Failed to load profile: $_error'),
+                  child: SelectableText('Failed to load profile: $_error'),
                 ),
               ),
             ),
@@ -360,9 +361,7 @@ class _AtprotoProfilePageState extends State<AtprotoProfilePage> {
   void _like(AtprotoFeedItem item) {
     AtprotoClientService().likePost(item).then((ok) {
       if (!ok && mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Could not like this post')),
-        );
+        _showActionError('Could not like this post');
       }
     });
   }
@@ -370,17 +369,16 @@ class _AtprotoProfilePageState extends State<AtprotoProfilePage> {
   void _repost(AtprotoFeedItem item) {
     AtprotoClientService().repost(item).then((ok) {
       if (!ok && mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Could not repost this post')),
-        );
+        _showActionError('Could not repost this post');
       }
     });
   }
 
   void _openThread(AtprotoFeedItem item) {
-    Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => AtprotoThreadPage(rootPost: item)),
-    );
+    final target = item.rootUri?.isNotEmpty == true
+        ? item.rootUri!.trim()
+        : item.uri;
+    _openThreadByUri(target);
   }
 
   void _openAuthorProfile(AtprotoFeedItem item) {
@@ -485,6 +483,24 @@ class _AtprotoProfilePageState extends State<AtprotoProfilePage> {
       ).showSnackBar(const SnackBar(content: Text('Could not follow profile')));
     }
     setState(() => _followBusy = false);
+  }
+
+  void _showActionError(String title) {
+    final details = AtprotoClientService().lastError;
+    final message = details == null || details.isEmpty
+        ? title
+        : '$title\n$details';
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: SelectableText(message),
+        action: SnackBarAction(
+          label: 'COPY',
+          onPressed: () {
+            Clipboard.setData(ClipboardData(text: message));
+          },
+        ),
+      ),
+    );
   }
 
   void _openActorList(AtprotoActorListType type) {

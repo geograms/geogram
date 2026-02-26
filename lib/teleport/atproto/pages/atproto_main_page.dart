@@ -6,6 +6,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../atproto_client_service.dart';
 import '../models/atproto_feed_item.dart';
@@ -389,9 +390,7 @@ class _AtprotoMainPageState extends State<AtprotoMainPage> {
   void _toggleLike(AtprotoFeedItem item) {
     AtprotoClientService().likePost(item).then((ok) {
       if (!ok && mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Could not like this post')),
-        );
+        _showActionError('Could not like this post');
       }
     });
   }
@@ -399,17 +398,16 @@ class _AtprotoMainPageState extends State<AtprotoMainPage> {
   void _toggleRepost(AtprotoFeedItem item) {
     AtprotoClientService().repost(item).then((ok) {
       if (!ok && mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Could not repost this post')),
-        );
+        _showActionError('Could not repost this post');
       }
     });
   }
 
   void _openThread(AtprotoFeedItem item) {
-    Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => AtprotoThreadPage(rootPost: item)),
-    );
+    final target = item.rootUri?.isNotEmpty == true
+        ? item.rootUri!.trim()
+        : item.uri;
+    _openThreadByUri(target);
   }
 
   void _openThreadByUri(String postUri) {
@@ -429,5 +427,23 @@ class _AtprotoMainPageState extends State<AtprotoMainPage> {
               : service.config.identifier);
     if (actor.trim().isEmpty) return;
     _openProfileByActor(actor.trim());
+  }
+
+  void _showActionError(String title) {
+    final details = AtprotoClientService().lastError;
+    final message = details == null || details.isEmpty
+        ? title
+        : '$title\n$details';
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: SelectableText(message),
+        action: SnackBarAction(
+          label: 'COPY',
+          onPressed: () {
+            Clipboard.setData(ClipboardData(text: message));
+          },
+        ),
+      ),
+    );
   }
 }
