@@ -66,6 +66,10 @@ class XmppS2sConnection {
   /// The remote domain verified via dialback (for inbound connections)
   String? verifiedDomain;
 
+  /// Map key in _outbound pool (original domain before SRV parent fallback).
+  /// e.g. "conference.yax.im" even if remoteDomain became "yax.im" via SRV.
+  String? mapKey;
+
   XmppS2sConnection({
     required this.localDomain,
     required this.remoteDomain,
@@ -260,25 +264,31 @@ class XmppS2sManager {
 
   Future<XmppS2sConnection?> _connectOutbound(String remoteDomain) async {
     try {
-      // DNS SRV lookup
+      // DNS SRV lookup — try exact domain first, fall back to parent domain
+      // (MUC services like conference.example.com are components of example.com)
       var host = remoteDomain;
       var targetPort = 5269;
+      var streamDomain = remoteDomain; // domain used in stream open + dialback
 
-      try {
-        final response = await DNSolve()
-            .lookup('_xmpp-server._tcp.$remoteDomain', type: RecordType.srv);
-        if (response.answer?.srvs != null && response.answer!.srvs!.isNotEmpty) {
-          final srv = response.answer!.srvs!.first;
-          if (srv.target != null && srv.target!.isNotEmpty) {
-            host = srv.target!.endsWith('.')
-                ? srv.target!.substring(0, srv.target!.length - 1)
-                : srv.target!;
-            targetPort = srv.port;
-            _log('SRV resolved $remoteDomain → $host:$targetPort');
+      for (final domain in _srvCandidates(remoteDomain)) {
+        try {
+          final response = await DNSolve()
+              .lookup('_xmpp-server._tcp.$domain', type: RecordType.srv);
+          if (response.answer?.srvs != null && response.answer!.srvs!.isNotEmpty) {
+            final srv = response.answer!.srvs!.first;
+            if (srv.target != null && srv.target!.isNotEmpty) {
+              host = srv.target!.endsWith('.')
+                  ? srv.target!.substring(0, srv.target!.length - 1)
+                  : srv.target!;
+              targetPort = srv.port;
+              streamDomain = domain; // use the domain that resolved
+              _log('SRV resolved $remoteDomain → $host:$targetPort (via $domain)');
+              break;
+            }
           }
+        } catch (_) {
+          // NXDomain or lookup failure — try next candidate
         }
-      } catch (e) {
-        _log('SRV lookup for $remoteDomain failed, using direct: $e');
       }
 
       final socket = await Socket.connect(host, targetPort,
@@ -286,13 +296,13 @@ class XmppS2sManager {
 
       final conn = XmppS2sConnection(
         localDomain: localDomain,
-        remoteDomain: remoteDomain,
+        remoteDomain: streamDomain, // stream target domain
         socket: socket,
-      );
+      )..mapKey = remoteDomain; // preserve original domain as pool key
       _outbound[remoteDomain] = conn;
 
-      // Send stream open
-      conn.send(XmppS2sXml.streamOpen(from: localDomain, to: remoteDomain));
+      // Send stream open with the resolved domain (parent if fallback)
+      conn.send(XmppS2sXml.streamOpen(from: localDomain, to: streamDomain));
       conn.state = S2sConnectionState.streamOpened;
 
       // Listen for responses
@@ -432,9 +442,9 @@ class XmppS2sManager {
         },
         onError: (e) {
           _log('Outbound TLS error for ${conn.remoteDomain}: $e');
-          _closeOutbound(conn.remoteDomain);
+          _closeOutbound(conn.mapKey ?? conn.remoteDomain);
         },
-        onDone: () => _closeOutbound(conn.remoteDomain),
+        onDone: () => _closeOutbound(conn.mapKey ?? conn.remoteDomain),
       );
 
       _log('Outbound TLS upgraded for ${conn.remoteDomain}');
@@ -453,7 +463,7 @@ class XmppS2sManager {
       conn.flushPending();
     } else {
       _log('Dialback rejected by ${conn.remoteDomain}: type=$type');
-      _closeOutbound(conn.remoteDomain);
+      _closeOutbound(conn.mapKey ?? conn.remoteDomain);
     }
   }
 
@@ -772,6 +782,18 @@ class XmppS2sManager {
   // -------------------------------------------------------------------------
   // Helpers
   // -------------------------------------------------------------------------
+
+  /// Return SRV lookup candidates: exact domain, then parent domains.
+  /// e.g. "conference.yax.im" → ["conference.yax.im", "yax.im"]
+  List<String> _srvCandidates(String domain) {
+    final candidates = <String>[domain];
+    final parts = domain.split('.');
+    // Try stripping subdomains: conference.example.com → example.com
+    if (parts.length > 2) {
+      candidates.add(parts.sublist(1).join('.'));
+    }
+    return candidates;
+  }
 
   String _generateId({int length = 12}) {
     const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
