@@ -735,6 +735,19 @@ class AtprotoClientService {
     final seen = <String>{};
     seen.add(root.uri);
     _collectReplies(thread, replies, seen, includeSelf: false);
+    try {
+      final localReplies = await _fetchLocalProfilePosts(limit: 120);
+      for (final item in localReplies) {
+        if (item.uri.isEmpty || seen.contains(item.uri)) continue;
+        final matchesRoot =
+            item.rootUri == root.uri ||
+            item.rootUri == postUri ||
+            item.parentUri == root.uri;
+        if (!matchesRoot) continue;
+        replies.add(item);
+        seen.add(item.uri);
+      }
+    } catch (_) {}
     replies.sort((a, b) => a.createdAt.compareTo(b.createdAt));
     return AtprotoThreadData(rootPost: root, replies: replies);
   }
