@@ -113,6 +113,8 @@ class StationChatQueueService {
     final list = await _loadQueue(msg.stationCallsign);
     list.add(msg);
     await _saveQueue(msg.stationCallsign, list);
+    // Try immediately instead of waiting for the next timer tick.
+    unawaited(processQueue(stationCallsign: msg.stationCallsign));
   }
 
   Future<void> processQueue({String? stationCallsign}) async {

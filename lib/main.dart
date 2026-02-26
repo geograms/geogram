@@ -30,6 +30,7 @@ import 'services/station_discovery_service.dart';
 import 'services/notification_service.dart';
 import 'services/i18n_service.dart';
 import 'services/chat_notification_service.dart';
+import 'services/station_chat_queue_service.dart';
 import 'services/dm_notification_service.dart';
 import 'services/backup_notification_service.dart';
 import 'services/message_attention_service.dart';
@@ -372,6 +373,10 @@ void main() async {
     // Initialize chat notification service (needed for unread counts)
     ChatNotificationService().initialize();
     LogService().log('ChatNotificationService initialized');
+
+    // Initialize station chat queue processing (keeps retrying queued sends)
+    StationChatQueueService().initialize();
+    LogService().log('StationChatQueueService initialized');
 
     // Initialize USB attachment service (Android only, for ESP32 auto-detection)
     if (!kIsWeb && Platform.isAndroid) {
