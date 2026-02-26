@@ -74,38 +74,66 @@ class _XmppSettingsPageState extends State<XmppSettingsPage> {
           ),
         ],
       ),
-      body: servers.isEmpty
-          ? Center(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(
-                    Icons.dns_outlined,
-                    size: 48,
-                    color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.5),
-                  ),
-                  const SizedBox(height: 12),
-                  Text(
-                    'No servers configured',
-                    style: theme.textTheme.bodyLarge?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant,
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  FilledButton.icon(
-                    onPressed: () => _showAddServerSheet(context),
-                    icon: const Icon(Icons.add),
-                    label: const Text('Add Server'),
-                  ),
-                ],
+      body: ListView(
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        children: [
+          // Connected / configured servers
+          if (servers.isNotEmpty) ...[
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+              child: Text(
+                'My Servers',
+                style: theme.textTheme.titleSmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
               ),
-            )
-          : ListView.builder(
-              padding: const EdgeInsets.symmetric(vertical: 8),
-              itemCount: servers.length,
-              itemBuilder: (context, index) =>
-                  _buildServerCard(servers[index], theme),
             ),
+            ...servers.map((s) => _buildServerCard(s, theme)),
+            const Divider(height: 24),
+          ],
+          // Public server presets — always visible
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+            child: Text(
+              'Public Servers',
+              style: theme.textTheme.titleSmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+            child: Text(
+              'Tap to register an account. Source: xmpp-providers directory.',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ),
+          const SizedBox(height: 4),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Wrap(
+              spacing: 8,
+              runSpacing: 6,
+              children: XmppServerConfig.presets.map((preset) {
+                // Check if already added
+                final alreadyAdded = servers.any((s) => s.host == preset.host);
+                return ActionChip(
+                  avatar: alreadyAdded
+                      ? Icon(Icons.check, size: 16, color: Colors.green.shade400)
+                      : null,
+                  label: Text(preset.name),
+                  onPressed: alreadyAdded
+                      ? null
+                      : () => _showRegisterSheet(context, preselectedHost: preset.host),
+                );
+              }).toList(),
+            ),
+          ),
+          const SizedBox(height: 16),
+        ],
+      ),
     );
   }
 
@@ -318,10 +346,10 @@ class _XmppSettingsPageState extends State<XmppSettingsPage> {
     );
   }
 
-  void _showRegisterSheet(BuildContext context) {
+  void _showRegisterSheet(BuildContext context, {String? preselectedHost}) {
     final usernameCtl = TextEditingController();
     final stationServer = XmppServer.instance;
-    String? selectedHost = stationServer != null ? 'localhost' : null;
+    String? selectedHost = preselectedHost ?? (stationServer != null ? 'localhost' : null);
     bool registering = false;
     String? statusMessage;
     bool success = false;
