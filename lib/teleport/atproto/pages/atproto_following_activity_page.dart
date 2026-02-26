@@ -100,17 +100,35 @@ class _AtprotoFollowingActivityPageState
 
   void _like(AtprotoFeedItem item) {
     AtprotoClientService().likePost(item).then((ok) {
-      if (!ok && mounted) {
+      if (!mounted) return;
+      if (!ok) {
         _showActionError('Could not like this post');
+        return;
       }
+      _patchItem(
+        item.uri,
+        (current) => current.copyWith(
+          isLikedByMe: true,
+          likeCount: current.likeCount + 1,
+        ),
+      );
     });
   }
 
   void _repost(AtprotoFeedItem item) {
     AtprotoClientService().repost(item).then((ok) {
-      if (!ok && mounted) {
+      if (!mounted) return;
+      if (!ok) {
         _showActionError('Could not repost this post');
+        return;
       }
+      _patchItem(
+        item.uri,
+        (current) => current.copyWith(
+          isRepostedByMe: true,
+          repostCount: current.repostCount + 1,
+        ),
+      );
     });
   }
 
@@ -164,5 +182,16 @@ class _AtprotoFollowingActivityPageState
         ),
       ),
     );
+  }
+
+  void _patchItem(
+    String uri,
+    AtprotoFeedItem Function(AtprotoFeedItem current) mapper,
+  ) {
+    setState(() {
+      _items = _items
+          .map((item) => item.uri == uri ? mapper(item) : item)
+          .toList();
+    });
   }
 }

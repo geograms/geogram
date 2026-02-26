@@ -228,17 +228,35 @@ class _AtprotoSearchPageState extends State<AtprotoSearchPage> {
 
   void _like(AtprotoFeedItem item) {
     AtprotoClientService().likePost(item).then((ok) {
-      if (!ok && mounted) {
+      if (!mounted) return;
+      if (!ok) {
         _showActionError('Could not like this post');
+        return;
       }
+      _patchPost(
+        item.uri,
+        (current) => current.copyWith(
+          isLikedByMe: true,
+          likeCount: current.likeCount + 1,
+        ),
+      );
     });
   }
 
   void _repost(AtprotoFeedItem item) {
     AtprotoClientService().repost(item).then((ok) {
-      if (!ok && mounted) {
+      if (!mounted) return;
+      if (!ok) {
         _showActionError('Could not repost this post');
+        return;
       }
+      _patchPost(
+        item.uri,
+        (current) => current.copyWith(
+          isRepostedByMe: true,
+          repostCount: current.repostCount + 1,
+        ),
+      );
     });
   }
 
@@ -295,5 +313,16 @@ class _AtprotoSearchPageState extends State<AtprotoSearchPage> {
         ),
       ),
     );
+  }
+
+  void _patchPost(
+    String uri,
+    AtprotoFeedItem Function(AtprotoFeedItem current) mapper,
+  ) {
+    setState(() {
+      _posts = _posts
+          .map((item) => item.uri == uri ? mapper(item) : item)
+          .toList();
+    });
   }
 }
