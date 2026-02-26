@@ -398,6 +398,11 @@ class XmppService {
     _clients[serverId]?.discoverRooms(config.derivedConferenceService);
   }
 
+  /// Discover rooms on an arbitrary conference service using an existing connection.
+  void discoverRoomsOnService(String serverId, String conferenceService) {
+    _clients[serverId]?.discoverRooms(conferenceService);
+  }
+
   /// Set room subject/topic.
   void setRoomSubject(String serverId, String roomJid, String subject) {
     _clients[serverId]?.setRoomSubject(roomJid, subject);

@@ -149,7 +149,7 @@ class _XmppRoomListState extends State<XmppRoomList> {
 
     Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (_) => _RoomBrowserPage(
+        builder: (_) => XmppRoomBrowserPage(
           serverId: widget.serverId,
           confService: confService,
         ),
@@ -159,17 +159,17 @@ class _XmppRoomListState extends State<XmppRoomList> {
 }
 
 /// Full-page room browser with search and discovery results.
-class _RoomBrowserPage extends StatefulWidget {
+class XmppRoomBrowserPage extends StatefulWidget {
   final String serverId;
   final String confService;
 
-  const _RoomBrowserPage({required this.serverId, required this.confService});
+  const XmppRoomBrowserPage({super.key, required this.serverId, required this.confService});
 
   @override
-  State<_RoomBrowserPage> createState() => _RoomBrowserPageState();
+  State<XmppRoomBrowserPage> createState() => _XmppRoomBrowserPageState();
 }
 
-class _RoomBrowserPageState extends State<_RoomBrowserPage> {
+class _XmppRoomBrowserPageState extends State<XmppRoomBrowserPage> {
   final _searchCtl = TextEditingController();
   StreamSubscription<XmppEvent>? _eventSub;
   List<Map<String, dynamic>> _rooms = [];

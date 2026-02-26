@@ -13,6 +13,7 @@ import 'package:flutter/services.dart';
 import '../xmpp_service.dart';
 import '../xmpp_client.dart';
 import '../models/xmpp_server_config.dart';
+import '../widgets/xmpp_room_list.dart';
 import '../../../services/xmpp_server_stub.dart' if (dart.library.io) '../../../services/xmpp_server.dart';
 
 class XmppSettingsPage extends StatefulWidget {
@@ -104,7 +105,7 @@ class _XmppSettingsPageState extends State<XmppSettingsPage> {
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
             child: Text(
-              'Tap to register an account. Source: xmpp-providers directory.',
+              'Tap to browse rooms. Long-press to register.',
               style: theme.textTheme.bodySmall?.copyWith(
                 color: theme.colorScheme.onSurfaceVariant,
               ),
@@ -117,16 +118,16 @@ class _XmppSettingsPageState extends State<XmppSettingsPage> {
               spacing: 8,
               runSpacing: 6,
               children: XmppServerConfig.presets.map((preset) {
-                // Check if already added
                 final alreadyAdded = servers.any((s) => s.host == preset.host);
-                return ActionChip(
-                  avatar: alreadyAdded
-                      ? Icon(Icons.check, size: 16, color: Colors.green.shade400)
-                      : null,
-                  label: Text(preset.name),
-                  onPressed: alreadyAdded
-                      ? null
-                      : () => _showRegisterSheet(context, preselectedHost: preset.host),
+                return GestureDetector(
+                  onLongPress: () => _showRegisterSheet(context, preselectedHost: preset.host),
+                  child: ActionChip(
+                    avatar: alreadyAdded
+                        ? Icon(Icons.check, size: 16, color: Colors.green.shade400)
+                        : null,
+                    label: Text(preset.name),
+                    onPressed: () => _browseRooms(context, preset),
+                  ),
                 );
               }).toList(),
             ),
@@ -346,6 +347,34 @@ class _XmppSettingsPageState extends State<XmppSettingsPage> {
     );
   }
 
+  void _browseRooms(BuildContext context, XmppServerConfig preset) {
+    final xmpp = XmppService();
+    // Find the first connected server to use as the connection for S2S discovery
+    final connectedServer = xmpp.servers.where((s) => xmpp.isConnected(s.id)).firstOrNull;
+    if (connectedServer == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('Connect to a server first'),
+          action: SnackBarAction(
+            label: 'Register',
+            onPressed: () => _showRegisterSheet(context, preselectedHost: preset.host),
+          ),
+        ),
+      );
+      return;
+    }
+    final confService = preset.conferenceService ?? 'conference.${preset.host}';
+    xmpp.discoverRoomsOnService(connectedServer.id, confService);
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => XmppRoomBrowserPage(
+          serverId: connectedServer.id,
+          confService: confService,
+        ),
+      ),
+    );
+  }
+
   void _showRegisterSheet(BuildContext context, {String? preselectedHost}) {
     final usernameCtl = TextEditingController();
     final stationServer = XmppServer.instance;
@@ -525,9 +554,13 @@ class _XmppSettingsPageState extends State<XmppSettingsPage> {
                                   final user = usernameCtl.text.trim().isNotEmpty
                                       ? usernameCtl.text.trim()
                                       : null;
+                                  final preset = XmppServerConfig.presets.where((p) => p.host == selectedHost).firstOrNull;
                                   final result = await XmppService().registerAccount(
                                     host: selectedHost!,
                                     username: user,
+                                    port: preset?.port ?? 5223,
+                                    directTls: preset?.directTls ?? true,
+                                    conferenceService: preset?.conferenceService,
                                   );
                                   if (!ctx.mounted) return;
                                   setSheetState(() {
