@@ -33,8 +33,17 @@ import 'reaction_utils.dart';
 /// - Content: all non-metadata lines after header (empty lines skipped)
 /// - Metadata: `--> key: value` lines
 /// - Unsigned reactions: `~~> reaction: emoji=USER1,USER2`
-/// - Field order: content metadata, created_at, npub, signature (signature ALWAYS last)
+/// - Field order: content metadata, created_at, npub, signature (signature ALWAYS last for signed content)
+/// - Unsigned metadata may appear after signature (allowlist only)
 class ChatFormat {
+  /// Allowlist of unsigned metadata keys that may appear AFTER signature
+  /// (excluded from signed content)
+  static const List<String> postSignatureKeys = [
+    'status',
+    'delivery_state',
+    'retry_count',
+    'queued_at',
+  ];
   /// Parse messages from chat file content
   ///
   /// Returns list of parsed messages with all metadata preserved.
@@ -172,7 +181,8 @@ class ChatFormat {
   /// 4. created_at (for signature verification)
   /// 5. npub (public key)
   /// 6. signature (MUST be last for verification)
-  /// 7. Reactions (unsigned, ~~> prefix)
+  /// 7. Unsigned metadata (post-signature allowlist)
+  /// 8. Reactions (unsigned, ~~> prefix)
   static String export(ParsedChatMessage message) {
     final buffer = StringBuffer();
 
@@ -198,6 +208,7 @@ class ChatFormat {
     // Regular metadata (file, lat, lon, voice, duration, sha1, quote, etc.)
     for (final entry in message.metadata.entries) {
       if (reservedKeys.contains(entry.key)) continue;
+      if (postSignatureKeys.contains(entry.key)) continue; // unsigned, after signature
       buffer.writeln('--> ${entry.key}: ${entry.value}');
     }
 
@@ -219,6 +230,13 @@ class ChatFormat {
     // signature MUST be last (for verification)
     if (message.metadata.containsKey('signature')) {
       buffer.writeln('--> signature: ${message.metadata['signature']}');
+    }
+
+    // Unsigned metadata after signature (allowlist only)
+    for (final key in postSignatureKeys) {
+      if (message.metadata.containsKey(key)) {
+        buffer.writeln('--> $key: ${message.metadata[key]}');
+      }
     }
 
     // Unsigned reactions (~~> prefix)

@@ -394,7 +394,7 @@ Great news everyone!
 
 **Optional**: Yes - messages may be signed or unsigned
 
-**Position**: When present, `npub` should be placed immediately before `signature`, and `signature` **MUST be the last metadata field**
+**Position**: When present, `npub` should be placed immediately before `signature`, and `signature` **MUST be the last metadata field in the signed block**. Unsigned metadata (allowlist) may appear after `signature`.
 
 **Storage Philosophy**:
 
@@ -438,8 +438,9 @@ This approach ensures:
 5. Cache verification result for display
 
 **Important Notes**:
-- The signature MUST always be the last metadata field
+- The `signature` MUST be the last metadata field **in the signed block**
 - When both `npub` and `signature` are present, `npub` should be placed immediately before `signature`
+- Unsigned metadata (allowlist) and reactions may appear after `signature`
 - Room ID from the file header is used in NOSTR event tags - changing it would invalidate signatures
 - Authors need both `npub` (public key) and `nsec` (private key) for signing
 - Verifiers only need the author's `npub` (public key)
@@ -519,7 +520,9 @@ Hey, what's up! :-)
 **Metadata Ordering**:
 - Regular metadata fields first
 - `npub` field (if present) should be placed just before `signature`
-- `signature` field (if present) MUST be the last metadata field
+- `signature` field (if present) MUST be the last metadata field in the signed block
+- Unsigned metadata (allowlist) may appear after `signature`, followed by reactions
+  - Allowlist: `status`, `delivery_state`, `retry_count`, `queued_at`
 
 ## NOSTR Integration
 
@@ -971,7 +974,8 @@ Come on! Please, please, please vote!
    - Key is everything before `: `
    - Value is everything after `: `
    - Store in key-value map
-   - Detect `signature` field and ensure it's the last metadata field
+   - Detect `signature` field as the end of the signed block
+   - Allow unsigned metadata (allowlist) after `signature`
 
 5. **Signature Verification** (Optional):
    - Extract `signature` metadata value
@@ -1036,7 +1040,8 @@ Messages should be inserted in chronological order, not necessarily appended to 
 
 ### Signature Validation (Optional)
 
-- `signature` field, when present, MUST be the last metadata field
+- `signature` field, when present, MUST be the last metadata field in the signed block
+- Unsigned metadata (allowlist) and reactions may appear after `signature`
 - Signature value must be valid hex string
 - Signed content includes everything from `>` up to (but not including) `--> signature:`
 - Verification requires author's `npub` (NOSTR public key)

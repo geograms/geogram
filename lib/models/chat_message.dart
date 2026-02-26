@@ -256,6 +256,12 @@ class ChatMessage implements Comparable<ChatMessage> {
   /// --> signature: hex_signature (if signed, must be last)
   String exportAsText() {
     StringBuffer buffer = StringBuffer();
+    const postSignatureKeys = {
+      'status',
+      'delivery_state',
+      'retry_count',
+      'queued_at',
+    };
 
     // Header: > YYYY-MM-DD HH:MM_ss -- CALLSIGN
     buffer.writeln('> $timestamp -- $author');
@@ -289,6 +295,9 @@ class ChatMessage implements Comparable<ChatMessage> {
       if (reservedKeys.contains(entry.key)) {
         continue; // Skip reserved keys - they're written in specific order or excluded
       }
+      if (postSignatureKeys.contains(entry.key)) {
+        continue; // Unsigned metadata goes after signature
+      }
       buffer.writeln('--> ${entry.key}: ${entry.value}');
     }
 
@@ -310,6 +319,13 @@ class ChatMessage implements Comparable<ChatMessage> {
     // Signature must be last if present
     if (isSigned) {
       buffer.writeln('--> signature: $signature');
+    }
+
+    // Unsigned metadata (post-signature allowlist)
+    for (final key in const ['status', 'delivery_state', 'retry_count', 'queued_at']) {
+      if (metadata.containsKey(key)) {
+        buffer.writeln('--> $key: ${metadata[key]}');
+      }
     }
 
     if (reactions.isNotEmpty) {

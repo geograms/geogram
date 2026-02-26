@@ -14,6 +14,7 @@ import '../services/websocket_service.dart';
 import '../services/profile_service.dart';
 import '../services/chat_notification_service.dart';
 import '../services/signing_service.dart';
+import '../services/station_chat_queue_service.dart';
 import '../util/nostr_event.dart';
 import '../util/nostr_crypto.dart';
 import '../util/reaction_utils.dart';
@@ -27,6 +28,24 @@ class _StationApiResponse {
     required this.statusCode,
     required this.body,
     this.transportUsed,
+  });
+}
+
+class StationSendResult {
+  final bool sent;
+  final int? createdAt;
+  final String? eventId;
+  final String? signature;
+  final String? pubkey;
+  final String? npub;
+
+  StationSendResult({
+    required this.sent,
+    this.createdAt,
+    this.eventId,
+    this.signature,
+    this.pubkey,
+    this.npub,
   });
 }
 
@@ -527,6 +546,14 @@ class StationService {
 
         // Sync all chat rooms in background so UI opens instantly
         unawaited(ChatNotificationService().syncAllRooms());
+
+        // Process any queued station chat messages
+        final queueService = StationChatQueueService();
+        unawaited(queueService.initialize());
+        final queueKey = stationCallsign ?? _stations[index].callsign ?? '';
+        if (queueKey.isNotEmpty) {
+          unawaited(queueService.processQueue(stationCallsign: queueKey));
+        }
 
         return true;
       } else {
@@ -1071,10 +1098,90 @@ class StationService {
     return null;
   }
 
+  /// Create a signed NOSTR event for a chat message
+  Future<NostrEvent?> createSignedChatEvent(
+    String roomId,
+    String callsign,
+    String content,
+  ) async {
+    try {
+      final profile = ProfileService().getProfile();
+      final pubkeyHex = NostrCrypto.decodeNpub(profile.npub);
+
+      final event = NostrEvent.textNote(
+        pubkeyHex: pubkeyHex,
+        content: content,
+        tags: [
+          ['t', 'chat'],
+          ['room', roomId],
+          ['callsign', callsign],
+        ],
+      );
+      event.calculateId();
+
+      final signingService = SigningService();
+      await signingService.initialize();
+      final signedEvent = await signingService.signEvent(event, profile);
+      return signedEvent;
+    } catch (e) {
+      LogService().log('Error creating signed chat event: $e');
+      return null;
+    }
+  }
+
+  /// Send a signed chat event via WebSocket or HTTP
+  Future<bool> sendSignedChatEvent(
+    String stationUrl,
+    String roomId,
+    String callsign,
+    NostrEvent signedEvent, {
+    Map<String, String>? metadata,
+    bool preferWebSocket = true,
+  }) async {
+    final hasMetadata = metadata != null && metadata.isNotEmpty;
+
+    // Try WebSocket when no metadata is needed
+    if (preferWebSocket && !hasMetadata) {
+      final isConnected = await _wsService.ensureConnected();
+      if (isConnected) {
+        final nostrMessage = NostrRelayMessage.event(signedEvent);
+        final sent = await _wsService.sendWithVerification({'nostr_event': nostrMessage});
+        if (sent) {
+          return true;
+        }
+      }
+    }
+
+    // HTTP fallback (supports metadata)
+    final pubkeyHex = signedEvent.pubkey;
+    final body = <String, dynamic>{
+      'callsign': callsign,
+      'content': signedEvent.content,
+      'npub': NostrCrypto.encodeNpub(pubkeyHex),
+      'pubkey': pubkeyHex,
+      'event_id': signedEvent.id,
+      'signature': signedEvent.sig,
+      'created_at': signedEvent.createdAt,
+    };
+    if (hasMetadata) {
+      body['metadata'] = metadata;
+    }
+
+    final response = await _stationApiRequest(
+      stationUrl: stationUrl,
+      method: 'POST',
+      path: '/api/chat/rooms/$roomId/messages',
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode(body),
+    );
+
+    return response != null && response.statusCode == 201;
+  }
+
   /// Post a message to a station chat room as a NOSTR event
   /// Creates a signed kind 1 text note and sends via WebSocket or HTTP
-  /// Returns the created_at timestamp (Unix seconds) on success, null on failure
-  Future<int?> postRoomMessage(
+  /// Returns send result on success or failure
+  Future<StationSendResult> postRoomMessage(
     String stationUrl,
     String roomId,
     String callsign,
@@ -1083,147 +1190,53 @@ class StationService {
     Map<String, String>? metadata,
   }) async {
     try {
-      final profile = ProfileService().getProfile();
       final hasMetadata = metadata != null && metadata.isNotEmpty;
-      final useNostr = useNostrProtocol && !hasMetadata;
-
-      if (useNostr) {
-        // Verify WebSocket connection is alive before attempting to send
-        final isConnected = await _wsService.ensureConnected();
-        if (!isConnected) {
-          LogService().log('WebSocket not connected, falling back to HTTP');
-          // Fall through to HTTP fallback below
-        } else {
-          // Create NOSTR event (kind 1 text note)
-          final pubkeyHex = NostrCrypto.decodeNpub(profile.npub);
-
-          final event = NostrEvent.textNote(
-            pubkeyHex: pubkeyHex,
-            content: content,
-            tags: [
-              ['t', 'chat'],
-              ['room', roomId],
-              ['callsign', callsign],
-            ],
-          );
-
-          // Calculate ID and sign with SigningService (handles both extension and nsec)
-          event.calculateId();
-          final signingService = SigningService();
-          await signingService.initialize();
-          final signedEvent = await signingService.signEvent(event, profile);
-          if (signedEvent == null) {
-            LogService().log('Failed to sign message event');
-            return null;
-          }
-
-          // Send via NOSTR protocol: ["EVENT", {...}]
-          final nostrMessage = NostrRelayMessage.event(signedEvent);
-
-          // Console output for debugging
-          print('');
-          print('╔══════════════════════════════════════════════════════════════╗');
-          print('║  SENDING MESSAGE (WebSocket/NOSTR)                           ║');
-          print('╠══════════════════════════════════════════════════════════════╣');
-          print('║  Room: $roomId');
-          print('║  Callsign: $callsign');
-          print('║  Content: $content');
-          print('║  Event ID: ${signedEvent.id?.substring(0, 32)}...');
-          print('║  Kind: ${signedEvent.kind}');
-          print('╚══════════════════════════════════════════════════════════════╝');
-          print('');
-
-          // Use sendWithVerification for reliable delivery
-          final sent = await _wsService.sendWithVerification({'nostr_event': nostrMessage});
-          if (sent) {
-            return signedEvent.createdAt;
-          } else {
-            LogService().log('WebSocket send failed, falling back to HTTP');
-            // Fall through to HTTP fallback below
-          }
-        }
+      final signedEvent = await createSignedChatEvent(roomId, callsign, content);
+      if (signedEvent == null) {
+        LogService().log('Failed to sign message event');
+        return StationSendResult(sent: false);
       }
 
-      // HTTP fallback (when WebSocket is unavailable, send failed, or metadata needs to be included)
-      {
-        LogService().log('Posting message via HTTP to room: $roomId');
-
-        // Create NOSTR event for signature
-        final pubkeyHex = NostrCrypto.decodeNpub(profile.npub);
-        final event = NostrEvent.textNote(
-          pubkeyHex: pubkeyHex,
-          content: content,
-          tags: [
-            ['t', 'chat'],
-            ['room', roomId],
-            ['callsign', callsign],
-          ],
-        );
-        event.calculateId();
-
-        // Sign with SigningService (handles both extension and nsec)
-        final signingService = SigningService();
-        await signingService.initialize();
-        final signedEvent = await signingService.signEvent(event, profile);
-        if (signedEvent == null) {
-          LogService().log('Failed to sign HTTP message event');
-          return null;
-        }
-
-        // Console output for debugging
+      final useNostr = useNostrProtocol && !hasMetadata;
+      if (useNostr) {
         print('');
         print('╔══════════════════════════════════════════════════════════════╗');
-        print('║  SENDING MESSAGE (HTTP)                                      ║');
+        print('║  SENDING MESSAGE (WebSocket/NOSTR)                           ║');
         print('╠══════════════════════════════════════════════════════════════╣');
         print('║  Room: $roomId');
         print('║  Callsign: $callsign');
         print('║  Content: $content');
         print('║  Event ID: ${signedEvent.id?.substring(0, 32)}...');
-        print('║  Pubkey: ${pubkeyHex.substring(0, 16)}...');
+        print('║  Kind: ${signedEvent.kind}');
         print('╚══════════════════════════════════════════════════════════════╝');
         print('');
-
-        // Self-verify the signature before sending
-        final selfVerify = NostrCrypto.schnorrVerify(signedEvent.id!, signedEvent.sig!, pubkeyHex);
-        if (!selfVerify) {
-          print('⚠ WARNING: Desktop cannot verify its own signature!');
-        }
-
-        // Build request body with NOSTR event data
-        final body = <String, dynamic>{
-          'callsign': callsign,
-          'content': content,
-          'npub': profile.npub,
-          'pubkey': pubkeyHex,
-          'event_id': signedEvent.id,
-          'signature': signedEvent.sig,
-          'created_at': signedEvent.createdAt,
-        };
-        if (hasMetadata) {
-          body['metadata'] = metadata;
-        }
-
-        final response = await _stationApiRequest(
-          stationUrl: stationUrl,
-          method: 'POST',
-          path: '/api/chat/rooms/$roomId/messages',
-          headers: {'Content-Type': 'application/json'},
-          body: jsonEncode(body),
-        );
-
-        if (response != null && response.statusCode == 201) {
-          LogService().log('Message posted successfully (HTTP)');
-          return signedEvent.createdAt;
-        } else {
-          final status = response?.statusCode;
-          final bodyText = response?.body ?? '';
-          LogService().log('Failed to post message: $status - $bodyText');
-          return null;
-        }
       }
+
+      final sent = await sendSignedChatEvent(
+        stationUrl,
+        roomId,
+        callsign,
+        signedEvent,
+        metadata: metadata,
+        preferWebSocket: useNostrProtocol,
+      );
+
+      if (sent) {
+        return StationSendResult(
+          sent: true,
+          createdAt: signedEvent.createdAt,
+          eventId: signedEvent.id,
+          signature: signedEvent.sig,
+          pubkey: signedEvent.pubkey,
+          npub: NostrCrypto.encodeNpub(signedEvent.pubkey),
+        );
+      }
+
+      LogService().log('Failed to post message');
+      return StationSendResult(sent: false);
     } catch (e) {
       LogService().log('Error posting message: $e');
-      return null;
+      return StationSendResult(sent: false);
     }
   }
 

@@ -240,8 +240,9 @@ class ChatNotificationService {
 
     // Try to get image path if it's an image attachment
     String? imagePath;
-    if (resolved.fileName != null && _isImageFile(resolved.fileName!)) {
-      imagePath = await _tryGetCachedImagePath(update, roomId, resolved.fileName!);
+    final fileName = resolved.metadata['file'] ?? resolved.metadata['voice'];
+    if (fileName != null && _isImageFile(fileName)) {
+      imagePath = await _tryGetCachedImagePath(update, roomId, fileName);
     }
 
     await DMNotificationService().showChatRoomMessage(
@@ -249,7 +250,7 @@ class ChatNotificationService {
       fromCallsign: resolved.callsign,
       content: resolved.content,
       verified: resolved.verified,
-      fileName: resolved.fileName,
+      fileName: fileName,
       imagePath: imagePath,
     );
   }
@@ -257,37 +258,19 @@ class ChatNotificationService {
   /// Cache a resolved message from a notification so the UI has it immediately
   void _cacheResolvedMessage(
     UpdateNotification update,
-    ({String callsign, String content, bool verified, String? fileName}) resolved,
+    StationChatMessage resolved,
   ) {
     final station = _stationService.getPreferredStation();
     if (station == null || station.callsign == null || station.callsign!.isEmpty) return;
 
     final roomId = update.path;
-    final now = DateTime.now();
-    final timestamp = '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')} '
-        '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}_${now.second.toString().padLeft(2, '0')}';
+    // Only cache when message has a signature to avoid unsigned duplicates
+    if (!resolved.hasSignature) return;
 
-    final metadata = <String, String>{};
-    if (resolved.fileName != null) {
-      metadata['file'] = resolved.fileName!;
-    }
-    if (resolved.verified) {
-      metadata['verified'] = 'true';
-    }
-
-    final msg = StationChatMessage(
-      roomId: roomId,
-      callsign: resolved.callsign,
-      content: resolved.content,
-      timestamp: timestamp,
-      metadata: metadata,
-      verified: resolved.verified,
-    );
-
-    unawaited(_cacheService.mergeMessages(station.callsign!, roomId, [msg]));
+    unawaited(_cacheService.mergeMessages(station.callsign!, roomId, [resolved]));
   }
 
-  Future<({String callsign, String content, bool verified, String? fileName})?> _resolveChatMessage(
+  Future<StationChatMessage?> _resolveChatMessage(
     UpdateNotification update,
   ) async {
     final roomId = update.path;
@@ -304,15 +287,7 @@ class ChatNotificationService {
         );
         if (messages.isNotEmpty) {
           messages.sort((a, b) => a.timestamp.compareTo(b.timestamp));
-          final latest = messages.last;
-          // Get file name from metadata
-          final fileName = latest.metadata['file'] ?? latest.metadata['voice'];
-          return (
-            callsign: latest.callsign,
-            content: latest.content,
-            verified: latest.verified,
-            fileName: fileName,
-          );
+          return messages.last;
         }
       } catch (e) {
         LogService().log('ChatNotificationService: Failed to fetch latest message: $e');
@@ -329,14 +304,18 @@ class ChatNotificationService {
       for (final cacheKey in candidateKeys) {
         if (cacheKey == null || cacheKey.isEmpty) continue;
         final cached = await _cacheService.loadLatestMessage(cacheKey, roomId);
-        if (cached != null) {
-          // Get file name from metadata
-          final fileName = cached.getMeta('file') ?? cached.getMeta('voice');
-          return (
+        if (cached != null && cached.hasSignature) {
+          return StationChatMessage(
+            roomId: roomId,
             callsign: cached.author,
             content: cached.content,
+            timestamp: cached.timestamp,
+            metadata: cached.metadata,
+            reactions: cached.reactions,
+            npub: cached.npub,
+            signature: cached.signature,
             verified: cached.isVerified,
-            fileName: fileName,
+            hasSignature: cached.hasSignature,
           );
         }
       }

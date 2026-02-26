@@ -45,6 +45,7 @@ import '../services/audio_platform_stub.dart'
 import '../services/contact_service.dart';
 import '../services/nip05_resolver_service.dart';
 import '../services/websocket_service.dart';
+import '../services/station_chat_queue_service.dart';
 import '../models/contact.dart';
 import 'chat_settings_page.dart';
 import 'room_management_page.dart';
@@ -515,6 +516,18 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       for (final msg in newMessages) {
         final key = '${msg.timestamp}|${msg.callsign}';
         if (!existingKeys.contains(key)) {
+          // Remove pending duplicates when a signed message arrives
+          existing.removeWhere((m) {
+            if (m.metadata['status'] != 'pending') return false;
+            if (msg.eventId != null && msg.eventId!.isNotEmpty) {
+              return m.eventId == msg.eventId || m.metadata['event_id'] == msg.eventId;
+            }
+            if (m.callsign.toUpperCase() != msg.callsign.toUpperCase()) return false;
+            if (m.content != msg.content) return false;
+            final dtA = ChatFormat.parseTimestamp(m.timestamp);
+            final dtB = ChatFormat.parseTimestamp(msg.timestamp);
+            return dtA.difference(dtB).abs().inSeconds <= 300;
+          });
           existing.add(msg);
           existingKeys.add(key);
         }
@@ -1595,81 +1608,188 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
   /// Send a message to a station chat room as a signed NOSTR event
   Future<void> _sendRelayMessage(String content, {Map<String, String>? metadata}) async {
     if (_selectedStationRoom == null) return;
-
-    // Check if station is reachable before trying to send
-    if (!_stationReachable) {
-      _showError('Cannot send message - station is offline');
-      return;
-    }
-
     final currentProfile = _profileService.getProfile();
 
     try {
-      // Send as a properly signed NOSTR event (kind 1 text note)
-      // StationService handles creating the event, signing with BIP-340 Schnorr,
-      // and sending via WebSocket or HTTP
-      // Returns the created_at timestamp (Unix seconds) on success, null on failure
-      final createdAt = await _stationService.postRoomMessage(
-        _selectedStationRoom!.stationUrl,
+      final signedEvent = await _stationService.createSignedChatEvent(
         _selectedStationRoom!.id,
         currentProfile.callsign,
         content,
-        metadata: metadata,
+      );
+      if (signedEvent == null) {
+        _showError('Failed to sign message');
+        return;
+      }
+
+      final createdAt = signedEvent.createdAt;
+      final timestamp = ChatFormat.epochToTimestamp(createdAt);
+      final pendingMeta = <String, String>{};
+      if (metadata != null) {
+        pendingMeta.addAll(metadata);
+      }
+      pendingMeta['created_at'] = createdAt.toString();
+      pendingMeta['npub'] = currentProfile.npub.isNotEmpty
+          ? currentProfile.npub
+          : NostrCrypto.encodeNpub(signedEvent.pubkey);
+      if (signedEvent.sig != null && signedEvent.sig!.isNotEmpty) {
+        pendingMeta['signature'] = signedEvent.sig!;
+      }
+      if (signedEvent.id != null && signedEvent.id!.isNotEmpty) {
+        pendingMeta['event_id'] = signedEvent.id!;
+      }
+      pendingMeta['status'] = 'pending';
+      pendingMeta['queued_at'] = DateTime.now().toUtc().toIso8601String();
+
+      final newMessage = StationChatMessage(
+        timestamp: timestamp,
+        callsign: currentProfile.callsign,
+        content: content,
+        roomId: _selectedStationRoom!.id,
+        metadata: pendingMeta,
+        npub: pendingMeta['npub'],
+        signature: pendingMeta['signature'],
+        eventId: pendingMeta['event_id'],
+        createdAt: createdAt,
+        verified: false,
+        hasSignature: true,
       );
 
-      if (createdAt != null) {
-        // Optimistic update - use the SAME timestamp that was sent to the server
-        // This ensures deduplication works when the server broadcasts the message back
-        // IMPORTANT: Keep in UTC to match how server stores and cache normalizes timestamps
-        final timestamp = ChatFormat.epochToTimestamp(createdAt);
+      // Track uploaded file to avoid re-downloading
+      if (metadata != null && metadata.containsKey('file')) {
+        _recentlyUploadedFiles.add(metadata['file']!);
+      }
 
-        final newMessage = StationChatMessage(
-          timestamp: timestamp,
+      _setStateIfMounted(() {
+        _stationMessages.add(newMessage);
+        final cached = List<StationChatMessage>.from(
+          _stationMessageCache[_selectedStationRoom!.id] ?? [],
+        );
+        cached.add(newMessage);
+        _stationMessageCache[_selectedStationRoom!.id] = cached;
+        _quotedMessage = null;
+      });
+
+      if (_lastRelayCacheKey != null && _lastRelayCacheKey!.isNotEmpty) {
+        await _cacheService.mergeMessages(
+          _lastRelayCacheKey!,
+          _selectedStationRoom!.id,
+          [newMessage],
+        );
+      }
+
+      if (!_stationReachable) {
+        final queued = QueuedStationChatMessage(
+          stationUrl: _selectedStationRoom!.stationUrl,
+          stationCallsign: _lastRelayCacheKey ?? '',
+          roomId: _selectedStationRoom!.id,
           callsign: currentProfile.callsign,
           content: content,
-          roomId: _selectedStationRoom!.id,
-          metadata: metadata,
-          npub: currentProfile.npub,
-          verified: true,
-          hasSignature: true,
+          metadata: pendingMeta,
+          eventJson: signedEvent.toJson(),
+          retryCount: 0,
+          queuedAt: DateTime.now().toUtc(),
+          nextAttemptAt: null,
         );
+        await StationChatQueueService().enqueue(queued);
+        return;
+      }
 
-        // Track uploaded file to avoid re-downloading
-        if (metadata != null && metadata.containsKey('file')) {
-          _recentlyUploadedFiles.add(metadata['file']!);
-        }
+      final sent = await _stationService.sendSignedChatEvent(
+        _selectedStationRoom!.stationUrl,
+        _selectedStationRoom!.id,
+        currentProfile.callsign,
+        signedEvent,
+        metadata: _stripUnsignedStatusMetadata(pendingMeta),
+      );
 
-        _setStateIfMounted(() {
-          _stationMessages.add(newMessage);
-          final cached = List<StationChatMessage>.from(
-            _stationMessageCache[_selectedStationRoom!.id] ?? [],
-          );
-          cached.add(newMessage);
-          _stationMessageCache[_selectedStationRoom!.id] = cached;
-          _quotedMessage = null;
-        });
-
-        // Cache the message locally (normalized timestamp will deduplicate with server response)
-        if (_lastRelayCacheKey != null && _lastRelayCacheKey!.isNotEmpty) {
-          await _cacheService.mergeMessages(
-            _lastRelayCacheKey!,
-            _selectedStationRoom!.id,
-            [newMessage],
-          );
-        }
+      if (sent) {
+        _updatePendingStationMessage(
+          _selectedStationRoom!.id,
+          signedEvent.id,
+          _stripUnsignedStatusMetadata(pendingMeta),
+        );
       } else {
-        // Send failed - station may be unreachable
-        _setStateIfMounted(() {
-          _connectionStatus = _StationConnectionStatus.offline;
-        });
-        _showError('Failed to send message - station offline');
+        final queued = QueuedStationChatMessage(
+          stationUrl: _selectedStationRoom!.stationUrl,
+          stationCallsign: _lastRelayCacheKey ?? '',
+          roomId: _selectedStationRoom!.id,
+          callsign: currentProfile.callsign,
+          content: content,
+          metadata: pendingMeta,
+          eventJson: signedEvent.toJson(),
+          retryCount: 0,
+          queuedAt: DateTime.now().toUtc(),
+          nextAttemptAt: null,
+        );
+        await StationChatQueueService().enqueue(queued);
       }
     } catch (e) {
       // Station became unreachable - update status
       _setStateIfMounted(() {
         _connectionStatus = _StationConnectionStatus.offline;
       });
-      _showError('Station offline - message not sent');
+      _showError('Station offline - message queued');
+    }
+  }
+
+  Map<String, String> _stripUnsignedStatusMetadata(Map<String, String> metadata) {
+    final cleaned = Map<String, String>.from(metadata);
+    cleaned.remove('status');
+    cleaned.remove('delivery_state');
+    cleaned.remove('retry_count');
+    cleaned.remove('queued_at');
+    return cleaned;
+  }
+
+  Future<void> _updatePendingStationMessage(
+    String roomId,
+    String? eventId,
+    Map<String, String> metadata,
+  ) async {
+    StationChatMessage? updatedMessage;
+
+    bool matches(StationChatMessage msg) {
+      if (eventId != null && eventId.isNotEmpty) {
+        return msg.eventId == eventId || msg.metadata['event_id'] == eventId;
+      }
+      return msg.metadata['status'] == 'pending' &&
+          msg.callsign.toUpperCase() == _profileService.getProfile().callsign.toUpperCase() &&
+          msg.content.isNotEmpty;
+    }
+
+    final cached = List<StationChatMessage>.from(
+      _stationMessageCache[roomId] ?? _stationMessages,
+    );
+    final index = cached.indexWhere(matches);
+    if (index != -1) {
+      final existing = cached[index];
+      final updatedMeta = Map<String, String>.from(metadata);
+      if (existing.metadata['event_id'] != null) {
+        updatedMeta['event_id'] = existing.metadata['event_id']!;
+      }
+      updatedMessage = StationChatMessage(
+        roomId: existing.roomId,
+        callsign: existing.callsign,
+        content: existing.content,
+        timestamp: existing.timestamp,
+        metadata: updatedMeta,
+        reactions: existing.reactions,
+        npub: updatedMeta['npub'] ?? existing.npub,
+        signature: updatedMeta['signature'] ?? existing.signature,
+        eventId: updatedMeta['event_id'] ?? existing.eventId,
+        createdAt: existing.createdAt,
+        hasSignature: (updatedMeta['signature'] ?? existing.signature)?.isNotEmpty == true,
+        verified: existing.verified,
+      );
+      cached[index] = updatedMessage;
+    }
+
+    if (updatedMessage != null) {
+      _stationMessageCache[roomId] = cached;
+      _applyStationMessageLimit(cached);
+      if (_lastRelayCacheKey != null && _lastRelayCacheKey!.isNotEmpty) {
+        await _cacheService.mergeMessages(_lastRelayCacheKey!, roomId, [updatedMessage]);
+      }
     }
   }
 
@@ -2294,7 +2414,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
         'file_size': fileSize.toString(),
       };
 
-      final createdAt = await _stationService.postRoomMessage(
+      final result = await _stationService.postRoomMessage(
         _selectedStationRoom!.stationUrl,
         _selectedStationRoom!.id,
         currentProfile.callsign,
@@ -2302,7 +2422,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
         metadata: metadata,
       );
 
-      if (createdAt != null) {
+      if (result.sent) {
         // Refresh to show the new message
         await _refreshRelayMessages();
       } else {

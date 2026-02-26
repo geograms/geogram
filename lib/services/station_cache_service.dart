@@ -444,6 +444,9 @@ class RelayCacheService {
       metadata['signature'] = msg.signature!;
       metadata['has_signature'] = 'true';
     }
+    if (msg.eventId != null && msg.eventId!.isNotEmpty) {
+      metadata['event_id'] = msg.eventId!;
+    }
     if (msg.verified) {
       metadata['verified'] = 'true';
     }
@@ -466,6 +469,7 @@ class RelayCacheService {
     final npub = metadata['npub'];
     final signature = metadata['signature'];
     final createdAtStr = metadata['created_at'];
+    final eventId = metadata['event_id'];
     final createdAt = createdAtStr != null ? int.tryParse(createdAtStr) : null;
 
     // Determine if message has signature and is verified
@@ -482,10 +486,81 @@ class RelayCacheService {
       reactions: msg.reactions,
       npub: npub,
       signature: signature,
+      eventId: eventId,
       createdAt: createdAt,
       hasSignature: hasSignature,
       verified: verified,
     );
+  }
+
+  String _messageDedupeKey(ChatMessage msg) {
+    final eventId = msg.getMeta('event_id');
+    if (eventId != null && eventId.isNotEmpty) {
+      return 'event:$eventId';
+    }
+    final signature = msg.getMeta('signature');
+    if (signature != null && signature.isNotEmpty) {
+      return 'sig:$signature';
+    }
+    final createdAt = msg.getMeta('created_at');
+    if (createdAt != null && createdAt.isNotEmpty) {
+      return 'created:$createdAt|${msg.author.toUpperCase()}';
+    }
+    return 'ts:${msg.timestamp}|${msg.author.toUpperCase()}|${msg.content}';
+  }
+
+  int _messageQualityScore(ChatMessage msg) {
+    final verified = msg.getMeta('verified') == 'true';
+    final hasSignature = msg.getMeta('signature')?.isNotEmpty == true ||
+        msg.getMeta('has_signature') == 'true';
+    final isPending = msg.getMeta('status') == 'pending';
+
+    if (verified) return 3;
+    if (hasSignature && !isPending) return 2;
+    if (hasSignature && isPending) return 1;
+    if (!hasSignature && !isPending) return 0;
+    return -1; // unsigned + pending
+  }
+
+  bool _isUnsignedOrPending(ChatMessage msg) {
+    final hasSignature = msg.getMeta('signature')?.isNotEmpty == true ||
+        msg.getMeta('has_signature') == 'true';
+    if (!hasSignature) return true;
+    return msg.getMeta('status') == 'pending';
+  }
+
+  List<ChatMessage> _removeUnsignedNearDuplicates(List<ChatMessage> messages) {
+    // Remove unsigned/pending duplicates when a signed version exists nearby
+    final result = <ChatMessage>[];
+    for (final msg in messages) {
+      bool replaced = false;
+      for (int i = 0; i < result.length; i++) {
+        final existing = result[i];
+        if (existing.author.toUpperCase() != msg.author.toUpperCase()) continue;
+        if (existing.content != msg.content) continue;
+
+        final dtA = ChatFormat.parseTimestamp(existing.timestamp);
+        final dtB = ChatFormat.parseTimestamp(msg.timestamp);
+        final seconds = dtA.difference(dtB).abs().inSeconds;
+        if (seconds > 300) continue;
+
+        final existingBetter = !_isUnsignedOrPending(existing);
+        final msgBetter = !_isUnsignedOrPending(msg);
+        if (existingBetter && !msgBetter) {
+          replaced = true;
+          break;
+        }
+        if (msgBetter && !existingBetter) {
+          result[i] = msg;
+          replaced = true;
+          break;
+        }
+      }
+      if (!replaced) {
+        result.add(msg);
+      }
+    }
+    return result;
   }
 
   /// Merge new messages into cached daily files without losing existing content
@@ -533,15 +608,26 @@ class RelayCacheService {
 
         final merged = <String, ChatMessage>{};
         for (final msg in existing) {
-          merged['${msg.timestamp}|${msg.author.toUpperCase()}'] = msg;
+          merged[_messageDedupeKey(msg)] = msg;
         }
         for (final msg in dayMessages) {
           final chatMsg = _stationChatToChatMessage(msg);
-          merged['${chatMsg.timestamp}|${chatMsg.author.toUpperCase()}'] = chatMsg;
+          final key = _messageDedupeKey(chatMsg);
+          final existingMsg = merged[key];
+          if (existingMsg == null) {
+            merged[key] = chatMsg;
+          } else {
+            final currentScore = _messageQualityScore(existingMsg);
+            final incomingScore = _messageQualityScore(chatMsg);
+            if (incomingScore > currentScore) {
+              merged[key] = chatMsg;
+            }
+          }
         }
 
-        final mergedMessages = merged.values.toList()
+        var mergedMessages = merged.values.toList()
           ..sort((a, b) => a.timestamp.compareTo(b.timestamp));
+        mergedMessages = _removeUnsignedNearDuplicates(mergedMessages);
 
         final buffer = StringBuffer();
         buffer.writeln('# ${roomId.toUpperCase()}: $roomId from $dateStr');

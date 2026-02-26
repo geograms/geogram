@@ -10082,7 +10082,7 @@ function cleanup() {
 
           // Send the message
           logs.add('Sending message...');
-          final createdAt = await stationService.postRoomMessage(
+          final result = await stationService.postRoomMessage(
             preferred.url,
             room,
             profile.callsign,
@@ -10090,8 +10090,8 @@ function cleanup() {
             metadata: metadata.isNotEmpty ? metadata : null,
           );
 
-          if (createdAt != null) {
-            logs.add('Message sent successfully, created_at: $createdAt');
+          if (result.sent) {
+            logs.add('Message sent successfully, created_at: ${result.createdAt}');
             return shelf.Response.ok(
               jsonEncode({
                 'success': true,
@@ -10099,7 +10099,7 @@ function cleanup() {
                 'room': room,
                 'content': content,
                 'metadata': metadata,
-                'created_at': createdAt,
+                'created_at': result.createdAt,
                 'logs': logs,
               }),
               headers: headers,

@@ -134,7 +134,10 @@ class StationChatMessage {
     }
     final npub = json['npub']?.toString() ?? metadata['npub'];
     final signature = json['signature']?.toString() ?? metadata['signature'];
-    final eventId = json['event_id']?.toString() ?? metadata['event_id'];
+    final eventId =
+        json['event_id']?.toString() ??
+        json['id']?.toString() ??
+        metadata['event_id'];
     final createdAt =
         _normalizeEpoch(json['created_at']) ??
         (metadata['created_at'] != null

@@ -18,6 +18,7 @@ import '../cli/commands/command_registry.dart';
 export '../cli/commands/command_registry.dart' show CompletionCandidate;
 import '../cli/commands/general_commands.dart';
 import '../cli/commands/station_command.dart';
+import '../services/log_service.dart';
 import '../cli/commands/devices_command.dart';
 import '../cli/commands/nip05_command.dart';
 import '../cli/commands/chat_command.dart';
@@ -382,12 +383,15 @@ class _StationServiceAdapter implements StationCommandInterface {
     if (_stationRoomIds.contains(roomId)) {
       final preferred = StationService().getPreferredStation();
       if (preferred != null) {
-        await StationService().postRoomMessage(
+        final result = await StationService().postRoomMessage(
           preferred.url,
           roomId,
           profile.callsign,
           content,
         );
+        if (!result.sent) {
+          LogService().log('CLI: Failed to post station message');
+        }
         return;
       }
     }
