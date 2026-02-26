@@ -620,7 +620,7 @@ class XmppService {
     final room = _rooms[key];
     if (room != null) {
       room.lastMessage = msg;
-      if (!msg.isOutgoing) room.unreadCount++;
+      if (!msg.isOutgoing && !msg.isSystemMessage) room.unreadCount++;
     }
 
     // Queue for batch write to per-server DB
