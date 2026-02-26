@@ -349,18 +349,22 @@ class XmppClient {
     final buf = StringBuffer();
 
     // Poll-based read — RawSocket.read() returns null when no data available.
+    // patterns: list of strings — returns when ANY pattern is found in buffer.
     Future<String> waitFor(
       RawSocket sock,
       String pattern, {
       int seconds = 15,
+      List<String>? altPatterns,
     }) async {
+      final allPatterns = [pattern, ...?altPatterns];
       final deadline = DateTime.now().add(Duration(seconds: seconds));
-      while (!buf.toString().contains(pattern)) {
+      while (true) {
+        final current = buf.toString();
+        if (allPatterns.any((p) => current.contains(p))) break;
         if (DateTime.now().isAfter(deadline)) {
-          final snippet = buf.toString();
           throw TimeoutException(
               'Timeout waiting for: $pattern\n'
-              'Buffer: ${snippet.substring(0, snippet.length.clamp(0, 300))}');
+              'Buffer: ${current.substring(0, current.length.clamp(0, 300))}');
         }
         final data = sock.read();
         if (data != null && data.isNotEmpty) {
@@ -400,8 +404,8 @@ class XmppClient {
         }
       }
 
-      Future<String> wait(String pattern, {int seconds = 15}) =>
-          waitFor(secureSock ?? rawSock!, pattern, seconds: seconds);
+      Future<String> wait(String pattern, {int seconds = 15, List<String>? alt}) =>
+          waitFor(secureSock ?? rawSock!, pattern, seconds: seconds, altPatterns: alt);
 
       // 2. Open stream — use domain (XMPP domain), not host (server address)
       send("<?xml version='1.0'?>"
@@ -442,7 +446,7 @@ class XmppClient {
       // 5. Query registration fields
       buf.clear();
       send("<iq type='get' id='reg1'><query xmlns='jabber:iq:register'/></iq>");
-      response = await wait('</iq>');
+      response = await wait('</iq>', alt: ["id='reg1'/>", 'id="reg1"/>']);
       log.log(
           'XmppRegister: query: ${response.substring(0, response.length.clamp(0, 300))}');
 
@@ -475,7 +479,7 @@ class XmppClient {
           "<password>${_xmlEscape(password!)}</password>"
           "</query></iq>");
 
-      response = await wait('</iq>');
+      response = await wait('</iq>', alt: ["id='reg2'/>", 'id="reg2"/>']);
       log.log(
           'XmppRegister: result: ${response.substring(0, response.length.clamp(0, 300))}');
 
