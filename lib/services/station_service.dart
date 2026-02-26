@@ -1137,6 +1137,7 @@ class StationService {
     NostrEvent signedEvent, {
     Map<String, String>? metadata,
     bool preferWebSocket = true,
+    Duration timeout = const Duration(seconds: 10),
   }) async {
     final hasMetadata = metadata != null && metadata.isNotEmpty;
 
@@ -1147,8 +1148,12 @@ class StationService {
         final nostrMessage = NostrRelayMessage.event(signedEvent);
         final sent = await _wsService.sendWithVerification({'nostr_event': nostrMessage});
         if (sent) {
+          LogService().log('StationService: chat sent via websocket (room=$roomId)');
           return true;
         }
+        LogService().log('StationService: websocket send failed (room=$roomId)');
+      } else {
+        LogService().log('StationService: websocket not connected (room=$roomId)');
       }
     }
 
@@ -1173,9 +1178,44 @@ class StationService {
       path: '/api/chat/rooms/$roomId/messages',
       headers: {'Content-Type': 'application/json'},
       body: jsonEncode(body),
+      timeout: timeout,
     );
 
-    return response != null && response.statusCode == 201;
+    if (response == null) {
+      LogService().log('StationService: HTTP chat send failed (no response)');
+      return false;
+    }
+    if (response.statusCode != 201) {
+      LogService().log(
+        'StationService: HTTP chat send failed '
+        '(status=${response.statusCode}, body=${response.body})',
+      );
+      return false;
+    }
+    return true;
+  }
+
+  /// Remove unsigned status fields and redundant event fields from send metadata.
+  /// Returns null if nothing remains, allowing WebSocket fast-path.
+  Map<String, String>? sanitizeChatMetadataForSend(Map<String, String>? metadata) {
+    if (metadata == null || metadata.isEmpty) return null;
+    final cleaned = stripUnsignedStatusMetadata(metadata);
+    // These are already included in the signed event/body.
+    cleaned.remove('event_id');
+    cleaned.remove('created_at');
+    cleaned.remove('npub');
+    cleaned.remove('signature');
+    return cleaned.isEmpty ? null : cleaned;
+  }
+
+  /// Strip unsigned delivery status fields (do not remove signed event fields).
+  Map<String, String> stripUnsignedStatusMetadata(Map<String, String> metadata) {
+    final cleaned = Map<String, String>.from(metadata);
+    cleaned.remove('status');
+    cleaned.remove('delivery_state');
+    cleaned.remove('retry_count');
+    cleaned.remove('queued_at');
+    return cleaned;
   }
 
   /// Post a message to a station chat room as a NOSTR event

@@ -85,9 +85,10 @@ class StationChatQueueService {
   bool _initialized = false;
   bool _isProcessing = false;
 
-  static const _processInterval = Duration(seconds: 15);
+  static const _processInterval = Duration(seconds: 5);
   static const _maxRetries = 10;
-  static const _baseBackoffSeconds = 5;
+  static const _baseBackoffSeconds = 3;
+  static const _maxBackoffSeconds = 30;
 
   Future<void> initialize() async {
     if (_initialized || kIsWeb) return;
@@ -143,7 +144,8 @@ class StationChatQueueService {
           if (!sent) {
             final retries = msg.retryCount + 1;
             if (retries <= _maxRetries) {
-              final backoffSeconds = _baseBackoffSeconds * (1 << (retries - 1));
+              final backoffSeconds =
+                  (_baseBackoffSeconds * (1 << (retries - 1))).clamp(1, _maxBackoffSeconds);
               updated.add(QueuedStationChatMessage(
                 stationUrl: msg.stationUrl,
                 stationCallsign: msg.stationCallsign,
@@ -172,13 +174,14 @@ class StationChatQueueService {
   Future<bool> _trySendQueuedMessage(QueuedStationChatMessage msg) async {
     try {
       final event = NostrEvent.fromJson(msg.eventJson);
-      final metadata = _stripUnsignedStatusMetadata(msg.metadata);
+      final metadata = _stationService.stripUnsignedStatusMetadata(msg.metadata);
+      final sendMetadata = _stationService.sanitizeChatMetadataForSend(msg.metadata);
       final sent = await _stationService.sendSignedChatEvent(
         msg.stationUrl,
         msg.roomId,
         msg.callsign,
         event,
-        metadata: metadata,
+        metadata: sendMetadata,
       );
 
       if (sent) {
@@ -262,15 +265,6 @@ class StationChatQueueService {
     } catch (e) {
       LogService().log('StationChatQueueService: Failed to mark message failed: $e');
     }
-  }
-
-  Map<String, String> _stripUnsignedStatusMetadata(Map<String, String> metadata) {
-    final cleaned = Map<String, String>.from(metadata);
-    cleaned.remove('status');
-    cleaned.remove('delivery_state');
-    cleaned.remove('retry_count');
-    cleaned.remove('queued_at');
-    return cleaned;
   }
 
   Future<List<String>> _getQueuedCallsigns() async {

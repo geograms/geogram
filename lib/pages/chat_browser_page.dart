@@ -1689,19 +1689,20 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
         );
       }
 
+      final sendMetadata = _stationService.sanitizeChatMetadataForSend(pendingMeta);
       final sent = await _stationService.sendSignedChatEvent(
         _selectedStationRoom!.stationUrl,
         _selectedStationRoom!.id,
         currentProfile.callsign,
         signedEvent,
-        metadata: _stripUnsignedStatusMetadata(pendingMeta),
+        metadata: sendMetadata,
       );
 
       if (sent) {
         _updatePendingStationMessage(
           _selectedStationRoom!.id,
           signedEvent.id,
-          _stripUnsignedStatusMetadata(pendingMeta),
+          _stationService.stripUnsignedStatusMetadata(pendingMeta),
         );
       } else {
         final queued = QueuedStationChatMessage(
@@ -1725,15 +1726,6 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       });
       _showError('Station offline - message queued');
     }
-  }
-
-  Map<String, String> _stripUnsignedStatusMetadata(Map<String, String> metadata) {
-    final cleaned = Map<String, String>.from(metadata);
-    cleaned.remove('status');
-    cleaned.remove('delivery_state');
-    cleaned.remove('retry_count');
-    cleaned.remove('queued_at');
-    return cleaned;
   }
 
   String _stationMessageKey(StationChatMessage msg) {
