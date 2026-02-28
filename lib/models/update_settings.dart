@@ -7,6 +7,7 @@ enum UpdateAssetType {
   linuxDesktop,
   linuxCli,
   windowsDesktop,
+  windowsSetup,
   macosDesktop,
   iosUnsigned,
   web,
@@ -24,6 +25,8 @@ enum UpdateAssetType {
         return 'linux-cli';
       case UpdateAssetType.windowsDesktop:
         return 'windows-desktop';
+      case UpdateAssetType.windowsSetup:
+        return 'windows-setup';
       case UpdateAssetType.macosDesktop:
         return 'macos-desktop';
       case UpdateAssetType.iosUnsigned:
@@ -47,6 +50,8 @@ enum UpdateAssetType {
         return 'Linux CLI';
       case UpdateAssetType.windowsDesktop:
         return 'Windows Desktop';
+      case UpdateAssetType.windowsSetup:
+        return 'Windows Installer';
       case UpdateAssetType.macosDesktop:
         return 'macOS Desktop';
       case UpdateAssetType.iosUnsigned:
@@ -65,6 +70,7 @@ enum UpdateAssetType {
     if (lower == 'app-release.aab') return UpdateAssetType.androidAab;
     if (lower.contains('linux') && lower.contains('cli')) return UpdateAssetType.linuxCli;
     if (lower.contains('linux')) return UpdateAssetType.linuxDesktop;
+    if (lower.contains('windows') && lower.contains('setup')) return UpdateAssetType.windowsSetup;
     if (lower.contains('windows')) return UpdateAssetType.windowsDesktop;
     if (lower.contains('macos')) return UpdateAssetType.macosDesktop;
     if (lower.contains('ios') && lower.endsWith('.ipa')) return UpdateAssetType.iosUnsigned;

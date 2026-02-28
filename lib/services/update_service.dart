@@ -498,6 +498,12 @@ class UpdateService {
           .replaceAll('{binary}', platform.binaryPattern);
     }
 
+    // On Windows, prefer the setup.exe installer over the ZIP
+    if (!kIsWeb && Platform.isWindows) {
+      final setupUrl = release.getAssetUrl(UpdateAssetType.windowsSetup);
+      if (setupUrl != null) return setupUrl;
+    }
+
     // Use asset URL (works for both station and GitHub releases)
     return release.getAssetUrl(assetType);
   }
@@ -996,13 +1002,18 @@ class UpdateService {
       }
       LogService().log('Download directory: ${tempDir.path}');
       final platform = detectPlatform();
+      // On Windows, if we're downloading the setup.exe, use .exe extension
+      final bool isWindowsSetup = !kIsWeb && Platform.isWindows &&
+          release.getAssetUrl(UpdateAssetType.windowsSetup) != null;
       final extension = platform == UpdatePlatform.android
           ? '.apk'
-          : platform == UpdatePlatform.windows || platform == UpdatePlatform.macos
-              ? '.zip'
-              : platform == UpdatePlatform.linux
-                  ? '.tar.gz'
-                  : '';
+          : isWindowsSetup
+              ? '.exe'
+              : platform == UpdatePlatform.windows || platform == UpdatePlatform.macos
+                  ? '.zip'
+                  : platform == UpdatePlatform.linux
+                      ? '.tar.gz'
+                      : '';
       final tempFilePath =
           '${tempDir.path}${Platform.pathSeparator}geogram-update-${release.version}$extension';
       final partialFilePath = '$tempFilePath.partial';
@@ -1466,13 +1477,18 @@ class UpdateService {
 
     try {
       final platform = detectPlatform();
+      // On Windows, check for setup.exe first, then fall back to .zip
+      final bool isWindowsSetup = !kIsWeb && Platform.isWindows &&
+          release.getAssetUrl(UpdateAssetType.windowsSetup) != null;
       final extension = platform == UpdatePlatform.android
           ? '.apk'
-          : platform == UpdatePlatform.windows || platform == UpdatePlatform.macos
-              ? '.zip'
-              : platform == UpdatePlatform.linux
-                  ? '.tar.gz'
-                  : '';
+          : isWindowsSetup
+              ? '.exe'
+              : platform == UpdatePlatform.windows || platform == UpdatePlatform.macos
+                  ? '.zip'
+                  : platform == UpdatePlatform.linux
+                      ? '.tar.gz'
+                      : '';
 
       // Check primary temp directory
       final tempDir = await getTemporaryDirectory();
@@ -1581,8 +1597,12 @@ class UpdateService {
         return await _stageLinuxUpdate(updateFilePath, expectedVersion);
       }
 
-      // Windows requires staged update (running .exe is locked by OS)
+      // Windows: use Inno Setup installer if we downloaded setup.exe,
+      // fall back to old staged update for ZIP files
       if (Platform.isWindows) {
+        if (updateFilePath.endsWith('.exe')) {
+          return await _runWindowsInstaller(updateFilePath);
+        }
         return await _stageWindowsUpdate(updateFilePath, expectedVersion);
       }
 
@@ -1784,7 +1804,34 @@ nohup "\$APP_DIR/geogram" > /dev/null 2>&1 &
   // Windows-specific update methods
   // ============================================================
 
+  /// Run the Inno Setup installer silently for Windows updates.
+  /// The installer handles closing the old app, replacing files, and restarting.
+  Future<bool> _runWindowsInstaller(String installerPath) async {
+    try {
+      final file = File(installerPath);
+      if (!await file.exists()) {
+        LogService().log('Windows installer not found: $installerPath');
+        return false;
+      }
+
+      LogService().log('Launching Windows installer: $installerPath');
+      await Process.start(
+        installerPath,
+        ['/SILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CLOSEAPPLICATIONS'],
+        mode: ProcessStartMode.detached,
+      );
+
+      // Exit so the installer can replace files
+      LogService().log('Exiting app to let installer take over');
+      exit(0);
+    } catch (e) {
+      LogService().log('Error running Windows installer: $e');
+      return false;
+    }
+  }
+
   /// Stage update for Windows - extracts ZIP and prepares full bundle replacement
+  /// (Legacy fallback for ZIP-based updates when no setup.exe is available)
   Future<bool> _stageWindowsUpdate(String updateFilePath, String? version) async {
     try {
       // Get the actual running binary path
