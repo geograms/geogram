@@ -177,27 +177,39 @@ class TrackerService {
     return null;
   }
 
-  /// Add a point to a path
+  /// Add a point to a path (append-only CSV, O(1) per point).
   Future<bool> addPathPoint(String pathId, TrackerPoint point, {int? year}) async {
     if (_storage == null) return false;
 
     final yr = year ?? DateTime.now().year;
-    final existingPoints = await _storage!.readPathPoints(yr, pathId);
-    if (existingPoints == null) return false;
-
-    final newPoints = existingPoints.addPoint(point);
-    final success = await _storage!.writePathPoints(yr, pathId, newPoints);
+    final success = await _storage!.appendPathPointCsv(yr, pathId, point);
 
     if (success) {
-      // Update path metadata with new point count
-      final path = await _storage!.readPath(yr, pathId);
-      if (path != null) {
-        final updatedPath = path.copyWith(totalPoints: newPoints.points.length);
-        await _storage!.writePath(yr, updatedPath);
-      }
       _notifyChange('path_point', 'created', id: pathId);
     }
     return success;
+  }
+
+  /// Update path metadata point count and distance from metadata values
+  /// (avoids re-reading the full points file).
+  Future<bool> updatePathStats(
+    String pathId, {
+    required int totalPoints,
+    required double totalDistanceMeters,
+    int? year,
+  }) async {
+    if (_storage == null) return false;
+    final yr = year ?? DateTime.now().year;
+    final path = await _storage!.readPath(yr, pathId);
+    if (path == null) return false;
+
+    final updated = path.copyWith(
+      totalPoints: totalPoints,
+      totalDistanceMeters: totalDistanceMeters,
+    );
+    final ok = await _storage!.writePath(yr, updated);
+    if (ok) _notifyChange('path', 'updated', id: pathId, data: updated);
+    return ok;
   }
 
   /// Complete a path recording
@@ -210,15 +222,19 @@ class TrackerService {
 
     final points = await _storage!.readPathPoints(yr, pathId);
     final totalDistance = points?.calculateTotalDistance() ?? 0;
+    final totalPoints = points?.points.length ?? path.totalPoints;
 
     final completedPath = path.copyWith(
       status: TrackerPathStatus.completed,
       endedAt: DateTime.now().toIso8601String(),
       totalDistanceMeters: totalDistance,
+      totalPoints: totalPoints,
     );
 
     final success = await _storage!.writePath(yr, completedPath);
     if (success) {
+      // Clean up legacy points.json if CSV exists
+      await _storage!.cleanupLegacyPointsJson(yr, pathId);
       _notifyChange('path', 'updated', id: pathId, data: completedPath);
       return completedPath;
     }
@@ -278,6 +294,124 @@ class TrackerService {
       _notifyChange('path', 'updated', id: pathId, data: updatedPath);
     }
     return true;
+  }
+
+  /// Merge multiple paths into one.
+  ///
+  /// Points are sorted chronologically and re-indexed.
+  /// Segments from all paths are merged with adjusted point indices.
+  /// Returns the new merged path, or null on failure.
+  Future<TrackerPath?> mergePaths(
+    List<String> pathIds, {
+    int? year,
+    bool deleteOriginals = false,
+    String? title,
+  }) async {
+    if (_storage == null || _ownerCallsign == null || pathIds.length < 2) {
+      return null;
+    }
+
+    final yr = year ?? DateTime.now().year;
+
+    // Load all paths and points
+    final paths = <TrackerPath>[];
+    final allPoints = <TrackerPoint>[];
+    final allSegments = <TrackerPathSegment>[];
+    final allTags = <String>{};
+
+    for (final id in pathIds) {
+      final path = await _storage!.readPath(yr, id);
+      if (path == null) continue;
+      paths.add(path);
+
+      final points = await _storage!.readPathPoints(yr, id);
+      if (points != null) {
+        allPoints.addAll(points.points);
+      }
+      allSegments.addAll(path.segments);
+      allTags.addAll(path.tags);
+    }
+
+    if (paths.isEmpty) return null;
+
+    // Sort points chronologically
+    allPoints.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+
+    // Re-index points
+    final reindexed = <TrackerPoint>[];
+    for (var i = 0; i < allPoints.length; i++) {
+      final p = allPoints[i];
+      reindexed.add(TrackerPoint(
+        index: i,
+        timestamp: p.timestamp,
+        lat: p.lat,
+        lon: p.lon,
+        altitude: p.altitude,
+        accuracy: p.accuracy,
+        speed: p.speed,
+        bearing: p.bearing,
+      ));
+    }
+
+    // Sort segments chronologically
+    allSegments.sort((a, b) => a.startedAt.compareTo(b.startedAt));
+
+    // Find earliest start and latest end
+    paths.sort((a, b) => a.startedAt.compareTo(b.startedAt));
+    final earliestStart = paths.first.startedAt;
+    final latestEnd = paths
+        .where((p) => p.endedAt != null)
+        .fold<String?>(null, (prev, p) {
+      if (prev == null) return p.endedAt;
+      return p.endedAt!.compareTo(prev) > 0 ? p.endedAt : prev;
+    }) ?? DateTime.now().toIso8601String();
+
+    // Calculate merged stats
+    final mergedPoints = TrackerPathPoints(
+      pathId: '', // will be set below
+      points: reindexed,
+    );
+    final totalDistance = mergedPoints.calculateTotalDistance();
+
+    // Create new path
+    final now = DateTime.now();
+    final newPathId = 'path_${TrackerPathUtils.formatDateYYYYMMDD(now)}_${_generateId()}';
+
+    final mergedPath = TrackerPath(
+      id: newPathId,
+      title: title ?? 'Merged Path',
+      startedAt: earliestStart,
+      endedAt: latestEnd,
+      status: TrackerPathStatus.completed,
+      intervalSeconds: paths.first.intervalSeconds,
+      totalPoints: reindexed.length,
+      totalDistanceMeters: totalDistance,
+      bounds: reindexed.isNotEmpty ? PathBounds.fromPoints(reindexed) : null,
+      tags: allTags.toList(),
+      segments: allSegments,
+      ownerCallsign: _ownerCallsign!,
+    );
+
+    // Write the merged path
+    final pathOk = await _storage!.writePath(yr, mergedPath);
+    if (!pathOk) return null;
+
+    final pointsOk = await _storage!.writePathPoints(
+      yr,
+      newPathId,
+      mergedPoints.copyWith(pathId: newPathId),
+    );
+    if (!pointsOk) return null;
+
+    // Optionally delete originals
+    if (deleteOriginals) {
+      for (final id in pathIds) {
+        await _storage!.deletePath(yr, id);
+      }
+    }
+
+    _notifyChange('path', 'created', id: newPathId, data: mergedPath);
+    return mergedPath;
   }
 
   /// Delete a path

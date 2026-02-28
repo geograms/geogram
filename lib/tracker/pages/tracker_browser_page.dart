@@ -90,6 +90,11 @@ class _TrackerBrowserPageState extends State<TrackerBrowserPage>
   final Set<String> _expandedWeekKeys = {};
   final TextEditingController _pathSearchController = TextEditingController();
   String _pathSearchQuery = '';
+
+  // Multi-select for path merge
+  bool _multiSelectMode = false;
+  final Set<String> _selectedPathIds = {};
+  int? _selectedPathYear;
   List<String> _exerciseTypes = [];
   List<String> _measurementTypes = [];
   Map<String, int> _weeklyTotals = {}; // Used for both exercises and measurements
@@ -445,12 +450,22 @@ class _TrackerBrowserPageState extends State<TrackerBrowserPage>
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text(_getDisplayTitle()),
-        bottom: TabBar(
-          controller: _tabController,
-          isScrollable: true,
-          tabs: _sortedTabs.map((tab) => _buildTab(tab)).toList(),
-        ),
+        leading: _multiSelectMode
+            ? IconButton(
+                icon: const Icon(Icons.close),
+                onPressed: _exitMultiSelect,
+              )
+            : null,
+        title: _multiSelectMode
+            ? Text('${_selectedPathIds.length} ${widget.i18n.t('tracker_selected')}')
+            : Text(_getDisplayTitle()),
+        bottom: _multiSelectMode
+            ? null
+            : TabBar(
+                controller: _tabController,
+                isScrollable: true,
+                tabs: _sortedTabs.map((tab) => _buildTab(tab)).toList(),
+              ),
         actions: [
           if (_showYearSelector)
             PopupMenuButton<int>(
@@ -531,6 +546,15 @@ class _TrackerBrowserPageState extends State<TrackerBrowserPage>
   }
 
   Widget? _buildFab() {
+    // In multi-select mode, show merge button
+    if (_multiSelectMode && _selectedPathIds.length >= 2) {
+      return FloatingActionButton.extended(
+        onPressed: _showMergeDialog,
+        icon: const Icon(Icons.merge),
+        label: Text('${widget.i18n.t('tracker_merge')} (${_selectedPathIds.length})'),
+      );
+    }
+
     IconData icon;
     VoidCallback? onPressed;
 
@@ -904,15 +928,23 @@ class _TrackerBrowserPageState extends State<TrackerBrowserPage>
     final durationLabel = duration != null ? _formatDurationCompact(duration) : null;
     final theme = Theme.of(context);
     final statStyle = theme.textTheme.bodySmall;
+    final isSelected = _selectedPathIds.contains(path.id);
 
     return Card(
       margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      color: isSelected ? theme.colorScheme.primaryContainer : null,
       child: ListTile(
-        leading: Icon(
-          pathType?.icon ?? Icons.route,
-          color:
-              path.status == TrackerPathStatus.recording ? Colors.red : null,
-        ),
+        leading: _multiSelectMode
+            ? Checkbox(
+                value: isSelected,
+                onChanged: (_) => _togglePathSelection(path.id, year),
+              )
+            : Icon(
+                pathType?.icon ?? Icons.route,
+                color: path.status == TrackerPathStatus.recording
+                    ? Colors.red
+                    : null,
+              ),
         title: Text(path.title ?? path.id),
         subtitle: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -944,22 +976,61 @@ class _TrackerBrowserPageState extends State<TrackerBrowserPage>
             ),
           ],
         ),
-        trailing: PopupMenuButton<String>(
-          onSelected: (value) => _handlePathMenu(value, path, year),
-          itemBuilder: (context) => [
-            PopupMenuItem(
-              value: 'edit',
-              child: Text(widget.i18n.t('tracker_edit_path')),
-            ),
-            PopupMenuItem(
-              value: 'delete',
-              child: Text(widget.i18n.t('tracker_delete_path')),
-            ),
-          ],
-        ),
-        onTap: () => _onPathTapped(path, year),
+        trailing: _multiSelectMode
+            ? null
+            : PopupMenuButton<String>(
+                onSelected: (value) => _handlePathMenu(value, path, year),
+                itemBuilder: (context) => [
+                  PopupMenuItem(
+                    value: 'edit',
+                    child: Text(widget.i18n.t('tracker_edit_path')),
+                  ),
+                  PopupMenuItem(
+                    value: 'delete',
+                    child: Text(widget.i18n.t('tracker_delete_path')),
+                  ),
+                ],
+              ),
+        onTap: _multiSelectMode
+            ? () => _togglePathSelection(path.id, year)
+            : () => _onPathTapped(path, year),
+        onLongPress: !_multiSelectMode
+            ? () => _enterMultiSelect(path.id, year)
+            : null,
       ),
     );
+  }
+
+  void _enterMultiSelect(String pathId, int year) {
+    setState(() {
+      _multiSelectMode = true;
+      _selectedPathIds.clear();
+      _selectedPathIds.add(pathId);
+      _selectedPathYear = year;
+    });
+  }
+
+  void _togglePathSelection(String pathId, int year) {
+    setState(() {
+      if (_selectedPathIds.contains(pathId)) {
+        _selectedPathIds.remove(pathId);
+        if (_selectedPathIds.isEmpty) {
+          _multiSelectMode = false;
+          _selectedPathYear = null;
+        }
+      } else {
+        _selectedPathIds.add(pathId);
+        _selectedPathYear = year;
+      }
+    });
+  }
+
+  void _exitMultiSelect() {
+    setState(() {
+      _multiSelectMode = false;
+      _selectedPathIds.clear();
+      _selectedPathYear = null;
+    });
   }
 
   DateTime _startOfWeek(DateTime date) {
@@ -1703,6 +1774,74 @@ class _TrackerBrowserPageState extends State<TrackerBrowserPage>
   }
 
   // ============ Action Handlers ============
+
+  Future<void> _showMergeDialog() async {
+    final titleController = TextEditingController(text: 'Merged Path');
+    bool deleteOriginals = false;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: Text(widget.i18n.t('tracker_merge_paths')),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text('${widget.i18n.t('tracker_merge_count')}: ${_selectedPathIds.length}'),
+              const SizedBox(height: 16),
+              TextField(
+                controller: titleController,
+                decoration: InputDecoration(
+                  labelText: widget.i18n.t('tracker_path_title'),
+                  border: const OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 12),
+              CheckboxListTile(
+                title: Text(widget.i18n.t('tracker_delete_originals')),
+                value: deleteOriginals,
+                onChanged: (v) => setDialogState(() => deleteOriginals = v ?? false),
+                contentPadding: EdgeInsets.zero,
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: Text(widget.i18n.t('cancel')),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: Text(widget.i18n.t('tracker_merge')),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (confirmed == true) {
+      final merged = await _service.mergePaths(
+        _selectedPathIds.toList(),
+        year: _selectedPathYear,
+        deleteOriginals: deleteOriginals,
+        title: titleController.text.trim().isNotEmpty
+            ? titleController.text.trim()
+            : 'Merged Path',
+      );
+      titleController.dispose();
+
+      _exitMultiSelect();
+      _loadCurrentTab();
+
+      if (merged != null && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(widget.i18n.t('tracker_paths_merged'))),
+        );
+      }
+    } else {
+      titleController.dispose();
+    }
+  }
 
   Future<void> _onAddPath() async {
     // Don't allow starting a new recording if one is already active

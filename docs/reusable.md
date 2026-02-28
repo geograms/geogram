@@ -9693,6 +9693,40 @@ curl -X POST http://localhost:8080/api/debug \
 
 Available at Settings drawer → "Tasks". Shows summary card with colored status chips, grouped task list (by service or priority), expandable tiles with status dot, run stats, error details, and pause/resume switch per task.
 
+## CSV Append-Only Storage Pattern
+
+**Files:**
+- `lib/tracker/models/tracker_path.dart` — `TrackerPoint.toCsvLine()`, `TrackerPoint.fromCsvLine()`, `TrackerPathPoints.fromCsv()`, `TrackerPathPoints.toCsv()`
+- `lib/tracker/services/tracker_storage_service.dart` — `appendPathPointCsv()`, CSV-aware `readPathPoints()`, `writePathPoints()`
+- `lib/tracker/utils/tracker_path_utils.dart` — `pathPointsCsvFile()`
+
+For high-frequency append-only data (GPS points, sensor readings), use CSV with `ProfileStorage.appendString()` instead of JSON read-modify-write. This is O(1) per write and crash-safe (partial last line is silently skipped on read).
+
+### Usage
+
+```dart
+// Append one point (O(1)):
+await storage.appendPathPointCsv(year, pathId, point);
+
+// Read all points (tolerates corrupt lines):
+final points = await storage.readPathPoints(year, pathId);
+// Tries points.csv first, falls back to points.json
+
+// Bulk write (merge, trim):
+await storage.writePathPoints(year, pathId, points);
+
+// Clean up legacy JSON after migration:
+await storage.cleanupLegacyPointsJson(year, pathId);
+```
+
+### CSV Format
+`index,timestamp,lat,lon,altitude,accuracy,speed,bearing` — empty string for null optional fields.
+
+### When to Use
+- Data grows by append only during recording/collection
+- Crash recovery matters (JSON corruption from partial writes)
+- Individual records are small and uniform (same fields per line)
+
 ## NOSTR Client Bridge
 
 **Files:**

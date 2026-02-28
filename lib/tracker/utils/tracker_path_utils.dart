@@ -16,9 +16,13 @@ class TrackerPathUtils {
   static String pathMetadataFile(String basePath, int year, String pathId) =>
       '${pathDir(basePath, year, pathId)}/path.json';
 
-  /// Get path points file
+  /// Get path points file (legacy JSON format)
   static String pathPointsFile(String basePath, int year, String pathId) =>
       '${pathDir(basePath, year, pathId)}/points.json';
+
+  /// Get path points CSV file (append-only, crash-safe)
+  static String pathPointsCsvFile(String basePath, int year, String pathId) =>
+      '${pathDir(basePath, year, pathId)}/points.csv';
 
   /// Get path expenses file
   static String pathExpensesFile(String basePath, int year, String pathId) =>

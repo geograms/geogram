@@ -63,15 +63,24 @@ class TrackerStorageService {
     }
   }
 
-  /// Read path points
+  /// Read path points — tries CSV first, falls back to legacy JSON.
   Future<TrackerPathPoints?> readPathPoints(int year, String pathId) async {
     try {
-      final filePath = TrackerPathUtils.pathPointsFile(basePath, year, pathId);
-      final relativePath = _relativePath(filePath);
-      final content = await _storage.readString(relativePath);
-      if (content == null) return null;
+      // Try CSV first (new format)
+      final csvFilePath = TrackerPathUtils.pathPointsCsvFile(basePath, year, pathId);
+      final csvRelative = _relativePath(csvFilePath);
+      final csvContent = await _storage.readString(csvRelative);
+      if (csvContent != null && csvContent.trim().isNotEmpty) {
+        return TrackerPathPoints.fromCsv(pathId, csvContent);
+      }
 
-      final json = jsonDecode(content) as Map<String, dynamic>;
+      // Fall back to legacy JSON
+      final jsonFilePath = TrackerPathUtils.pathPointsFile(basePath, year, pathId);
+      final jsonRelative = _relativePath(jsonFilePath);
+      final jsonContent = await _storage.readString(jsonRelative);
+      if (jsonContent == null) return null;
+
+      final json = jsonDecode(jsonContent) as Map<String, dynamic>;
       return TrackerPathPoints.fromJson(json);
     } catch (e) {
       LogService().log('TrackerStorageService: Error reading path points: $e');
@@ -79,25 +88,55 @@ class TrackerStorageService {
     }
   }
 
-  /// Write path points
+  /// Write path points in CSV format.
   Future<bool> writePathPoints(int year, String pathId, TrackerPathPoints points) async {
     try {
-      final filePath = TrackerPathUtils.pathPointsFile(basePath, year, pathId);
-      final relativePath = _relativePath(filePath);
+      final csvFilePath = TrackerPathUtils.pathPointsCsvFile(basePath, year, pathId);
+      final relativePath = _relativePath(csvFilePath);
       final parentDir = relativePath.contains('/')
           ? relativePath.substring(0, relativePath.lastIndexOf('/'))
           : '';
       if (parentDir.isNotEmpty) {
         await _storage.createDirectory(parentDir);
       }
-      await _storage.writeString(
-        relativePath,
-        const JsonEncoder.withIndent('  ').convert(points.toJson()),
-      );
+      final csv = points.toCsv();
+      await _storage.writeString(relativePath, csv.isEmpty ? '' : '$csv\n');
       return true;
     } catch (e) {
       LogService().log('TrackerStorageService: Error writing path points: $e');
       return false;
+    }
+  }
+
+  /// Append a single point to the CSV file (O(1) per point).
+  Future<bool> appendPathPointCsv(int year, String pathId, TrackerPoint point) async {
+    try {
+      final csvFilePath = TrackerPathUtils.pathPointsCsvFile(basePath, year, pathId);
+      final relativePath = _relativePath(csvFilePath);
+      final parentDir = relativePath.contains('/')
+          ? relativePath.substring(0, relativePath.lastIndexOf('/'))
+          : '';
+      if (parentDir.isNotEmpty) {
+        await _storage.createDirectory(parentDir);
+      }
+      await _storage.appendString(relativePath, '${point.toCsvLine()}\n');
+      return true;
+    } catch (e) {
+      LogService().log('TrackerStorageService: Error appending path point CSV: $e');
+      return false;
+    }
+  }
+
+  /// Remove legacy points.json when points.csv exists.
+  Future<void> cleanupLegacyPointsJson(int year, String pathId) async {
+    try {
+      final jsonFilePath = TrackerPathUtils.pathPointsFile(basePath, year, pathId);
+      final jsonRelative = _relativePath(jsonFilePath);
+      if (await _storage.exists(jsonRelative)) {
+        await _storage.delete(jsonRelative);
+      }
+    } catch (e) {
+      LogService().log('TrackerStorageService: Error cleaning up legacy JSON: $e');
     }
   }
 

@@ -300,5 +300,11 @@
   "tracker_minutes": "Minutos",
   "tracker_hours": "Horas",
   "tracker_days": "Dias",
-  "tracker_split": "Dividir"
+  "tracker_split": "Dividir",
+  "tracker_merge": "Unir",
+  "tracker_merge_paths": "Unir Percursos",
+  "tracker_merge_count": "Percursos a unir",
+  "tracker_delete_originals": "Apagar percursos originais apos unir",
+  "tracker_paths_merged": "Percursos unidos com sucesso",
+  "tracker_selected": "selecionados"
 }

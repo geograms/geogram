@@ -300,5 +300,11 @@
   "tracker_minutes": "Minutes",
   "tracker_hours": "Hours",
   "tracker_days": "Days",
-  "tracker_split": "Split"
+  "tracker_split": "Split",
+  "tracker_merge": "Merge",
+  "tracker_merge_paths": "Merge Paths",
+  "tracker_merge_count": "Paths to merge",
+  "tracker_delete_originals": "Delete original paths after merge",
+  "tracker_paths_merged": "Paths merged successfully",
+  "tracker_selected": "selected"
 }

@@ -6,8 +6,10 @@ import 'package:geolocator/geolocator.dart';
 
 import '../models/tracker_models.dart';
 import 'tracker_service.dart';
+import '../../models/monitored_task.dart';
 import '../../services/log_service.dart';
 import '../../services/location_provider_service.dart';
+import '../../util/task_monitor_helpers.dart';
 
 /// Service for managing GPS path recording.
 /// Uses [LocationProviderService] for GPS positioning.
@@ -20,6 +22,7 @@ class PathRecordingService extends ChangeNotifier {
   TrackerRecordingState? _recordingState;
   TrackerPath? _activePath;
   VoidCallback? _locationConsumerDispose;
+  MonitoredIsolateHandle? _taskHandle;
   DateTime? _startTime;
   int _pointCount = 0;
   double _totalDistance = 0;
@@ -52,7 +55,22 @@ class PathRecordingService extends ChangeNotifier {
     _trackerService = trackerService;
   }
 
-  /// Check and resume any active recording from crash recovery
+  /// Register with TaskMonitorService for visibility in task settings.
+  void _registerTaskMonitor() {
+    _taskHandle?.dispose();
+    _taskHandle = MonitoredIsolateHandle(
+      id: 'tracker.path_recording',
+      name: 'Path Recording',
+      description: 'GPS path recording in progress',
+      serviceName: 'PathRecordingService',
+      priority: TaskPriority.critical,
+    );
+  }
+
+  /// Check and resume any active recording from crash recovery.
+  ///
+  /// Crash-tolerant: if points file is corrupt or missing, resumes
+  /// with zero counters — new CSV append will create a fresh file.
   Future<bool> checkAndResumeRecording() async {
     if (_trackerService == null) return false;
 
@@ -61,35 +79,50 @@ class PathRecordingService extends ChangeNotifier {
       if (state != null) {
         _recordingState = state;
         _startTime = DateTime.parse(state.startedAt);
-        _pointCount = state.pointCount;
         _activePath = await _trackerService!.getPath(
           state.activePathId,
           year: state.activePathYear,
         );
 
-        // Load existing points to calculate distance
-        final points = await _trackerService!.getPathPoints(
-          state.activePathId,
-          year: state.activePathYear,
-        );
-        if (points != null && points.points.isNotEmpty) {
-          _totalDistance = points.calculateTotalDistance();
-          final lastPoint = points.points.last;
-          _lastPosition = LockedPosition(
-            latitude: lastPoint.lat,
-            longitude: lastPoint.lon,
-            altitude: lastPoint.altitude ?? 0,
-            accuracy: lastPoint.accuracy ?? 0,
-            speed: lastPoint.speed ?? 0,
-            heading: lastPoint.bearing ?? 0,
-            timestamp: DateTime.parse(lastPoint.timestamp),
-            source: 'stored',
+        // Load existing points — tolerate corrupt/missing files
+        try {
+          final points = await _trackerService!.getPathPoints(
+            state.activePathId,
+            year: state.activePathYear,
           );
-          _lastObservedPosition = _lastPosition;
-          _lastRecordedAt = _lastPosition?.timestamp;
+          if (points != null && points.points.isNotEmpty) {
+            _totalDistance = points.calculateTotalDistance();
+            _pointCount = points.points.length;
+            final lastPoint = points.points.last;
+            _lastPosition = LockedPosition(
+              latitude: lastPoint.lat,
+              longitude: lastPoint.lon,
+              altitude: lastPoint.altitude ?? 0,
+              accuracy: lastPoint.accuracy ?? 0,
+              speed: lastPoint.speed ?? 0,
+              heading: lastPoint.bearing ?? 0,
+              timestamp: DateTime.parse(lastPoint.timestamp),
+              source: 'stored',
+            );
+            _lastObservedPosition = _lastPosition;
+            _lastRecordedAt = _lastPosition?.timestamp;
+          } else {
+            // No points or null — start fresh counters
+            _pointCount = 0;
+            _totalDistance = 0;
+          }
+        } catch (e) {
+          // Points file corrupt — resume with fresh counters
+          LogService().log('PathRecordingService: Points corrupt, resuming fresh: $e');
+          _pointCount = 0;
+          _totalDistance = 0;
         }
 
+        // Register with task monitor
+        _registerTaskMonitor();
+
         if (state.isRecording) {
+          _taskHandle?.markRunning();
           await _startGPSUpdates(state.intervalSeconds);
         }
 
@@ -187,6 +220,10 @@ class PathRecordingService extends ChangeNotifier {
       _stoppingForInactivity = false;
       _activePath = path;
 
+      // Register with task monitor
+      _registerTaskMonitor();
+      _taskHandle?.markRunning();
+
       // GPS already started above
       notifyListeners();
       return path;
@@ -261,6 +298,7 @@ class PathRecordingService extends ChangeNotifier {
 
     try {
       _stopGPSUpdates();
+      _taskHandle?.markIdle();
 
       _recordingState = _recordingState!.copyWith(
         status: RecordingStatus.paused,
@@ -311,6 +349,7 @@ class PathRecordingService extends ChangeNotifier {
       _stationaryAnchor = _lastPosition;
       _stationaryStartAt = null;
       _stoppingForInactivity = false;
+      _taskHandle?.markRunning();
 
       notifyListeners();
       return true;
@@ -357,6 +396,10 @@ class PathRecordingService extends ChangeNotifier {
 
       await _trackerService?.clearRecordingState();
 
+      _taskHandle?.markIdle();
+      _taskHandle?.dispose();
+      _taskHandle = null;
+
       _recordingState = null;
       _startTime = null;
       _pointCount = 0;
@@ -368,7 +411,6 @@ class PathRecordingService extends ChangeNotifier {
       _stationaryAnchor = null;
       _stationaryStartAt = null;
       _stoppingForInactivity = false;
-      _activePath = null;
       _activePath = null;
 
       notifyListeners();
@@ -394,6 +436,9 @@ class PathRecordingService extends ChangeNotifier {
       );
 
       await _trackerService?.clearRecordingState();
+
+      _taskHandle?.dispose();
+      _taskHandle = null;
 
       _recordingState = null;
       _startTime = null;
@@ -517,6 +562,9 @@ class PathRecordingService extends ChangeNotifier {
     } catch (e) {
       LogService().log('PathRecordingService: Inactivity stop error: $e');
     } finally {
+      _taskHandle?.markIdle();
+      _taskHandle?.dispose();
+      _taskHandle = null;
       _recordingState = null;
       _startTime = null;
       _pointCount = 0;
@@ -673,7 +721,15 @@ class PathRecordingService extends ChangeNotifier {
 
         _lastPosition = position;
         _lastObservedPosition = position;
-      _pointCount++;
+        _pointCount++;
+
+        // Update path metadata stats from in-memory counters (avoids re-reading CSV)
+        await _trackerService!.updatePathStats(
+          _recordingState!.activePathId,
+          totalPoints: _pointCount,
+          totalDistanceMeters: _totalDistance,
+          year: _recordingState!.activePathYear,
+        );
 
         // Update recording state
         _recordingState = _recordingState!.copyWith(
@@ -684,8 +740,11 @@ class PathRecordingService extends ChangeNotifier {
         await _trackerService!.saveRecordingState(_recordingState!);
 
         notifyListeners();
+      } else {
+        _taskHandle?.markError('Failed to write point');
       }
     } catch (e) {
+      _taskHandle?.markError(e);
       LogService().log('PathRecordingService: Error adding point: $e');
     }
   }
@@ -807,6 +866,8 @@ class PathRecordingService extends ChangeNotifier {
   @override
   void dispose() {
     _stopGPSUpdates();
+    _taskHandle?.dispose();
+    _taskHandle = null;
     super.dispose();
   }
 }

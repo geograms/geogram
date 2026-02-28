@@ -436,6 +436,44 @@ class TrackerPoint {
       bearing: (json['bearing'] as num?)?.toDouble(),
     );
   }
+
+  /// Serialize to a single CSV line (no trailing newline).
+  /// Format: index,timestamp,lat,lon,altitude,accuracy,speed,bearing
+  String toCsvLine() {
+    return '$index,$timestamp,$lat,$lon'
+        ',${altitude ?? ''}'
+        ',${accuracy ?? ''}'
+        ',${speed ?? ''}'
+        ',${bearing ?? ''}';
+  }
+
+  /// Parse a single CSV line. Returns null on parse failure.
+  static TrackerPoint? fromCsvLine(String line) {
+    try {
+      final parts = line.split(',');
+      if (parts.length < 4) return null;
+      return TrackerPoint(
+        index: int.parse(parts[0]),
+        timestamp: parts[1],
+        lat: double.parse(parts[2]),
+        lon: double.parse(parts[3]),
+        altitude: parts.length > 4 && parts[4].isNotEmpty
+            ? double.parse(parts[4])
+            : null,
+        accuracy: parts.length > 5 && parts[5].isNotEmpty
+            ? double.parse(parts[5])
+            : null,
+        speed: parts.length > 6 && parts[6].isNotEmpty
+            ? double.parse(parts[6])
+            : null,
+        bearing: parts.length > 7 && parts[7].isNotEmpty
+            ? double.parse(parts[7])
+            : null,
+      );
+    } catch (_) {
+      return null;
+    }
+  }
 }
 
 /// Container for path points (stored in points.json)
@@ -476,6 +514,23 @@ class TrackerPathPoints {
   /// Add a new point
   TrackerPathPoints addPoint(TrackerPoint point) {
     return copyWith(points: [...points, point]);
+  }
+
+  /// Parse from CSV content. Silently skips corrupt lines.
+  factory TrackerPathPoints.fromCsv(String pathId, String csvContent) {
+    final lines = csvContent.split('\n');
+    final points = <TrackerPoint>[];
+    for (final line in lines) {
+      if (line.trim().isEmpty) continue;
+      final point = TrackerPoint.fromCsvLine(line.trim());
+      if (point != null) points.add(point);
+    }
+    return TrackerPathPoints(pathId: pathId, points: points);
+  }
+
+  /// Serialize all points to CSV format.
+  String toCsv() {
+    return points.map((p) => p.toCsvLine()).join('\n');
   }
 
   /// Calculate total distance using Haversine formula
