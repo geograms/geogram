@@ -19,6 +19,15 @@ Always commit your changes with a proper change log
 
 Write code that is based on DART and can run from the command line for libraries, so we can reuse it in other platforms
 
+## Release Process
+
+1. Bump version in `pubspec.yaml`
+2. Commit (pre-commit hook auto-updates `lib/version.dart` via `tool/update_version.dart`)
+3. Tag with `git tag v<version>` and push with `git push --tags`
+4. Create GitHub release — CI workflows will `sed` pubspec.yaml from the tag and regenerate `version.dart` before building
+
+**Important**: CI workflows automatically sync `version.dart` from pubspec.yaml via `dart run tool/update_version.dart`. This ensures the compiled `appVersion` constant always matches the release tag, preventing self-updater loops.
+
 ## Architecture Notes
 
 - ProfileStorage is an abstract class with two implementations: FilesystemProfileStorage (plain files) and EncryptedProfileStorage (encrypted SQLite archive)

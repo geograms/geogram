@@ -101,6 +101,9 @@ jobs:
         echo "VERSION=$VERSION" >> $GITHUB_ENV
         echo "BUILD_NUMBER=$BUILD_NUMBER" >> $GITHUB_ENV
 
+    - name: Sync version.dart from pubspec.yaml
+      run: dart run tool/update_version.dart
+
     - name: Install dependencies
       run: flutter pub get
 

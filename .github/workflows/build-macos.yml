@@ -43,6 +43,9 @@ jobs:
         sed -i '' "s/^version: .*/version: $VERSION+$BUILD_NUMBER/" pubspec.yaml
         echo "Building version $VERSION+$BUILD_NUMBER"
 
+    - name: Sync version.dart from pubspec.yaml
+      run: dart run tool/update_version.dart
+
     - name: Enable macOS desktop
       run: flutter config --enable-macos-desktop
 

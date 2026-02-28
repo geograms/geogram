@@ -40,6 +40,9 @@ jobs:
         sed -i "s/^version: .*/version: $VERSION+$BUILD_NUMBER/" geogram-cli/pubspec.yaml
         echo "Building version $VERSION+$BUILD_NUMBER"
 
+    - name: Sync version.dart from pubspec.yaml
+      run: dart run tool/update_version.dart
+
     - name: Setup CLI package
       working-directory: geogram-cli
       run: |
