@@ -23,6 +23,8 @@ class PathRecordingService extends ChangeNotifier {
   TrackerPath? _activePath;
   VoidCallback? _locationConsumerDispose;
   MonitoredIsolateHandle? _taskHandle;
+  String? _notificationTitle;
+  String? _notificationText;
   DateTime? _startTime;
   int _pointCount = 0;
   double _totalDistance = 0;
@@ -460,7 +462,9 @@ class PathRecordingService extends ChangeNotifier {
     }
   }
 
-  /// Start GPS position updates via LocationProviderService
+  /// Start GPS position updates via LocationProviderService.
+  ///
+  /// [notificationTitle] and [notificationText] are stored for stream restarts.
   Future<bool> _startGPSUpdates(
     int intervalSeconds, {
     String? notificationTitle,
@@ -468,12 +472,16 @@ class PathRecordingService extends ChangeNotifier {
   }) async {
     _stopGPSUpdates();
 
+    // Store for use on watchdog-triggered restarts
+    if (notificationTitle != null) _notificationTitle = notificationTitle;
+    if (notificationText != null) _notificationText = notificationText;
+
     try {
       _locationConsumerDispose = await LocationProviderService().registerConsumer(
         intervalSeconds: intervalSeconds,
         onPosition: _onPositionUpdate,
-        notificationTitle: notificationTitle,
-        notificationText: notificationText,
+        notificationTitle: _notificationTitle,
+        notificationText: _notificationText,
       );
       _startGpsWatchdog(intervalSeconds);
       return true;
@@ -821,8 +829,12 @@ class PathRecordingService extends ChangeNotifier {
     return 20;
   }
 
+  int _consecutiveGpsFails = 0;
+
   void _startGpsWatchdog(int intervalSeconds) {
     _gpsWatchdog?.cancel();
+    _consecutiveGpsFails = 0;
+    // Check every interval (not 3x) so we detect stalls faster
     final checkSeconds = intervalSeconds < 10 ? 10 : intervalSeconds;
     _gpsWatchdog = Timer.periodic(
       Duration(seconds: checkSeconds),
@@ -836,7 +848,12 @@ class PathRecordingService extends ChangeNotifier {
           return;
         }
         final staleSeconds = DateTime.now().difference(lastSeen).inSeconds;
-        if (staleSeconds >= intervalSeconds * 3) {
+        // Force update after 1.5x interval instead of 3x
+        if (staleSeconds >= (intervalSeconds * 1.5).round()) {
+          LogService().log(
+            'PathRecordingService: GPS stale for ${staleSeconds}s '
+            '(threshold: ${(intervalSeconds * 1.5).round()}s), forcing update',
+          );
           unawaited(_forcePositionUpdate());
         }
       },
@@ -848,17 +865,54 @@ class PathRecordingService extends ChangeNotifier {
       final enabled = await Geolocator.isLocationServiceEnabled();
       if (!enabled) {
         LogService().log('PathRecordingService: GPS disabled while recording');
+        _taskHandle?.markError('GPS disabled');
         return;
       }
-      final position =
+
+      // Try LocationProviderService first (uses existing stream)
+      LockedPosition? position =
           await LocationProviderService().requestImmediatePosition();
+
+      // If that failed, try a direct one-shot GPS request as fallback
+      // (the stream might be dead on Android due to OEM battery optimization)
+      if (position == null) {
+        try {
+          final directPos = await Geolocator.getCurrentPosition(
+            locationSettings: const LocationSettings(
+              accuracy: LocationAccuracy.high,
+              timeLimit: Duration(seconds: 10),
+            ),
+          );
+          position = LockedPosition.fromGeolocator(directPos);
+        } catch (e) {
+          LogService().log('PathRecordingService: Direct GPS also failed: $e');
+        }
+      }
+
       if (position != null) {
+        _consecutiveGpsFails = 0;
         _onPositionUpdate(position);
       } else {
-        LogService().log('PathRecordingService: No GPS fix yet, retrying');
+        _consecutiveGpsFails++;
+        LogService().log(
+          'PathRecordingService: No GPS fix (fail #$_consecutiveGpsFails)',
+        );
+        // After 3 consecutive fails, restart the GPS stream entirely.
+        // Handles Android OEM battery optimization silently killing the stream.
+        if (_consecutiveGpsFails >= 3 && _recordingState != null) {
+          LogService().log(
+            'PathRecordingService: Restarting GPS stream after $_consecutiveGpsFails fails',
+          );
+          _consecutiveGpsFails = 0;
+          final interval = _recordingState!.intervalSeconds <= 0
+              ? _autoBaseIntervalSeconds
+              : _recordingState!.intervalSeconds;
+          await _startGPSUpdates(interval);
+        }
       }
     } catch (e) {
       LogService().log('PathRecordingService: GPS watchdog error: $e');
+      _taskHandle?.markError(e);
     }
   }
 
