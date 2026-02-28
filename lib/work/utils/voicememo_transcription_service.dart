@@ -408,7 +408,6 @@ class VoiceMemoTranscriptionService {
     // Create temp files
     final tempDir = Directory.systemTemp;
     final timestamp = DateTime.now().millisecondsSinceEpoch;
-    final oggPath = '${tempDir.path}/voicememo_$timestamp.ogg';
     final wavPath = '${tempDir.path}/voicememo_$timestamp.wav';
 
     try {
@@ -503,29 +502,54 @@ class VoiceMemoTranscriptionService {
       if (_isCancelled) return VoiceMemoTranscriptionResult.cancelled();
       await Future.delayed(Duration.zero); // Yield after cancelled check
 
-      // Write audio to temp file
+      // Write audio to temp file and convert if needed
       _setProgress(TranscriptionProgress(
         state: TranscriptionState.convertingAudio,
         progress: 0.0,
         modelName: modelName,
-        message: 'Converting audio format...',
+        message: 'Preparing audio...',
       ));
       await Future.delayed(Duration.zero); // Yield to allow UI update
 
-      await File(oggPath).writeAsBytes(audioBytes);
-      await Future.delayed(Duration.zero); // Yield after file write
+      // Check if the audio is already WAV (16kHz mono) by inspecting header
+      final isWav = audioBytes.length > 4 &&
+          audioBytes[0] == 0x52 && // 'R'
+          audioBytes[1] == 0x49 && // 'I'
+          audioBytes[2] == 0x46 && // 'F'
+          audioBytes[3] == 0x46;   // 'F'
 
-      // Convert OGG to WAV (whisper needs 16kHz mono WAV)
-      final convertOk = await _convertToWav(oggPath, wavPath);
-      if (!convertOk) {
-        await _safeDelete(oggPath);
-        return VoiceMemoTranscriptionResult.failure(
-          'Audio conversion failed. Is ffmpeg installed?',
-        );
+      String? tempOggPath;
+
+      if (isWav) {
+        // Already WAV — write directly, no conversion needed
+        await File(wavPath).writeAsBytes(audioBytes);
+      } else {
+        // Legacy OGG/Opus clip — try ffmpeg conversion (desktop only)
+        tempOggPath = '${tempDir.path}/voicememo_$timestamp.ogg';
+        await File(tempOggPath).writeAsBytes(audioBytes);
+        await Future.delayed(Duration.zero);
+
+        _setProgress(TranscriptionProgress(
+          state: TranscriptionState.convertingAudio,
+          progress: 0.5,
+          modelName: modelName,
+          message: 'Converting audio format...',
+        ));
+        await Future.delayed(Duration.zero);
+
+        final convertOk = await _convertToWav(tempOggPath, wavPath);
+        if (!convertOk) {
+          await _safeDelete(tempOggPath);
+          return VoiceMemoTranscriptionResult.failure(
+            'Audio conversion failed. Legacy OGG clips require ffmpeg for transcription.',
+          );
+        }
       }
 
+      await Future.delayed(Duration.zero); // Yield after file write
+
       if (_isCancelled) {
-        await _safeDelete(oggPath);
+        if (tempOggPath != null) await _safeDelete(tempOggPath);
         await _safeDelete(wavPath);
         return VoiceMemoTranscriptionResult.cancelled();
       }
@@ -542,7 +566,7 @@ class VoiceMemoTranscriptionService {
       final result = await _sttService.transcribe(wavPath);
 
       // Cleanup
-      await _safeDelete(oggPath);
+      if (tempOggPath != null) await _safeDelete(tempOggPath);
       await _safeDelete(wavPath);
 
       if (!result.success) {

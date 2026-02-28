@@ -7052,6 +7052,38 @@ VoiceMemoRatingDisplayWidget(
 
 ---
 
+## Voice Memo Recording Format
+
+Voice memos are recorded in **WAV format (16kHz mono PCM)** for direct compatibility with Whisper transcription, avoiding the need for ffmpeg conversion on mobile platforms.
+
+**Pattern** (from `TranscriptionDialog` and `VoiceMemoRecorderWidget`):
+```dart
+final AudioRecorder recorder = AudioRecorder();
+await recorder.start(
+  RecordConfig(
+    encoder: AudioEncoder.wav,
+    sampleRate: 16000,
+    numChannels: 1,
+  ),
+  path: outputPath,
+);
+```
+
+**Amplitude polling** for visual feedback:
+```dart
+final amp = await recorder.getAmplitude();
+// amp.current is in dBFS (-160 = silence, 0 = max)
+final normalized = ((amp.current + 60) / 60).clamp(0.0, 1.0);
+```
+
+**Trade-off:** WAV files are ~10MB per 5-min clip vs ~500KB in Opus/OGG. This is acceptable since voice memos are stored in NDF archives and transcription compatibility on Android is the priority.
+
+**Files using this pattern:**
+- `lib/widgets/transcription_dialog.dart` — short transcription recordings
+- `lib/work/widgets/voicememo/voicememo_recorder_widget.dart` — voice memo clips
+
+---
+
 ## Audio Merge Approach
 
 The VoiceMemoMergeService handles concatenating OGG/Opus audio clips.

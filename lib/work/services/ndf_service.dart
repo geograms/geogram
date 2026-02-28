@@ -1079,10 +1079,11 @@ class NdfService {
   Future<void> saveClipAudio(
     String filePath,
     String clipId,
-    Uint8List audioBytes,
-  ) async {
+    Uint8List audioBytes, {
+    String extension = 'wav',
+  }) async {
     await _updateArchiveFilesBytes(filePath, {
-      'assets/audio/$clipId.ogg': audioBytes,
+      'assets/audio/$clipId.$extension': audioBytes,
     });
   }
 

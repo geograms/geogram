@@ -85,11 +85,13 @@ class VoiceMemoMergeService {
         transcription: null, // Clear transcription - needs re-transcription
       );
 
-      // Save the merged audio
+      // Save the merged audio (preserve original format from audioFile path)
+      final ext = targetClip.audioFile.split('.').last;
       await _ndfService.saveClipAudio(
         ndfFilePath,
         targetClip.id,
         mergedAudio,
+        extension: ext,
       );
 
       // Save the updated clip metadata

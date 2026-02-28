@@ -219,6 +219,8 @@ class _VoiceMemoEditorPageState extends State<VoiceMemoEditorPage> {
         return;
       }
 
+      // Determine audio extension from the recorded file
+      final ext = filePath.split('.').last; // wav on Android, ogg on Linux
       // Create the clip - audioFile must match what saveClipAudio saves
       final clipId = 'clip-${DateTime.now().millisecondsSinceEpoch.toRadixString(36)}';
       final clip = VoiceMemoClip(
@@ -228,11 +230,11 @@ class _VoiceMemoEditorPageState extends State<VoiceMemoEditorPage> {
         recordedAt: DateTime.now(),
         finishedAt: DateTime.now(),
         durationMs: durationSeconds * 1000,
-        audioFile: 'audio/$clipId.ogg', // Must match saveClipAudio path
+        audioFile: 'audio/$clipId.$ext', // Must match saveClipAudio path
       );
 
       // Save audio to archive
-      await _ndfService.saveClipAudio(widget.filePath, clip.id, audioBytes);
+      await _ndfService.saveClipAudio(widget.filePath, clip.id, audioBytes, extension: ext);
 
       // Save clip metadata to archive
       await _ndfService.saveVoiceMemoClip(widget.filePath, clip);
@@ -502,9 +504,10 @@ class _VoiceMemoEditorPageState extends State<VoiceMemoEditorPage> {
         throw Exception('Audio file not found');
       }
 
-      // Write to temp file for playback
+      // Write to temp file for playback (use original extension)
       final tempDir = Directory.systemTemp;
-      final tempFile = File('${tempDir.path}/voicememo_${clip.id}.ogg');
+      final ext = clip.audioFile.split('.').last;
+      final tempFile = File('${tempDir.path}/voicememo_${clip.id}.$ext');
       await tempFile.writeAsBytes(audioBytes);
 
       // Load and play

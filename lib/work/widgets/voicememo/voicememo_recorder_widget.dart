@@ -6,6 +6,8 @@
 import 'dart:async';
 import 'dart:math';
 import 'package:flutter/material.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:record/record.dart';
 
 import '../../../services/audio_service.dart';
 import '../../../services/log_service.dart';
@@ -15,7 +17,8 @@ import '../../../services/audio_platform_stub.dart'
 /// Voice memo recorder widget for recording audio clips.
 ///
 /// This is a customized version of VoiceRecorderWidget for the Work app.
-/// Records audio in Opus format and returns the file path when done.
+/// Records audio in WAV format (16kHz mono) for direct Whisper transcription.
+/// On Linux uses AudioService (ALSA), on other platforms uses AudioRecorder directly.
 /// Shows visual amplitude feedback during recording.
 class VoiceMemoRecorderWidget extends StatefulWidget {
   /// Called when user finishes recording.
@@ -40,7 +43,10 @@ class VoiceMemoRecorderWidget extends StatefulWidget {
 }
 
 class _VoiceMemoRecorderWidgetState extends State<VoiceMemoRecorderWidget> {
-  final AudioService _audioService = AudioService();
+  // On Linux we delegate to AudioService (ALSA); elsewhere use record package
+  final bool _useAudioService = isLinuxPlatform;
+  AudioService? _audioService;
+  AudioRecorder? _recorder;
 
   _RecorderState _state = _RecorderState.idle;
   Duration _recordingDuration = Duration.zero;
@@ -48,64 +54,32 @@ class _VoiceMemoRecorderWidgetState extends State<VoiceMemoRecorderWidget> {
   int _recordedDurationSeconds = 0;
   double _amplitude = 0.0;
 
-  StreamSubscription<Duration>? _durationSubscription;
+  Timer? _durationTimer;
+  Timer? _amplitudeTimer;
   StreamSubscription<double>? _amplitudeSubscription;
 
   @override
   void initState() {
     super.initState();
-    _setupListeners();
+    if (_useAudioService) {
+      _audioService = AudioService();
+      // Listen to ALSA amplitude stream
+      _amplitudeSubscription = _audioService!.amplitudeStream.listen((amp) {
+        if (!mounted) return;
+        setState(() => _amplitude = amp);
+      });
+    } else {
+      _recorder = AudioRecorder();
+    }
     _startRecording();
-  }
-
-  void _setupListeners() {
-    _durationSubscription = _audioService.recordingDurationStream.listen((duration) {
-      if (!mounted) return;
-      setState(() {
-        _recordingDuration = duration;
-      });
-
-      // Auto-stop at max duration
-      if (duration.inSeconds >= widget.maxDurationSeconds) {
-        _stopRecording();
-      }
-    });
-
-    _amplitudeSubscription = _audioService.amplitudeStream.listen((amplitude) {
-      if (!mounted) return;
-      setState(() {
-        _amplitude = amplitude;
-      });
-    });
   }
 
   Future<void> _startRecording() async {
     try {
-      await _audioService.initialize();
-
-      if (!await _audioService.hasPermission()) {
-        LogService().log('VoiceMemoRecorderWidget: No microphone permission');
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Microphone permission required')),
-          );
-          widget.onCancel();
-        }
-        return;
-      }
-
-      final path = await _audioService.startRecording();
-      if (path != null && mounted) {
-        setState(() {
-          _state = _RecorderState.recording;
-        });
-      } else if (mounted) {
-        final error = _audioService.lastError ?? 'Unknown error';
-        LogService().log('VoiceMemoRecorderWidget: Recording failed: $error');
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to start recording: $error')),
-        );
-        widget.onCancel();
+      if (_useAudioService) {
+        await _startRecordingAudioService();
+      } else {
+        await _startRecordingDirect();
       }
     } catch (e) {
       LogService().log('VoiceMemoRecorderWidget: Exception starting recording: $e');
@@ -118,8 +92,118 @@ class _VoiceMemoRecorderWidgetState extends State<VoiceMemoRecorderWidget> {
     }
   }
 
+  /// Start recording via AudioService (Linux/ALSA — already produces WAV)
+  Future<void> _startRecordingAudioService() async {
+    await _audioService!.initialize();
+
+    if (!await _audioService!.hasPermission()) {
+      LogService().log('VoiceMemoRecorderWidget: No microphone permission');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Microphone permission required')),
+        );
+        widget.onCancel();
+      }
+      return;
+    }
+
+    final path = await _audioService!.startRecording();
+    if (path != null && mounted) {
+      _recordedFilePath = path;
+      setState(() {
+        _state = _RecorderState.recording;
+        _recordingDuration = Duration.zero;
+      });
+      _startTimers();
+    } else if (mounted) {
+      final error = _audioService!.lastError ?? 'Unknown error';
+      LogService().log('VoiceMemoRecorderWidget: Recording failed: $error');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to start recording: $error')),
+      );
+      widget.onCancel();
+    }
+  }
+
+  /// Start recording via record package (Android/iOS — WAV 16kHz mono)
+  Future<void> _startRecordingDirect() async {
+    if (!await _recorder!.hasPermission()) {
+      LogService().log('VoiceMemoRecorderWidget: No microphone permission');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Microphone permission required')),
+        );
+        widget.onCancel();
+      }
+      return;
+    }
+
+    final tempDir = await getTemporaryDirectory();
+    final timestamp = DateTime.now().millisecondsSinceEpoch;
+    final path = '${tempDir.path}/voicememo_$timestamp.wav';
+
+    // Record in WAV format (16kHz mono) — directly compatible with Whisper
+    await _recorder!.start(
+      RecordConfig(
+        encoder: AudioEncoder.wav,
+        sampleRate: 16000,
+        numChannels: 1,
+      ),
+      path: path,
+    );
+
+    _recordedFilePath = path;
+
+    if (mounted) {
+      setState(() {
+        _state = _RecorderState.recording;
+        _recordingDuration = Duration.zero;
+      });
+    }
+
+    _startTimers();
+
+    // Start amplitude polling (record package)
+    _amplitudeTimer = Timer.periodic(const Duration(milliseconds: 100), (timer) async {
+      if (!mounted) return;
+      try {
+        final amp = await _recorder!.getAmplitude();
+        if (!mounted) return;
+        // amp.current is in dBFS (negative, -160 = silence, 0 = max)
+        // Normalize to 0.0-1.0 range
+        final normalized = ((amp.current + 60) / 60).clamp(0.0, 1.0);
+        setState(() {
+          _amplitude = normalized;
+        });
+      } catch (_) {
+        // Ignore amplitude errors
+      }
+    });
+  }
+
+  void _startTimers() {
+    _durationTimer = Timer.periodic(const Duration(milliseconds: 100), (timer) {
+      if (!mounted) return;
+      setState(() {
+        _recordingDuration += const Duration(milliseconds: 100);
+      });
+      if (_recordingDuration.inSeconds >= widget.maxDurationSeconds) {
+        _stopRecording();
+      }
+    });
+  }
+
   Future<void> _stopRecording() async {
-    final path = await _audioService.stopRecording();
+    _durationTimer?.cancel();
+    _amplitudeTimer?.cancel();
+
+    String? path;
+    if (_useAudioService) {
+      path = await _audioService!.stopRecording();
+    } else {
+      path = await _recorder!.stop();
+    }
+
     if (path != null && mounted) {
       _recordedFilePath = path;
       _recordedDurationSeconds = _recordingDuration.inSeconds;
@@ -165,7 +249,20 @@ class _VoiceMemoRecorderWidgetState extends State<VoiceMemoRecorderWidget> {
         await file.delete();
       }
     } else if (_state == _RecorderState.recording) {
-      await _audioService.cancelRecording();
+      _durationTimer?.cancel();
+      _amplitudeTimer?.cancel();
+      if (_useAudioService) {
+        await _audioService!.cancelRecording();
+      } else {
+        await _recorder!.stop();
+        // Delete the temp file
+        if (_recordedFilePath != null) {
+          final file = PlatformFile(_recordedFilePath!);
+          if (await file.exists()) {
+            await file.delete();
+          }
+        }
+      }
     }
     widget.onCancel();
   }
@@ -184,8 +281,10 @@ class _VoiceMemoRecorderWidgetState extends State<VoiceMemoRecorderWidget> {
 
   @override
   void dispose() {
-    _durationSubscription?.cancel();
+    _durationTimer?.cancel();
+    _amplitudeTimer?.cancel();
     _amplitudeSubscription?.cancel();
+    _recorder?.dispose();
     super.dispose();
   }
 
