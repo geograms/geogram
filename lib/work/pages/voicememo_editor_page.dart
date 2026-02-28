@@ -266,12 +266,34 @@ class _VoiceMemoEditorPageState extends State<VoiceMemoEditorPage> {
     });
   }
 
+  /// Compute the next sequential clip number based on existing clip titles.
+  int _nextClipNumber() {
+    final pattern = RegExp(r'^Clip\s+(\d+)$', caseSensitive: false);
+    int maxN = 0;
+    for (final clip in _clips) {
+      final match = pattern.firstMatch(clip.title);
+      if (match != null) {
+        final n = int.tryParse(match.group(1)!) ?? 0;
+        if (n > maxN) maxN = n;
+      }
+    }
+    return maxN + 1;
+  }
+
   Future<({String title, String? description})?> _showClipDetailsDialog() async {
-    final titleController = TextEditingController();
+    final defaultTitle = 'Clip ${_nextClipNumber()}';
+    final titleController = TextEditingController(text: defaultTitle);
     final descController = TextEditingController();
+
+    // Select all text so user can easily replace it
+    titleController.selection = TextSelection(
+      baseOffset: 0,
+      extentOffset: defaultTitle.length,
+    );
 
     final result = await showDialog<bool>(
       context: context,
+      barrierDismissible: false,
       builder: (context) => AlertDialog(
         title: Text(_i18n.t('work_voicememo_record')),
         content: Column(
@@ -285,6 +307,7 @@ class _VoiceMemoEditorPageState extends State<VoiceMemoEditorPage> {
               ),
               autofocus: true,
               textCapitalization: TextCapitalization.sentences,
+              inputFormatters: [_UpperCaseFirstLetterFormatter()],
               textInputAction: TextInputAction.next,
             ),
             const SizedBox(height: 16),
@@ -301,7 +324,32 @@ class _VoiceMemoEditorPageState extends State<VoiceMemoEditorPage> {
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context, false),
+            onPressed: () async {
+              // Warn user that cancelling will lose the recording
+              final discard = await showDialog<bool>(
+                context: context,
+                builder: (ctx) => AlertDialog(
+                  title: Text(_i18n.t('work_voicememo_discard_clip')),
+                  content: Text(_i18n.t('work_voicememo_discard_clip_confirm')),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(ctx, false),
+                      child: Text(_i18n.t('work_voicememo_keep_recording')),
+                    ),
+                    FilledButton(
+                      onPressed: () => Navigator.pop(ctx, true),
+                      style: FilledButton.styleFrom(
+                        backgroundColor: Theme.of(ctx).colorScheme.error,
+                      ),
+                      child: Text(_i18n.t('discard')),
+                    ),
+                  ],
+                ),
+              );
+              if (discard == true && context.mounted) {
+                Navigator.pop(context, false);
+              }
+            },
             child: Text(_i18n.t('cancel')),
           ),
           FilledButton(
@@ -1163,5 +1211,20 @@ class _VoiceMemoEditorPageState extends State<VoiceMemoEditorPage> {
         ),
       ],
     );
+  }
+}
+
+/// Ensures the first letter of the input is always uppercase.
+class _UpperCaseFirstLetterFormatter extends TextInputFormatter {
+  @override
+  TextEditingValue formatEditUpdate(
+    TextEditingValue oldValue,
+    TextEditingValue newValue,
+  ) {
+    if (newValue.text.isEmpty) return newValue;
+    final first = newValue.text[0].toUpperCase();
+    if (first == newValue.text[0]) return newValue;
+    final newText = first + newValue.text.substring(1);
+    return newValue.copyWith(text: newText);
   }
 }

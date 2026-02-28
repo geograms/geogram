@@ -134,13 +134,38 @@ class _VoiceMemoRecorderWidgetState extends State<VoiceMemoRecorderWidget> {
   }
 
   Future<void> _cancel() async {
-    if (_state == _RecorderState.recording) {
-      await _audioService.cancelRecording();
-    } else if (_recordedFilePath != null) {
+    // If in preview mode (clip already recorded), warn before discarding
+    if (_state == _RecorderState.preview && _recordedFilePath != null) {
+      final discard = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Discard Recording?'),
+          content: const Text(
+            'The recorded audio clip will be permanently lost. '
+            'Are you sure you want to discard it?',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Keep'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              style: FilledButton.styleFrom(
+                backgroundColor: Theme.of(ctx).colorScheme.error,
+              ),
+              child: const Text('Discard'),
+            ),
+          ],
+        ),
+      );
+      if (discard != true) return;
       final file = PlatformFile(_recordedFilePath!);
       if (await file.exists()) {
         await file.delete();
       }
+    } else if (_state == _RecorderState.recording) {
+      await _audioService.cancelRecording();
     }
     widget.onCancel();
   }
