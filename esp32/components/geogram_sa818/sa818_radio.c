@@ -32,11 +32,11 @@ static const char *TAG = "sa818_radio";
 #endif
 
 #define SA818_RADIO_CMD_TIMEOUT_MS      1500
-#define SA818_RADIO_RX_TASK_STACK       8192
+#define SA818_RADIO_RX_TASK_STACK       4096
 #define SA818_RADIO_RX_TASK_PRIO        4
 #define SA818_RADIO_AUDIO_BLOCK_SAMPLES 160
 #define SA818_RADIO_RX_STATS_LOG        0
-#define SA818_RADIO_IDLE_YIELD_US       1000000LL
+#define SA818_RADIO_IDLE_YIELD_US       100000LL
 #define APRS_HDLC_FLAG                  0x7EU
 #define APRS_HDLC_RESET                 0x7FU
 #define APRS_AX25_ESC                   0x1BU
