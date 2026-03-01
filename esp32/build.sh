@@ -9,6 +9,17 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
+# Find PlatformIO CLI
+if command -v pio &>/dev/null; then
+    PIO="pio"
+elif [ -x "$HOME/.platformio/penv/bin/pio" ]; then
+    PIO="$HOME/.platformio/penv/bin/pio"
+else
+    echo "Error: PlatformIO (pio) not found."
+    echo "Install it from https://platformio.org/install/cli"
+    exit 1
+fi
+
 # Available firmware targets
 declare -A TARGETS
 TARGETS=(
@@ -56,11 +67,11 @@ build_target() {
     echo ""
 
     if [ "$ACTION" = "upload" ]; then
-        pio run -e "$env" --target upload
+        $PIO run -e "$env" --target upload
     elif [ "$ACTION" = "clean" ]; then
-        pio run -e "$env" --target clean
+        $PIO run -e "$env" --target clean
     else
-        pio run -e "$env"
+        $PIO run -e "$env"
     fi
 }
 
