@@ -8,6 +8,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../models/monitored_task.dart';
+import '../services/i18n_service.dart';
 import '../services/task_monitor_service.dart';
 
 class TaskSettingsPage extends StatefulWidget {
@@ -19,6 +20,7 @@ class TaskSettingsPage extends StatefulWidget {
 
 class _TaskSettingsPageState extends State<TaskSettingsPage> {
   final TaskMonitorService _monitor = TaskMonitorService();
+  final I18nService _i18n = I18nService();
   StreamSubscription<TaskStateChangedEvent>? _sub;
   bool _groupByService = true; // false = group by priority
 
@@ -42,7 +44,7 @@ class _TaskSettingsPageState extends State<TaskSettingsPage> {
     final tasks = _monitor.tasks;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Task Monitor')),
+      appBar: AppBar(title: Text(_i18n.t('task_monitor'))),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
@@ -78,7 +80,7 @@ class _TaskSettingsPageState extends State<TaskSettingsPage> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              '${tasks.length} registered tasks',
+              _i18n.t('task_registered_count', params: ['${tasks.length}']),
               style: theme.textTheme.titleMedium,
             ),
             const SizedBox(height: 8),
@@ -86,10 +88,10 @@ class _TaskSettingsPageState extends State<TaskSettingsPage> {
               spacing: 8,
               runSpacing: 4,
               children: [
-                _chip('Running', running, Colors.blue),
-                _chip('Idle', idle, Colors.green),
-                _chip('Paused', paused, Colors.orange),
-                _chip('Error', error, Colors.red),
+                _chip(_i18n.t('task_status_running'), running, Colors.blue),
+                _chip(_i18n.t('task_status_idle'), idle, Colors.green),
+                _chip(_i18n.t('task_status_paused'), paused, Colors.orange),
+                _chip(_i18n.t('task_status_error'), error, Colors.red),
               ],
             ),
             const SizedBox(height: 12),
@@ -97,7 +99,7 @@ class _TaskSettingsPageState extends State<TaskSettingsPage> {
               width: double.infinity,
               child: OutlinedButton.icon(
                 icon: Icon(hasPaused ? Icons.play_arrow : Icons.pause),
-                label: Text(hasPaused ? 'Resume all' : 'Pause all non-critical'),
+                label: Text(hasPaused ? _i18n.t('task_resume_all') : _i18n.t('task_pause_all')),
                 onPressed: () {
                   setState(() {
                     if (hasPaused) {
@@ -133,9 +135,9 @@ class _TaskSettingsPageState extends State<TaskSettingsPage> {
 
   Widget _buildGroupToggle(ThemeData theme) {
     return SegmentedButton<bool>(
-      segments: const [
-        ButtonSegment(value: true, label: Text('By Service')),
-        ButtonSegment(value: false, label: Text('By Priority')),
+      segments: [
+        ButtonSegment(value: true, label: Text(_i18n.t('task_group_by_service'))),
+        ButtonSegment(value: false, label: Text(_i18n.t('task_group_by_priority'))),
       ],
       selected: {_groupByService},
       onSelectionChanged: (v) => setState(() => _groupByService = v.first),
@@ -155,14 +157,14 @@ class _TaskSettingsPageState extends State<TaskSettingsPage> {
             Icon(Icons.task_alt, size: 64, color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.4)),
             const SizedBox(height: 12),
             Text(
-              'No tasks registered yet',
+              _i18n.t('task_no_tasks'),
               style: theme.textTheme.bodyLarge?.copyWith(
                 color: theme.colorScheme.onSurfaceVariant,
               ),
             ),
             const SizedBox(height: 4),
             Text(
-              'Services will appear here as they adopt the task monitor.',
+              _i18n.t('task_no_tasks_hint'),
               style: theme.textTheme.bodySmall?.copyWith(
                 color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.7),
               ),
@@ -219,11 +221,11 @@ class _TaskSettingsPageState extends State<TaskSettingsPage> {
   Widget _buildTaskTile(ThemeData theme, MonitoredTask task) {
     final ago = task.lastRunAt != null
         ? _formatAgo(DateTime.now().difference(task.lastRunAt!))
-        : 'never';
+        : _i18n.t('task_last_run_never');
     final dur = task.lastDuration != null
         ? _formatDuration(task.lastDuration!)
         : '-';
-    final subtitle = 'Last run: $ago · $dur · ${task.runCount} runs';
+    final subtitle = _i18n.t('task_last_run', params: [ago, dur, '${task.runCount}']);
 
     return ExpansionTile(
       leading: _statusDot(task.status),
@@ -251,13 +253,13 @@ class _TaskSettingsPageState extends State<TaskSettingsPage> {
               Text(task.description, style: theme.textTheme.bodySmall),
               const SizedBox(height: 8),
               Text(
-                'Success: ${task.successCount} · Fail: ${task.failCount}',
+                _i18n.t('task_success_fail', params: ['${task.successCount}', '${task.failCount}']),
                 style: theme.textTheme.bodySmall,
               ),
               if (task.lastError != null) ...[
                 const SizedBox(height: 4),
                 Text(
-                  'Error: ${task.lastError}',
+                  _i18n.t('task_error_label', params: [task.lastError!]),
                   style: theme.textTheme.bodySmall?.copyWith(color: Colors.red),
                   maxLines: 3,
                   overflow: TextOverflow.ellipsis,
@@ -266,7 +268,7 @@ class _TaskSettingsPageState extends State<TaskSettingsPage> {
               const SizedBox(height: 8),
               Row(
                 children: [
-                  const Text('Paused'),
+                  Text(_i18n.t('task_paused_switch')),
                   const Spacer(),
                   Switch(
                     value: task.status == TaskStatus.paused,
@@ -311,9 +313,9 @@ class _TaskSettingsPageState extends State<TaskSettingsPage> {
 
   Widget _priorityBadge(ThemeData theme, TaskPriority priority) {
     final (label, color) = switch (priority) {
-      TaskPriority.critical => ('CRIT', Colors.red),
-      TaskPriority.normal => ('NORM', Colors.grey),
-      TaskPriority.low => ('LOW', Colors.blueGrey),
+      TaskPriority.critical => (_i18n.t('task_priority_critical'), Colors.red),
+      TaskPriority.normal => (_i18n.t('task_priority_normal'), Colors.grey),
+      TaskPriority.low => (_i18n.t('task_priority_low'), Colors.blueGrey),
     };
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
@@ -329,10 +331,10 @@ class _TaskSettingsPageState extends State<TaskSettingsPage> {
   }
 
   String _formatAgo(Duration d) {
-    if (d.inDays > 0) return '${d.inDays}d ago';
-    if (d.inHours > 0) return '${d.inHours}h ago';
-    if (d.inMinutes > 0) return '${d.inMinutes}m ago';
-    return '${d.inSeconds}s ago';
+    if (d.inDays > 0) return _i18n.t('task_ago_days', params: ['${d.inDays}']);
+    if (d.inHours > 0) return _i18n.t('task_ago_hours', params: ['${d.inHours}']);
+    if (d.inMinutes > 0) return _i18n.t('task_ago_minutes', params: ['${d.inMinutes}']);
+    return _i18n.t('task_ago_seconds', params: ['${d.inSeconds}']);
   }
 
   String _formatDuration(Duration d) {
