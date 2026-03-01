@@ -1963,9 +1963,9 @@ esp_err_t http_server_start_ex(wifi_config_callback_t callback, bool enable_stat
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.lru_purge_enable = true;
     // Keep HTTP server footprint low on no-PSRAM targets (ESP32-C3/KV4P).
-    config.stack_size = 8192;
+    config.stack_size = 12288;
     config.max_uri_handlers = 20;
-    config.max_open_sockets = 3;
+    config.max_open_sockets = 5;
     config.recv_wait_timeout = 5;  // Shorter timeout to free sockets faster
     config.send_wait_timeout = 5;
 

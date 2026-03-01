@@ -1670,12 +1670,13 @@ esp_err_t sa818_radio_start_audio_rx(sa818_radio_handle_t handle,
     handle->audio_rx_ctx = user_ctx;
     handle->rx_task_running = true;
 
-    BaseType_t ok = xTaskCreate(sa818_radio_rx_task,
+    BaseType_t ok = xTaskCreatePinnedToCore(sa818_radio_rx_task,
                                 "sa818_rx",
                                 SA818_RADIO_RX_TASK_STACK,
                                 handle,
                                 SA818_RADIO_RX_TASK_PRIO,
-                                &handle->rx_task);
+                                &handle->rx_task,
+                                1);  // Pin to core 1 — keeps core 0 free for WiFi/HTTP
     if (ok != pdPASS) {
         handle->rx_task_running = false;
         handle->rx_task = NULL;
