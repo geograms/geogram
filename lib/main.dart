@@ -2028,7 +2028,7 @@ class _HomePageState extends State<HomePage> {
                 ),
                 ListTile(
                   leading: const Icon(Icons.task_alt),
-                  title: const Text('Tasks'),
+                  title: const Text('Task Monitor'),
                   onTap: () {
                     Navigator.pop(context);
                     Navigator.push(

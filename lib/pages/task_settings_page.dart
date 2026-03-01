@@ -42,7 +42,7 @@ class _TaskSettingsPageState extends State<TaskSettingsPage> {
     final tasks = _monitor.tasks;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Background Tasks')),
+      appBar: AppBar(title: const Text('Task Monitor')),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
