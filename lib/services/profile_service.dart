@@ -146,17 +146,72 @@ class ProfileService {
       _saveAllProfiles();
       LogService().log('Migrated legacy profile to multi-profile format');
     } else {
-      // Create default profile with identity
-      final newProfile = Profile();
-      await _generateIdentityForProfile(newProfile);
-      _profiles = [newProfile];
-      _activeProfileId = newProfile.id;
-      _saveAllProfiles();
-      LogService().log('Created default profile with new identity');
+      // No profile data in config — attempt filesystem recovery before creating new identity
+      final recovered = await _tryRecoverFromFilesystem();
+      if (!recovered) {
+        final newProfile = Profile();
+        await _generateIdentityForProfile(newProfile);
+        _profiles = [newProfile];
+        _activeProfileId = newProfile.id;
+        _saveAllProfiles();
+        LogService().log('Created default profile with new identity');
+      }
     }
 
     // Update active profile notifier
     activeProfileNotifier.value = _activeProfileId;
+  }
+
+  /// Last-resort recovery: scan devices/ for existing profile folders when config is empty.
+  /// Recovered profiles will have no nsec (user must re-import), but unencrypted data
+  /// is preserved and the app won't show onboarding as if it were a fresh install.
+  Future<bool> _tryRecoverFromFilesystem() async {
+    if (kIsWeb) return false;
+
+    try {
+      final devicesDir = Directory(StorageConfig().devicesDir);
+      if (!await devicesDir.exists()) return false;
+
+      final List<Profile> recovered = [];
+      await for (final entity in devicesDir.list()) {
+        String? callsign;
+
+        if (entity is File && entity.path.endsWith('.sqlite')) {
+          // Encrypted profile: derive callsign from filename
+          callsign = path.basenameWithoutExtension(entity.path);
+        } else if (entity is Directory) {
+          // Plain profile folder — only count if it has subdirectories
+          final sub = await entity.list().take(1).toList();
+          if (sub.isNotEmpty) {
+            callsign = path.basename(entity.path);
+          }
+        }
+
+        if (callsign != null && callsign.isNotEmpty) {
+          final profile = Profile(callsign: callsign);
+          // Set a placeholder color
+          final colors = ['red', 'blue', 'green', 'yellow', 'purple', 'orange', 'pink', 'cyan'];
+          profile.preferredColor = colors[recovered.length % colors.length];
+          recovered.add(profile);
+          LogService().log('ProfileService: Recovered profile folder for $callsign (nsec missing — re-import required)');
+        }
+      }
+
+      if (recovered.isEmpty) return false;
+
+      _profiles = recovered;
+      _activeProfileId = recovered.first.id;
+      _saveAllProfiles();
+
+      // Skip onboarding since this is clearly not a fresh install
+      ConfigService().set('firstLaunchComplete', true);
+
+      LogService().log('ProfileService: Recovered ${recovered.length} profile(s) from filesystem. Private keys must be re-imported.');
+      return true;
+    } catch (e) {
+      LogService().log('ProfileService: Filesystem recovery failed: $e');
+      return false;
+    }
   }
 
   /// Attempt to repair corrupted profiles (missing npub/callsign but have nsec)

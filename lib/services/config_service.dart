@@ -116,10 +116,10 @@ class ConfigService {
     }
 
     // Attempt to recover from backup before falling back to defaults
-    final recovered = await _restoreFromBackup();
-    if (recovered) {
-      return;
-    }
+    if (await _restoreFromBackup()) return;
+
+    // Try .tmp file (may contain valid data from an interrupted atomic write)
+    if (await _restoreFromTmp()) return;
 
     // Quarantine the corrupt file to avoid overwriting it and to aid debugging
     await _quarantineCorruptFile();
@@ -165,16 +165,13 @@ class ConfigService {
         // Ensure the config directory exists
         await _configFile!.parent.create(recursive: true);
 
-        // Persist a backup of the last known good config before overwriting
-        if (await _configFile!.exists()) {
-          final existing = await _configFile!.readAsString();
-          await _writeBackup(existing);
-        }
-
         // Atomic-ish write: write to a temp file then rename
         final tmpFile = File('${_configFile!.path}.tmp');
         await tmpFile.writeAsString(contents, flush: true);
         await tmpFile.rename(_configFile!.path);
+
+        // Back up known-good content after successful write
+        await _writeBackup(contents);
       } catch (e) {
         stderr.writeln('Error saving config: $e');
       }
@@ -291,6 +288,26 @@ class ConfigService {
       return true;
     } catch (e) {
       stderr.writeln('Error restoring config from backup: $e');
+      return false;
+    }
+  }
+
+  /// Restore config from .tmp file if possible (interrupted atomic write)
+  Future<bool> _restoreFromTmp() async {
+    if (_configFile == null) return false;
+    final tmpFile = File('${_configFile!.path}.tmp');
+    if (!await tmpFile.exists()) return false;
+
+    try {
+      final contents = await tmpFile.readAsString();
+      final data = json.decode(contents) as Map<String, dynamic>;
+      _config = Map<String, dynamic>.from(data);
+      await tmpFile.rename(_configFile!.path);
+      await _writeBackup(contents);
+      stderr.writeln('ConfigService: Restored config from .tmp file');
+      return true;
+    } catch (e) {
+      stderr.writeln('Error restoring config from .tmp: $e');
       return false;
     }
   }

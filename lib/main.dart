@@ -878,6 +878,7 @@ class _GeogramAppState extends State<GeogramApp> with WidgetsBindingObserver {
     if (state == AppLifecycleState.inactive ||
         state == AppLifecycleState.paused ||
         state == AppLifecycleState.detached) {
+      ConfigService().saveNow();
       IrcService().flushWrites();
       XmppService().flushWrites();
     }
