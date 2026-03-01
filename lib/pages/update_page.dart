@@ -28,7 +28,6 @@ class _UpdatePageState extends State<UpdatePage> {
   String? _completedDownloadPath; // Track completed download ready to install
   VoidCallback? _completedDownloadListener;
   VoidCallback? _updateAvailableListener;
-  bool _showDesktopRestartDialog = false; // Show restart dialog after staging (Linux/Windows)
 
   @override
   void initState() {
@@ -299,11 +298,8 @@ class _UpdatePageState extends State<UpdatePage> {
             _statusMessage = _i18n.t('apk_installer_launched');
           });
         } else if (!kIsWeb && (Platform.isLinux || Platform.isWindows) && _updateService.hasPendingDesktopUpdate) {
-          // Desktop: Show restart dialog (update is staged, needs restart to apply)
-          _setStateIfMounted(() {
-            _statusMessage = null;
-            _showDesktopRestartDialog = true;
-          });
+          // Desktop: Apply update immediately (stages script, exits app, script replaces binary and restarts)
+          await _updateService.applyPendingDesktopUpdate();
         } else {
           final backups = await _updateService.listBackups();
           _setStateIfMounted(() {
@@ -562,45 +558,6 @@ class _UpdatePageState extends State<UpdatePage> {
               _buildUpdateStatusCard(hasUpdate),
 
               const SizedBox(height: 16),
-
-              // Linux Restart Dialog - shows after update is staged
-              if (_showDesktopRestartDialog)
-                Card(
-                  color: Theme.of(context).colorScheme.primaryContainer,
-                  child: Padding(
-                    padding: const EdgeInsets.all(20),
-                    child: Column(
-                      children: [
-                        Icon(
-                          Icons.restart_alt,
-                          size: 48,
-                          color: Theme.of(context).colorScheme.primary,
-                        ),
-                        const SizedBox(height: 16),
-                        Text(
-                          _i18n.t('update_ready_restart'),
-                          style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                                fontWeight: FontWeight.bold,
-                              ),
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          _i18n.t('update_ready_restart_msg'),
-                          textAlign: TextAlign.center,
-                          style: Theme.of(context).textTheme.bodyMedium,
-                        ),
-                        const SizedBox(height: 16),
-                        FilledButton.icon(
-                          onPressed: () => _updateService.applyPendingDesktopUpdate(),
-                          icon: const Icon(Icons.restart_alt),
-                          label: Text(_i18n.t('restart_now')),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-
-              if (_showDesktopRestartDialog) const SizedBox(height: 16),
 
               // Download Progress
               if (_updateService.isDownloading)
