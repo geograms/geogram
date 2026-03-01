@@ -247,6 +247,110 @@ After successful WiFi connection, the device:
 
 ---
 
+## APRS API (KV4P only)
+
+These endpoints are only available on the KV4P board, which has an SA818 radio module with full APRS TX/RX capability. The radio is shared — all messages are visible to all connected clients.
+
+### `GET /api/aprs?since=<id>`
+
+Returns APRS messages with id greater than `since`. Omit `since` or pass `0` to get all messages.
+
+**Response:**
+```json
+{
+  "latest_id": 42,
+  "count": 3,
+  "messages": [
+    {
+      "id": 40,
+      "timestamp": 1709312400,
+      "from": "N0CALL",
+      "to": "APRS",
+      "message": "!4903.50N/07201.75W-PHG2360",
+      "raw": "N0CALL>APRS,WIDE1-1:!4903.50N/...",
+      "beacon": true,
+      "beacon_count": 15,
+      "outgoing": false
+    }
+  ]
+}
+```
+
+**Beacon deduplication:** Repeated position/status beacons from the same callsign with identical content are deduplicated. The `beacon_count` field shows how many times the beacon was received. The message's `id` is bumped on each repeat so it appears as "new" when polling with `since`.
+
+**Example:**
+```bash
+# Get all messages
+curl http://192.168.5.1/api/aprs
+
+# Poll for new messages since ID 42
+curl http://192.168.5.1/api/aprs?since=42
+```
+
+---
+
+### `POST /api/aprs`
+
+Send an APRS message via the SA818 radio.
+
+**Content-Type:** `application/x-www-form-urlencoded`
+
+**Parameters:**
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `from` | string | Yes | Sender callsign (max 16 chars) |
+| `to` | string | Yes | Destination callsign (max 16 chars) |
+| `message` | string | Yes | Message text (max 128 chars) |
+
+**Response:**
+```json
+{"ok": true}
+```
+
+**Error Response:**
+```json
+{"ok": false, "error": "TX failed"}
+```
+
+**Example:**
+```bash
+curl -X POST http://192.168.5.1/api/aprs \
+  -d "from=MYCALL&to=THEIRCALL&message=Hello"
+```
+
+---
+
+### `GET /api/aprs/status`
+
+Returns APRS radio status.
+
+**Response:**
+```json
+{
+  "enabled": true,
+  "frequency": 144.800,
+  "tx_supported": true,
+  "total_rx": 123,
+  "total_tx": 5
+}
+```
+
+**Fields:**
+| Field | Description |
+|-------|-------------|
+| `enabled` | Whether the radio is powered on |
+| `frequency` | Current APRS frequency in MHz |
+| `tx_supported` | Whether APRS TX is supported (requires audio_out pin) |
+| `total_rx` | Total received APRS frames (including deduplicated beacons) |
+| `total_tx` | Total transmitted APRS messages |
+
+**Example:**
+```bash
+curl http://192.168.5.1/api/aprs/status
+```
+
+---
+
 ## Rate Limiting
 
 There is no rate limiting implemented. For polling `/api/status`, a reasonable interval is 1-5 seconds.

@@ -8,8 +8,8 @@ if(CONFIG_GEOGRAM_BOARD_EPAPER_1IN54)
     list(APPEND HTTP_REQUIRES geogram_tiles geogram_updates)
 endif()
 
-# Private requirements
-set(HTTP_PRIV_REQUIRES esp_wifi)
+# Private requirements — APRS/SA818/model_kv4p are empty stubs on non-KV4P boards
+set(HTTP_PRIV_REQUIRES esp_wifi geogram_aprs geogram_sa818 geogram_model_kv4p)
 
 # Add mesh and nostr components on targets that support ESP-MESH
 # These are used conditionally via CONFIG_GEOGRAM_MESH_ENABLED

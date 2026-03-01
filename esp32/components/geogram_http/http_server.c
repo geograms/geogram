@@ -22,6 +22,12 @@
 #include "updates.h"
 #endif
 
+#if BOARD_MODEL == MODEL_KV4P
+#include "aprs_store.h"
+#include "sa818_radio.h"
+#include "model_init.h"
+#endif
+
 // Chat support (in-memory history; mesh broadcast optional)
 #define CHAT_ENABLED 1
 #include "mesh_chat.h"
@@ -1293,6 +1299,168 @@ static const httpd_uri_t uri_api_chat_client = {
 #endif // CHAT_ENABLED
 
 // ============================================================================
+// APRS API Handlers (KV4P only)
+// ============================================================================
+#if BOARD_MODEL == MODEL_KV4P
+
+/**
+ * @brief Handler for GET /api/aprs — list APRS messages since given ID
+ */
+static esp_err_t api_aprs_get_handler(httpd_req_t *req)
+{
+    char query[64] = {0};
+    uint32_t since_id = 0;
+
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK) {
+        char param[16];
+        if (httpd_query_key_value(query, "since", param, sizeof(param)) == ESP_OK) {
+            since_id = (uint32_t)strtoul(param, NULL, 10);
+        }
+    }
+
+    const size_t buffer_size = 8192;
+    char *buffer = malloc(buffer_size);
+    if (!buffer) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Out of memory");
+        return ESP_FAIL;
+    }
+
+    size_t len = aprs_store_build_json(buffer, buffer_size, since_id);
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_send(req, buffer, len);
+
+    free(buffer);
+    return ESP_OK;
+}
+
+/**
+ * @brief Handler for POST /api/aprs — send an APRS message
+ */
+static esp_err_t api_aprs_post_handler(httpd_req_t *req)
+{
+    char *content = malloc(512);
+    if (!content) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Out of memory");
+        return ESP_FAIL;
+    }
+
+    int total_len = req->content_len;
+    if (total_len >= 512) {
+        free(content);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Content too long");
+        return ESP_FAIL;
+    }
+
+    int ret = httpd_req_recv(req, content, total_len);
+    if (ret <= 0) {
+        free(content);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to receive data");
+        return ESP_FAIL;
+    }
+    content[total_len] = '\0';
+
+    char from[APRS_MAX_CALLSIGN_LEN] = {0};
+    char to[APRS_MAX_CALLSIGN_LEN] = {0};
+    char message[APRS_MAX_MESSAGE_LEN] = {0};
+
+    if (!extract_form_value(content, "from", from, sizeof(from)) || from[0] == '\0') {
+        free(content);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "{\"error\":\"Missing 'from' parameter\"}");
+        return ESP_FAIL;
+    }
+    if (!extract_form_value(content, "to", to, sizeof(to)) || to[0] == '\0') {
+        free(content);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "{\"error\":\"Missing 'to' parameter\"}");
+        return ESP_FAIL;
+    }
+    if (!extract_form_value(content, "message", message, sizeof(message))) {
+        free(content);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "{\"error\":\"Missing 'message' parameter\"}");
+        return ESP_FAIL;
+    }
+
+    free(content);
+
+    // Send via SA818 radio
+    sa818_radio_handle_t radio = model_get_sa818_radio();
+    if (radio) {
+        esp_err_t err = sa818_radio_send_aprs_message(radio, from, to, message);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "APRS TX failed: %s", esp_err_to_name(err));
+            httpd_resp_set_type(req, "application/json");
+            httpd_resp_send(req, "{\"ok\":false,\"error\":\"TX failed\"}", -1);
+            return ESP_OK;
+        }
+    }
+
+    // Store in APRS history
+    aprs_store_add_tx(from, to, message);
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_send(req, "{\"ok\":true}", 11);
+    return ESP_OK;
+}
+
+/**
+ * @brief Handler for GET /api/aprs/status — APRS radio status
+ */
+static esp_err_t api_aprs_status_get_handler(httpd_req_t *req)
+{
+    char buf[256];
+    bool enabled = false;
+    float freq = 0.0f;
+    bool tx_supported = false;
+
+    sa818_radio_handle_t radio = model_get_sa818_radio();
+    if (radio) {
+        enabled = sa818_radio_is_powered(radio);
+        freq = sa818_radio_get_aprs_frequency(radio);
+        tx_supported = sa818_radio_is_aprs_tx_supported(radio);
+    }
+
+    int len = snprintf(buf, sizeof(buf),
+        "{\"enabled\":%s,\"frequency\":%.3f,"
+        "\"tx_supported\":%s,"
+        "\"total_rx\":%lu,\"total_tx\":%lu}",
+        enabled ? "true" : "false",
+        (double)freq,
+        tx_supported ? "true" : "false",
+        (unsigned long)aprs_store_get_total_rx(),
+        (unsigned long)aprs_store_get_total_tx());
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_send(req, buf, len);
+    return ESP_OK;
+}
+
+static const httpd_uri_t uri_api_aprs = {
+    .uri = "/api/aprs",
+    .method = HTTP_GET,
+    .handler = api_aprs_get_handler,
+    .user_ctx = NULL
+};
+
+static const httpd_uri_t uri_api_aprs_send = {
+    .uri = "/api/aprs",
+    .method = HTTP_POST,
+    .handler = api_aprs_post_handler,
+    .user_ctx = NULL
+};
+
+static const httpd_uri_t uri_api_aprs_status = {
+    .uri = "/api/aprs/status",
+    .method = HTTP_GET,
+    .handler = api_aprs_status_get_handler,
+    .user_ctx = NULL
+};
+
+#endif // BOARD_MODEL == MODEL_KV4P
+
+// ============================================================================
 // File Transfer Relay Handlers
 // ============================================================================
 
@@ -1699,7 +1867,7 @@ esp_err_t http_server_start_ex(wifi_config_callback_t callback, bool enable_stat
     config.lru_purge_enable = true;
     // Keep HTTP server footprint low on no-PSRAM targets (ESP32-C3/KV4P).
     config.stack_size = 12288;
-    config.max_uri_handlers = 16;
+    config.max_uri_handlers = 20;
     config.max_open_sockets = 5;
     config.recv_wait_timeout = 5;  // Shorter timeout to free sockets faster
     config.send_wait_timeout = 5;
@@ -1749,6 +1917,12 @@ esp_err_t http_server_start_ex(wifi_config_callback_t callback, bool enable_stat
         // to keep captive portal and HTTP API startup deterministic.
 #if BOARD_MODEL == MODEL_KV4P
         ESP_LOGI(TAG, "WebSocket handler disabled on KV4P");
+
+        // Register APRS API endpoints
+        httpd_register_uri_handler(s_server, &uri_api_aprs);
+        httpd_register_uri_handler(s_server, &uri_api_aprs_send);
+        httpd_register_uri_handler(s_server, &uri_api_aprs_status);
+        ESP_LOGI(TAG, "APRS API endpoints registered");
 #else
         ret = ws_server_register(s_server);
         if (ret != ESP_OK) {

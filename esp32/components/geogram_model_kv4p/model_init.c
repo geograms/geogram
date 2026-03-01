@@ -3,6 +3,7 @@
 #include "model_config.h"
 #include "esp_log.h"
 #include "nvs_flash.h"
+#include "aprs_store.h"
 
 static const char *TAG = "model_init";
 static sa818_handle_t s_sa818 = NULL;
@@ -67,6 +68,23 @@ esp_err_t model_init(void)
         s_sa818 = sa818_radio_get_modem(s_sa818_radio);
         ESP_LOGI(TAG, "SA818 radio module ready (APRS freq %.3f MHz)",
                  (double)sa818_radio_get_aprs_frequency(s_sa818_radio));
+
+        // Initialize APRS message store and register RX callback
+        ret = aprs_store_init();
+        if (ret == ESP_OK) {
+            sa818_radio_set_aprs_rx_callback(s_sa818_radio, aprs_store_rx_callback, NULL);
+            ESP_LOGI(TAG, "APRS store initialized, RX callback registered");
+
+            // Start audio RX to enable APRS demodulator
+            ret = sa818_radio_start_audio_rx(s_sa818_radio, NULL, NULL);
+            if (ret == ESP_OK) {
+                ESP_LOGI(TAG, "APRS audio RX started");
+            } else {
+                ESP_LOGW(TAG, "Failed to start audio RX: %s", esp_err_to_name(ret));
+            }
+        } else {
+            ESP_LOGW(TAG, "APRS store init failed: %s", esp_err_to_name(ret));
+        }
     }
 #endif
 
