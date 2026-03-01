@@ -450,6 +450,24 @@ static esp_err_t connect_post_handler(httpd_req_t *req)
 
     if (s_config_callback != NULL) {
         s_config_callback(ssid, password);
+    } else {
+        // No callback — attempt STA connection directly (KV4P standalone mode)
+        // Use esp_wifi APIs directly to keep AP running alongside STA
+        ESP_LOGI(TAG, "Attempting WiFi STA connection to %s", ssid);
+
+        esp_wifi_set_mode(WIFI_MODE_APSTA);
+
+        wifi_config_t wifi_config = {0};
+        strncpy((char *)wifi_config.sta.ssid, ssid, sizeof(wifi_config.sta.ssid) - 1);
+        strncpy((char *)wifi_config.sta.password, password, sizeof(wifi_config.sta.password) - 1);
+
+        esp_err_t conn_err = esp_wifi_set_config(WIFI_IF_STA, &wifi_config);
+        if (conn_err == ESP_OK) {
+            conn_err = esp_wifi_connect();
+        }
+        if (conn_err != ESP_OK) {
+            ESP_LOGW(TAG, "WiFi STA connect failed: %s", esp_err_to_name(conn_err));
+        }
     }
 
     return ESP_OK;
@@ -490,6 +508,14 @@ static esp_err_t api_status_get_handler(httpd_req_t *req)
 static esp_err_t api_wifi_scan_get_handler(httpd_req_t *req)
 {
     ESP_LOGI(TAG, "WiFi scan requested");
+
+    // WiFi scan requires STA interface — switch to AP+STA mode if needed
+    wifi_mode_t mode;
+    esp_wifi_get_mode(&mode);
+    if (mode == WIFI_MODE_AP) {
+        ESP_LOGI(TAG, "Switching to APSTA mode for scan");
+        esp_wifi_set_mode(WIFI_MODE_APSTA);
+    }
 
     wifi_scan_config_t scan_config = {
         .ssid = NULL,
