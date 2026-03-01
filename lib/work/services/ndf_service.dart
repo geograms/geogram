@@ -161,7 +161,7 @@ class NdfService {
 
     // Create default content based on document type
     if (mainContent == null) {
-      final defaultContent = _createDefaultContent(metadata.type);
+      final defaultContent = _createDefaultContent(metadata.type, metadata.title);
       final contentJson = utf8.encode(const JsonEncoder.withIndent('  ').convert(defaultContent));
       archive.addFile(ArchiveFile('content/main.json', contentJson.length, contentJson));
 
@@ -312,7 +312,7 @@ class NdfService {
 
     // Create default content based on document type
     if (mainContent == null) {
-      final defaultContent = _createDefaultContent(metadata.type);
+      final defaultContent = _createDefaultContent(metadata.type, metadata.title);
       final contentJson = utf8.encode(const JsonEncoder.withIndent('  ').convert(defaultContent));
       archive.addFile(ArchiveFile('content/main.json', contentJson.length, contentJson));
 
@@ -354,7 +354,7 @@ class NdfService {
   }
 
   /// Create default content based on document type
-  Map<String, dynamic> _createDefaultContent(NdfDocumentType type) {
+  Map<String, dynamic> _createDefaultContent(NdfDocumentType type, String title) {
     switch (type) {
       case NdfDocumentType.spreadsheet:
         return {
@@ -379,7 +379,7 @@ class NdfService {
               'type': 'heading',
               'level': 1,
               'id': 'h-001',
-              'content': [{'type': 'text', 'value': 'Untitled Document'}],
+              'content': [{'type': 'text', 'value': title}],
             },
             {
               'type': 'paragraph',
@@ -426,7 +426,7 @@ class NdfService {
           'type': 'form',
           'id': 'form-${now.millisecondsSinceEpoch.toRadixString(36)}',
           'schema': 'ndf-form-1.0',
-          'title': 'Untitled Form',
+          'title': title,
           'description': '',
           'version': 1,
           'created': now.toIso8601String(),
@@ -449,7 +449,7 @@ class NdfService {
           'type': 'todo',
           'id': 'todo-${now.millisecondsSinceEpoch.toRadixString(36)}',
           'schema': 'ndf-todo-1.0',
-          'title': 'Untitled TODO',
+          'title': title,
           'version': 1,
           'created': now.toIso8601String(),
           'modified': now.toIso8601String(),
@@ -467,7 +467,7 @@ class NdfService {
           'type': 'voicememo',
           'id': 'voicememo-${now.millisecondsSinceEpoch.toRadixString(36)}',
           'schema': 'ndf-voicememo-1.0',
-          'title': 'Untitled Voice Memo',
+          'title': title,
           'version': 1,
           'created': now.toIso8601String(),
           'modified': now.toIso8601String(),
@@ -487,7 +487,7 @@ class NdfService {
           'type': 'websnapshot',
           'id': 'websnapshot-${now.millisecondsSinceEpoch.toRadixString(36)}',
           'schema': 'ndf-websnapshot-1.0',
-          'title': 'Web Snapshot',
+          'title': title,
           'target_url': '',
           'version': 1,
           'created': now.toIso8601String(),
