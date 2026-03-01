@@ -36,7 +36,7 @@ static const char *TAG = "sa818_radio";
 #define SA818_RADIO_RX_TASK_PRIO        4
 #define SA818_RADIO_AUDIO_BLOCK_SAMPLES 160
 #define SA818_RADIO_RX_STATS_LOG        0
-#define SA818_RADIO_IDLE_YIELD_US       100000LL
+#define SA818_RADIO_IDLE_YIELD_US       10000LL
 #define APRS_HDLC_FLAG                  0x7EU
 #define APRS_HDLC_RESET                 0x7FU
 #define APRS_AX25_ESC                   0x1BU
@@ -431,7 +431,7 @@ static esp_err_t sa818_radio_configure_i2s_tx(sa818_radio_handle_t handle)
         .communication_format = I2S_COMM_FORMAT_I2S_MSB,
 #endif
         .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
-        .dma_buf_count = 5,
+        .dma_buf_count = 2,
         .dma_buf_len = 768,
         .use_apll = false,
         .tx_desc_auto_clear = true,

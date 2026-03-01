@@ -69,10 +69,15 @@ esp_err_t model_init(void)
         ESP_LOGI(TAG, "SA818 radio module ready (APRS freq %.3f MHz)",
                  (double)sa818_radio_get_aprs_frequency(s_sa818_radio));
 
-        // APRS RX disabled: the sa818_rx demodulator task uses too much
-        // heap/CPU and destabilises WiFi + HTTP on the KV4P's 520 KB SRAM.
-        // TODO: re-enable once memory budget is resolved.
-        ESP_LOGI(TAG, "APRS RX disabled (heap constrained) — radio ready for TX");
+        // Initialize APRS store and enable RX demodulator
+        ret = aprs_store_init();
+        if (ret != ESP_OK) {
+            ESP_LOGW(TAG, "APRS store init failed: %s", esp_err_to_name(ret));
+        } else {
+            sa818_radio_set_aprs_rx_callback(s_sa818_radio, aprs_store_rx_callback, NULL);
+            sa818_radio_start_audio_rx(s_sa818_radio, NULL, NULL);
+            ESP_LOGI(TAG, "APRS RX enabled — store + demodulator active");
+        }
     }
 #endif
 

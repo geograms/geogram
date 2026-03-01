@@ -22,7 +22,6 @@ extern "C" {
 #define APRS_STORE_MAX_MESSAGES  64
 #define APRS_MAX_CALLSIGN_LEN   10
 #define APRS_MAX_MESSAGE_LEN    68
-#define APRS_MAX_RAW_LEN        128
 
 typedef struct {
     uint32_t id;               /**< Monotonic counter (never resets) */
@@ -30,7 +29,6 @@ typedef struct {
     char from[APRS_MAX_CALLSIGN_LEN];
     char to[APRS_MAX_CALLSIGN_LEN];
     char message[APRS_MAX_MESSAGE_LEN];
-    char raw_tnc2[APRS_MAX_RAW_LEN];
     bool is_beacon;            /**< True if this is a repeated beacon */
     uint32_t beacon_count;     /**< Times this beacon was seen */
     uint32_t last_seen;        /**< Last time beacon was updated (timestamp) */

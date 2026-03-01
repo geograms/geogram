@@ -129,12 +129,6 @@ void aprs_store_add_rx(const char *from, const char *to,
             existing->last_seen = now;
             existing->id = s_next_id++;  // Bump ID so it appears "new" to polling clients
 
-            // Update raw TNC2 if provided (may differ in path)
-            if (raw_tnc2 && raw_tnc2[0] != '\0') {
-                strncpy(existing->raw_tnc2, raw_tnc2, APRS_MAX_RAW_LEN - 1);
-                existing->raw_tnc2[APRS_MAX_RAW_LEN - 1] = '\0';
-            }
-
             ESP_LOGD(TAG, "Beacon dedup: %s (count=%lu)",
                      from, (unsigned long)existing->beacon_count);
             xSemaphoreGive(s_mutex);
@@ -163,11 +157,6 @@ void aprs_store_add_rx(const char *from, const char *to,
         strncpy(slot->message, message, APRS_MAX_MESSAGE_LEN - 1);
         slot->message[APRS_MAX_MESSAGE_LEN - 1] = '\0';
     }
-    if (raw_tnc2) {
-        strncpy(slot->raw_tnc2, raw_tnc2, APRS_MAX_RAW_LEN - 1);
-        slot->raw_tnc2[APRS_MAX_RAW_LEN - 1] = '\0';
-    }
-
     ESP_LOGI(TAG, "RX: %s -> %s: %.40s%s",
              slot->from, slot->to, slot->message,
              strlen(slot->message) > 40 ? "..." : "");
@@ -203,10 +192,6 @@ void aprs_store_add_tx(const char *from, const char *to, const char *message)
         strncpy(slot->message, message, APRS_MAX_MESSAGE_LEN - 1);
         slot->message[APRS_MAX_MESSAGE_LEN - 1] = '\0';
     }
-
-    // Build a simple TNC2-style raw string for outgoing
-    snprintf(slot->raw_tnc2, APRS_MAX_RAW_LEN, "%s>%s:%s",
-             slot->from, slot->to, slot->message);
 
     ESP_LOGI(TAG, "TX: %s -> %s: %s", slot->from, slot->to, slot->message);
 
@@ -317,7 +302,6 @@ size_t aprs_store_build_json(char *buffer, size_t size, uint32_t since_id)
     char esc_from[APRS_MAX_CALLSIGN_LEN * 2];
     char esc_to[APRS_MAX_CALLSIGN_LEN * 2];
     char esc_msg[APRS_MAX_MESSAGE_LEN * 2];
-    char esc_raw[APRS_MAX_RAW_LEN * 2];
 
     for (size_t i = 0; i < s_count; i++) {
         aprs_message_t *m = &s_messages[i];
@@ -326,19 +310,18 @@ size_t aprs_store_build_json(char *buffer, size_t size, uint32_t since_id)
         json_escape(esc_from, sizeof(esc_from), m->from);
         json_escape(esc_to, sizeof(esc_to), m->to);
         json_escape(esc_msg, sizeof(esc_msg), m->message);
-        json_escape(esc_raw, sizeof(esc_raw), m->raw_tnc2);
 
         int n = snprintf(buffer + offset, size - offset,
             "%s{\"id\":%lu,\"timestamp\":%lu,"
             "\"from\":\"%s\",\"to\":\"%s\","
-            "\"message\":\"%s\",\"raw\":\"%s\","
+            "\"message\":\"%s\","
             "\"beacon\":%s,\"beacon_count\":%lu,"
             "\"outgoing\":%s}",
             first ? "" : ",",
             (unsigned long)m->id,
             (unsigned long)m->timestamp,
             esc_from, esc_to,
-            esc_msg, esc_raw,
+            esc_msg,
             m->is_beacon ? "true" : "false",
             (unsigned long)m->beacon_count,
             m->is_outgoing ? "true" : "false");
