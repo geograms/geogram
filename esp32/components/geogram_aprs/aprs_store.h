@@ -19,7 +19,7 @@
 extern "C" {
 #endif
 
-#define APRS_STORE_MAX_MESSAGES  200
+#define APRS_STORE_MAX_MESSAGES  64
 #define APRS_MAX_CALLSIGN_LEN   10
 #define APRS_MAX_MESSAGE_LEN    68
 #define APRS_MAX_RAW_LEN        128
