@@ -351,6 +351,84 @@ curl http://192.168.5.1/api/aprs/status
 
 ---
 
+## OTA Firmware Update (KV4P only)
+
+Over-the-air firmware updates via HTTP. The device uses a dual OTA partition scheme (A/B) — new firmware is written to the inactive slot, validated, then the device reboots into it.
+
+**Note:** The first flash after enabling OTA must be via USB (partition table change). After that, all updates can be done over HTTP.
+
+### `GET /ota`
+
+Firmware update web page with file picker, upload progress bar, and reboot polling.
+
+**Response:** HTML page.
+
+---
+
+### `GET /api/ota/status`
+
+Returns current firmware version and partition info.
+
+**Response:**
+```json
+{
+  "version": "1.0.0",
+  "partition": "ota_0",
+  "ota_ready": true
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `version` | Current firmware version string |
+| `partition` | Active partition label (`ota_0` or `ota_1`) |
+| `ota_ready` | Whether an OTA update partition is available |
+
+**Example:**
+```bash
+curl http://192.168.1.94/api/ota/status
+```
+
+---
+
+### `POST /api/ota`
+
+Upload a firmware binary to flash. The binary is streamed in chunks, written to the inactive OTA partition, validated, and then the device reboots.
+
+**Content-Type:** `application/octet-stream`
+
+**Body:** Raw firmware `.bin` file.
+
+**Response (success):**
+```json
+{"ok": true}
+```
+Device reboots ~500ms after sending the response.
+
+**Error Responses:**
+```json
+{"error": "No OTA partition available"}
+{"error": "Firmware too large for partition"}
+{"error": "Invalid firmware image"}
+{"error": "Flash write failed"}
+{"error": "Validation failed: <reason>"}
+```
+
+**Examples:**
+```bash
+# Upload via curl
+curl -X POST http://192.168.1.94/api/ota \
+  -H "Content-Type: application/octet-stream" \
+  --data-binary @esp32/firmware/geogram-KV4P-HT.bin
+
+# Upload via web browser
+# Navigate to http://192.168.1.94/ota
+```
+
+**Partition size limit:** ~1.9MB (1,966,080 bytes). Current firmware is ~1.6MB.
+
+---
+
 ## Rate Limiting
 
 There is no rate limiting implemented. For polling `/api/status`, a reasonable interval is 1-5 seconds.

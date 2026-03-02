@@ -31,6 +31,8 @@
 #include "aprs_store.h"
 #include "sa818_radio.h"
 #include "model_init.h"
+#include "esp_ota_ops.h"
+#include "esp_partition.h"
 #endif
 
 static const char *TAG = "http_server";
@@ -120,7 +122,7 @@ static const char *APRS_PAGE_HTML =
     "<input type=\"text\" id=\"message\" placeholder=\"Message\" maxlength=\"67\" required>"
     "<button type=\"submit\" id=\"btn\">SEND</button>"
     "</form>"
-    "<div class=\"nav\"><a href=\"/setup\">WiFi Setup</a></div>"
+    "<div class=\"nav\"><a href=\"/setup\">WiFi Setup</a> | <a href=\"/ota\">Firmware Update</a></div>"
     "<script>"
     "var lastId=0,myCall='',polling=null;"
     "function esc(s){var d=document.createElement('div');d.textContent=s;return d.innerHTML}"
@@ -228,7 +230,7 @@ static const char *WIFI_SETUP_PAGE_HTML =
     "<button type=\"submit\" id=\"connBtn\">Connect</button>"
     "</form>"
     "<div id=\"result\"></div>"
-    "<div class=\"back\"><a href=\"/\">Back to APRS</a></div>"
+    "<div class=\"back\"><a href=\"/\">APRS</a> | <a href=\"/ota\">Firmware Update</a></div>"
     "<script>"
     "function bars(r){if(r>-50)return'\\u2588\\u2588\\u2588\\u2588';if(r>-65)return'\\u2588\\u2588\\u2588\\u2591';if(r>-75)return'\\u2588\\u2588\\u2591\\u2591';return'\\u2588\\u2591\\u2591\\u2591';}"
     "function togglePw(){"
@@ -841,6 +843,297 @@ static esp_err_t api_aprs_status_get_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+// ============================================================================
+// OTA Update Page HTML (KV4P only)
+// ============================================================================
+
+static const char *OTA_PAGE_HTML =
+    "<!DOCTYPE html>"
+    "<html><head>"
+    "<meta charset=\"utf-8\">"
+    "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+    "<title>Geogram Firmware Update</title>"
+    "<style>"
+    "*{box-sizing:border-box;margin:0;padding:0}"
+    "body{font-family:monospace;background:#1a1a2e;color:#e0e0e0;padding:12px;max-width:500px;margin:0 auto}"
+    "h1{color:#00d4ff;font-size:1.3em;margin-bottom:12px}"
+    ".info{background:#16213e;padding:10px 12px;border-radius:6px;margin-bottom:12px;font-size:.9em}"
+    ".info span{color:#0f0}"
+    "label{display:block;margin:12px 0 4px;color:#aaa;font-size:.9em}"
+    "input[type=file]{width:100%;padding:10px;background:#16213e;border:1px solid #444;color:#fff;border-radius:4px;font-family:monospace}"
+    "button{width:100%;padding:12px;background:#00d4ff;color:#000;border:none;border-radius:4px;cursor:pointer;font-weight:bold;font-size:1em;margin-top:12px;font-family:monospace}"
+    "button:hover{background:#00b8d9}"
+    "button:disabled{background:#555;color:#888}"
+    ".progress{display:none;margin-top:12px}"
+    ".progress-bar{background:#333;border-radius:4px;height:24px;overflow:hidden}"
+    ".progress-fill{background:#00d4ff;height:100%;width:0;transition:width .3s;text-align:center;line-height:24px;color:#000;font-weight:bold;font-size:.85em}"
+    "#status{margin-top:12px;padding:10px;border-radius:6px;display:none;font-size:.9em}"
+    ".ok{background:#1a2a1a;border:1px solid #0f0;color:#0f0}"
+    ".fail{background:#2a1a1a;border:1px solid #f66;color:#f66}"
+    ".wait{background:#1a1a2e;border:1px solid #888;color:#aaa}"
+    ".nav{margin-top:12px;text-align:center}"
+    ".nav a{color:#00d4ff;font-size:.85em;margin:0 8px}"
+    "</style></head><body>"
+    "<h1>Firmware Update</h1>"
+    "<div class=\"info\" id=\"info\">Loading...</div>"
+    "<form id=\"uf\">"
+    "<label for=\"fw\">Select firmware binary (.bin)</label>"
+    "<input type=\"file\" id=\"fw\" accept=\".bin\" required>"
+    "<button type=\"submit\" id=\"btn\">Upload &amp; Install</button>"
+    "</form>"
+    "<div class=\"progress\" id=\"prog\">"
+    "<div class=\"progress-bar\"><div class=\"progress-fill\" id=\"pbar\">0%</div></div>"
+    "</div>"
+    "<div id=\"status\"></div>"
+    "<div class=\"nav\"><a href=\"/\">APRS</a> | <a href=\"/setup\">WiFi Setup</a></div>"
+    "<script>"
+    "function showStatus(cls,msg){var s=document.getElementById('status');s.className=cls;s.style.display='block';s.innerHTML=msg;}"
+    "function loadInfo(){"
+    "fetch('/api/ota/status').then(r=>r.json()).then(d=>{"
+    "document.getElementById('info').innerHTML="
+    "'Version: <span>'+d.version+'</span> | Partition: <span>'+d.partition+'</span>';"
+    "}).catch(()=>{document.getElementById('info').textContent='Could not load device info';});"
+    "}"
+    "document.getElementById('uf').onsubmit=function(e){"
+    "e.preventDefault();"
+    "var file=document.getElementById('fw').files[0];"
+    "if(!file){alert('Select a file');return;}"
+    "if(!file.name.endsWith('.bin')){alert('Must be a .bin file');return;}"
+    "var btn=document.getElementById('btn');"
+    "btn.disabled=true;btn.textContent='Uploading...';"
+    "var prog=document.getElementById('prog');prog.style.display='block';"
+    "var pbar=document.getElementById('pbar');"
+    "var xhr=new XMLHttpRequest();"
+    "xhr.open('POST','/api/ota',true);"
+    "xhr.setRequestHeader('Content-Type','application/octet-stream');"
+    "xhr.upload.onprogress=function(ev){"
+    "if(ev.lengthComputable){var pct=Math.round(ev.loaded/ev.total*100);pbar.style.width=pct+'%';pbar.textContent=pct+'%';}"
+    "};"
+    "xhr.onload=function(){"
+    "if(xhr.status===200){"
+    "showStatus('wait','Firmware written. Device is rebooting...');"
+    "btn.textContent='Rebooting...';"
+    "setTimeout(function(){pollReboot(0);},3000);"
+    "}else{"
+    "var msg='Upload failed';try{msg=JSON.parse(xhr.responseText).error||msg;}catch(e){}"
+    "showStatus('fail',msg);btn.disabled=false;btn.textContent='Upload & Install';}"
+    "};"
+    "xhr.onerror=function(){"
+    "showStatus('wait','Connection lost — device may be rebooting...');"
+    "btn.textContent='Rebooting...';"
+    "setTimeout(function(){pollReboot(0);},3000);"
+    "};"
+    "xhr.send(file);"
+    "};"
+    "function pollReboot(n){"
+    "if(n>20){showStatus('fail','Device did not come back. Check manually.');return;}"
+    "fetch('/api/ota/status').then(r=>r.json()).then(d=>{"
+    "showStatus('ok','Firmware updated!<br>Version: '+d.version+' | Partition: '+d.partition);"
+    "document.getElementById('btn').textContent='Done';loadInfo();"
+    "}).catch(()=>{setTimeout(function(){pollReboot(n+1);},2000);});"
+    "}"
+    "loadInfo();"
+    "</script></body></html>";
+
+// ============================================================================
+// OTA Handlers (KV4P only)
+// ============================================================================
+
+/**
+ * @brief Handler for GET /ota — firmware update web page
+ */
+static esp_err_t ota_page_get_handler(httpd_req_t *req)
+{
+    httpd_resp_set_type(req, "text/html");
+    httpd_resp_send(req, OTA_PAGE_HTML, strlen(OTA_PAGE_HTML));
+    return ESP_OK;
+}
+
+/**
+ * @brief Handler for GET /api/ota/status — current firmware info
+ */
+static esp_err_t api_ota_status_get_handler(httpd_req_t *req)
+{
+    char buf[192];
+    const esp_partition_t *running = esp_ota_get_running_partition();
+    const char *part_label = running ? running->label : "unknown";
+
+    // Check if OTA is possible (need at least one OTA partition)
+    const esp_partition_t *next = esp_ota_get_next_update_partition(NULL);
+    bool ota_ready = (next != NULL);
+
+    int len = snprintf(buf, sizeof(buf),
+        "{\"version\":\"%s\",\"partition\":\"%s\",\"ota_ready\":%s}",
+        GEOGRAM_VERSION,
+        part_label,
+        ota_ready ? "true" : "false");
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_send(req, buf, len);
+    return ESP_OK;
+}
+
+/**
+ * @brief Handler for POST /api/ota — receive firmware binary and flash it
+ */
+static esp_err_t api_ota_post_handler(httpd_req_t *req)
+{
+    ESP_LOGI(TAG, "OTA update started, content_len=%d", req->content_len);
+
+    if (req->content_len <= 0) {
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req, "{\"error\":\"No data received\"}", -1);
+        return ESP_FAIL;
+    }
+
+    const esp_partition_t *update_partition = esp_ota_get_next_update_partition(NULL);
+    if (!update_partition) {
+        ESP_LOGE(TAG, "No OTA partition available");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req, "{\"error\":\"No OTA partition available\"}", -1);
+        return ESP_FAIL;
+    }
+
+    ESP_LOGI(TAG, "Writing to partition '%s' at offset 0x%lx, size 0x%lx",
+             update_partition->label,
+             (unsigned long)update_partition->address,
+             (unsigned long)update_partition->size);
+
+    if ((size_t)req->content_len > update_partition->size) {
+        ESP_LOGE(TAG, "Firmware too large: %d > %lu",
+                 req->content_len, (unsigned long)update_partition->size);
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req, "{\"error\":\"Firmware too large for partition\"}", -1);
+        return ESP_FAIL;
+    }
+
+    esp_ota_handle_t ota_handle = 0;
+    esp_err_t err;
+
+    // Allocate receive buffer
+    const size_t buf_size = 4096;
+    char *buf = malloc(buf_size);
+    if (!buf) {
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req, "{\"error\":\"Out of memory\"}", -1);
+        return ESP_FAIL;
+    }
+
+    int remaining = req->content_len;
+    bool first_chunk = true;
+    int received_total = 0;
+
+    while (remaining > 0) {
+        int recv_len = httpd_req_recv(req, buf, (remaining < (int)buf_size) ? remaining : (int)buf_size);
+        if (recv_len <= 0) {
+            if (recv_len == HTTPD_SOCK_ERR_TIMEOUT) {
+                continue;  // retry on timeout
+            }
+            ESP_LOGE(TAG, "OTA recv error: %d", recv_len);
+            if (!first_chunk) {
+                esp_ota_abort(ota_handle);
+            }
+            free(buf);
+            httpd_resp_set_type(req, "application/json");
+            httpd_resp_send(req, "{\"error\":\"Connection lost during upload\"}", -1);
+            return ESP_FAIL;
+        }
+
+        if (first_chunk) {
+            // Validate: ESP32 firmware starts with magic byte 0xE9
+            if ((uint8_t)buf[0] != 0xE9) {
+                ESP_LOGE(TAG, "Invalid firmware image (magic=0x%02x)", (uint8_t)buf[0]);
+                free(buf);
+                httpd_resp_set_type(req, "application/json");
+                httpd_resp_send(req, "{\"error\":\"Invalid firmware image\"}", -1);
+                return ESP_FAIL;
+            }
+
+            err = esp_ota_begin(update_partition, req->content_len, &ota_handle);
+            if (err != ESP_OK) {
+                ESP_LOGE(TAG, "esp_ota_begin failed: %s", esp_err_to_name(err));
+                free(buf);
+                httpd_resp_set_type(req, "application/json");
+                char errbuf[96];
+                snprintf(errbuf, sizeof(errbuf), "{\"error\":\"OTA begin failed: %s\"}", esp_err_to_name(err));
+                httpd_resp_send(req, errbuf, -1);
+                return ESP_FAIL;
+            }
+            first_chunk = false;
+        }
+
+        err = esp_ota_write(ota_handle, buf, recv_len);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "esp_ota_write failed: %s", esp_err_to_name(err));
+            esp_ota_abort(ota_handle);
+            free(buf);
+            httpd_resp_set_type(req, "application/json");
+            httpd_resp_send(req, "{\"error\":\"Flash write failed\"}", -1);
+            return ESP_FAIL;
+        }
+
+        remaining -= recv_len;
+        received_total += recv_len;
+
+        if (received_total % (64 * 1024) < recv_len) {
+            ESP_LOGI(TAG, "OTA progress: %d / %d bytes", received_total, req->content_len);
+        }
+    }
+
+    free(buf);
+
+    err = esp_ota_end(ota_handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_ota_end failed: %s", esp_err_to_name(err));
+        httpd_resp_set_type(req, "application/json");
+        char errbuf[96];
+        snprintf(errbuf, sizeof(errbuf), "{\"error\":\"Validation failed: %s\"}", esp_err_to_name(err));
+        httpd_resp_send(req, errbuf, -1);
+        return ESP_FAIL;
+    }
+
+    err = esp_ota_set_boot_partition(update_partition);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_ota_set_boot_partition failed: %s", esp_err_to_name(err));
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req, "{\"error\":\"Failed to set boot partition\"}", -1);
+        return ESP_FAIL;
+    }
+
+    ESP_LOGI(TAG, "OTA update successful (%d bytes), rebooting...", received_total);
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, "{\"ok\":true}", -1);
+
+    // Give the HTTP response time to be sent before rebooting
+    vTaskDelay(pdMS_TO_TICKS(500));
+    esp_restart();
+
+    return ESP_OK;  // unreachable
+}
+
+static const httpd_uri_t uri_ota_page = {
+    .uri = "/ota",
+    .method = HTTP_GET,
+    .handler = ota_page_get_handler,
+    .user_ctx = NULL
+};
+
+static const httpd_uri_t uri_api_ota_status = {
+    .uri = "/api/ota/status",
+    .method = HTTP_GET,
+    .handler = api_ota_status_get_handler,
+    .user_ctx = NULL
+};
+
+static const httpd_uri_t uri_api_ota_upload = {
+    .uri = "/api/ota",
+    .method = HTTP_POST,
+    .handler = api_ota_post_handler,
+    .user_ctx = NULL
+};
+
 static const httpd_uri_t uri_api_aprs = {
     .uri = "/api/aprs",
     .method = HTTP_GET,
@@ -954,7 +1247,7 @@ esp_err_t http_server_start_ex(wifi_config_callback_t callback, bool enable_stat
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.lru_purge_enable = true;
     config.stack_size = 12288;
-    config.max_uri_handlers = 13;
+    config.max_uri_handlers = 16;
     config.max_open_sockets = 5;
     config.recv_wait_timeout = 5;
     config.send_wait_timeout = 5;
@@ -992,6 +1285,12 @@ esp_err_t http_server_start_ex(wifi_config_callback_t callback, bool enable_stat
         httpd_register_uri_handler(s_server, &uri_api_aprs_send);
         httpd_register_uri_handler(s_server, &uri_api_aprs_status);
         ESP_LOGI(TAG, "APRS API endpoints registered");
+
+        // Register OTA update endpoints
+        httpd_register_uri_handler(s_server, &uri_ota_page);
+        httpd_register_uri_handler(s_server, &uri_api_ota_status);
+        httpd_register_uri_handler(s_server, &uri_api_ota_upload);
+        ESP_LOGI(TAG, "OTA update endpoints registered");
 #endif
 
 #if BOARD_MODEL == MODEL_ESP32S3_EPAPER_1IN54
