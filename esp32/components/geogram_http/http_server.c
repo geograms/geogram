@@ -199,27 +199,41 @@ static const char *WIFI_SETUP_PAGE_HTML =
     ".net .info{color:#888;font-size:.85em;text-align:right;white-space:nowrap;margin-left:8px}"
     ".lock::after{content:' \\1F512'}"
     "label{display:block;margin:10px 0 4px;color:#aaa;font-size:.9em}"
-    "input[type=text],input[type=password]{width:100%;padding:10px;background:#16213e;border:1px solid #444;color:#fff;border-radius:4px;font-family:monospace;font-size:1em}"
+    "input[type=text],input[type=password],input[type=text].pw{width:100%;padding:10px;background:#16213e;border:1px solid #444;color:#fff;border-radius:4px;font-family:monospace;font-size:1em}"
+    ".pw-row{position:relative}"
+    ".pw-toggle{position:absolute;right:8px;top:50%;transform:translateY(-50%);background:none;border:none;color:#888;cursor:pointer;font-size:1.1em;padding:4px 8px;margin:0;width:auto}"
     "button{width:100%;padding:12px;background:#00d4ff;color:#000;border:none;border-radius:4px;cursor:pointer;font-weight:bold;font-size:1em;margin-top:12px;font-family:monospace}"
     "button:hover{background:#00b8d9}"
+    "button:disabled{background:#555;color:#888}"
     ".loading{text-align:center;color:#888;padding:20px}"
     ".back{margin-top:12px;text-align:center}"
     ".back a{color:#00d4ff;font-size:.85em}"
     "#scanBtn{background:#333;color:#aaa;margin-bottom:8px}"
+    "#result{margin-top:12px;padding:12px;border-radius:6px;display:none}"
+    ".ok{background:#1a2a1a;border:1px solid #0f0;color:#0f0}"
+    ".fail{background:#2a1a1a;border:1px solid #f66;color:#f66}"
+    ".wait{background:#1a1a2e;border:1px solid #888;color:#aaa}"
     "</style></head><body>"
     "<h1>WiFi Setup</h1>"
     "<button id=\"scanBtn\" onclick=\"scan()\">Scan Networks</button>"
     "<div id=\"nets\"><div class=\"loading\">Scanning...</div></div>"
-    "<form action=\"/connect\" method=\"POST\">"
+    "<form id=\"wf\" onsubmit=\"return doConnect()\">"
     "<label for=\"ssid\">Network Name (SSID)</label>"
     "<input type=\"text\" id=\"ssid\" name=\"ssid\" required maxlength=\"32\">"
     "<label for=\"password\">Password</label>"
+    "<div class=\"pw-row\">"
     "<input type=\"password\" id=\"password\" name=\"password\" maxlength=\"64\">"
-    "<button type=\"submit\">Connect</button>"
+    "<button type=\"button\" class=\"pw-toggle\" onclick=\"togglePw()\" title=\"Show/hide password\">Show</button>"
+    "</div>"
+    "<button type=\"submit\" id=\"connBtn\">Connect</button>"
     "</form>"
+    "<div id=\"result\"></div>"
     "<div class=\"back\"><a href=\"/\">Back to APRS</a></div>"
     "<script>"
     "function bars(r){if(r>-50)return'\\u2588\\u2588\\u2588\\u2588';if(r>-65)return'\\u2588\\u2588\\u2588\\u2591';if(r>-75)return'\\u2588\\u2588\\u2591\\u2591';return'\\u2588\\u2591\\u2591\\u2591';}"
+    "function togglePw(){"
+    "var p=document.getElementById('password'),b=event.target;"
+    "if(p.type==='password'){p.type='text';b.textContent='Hide';}else{p.type='password';b.textContent='Show';}}"
     "function scan(){"
     "document.getElementById('nets').innerHTML='<div class=\"loading\">Scanning...</div>';"
     "fetch('/api/wifi/scan').then(r=>r.json()).then(d=>{"
@@ -238,25 +252,39 @@ static const char *WIFI_SETUP_PAGE_HTML =
     "});"
     "}).catch(()=>{document.getElementById('nets').innerHTML='<div class=\"loading\">Scan failed. Enter SSID manually.</div>';});"
     "}"
+    "function showResult(cls,msg){var r=document.getElementById('result');r.className=cls;r.style.display='block';r.innerHTML=msg;}"
+    "function doConnect(){"
+    "var ssid=document.getElementById('ssid').value.trim();"
+    "var pw=document.getElementById('password').value;"
+    "if(!ssid)return false;"
+    "var btn=document.getElementById('connBtn');"
+    "btn.disabled=true;btn.textContent='Connecting...';"
+    "showResult('wait','Sending credentials...');"
+    "fetch('/connect',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},"
+    "body:'ssid='+encodeURIComponent(ssid)+'&password='+encodeURIComponent(pw)"
+    "}).then(r=>{if(!r.ok)throw new Error('HTTP '+r.status);"
+    "showResult('wait','Connecting to '+esc(ssid)+'... (checking)');"
+    "var tries=0,maxTries=15;"
+    "var poll=setInterval(function(){"
+    "tries++;"
+    "fetch('/api/wifi/status').then(r=>r.json()).then(d=>{"
+    "if(d.sta_connected&&d.sta_ip){"
+    "clearInterval(poll);"
+    "showResult('ok','Connected to <b>'+esc(ssid)+'</b><br>Device IP: <b>'+esc(d.sta_ip)+'</b><br><br>You can now reach the device at<br><a href=\"http://'+d.sta_ip+'/\" style=\"color:#0f0\">http://'+d.sta_ip+'/</a>');"
+    "btn.textContent='Connected';}"
+    "else if(tries>=maxTries){"
+    "clearInterval(poll);"
+    "showResult('fail','Failed to connect to <b>'+esc(ssid)+'</b>.<br>Check password and try again.');"
+    "btn.disabled=false;btn.textContent='Connect';}"
+    "else{showResult('wait','Connecting to '+esc(ssid)+'... ('+tries+'/'+maxTries+')');}"
+    "}).catch(()=>{if(tries>=maxTries){clearInterval(poll);showResult('fail','Connection lost. Device may have restarted.');btn.disabled=false;btn.textContent='Connect';}});"
+    "},2000);}).catch(e=>{showResult('fail','Error: '+e.message);btn.disabled=false;btn.textContent='Connect';});"
+    "return false;}"
     "function esc(s){var d=document.createElement('div');d.textContent=s;return d.innerHTML;}"
     "scan();"
     "</script></body></html>";
 
-static const char *SUCCESS_PAGE_HTML =
-    "<!DOCTYPE html>"
-    "<html><head>"
-    "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
-    "<title>Geogram - Connected</title>"
-    "<style>"
-    "*{box-sizing:border-box;margin:0;padding:0}"
-    "body{font-family:monospace;background:#1a1a2e;color:#e0e0e0;padding:12px;max-width:500px;margin:0 auto;text-align:center}"
-    "h1{color:#0f0;margin:40px 0 12px}"
-    "p{color:#aaa;line-height:1.6}"
-    "</style></head><body>"
-    "<h1>Configuration Saved</h1>"
-    "<p>The device will now attempt to connect to the WiFi network.</p>"
-    "<p>If successful, the AP will be disabled and you can close this page.</p>"
-    "</body></html>";
+// SUCCESS_PAGE_HTML removed — connect flow now uses JS polling with /api/wifi/status
 
 // ============================================================================
 // Utility functions
@@ -445,11 +473,10 @@ static esp_err_t connect_post_handler(httpd_req_t *req)
         ESP_LOGI(TAG, "WiFi credentials saved to NVS");
     }
 
-    httpd_resp_set_type(req, "text/html");
-    httpd_resp_send(req, SUCCESS_PAGE_HTML, strlen(SUCCESS_PAGE_HTML));
-
     if (s_config_callback != NULL) {
         s_config_callback(ssid, password);
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req, "{\"ok\":true}", -1);
     } else {
         // No callback — attempt STA connection directly (KV4P standalone mode)
         // Use esp_wifi APIs directly to keep AP running alongside STA
@@ -465,8 +492,12 @@ static esp_err_t connect_post_handler(httpd_req_t *req)
         if (conn_err == ESP_OK) {
             conn_err = esp_wifi_connect();
         }
+        httpd_resp_set_type(req, "application/json");
         if (conn_err != ESP_OK) {
             ESP_LOGW(TAG, "WiFi STA connect failed: %s", esp_err_to_name(conn_err));
+            httpd_resp_send(req, "{\"ok\":false,\"error\":\"connect failed\"}", -1);
+        } else {
+            httpd_resp_send(req, "{\"ok\":true}", -1);
         }
     }
 
@@ -629,6 +660,36 @@ static esp_err_t api_wifi_scan_get_handler(httpd_req_t *req)
     free(buf);
     free(ap_records);
     free(skip);
+    return ESP_OK;
+}
+
+/**
+ * @brief Handler for GET /api/wifi/status — STA connection state and IP
+ */
+static esp_err_t api_wifi_status_get_handler(httpd_req_t *req)
+{
+    char buf[192];
+    bool sta_connected = false;
+    char ip_str[16] = "0.0.0.0";
+
+    // Check if STA interface has an IP
+    esp_netif_t *sta_netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    if (sta_netif) {
+        esp_netif_ip_info_t ip_info;
+        if (esp_netif_get_ip_info(sta_netif, &ip_info) == ESP_OK && ip_info.ip.addr != 0) {
+            sta_connected = true;
+            snprintf(ip_str, sizeof(ip_str), IPSTR, IP2STR(&ip_info.ip));
+        }
+    }
+
+    int len = snprintf(buf, sizeof(buf),
+        "{\"sta_connected\":%s,\"sta_ip\":\"%s\"}",
+        sta_connected ? "true" : "false",
+        ip_str);
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_send(req, buf, len);
     return ESP_OK;
 }
 
@@ -849,6 +910,13 @@ static const httpd_uri_t uri_wifi_scan = {
     .user_ctx = NULL
 };
 
+static const httpd_uri_t uri_wifi_status = {
+    .uri = "/api/wifi/status",
+    .method = HTTP_GET,
+    .handler = api_wifi_status_get_handler,
+    .user_ctx = NULL
+};
+
 // Captive portal detection URIs
 static const httpd_uri_t uri_generate_204 = {
     .uri = "/generate_204",
@@ -886,7 +954,7 @@ esp_err_t http_server_start_ex(wifi_config_callback_t callback, bool enable_stat
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.lru_purge_enable = true;
     config.stack_size = 12288;
-    config.max_uri_handlers = 12;
+    config.max_uri_handlers = 13;
     config.max_open_sockets = 5;
     config.recv_wait_timeout = 5;
     config.send_wait_timeout = 5;
@@ -908,6 +976,7 @@ esp_err_t http_server_start_ex(wifi_config_callback_t callback, bool enable_stat
     httpd_register_uri_handler(s_server, &uri_connect);
     httpd_register_uri_handler(s_server, &uri_status);
     httpd_register_uri_handler(s_server, &uri_wifi_scan);
+    httpd_register_uri_handler(s_server, &uri_wifi_status);
 
     // Register captive portal handlers
     httpd_register_uri_handler(s_server, &uri_generate_204);
