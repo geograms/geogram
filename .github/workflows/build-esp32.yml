@@ -15,6 +15,23 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - env: esp32s3_epaper_1in54
+            firmware: geogram-ESP32S3-ePaper1in54
+          - env: esp32_generic
+            firmware: geogram-ESP32-Generic
+          - env: esp32c3_mini
+            firmware: geogram-ESP32C3-mini
+          - env: kv4p
+            firmware: geogram-KV4P-HT
+          - env: heltec_v2
+            firmware: geogram-HeltecV2-LoRa
+          - env: heltec_v1
+            firmware: geogram-HeltecV1-LoRa
+          - env: heltec_v3
+            firmware: geogram-HeltecV3-LoRa
 
     steps:
     - name: Checkout code
@@ -26,7 +43,7 @@ jobs:
       uses: actions/cache@v4
       with:
         path: ~/.platformio
-        key: ${{ runner.os }}-pio-${{ hashFiles('esp32/platformio.ini') }}
+        key: ${{ runner.os }}-pio-${{ matrix.env }}-${{ hashFiles('esp32/platformio.ini') }}
 
     - name: Setup Python
       uses: actions/setup-python@v5
@@ -36,26 +53,36 @@ jobs:
     - name: Install PlatformIO
       run: pip install platformio
 
-    - name: Build ESP32-C3-mini firmware
+    - name: Build ${{ matrix.firmware }}
       working-directory: esp32
-      run: pio run -e esp32c3_mini
-
-    - name: Rename firmware for release
-      run: |
-        cp esp32/firmware/geogram-ESP32C3-mini.bin geogram-esp32-c3-mini.bin
-        ls -la geogram-esp32-c3-mini.bin
+      run: pio run -e ${{ matrix.env }}
 
     - name: Upload artifact
       uses: actions/upload-artifact@v4
       with:
-        name: geogram-esp32-c3-mini
-        path: geogram-esp32-c3-mini.bin
+        name: ${{ matrix.firmware }}
+        path: esp32/firmware/${{ matrix.firmware }}.bin
         retention-days: 30
 
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+    - name: Download all firmware artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: firmware
+
+    - name: Collect firmware binaries
+      run: |
+        mkdir -p release
+        find firmware -name '*.bin' -exec cp {} release/ \;
+        ls -la release/
+
     - name: Upload to Release
-      if: startsWith(github.ref, 'refs/tags/v')
       uses: softprops/action-gh-release@v1
       with:
-        files: geogram-esp32-c3-mini.bin
+        files: release/*.bin
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
