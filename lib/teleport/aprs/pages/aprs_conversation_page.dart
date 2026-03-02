@@ -10,6 +10,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../../../services/i18n_service.dart';
 import '../../../services/user_location_service.dart';
 import '../../shared/teleport_chat_utils.dart';
 import '../aprs_message_utils.dart';
@@ -130,9 +131,7 @@ class _AprsConversationPageState extends State<AprsConversationPage> {
             child: messages.isEmpty
                 ? Center(
                     child: Text(
-                      _isTag
-                          ? 'No messages in ${widget.conversationId} yet'
-                          : 'No messages with ${widget.conversationId} yet',
+                      I18nService().t('aprs_no_messages_in_conv', params: [widget.conversationId]),
                       style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                         color: Theme.of(context).colorScheme.onSurfaceVariant,
                       ),
@@ -228,7 +227,7 @@ class _AprsConversationPageState extends State<AprsConversationPage> {
                 onSubmitted: (_) => _sendMessage(),
                 onChanged: (_) => setState(() {}),
                 decoration: InputDecoration(
-                  hintText: 'Message ${widget.conversationId}',
+                  hintText: I18nService().t('aprs_message_hint', params: [widget.conversationId]),
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(20),
                     borderSide: BorderSide.none,

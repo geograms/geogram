@@ -8,6 +8,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../../services/i18n_service.dart';
 import '../atproto_client_service.dart';
 import '../models/atproto_feed_item.dart';
 import '../widgets/atproto_post_tile.dart';
@@ -100,16 +101,16 @@ class _AtprotoMainPageState extends State<AtprotoMainPage> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Bluesky / AT Proto'),
+        title: Text(I18nService().t('atproto_title')),
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh),
-            tooltip: 'Refresh',
+            tooltip: I18nService().t('atproto_refresh_tooltip'),
             onPressed: () => service.syncFeed(),
           ),
           IconButton(
             icon: const Icon(Icons.group),
-            tooltip: 'Following activity',
+            tooltip: I18nService().t('atproto_following_activity_tooltip'),
             onPressed: () {
               Navigator.of(context).push(
                 MaterialPageRoute(
@@ -120,7 +121,7 @@ class _AtprotoMainPageState extends State<AtprotoMainPage> {
           ),
           IconButton(
             icon: const Icon(Icons.search),
-            tooltip: 'Search network',
+            tooltip: I18nService().t('atproto_search_network_tooltip'),
             onPressed: () {
               Navigator.of(context).push(
                 MaterialPageRoute(builder: (_) => const AtprotoSearchPage()),
@@ -129,12 +130,12 @@ class _AtprotoMainPageState extends State<AtprotoMainPage> {
           ),
           IconButton(
             icon: const Icon(Icons.account_circle_outlined),
-            tooltip: 'My profile',
+            tooltip: I18nService().t('atproto_my_profile_tooltip'),
             onPressed: _openMyProfile,
           ),
           IconButton(
             icon: const Icon(Icons.settings),
-            tooltip: 'Settings',
+            tooltip: I18nService().t('atproto_settings_tooltip'),
             onPressed: () {
               Navigator.of(context)
                   .push(
@@ -153,20 +154,20 @@ class _AtprotoMainPageState extends State<AtprotoMainPage> {
       body: Column(
         children: [
           if (_isBootstrapping)
-            const Padding(
-              padding: EdgeInsets.all(12),
+            Padding(
+              padding: const EdgeInsets.all(12),
               child: Card(
                 child: Padding(
-                  padding: EdgeInsets.all(12),
+                  padding: const EdgeInsets.all(12),
                   child: Row(
                     children: [
-                      SizedBox(
+                      const SizedBox(
                         width: 16,
                         height: 16,
                         child: CircularProgressIndicator(strokeWidth: 2),
                       ),
-                      SizedBox(width: 12),
-                      Expanded(child: Text('Starting Bluesky integration...')),
+                      const SizedBox(width: 12),
+                      Expanded(child: Text(I18nService().t('atproto_starting_integration'))),
                     ],
                   ),
                 ),
@@ -181,7 +182,7 @@ class _AtprotoMainPageState extends State<AtprotoMainPage> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Text('Could not initialize integration.'),
+                      Text(I18nService().t('atproto_init_error_title')),
                       const SizedBox(height: 6),
                       Text(
                         _bootstrapError!,
@@ -190,7 +191,7 @@ class _AtprotoMainPageState extends State<AtprotoMainPage> {
                       const SizedBox(height: 8),
                       FilledButton(
                         onPressed: _bootstrap,
-                        child: const Text('Retry'),
+                        child: Text(I18nService().t('atproto_retry_btn')),
                       ),
                     ],
                   ),
@@ -206,9 +207,9 @@ class _AtprotoMainPageState extends State<AtprotoMainPage> {
               onRefresh: service.syncFeed,
               child: feed.isEmpty
                   ? ListView(
-                      children: const [
-                        SizedBox(height: 140),
-                        Center(child: Text('No posts yet')),
+                      children: [
+                        const SizedBox(height: 140),
+                        Center(child: Text(I18nService().t('atproto_no_posts'))),
                       ],
                     )
                   : ListView.builder(
@@ -246,8 +247,8 @@ class _AtprotoMainPageState extends State<AtprotoMainPage> {
         ? Colors.green.shade700
         : theme.colorScheme.primary;
     final text = authenticated
-        ? 'Connected as @${service.session?.handle ?? service.config.identifier}'
-        : 'Read-only feed active. Publishing unlocks automatically after local PDS auth.';
+        ? I18nService().t('atproto_connected_as', params: [service.session?.handle ?? service.config.identifier])
+        : I18nService().t('atproto_readonly_feed');
 
     return Container(
       width: double.infinity,
@@ -296,7 +297,7 @@ class _AtprotoMainPageState extends State<AtprotoMainPage> {
                   children: [
                     Expanded(
                       child: Text(
-                        'Replying to @${_replyTarget!.authorHandle}',
+                        I18nService().t('atproto_replying_to', params: [_replyTarget!.authorHandle]),
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(fontSize: 12),
                       ),
@@ -316,9 +317,9 @@ class _AtprotoMainPageState extends State<AtprotoMainPage> {
                       minLines: 1,
                       maxLines: 4,
                       decoration: InputDecoration(
-                        hintText: 'Write a post...',
+                        hintText: I18nService().t('atproto_write_post_hint'),
                         helperText: overLimit
-                            ? 'Post is too long (max 300 chars)'
+                            ? I18nService().t('atproto_post_too_long')
                             : null,
                         helperStyle: TextStyle(
                           color: overLimit ? Colors.red.shade700 : null,
@@ -341,7 +342,7 @@ class _AtprotoMainPageState extends State<AtprotoMainPage> {
                       const SizedBox(height: 4),
                       FilledButton(
                         onPressed: canPublish ? _publish : null,
-                        child: const Text('Post'),
+                        child: Text(I18nService().t('atproto_post_btn')),
                       ),
                     ],
                   ),
@@ -370,7 +371,7 @@ class _AtprotoMainPageState extends State<AtprotoMainPage> {
     } else {
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(const SnackBar(content: Text('Failed to publish post')));
+      ).showSnackBar(SnackBar(content: Text(I18nService().t('atproto_publish_failed'))));
     }
   }
 
@@ -390,7 +391,7 @@ class _AtprotoMainPageState extends State<AtprotoMainPage> {
   void _toggleLike(AtprotoFeedItem item) {
     AtprotoClientService().likePost(item).then((ok) {
       if (!ok && mounted) {
-        _showActionError('Could not like this post');
+        _showActionError(I18nService().t('atproto_like_failed'));
       }
     });
   }
@@ -398,7 +399,7 @@ class _AtprotoMainPageState extends State<AtprotoMainPage> {
   void _toggleRepost(AtprotoFeedItem item) {
     AtprotoClientService().repost(item).then((ok) {
       if (!ok && mounted) {
-        _showActionError('Could not repost this post');
+        _showActionError(I18nService().t('atproto_repost_failed'));
       }
     });
   }

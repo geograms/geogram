@@ -8,6 +8,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../../services/i18n_service.dart';
 import '../atproto_link_parser.dart';
 import '../atproto_client_service.dart';
 import '../models/atproto_feed_item.dart';
@@ -119,10 +120,10 @@ class _AtprotoProfilePageState extends State<AtprotoProfilePage> {
         child: Column(
           children: [
             _buildHeader(context, profile),
-            const TabBar(
+            TabBar(
               tabs: [
-                Tab(text: 'Posts'),
-                Tab(text: 'Media'),
+                Tab(text: I18nService().t('atproto_posts_tab')),
+                Tab(text: I18nService().t('atproto_media_tab')),
               ],
             ),
             Expanded(

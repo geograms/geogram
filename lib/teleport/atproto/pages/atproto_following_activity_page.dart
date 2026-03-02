@@ -6,6 +6,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../../services/i18n_service.dart';
 import '../atproto_client_service.dart';
 import '../models/atproto_feed_item.dart';
 import '../widgets/atproto_post_tile.dart';
@@ -52,7 +53,7 @@ class _AtprotoFollowingActivityPageState
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Following Activity')),
+      appBar: AppBar(title: Text(I18nService().t('atproto_following_activity_title'))),
       body: RefreshIndicator(
         onRefresh: _load,
         child: ListView(
@@ -68,15 +69,15 @@ class _AtprotoFollowingActivityPageState
                 child: Card(
                   child: Padding(
                     padding: const EdgeInsets.all(12),
-                    child: Text('Failed to load following activity: $_error'),
+                    child: Text(I18nService().t('atproto_following_activity_failed', params: [_error!])),
                   ),
                 ),
               ),
             if (!_loading && _error == null && _items.isEmpty)
-              const Padding(
-                padding: EdgeInsets.all(24),
+              Padding(
+                padding: const EdgeInsets.all(24),
                 child: Center(
-                  child: Text('No activity from followed profiles yet'),
+                  child: Text(I18nService().t('atproto_no_following_activity')),
                 ),
               ),
             if (_items.isNotEmpty)

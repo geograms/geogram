@@ -11,6 +11,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../../../services/i18n_service.dart';
 import '../irc_service.dart';
 import '../models/irc_server_config.dart';
 import '../widgets/irc_channel_list.dart';
@@ -82,11 +83,11 @@ class _IrcMainPageState extends State<IrcMainPage> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('IRC'),
+        title: Text(I18nService().t('irc_title')),
         actions: [
           IconButton(
             icon: const Icon(Icons.settings),
-            tooltip: 'IRC Settings',
+            tooltip: I18nService().t('irc_settings_title'),
             onPressed: () {
               Navigator.of(context).push(
                 MaterialPageRoute(
@@ -122,14 +123,14 @@ class _IrcMainPageState extends State<IrcMainPage> {
           ),
           const SizedBox(height: 12),
           Text(
-            'No IRC servers configured',
+            I18nService().t('irc_no_servers'),
             style: theme.textTheme.bodyLarge?.copyWith(
               color: theme.colorScheme.onSurfaceVariant,
             ),
           ),
           const SizedBox(height: 4),
           Text(
-            'Add a server to get started',
+            I18nService().t('irc_add_server_hint'),
             style: theme.textTheme.bodySmall?.copyWith(
               color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.7),
             ),
@@ -146,7 +147,7 @@ class _IrcMainPageState extends State<IrcMainPage> {
               });
             },
             icon: const Icon(Icons.add),
-            label: const Text('Add Server'),
+            label: Text(I18nService().t('irc_add_server_btn')),
           ),
         ],
       ),
@@ -228,9 +229,9 @@ class _IrcMainPageState extends State<IrcMainPage> {
                       const SizedBox(height: 2),
                       Text(
                         connected
-                            ? '$nick — ${channels.length} channel${channels.length == 1 ? '' : 's'}'
+                            ? '$nick — ${channels.length} ${channels.length == 1 ? I18nService().t('irc_channel_singular') : I18nService().t('irc_channels_plural')}'
                             : isConnecting
-                                ? 'Connecting...'
+                                ? I18nService().t('irc_connecting_status')
                                 : '${config.host}:${config.port}',
                         style: theme.textTheme.bodySmall?.copyWith(
                           color: isConnecting
@@ -325,14 +326,14 @@ class _ServerChannelsPageState extends State<_ServerChannelsPage> {
             Text(config?.name ?? widget.serverId),
             if (isConnecting)
               Text(
-                'Connecting...',
+                I18nService().t('irc_connecting_status'),
                 style: Theme.of(context).textTheme.bodySmall?.copyWith(
                   color: Colors.orange,
                 ),
               )
             else if (!connected)
               Text(
-                'Offline',
+                I18nService().t('offline'),
                 style: Theme.of(context).textTheme.bodySmall?.copyWith(
                   color: Theme.of(context).colorScheme.onSurfaceVariant,
                 ),
@@ -343,7 +344,7 @@ class _ServerChannelsPageState extends State<_ServerChannelsPage> {
           // Connect/disconnect button
           IconButton(
             icon: Icon(connected ? Icons.link_off : Icons.link),
-            tooltip: connected ? 'Disconnect' : 'Connect',
+            tooltip: connected ? I18nService().t('irc_disconnect_btn') : I18nService().t('irc_connect_btn'),
             onPressed: () {
               if (connected) {
                 irc.disconnect(widget.serverId);

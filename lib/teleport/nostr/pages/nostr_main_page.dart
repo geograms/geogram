@@ -10,6 +10,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../../../services/i18n_service.dart';
 import '../../../services/profile_service.dart';
 import '../../../util/nostr_crypto.dart';
 import '../nostr_client_service.dart';
@@ -94,7 +95,7 @@ class _NostrMainPageState extends State<NostrMainPage> {
     final service = NostrClientService();
     if (!service.isAnyConnected) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Not connected to any relay')),
+        SnackBar(content: Text(I18nService().t('nostr_not_connected'))),
       );
       return;
     }
@@ -112,7 +113,7 @@ class _NostrMainPageState extends State<NostrMainPage> {
     } else {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Failed to publish note')),
+          SnackBar(content: Text(I18nService().t('nostr_publish_failed'))),
         );
       }
     }
@@ -124,7 +125,7 @@ class _NostrMainPageState extends State<NostrMainPage> {
     final ok = await NostrClientService().likeEvent(eventId, item.pubkey);
     if (!ok && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Failed to like post')),
+        SnackBar(content: Text(I18nService().t('nostr_like_failed'))),
       );
     }
   }
@@ -194,8 +195,8 @@ class _NostrMainPageState extends State<NostrMainPage> {
             ? TextField(
                 controller: _searchController,
                 focusNode: _searchFocusNode,
-                decoration: const InputDecoration(
-                  hintText: 'Search NOSTR',
+                decoration: InputDecoration(
+                  hintText: I18nService().t('nostr_search_hint'),
                   border: InputBorder.none,
                 ),
                 style: theme.textTheme.titleMedium,
@@ -203,7 +204,7 @@ class _NostrMainPageState extends State<NostrMainPage> {
             : Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  const Text('NOSTR'),
+                  Text(I18nService().t('nostr_title')),
                   if (items.isNotEmpty) ...[
                     const SizedBox(width: 8),
                     Container(
@@ -227,7 +228,7 @@ class _NostrMainPageState extends State<NostrMainPage> {
         actions: [
           IconButton(
             icon: Icon(_isSearching ? Icons.close : Icons.search),
-            tooltip: _isSearching ? 'Close search' : 'Search',
+            tooltip: _isSearching ? I18nService().t('nostr_close_search_tooltip') : I18nService().t('nostr_search_tooltip'),
             onPressed: _toggleSearch,
           ),
           // Filter dropdown
@@ -235,14 +236,14 @@ class _NostrMainPageState extends State<NostrMainPage> {
             value: service.feedFilter,
             underline: const SizedBox.shrink(),
             icon: const Icon(Icons.filter_list, size: 20),
-            items: const [
+            items: [
               DropdownMenuItem(
                 value: NostrFeedFilter.firehose,
-                child: Text('Firehose'),
+                child: Text(I18nService().t('nostr_filter_firehose')),
               ),
               DropdownMenuItem(
                 value: NostrFeedFilter.onlyFollows,
-                child: Text('Only Follows'),
+                child: Text(I18nService().t('nostr_filter_only_follows')),
               ),
             ],
             onChanged: (filter) {
@@ -260,7 +261,7 @@ class _NostrMainPageState extends State<NostrMainPage> {
           // Pause/play toggle
           IconButton(
             icon: Icon(service.isPaused ? Icons.play_arrow : Icons.pause),
-            tooltip: service.isPaused ? 'Resume feed' : 'Pause feed',
+            tooltip: service.isPaused ? I18nService().t('nostr_resume_feed_tooltip') : I18nService().t('nostr_pause_feed_tooltip'),
             onPressed: () {
               service.togglePause();
               setState(() {});
@@ -269,7 +270,7 @@ class _NostrMainPageState extends State<NostrMainPage> {
           // Settings
           IconButton(
             icon: const Icon(Icons.settings),
-            tooltip: 'Relay Settings',
+            tooltip: I18nService().t('nostr_relay_settings_tooltip'),
             onPressed: () {
               Navigator.of(context).push(
                 MaterialPageRoute(
@@ -307,14 +308,14 @@ class _NostrMainPageState extends State<NostrMainPage> {
           ),
           const SizedBox(height: 12),
           Text(
-            'Connect to relays to see the NOSTR feed',
+            I18nService().t('nostr_connect_to_relays'),
             style: theme.textTheme.bodyLarge?.copyWith(
               color: theme.colorScheme.onSurfaceVariant,
             ),
           ),
           const SizedBox(height: 4),
           Text(
-            'Tap the settings gear to configure relays',
+            I18nService().t('nostr_configure_relays_hint'),
             style: theme.textTheme.bodySmall?.copyWith(
               color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.7),
             ),
@@ -331,7 +332,7 @@ class _NostrMainPageState extends State<NostrMainPage> {
               });
             },
             icon: const Icon(Icons.settings),
-            label: const Text('Relay Settings'),
+            label: Text(I18nService().t('nostr_relay_settings_btn')),
           ),
         ],
       ),
@@ -348,7 +349,7 @@ class _NostrMainPageState extends State<NostrMainPage> {
               const CircularProgressIndicator(),
               const SizedBox(height: 16),
               Text(
-                'Waiting for events...',
+                I18nService().t('nostr_waiting_for_events'),
                 style: theme.textTheme.bodyMedium?.copyWith(
                   color: theme.colorScheme.onSurfaceVariant,
                 ),
@@ -361,7 +362,7 @@ class _NostrMainPageState extends State<NostrMainPage> {
               ),
               const SizedBox(height: 12),
               Text(
-                'No results',
+                I18nService().t('nostr_no_results'),
                 style: theme.textTheme.bodyMedium?.copyWith(
                   color: theme.colorScheme.onSurfaceVariant,
                 ),
@@ -405,7 +406,7 @@ class _NostrMainPageState extends State<NostrMainPage> {
         : await service.followUser(item.pubkey);
     if (!ok && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Failed to update follow status')),
+        SnackBar(content: Text(I18nService().t('nostr_follow_status_failed'))),
       );
     }
   }
@@ -438,7 +439,7 @@ class _NostrMainPageState extends State<NostrMainPage> {
                   children: [
                     Expanded(
                       child: Text(
-                        'Replying to ${_replyTarget!.displayName}',
+                        I18nService().t('nostr_replying_to', params: [_replyTarget!.displayName]),
                         style: theme.textTheme.bodySmall,
                         overflow: TextOverflow.ellipsis,
                       ),
@@ -460,8 +461,8 @@ class _NostrMainPageState extends State<NostrMainPage> {
                     focusNode: _focusNode,
                     decoration: InputDecoration(
                       hintText: _replyTarget == null
-                          ? 'Write a note...'
-                          : 'Write a reply...',
+                          ? I18nService().t('nostr_write_note_hint')
+                          : I18nService().t('nostr_write_reply_hint'),
                       border: InputBorder.none,
                       contentPadding:
                           const EdgeInsets.symmetric(horizontal: 12, vertical: 10),

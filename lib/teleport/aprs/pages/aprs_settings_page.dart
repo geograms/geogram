@@ -7,6 +7,7 @@
 
 import 'package:flutter/material.dart';
 
+import '../../../services/i18n_service.dart';
 import '../aprs_service.dart';
 
 class AprsSettingsPage extends StatefulWidget {
@@ -42,20 +43,20 @@ class _AprsSettingsPageState extends State<AprsSettingsPage> {
     final theme = Theme.of(context);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('APRS Settings')),
+      appBar: AppBar(title: Text(I18nService().t('aprs_settings_title'))),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
           // Tag subscription section
           Text(
-            'Subscribed Tags',
+            I18nService().t('aprs_subscribed_tags_title'),
             style: theme.textTheme.titleMedium?.copyWith(
               fontWeight: FontWeight.bold,
             ),
           ),
           const SizedBox(height: 4),
           Text(
-            'Messages with these hashtags will appear as group channels in the Messages tab.',
+            I18nService().t('aprs_tags_desc'),
             style: theme.textTheme.bodySmall?.copyWith(
               color: theme.colorScheme.onSurfaceVariant,
             ),
@@ -68,7 +69,7 @@ class _AprsSettingsPageState extends State<AprsSettingsPage> {
                 child: TextField(
                   controller: _tagController,
                   decoration: InputDecoration(
-                    hintText: '#tag',
+                    hintText: I18nService().t('aprs_tag_hint'),
                     border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(8),
                     ),
@@ -86,7 +87,7 @@ class _AprsSettingsPageState extends State<AprsSettingsPage> {
               FilledButton.icon(
                 onPressed: _addTag,
                 icon: const Icon(Icons.add, size: 18),
-                label: const Text('Add'),
+                label: Text(I18nService().t('aprs_add_tag_btn')),
               ),
             ],
           ),
@@ -99,8 +100,8 @@ class _AprsSettingsPageState extends State<AprsSettingsPage> {
                   Icons.tag,
                   color: theme.colorScheme.onSurfaceVariant,
                 ),
-                title: const Text('No tags subscribed'),
-                subtitle: const Text('Add a tag like #cq or #dev to start'),
+                title: Text(I18nService().t('aprs_no_tags')),
+                subtitle: Text(I18nService().t('aprs_add_tag_hint')),
               ),
             )
           else

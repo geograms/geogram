@@ -7,6 +7,7 @@
 
 import 'package:flutter/material.dart';
 
+import '../../../services/i18n_service.dart';
 import '../meshcore_ble_client.dart';
 
 class MeshCoreDeviceCard extends StatelessWidget {
@@ -22,10 +23,10 @@ class MeshCoreDeviceCard extends StatelessWidget {
   });
 
   String _rssiLabel(int rssi) {
-    if (rssi > -50) return 'Excellent';
-    if (rssi > -70) return 'Good';
-    if (rssi > -85) return 'Fair';
-    return 'Weak';
+    if (rssi > -50) return I18nService().t('meshcore_rssi_excellent');
+    if (rssi > -70) return I18nService().t('meshcore_rssi_good');
+    if (rssi > -85) return I18nService().t('meshcore_rssi_fair');
+    return I18nService().t('meshcore_rssi_weak');
   }
 
   IconData _rssiIcon(int rssi) {
@@ -72,7 +73,7 @@ class MeshCoreDeviceCard extends StatelessWidget {
               )
             : FilledButton(
                 onPressed: onConnect,
-                child: const Text('Connect'),
+                child: Text(I18nService().t('meshcore_connect_btn')),
               ),
       ),
     );

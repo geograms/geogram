@@ -10,6 +10,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import '../../../services/i18n_service.dart';
 import '../../shared/teleport_chat_utils.dart';
 import '../xmpp_service.dart';
 import '../widgets/xmpp_message_bubble.dart';
@@ -47,7 +48,7 @@ class _XmppChatPageState extends State<XmppChatPage> {
           event.serverId == widget.serverId) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Error: ${event.data}'),
+            content: Text(I18nService().t('xmpp_error_msg', params: ['${event.data}'])),
             backgroundColor: Colors.red.shade700,
           ),
         );
@@ -58,7 +59,7 @@ class _XmppChatPageState extends State<XmppChatPage> {
           event.serverId == widget.serverId &&
           event.data == widget.roomJid) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Left ${widget.roomJid.split('@').first}')),
+          SnackBar(content: Text(I18nService().t('xmpp_left_room_msg', params: [widget.roomJid.split('@').first]))),
         );
         Navigator.of(context).pop();
         return;
@@ -68,7 +69,7 @@ class _XmppChatPageState extends State<XmppChatPage> {
       if (event.type == XmppEventType.disconnected &&
           event.serverId == widget.serverId) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Disconnected from server')),
+          SnackBar(content: Text(I18nService().t('xmpp_disconnected_msg'))),
         );
         Navigator.of(context).pop();
         return;
@@ -112,7 +113,7 @@ class _XmppChatPageState extends State<XmppChatPage> {
 
     if (!xmpp.isConnected(widget.serverId)) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Not connected to server')),
+        SnackBar(content: Text(I18nService().t('xmpp_not_connected'))),
       );
       return;
     }
@@ -151,7 +152,7 @@ class _XmppChatPageState extends State<XmppChatPage> {
               child: Row(
                 children: [
                   Text(
-                    'Occupants (${occupants.length})',
+                    I18nService().t('xmpp_occupants_count', params: ['${occupants.length}']),
                     style: theme.textTheme.titleMedium?.copyWith(
                       fontWeight: FontWeight.w600,
                     ),
@@ -193,7 +194,7 @@ class _XmppChatPageState extends State<XmppChatPage> {
                       ),
                     ),
                     trailing: isMe
-                        ? Text('you', style: theme.textTheme.labelSmall?.copyWith(
+                        ? Text(I18nService().t('xmpp_you_label'), style: theme.textTheme.labelSmall?.copyWith(
                             color: theme.colorScheme.onSurfaceVariant,
                           ))
                         : null,
@@ -262,30 +263,30 @@ class _XmppChatPageState extends State<XmppChatPage> {
               }
             },
             itemBuilder: (_) => [
-              const PopupMenuItem(
+              PopupMenuItem(
                 value: 'occupants',
                 child: ListTile(
-                  leading: Icon(Icons.people),
-                  title: Text('Occupant List'),
+                  leading: const Icon(Icons.people),
+                  title: Text(I18nService().t('xmpp_occupant_list_label')),
                   dense: true,
                   contentPadding: EdgeInsets.zero,
                 ),
               ),
-              const PopupMenuItem(
+              PopupMenuItem(
                 value: 'help',
                 child: ListTile(
-                  leading: Icon(Icons.help_outline),
-                  title: Text('Slash Commands'),
+                  leading: const Icon(Icons.help_outline),
+                  title: Text(I18nService().t('xmpp_slash_commands_title')),
                   dense: true,
                   contentPadding: EdgeInsets.zero,
                 ),
               ),
               const PopupMenuDivider(),
-              const PopupMenuItem(
+              PopupMenuItem(
                 value: 'leave',
                 child: ListTile(
-                  leading: Icon(Icons.exit_to_app, color: Colors.red),
-                  title: Text('Leave Room', style: TextStyle(color: Colors.red)),
+                  leading: const Icon(Icons.exit_to_app, color: Colors.red),
+                  title: Text(I18nService().t('xmpp_leave_room_menu'), style: const TextStyle(color: Colors.red)),
                   dense: true,
                   contentPadding: EdgeInsets.zero,
                 ),
@@ -300,7 +301,7 @@ class _XmppChatPageState extends State<XmppChatPage> {
             child: messages.isEmpty
                 ? Center(
                     child: Text(
-                      _loadedCache ? 'No messages yet' : 'Loading...',
+                      _loadedCache ? I18nService().t('xmpp_no_messages') : I18nService().t('loading'),
                       style: theme.textTheme.bodyMedium?.copyWith(
                         color: theme.colorScheme.onSurfaceVariant,
                       ),
@@ -354,21 +355,21 @@ class _XmppChatPageState extends State<XmppChatPage> {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Slash Commands'),
-        content: const Column(
+        title: Text(I18nService().t('xmpp_slash_commands_title')),
+        content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _CmdHelp('/join room@server', 'Join a room'),
-            _CmdHelp('/part [room]', 'Leave current or specified room'),
-            _CmdHelp('/subject text', 'Set room subject'),
-            _CmdHelp('/msg user text', 'Send a private message'),
+            _CmdHelp(I18nService().t('xmpp_join_command'), I18nService().t('xmpp_join_desc')),
+            _CmdHelp(I18nService().t('xmpp_part_command'), I18nService().t('xmpp_part_desc')),
+            _CmdHelp(I18nService().t('xmpp_subject_command'), I18nService().t('xmpp_subject_desc')),
+            _CmdHelp(I18nService().t('xmpp_msg_command'), I18nService().t('xmpp_msg_desc')),
           ],
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
-            child: const Text('OK'),
+            child: Text(I18nService().t('ok')),
           ),
         ],
       ),
@@ -395,7 +396,7 @@ class _XmppChatPageState extends State<XmppChatPage> {
                 controller: _textController,
                 focusNode: _focusNode,
                 decoration: InputDecoration(
-                  hintText: 'Message ${widget.roomJid.split('@').first}',
+                  hintText: I18nService().t('xmpp_message_hint', params: [widget.roomJid.split('@').first]),
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(24),
                     borderSide: BorderSide.none,

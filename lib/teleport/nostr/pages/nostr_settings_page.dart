@@ -9,6 +9,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../../../services/i18n_service.dart';
 import '../nostr_client_service.dart';
 import '../models/nostr_relay_config.dart';
 import '../widgets/nostr_relay_list.dart';
@@ -54,11 +55,11 @@ class _NostrSettingsPageState extends State<NostrSettingsPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('NOSTR Settings'),
+        title: Text(I18nService().t('nostr_settings_title')),
         actions: [
           IconButton(
             icon: const Icon(Icons.add),
-            tooltip: 'Add Relay',
+            tooltip: I18nService().t('nostr_add_relay_tooltip'),
             onPressed: () => _showAddRelayDialog(context),
           ),
         ],
@@ -90,15 +91,15 @@ class _NostrSettingsPageState extends State<NostrSettingsPage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'Add Relay',
+                  I18nService().t('nostr_add_relay_title'),
                   style: Theme.of(ctx).textTheme.titleLarge,
                 ),
                 const SizedBox(height: 16),
                 TextField(
                   controller: urlCtl,
                   decoration: InputDecoration(
-                    labelText: 'Relay URL',
-                    hintText: 'wss://relay.example.com',
+                    labelText: I18nService().t('nostr_relay_url_label'),
+                    hintText: I18nService().t('nostr_relay_url_hint'),
                     border: const OutlineInputBorder(),
                     isDense: true,
                     errorText: urlError,
@@ -114,14 +115,14 @@ class _NostrSettingsPageState extends State<NostrSettingsPage> {
                   children: [
                     TextButton(
                       onPressed: () => Navigator.pop(ctx),
-                      child: const Text('Cancel'),
+                      child: Text(I18nService().t('cancel')),
                     ),
                     const SizedBox(width: 8),
                     FilledButton(
                       onPressed: () {
                         var url = urlCtl.text.trim();
                         if (url.isEmpty) {
-                          setSheetState(() => urlError = 'URL is required');
+                          setSheetState(() => urlError = I18nService().t('nostr_url_required'));
                           return;
                         }
                         // Auto-prefix wss:// if missing
@@ -131,13 +132,13 @@ class _NostrSettingsPageState extends State<NostrSettingsPage> {
                         // Validate URL format
                         final uri = Uri.tryParse(url);
                         if (uri == null || uri.host.isEmpty) {
-                          setSheetState(() => urlError = 'Invalid URL');
+                          setSheetState(() => urlError = I18nService().t('nostr_invalid_url'));
                           return;
                         }
                         // Check for duplicates
                         final existing = NostrClientService().relays;
                         if (existing.any((r) => r.url == url)) {
-                          setSheetState(() => urlError = 'Relay already added');
+                          setSheetState(() => urlError = I18nService().t('nostr_relay_already_added'));
                           return;
                         }
 
@@ -149,7 +150,7 @@ class _NostrSettingsPageState extends State<NostrSettingsPage> {
                         NostrClientService().addRelay(config);
                         Navigator.pop(ctx);
                       },
-                      child: const Text('Add'),
+                      child: Text(I18nService().t('nostr_add_relay_btn')),
                     ),
                   ],
                 ),

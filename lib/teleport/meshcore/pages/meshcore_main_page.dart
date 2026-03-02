@@ -11,6 +11,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../../../services/app_service.dart';
+import '../../../services/i18n_service.dart';
 import '../meshcore_service.dart';
 import '../models/meshcore_message.dart';
 import 'meshcore_chat_page.dart';
@@ -80,7 +81,7 @@ class _MeshCoreMainPageState extends State<MeshCoreMainPage> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('MeshCore'),
+        title: Text(I18nService().t('meshcore_title')),
         actions: [
           // Connection indicator
           Padding(
@@ -95,7 +96,7 @@ class _MeshCoreMainPageState extends State<MeshCoreMainPage> {
           ),
           IconButton(
             icon: const Icon(Icons.settings),
-            tooltip: 'MeshCore Settings',
+            tooltip: I18nService().t('meshcore_settings_title'),
             onPressed: _openSettings,
           ),
         ],
@@ -170,15 +171,14 @@ class _MeshCoreMainPageState extends State<MeshCoreMainPage> {
                       ),
                       const SizedBox(height: 16),
                       Text(
-                        'No MeshCore Device Connected',
+                        I18nService().t('meshcore_no_device_title'),
                         style: theme.textTheme.titleMedium?.copyWith(
                           fontWeight: FontWeight.w600,
                         ),
                       ),
                       const SizedBox(height: 8),
                       Text(
-                        'Connect to a MeshCore companion radio\n'
-                        'to send and receive mesh messages.',
+                        I18nService().t('meshcore_no_device_desc'),
                         textAlign: TextAlign.center,
                         style: theme.textTheme.bodyMedium?.copyWith(
                           color: theme.colorScheme.onSurfaceVariant,
@@ -188,7 +188,7 @@ class _MeshCoreMainPageState extends State<MeshCoreMainPage> {
                       FilledButton.icon(
                         onPressed: _openSettings,
                         icon: const Icon(Icons.bluetooth_searching),
-                        label: const Text('Find Device'),
+                        label: Text(I18nService().t('meshcore_find_device_btn')),
                       ),
                     ],
                   ),
@@ -202,8 +202,7 @@ class _MeshCoreMainPageState extends State<MeshCoreMainPage> {
               child: conversations.isEmpty
                   ? Center(
                       child: Text(
-                        'No conversations yet.\n'
-                        'Messages from the mesh will appear here.',
+                        I18nService().t('meshcore_no_conversations'),
                         textAlign: TextAlign.center,
                         style: theme.textTheme.bodyMedium?.copyWith(
                           color: theme.colorScheme.onSurfaceVariant,
@@ -251,7 +250,7 @@ class _MeshCoreMainPageState extends State<MeshCoreMainPage> {
               style: theme.textTheme.bodySmall,
             )
           : Text(
-              'No messages',
+              I18nService().t('meshcore_no_messages'),
               style: theme.textTheme.bodySmall?.copyWith(
                 color: theme.colorScheme.onSurfaceVariant,
               ),

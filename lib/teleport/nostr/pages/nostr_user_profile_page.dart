@@ -10,6 +10,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../../services/i18n_service.dart';
 import '../../../util/nostr_crypto.dart';
 import '../../shared/teleport_chat_utils.dart';
 import '../models/nostr_feed_item.dart';
@@ -78,7 +79,7 @@ class _NostrUserProfilePageState extends State<NostrUserProfilePage> {
     if (!ok && mounted) {
       setState(() => _isFollowed = !next);
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Failed to update follow status')),
+        SnackBar(content: Text(I18nService().t('nostr_follow_failed'))),
       );
     }
     if (mounted) setState(() => _busy = false);
@@ -98,7 +99,7 @@ class _NostrUserProfilePageState extends State<NostrUserProfilePage> {
   void _copyNpub() {
     Clipboard.setData(ClipboardData(text: _npub));
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('npub copied')),
+      SnackBar(content: Text(I18nService().t('nostr_npub_copied'))),
     );
   }
 
@@ -117,7 +118,7 @@ class _NostrUserProfilePageState extends State<NostrUserProfilePage> {
         actions: [
           IconButton(
             icon: const Icon(Icons.copy),
-            tooltip: 'Copy npub',
+            tooltip: I18nService().t('nostr_copy_npub_tooltip'),
             onPressed: _copyNpub,
           ),
         ],
@@ -211,7 +212,7 @@ class _NostrUserProfilePageState extends State<NostrUserProfilePage> {
                       const SizedBox(width: 8),
                       FilledButton(
                         onPressed: _busy ? null : _toggleFollow,
-                        child: Text(_isFollowed ? 'Unfollow' : 'Follow'),
+                        child: Text(_isFollowed ? I18nService().t('nostr_unfollow_btn') : I18nService().t('nostr_follow_btn')),
                       ),
                     ],
                   ),
@@ -228,7 +229,7 @@ class _NostrUserProfilePageState extends State<NostrUserProfilePage> {
                   Divider(color: theme.dividerColor.withValues(alpha: 0.4)),
                   const SizedBox(height: 4),
                   Text(
-                    'Recent posts',
+                    I18nService().t('nostr_recent_posts_label'),
                     style: theme.textTheme.titleSmall,
                   ),
                   const SizedBox(height: 8),

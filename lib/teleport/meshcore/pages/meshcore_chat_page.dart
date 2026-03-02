@@ -10,6 +10,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../../../services/i18n_service.dart';
 import '../../shared/teleport_chat_utils.dart';
 import '../meshcore_protocol.dart';
 import '../meshcore_service.dart';
@@ -103,14 +104,14 @@ class _MeshCoreChatPageState extends State<MeshCoreChatPage> {
             Text(widget.displayName),
             if (_service.isConnected)
               Text(
-                'Connected',
+                I18nService().t('meshcore_connected_status'),
                 style: theme.textTheme.labelSmall?.copyWith(
                   color: const Color(0xFF00BCD4),
                 ),
               )
             else
               Text(
-                'Offline',
+                I18nService().t('meshcore_offline_status'),
                 style: theme.textTheme.labelSmall?.copyWith(
                   color: theme.colorScheme.onSurfaceVariant,
                 ),
@@ -125,7 +126,7 @@ class _MeshCoreChatPageState extends State<MeshCoreChatPage> {
             child: items.isEmpty
                 ? Center(
                     child: Text(
-                      'No messages yet',
+                      I18nService().t('meshcore_chat_no_messages'),
                       style: theme.textTheme.bodyMedium?.copyWith(
                         color: theme.colorScheme.onSurfaceVariant,
                       ),
@@ -169,7 +170,7 @@ class _MeshCoreChatPageState extends State<MeshCoreChatPage> {
                     onSubmitted: (_) => _send(),
                     onChanged: (_) => setState(() {}),
                     decoration: InputDecoration(
-                      hintText: 'Message (max $meshCoreMaxTextBytes chars)',
+                      hintText: I18nService().t('meshcore_message_hint', params: ['$meshCoreMaxTextBytes']),
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(24),
                         borderSide: BorderSide.none,

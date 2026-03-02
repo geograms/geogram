@@ -11,6 +11,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../../../services/i18n_service.dart';
 import '../xmpp_service.dart';
 import '../models/xmpp_room.dart';
 import '../models/xmpp_server_config.dart';
@@ -84,11 +85,11 @@ class _XmppMainPageState extends State<XmppMainPage> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('XMPP'),
+        title: Text(I18nService().t('xmpp_title')),
         actions: [
           IconButton(
             icon: const Icon(Icons.settings),
-            tooltip: 'XMPP Settings',
+            tooltip: I18nService().t('xmpp_settings_title'),
             onPressed: () {
               Navigator.of(context).push(
                 MaterialPageRoute(
@@ -123,14 +124,14 @@ class _XmppMainPageState extends State<XmppMainPage> {
           ),
           const SizedBox(height: 12),
           Text(
-            'No XMPP servers configured',
+            I18nService().t('xmpp_no_servers'),
             style: theme.textTheme.bodyLarge?.copyWith(
               color: theme.colorScheme.onSurfaceVariant,
             ),
           ),
           const SizedBox(height: 4),
           Text(
-            'Add a server to get started',
+            I18nService().t('xmpp_add_server_hint'),
             style: theme.textTheme.bodySmall?.copyWith(
               color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.7),
             ),
@@ -147,7 +148,7 @@ class _XmppMainPageState extends State<XmppMainPage> {
               });
             },
             icon: const Icon(Icons.add),
-            label: const Text('Add Server'),
+            label: Text(I18nService().t('xmpp_add_server_btn')),
           ),
         ],
       ),
@@ -288,9 +289,9 @@ class _XmppMainPageState extends State<XmppMainPage> {
             child: Text(
               group.isConfigured
                   ? (connected
-                      ? 'No rooms joined'
-                      : (isConnecting ? 'Connecting...' : 'Offline'))
-                  : 'No rooms',
+                      ? I18nService().t('xmpp_no_rooms_joined')
+                      : (isConnecting ? I18nService().t('connecting') : I18nService().t('offline')))
+                  : I18nService().t('xmpp_no_rooms'),
               style: theme.textTheme.bodySmall?.copyWith(
                 color: isConnecting
                     ? Colors.orange
@@ -347,7 +348,7 @@ class _XmppMainPageState extends State<XmppMainPage> {
                 ),
                 if (group.isFederated && group.viaServerName != null)
                   Text(
-                    'via ${group.viaServerName}',
+                    I18nService().t('xmpp_via_server_label', params: [group.viaServerName!]),
                     style: theme.textTheme.labelSmall?.copyWith(
                       color: Colors.blue.shade400,
                     ),
@@ -359,7 +360,7 @@ class _XmppMainPageState extends State<XmppMainPage> {
           if (connected || (group.isFederated && XmppService().isConnected(group.connectionServerId)))
             IconButton(
               icon: const Icon(Icons.explore, size: 20),
-              tooltip: 'Browse rooms',
+              tooltip: I18nService().t('xmpp_browse_rooms_tooltip'),
               onPressed: () => _browseRooms(group),
               visualDensity: VisualDensity.compact,
             ),
@@ -438,7 +439,7 @@ class _XmppMainPageState extends State<XmppMainPage> {
                     Text(
                       room.subject.isNotEmpty
                           ? room.subject
-                          : '${room.occupants.length} occupant${room.occupants.length == 1 ? '' : 's'}',
+                          : '${room.occupants.length} ${room.occupants.length == 1 ? I18nService().t('xmpp_occupant_singular') : I18nService().t('xmpp_occupants_plural')}',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: theme.textTheme.bodySmall?.copyWith(

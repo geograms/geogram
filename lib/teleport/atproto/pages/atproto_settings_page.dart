@@ -5,6 +5,7 @@
 
 import 'package:flutter/material.dart';
 
+import '../../../services/i18n_service.dart';
 import '../atproto_client_service.dart';
 
 class AtprotoSettingsPage extends StatefulWidget {
@@ -38,31 +39,31 @@ class _AtprotoSettingsPageState extends State<AtprotoSettingsPage> {
     final service = AtprotoClientService();
 
     return Scaffold(
-      appBar: AppBar(title: const Text('AT Proto Settings')),
+      appBar: AppBar(title: Text(I18nService().t('atproto_settings_title'))),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
           SwitchListTile(
             value: true,
-            title: const Text('Enable bridge'),
-            subtitle: const Text(
-              'Use teleport/atproto storage and background sync',
+            title: Text(I18nService().t('atproto_enable_bridge')),
+            subtitle: Text(
+              I18nService().t('atproto_enable_bridge_desc'),
             ),
             onChanged: null,
           ),
           const SizedBox(height: 12),
           ListTile(
             contentPadding: EdgeInsets.zero,
-            title: const Text('PDS URL'),
+            title: Text(I18nService().t('atproto_pds_url_label')),
             subtitle: Text(service.config.pdsUrl),
           ),
           const SizedBox(height: 12),
           TextField(
             controller: _appViewCtl,
-            decoration: const InputDecoration(
-              labelText: 'AppView URL',
-              hintText: 'https://public.api.bsky.app',
-              border: OutlineInputBorder(),
+            decoration: InputDecoration(
+              labelText: I18nService().t('atproto_appview_url_label'),
+              hintText: I18nService().t('atproto_appview_url_hint'),
+              border: const OutlineInputBorder(),
             ),
           ),
           const SizedBox(height: 12),
@@ -70,9 +71,7 @@ class _AtprotoSettingsPageState extends State<AtprotoSettingsPage> {
             child: Padding(
               padding: const EdgeInsets.all(12),
               child: Text(
-                'Identifier and password are automatic.\n'
-                'Identifier uses nickname (or callsign fallback).\n'
-                'Password is generated and stored automatically.',
+                I18nService().t('atproto_auth_desc'),
               ),
             ),
           ),
@@ -80,7 +79,7 @@ class _AtprotoSettingsPageState extends State<AtprotoSettingsPage> {
           FilledButton.icon(
             onPressed: _busy ? null : _save,
             icon: const Icon(Icons.save),
-            label: const Text('Save Settings'),
+            label: Text(I18nService().t('atproto_save_settings_btn')),
           ),
           const SizedBox(height: 8),
           OutlinedButton.icon(
@@ -91,11 +90,11 @@ class _AtprotoSettingsPageState extends State<AtprotoSettingsPage> {
                     if (!context.mounted) return;
                     ScaffoldMessenger.of(
                       context,
-                    ).showSnackBar(const SnackBar(content: Text('Logged out')));
+                    ).showSnackBar(SnackBar(content: Text(I18nService().t('atproto_logged_out'))));
                     setState(() {});
                   },
             icon: const Icon(Icons.logout),
-            label: const Text('Logout'),
+            label: Text(I18nService().t('atproto_logout_btn')),
           ),
           const SizedBox(height: 20),
           Card(
@@ -103,8 +102,8 @@ class _AtprotoSettingsPageState extends State<AtprotoSettingsPage> {
               padding: const EdgeInsets.all(12),
               child: Text(
                 service.isAuthenticated
-                    ? 'Authenticated as ${service.session?.handle} (${service.session?.did})'
-                    : 'Not authenticated',
+                    ? I18nService().t('atproto_authenticated_as', params: ['${service.session?.handle}', '${service.session?.did}'])
+                    : I18nService().t('atproto_not_authenticated'),
               ),
             ),
           ),
@@ -125,7 +124,7 @@ class _AtprotoSettingsPageState extends State<AtprotoSettingsPage> {
     if (mounted) {
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(const SnackBar(content: Text('AT Proto settings saved')));
+      ).showSnackBar(SnackBar(content: Text(I18nService().t('atproto_settings_saved'))));
       setState(() => _busy = false);
     }
   }

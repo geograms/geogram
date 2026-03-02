@@ -6,6 +6,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../../services/i18n_service.dart';
 import '../atproto_client_service.dart';
 import '../models/atproto_feed_item.dart';
 import '../models/atproto_profile.dart';
@@ -68,7 +69,7 @@ class _AtprotoSearchPageState extends State<AtprotoSearchPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Search Network')),
+      appBar: AppBar(title: Text(I18nService().t('atproto_search_network_title'))),
       body: Column(
         children: [
           Padding(
@@ -80,9 +81,9 @@ class _AtprotoSearchPageState extends State<AtprotoSearchPage> {
                     controller: _query,
                     onSubmitted: (_) => _search(),
                     textInputAction: TextInputAction.search,
-                    decoration: const InputDecoration(
-                      hintText: 'Search people and posts...',
-                      border: OutlineInputBorder(),
+                    decoration: InputDecoration(
+                      hintText: I18nService().t('atproto_search_hint'),
+                      border: const OutlineInputBorder(),
                       isDense: true,
                     ),
                   ),
@@ -91,7 +92,7 @@ class _AtprotoSearchPageState extends State<AtprotoSearchPage> {
                 FilledButton.icon(
                   onPressed: _loading ? null : _search,
                   icon: const Icon(Icons.search),
-                  label: const Text('Search'),
+                  label: Text(I18nService().t('atproto_search_btn')),
                 ),
               ],
             ),
@@ -110,7 +111,7 @@ class _AtprotoSearchPageState extends State<AtprotoSearchPage> {
                     child: Card(
                       child: Padding(
                         padding: const EdgeInsets.all(12),
-                        child: Text('Search failed: $_error'),
+                        child: Text(I18nService().t('atproto_search_failed', params: [_error!])),
                       ),
                     ),
                   ),
@@ -120,16 +121,16 @@ class _AtprotoSearchPageState extends State<AtprotoSearchPage> {
                   Padding(
                     padding: const EdgeInsets.fromLTRB(12, 6, 12, 0),
                     child: Text(
-                      '${_people.length} people • ${_posts.length} posts',
+                      I18nService().t('atproto_search_results_count', params: ['${_people.length}', '${_posts.length}']),
                       style: Theme.of(context).textTheme.bodySmall,
                     ),
                   ),
                 if (_people.isNotEmpty) ...[
-                  const Padding(
-                    padding: EdgeInsets.fromLTRB(12, 10, 12, 4),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 10, 12, 4),
                     child: Text(
-                      'People',
-                      style: TextStyle(
+                      I18nService().t('atproto_people_label'),
+                      style: const TextStyle(
                         fontSize: 14,
                         fontWeight: FontWeight.w700,
                       ),
@@ -138,11 +139,11 @@ class _AtprotoSearchPageState extends State<AtprotoSearchPage> {
                   ..._people.map((p) => _personTile(p)),
                 ],
                 if (_posts.isNotEmpty) ...[
-                  const Padding(
-                    padding: EdgeInsets.fromLTRB(12, 12, 12, 4),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
                     child: Text(
-                      'Posts',
-                      style: TextStyle(
+                      I18nService().t('atproto_posts_label'),
+                      style: const TextStyle(
                         fontSize: 14,
                         fontWeight: FontWeight.w700,
                       ),

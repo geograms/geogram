@@ -10,6 +10,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import '../../../services/i18n_service.dart';
 import '../../shared/teleport_chat_utils.dart';
 import '../irc_service.dart';
 import '../widgets/irc_message_bubble.dart';
@@ -50,7 +51,7 @@ class _IrcChatPageState extends State<IrcChatPage> {
           event.serverId == widget.serverId) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Error: ${event.data}'),
+            content: Text(I18nService().t('irc_error_msg', params: [event.data ?? ''])),
             backgroundColor: Colors.red.shade700,
           ),
         );
@@ -66,7 +67,7 @@ class _IrcChatPageState extends State<IrcChatPage> {
           event.serverId == widget.serverId &&
           event.data == widget.channel) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Left ${widget.channel}')),
+          SnackBar(content: Text(I18nService().t('irc_left_channel_msg', params: [widget.channel]))),
         );
         Navigator.of(context).pop();
         return;
@@ -76,7 +77,7 @@ class _IrcChatPageState extends State<IrcChatPage> {
       if (event.type == IrcEventType.disconnected &&
           event.serverId == widget.serverId) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Disconnected from server')),
+          SnackBar(content: Text(I18nService().t('irc_disconnected_msg'))),
         );
         Navigator.of(context).pop();
         return;
@@ -122,7 +123,7 @@ class _IrcChatPageState extends State<IrcChatPage> {
 
     if (!irc.isConnected(widget.serverId)) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Not connected to server')),
+        SnackBar(content: Text(I18nService().t('irc_not_connected'))),
       );
       return;
     }
@@ -163,7 +164,7 @@ class _IrcChatPageState extends State<IrcChatPage> {
               child: Row(
                 children: [
                   Text(
-                    'Users (${users.length})',
+                    I18nService().t('irc_users_count', params: ['${users.length}']),
                     style: theme.textTheme.titleMedium?.copyWith(
                       fontWeight: FontWeight.w600,
                     ),
@@ -205,7 +206,7 @@ class _IrcChatPageState extends State<IrcChatPage> {
                       ),
                     ),
                     trailing: isMe
-                        ? Text('you', style: theme.textTheme.labelSmall?.copyWith(
+                        ? Text(I18nService().t('irc_you_label'), style: theme.textTheme.labelSmall?.copyWith(
                             color: theme.colorScheme.onSurfaceVariant,
                           ))
                         : null,
@@ -276,30 +277,30 @@ class _IrcChatPageState extends State<IrcChatPage> {
               }
             },
             itemBuilder: (_) => [
-              const PopupMenuItem(
+              PopupMenuItem(
                 value: 'users',
                 child: ListTile(
-                  leading: Icon(Icons.people),
-                  title: Text('User List'),
+                  leading: const Icon(Icons.people),
+                  title: Text(I18nService().t('irc_user_list_label')),
                   dense: true,
                   contentPadding: EdgeInsets.zero,
                 ),
               ),
-              const PopupMenuItem(
+              PopupMenuItem(
                 value: 'help',
                 child: ListTile(
-                  leading: Icon(Icons.help_outline),
-                  title: Text('Slash Commands'),
+                  leading: const Icon(Icons.help_outline),
+                  title: Text(I18nService().t('irc_slash_commands_title')),
                   dense: true,
                   contentPadding: EdgeInsets.zero,
                 ),
               ),
               const PopupMenuDivider(),
-              const PopupMenuItem(
+              PopupMenuItem(
                 value: 'leave',
                 child: ListTile(
-                  leading: Icon(Icons.exit_to_app, color: Colors.red),
-                  title: Text('Leave Channel', style: TextStyle(color: Colors.red)),
+                  leading: const Icon(Icons.exit_to_app, color: Colors.red),
+                  title: Text(I18nService().t('irc_leave_channel_menu'), style: const TextStyle(color: Colors.red)),
                   dense: true,
                   contentPadding: EdgeInsets.zero,
                 ),
@@ -315,7 +316,7 @@ class _IrcChatPageState extends State<IrcChatPage> {
             child: messages.isEmpty
                 ? Center(
                     child: Text(
-                      _loadedCache ? 'No messages yet' : 'Loading...',
+                      _loadedCache ? I18nService().t('irc_no_messages') : I18nService().t('loading'),
                       style: theme.textTheme.bodyMedium?.copyWith(
                         color: theme.colorScheme.onSurfaceVariant,
                       ),
@@ -396,11 +397,11 @@ class _IrcChatPageState extends State<IrcChatPage> {
 
     String label;
     if (users.length == 1) {
-      label = '${users.first} is typing...';
+      label = I18nService().t('irc_user_typing', params: [users.first]);
     } else if (users.length == 2) {
-      label = '${users[0]} and ${users[1]} are typing...';
+      label = I18nService().t('irc_users_typing_two', params: [users[0], users[1]]);
     } else {
-      label = '${users[0]} and ${users.length - 1} others are typing...';
+      label = I18nService().t('irc_users_typing_many', params: [users[0], '${users.length - 1}']);
     }
 
     return Padding(
@@ -418,23 +419,23 @@ class _IrcChatPageState extends State<IrcChatPage> {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Slash Commands'),
-        content: const Column(
+        title: Text(I18nService().t('irc_slash_commands_title')),
+        content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _CmdHelp('/join #channel', 'Join a channel'),
-            _CmdHelp('/part [#channel]', 'Leave current or specified channel'),
-            _CmdHelp('/nick newname', 'Change your nickname'),
-            _CmdHelp('/msg user text', 'Send a private message'),
-            _CmdHelp('/topic text', 'Set channel topic'),
-            _CmdHelp('/me action', 'Send an action message'),
+            _CmdHelp(I18nService().t('irc_join_command'), I18nService().t('irc_join_desc')),
+            _CmdHelp(I18nService().t('irc_part_command'), I18nService().t('irc_part_desc')),
+            _CmdHelp(I18nService().t('irc_nick_command'), I18nService().t('irc_nick_desc')),
+            _CmdHelp(I18nService().t('irc_msg_command'), I18nService().t('irc_msg_desc')),
+            _CmdHelp(I18nService().t('irc_topic_command'), I18nService().t('irc_topic_desc')),
+            _CmdHelp(I18nService().t('irc_me_command'), I18nService().t('irc_me_desc')),
           ],
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
-            child: const Text('OK'),
+            child: Text(I18nService().t('ok')),
           ),
         ],
       ),
@@ -461,7 +462,7 @@ class _IrcChatPageState extends State<IrcChatPage> {
                 controller: _textController,
                 focusNode: _focusNode,
                 decoration: InputDecoration(
-                  hintText: 'Message ${widget.channel}',
+                  hintText: I18nService().t('irc_message_hint', params: [widget.channel]),
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(24),
                     borderSide: BorderSide.none,

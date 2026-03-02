@@ -30,6 +30,7 @@ import '../teleport/atproto/atproto_client_service.dart';
 import '../teleport/atproto/pages/atproto_main_page.dart';
 import '../teleport/meshcore/meshcore_service.dart';
 import '../teleport/meshcore/pages/meshcore_main_page.dart';
+import '../services/i18n_service.dart';
 
 /// Browser page for the "Teleport" app — lists platform bridges
 class TeleportBrowserPage extends StatefulWidget {
@@ -61,70 +62,70 @@ class _TeleportBrowserPageState extends State<TeleportBrowserPage> {
     _BridgeInfo(
       id: 'telegram',
       name: 'Telegram',
-      description: 'Cloud-based messaging with bot API integration',
+      descriptionKey: 'teleport_telegram_desc',
       icon: Icons.telegram,
       color: Color(0xFF0088CC),
     ),
     _BridgeInfo(
       id: 'signal',
       name: 'Signal',
-      description: 'End-to-end encrypted messaging via Signal protocol',
+      descriptionKey: 'teleport_signal_desc',
       icon: Icons.security,
       color: Color(0xFF3A76F0),
     ),
     _BridgeInfo(
       id: 'aprs',
       name: 'APRS',
-      description: 'Amateur radio packet reporting and messaging',
+      descriptionKey: 'teleport_aprs_desc',
       icon: Icons.cell_tower,
       color: Color(0xFFE65100),
     ),
     _BridgeInfo(
       id: 'meshcore',
       name: 'MeshCore',
-      description: 'LoRa mesh radio messaging via BLE',
+      descriptionKey: 'teleport_meshcore_desc',
       icon: Icons.radio,
       color: Color(0xFF00BCD4),
     ),
     _BridgeInfo(
       id: 'whatsapp',
       name: 'WhatsApp',
-      description: 'Cross-platform messaging via WhatsApp Web bridge',
+      descriptionKey: 'teleport_whatsapp_desc',
       icon: Icons.chat,
       color: Color(0xFF25D366),
     ),
     _BridgeInfo(
       id: 'nostr',
       name: 'NOSTR',
-      description: 'Decentralized relay-based messaging with NIP support',
+      descriptionKey: 'teleport_nostr_desc',
       icon: Icons.hub,
       color: Color(0xFF8B5CF6),
     ),
     _BridgeInfo(
       id: 'bluesky',
       name: 'Bluesky',
-      description: 'AT Protocol federation for decentralized social messaging',
+      descriptionKey: 'teleport_atproto_desc',
       icon: Icons.cloud,
       color: Color(0xFF0085FF),
     ),
     _BridgeInfo(
       id: 'irc',
       name: 'IRC',
-      description: 'Classic Internet Relay Chat with multi-server support',
+      descriptionKey: 'teleport_irc_desc',
       icon: Icons.terminal,
       color: Color(0xFF4CAF50),
     ),
     _BridgeInfo(
       id: 'matrix',
       name: 'Matrix',
-      description: 'Open federated messaging with end-to-end encryption',
+      descriptionKey: 'teleport_matrix_desc',
       icon: Icons.grid_view,
       color: Color(0xFF0DBD8B),
     ),
     _BridgeInfo(
       id: 'xmpp',
       name: 'XMPP',
-      description: 'Extensible messaging with Jabber protocol support',
+      descriptionKey: 'teleport_xmpp_desc',
       icon: Icons.message,
       color: Color(0xFFFF6600),
     ),
@@ -231,40 +232,35 @@ class _TeleportBrowserPageState extends State<TeleportBrowserPage> {
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Row(
+        title: Row(
           children: [
-            Icon(Icons.rocket_launch, size: 24),
-            SizedBox(width: 12),
-            Text('About Teleport'),
+            const Icon(Icons.rocket_launch, size: 24),
+            const SizedBox(width: 12),
+            Text(I18nService().t('teleport_about_title')),
           ],
         ),
-        content: const Column(
+        content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              'Teleport is a modular bridge system that connects Geogram '
-              'to external messaging platforms.',
+              I18nService().t('teleport_about_desc_1'),
             ),
-            SizedBox(height: 12),
+            const SizedBox(height: 12),
             Text(
-              'Each platform bridge runs independently with its own '
-              'credentials and connection state. Messages are synced '
-              'through a unified interface while keeping per-bridge '
-              'isolation for security.',
+              I18nService().t('teleport_about_desc_2'),
             ),
-            SizedBox(height: 12),
+            const SizedBox(height: 12),
             Text(
-              'Platform bridges are being added incrementally. '
-              'Check back for updates as new bridges become available.',
-              style: TextStyle(fontStyle: FontStyle.italic),
+              I18nService().t('teleport_about_desc_3'),
+              style: const TextStyle(fontStyle: FontStyle.italic),
             ),
           ],
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('OK'),
+            child: Text(I18nService().t('ok')),
           ),
         ],
       ),
@@ -281,7 +277,7 @@ class _TeleportBrowserPageState extends State<TeleportBrowserPage> {
         actions: [
           IconButton(
             icon: const Icon(Icons.info_outline),
-            tooltip: 'About Teleport',
+            tooltip: I18nService().t('teleport_about_title'),
             onPressed: _showAboutDialog,
           ),
         ],
@@ -488,7 +484,7 @@ class _TeleportBrowserPageState extends State<TeleportBrowserPage> {
             }
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
-                content: Text('${bridge.name} bridge coming soon'),
+                content: Text(I18nService().t('teleport_bridge_coming_soon_msg', params: [bridge.name])),
                 duration: const Duration(seconds: 2),
               ),
             );
@@ -522,7 +518,7 @@ class _TeleportBrowserPageState extends State<TeleportBrowserPage> {
                       ),
                       const SizedBox(height: 4),
                       Text(
-                        bridge.description,
+                        I18nService().t(bridge.descriptionKey),
                         style: theme.textTheme.bodySmall?.copyWith(
                           color: theme.colorScheme.onSurfaceVariant,
                         ),
@@ -545,15 +541,15 @@ class _TeleportBrowserPageState extends State<TeleportBrowserPage> {
                   ),
                   child: Text(
                     showActive
-                        ? 'Active'
+                        ? I18nService().t('teleport_bridge_status_active')
                         : (bridge.id == 'aprs' ||
                               bridge.id == 'meshcore' ||
                               bridge.id == 'irc' ||
                               bridge.id == 'xmpp' ||
                               bridge.id == 'nostr' ||
                               bridge.id == 'bluesky')
-                        ? 'Available'
-                        : 'Coming Soon',
+                        ? I18nService().t('teleport_bridge_status_available')
+                        : I18nService().t('teleport_bridge_status_coming_soon'),
                     style: TextStyle(
                       fontSize: 11,
                       fontWeight: FontWeight.w500,
@@ -576,14 +572,14 @@ class _TeleportBrowserPageState extends State<TeleportBrowserPage> {
 class _BridgeInfo {
   final String id;
   final String name;
-  final String description;
+  final String descriptionKey;
   final IconData icon;
   final Color color;
 
   const _BridgeInfo({
     required this.id,
     required this.name,
-    required this.description,
+    required this.descriptionKey,
     required this.icon,
     required this.color,
   });

@@ -10,6 +10,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../../services/i18n_service.dart';
 import '../xmpp_service.dart';
 import '../xmpp_client.dart';
 import '../models/xmpp_server_config.dart';
@@ -61,16 +62,16 @@ class _XmppSettingsPageState extends State<XmppSettingsPage> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('XMPP Settings'),
+        title: Text(I18nService().t('xmpp_settings_title')),
         actions: [
           IconButton(
             icon: const Icon(Icons.person_add),
-            tooltip: 'Register Account',
+            tooltip: I18nService().t('xmpp_register_account_tooltip'),
             onPressed: () => _showRegisterSheet(context),
           ),
           IconButton(
             icon: const Icon(Icons.add),
-            tooltip: 'Add Server',
+            tooltip: I18nService().t('xmpp_add_server_tooltip'),
             onPressed: () => _showAddServerSheet(context),
           ),
         ],
@@ -83,7 +84,7 @@ class _XmppSettingsPageState extends State<XmppSettingsPage> {
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
               child: Text(
-                'My Servers',
+                I18nService().t('xmpp_my_servers_label'),
                 style: theme.textTheme.titleSmall?.copyWith(
                   color: theme.colorScheme.onSurfaceVariant,
                 ),
@@ -96,7 +97,7 @@ class _XmppSettingsPageState extends State<XmppSettingsPage> {
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
             child: Text(
-              'Public Servers',
+              I18nService().t('xmpp_public_servers_label'),
               style: theme.textTheme.titleSmall?.copyWith(
                 color: theme.colorScheme.onSurfaceVariant,
               ),
@@ -105,7 +106,7 @@ class _XmppSettingsPageState extends State<XmppSettingsPage> {
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
             child: Text(
-              'Tap to browse rooms. Long-press to register.',
+              I18nService().t('xmpp_public_servers_desc'),
               style: theme.textTheme.bodySmall?.copyWith(
                 color: theme.colorScheme.onSurfaceVariant,
               ),
@@ -178,7 +179,7 @@ class _XmppSettingsPageState extends State<XmppSettingsPage> {
                           ),
                         if (config.autoJoinRooms.isNotEmpty)
                           Text(
-                            'Auto-join: ${config.autoJoinRooms.join(', ')}',
+                            I18nService().t('xmpp_autojoin_label', params: [config.autoJoinRooms.join(', ')]),
                             style: theme.textTheme.bodySmall?.copyWith(
                               color: theme.colorScheme.onSurfaceVariant,
                             ),
@@ -212,22 +213,22 @@ class _XmppSettingsPageState extends State<XmppSettingsPage> {
                       connected ? Icons.link_off : Icons.link,
                       size: 18,
                     ),
-                    label: Text(connected ? 'Disconnect' : 'Connect'),
+                    label: Text(connected ? I18nService().t('xmpp_disconnect_btn') : I18nService().t('xmpp_connect_btn')),
                   ),
                   const SizedBox(width: 8),
                   IconButton(
                     icon: const Icon(Icons.info_outline, size: 20),
-                    tooltip: 'Account Details',
+                    tooltip: I18nService().t('xmpp_account_details_tooltip'),
                     onPressed: () => _showAccountDetails(context, config),
                   ),
                   IconButton(
                     icon: const Icon(Icons.edit, size: 20),
-                    tooltip: 'Edit',
+                    tooltip: I18nService().t('xmpp_edit_tooltip'),
                     onPressed: () => _showEditServerSheet(context, config),
                   ),
                   IconButton(
                     icon: const Icon(Icons.delete, size: 20),
-                    tooltip: 'Remove',
+                    tooltip: I18nService().t('xmpp_remove_tooltip'),
                     onPressed: () => _confirmRemove(context, config),
                   ),
                 ],
@@ -259,11 +260,11 @@ class _XmppSettingsPageState extends State<XmppSettingsPage> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  _detailRow(theme, 'Server', '${config.host}:${config.port}'),
-                  _detailRow(theme, 'JID', config.jid ?? 'Not set'),
+                  _detailRow(theme, I18nService().t('xmpp_server_label'), '${config.host}:${config.port}'),
+                  _detailRow(theme, I18nService().t('xmpp_jid_label'), config.jid ?? 'Not set'),
                   _detailRow(
                     theme,
-                    'Password',
+                    I18nService().t('xmpp_password_label'),
                     showPassword
                         ? (config.password ?? 'Not set')
                         : (config.password != null ? '\u2022' * 12 : 'Not set'),
@@ -276,7 +277,7 @@ class _XmppSettingsPageState extends State<XmppSettingsPage> {
                             size: 18,
                           ),
                           onPressed: () => setDialogState(() => showPassword = !showPassword),
-                          tooltip: showPassword ? 'Hide' : 'Show',
+                          tooltip: showPassword ? I18nService().t('xmpp_hide_password') : I18nService().t('xmpp_show_password'),
                           constraints: const BoxConstraints(),
                           padding: const EdgeInsets.all(4),
                         ),
@@ -286,31 +287,31 @@ class _XmppSettingsPageState extends State<XmppSettingsPage> {
                             onPressed: () {
                               Clipboard.setData(ClipboardData(text: config.password!));
                               ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(
-                                  content: Text('Password copied'),
-                                  duration: Duration(seconds: 1),
+                                SnackBar(
+                                  content: Text(I18nService().t('xmpp_password_copied')),
+                                  duration: const Duration(seconds: 1),
                                 ),
                               );
                             },
-                            tooltip: 'Copy',
+                            tooltip: I18nService().t('xmpp_copy_btn'),
                             constraints: const BoxConstraints(),
                             padding: const EdgeInsets.all(4),
                           ),
                       ],
                     ),
                   ),
-                  _detailRow(theme, 'Conference', config.derivedConferenceService),
-                  _detailRow(theme, 'TLS', config.directTls ? 'Direct TLS' : 'STARTTLS'),
-                  _detailRow(theme, 'Auto-connect', config.autoConnect ? 'Yes' : 'No'),
+                  _detailRow(theme, I18nService().t('xmpp_conference_label'), config.derivedConferenceService),
+                  _detailRow(theme, I18nService().t('xmpp_tls_label_detail'), config.directTls ? I18nService().t('xmpp_direct_tls_label') : I18nService().t('xmpp_starttls_label')),
+                  _detailRow(theme, I18nService().t('xmpp_autoconnect_label'), config.autoConnect ? I18nService().t('yes') : I18nService().t('no')),
                   if (config.autoJoinRooms.isNotEmpty)
-                    _detailRow(theme, 'Auto-join', config.autoJoinRooms.join(', ')),
+                    _detailRow(theme, I18nService().t('xmpp_autojoin_label', params: ['']).split(':').first.trim(), config.autoJoinRooms.join(', ')),
                 ],
               ),
             ),
             actions: [
               TextButton(
                 onPressed: () => Navigator.pop(ctx),
-                child: const Text('Close'),
+                child: Text(I18nService().t('close')),
               ),
             ],
           );
@@ -354,9 +355,9 @@ class _XmppSettingsPageState extends State<XmppSettingsPage> {
     if (connectedServer == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: const Text('Connect to a server first'),
+          content: Text(I18nService().t('xmpp_connect_to_server_first')),
           action: SnackBarAction(
-            label: 'Register',
+            label: I18nService().t('xmpp_register_btn'),
             onPressed: () => _showRegisterSheet(context, preselectedHost: preset.host),
           ),
         ),
@@ -403,19 +404,19 @@ class _XmppSettingsPageState extends State<XmppSettingsPage> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'Register New Account',
+                    I18nService().t('xmpp_register_new_account_title'),
                     style: Theme.of(ctx).textTheme.titleLarge,
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    'Create a new XMPP account via in-band registration (XEP-0077).',
+                    I18nService().t('xmpp_register_desc'),
                     style: Theme.of(ctx).textTheme.bodySmall?.copyWith(
                       color: Theme.of(ctx).colorScheme.onSurfaceVariant,
                     ),
                   ),
                   const SizedBox(height: 16),
                   Text(
-                    'Server',
+                    I18nService().t('xmpp_server_label'),
                     style: Theme.of(ctx).textTheme.labelMedium?.copyWith(
                       color: Theme.of(ctx).colorScheme.onSurfaceVariant,
                     ),
@@ -428,7 +429,7 @@ class _XmppSettingsPageState extends State<XmppSettingsPage> {
                       // Station server option (shown first when available)
                       if (stationServer != null)
                         ChoiceChip(
-                          label: Text('Station (${stationServer.domain})'),
+                          label: Text(I18nService().t('xmpp_station_server_label', params: [stationServer.domain])),
                           selected: selectedHost == 'localhost',
                           avatar: const Icon(Icons.home, size: 16),
                           onSelected: registering
@@ -462,9 +463,9 @@ class _XmppSettingsPageState extends State<XmppSettingsPage> {
                   const SizedBox(height: 16),
                   TextField(
                     controller: usernameCtl,
-                    decoration: const InputDecoration(
-                      labelText: 'Username (optional)',
-                      hintText: 'Leave empty for auto-generated',
+                    decoration: InputDecoration(
+                      labelText: I18nService().t('xmpp_username_label'),
+                      hintText: I18nService().t('xmpp_username_hint'),
                       border: OutlineInputBorder(),
                       isDense: true,
                     ),
@@ -472,7 +473,7 @@ class _XmppSettingsPageState extends State<XmppSettingsPage> {
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    'Password will be generated automatically.',
+                    I18nService().t('xmpp_password_auto_desc'),
                     style: Theme.of(ctx).textTheme.bodySmall?.copyWith(
                       color: Theme.of(ctx).colorScheme.onSurfaceVariant,
                       fontStyle: FontStyle.italic,
@@ -501,12 +502,12 @@ class _XmppSettingsPageState extends State<XmppSettingsPage> {
                           ),
                           if (success && registeredJid != null) ...[
                             const SizedBox(height: 8),
-                            SelectableText('JID: $registeredJid'),
+                            SelectableText(I18nService().t('xmpp_registered_jid', params: [registeredJid!])),
                             const SizedBox(height: 4),
                             Row(
                               children: [
                                 Expanded(
-                                  child: SelectableText('Password: $registeredPassword'),
+                                  child: SelectableText(I18nService().t('xmpp_registered_password', params: [registeredPassword ?? ''])),
                                 ),
                                 IconButton(
                                   icon: const Icon(Icons.copy, size: 18),
@@ -515,13 +516,13 @@ class _XmppSettingsPageState extends State<XmppSettingsPage> {
                                       ClipboardData(text: registeredPassword ?? ''),
                                     );
                                     ScaffoldMessenger.of(context).showSnackBar(
-                                      const SnackBar(
-                                        content: Text('Password copied'),
-                                        duration: Duration(seconds: 1),
+                                      SnackBar(
+                                        content: Text(I18nService().t('xmpp_password_copied')),
+                                        duration: const Duration(seconds: 1),
                                       ),
                                     );
                                   },
-                                  tooltip: 'Copy password',
+                                  tooltip: I18nService().t('xmpp_copy_btn'),
                                   constraints: const BoxConstraints(),
                                   padding: const EdgeInsets.all(4),
                                 ),
@@ -538,7 +539,7 @@ class _XmppSettingsPageState extends State<XmppSettingsPage> {
                     children: [
                       TextButton(
                         onPressed: () => Navigator.pop(ctx),
-                        child: Text(success ? 'Done' : 'Cancel'),
+                        child: Text(success ? I18nService().t('ok') : I18nService().t('cancel')),
                       ),
                       if (!success) ...[
                         const SizedBox(width: 8),
@@ -548,7 +549,7 @@ class _XmppSettingsPageState extends State<XmppSettingsPage> {
                               : () async {
                                   setSheetState(() {
                                     registering = true;
-                                    statusMessage = 'Registering on $selectedHost...';
+                                    statusMessage = I18nService().t('xmpp_registering_msg', params: [selectedHost!]);
                                     success = false;
                                   });
                                   final user = usernameCtl.text.trim().isNotEmpty
@@ -569,7 +570,7 @@ class _XmppSettingsPageState extends State<XmppSettingsPage> {
                                     if (success) {
                                       registeredJid = result['jid'] as String?;
                                       registeredPassword = result['password'] as String?;
-                                      statusMessage = 'Account created successfully!';
+                                      statusMessage = I18nService().t('xmpp_account_created');
                                     } else {
                                       statusMessage = result['error'] as String? ?? 'Registration failed';
                                     }
@@ -581,7 +582,7 @@ class _XmppSettingsPageState extends State<XmppSettingsPage> {
                                   height: 18,
                                   child: CircularProgressIndicator(strokeWidth: 2),
                                 )
-                              : const Text('Register'),
+                              : Text(I18nService().t('xmpp_register_btn')),
                         ),
                       ],
                     ],
@@ -601,19 +602,19 @@ class _XmppSettingsPageState extends State<XmppSettingsPage> {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Remove Server'),
-        content: Text('Remove ${config.name} (${config.host})?'),
+        title: Text(I18nService().t('xmpp_remove_server_title')),
+        content: Text(I18nService().t('xmpp_remove_server_confirm', params: [config.name, config.host])),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancel'),
+            child: Text(I18nService().t('cancel')),
           ),
           FilledButton(
             onPressed: () {
               XmppService().removeServer(config.id);
               Navigator.pop(ctx);
             },
-            child: const Text('Remove'),
+            child: Text(I18nService().t('xmpp_remove_btn')),
           ),
         ],
       ),
@@ -662,7 +663,7 @@ class _XmppSettingsPageState extends State<XmppSettingsPage> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    existing != null ? 'Edit Server' : 'Add Server',
+                    existing != null ? I18nService().t('xmpp_edit_server_title') : I18nService().t('xmpp_add_server_title'),
                     style: Theme.of(ctx).textTheme.titleLarge,
                   ),
                   const SizedBox(height: 12),
@@ -702,7 +703,7 @@ class _XmppSettingsPageState extends State<XmppSettingsPage> {
                   TextField(
                     controller: nameCtl,
                     decoration: InputDecoration(
-                      labelText: 'Name',
+                      labelText: I18nService().t('xmpp_name_label'),
                       border: const OutlineInputBorder(),
                       isDense: true,
                       errorText: nameError,
@@ -761,9 +762,9 @@ class _XmppSettingsPageState extends State<XmppSettingsPage> {
                   const SizedBox(height: 12),
                   TextField(
                     controller: passCtl,
-                    decoration: const InputDecoration(
-                      labelText: 'Password',
-                      border: OutlineInputBorder(),
+                    decoration: InputDecoration(
+                      labelText: I18nService().t('xmpp_password_label'),
+                      border: const OutlineInputBorder(),
                       isDense: true,
                     ),
                     obscureText: true,
@@ -790,7 +791,7 @@ class _XmppSettingsPageState extends State<XmppSettingsPage> {
                   ),
                   const SizedBox(height: 8),
                   SwitchListTile(
-                    title: const Text('Direct TLS'),
+                    title: Text(I18nService().t('xmpp_direct_tls_label')),
                     subtitle: const Text('Use TLS from the start (port 5223)'),
                     value: directTls,
                     onChanged: (v) => setSheetState(() {
@@ -801,7 +802,7 @@ class _XmppSettingsPageState extends State<XmppSettingsPage> {
                     contentPadding: EdgeInsets.zero,
                   ),
                   SwitchListTile(
-                    title: const Text('Auto-connect'),
+                    title: Text(I18nService().t('xmpp_autoconnect_label')),
                     value: autoConnect,
                     onChanged: (v) => setSheetState(() => autoConnect = v),
                     contentPadding: EdgeInsets.zero,
@@ -812,7 +813,7 @@ class _XmppSettingsPageState extends State<XmppSettingsPage> {
                     children: [
                       TextButton(
                         onPressed: () => Navigator.pop(ctx),
-                        child: const Text('Cancel'),
+                        child: Text(I18nService().t('cancel')),
                       ),
                       const SizedBox(width: 8),
                       FilledButton(
@@ -871,7 +872,7 @@ class _XmppSettingsPageState extends State<XmppSettingsPage> {
                           }
                           Navigator.pop(ctx);
                         },
-                        child: Text(existing != null ? 'Save' : 'Add'),
+                        child: Text(existing != null ? I18nService().t('save') : I18nService().t('add')),
                       ),
                     ],
                   ),

@@ -9,6 +9,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../../../services/i18n_service.dart';
 import '../irc_service.dart';
 import '../models/irc_server_config.dart';
 
@@ -58,11 +59,11 @@ class _IrcSettingsPageState extends State<IrcSettingsPage> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('IRC Settings'),
+        title: Text(I18nService().t('irc_settings_title')),
         actions: [
           IconButton(
             icon: const Icon(Icons.add),
-            tooltip: 'Add Server',
+            tooltip: I18nService().t('irc_add_server_btn'),
             onPressed: () => _showAddServerSheet(context),
           ),
         ],
@@ -79,7 +80,7 @@ class _IrcSettingsPageState extends State<IrcSettingsPage> {
                   ),
                   const SizedBox(height: 12),
                   Text(
-                    'No servers configured',
+                    I18nService().t('irc_no_servers_configured'),
                     style: theme.textTheme.bodyLarge?.copyWith(
                       color: theme.colorScheme.onSurfaceVariant,
                     ),
@@ -88,7 +89,7 @@ class _IrcSettingsPageState extends State<IrcSettingsPage> {
                   FilledButton.icon(
                     onPressed: () => _showAddServerSheet(context),
                     icon: const Icon(Icons.add),
-                    label: const Text('Add Server'),
+                    label: Text(I18nService().t('irc_add_server_btn')),
                   ),
                 ],
               ),
@@ -171,7 +172,7 @@ class _IrcSettingsPageState extends State<IrcSettingsPage> {
                       connected ? Icons.link_off : Icons.link,
                       size: 18,
                     ),
-                    label: Text(connected ? 'Disconnect' : 'Connect'),
+                    label: Text(connected ? I18nService().t('irc_disconnect_btn') : I18nService().t('irc_connect_btn')),
                   ),
                   const SizedBox(width: 8),
                   // Edit
@@ -199,19 +200,19 @@ class _IrcSettingsPageState extends State<IrcSettingsPage> {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Remove Server'),
-        content: Text('Remove ${config.name} (${config.host})?'),
+        title: Text(I18nService().t('irc_remove_server_title')),
+        content: Text(I18nService().t('irc_remove_server_confirm', params: [config.name, config.host])),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancel'),
+            child: Text(I18nService().t('cancel')),
           ),
           FilledButton(
             onPressed: () {
               IrcService().removeServer(config.id);
               Navigator.pop(ctx);
             },
-            child: const Text('Remove'),
+            child: Text(I18nService().t('irc_remove_btn')),
           ),
         ],
       ),
@@ -257,14 +258,14 @@ class _IrcSettingsPageState extends State<IrcSettingsPage> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    existing != null ? 'Edit Server' : 'Add Server',
+                    existing != null ? I18nService().t('irc_edit_server_title') : I18nService().t('irc_add_server_btn'),
                     style: Theme.of(ctx).textTheme.titleLarge,
                   ),
                   const SizedBox(height: 12),
                   // Preset buttons
                   if (existing == null) ...[
                     Text(
-                      'Quick Add',
+                      I18nService().t('irc_quick_add_label'),
                       style: Theme.of(ctx).textTheme.labelMedium?.copyWith(
                         color: Theme.of(ctx).colorScheme.onSurfaceVariant,
                       ),
@@ -296,7 +297,7 @@ class _IrcSettingsPageState extends State<IrcSettingsPage> {
                   TextField(
                     controller: nameCtl,
                     decoration: InputDecoration(
-                      labelText: 'Name',
+                      labelText: I18nService().t('irc_name_label'),
                       border: const OutlineInputBorder(),
                       isDense: true,
                       errorText: nameError,
@@ -314,7 +315,7 @@ class _IrcSettingsPageState extends State<IrcSettingsPage> {
                         child: TextField(
                           controller: hostCtl,
                           decoration: InputDecoration(
-                            labelText: 'Host',
+                            labelText: I18nService().t('irc_host_label'),
                             border: const OutlineInputBorder(),
                             isDense: true,
                             errorText: hostError,
@@ -328,9 +329,9 @@ class _IrcSettingsPageState extends State<IrcSettingsPage> {
                       Expanded(
                         child: TextField(
                           controller: portCtl,
-                          decoration: const InputDecoration(
-                            labelText: 'Port',
-                            border: OutlineInputBorder(),
+                          decoration: InputDecoration(
+                            labelText: I18nService().t('irc_port_label'),
+                            border: const OutlineInputBorder(),
                             isDense: true,
                           ),
                           keyboardType: TextInputType.number,
@@ -341,9 +342,9 @@ class _IrcSettingsPageState extends State<IrcSettingsPage> {
                   const SizedBox(height: 12),
                   TextField(
                     controller: passCtl,
-                    decoration: const InputDecoration(
-                      labelText: 'NickServ Password (optional)',
-                      border: OutlineInputBorder(),
+                    decoration: InputDecoration(
+                      labelText: I18nService().t('irc_nickserv_password_label'),
+                      border: const OutlineInputBorder(),
                       isDense: true,
                     ),
                     obscureText: true,
@@ -351,16 +352,16 @@ class _IrcSettingsPageState extends State<IrcSettingsPage> {
                   const SizedBox(height: 12),
                   TextField(
                     controller: autoJoinCtl,
-                    decoration: const InputDecoration(
-                      labelText: 'Auto-join channels (comma-separated)',
-                      hintText: '#channel1, #channel2',
-                      border: OutlineInputBorder(),
+                    decoration: InputDecoration(
+                      labelText: I18nService().t('irc_autojoin_channels_label'),
+                      hintText: I18nService().t('irc_channel_example'),
+                      border: const OutlineInputBorder(),
                       isDense: true,
                     ),
                   ),
                   const SizedBox(height: 8),
                   SwitchListTile(
-                    title: const Text('TLS'),
+                    title: Text(I18nService().t('irc_tls_label')),
                     value: useTls,
                     onChanged: (v) => setSheetState(() {
                       useTls = v;
@@ -370,7 +371,7 @@ class _IrcSettingsPageState extends State<IrcSettingsPage> {
                     contentPadding: EdgeInsets.zero,
                   ),
                   SwitchListTile(
-                    title: const Text('Auto-connect'),
+                    title: Text(I18nService().t('irc_autoconnect_label')),
                     value: autoConnect,
                     onChanged: (v) => setSheetState(() => autoConnect = v),
                     contentPadding: EdgeInsets.zero,
@@ -381,7 +382,7 @@ class _IrcSettingsPageState extends State<IrcSettingsPage> {
                     children: [
                       TextButton(
                         onPressed: () => Navigator.pop(ctx),
-                        child: const Text('Cancel'),
+                        child: Text(I18nService().t('cancel')),
                       ),
                       const SizedBox(width: 8),
                       FilledButton(
@@ -433,7 +434,7 @@ class _IrcSettingsPageState extends State<IrcSettingsPage> {
                           }
                           Navigator.pop(ctx);
                         },
-                        child: Text(existing != null ? 'Save' : 'Add'),
+                        child: Text(existing != null ? I18nService().t('save') : I18nService().t('add')),
                       ),
                     ],
                   ),

@@ -9,6 +9,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../../../services/i18n_service.dart';
 import '../meshcore_ble_client.dart';
 import '../meshcore_service.dart';
 import '../widgets/meshcore_device_card.dart';
@@ -86,7 +87,7 @@ class _MeshCoreSettingsPageState extends State<MeshCoreSettingsPage> {
     final deviceInfo = _service.deviceInfo;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('MeshCore Settings')),
+      appBar: AppBar(title: Text(I18nService().t('meshcore_settings_title'))),
       body: ListView(
         children: [
           // Connection status
@@ -105,7 +106,7 @@ class _MeshCoreSettingsPageState extends State<MeshCoreSettingsPage> {
                               color: theme.colorScheme.primary),
                           const SizedBox(width: 8),
                           Text(
-                            'Connected',
+                            I18nService().t('meshcore_connected_status'),
                             style: theme.textTheme.titleMedium?.copyWith(
                               fontWeight: FontWeight.w600,
                               color: theme.colorScheme.primary,
@@ -114,20 +115,20 @@ class _MeshCoreSettingsPageState extends State<MeshCoreSettingsPage> {
                         ],
                       ),
                       const SizedBox(height: 12),
-                      _infoRow('Device', deviceInfo.name),
+                      _infoRow(I18nService().t('meshcore_device_label'), deviceInfo.name),
                       if (deviceInfo.firmwareVersion != null)
-                        _infoRow('Firmware', deviceInfo.firmwareVersion!),
+                        _infoRow(I18nService().t('meshcore_firmware_label'), deviceInfo.firmwareVersion!),
                       if (deviceInfo.boardModel != null)
-                        _infoRow('Board', deviceInfo.boardModel!),
+                        _infoRow(I18nService().t('meshcore_board_label'), deviceInfo.boardModel!),
                       if (deviceInfo.frequencyMhz != null)
                         _infoRow(
-                          'Frequency',
+                          I18nService().t('meshcore_frequency_label'),
                           '${deviceInfo.frequencyMhz!.toStringAsFixed(2)} MHz',
                         ),
                       if (deviceInfo.spreadingFactor != null)
-                        _infoRow('SF', '${deviceInfo.spreadingFactor}'),
+                        _infoRow(I18nService().t('meshcore_sf_label'), '${deviceInfo.spreadingFactor}'),
                       if (deviceInfo.txPowerDbm != null)
-                        _infoRow('TX Power', '${deviceInfo.txPowerDbm} dBm'),
+                        _infoRow(I18nService().t('meshcore_tx_power_label'), '${deviceInfo.txPowerDbm} dBm'),
                       const SizedBox(height: 12),
                       SizedBox(
                         width: double.infinity,
@@ -137,7 +138,7 @@ class _MeshCoreSettingsPageState extends State<MeshCoreSettingsPage> {
                             if (mounted) setState(() {});
                           },
                           icon: const Icon(Icons.bluetooth_disabled),
-                          label: const Text('Disconnect'),
+                          label: Text(I18nService().t('meshcore_disconnect_btn')),
                         ),
                       ),
                     ],
@@ -153,15 +154,14 @@ class _MeshCoreSettingsPageState extends State<MeshCoreSettingsPage> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'Find MeshCore Device',
+                    I18nService().t('meshcore_find_device_title'),
                     style: theme.textTheme.titleMedium?.copyWith(
                       fontWeight: FontWeight.w600,
                     ),
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    'Scan for MeshCore companion radios nearby. '
-                    'Make sure your device is powered on.',
+                    I18nService().t('meshcore_scan_desc'),
                     style: theme.textTheme.bodySmall?.copyWith(
                       color: theme.colorScheme.onSurfaceVariant,
                     ),
@@ -181,7 +181,7 @@ class _MeshCoreSettingsPageState extends State<MeshCoreSettingsPage> {
                               ),
                             )
                           : const Icon(Icons.bluetooth_searching),
-                      label: Text(_isScanning ? 'Scanning...' : 'Scan'),
+                      label: Text(_isScanning ? I18nService().t('meshcore_scanning') : I18nService().t('meshcore_scan_btn')),
                     ),
                   ),
                 ],
@@ -194,8 +194,7 @@ class _MeshCoreSettingsPageState extends State<MeshCoreSettingsPage> {
                   padding: const EdgeInsets.all(16),
                   child: Center(
                     child: Text(
-                      'No MeshCore devices found.\n'
-                      'Make sure your device is powered on and nearby.',
+                      I18nService().t('meshcore_no_devices_found'),
                       textAlign: TextAlign.center,
                       style: theme.textTheme.bodyMedium?.copyWith(
                         color: theme.colorScheme.onSurfaceVariant,

@@ -25,6 +25,7 @@ import '../../../services/location_provider_service.dart';
 import '../../../services/map_tile_service.dart' show MapTileService, MapLayerType;
 import '../../../services/profile_service.dart';
 import '../../../services/user_location_service.dart';
+import '../../../services/i18n_service.dart';
 import '../aprs_service.dart';
 import '../models/aprs_packet.dart';
 import '../widgets/aprs_conversation_list.dart';
@@ -91,7 +92,7 @@ class _AprsMainPageState extends State<AprsMainPage> {
       length: 3,
       child: Scaffold(
         appBar: AppBar(
-          title: const Text('APRS'),
+          title: Text(I18nService().t('aprs_title')),
           actions: [
             Switch(
               value: aprs.isEnabled,
@@ -99,8 +100,8 @@ class _AprsMainPageState extends State<AprsMainPage> {
                 if (on) {
                   if (!aprs.hasLocation) {
                     ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text('Set your location first'),
+                      SnackBar(
+                        content: Text(I18nService().t('aprs_set_location_first')),
                       ),
                     );
                     return;
@@ -117,7 +118,7 @@ class _AprsMainPageState extends State<AprsMainPage> {
             ),
             IconButton(
               icon: Icon(_paused ? Icons.play_arrow : Icons.pause),
-              tooltip: _paused ? 'Resume updates' : 'Pause updates',
+              tooltip: _paused ? I18nService().t('aprs_resume_updates') : I18nService().t('aprs_pause_updates'),
               onPressed: () {
                 setState(() {
                   _paused = !_paused;
@@ -126,7 +127,7 @@ class _AprsMainPageState extends State<AprsMainPage> {
             ),
             IconButton(
               icon: const Icon(Icons.delete_outline),
-              tooltip: 'Clear messages',
+              tooltip: I18nService().t('aprs_clear_messages'),
               onPressed: () {
                 aprs.clearDisplay();
                 setState(() {});
@@ -134,7 +135,7 @@ class _AprsMainPageState extends State<AprsMainPage> {
             ),
             IconButton(
               icon: const Icon(Icons.settings),
-              tooltip: 'APRS Settings',
+              tooltip: I18nService().t('aprs_settings_title'),
               onPressed: () {
                 Navigator.of(context).push(
                   MaterialPageRoute(
@@ -145,11 +146,11 @@ class _AprsMainPageState extends State<AprsMainPage> {
               },
             ),
           ],
-          bottom: const TabBar(
+          bottom: TabBar(
             tabs: [
-              Tab(text: 'Stream'),
-              Tab(text: 'Messages'),
-              Tab(text: 'Map'),
+              Tab(text: I18nService().t('aprs_tab_stream')),
+              Tab(text: I18nService().t('aprs_tab_messages')),
+              Tab(text: I18nService().t('aprs_tab_map')),
             ],
           ),
         ),
@@ -241,7 +242,7 @@ class _AprsMainPageState extends State<AprsMainPage> {
           ),
           const SizedBox(width: 8),
           Text(
-            'Range',
+            I18nService().t('aprs_range_label'),
             style: theme.textTheme.bodySmall?.copyWith(
               fontWeight: FontWeight.w500,
             ),
@@ -301,7 +302,7 @@ class _AprsMainPageState extends State<AprsMainPage> {
                     : theme.colorScheme.error,
               ),
               padding: EdgeInsets.zero,
-              tooltip: 'Choose location',
+              tooltip: I18nService().t('aprs_choose_location_tooltip'),
               onPressed: () => _pickLocation(context),
             ),
           ),
@@ -582,7 +583,7 @@ class _MapTabState extends State<_MapTab> with AutomaticKeepAliveClientMixin {
     super.build(context);
     final myLoc = widget.myLocation;
     if (myLoc == null || !myLoc.isValid) {
-      return const Center(child: Text('Set your location to view the map'));
+      return Center(child: Text(I18nService().t('aprs_set_location_for_map')));
     }
 
     final center = LatLng(myLoc.latitude, myLoc.longitude);
@@ -840,7 +841,7 @@ class _MapTabState extends State<_MapTab> with AutomaticKeepAliveClientMixin {
               const Divider(height: 16),
               Expanded(
                 child: stationPackets.isEmpty
-                    ? const Center(child: Text('No packets from this station'))
+                    ? Center(child: Text(I18nService().t('aprs_no_station_packets')))
                     : ListView.builder(
                         controller: scrollController,
                         itemCount: stationPackets.length,
@@ -943,7 +944,7 @@ class _StreamTab extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (packets.isEmpty) {
-      return const Center(child: Text('No packets received yet'));
+      return Center(child: Text(I18nService().t('aprs_no_packets')));
     }
 
     // Build filtered list: only packets with coordinates within radius.
@@ -957,7 +958,7 @@ class _StreamTab extends StatelessWidget {
     }
 
     if (filtered.isEmpty) {
-      return const Center(child: Text('No packets within this range'));
+      return Center(child: Text(I18nService().t('aprs_no_packets_in_range')));
     }
 
     return ListView.builder(
