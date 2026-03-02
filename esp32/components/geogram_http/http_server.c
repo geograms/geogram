@@ -166,15 +166,12 @@ static const char *APRS_PAGE_HTML =
     "<script>"
     "var lastId=0,myCall='',polling=null,busy=false;"
     "function esc(s){var d=document.createElement('div');d.textContent=s;return d.innerHTML}"
-    "function init(){"
-    "poll();polling=setInterval(poll,2000);"
-    "}"
     "function poll(){"
     "if(busy)return;busy=true;"
-    "fetch('/api/aprs?since='+lastId).then(r=>r.json()).then(d=>{"
+    "fetch('/api/aprs?since='+lastId).then(function(r){if(!r.ok)throw new Error(r.status);return r.json();}).then(function(d){"
     "if(d.messages&&d.messages.length){"
     "var el=document.getElementById('msgs');"
-    "d.messages.forEach(m=>{"
+    "d.messages.forEach(function(m){"
     "if(m.id>lastId)lastId=m.id;"
     "var div=document.createElement('div');"
     "div.className='msg'+(m.outgoing?' tx':'');"
@@ -187,30 +184,36 @@ static const char *APRS_PAGE_HTML =
     "});"
     "el.scrollTop=el.scrollHeight;"
     "}"
-    "return fetch('/api/aprs/status').then(r=>r.json()).then(s=>{"
-    "if(!myCall){myCall=s.callsign||'NOCALL';document.getElementById('info').textContent=myCall+' | '+(s.frequency||'?')+' MHz';}"
+    "return fetch('/api/aprs/status').then(function(r){if(!r.ok)throw new Error(r.status);return r.json();}).then(function(s){"
+    "if(!myCall||myCall==='NOCALL'){myCall=s.callsign||'NOCALL';document.getElementById('info').textContent=myCall+' | '+(s.frequency||'?')+' MHz';}"
     "document.getElementById('status').innerHTML="
     "'<span>RX: '+(s.total_rx||0)+'</span><span>TX: '+(s.total_tx||0)+'</span>'+"
     "'<span>'+(s.enabled?'Radio ON':'Radio OFF')+'</span>'+"
     "'<span>'+(s.tx_supported?'TX OK':'RX only')+'</span>';"
-    "}).catch(()=>{if(!myCall)document.getElementById('info').textContent='Status unavailable';});"
-    "}).catch(()=>{}).finally(()=>{busy=false;});"
+    "});"
+    "}).catch(function(){if(!myCall)document.getElementById('info').textContent='Status unavailable';}).then(function(){busy=false;});"
     "}"
     "function sendMsg(){"
     "var to=document.getElementById('to').value.trim().toUpperCase();"
     "var msg=document.getElementById('message').value.trim();"
     "if(!to||!msg)return false;"
+    "if(msg.length>67)msg=msg.substring(0,67);"
+    "if(!myCall||myCall==='NOCALL'){alert('Waiting for radio status');return false;}"
     "var btn=document.getElementById('btn');"
     "btn.disabled=true;btn.textContent='TX...';"
+    "clearInterval(polling);busy=true;"
     "fetch('/api/aprs',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},"
     "body:'from='+encodeURIComponent(myCall)+'&to='+encodeURIComponent(to)+'&message='+encodeURIComponent(msg)"
-    "}).then(r=>r.json()).then(d=>{"
+    "}).then(function(r){return r.json();}).then(function(d){"
     "if(d.ok){document.getElementById('message').value='';}"
     "else{alert('Send failed: '+(d.error||'unknown'));}"
-    "}).catch(e=>{alert('Error: '+e);}).finally(()=>{btn.disabled=false;btn.textContent='SEND';});"
+    "}).catch(function(e){alert('Error: '+e);}).then(function(){"
+    "btn.disabled=false;btn.textContent='SEND';"
+    "busy=false;poll();polling=setInterval(poll,2000);"
+    "});"
     "return false;"
     "}"
-    "init();"
+    "poll();polling=setInterval(poll,2000);"
     "</script></body></html>";
 
 #endif // MODEL_KV4P
@@ -752,6 +755,7 @@ static esp_err_t api_aprs_get_handler(httpd_req_t *req)
 
     httpd_resp_set_type(req, "application/json");
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_set_hdr(req, "Connection", "close");
     httpd_resp_send(req, buffer, len);
 
     free(buffer);
@@ -765,22 +769,28 @@ static esp_err_t api_aprs_post_handler(httpd_req_t *req)
 {
     char *content = malloc(512);
     if (!content) {
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Out of memory");
-        return ESP_FAIL;
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Connection", "close");
+        httpd_resp_send(req, "{\"ok\":false,\"error\":\"Out of memory\"}", -1);
+        return ESP_OK;
     }
 
     int total_len = req->content_len;
     if (total_len >= 512) {
         free(content);
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Content too long");
-        return ESP_FAIL;
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Connection", "close");
+        httpd_resp_send(req, "{\"ok\":false,\"error\":\"Content too long\"}", -1);
+        return ESP_OK;
     }
 
     int ret = httpd_req_recv(req, content, total_len);
     if (ret <= 0) {
         free(content);
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to receive data");
-        return ESP_FAIL;
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Connection", "close");
+        httpd_resp_send(req, "{\"ok\":false,\"error\":\"Failed to receive data\"}", -1);
+        return ESP_OK;
     }
     content[total_len] = '\0';
 
@@ -790,18 +800,24 @@ static esp_err_t api_aprs_post_handler(httpd_req_t *req)
 
     if (!extract_form_value(content, "from", from, sizeof(from)) || from[0] == '\0') {
         free(content);
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "{\"error\":\"Missing 'from' parameter\"}");
-        return ESP_FAIL;
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Connection", "close");
+        httpd_resp_send(req, "{\"ok\":false,\"error\":\"Missing 'from'\"}", -1);
+        return ESP_OK;
     }
     if (!extract_form_value(content, "to", to, sizeof(to)) || to[0] == '\0') {
         free(content);
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "{\"error\":\"Missing 'to' parameter\"}");
-        return ESP_FAIL;
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Connection", "close");
+        httpd_resp_send(req, "{\"ok\":false,\"error\":\"Missing 'to'\"}", -1);
+        return ESP_OK;
     }
     if (!extract_form_value(content, "message", message, sizeof(message))) {
         free(content);
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "{\"error\":\"Missing 'message' parameter\"}");
-        return ESP_FAIL;
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Connection", "close");
+        httpd_resp_send(req, "{\"ok\":false,\"error\":\"Missing 'message'\"}", -1);
+        return ESP_OK;
     }
 
     free(content);
@@ -810,6 +826,7 @@ static esp_err_t api_aprs_post_handler(httpd_req_t *req)
     sa818_radio_handle_t radio = model_get_sa818_radio();
     if (!radio || !s_aprs_tx_queue) {
         httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Connection", "close");
         httpd_resp_send(req, "{\"ok\":false,\"error\":\"Radio not available\"}", -1);
         return ESP_OK;
     }
@@ -825,6 +842,7 @@ static esp_err_t api_aprs_post_handler(httpd_req_t *req)
 
         if (xQueueSend(s_aprs_tx_queue, &item, 0) != pdTRUE) {
             httpd_resp_set_type(req, "application/json");
+            httpd_resp_set_hdr(req, "Connection", "close");
             httpd_resp_send(req, "{\"ok\":false,\"error\":\"TX queue full\"}", -1);
             return ESP_OK;
         }
@@ -835,6 +853,7 @@ static esp_err_t api_aprs_post_handler(httpd_req_t *req)
 
     httpd_resp_set_type(req, "application/json");
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_set_hdr(req, "Connection", "close");
     httpd_resp_send(req, "{\"ok\":true}", 11);
     return ESP_OK;
 }
@@ -877,6 +896,7 @@ static esp_err_t api_aprs_status_get_handler(httpd_req_t *req)
 
     httpd_resp_set_type(req, "application/json");
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_set_hdr(req, "Connection", "close");
     httpd_resp_send(req, buf, len);
     return ESP_OK;
 }
