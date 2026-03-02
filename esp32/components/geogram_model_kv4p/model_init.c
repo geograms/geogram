@@ -8,6 +8,7 @@
 static const char *TAG = "model_init";
 static sa818_handle_t s_sa818 = NULL;
 static sa818_radio_handle_t s_sa818_radio = NULL;
+static esp_err_t s_radio_init_err = ESP_ERR_NOT_FINISHED;
 
 sa818_handle_t model_get_sa818(void)
 {
@@ -19,25 +20,18 @@ sa818_radio_handle_t model_get_sa818_radio(void)
     return s_sa818_radio;
 }
 
-esp_err_t model_init(void)
+esp_err_t model_get_radio_init_error(void)
 {
-    ESP_LOGI(TAG, "Initializing %s (%s)", MODEL_NAME, MODEL_VARIANT);
-    ESP_LOGI(TAG, "ESP32 LX6 @ 240MHz, 520KB SRAM, 4MB Flash");
-
-    // Initialize NVS (required for WiFi and persistent settings)
-    esp_err_t ret = nvs_flash_init();
-    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-        ESP_LOGW(TAG, "NVS partition was truncated, erasing...");
-        ESP_ERROR_CHECK(nvs_flash_erase());
-        ret = nvs_flash_init();
-    }
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to initialize NVS: %s", esp_err_to_name(ret));
-        return ret;
-    }
-    ESP_LOGI(TAG, "NVS initialized");
+    return s_radio_init_err;
+}
 
 #if HAS_SA818
+static esp_err_t init_sa818_radio(void)
+{
+    if (s_sa818_radio != NULL) {
+        return ESP_OK;  // already initialized
+    }
+
     sa818_radio_config_t radio_cfg = {
         .sa818 = {
             .uart_port = SA818_UART_PORT,
@@ -61,24 +55,64 @@ esp_err_t model_init(void)
         .audio_sample_rate_hz = 9600,
     };
 
-    ret = sa818_radio_create(&radio_cfg, &s_sa818_radio);
+    esp_err_t ret = sa818_radio_create(&radio_cfg, &s_sa818_radio);
+    s_radio_init_err = ret;
     if (ret != ESP_OK) {
         ESP_LOGW(TAG, "SA818 radio init failed: %s", esp_err_to_name(ret));
-    } else {
-        s_sa818 = sa818_radio_get_modem(s_sa818_radio);
-        ESP_LOGI(TAG, "SA818 radio module ready (APRS freq %.3f MHz)",
-                 (double)sa818_radio_get_aprs_frequency(s_sa818_radio));
-
-        // Initialize APRS store and enable RX demodulator
-        ret = aprs_store_init();
-        if (ret != ESP_OK) {
-            ESP_LOGW(TAG, "APRS store init failed: %s", esp_err_to_name(ret));
-        } else {
-            sa818_radio_set_aprs_rx_callback(s_sa818_radio, aprs_store_rx_callback, NULL);
-            sa818_radio_start_audio_rx(s_sa818_radio, NULL, NULL);
-            ESP_LOGI(TAG, "APRS RX enabled — store + demodulator active");
-        }
+        return ret;
     }
+
+    s_sa818 = sa818_radio_get_modem(s_sa818_radio);
+    ESP_LOGI(TAG, "SA818 radio module ready (APRS freq %.3f MHz)",
+             (double)sa818_radio_get_aprs_frequency(s_sa818_radio));
+
+    // Initialize APRS store and enable RX demodulator
+    ret = aprs_store_init();
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "APRS store init failed: %s", esp_err_to_name(ret));
+    } else {
+        sa818_radio_set_aprs_rx_callback(s_sa818_radio, aprs_store_rx_callback, NULL);
+        sa818_radio_start_audio_rx(s_sa818_radio, NULL, NULL);
+        ESP_LOGI(TAG, "APRS RX enabled — store + demodulator active");
+    }
+
+    return ESP_OK;
+}
+#endif
+
+esp_err_t model_retry_radio_init(void)
+{
+#if HAS_SA818
+    if (s_sa818_radio != NULL) {
+        return ESP_OK;  // already working
+    }
+    ESP_LOGI(TAG, "Retrying SA818 radio initialization...");
+    return init_sa818_radio();
+#else
+    return ESP_ERR_NOT_SUPPORTED;
+#endif
+}
+
+esp_err_t model_init(void)
+{
+    ESP_LOGI(TAG, "Initializing %s (%s)", MODEL_NAME, MODEL_VARIANT);
+    ESP_LOGI(TAG, "ESP32 LX6 @ 240MHz, 520KB SRAM, 4MB Flash");
+
+    // Initialize NVS (required for WiFi and persistent settings)
+    esp_err_t ret = nvs_flash_init();
+    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        ESP_LOGW(TAG, "NVS partition was truncated, erasing...");
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        ret = nvs_flash_init();
+    }
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to initialize NVS: %s", esp_err_to_name(ret));
+        return ret;
+    }
+    ESP_LOGI(TAG, "NVS initialized");
+
+#if HAS_SA818
+    init_sa818_radio();
 #endif
 
     ESP_LOGI(TAG, "Board initialization complete");

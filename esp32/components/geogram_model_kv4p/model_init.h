@@ -29,6 +29,16 @@ sa818_handle_t model_get_sa818(void);
  */
 sa818_radio_handle_t model_get_sa818_radio(void);
 
+/**
+ * @brief Get the error code from the last SA818 radio init attempt.
+ */
+esp_err_t model_get_radio_init_error(void);
+
+/**
+ * @brief Retry SA818 radio initialization (if previous attempt failed).
+ */
+esp_err_t model_retry_radio_init(void);
+
 #ifdef __cplusplus
 }
 #endif

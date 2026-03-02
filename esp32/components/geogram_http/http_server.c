@@ -835,6 +835,54 @@ static esp_err_t api_aprs_status_get_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+/**
+ * @brief Handler for GET /api/radio/diag — radio diagnostic info
+ */
+static esp_err_t api_radio_diag_get_handler(httpd_req_t *req)
+{
+    char buf[256];
+    sa818_radio_handle_t radio = model_get_sa818_radio();
+    esp_err_t init_err = model_get_radio_init_error();
+
+    int len = snprintf(buf, sizeof(buf),
+        "{\"radio_handle\":%s,"
+        "\"init_error\":\"%s\","
+        "\"init_error_code\":%d,"
+        "\"powered\":%s,"
+        "\"frequency\":%.3f}",
+        radio ? "true" : "false",
+        esp_err_to_name(init_err),
+        (int)init_err,
+        (radio && sa818_radio_is_powered(radio)) ? "true" : "false",
+        radio ? (double)sa818_radio_get_aprs_frequency(radio) : 0.0);
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_send(req, buf, len);
+    return ESP_OK;
+}
+
+/**
+ * @brief Handler for POST /api/radio/retry — retry radio initialization
+ */
+static esp_err_t api_radio_retry_post_handler(httpd_req_t *req)
+{
+    char buf[128];
+    esp_err_t ret = model_retry_radio_init();
+    sa818_radio_handle_t radio = model_get_sa818_radio();
+
+    int len = snprintf(buf, sizeof(buf),
+        "{\"ok\":%s,\"error\":\"%s\",\"powered\":%s}",
+        ret == ESP_OK ? "true" : "false",
+        esp_err_to_name(ret),
+        (radio && sa818_radio_is_powered(radio)) ? "true" : "false");
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_send(req, buf, len);
+    return ESP_OK;
+}
+
 // ============================================================================
 // OTA Update Page HTML (KV4P only)
 // ============================================================================
@@ -1147,6 +1195,20 @@ static const httpd_uri_t uri_api_aprs_status = {
     .user_ctx = NULL
 };
 
+static const httpd_uri_t uri_api_radio_diag = {
+    .uri = "/api/radio/diag",
+    .method = HTTP_GET,
+    .handler = api_radio_diag_get_handler,
+    .user_ctx = NULL
+};
+
+static const httpd_uri_t uri_api_radio_retry = {
+    .uri = "/api/radio/retry",
+    .method = HTTP_POST,
+    .handler = api_radio_retry_post_handler,
+    .user_ctx = NULL
+};
+
 #endif // BOARD_MODEL == MODEL_KV4P
 
 // ============================================================================
@@ -1239,7 +1301,7 @@ esp_err_t http_server_start_ex(wifi_config_callback_t callback, bool enable_stat
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.lru_purge_enable = true;
     config.stack_size = 12288;
-    config.max_uri_handlers = 16;
+    config.max_uri_handlers = 18;
     config.max_open_sockets = 5;
     config.recv_wait_timeout = 5;
     config.send_wait_timeout = 5;
@@ -1276,6 +1338,8 @@ esp_err_t http_server_start_ex(wifi_config_callback_t callback, bool enable_stat
         httpd_register_uri_handler(s_server, &uri_api_aprs);
         httpd_register_uri_handler(s_server, &uri_api_aprs_send);
         httpd_register_uri_handler(s_server, &uri_api_aprs_status);
+        httpd_register_uri_handler(s_server, &uri_api_radio_diag);
+        httpd_register_uri_handler(s_server, &uri_api_radio_retry);
         ESP_LOGI(TAG, "APRS API endpoints registered");
 
         // Register OTA update endpoints
