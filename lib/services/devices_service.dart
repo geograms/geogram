@@ -28,6 +28,8 @@ import 'signing_service.dart';
 import '../api/endpoints/chat_api.dart';
 import 'debug_controller.dart';
 import 'config_service.dart';
+import '../teleport/aprs/aprs_service.dart';
+import '../teleport/aprs/blue_aprs_service.dart';
 import 'app_args.dart';
 import 'group_sync_service.dart';
 import 'bluetooth_classic_pairing_service.dart';
@@ -815,6 +817,12 @@ class DevicesService {
       LogService().log(
         'DevicesService: BLE messaging initialized successfully (isInitialized: ${_bleMessageService!.isInitialized})',
       );
+
+      // Activate BlueAPRS bridge if APRS is already enabled
+      if (AprsService().isEnabled) {
+        BlueAprsService().activate();
+        LogService().log('DevicesService: BlueAPRS bridge activated');
+      }
 
       // Start BLE foreground service on Android to keep BLE alive in background
       await BLEForegroundService().start();

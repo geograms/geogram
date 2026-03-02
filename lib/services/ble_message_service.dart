@@ -82,6 +82,27 @@ class BLEMessageService {
 
   static const String _blePlusPairChannel = '_ble_plus';
 
+  /// Whether the APRS capability is advertised in HELLO handshakes
+  bool _aprsCapabilityEnabled = false;
+
+  /// Enable APRS capability advertisement in BLE handshakes
+  void enableAprsCapability() {
+    _aprsCapabilityEnabled = true;
+    LogService().log('BLEMessageService: APRS capability enabled');
+  }
+
+  /// Check if a peer supports APRS
+  bool peerSupportsAprs(String deviceId) {
+    return _peerCapabilities[deviceId]?.contains('aprs') ?? false;
+  }
+
+  /// Get list of connected client device IDs that support APRS
+  List<String> get aprsCapableClients {
+    return connectedClients
+        .where((id) => peerSupportsAprs(id))
+        .toList();
+  }
+
   static final RegExp _macPattern = RegExp(
     r'^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$',
   );
@@ -90,6 +111,9 @@ class BLEMessageService {
     final capabilities = [..._baseCapabilities];
     if (_localClassicMac != null) {
       capabilities.add('bluetooth_classic:spp');
+    }
+    if (_aprsCapabilityEnabled) {
+      capabilities.add('aprs');
     }
     return capabilities;
   }

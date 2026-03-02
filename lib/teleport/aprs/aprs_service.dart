@@ -16,11 +16,13 @@ import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 
+import '../../services/ble_message_service.dart';
 import '../../services/location_provider_service.dart';
 import '../../services/log_service.dart';
 import '../../services/profile_storage.dart';
 import 'aprs_cache_service.dart';
 import 'aprs_is_client.dart';
+import 'blue_aprs_service.dart';
 import 'models/aprs_conversation.dart';
 import 'aprs_message_utils.dart';
 import 'models/aprs_packet.dart';
@@ -206,6 +208,11 @@ class AprsService {
     enable(callsign: callsign);
   }
 
+  /// Send a raw TNC2 line to APRS-IS (used by BlueAprsService).
+  void sendRaw(String tnc2Line) {
+    _client?.sendRaw(tnc2Line);
+  }
+
   /// Enable APRS operations — connects to APRS-IS using GPS position.
   /// Fire-and-forget safe: loads cached packets, connects, and emits events
   /// without blocking the caller.
@@ -218,6 +225,16 @@ class AprsService {
     // Persist enabled state, then load cache + connect in background
     _saveConfig();
     _initAsync(callsign);
+
+    // Activate BlueAPRS bridge if BLE is available
+    try {
+      final ble = BLEMessageService();
+      if (ble.isInitialized) {
+        BlueAprsService().activate();
+      }
+    } catch (_) {
+      // BLE not available — ignore
+    }
   }
 
   /// Async initialization — runs after enable() returns.
@@ -357,6 +374,7 @@ class AprsService {
   void disable() {
     if (!_enabled) return;
     _enabled = false;
+    BlueAprsService().deactivate();
     _stopUiTimer();
     _locationDispose?.call();
     _locationDispose = null;

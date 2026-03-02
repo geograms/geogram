@@ -48,6 +48,8 @@ This document catalogs reusable UI components available in the Geogram codebase.
 ### APRS Components
 - [APRS Message Utils](#aprsmessageutils) - Constants, text splitting, and display merging for APRS messages
 - [APRS Geo-Chat Panel](#aprs-geo-chat-panel) - Floating map overlay for sending/receiving position reports with comments
+- [BlueAprsService](#blueaprsservice) - APRS over BLE bridge (iGate + repeater)
+- [BLEAprsPayload](#bleaprspayload) - Structured APRS data model for BLE transport
 
 ### MeshCore Components
 - [MeshCore Protocol Codec](#meshcore-protocol-codec) - Pure Dart binary encode/decode for MeshCore BLE commands (CLI-reusable)
@@ -9953,6 +9955,44 @@ final echo = AprsService().sendGeoChat('Hello from here');
 
 - `aprs_geochat` — List all geo-chat messages (sender, lat, lon, comment, timestamp, isOutgoing, distKm)
 - `aprs_send_geochat` — Send a geo-chat message: `{"action":"aprs_send_geochat","text":"Hello"}`
+
+## BlueAprsService
+
+**File:** `lib/teleport/aprs/blue_aprs_service.dart`
+
+APRS over Bluetooth Low Energy bridge. Acts as both an iGate (BLE ↔ APRS-IS) and a repeater (BLE ↔ BLE). Reuses the existing BLE chat protocol with a `_aprs` system channel and `aprs` capability flag.
+
+**Key APIs:**
+- `BlueAprsService().activate()` / `.deactivate()` — Start/stop the bridge
+- `BlueAprsService().isActive` — Whether the bridge is running
+- `BlueAprsService().getStatus()` — Bridge status including connected BLE clients and stats
+- `BlueAprsService().injectBleAprsMessage()` — Simulate a BLE client sending APRS (debug API)
+- `BlueAprsService().injectAprsPacket()` — Simulate APRS-IS packet for BLE client (debug API)
+- `BlueAprsService().registerSimulatedClient()` — Register test BLE client (debug API)
+- `BlueAprsService().getClientInbox()` — Check simulated client inbox (debug API)
+
+**Architecture:**
+```
+BLE Clients ── BLEMessageService ── BlueAprsService ── AprsService ── APRS-IS
+                (channel: _aprs)      (bridge)          (existing)
+```
+
+**Rate limiting:** 1 message per 30 seconds per BLE device.
+
+## BLEAprsPayload
+
+**File:** `lib/models/ble_message.dart`
+
+Data class for structured APRS data carried inside `BLEChatPayload.content` (JSON string) on the `_aprs` system channel.
+
+**Fields:** `to`, `text`, `lat`, `lon`, `comment`, `type` (message/geochat/position), `from`, `msgId`
+
+**Usage:**
+```dart
+final payload = BLEAprsPayload(to: 'N0CALL', text: 'Hello', type: 'message');
+final error = payload.validate(); // null if valid
+final jsonStr = json.encode(payload.toJson());
+```
 
 ## MeshCore Protocol Codec
 

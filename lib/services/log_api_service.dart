@@ -30,6 +30,8 @@ import '../connection/connection_manager.dart';
 import '../teleport/aprs/aprs_is_client.dart';
 import '../teleport/aprs/aprs_message_utils.dart';
 import '../teleport/aprs/aprs_service.dart';
+import '../teleport/aprs/blue_aprs_service.dart';
+import '../models/ble_message.dart';
 import 'location_provider_service.dart';
 import '../teleport/telegram/telegram_service.dart';
 import '../teleport/signal/models/signal_auth_state.dart';
@@ -2113,6 +2115,11 @@ function cleanup() {
       // Handle APRS debug actions
       if (action.toLowerCase().startsWith('aprs_')) {
         return await _handleAprsAction(action.toLowerCase(), params, headers);
+      }
+
+      // Handle BlueAPRS debug actions
+      if (action.toLowerCase().startsWith('blue_aprs_')) {
+        return _handleBlueAprsAction(action.toLowerCase(), params, headers);
       }
 
       // Handle IRC debug actions
@@ -17301,6 +17308,147 @@ function cleanup() {
         sin(dLon / 2) * sin(dLon / 2);
     final c = 2 * atan2(sqrt(a), sqrt(1 - a));
     return earthRadius * c;
+  }
+
+  // ============================================================
+  // BlueAPRS Debug Actions
+  // ============================================================
+
+  shelf.Response _handleBlueAprsAction(
+    String action,
+    Map<String, dynamic> params,
+    Map<String, String> headers,
+  ) {
+    try {
+      final blueAprs = BlueAprsService();
+
+      switch (action) {
+        case 'blue_aprs_status':
+          return shelf.Response.ok(
+            jsonEncode({'success': true, ...blueAprs.getStatus()}),
+            headers: headers,
+          );
+
+        case 'blue_aprs_register_client':
+          final deviceId = params['deviceId'] as String?;
+          final callsign = params['callsign'] as String?;
+          if (deviceId == null || callsign == null) {
+            return shelf.Response.ok(
+              jsonEncode({'success': false, 'error': 'deviceId and callsign required'}),
+              headers: headers,
+            );
+          }
+          final result = blueAprs.registerSimulatedClient(
+            deviceId: deviceId,
+            callsign: callsign,
+          );
+          return shelf.Response.ok(
+            jsonEncode(result),
+            headers: headers,
+          );
+
+        case 'blue_aprs_inject_ble':
+          final callsign = params['callsign'] as String?;
+          final text = params['text'] as String? ?? '';
+          final type = params['type'] as String? ?? 'message';
+          final to = params['to'] as String?;
+          final lat = (params['lat'] as num?)?.toDouble();
+          final lon = (params['lon'] as num?)?.toDouble();
+          final comment = params['comment'] as String?;
+          if (callsign == null) {
+            return shelf.Response.ok(
+              jsonEncode({'success': false, 'error': 'callsign required'}),
+              headers: headers,
+            );
+          }
+          if (!blueAprs.isActive) {
+            // Auto-activate if APRS is enabled
+            if (AprsService().isEnabled) {
+              blueAprs.activate();
+            } else {
+              return shelf.Response.ok(
+                jsonEncode({'success': false, 'error': 'BlueAPRS not active (enable APRS first)'}),
+                headers: headers,
+              );
+            }
+          }
+          final payload = BLEAprsPayload(
+            to: to,
+            text: text,
+            type: type,
+            lat: lat,
+            lon: lon,
+            comment: comment,
+          );
+          final result = blueAprs.injectBleAprsMessage(
+            callsign: callsign,
+            payload: payload,
+          );
+          return shelf.Response.ok(
+            jsonEncode(result),
+            headers: headers,
+          );
+
+        case 'blue_aprs_inject_aprs':
+          final from = params['from'] as String?;
+          final to = params['to'] as String?;
+          final text = params['text'] as String?;
+          final lat = (params['lat'] as num?)?.toDouble();
+          final lon = (params['lon'] as num?)?.toDouble();
+          if (from == null || to == null || text == null) {
+            return shelf.Response.ok(
+              jsonEncode({'success': false, 'error': 'from, to, and text required'}),
+              headers: headers,
+            );
+          }
+          if (!blueAprs.isActive) {
+            if (AprsService().isEnabled) {
+              blueAprs.activate();
+            } else {
+              return shelf.Response.ok(
+                jsonEncode({'success': false, 'error': 'BlueAPRS not active (enable APRS first)'}),
+                headers: headers,
+              );
+            }
+          }
+          final result = blueAprs.injectAprsPacket(
+            from: from,
+            to: to,
+            text: text,
+            lat: lat,
+            lon: lon,
+          );
+          return shelf.Response.ok(
+            jsonEncode(result),
+            headers: headers,
+          );
+
+        case 'blue_aprs_client_inbox':
+          final deviceId = params['deviceId'] as String?;
+          if (deviceId == null) {
+            return shelf.Response.ok(
+              jsonEncode({'success': false, 'error': 'deviceId required'}),
+              headers: headers,
+            );
+          }
+          final result = blueAprs.getClientInbox(deviceId);
+          return shelf.Response.ok(
+            jsonEncode(result),
+            headers: headers,
+          );
+
+        default:
+          return shelf.Response.ok(
+            jsonEncode({'success': false, 'error': 'Unknown BlueAPRS action: $action'}),
+            headers: headers,
+          );
+      }
+    } catch (e) {
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'success': false, 'error': e.toString()}),
+        headers: headers,
+      );
+    }
   }
 
   // ============================================================

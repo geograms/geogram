@@ -3745,6 +3745,59 @@ curl -X POST http://localhost:3456/api/debug \
   -d '{"action": "profile_delete", "callsign": "X1FART"}'
 ```
 
+### BlueAPRS Debug Actions
+
+BlueAPRS provides APRS over Bluetooth Low Energy. These debug actions test the iGate (BLE ↔ APRS-IS) and repeater (BLE ↔ BLE) bridge using simulated BLE clients.
+
+```bash
+# Get BlueAPRS bridge status
+curl -s localhost:3456/api/debug -d '{"action":"blue_aprs_status"}'
+# → {active, bleClients: [{deviceId, callsign}], stats: {txCount, rxCount, repeatCount}}
+
+# Register a simulated BLE client (no real Bluetooth needed)
+curl -s localhost:3456/api/debug -d '{
+  "action": "blue_aprs_register_client",
+  "deviceId": "sim-ble-1",
+  "callsign": "BLE1-5"
+}'
+
+# Simulate BLE client sending directed APRS message (iGate TX)
+curl -s localhost:3456/api/debug -d '{
+  "action": "blue_aprs_inject_ble",
+  "callsign": "BLE1-5",
+  "to": "N0CALL",
+  "text": "Hello from BlueAPRS",
+  "type": "message"
+}'
+
+# Simulate BLE client sending geochat (iGate TX)
+curl -s localhost:3456/api/debug -d '{
+  "action": "blue_aprs_inject_ble",
+  "callsign": "BLE1-5",
+  "type": "geochat",
+  "text": "Position report via BLE",
+  "lat": 38.72,
+  "lon": -9.14
+}'
+
+# Simulate APRS-IS packet arriving for BLE client (iGate RX)
+curl -s localhost:3456/api/debug -d '{
+  "action": "blue_aprs_inject_aprs",
+  "from": "W5XYZ-9",
+  "to": "BLE1-5",
+  "text": "Reply from APRS network"
+}'
+
+# Check simulated BLE client inbox
+curl -s localhost:3456/api/debug -d '{
+  "action": "blue_aprs_client_inbox",
+  "deviceId": "sim-ble-1"
+}'
+# → {success, messages: [{from, to, text, type, timestamp}]}
+```
+
+**Automated test:** `dart run tests/blue_aprs_test.dart`
+
 ---
 
 ## AT Protocol PDS

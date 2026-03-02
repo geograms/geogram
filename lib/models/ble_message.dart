@@ -307,6 +307,87 @@ class BLEMessageId {
   }
 }
 
+/// Structured APRS data carried inside BLEChatPayload.content (JSON string)
+/// on the `_aprs` system channel.
+class BLEAprsPayload {
+  /// Destination callsign or "#tag" (null for position-only reports)
+  String? to;
+
+  /// Message body (≤67 chars for messages, ≤107 chars for position comments)
+  String text;
+
+  /// Optional position
+  double? lat, lon;
+
+  /// Position comment (≤107 chars)
+  String? comment;
+
+  /// "message" | "geochat" | "position"
+  String type;
+
+  /// Source callsign (set on RX path only)
+  String? from;
+
+  /// APRS message ID (for ACK tracking)
+  String? msgId;
+
+  BLEAprsPayload({
+    this.to,
+    required this.text,
+    this.lat,
+    this.lon,
+    this.comment,
+    this.type = 'message',
+    this.from,
+    this.msgId,
+  });
+
+  factory BLEAprsPayload.fromJson(Map<String, dynamic> json) {
+    return BLEAprsPayload(
+      to: json['to'] as String?,
+      text: json['text'] as String? ?? '',
+      lat: (json['lat'] as num?)?.toDouble(),
+      lon: (json['lon'] as num?)?.toDouble(),
+      comment: json['comment'] as String?,
+      type: json['type'] as String? ?? 'message',
+      from: json['from'] as String?,
+      msgId: json['msgId'] as String?,
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    final result = <String, dynamic>{
+      'text': text,
+      'type': type,
+    };
+    if (to != null) result['to'] = to;
+    if (lat != null) result['lat'] = lat;
+    if (lon != null) result['lon'] = lon;
+    if (comment != null) result['comment'] = comment;
+    if (from != null) result['from'] = from;
+    if (msgId != null) result['msgId'] = msgId;
+    return result;
+  }
+
+  /// Returns null if valid, error string if not.
+  String? validate() {
+    if (type == 'message') {
+      if (to == null || to!.isEmpty) return 'message requires "to" field';
+      if (text.length > 67) return 'message text exceeds 67 chars';
+    } else if (type == 'geochat') {
+      if (text.length > 107) return 'geochat text exceeds 107 chars';
+    } else if (type == 'position') {
+      if (lat == null || lon == null) return 'position requires lat/lon';
+      if (comment != null && comment!.length > 107) {
+        return 'position comment exceeds 107 chars';
+      }
+    } else {
+      return 'unknown type: $type (expected message, geochat, or position)';
+    }
+    return null;
+  }
+}
+
 /// Builder for common message types
 class BLEMessageBuilder {
   /// Create a HELLO message
