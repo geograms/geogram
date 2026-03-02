@@ -3,7 +3,7 @@
 # Geogram ESP32 Firmware Upload
 # Builds firmware via build.sh, then flashes the selected target
 # Usage: ./upload.sh [-e ENV]   (non-interactive, specific target)
-#        ./upload.sh            (interactive menu)
+#        ./upload.sh            (interactive menu — asks once, builds + flashes)
 # =============================================================================
 
 set -e
@@ -22,13 +22,9 @@ else
     exit 1
 fi
 
-# Pass all arguments through to build.sh
-echo "=== Step 1: Build firmware ==="
-"$SCRIPT_DIR/build.sh" "$@"
-
-# Determine which environment was built so we can flash it
-# Parse args the same way build.sh does to find the target
+# Parse -e ENV from arguments
 ENV=""
+EXTRA_ARGS=()
 while [[ $# -gt 0 ]]; do
     case $1 in
         --env|-e)
@@ -37,17 +33,18 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         *)
+            EXTRA_ARGS+=("$1")
             shift
             ;;
     esac
 done
 
+# If no -e given, ask the user once and reuse for both build and flash
 if [ -z "$ENV" ]; then
-    # Interactive mode — ask which target to flash
     declare -A TARGETS
     TARGETS=(
-        [1]="esp32s3_epaper_1in54|ESP32-S3 ePaper 1.54\""
-        [2]="esp32_generic|ESP32 Generic"
+        [1]="esp32s3_epaper_1in54|ESP32-S3 ePaper 1.54\" (Waveshare)"
+        [2]="esp32_generic|ESP32 Generic (no display)"
         [3]="esp32c3_mini|ESP32-C3 Mini"
         [4]="kv4p|KV4P-HT (SA818 radio)"
         [5]="heltec_v1|Heltec WiFi LoRa 32 V1"
@@ -56,29 +53,26 @@ if [ -z "$ENV" ]; then
     )
 
     echo ""
-    echo "=== Step 2: Flash firmware ==="
+    echo "================================================"
+    echo "  Geogram ESP32 Build + Flash"
+    echo "================================================"
     echo ""
-    echo "Which target did you just build?"
+    echo "Available targets:"
     echo ""
     for i in $(seq 1 ${#TARGETS[@]}); do
         IFS='|' read -r env name <<< "${TARGETS[$i]}"
-        # Only show targets that have a built firmware
-        if [ -f ".pio/build/${env}/firmware.bin" ]; then
-            printf "  %d) %s  [firmware ready]\n" "$i" "$name"
-        else
-            printf "  %d) %s  [not built]\n" "$i" "$name"
-        fi
+        printf "  %d) %s\n" "$i" "$name"
     done
-    echo "  q) Quit (skip flash)"
+    echo "  q) Quit"
     echo ""
-    read -rp "Select target to flash [1-${#TARGETS[@]}/q]: " choice
+    read -rp "Select target [1-${#TARGETS[@]}/q]: " choice
 
     case $choice in
         [1-7])
             IFS='|' read -r ENV name <<< "${TARGETS[$choice]}"
             ;;
         q|Q)
-            echo "Build done, skipping flash."
+            echo "Bye."
             exit 0
             ;;
         *)
@@ -88,6 +82,13 @@ if [ -z "$ENV" ]; then
     esac
 fi
 
+# Step 1: Build
+echo ""
+echo "=== Step 1: Build firmware ($ENV) ==="
+echo ""
+"$SCRIPT_DIR/build.sh" -e "$ENV" "${EXTRA_ARGS[@]}"
+
+# Step 2: Flash
 FIRMWARE=".pio/build/${ENV}/firmware.bin"
 if [ ! -f "$FIRMWARE" ]; then
     echo "Error: Firmware not found at $FIRMWARE"
@@ -96,11 +97,8 @@ if [ ! -f "$FIRMWARE" ]; then
 fi
 
 echo ""
-echo "=== Step 2: Flash firmware ==="
-echo "  Environment: $ENV"
-echo "  Firmware: $FIRMWARE"
+echo "=== Step 2: Flash firmware ($ENV) ==="
 echo ""
-
 $PIO run -e "$ENV" --target upload
 
 echo ""
