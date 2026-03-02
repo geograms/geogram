@@ -69,6 +69,7 @@
     #include "model_config.h"
     #include "model_init.h"
     #include "wifi_bsp.h"
+    #include "esp_wifi.h"
     #include "http_server.h"
     #if HAS_LED
     #include "led_bsp.h"
@@ -997,6 +998,31 @@ extern "C" void app_main(void)
         ret = geogram_wifi_start_ap(&ap_config);
         if (ret == ESP_OK) {
             ESP_LOGI(TAG, "WiFi AP started: geogram");
+
+            // Try to auto-connect STA with saved WiFi credentials
+            {
+                char saved_ssid[33] = {0};
+                char saved_pass[65] = {0};
+                if (geogram_wifi_load_credentials(saved_ssid, saved_pass) == ESP_OK
+                    && strlen(saved_ssid) > 0) {
+                    ESP_LOGI(TAG, "Found saved WiFi credentials, connecting to: %s", saved_ssid);
+                    esp_wifi_set_mode(WIFI_MODE_APSTA);
+
+                    wifi_config_t sta_cfg = {};
+                    strncpy((char *)sta_cfg.sta.ssid, saved_ssid, sizeof(sta_cfg.sta.ssid) - 1);
+                    strncpy((char *)sta_cfg.sta.password, saved_pass, sizeof(sta_cfg.sta.password) - 1);
+
+                    esp_err_t sta_err = esp_wifi_set_config(WIFI_IF_STA, &sta_cfg);
+                    if (sta_err == ESP_OK) {
+                        sta_err = esp_wifi_connect();
+                    }
+                    if (sta_err == ESP_OK) {
+                        ESP_LOGI(TAG, "WiFi STA connecting to %s (AP still active)", saved_ssid);
+                    } else {
+                        ESP_LOGW(TAG, "WiFi STA connect failed: %s", esp_err_to_name(sta_err));
+                    }
+                }
+            }
 
             // Start DNS server for captive portal
             uint32_t ap_ip = 0;
