@@ -12,6 +12,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../services/i18n_service.dart';
 import '../../services/log_service.dart';
+import '../../widgets/transcribe_button_widget.dart';
 import '../models/ndf_document.dart';
 import '../models/todo_content.dart';
 import '../services/ndf_service.dart';
@@ -128,184 +129,50 @@ class _TodoEditorPageState extends State<TodoEditorPage> {
   }
 
   void _addItem() async {
-    final titleController = TextEditingController();
-    final descController = TextEditingController();
-    var priority = TodoPriority.normal;
-
-    final result = await showDialog<bool>(
-      context: context,
-      builder: (context) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
-          title: Text(_i18n.t('work_todo_add_item')),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: titleController,
-                decoration: InputDecoration(
-                  labelText: _i18n.t('work_todo_item_title'),
-                  border: const OutlineInputBorder(),
-                ),
-                autofocus: true,
-                textCapitalization: TextCapitalization.sentences,
-                textInputAction: TextInputAction.next,
-              ),
-              const SizedBox(height: 16),
-              TextField(
-                controller: descController,
-                decoration: InputDecoration(
-                  labelText: _i18n.t('work_todo_item_description'),
-                  border: const OutlineInputBorder(),
-                ),
-                maxLines: 3,
-                textCapitalization: TextCapitalization.sentences,
-              ),
-              const SizedBox(height: 16),
-              DropdownButtonFormField<TodoPriority>(
-                value: priority,
-                decoration: InputDecoration(
-                  labelText: _i18n.t('work_todo_priority'),
-                  border: const OutlineInputBorder(),
-                ),
-                items: TodoPriority.values.map((p) {
-                  return DropdownMenuItem(
-                    value: p,
-                    child: Row(
-                      children: [
-                        Icon(
-                          _getPriorityIcon(p),
-                          size: 18,
-                          color: _getPriorityColor(p),
-                        ),
-                        const SizedBox(width: 8),
-                        Text(_getPriorityLabel(p)),
-                      ],
-                    ),
-                  );
-                }).toList(),
-                onChanged: (val) {
-                  if (val != null) {
-                    setDialogState(() => priority = val);
-                  }
-                },
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: Text(_i18n.t('cancel')),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: Text(_i18n.t('save')),
-            ),
-          ],
+    final result = await Navigator.push<TodoItem>(
+      context,
+      MaterialPageRoute(
+        builder: (context) => _TodoItemFormPage(
+          i18n: _i18n,
+          title: _i18n.t('work_todo_add_item'),
+          getPriorityIcon: _getPriorityIcon,
+          getPriorityColor: _getPriorityColor,
+          getPriorityLabel: _getPriorityLabel,
         ),
       ),
     );
 
-    if (result == true && titleController.text.trim().isNotEmpty) {
-      final item = TodoItem.create(
-        title: titleController.text.trim(),
-        description: descController.text.trim().isNotEmpty
-            ? descController.text.trim()
-            : null,
-        priority: priority,
-      );
-
+    if (result != null) {
       setState(() {
-        _items.add(item);
-        _content?.addItem(item.id);
+        _items.add(result);
+        _content?.addItem(result.id);
         _hasChanges = true;
       });
     }
   }
 
   void _editItem(TodoItem item) async {
-    final titleController = TextEditingController(text: item.title);
-    final descController = TextEditingController(text: item.description ?? '');
-    var priority = item.priority;
-
-    final result = await showDialog<bool>(
-      context: context,
-      builder: (context) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
-          title: Text(_i18n.t('work_todo_edit_item')),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: titleController,
-                decoration: InputDecoration(
-                  labelText: _i18n.t('work_todo_item_title'),
-                  border: const OutlineInputBorder(),
-                ),
-                autofocus: true,
-                textCapitalization: TextCapitalization.sentences,
-              ),
-              const SizedBox(height: 16),
-              TextField(
-                controller: descController,
-                decoration: InputDecoration(
-                  labelText: _i18n.t('work_todo_item_description'),
-                  border: const OutlineInputBorder(),
-                ),
-                maxLines: 3,
-                textCapitalization: TextCapitalization.sentences,
-              ),
-              const SizedBox(height: 16),
-              DropdownButtonFormField<TodoPriority>(
-                value: priority,
-                decoration: InputDecoration(
-                  labelText: _i18n.t('work_todo_priority'),
-                  border: const OutlineInputBorder(),
-                ),
-                items: TodoPriority.values.map((p) {
-                  return DropdownMenuItem(
-                    value: p,
-                    child: Row(
-                      children: [
-                        Icon(
-                          _getPriorityIcon(p),
-                          size: 18,
-                          color: _getPriorityColor(p),
-                        ),
-                        const SizedBox(width: 8),
-                        Text(_getPriorityLabel(p)),
-                      ],
-                    ),
-                  );
-                }).toList(),
-                onChanged: (val) {
-                  if (val != null) {
-                    setDialogState(() => priority = val);
-                  }
-                },
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: Text(_i18n.t('cancel')),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: Text(_i18n.t('save')),
-            ),
-          ],
+    final result = await Navigator.push<TodoItem>(
+      context,
+      MaterialPageRoute(
+        builder: (context) => _TodoItemFormPage(
+          i18n: _i18n,
+          title: _i18n.t('work_todo_edit_item'),
+          initialTitle: item.title,
+          initialDescription: item.description,
+          initialPriority: item.priority,
+          getPriorityIcon: _getPriorityIcon,
+          getPriorityColor: _getPriorityColor,
+          getPriorityLabel: _getPriorityLabel,
         ),
       ),
     );
 
-    if (result == true && titleController.text.trim().isNotEmpty) {
+    if (result != null) {
       setState(() {
-        item.title = titleController.text.trim();
-        item.description = descController.text.trim().isNotEmpty
-            ? descController.text.trim()
-            : null;
-        item.priority = priority;
+        item.title = result.title;
+        item.description = result.description;
+        item.priority = result.priority;
         _hasChanges = true;
       });
     }
@@ -1025,6 +892,160 @@ class _TodoEditorPageState extends State<TodoEditorPage> {
           onRemoveUpdate: (updateId) => _removeUpdate(item, updateId),
         );
       },
+    );
+  }
+}
+
+/// Full-screen form page for adding/editing a TODO item
+class _TodoItemFormPage extends StatefulWidget {
+  final I18nService i18n;
+  final String title;
+  final String? initialTitle;
+  final String? initialDescription;
+  final TodoPriority? initialPriority;
+  final IconData Function(TodoPriority) getPriorityIcon;
+  final Color Function(TodoPriority) getPriorityColor;
+  final String Function(TodoPriority) getPriorityLabel;
+
+  const _TodoItemFormPage({
+    required this.i18n,
+    required this.title,
+    this.initialTitle,
+    this.initialDescription,
+    this.initialPriority,
+    required this.getPriorityIcon,
+    required this.getPriorityColor,
+    required this.getPriorityLabel,
+  });
+
+  @override
+  State<_TodoItemFormPage> createState() => _TodoItemFormPageState();
+}
+
+class _TodoItemFormPageState extends State<_TodoItemFormPage> {
+  late final TextEditingController _titleController;
+  late final TextEditingController _descController;
+  late TodoPriority _priority;
+
+  @override
+  void initState() {
+    super.initState();
+    _titleController = TextEditingController(text: widget.initialTitle ?? '');
+    _descController = TextEditingController(text: widget.initialDescription ?? '');
+    _priority = widget.initialPriority ?? TodoPriority.normal;
+  }
+
+  @override
+  void dispose() {
+    _titleController.dispose();
+    _descController.dispose();
+    super.dispose();
+  }
+
+  void _save() {
+    if (_titleController.text.trim().isEmpty) return;
+
+    final item = TodoItem.create(
+      title: _titleController.text.trim(),
+      description: _descController.text.trim().isNotEmpty
+          ? _descController.text.trim()
+          : null,
+      priority: _priority,
+    );
+
+    Navigator.pop(context, item);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(widget.title),
+        actions: [
+          FilledButton(
+            onPressed: _save,
+            child: Text(widget.i18n.t('save')),
+          ),
+          const SizedBox(width: 8),
+        ],
+      ),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            TextField(
+              controller: _titleController,
+              decoration: InputDecoration(
+                labelText: widget.i18n.t('work_todo_item_title'),
+                border: const OutlineInputBorder(),
+                suffixIcon: TranscribeButtonWidget(
+                  i18n: widget.i18n,
+                  onTranscribed: (text) {
+                    if (_titleController.text.isEmpty) {
+                      _titleController.text = text;
+                    } else {
+                      _titleController.text += ' $text';
+                    }
+                  },
+                ),
+              ),
+              autofocus: true,
+              textCapitalization: TextCapitalization.sentences,
+              textInputAction: TextInputAction.next,
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: _descController,
+              decoration: InputDecoration(
+                labelText: widget.i18n.t('work_todo_item_description'),
+                border: const OutlineInputBorder(),
+                suffixIcon: TranscribeButtonWidget(
+                  i18n: widget.i18n,
+                  onTranscribed: (text) {
+                    if (_descController.text.isEmpty) {
+                      _descController.text = text;
+                    } else {
+                      _descController.text += ' $text';
+                    }
+                  },
+                ),
+              ),
+              maxLines: 5,
+              textCapitalization: TextCapitalization.sentences,
+            ),
+            const SizedBox(height: 16),
+            DropdownButtonFormField<TodoPriority>(
+              value: _priority,
+              decoration: InputDecoration(
+                labelText: widget.i18n.t('work_todo_priority'),
+                border: const OutlineInputBorder(),
+              ),
+              items: TodoPriority.values.map((p) {
+                return DropdownMenuItem(
+                  value: p,
+                  child: Row(
+                    children: [
+                      Icon(
+                        widget.getPriorityIcon(p),
+                        size: 18,
+                        color: widget.getPriorityColor(p),
+                      ),
+                      const SizedBox(width: 8),
+                      Text(widget.getPriorityLabel(p)),
+                    ],
+                  ),
+                );
+              }).toList(),
+              onChanged: (val) {
+                if (val != null) {
+                  setState(() => _priority = val);
+                }
+              },
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
