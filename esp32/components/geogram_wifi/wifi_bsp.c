@@ -53,7 +53,7 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
                 s_current_ip = 0;
 
                 // Auto-reconnect if we were in STA mode and haven't exceeded retries
-                if (s_sta_connecting && !s_ap_active) {
+                if (s_sta_connecting) {
                     s_retry_count++;
                     if (s_retry_count <= MAX_RETRY_COUNT) {
                         ESP_LOGI(TAG, "Reconnecting... (attempt %d/%d)", s_retry_count, MAX_RETRY_COUNT);
@@ -402,5 +402,61 @@ esp_err_t geogram_wifi_load_credentials(char *ssid, char *password)
 
     nvs_close(nvs);
     ESP_LOGI(TAG, "Loaded WiFi credentials for SSID: %s", ssid);
+    return ESP_OK;
+}
+
+esp_err_t geogram_wifi_connect_sta(const char *ssid, const char *password)
+{
+    if (!s_initialized) {
+        ESP_LOGE(TAG, "WiFi not initialized");
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (ssid == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    ESP_LOGI(TAG, "Connecting STA to %s (keeping AP active)", ssid);
+
+    // Disconnect and stop WiFi driver cleanly
+    esp_wifi_disconnect();
+    esp_wifi_stop();
+
+    // Set AP+STA mode and configure STA interface
+    esp_err_t err = esp_wifi_set_mode(WIFI_MODE_APSTA);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to set APSTA mode: %s", esp_err_to_name(err));
+        // Try to restart in AP-only mode so portal stays up
+        esp_wifi_set_mode(WIFI_MODE_AP);
+        esp_wifi_start();
+        return err;
+    }
+
+    wifi_config_t sta_cfg = {0};
+    strncpy((char *)sta_cfg.sta.ssid, ssid, sizeof(sta_cfg.sta.ssid) - 1);
+    if (password != NULL) {
+        strncpy((char *)sta_cfg.sta.password, password, sizeof(sta_cfg.sta.password) - 1);
+    }
+
+    err = esp_wifi_set_config(WIFI_IF_STA, &sta_cfg);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to set STA config: %s", esp_err_to_name(err));
+        esp_wifi_set_mode(WIFI_MODE_AP);
+        esp_wifi_start();
+        return err;
+    }
+
+    // Mark STA as connecting so the event handler will auto-reconnect
+    s_sta_connecting = true;
+    s_retry_count = 0;
+
+    // Restart driver — AP config is retained by ESP-IDF across stop/start.
+    // WIFI_EVENT_STA_START will fire, and the event handler calls esp_wifi_connect().
+    err = esp_wifi_start();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to start WiFi: %s", esp_err_to_name(err));
+        s_sta_connecting = false;
+        return err;
+    }
+
     return ESP_OK;
 }

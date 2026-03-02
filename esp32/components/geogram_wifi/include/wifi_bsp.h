@@ -138,6 +138,18 @@ esp_err_t geogram_wifi_get_ap_ip_addr(uint32_t *ip_addr);
  */
 esp_err_t geogram_wifi_load_credentials(char *ssid, char *password);
 
+/**
+ * @brief Connect STA while keeping AP running (AP+STA mode)
+ *
+ * Properly restarts the WiFi driver to switch from AP to AP+STA mode.
+ * The event handler will call esp_wifi_connect() on STA_START.
+ *
+ * @param ssid Network SSID
+ * @param password Network password (NULL for open networks)
+ * @return esp_err_t ESP_OK on success
+ */
+esp_err_t geogram_wifi_connect_sta(const char *ssid, const char *password);
+
 #ifdef __cplusplus
 }
 #endif

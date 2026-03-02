@@ -1005,22 +1005,8 @@ extern "C" void app_main(void)
                 char saved_pass[65] = {0};
                 if (geogram_wifi_load_credentials(saved_ssid, saved_pass) == ESP_OK
                     && strlen(saved_ssid) > 0) {
-                    ESP_LOGI(TAG, "Found saved WiFi credentials, connecting to: %s", saved_ssid);
-                    esp_wifi_set_mode(WIFI_MODE_APSTA);
-
-                    wifi_config_t sta_cfg = {};
-                    strncpy((char *)sta_cfg.sta.ssid, saved_ssid, sizeof(sta_cfg.sta.ssid) - 1);
-                    strncpy((char *)sta_cfg.sta.password, saved_pass, sizeof(sta_cfg.sta.password) - 1);
-
-                    esp_err_t sta_err = esp_wifi_set_config(WIFI_IF_STA, &sta_cfg);
-                    if (sta_err == ESP_OK) {
-                        sta_err = esp_wifi_connect();
-                    }
-                    if (sta_err == ESP_OK) {
-                        ESP_LOGI(TAG, "WiFi STA connecting to %s (AP still active)", saved_ssid);
-                    } else {
-                        ESP_LOGW(TAG, "WiFi STA connect failed: %s", esp_err_to_name(sta_err));
-                    }
+                    ESP_LOGI(TAG, "Auto-connecting to saved WiFi: %s", saved_ssid);
+                    geogram_wifi_connect_sta(saved_ssid, saved_pass);
                 }
             }
 
