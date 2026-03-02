@@ -34,6 +34,8 @@
 #include "esp_ota_ops.h"
 #include "esp_partition.h"
 #include "wifi_bsp.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
 #endif
 
 static const char *TAG = "http_server";
@@ -41,6 +43,43 @@ static const char *TAG = "http_server";
 static httpd_handle_t s_server = NULL;
 static wifi_config_callback_t s_config_callback = NULL;
 static bool s_station_api_enabled = false;
+
+#if BOARD_MODEL == MODEL_KV4P
+// APRS TX queue — offloads radio transmission from the HTTP handler task
+typedef struct {
+    char from[APRS_MAX_CALLSIGN_LEN];
+    char to[APRS_MAX_CALLSIGN_LEN];
+    char message[APRS_MAX_MESSAGE_LEN];
+} aprs_tx_item_t;
+
+static QueueHandle_t s_aprs_tx_queue = NULL;
+
+static void aprs_tx_task(void *arg)
+{
+    aprs_tx_item_t item;
+    while (true) {
+        if (xQueueReceive(s_aprs_tx_queue, &item, portMAX_DELAY) == pdTRUE) {
+            sa818_radio_handle_t radio = model_get_sa818_radio();
+            if (radio) {
+                esp_err_t err = sa818_radio_send_aprs_message(radio, item.from, item.to, item.message);
+                if (err != ESP_OK) {
+                    ESP_LOGW(TAG, "APRS TX failed: %s", esp_err_to_name(err));
+                }
+            }
+        }
+    }
+}
+
+static void aprs_tx_queue_init(void)
+{
+    if (s_aprs_tx_queue == NULL) {
+        s_aprs_tx_queue = xQueueCreate(4, sizeof(aprs_tx_item_t));
+        if (s_aprs_tx_queue) {
+            xTaskCreatePinnedToCore(aprs_tx_task, "aprs_tx", 8192, NULL, 5, NULL, 1);
+        }
+    }
+}
+#endif
 
 /**
  * @brief Escape a string for JSON (handles quotes, backslashes, control chars)
@@ -125,7 +164,7 @@ static const char *APRS_PAGE_HTML =
     "</form>"
     "<div class=\"nav\"><a href=\"/setup\">WiFi Setup</a> | <a href=\"/ota\">Firmware Update</a></div>"
     "<script>"
-    "var lastId=0,myCall='',polling=null;"
+    "var lastId=0,myCall='',polling=null,busy=false;"
     "function esc(s){var d=document.createElement('div');d.textContent=s;return d.innerHTML}"
     "function init(){"
     "fetch('/api/aprs/status').then(r=>r.json()).then(d=>{"
@@ -139,6 +178,7 @@ static const char *APRS_PAGE_HTML =
     "poll();polling=setInterval(poll,2000);"
     "}"
     "function poll(){"
+    "if(busy)return;busy=true;"
     "fetch('/api/aprs?since='+lastId).then(r=>r.json()).then(d=>{"
     "if(d.messages&&d.messages.length){"
     "var el=document.getElementById('msgs');"
@@ -154,7 +194,7 @@ static const char *APRS_PAGE_HTML =
     "});"
     "el.scrollTop=el.scrollHeight;"
     "}"
-    "}).catch(()=>{});"
+    "}).catch(()=>{}).finally(()=>{busy=false;});"
     "fetch('/api/aprs/status').then(r=>r.json()).then(s=>{"
     "document.getElementById('status').innerHTML="
     "'<span>RX: '+(s.total_rx||0)+'</span><span>TX: '+(s.total_tx||0)+'</span>'+"
@@ -167,11 +207,11 @@ static const char *APRS_PAGE_HTML =
     "var msg=document.getElementById('message').value.trim();"
     "if(!to||!msg)return false;"
     "var btn=document.getElementById('btn');"
-    "btn.disabled=true;btn.textContent='...';"
+    "btn.disabled=true;btn.textContent='TX...';"
     "fetch('/api/aprs',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},"
     "body:'from='+encodeURIComponent(myCall)+'&to='+encodeURIComponent(to)+'&message='+encodeURIComponent(msg)"
     "}).then(r=>r.json()).then(d=>{"
-    "if(d.ok){document.getElementById('message').value='';poll();}"
+    "if(d.ok){document.getElementById('message').value='';}"
     "else{alert('Send failed: '+(d.error||'unknown'));}"
     "}).catch(e=>{alert('Error: '+e);}).finally(()=>{btn.disabled=false;btn.textContent='SEND';});"
     "return false;"
@@ -772,19 +812,31 @@ static esp_err_t api_aprs_post_handler(httpd_req_t *req)
 
     free(content);
 
-    // Send via SA818 radio
+    // Queue TX for background task (don't block HTTP handler)
     sa818_radio_handle_t radio = model_get_sa818_radio();
-    if (radio) {
-        esp_err_t err = sa818_radio_send_aprs_message(radio, from, to, message);
-        if (err != ESP_OK) {
-            ESP_LOGW(TAG, "APRS TX failed: %s", esp_err_to_name(err));
+    if (!radio || !s_aprs_tx_queue) {
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req, "{\"ok\":false,\"error\":\"Radio not available\"}", -1);
+        return ESP_OK;
+    }
+
+    {
+        aprs_tx_item_t item;
+        strncpy(item.from, from, sizeof(item.from) - 1);
+        item.from[sizeof(item.from) - 1] = '\0';
+        strncpy(item.to, to, sizeof(item.to) - 1);
+        item.to[sizeof(item.to) - 1] = '\0';
+        strncpy(item.message, message, sizeof(item.message) - 1);
+        item.message[sizeof(item.message) - 1] = '\0';
+
+        if (xQueueSend(s_aprs_tx_queue, &item, 0) != pdTRUE) {
             httpd_resp_set_type(req, "application/json");
-            httpd_resp_send(req, "{\"ok\":false,\"error\":\"TX failed\"}", -1);
+            httpd_resp_send(req, "{\"ok\":false,\"error\":\"TX queue full\"}", -1);
             return ESP_OK;
         }
     }
 
-    // Store in APRS history
+    // Store in APRS history immediately (TX task handles radio)
     aprs_store_add_tx(from, to, message);
 
     httpd_resp_set_type(req, "application/json");
@@ -1334,7 +1386,8 @@ esp_err_t http_server_start_ex(wifi_config_callback_t callback, bool enable_stat
         httpd_register_uri_handler(s_server, &uri_api_status);
 
 #if BOARD_MODEL == MODEL_KV4P
-        // Register APRS API endpoints
+        // Register APRS API endpoints and start TX task
+        aprs_tx_queue_init();
         httpd_register_uri_handler(s_server, &uri_api_aprs);
         httpd_register_uri_handler(s_server, &uri_api_aprs_send);
         httpd_register_uri_handler(s_server, &uri_api_aprs_status);

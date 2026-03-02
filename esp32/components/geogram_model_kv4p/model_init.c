@@ -26,6 +26,8 @@ esp_err_t model_get_radio_init_error(void)
 }
 
 #if HAS_SA818
+static bool s_aprs_store_ready = false;
+
 static esp_err_t init_sa818_radio(void)
 {
     if (s_sa818_radio != NULL) {
@@ -66,14 +68,11 @@ static esp_err_t init_sa818_radio(void)
     ESP_LOGI(TAG, "SA818 radio module ready (APRS freq %.3f MHz)",
              (double)sa818_radio_get_aprs_frequency(s_sa818_radio));
 
-    // Initialize APRS store and enable RX demodulator
-    ret = aprs_store_init();
-    if (ret != ESP_OK) {
-        ESP_LOGW(TAG, "APRS store init failed: %s", esp_err_to_name(ret));
-    } else {
+    // Connect RX demodulator if APRS store is ready
+    if (s_aprs_store_ready) {
         sa818_radio_set_aprs_rx_callback(s_sa818_radio, aprs_store_rx_callback, NULL);
         sa818_radio_start_audio_rx(s_sa818_radio, NULL, NULL);
-        ESP_LOGI(TAG, "APRS RX enabled — store + demodulator active");
+        ESP_LOGI(TAG, "APRS RX enabled — demodulator active");
     }
 
     return ESP_OK;
@@ -112,6 +111,15 @@ esp_err_t model_init(void)
     ESP_LOGI(TAG, "NVS initialized");
 
 #if HAS_SA818
+    // Always initialize APRS store (web API needs it even without radio)
+    ret = aprs_store_init();
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "APRS store init failed: %s", esp_err_to_name(ret));
+    } else {
+        s_aprs_store_ready = true;
+    }
+
+    // Initialize SA818 radio (may fail transiently — retry via /api/radio/retry)
     init_sa818_radio();
 #endif
 
