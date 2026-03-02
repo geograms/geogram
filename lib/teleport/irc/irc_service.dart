@@ -93,6 +93,9 @@ class IrcService {
   // Batch SQLite writes — per-server queues
   static const Duration _writeFlushInterval = Duration(seconds: 2);
   static const int _writeFlushThreshold = 50;
+
+  /// System messages (join/part/quit) older than this are pruned from memory.
+  static const Duration _systemMessageMaxAge = Duration(hours: 12);
   final Map<String, List<IrcMessage>> _writeQueues = {};
   MonitoredAsyncPeriodicTimer? _writeTimer;
 
@@ -719,6 +722,10 @@ class IrcService {
     if (list.length > 5000) {
       list.removeRange(0, list.length - 5000);
     }
+
+    // Prune system messages (join/part/quit) older than 12 hours
+    final cutoff = DateTime.now().toUtc().subtract(_systemMessageMaxAge);
+    list.removeWhere((m) => m.isSystemMessage && m.timestamp.isBefore(cutoff));
 
     // Update channel's last message
     final ch = _channels[key];
