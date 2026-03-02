@@ -3750,9 +3750,21 @@ curl -X POST http://localhost:3456/api/debug \
 BlueAPRS provides APRS over Bluetooth Low Energy. These debug actions test the iGate (BLE ↔ APRS-IS) and repeater (BLE ↔ BLE) bridge using simulated BLE clients.
 
 ```bash
-# Get BlueAPRS bridge status
+# Get BlueAPRS bridge status (includes beacon state)
 curl -s localhost:3456/api/debug -d '{"action":"blue_aprs_status"}'
-# → {active, bleClients: [{deviceId, callsign}], stats: {txCount, rxCount, repeatCount}}
+# → {active, beaconEnabled, beaconIntervalSec, bleClients: [...], stats: {...}}
+
+# Enable/disable BlueAPRS bridge
+curl -s localhost:3456/api/debug -d '{"action":"blue_aprs_enable","enabled":true}'
+# → {success, blueAprsEnabled, active}
+
+# Control position beacon
+curl -s localhost:3456/api/debug -d '{
+  "action": "blue_aprs_beacon",
+  "enabled": true,
+  "intervalSec": 300
+}'
+# → {success, beaconEnabled, beaconIntervalSec, ...status}
 
 # Register a simulated BLE client (no real Bluetooth needed)
 curl -s localhost:3456/api/debug -d '{

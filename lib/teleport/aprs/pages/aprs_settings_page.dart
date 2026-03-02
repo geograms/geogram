@@ -9,6 +9,7 @@ import 'package:flutter/material.dart';
 
 import '../../../services/i18n_service.dart';
 import '../aprs_service.dart';
+import '../blue_aprs_service.dart';
 
 class AprsSettingsPage extends StatefulWidget {
   final String appPath;
@@ -121,6 +122,80 @@ class _AprsSettingsPageState extends State<AprsSettingsPage> {
                     ),
                   ),
                 )),
+
+          // BlueAPRS section
+          const SizedBox(height: 24),
+          const Divider(),
+          const SizedBox(height: 12),
+          Text(
+            I18nService().t('aprs_blue_aprs_title'),
+            style: theme.textTheme.titleMedium?.copyWith(
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            I18nService().t('aprs_blue_aprs_desc'),
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(height: 8),
+          SwitchListTile(
+            title: Text(I18nService().t('aprs_blue_aprs_enable')),
+            subtitle: Text(
+              aprs.isEnabled
+                  ? I18nService().t('aprs_blue_aprs_enable_desc')
+                  : I18nService().t('aprs_blue_aprs_requires_aprs'),
+            ),
+            value: aprs.blueAprsEnabled,
+            onChanged: aprs.isEnabled
+                ? (value) {
+                    aprs.blueAprsEnabled = value;
+                    setState(() {});
+                  }
+                : null,
+          ),
+          SwitchListTile(
+            title: Text(I18nService().t('aprs_blue_aprs_beacon')),
+            subtitle: Text(I18nService().t('aprs_blue_aprs_beacon_desc')),
+            value: aprs.blueAprsBeaconEnabled,
+            onChanged: aprs.blueAprsEnabled
+                ? (value) {
+                    aprs.blueAprsBeaconEnabled = value;
+                    setState(() {});
+                  }
+                : null,
+          ),
+          if (aprs.blueAprsBeaconEnabled)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Row(
+                children: [
+                  Text(
+                    I18nService().t('aprs_blue_aprs_beacon_interval'),
+                    style: theme.textTheme.bodyMedium,
+                  ),
+                  const SizedBox(width: 12),
+                  DropdownButton<int>(
+                    value: aprs.blueAprsBeaconIntervalSec,
+                    items: const [
+                      DropdownMenuItem(value: 60, child: Text('1 min')),
+                      DropdownMenuItem(value: 120, child: Text('2 min')),
+                      DropdownMenuItem(value: 300, child: Text('5 min')),
+                      DropdownMenuItem(value: 600, child: Text('10 min')),
+                      DropdownMenuItem(value: 900, child: Text('15 min')),
+                    ],
+                    onChanged: (value) {
+                      if (value != null) {
+                        aprs.blueAprsBeaconIntervalSec = value;
+                        setState(() {});
+                      }
+                    },
+                  ),
+                ],
+              ),
+            ),
         ],
       ),
     );

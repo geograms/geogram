@@ -34,6 +34,11 @@ class BlueAprsService {
   bool _active = false;
   bool get isActive => _active;
 
+  // Beacon
+  Timer? _beaconTimer;
+  int _beaconIntervalSec = 300;
+  bool _beaconEnabled = false;
+
   // Subscriptions
   StreamSubscription<BLEChatMessage>? _bleChatSub;
   StreamSubscription<AprsEvent>? _aprsEventSub;
@@ -84,10 +89,75 @@ class BlueAprsService {
     LogService().log('BlueAprsService: activated');
   }
 
+  /// Start periodic beacon broadcasting.
+  void startBeacon(int intervalSec) {
+    stopBeacon();
+    _beaconIntervalSec = intervalSec;
+    _beaconEnabled = true;
+    _beaconTimer = Timer.periodic(
+      Duration(seconds: intervalSec),
+      (_) => _sendBeacon(),
+    );
+    LogService().log('BlueAprsService: beacon started (${intervalSec}s interval)');
+  }
+
+  /// Stop beacon broadcasting.
+  void stopBeacon() {
+    _beaconTimer?.cancel();
+    _beaconTimer = null;
+    _beaconEnabled = false;
+  }
+
+  /// Broadcast position beacon to BLE clients on _aprs channel.
+  void _sendBeacon() {
+    if (!_active) return;
+    final aprs = AprsService();
+    final lat = aprs.savedLatitude;
+    final lon = aprs.savedLongitude;
+    final callsign = aprs.callsign;
+    if (lat == null || lon == null || callsign == null) return;
+
+    final payload = BLEAprsPayload(
+      type: 'position',
+      from: callsign,
+      text: '',
+      lat: lat,
+      lon: lon,
+      comment: 'BlueAPRS beacon',
+    );
+
+    final contentJson = json.encode(payload.toJson());
+
+    try {
+      BLEMessageService().broadcastChat(
+        channel: _aprsChannel,
+        content: contentJson,
+      );
+      LogService().log('BlueAprsService: beacon sent ($lat, $lon)');
+    } catch (e) {
+      LogService().log('BlueAprsService: beacon send failed: $e');
+    }
+
+    // Also deliver to simulated clients
+    for (final simId in _simulatedDeviceIds) {
+      _simulatedInbox.putIfAbsent(simId, () => []).add({
+        'from': callsign,
+        'text': '',
+        'type': 'position',
+        'lat': lat,
+        'lon': lon,
+        'comment': 'BlueAPRS beacon',
+        'timestamp': DateTime.now().toIso8601String(),
+        'source': 'beacon',
+      });
+    }
+  }
+
   /// Deactivate the BlueAPRS bridge.
   void deactivate() {
     if (!_active) return;
     _active = false;
+    stopBeacon();
     _bleChatSub?.cancel();
     _bleChatSub = null;
     _aprsEventSub?.cancel();
@@ -115,6 +185,8 @@ class BlueAprsService {
     }
     return {
       'active': _active,
+      'beaconEnabled': _beaconEnabled,
+      'beaconIntervalSec': _beaconIntervalSec,
       'bleClients': clients,
       'stats': {
         'txCount': _txCount,

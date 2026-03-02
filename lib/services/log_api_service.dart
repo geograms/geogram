@@ -17437,6 +17437,38 @@ function cleanup() {
             headers: headers,
           );
 
+        case 'blue_aprs_enable':
+          final enabled = params['enabled'] as bool? ?? true;
+          AprsService().blueAprsEnabled = enabled;
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'blueAprsEnabled': AprsService().blueAprsEnabled,
+              'active': blueAprs.isActive,
+            }),
+            headers: headers,
+          );
+
+        case 'blue_aprs_beacon':
+          final enabled = params['enabled'] as bool? ?? true;
+          final intervalSec = params['intervalSec'] as int? ?? 300;
+          final aprs = AprsService();
+          if (enabled) {
+            aprs.blueAprsBeaconIntervalSec = intervalSec;
+            aprs.blueAprsBeaconEnabled = true;
+          } else {
+            aprs.blueAprsBeaconEnabled = false;
+          }
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'beaconEnabled': aprs.blueAprsBeaconEnabled,
+              'beaconIntervalSec': aprs.blueAprsBeaconIntervalSec,
+              ...blueAprs.getStatus(),
+            }),
+            headers: headers,
+          );
+
         default:
           return shelf.Response.ok(
             jsonEncode({'success': false, 'error': 'Unknown BlueAPRS action: $action'}),

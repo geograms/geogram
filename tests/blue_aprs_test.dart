@@ -213,6 +213,56 @@ void main(List<String> args) async {
     print('  Test 3 complete');
 
     // =========================================================================
+    // Test 4: BlueAPRS enable/disable and beacon
+    // =========================================================================
+    print('\n[Test 4] BlueAPRS enable/disable and beacon');
+
+    // Enable BlueAPRS via debug API
+    final enableResult = await apiCall(client, host, port, {
+      'action': 'blue_aprs_enable',
+      'enabled': true,
+    });
+    assert_(enableResult['success'] == true, 'BlueAPRS enable via API');
+    assert_(enableResult['blueAprsEnabled'] == true, 'blueAprsEnabled is true');
+
+    // Enable beacon
+    final beaconResult = await apiCall(client, host, port, {
+      'action': 'blue_aprs_beacon',
+      'enabled': true,
+      'intervalSec': 60,
+    });
+    assert_(beaconResult['success'] == true, 'Beacon enable via API');
+    assert_(beaconResult['beaconEnabled'] == true, 'beaconEnabled is true');
+    assert_(beaconResult['beaconIntervalSec'] == 60, 'beaconIntervalSec is 60');
+
+    // Verify status reflects beacon
+    final status4 = await apiCall(client, host, port, {'action': 'blue_aprs_status'});
+    assert_(status4['beaconEnabled'] == true, 'Status shows beacon enabled');
+    assert_(status4['beaconIntervalSec'] == 60, 'Status shows beacon interval 60');
+
+    // Disable beacon
+    final beaconOff = await apiCall(client, host, port, {
+      'action': 'blue_aprs_beacon',
+      'enabled': false,
+    });
+    assert_(beaconOff['beaconEnabled'] == false, 'Beacon disabled');
+
+    // Disable BlueAPRS
+    final disableResult = await apiCall(client, host, port, {
+      'action': 'blue_aprs_enable',
+      'enabled': false,
+    });
+    assert_(disableResult['blueAprsEnabled'] == false, 'BlueAPRS disabled');
+
+    // Re-enable for other tests to continue working
+    await apiCall(client, host, port, {
+      'action': 'blue_aprs_enable',
+      'enabled': true,
+    });
+
+    print('  Test 4 complete');
+
+    // =========================================================================
     // Summary
     // =========================================================================
     print('\n---');

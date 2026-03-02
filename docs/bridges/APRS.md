@@ -274,12 +274,34 @@ When a BLE client sends an APRS message, it is forwarded to all other connected 
 
 1 message per 30 seconds per BLE device (APRS etiquette). Simulated test clients are exempt from rate limiting.
 
+### Position Beacon
+
+BlueAPRS can periodically broadcast the station's position to nearby BLE devices. This allows BLE-only clients to discover the iGate and see its location.
+
+**Configuration** (via APRS Settings UI or debug API):
+- **Enable**: Toggle on/off independently from BlueAPRS bridge
+- **Interval**: 1, 2, 5 (default), 10, or 15 minutes
+
+The beacon sends a `BLEAprsPayload` with `type: "position"` containing the station's lat/lon and callsign on the `_aprs` channel.
+
+```json
+{
+  "type": "position",
+  "from": "MYCALL-5",
+  "text": "",
+  "lat": 38.72,
+  "lon": -9.14,
+  "comment": "BlueAPRS beacon"
+}
+```
+
 ### Lifecycle
 
-BlueAPRS activates automatically when both APRS and BLE are initialized:
-- `AprsService.enable()` → if BLE is initialized, calls `BlueAprsService.activate()`
-- `DevicesService` BLE init → if APRS is enabled, calls `BlueAprsService.activate()`
+BlueAPRS is controlled independently from APRS via the BlueAPRS enable toggle in APRS Settings:
+- `AprsService.enable()` → if BlueAPRS is enabled and BLE is initialized, calls `BlueAprsService.activate()`
+- `DevicesService` BLE init → if APRS and BlueAPRS are enabled, calls `BlueAprsService.activate()`
 - `AprsService.disable()` → calls `BlueAprsService.deactivate()`
+- BlueAPRS can be toggled on/off without restarting APRS
 
 ## Caching & Persistence
 
@@ -350,7 +372,9 @@ All APRS debug actions are sent via `POST /api/debug` with JSON body.
 
 | Action | Description |
 |--------|-------------|
-| `blue_aprs_status` | Bridge state, connected BLE clients, TX/RX/repeat stats |
+| `blue_aprs_status` | Bridge state, connected BLE clients, TX/RX/repeat stats, beacon status |
+| `blue_aprs_enable` | Enable/disable BlueAPRS: `{"enabled": true}` |
+| `blue_aprs_beacon` | Control beacon: `{"enabled": true, "intervalSec": 300}` |
 | `blue_aprs_register_client` | Register simulated BLE client: `{"deviceId": "sim-1", "callsign": "BLE1-5"}` |
 | `blue_aprs_inject_ble` | Simulate BLE client sending APRS message (iGate TX test) |
 | `blue_aprs_inject_aprs` | Simulate APRS-IS packet for BLE client (iGate RX test) |
@@ -378,6 +402,9 @@ APRS configuration is persisted via `AprsCacheService.saveConfig()`:
 | `latitude` | double | - | Saved position latitude |
 | `longitude` | double | - | Saved position longitude |
 | `subscribedTags` | List | `['#cq']` | Subscribed hashtag channels |
+| `blueAprsEnabled` | bool | false | Enable BlueAPRS BLE bridge |
+| `blueAprsBeaconEnabled` | bool | false | Enable position beacon |
+| `blueAprsBeaconIntervalSec` | int | 300 | Beacon interval in seconds |
 
 ## File Reference
 

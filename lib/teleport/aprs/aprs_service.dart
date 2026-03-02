@@ -61,6 +61,11 @@ class AprsService {
   String? _callsign;
   AprsIsClient? _client;
 
+  // BlueAPRS settings
+  bool _blueAprsEnabled = false;
+  bool _blueAprsBeaconEnabled = false;
+  int _blueAprsBeaconIntervalSec = 300;
+
   // User-chosen position (persisted in config)
   double? _savedLat;
   double? _savedLon;
@@ -153,6 +158,52 @@ class AprsService {
   /// Currently subscribed hashtag channels.
   Set<String> get subscribedTags => Set.unmodifiable(_subscribedTags);
 
+  /// Whether BlueAPRS (APRS over BLE) is enabled.
+  bool get blueAprsEnabled => _blueAprsEnabled;
+  set blueAprsEnabled(bool value) {
+    if (_blueAprsEnabled == value) return;
+    _blueAprsEnabled = value;
+    _saveConfig();
+    if (_enabled) {
+      if (value) {
+        try {
+          final ble = BLEMessageService();
+          if (ble.isInitialized) {
+            BlueAprsService().activate();
+          }
+        } catch (_) {}
+      } else {
+        BlueAprsService().deactivate();
+      }
+    }
+  }
+
+  /// Whether BlueAPRS beacon broadcasting is enabled.
+  bool get blueAprsBeaconEnabled => _blueAprsBeaconEnabled;
+  set blueAprsBeaconEnabled(bool value) {
+    if (_blueAprsBeaconEnabled == value) return;
+    _blueAprsBeaconEnabled = value;
+    _saveConfig();
+    final blueAprs = BlueAprsService();
+    if (value && blueAprs.isActive) {
+      blueAprs.startBeacon(_blueAprsBeaconIntervalSec);
+    } else {
+      blueAprs.stopBeacon();
+    }
+  }
+
+  /// BlueAPRS beacon interval in seconds.
+  int get blueAprsBeaconIntervalSec => _blueAprsBeaconIntervalSec;
+  set blueAprsBeaconIntervalSec(int value) {
+    if (_blueAprsBeaconIntervalSec == value) return;
+    _blueAprsBeaconIntervalSec = value;
+    _saveConfig();
+    final blueAprs = BlueAprsService();
+    if (_blueAprsBeaconEnabled && blueAprs.isActive) {
+      blueAprs.startBeacon(value);
+    }
+  }
+
   /// Subscribe to a hashtag channel.
   void addTag(String tag) {
     final normalized = tag.toLowerCase().startsWith('#') ? tag.toLowerCase() : '#${tag.toLowerCase()}';
@@ -197,6 +248,13 @@ class AprsService {
     if (savedTags != null && savedTags.isNotEmpty) {
       _subscribedTags = savedTags.map((t) => t.toString().toLowerCase()).toSet();
     }
+    // Restore BlueAPRS settings
+    _blueAprsEnabled = config['blueAprsEnabled'] == true;
+    _blueAprsBeaconEnabled = config['blueAprsBeaconEnabled'] == true;
+    final savedBeaconInterval = config['blueAprsBeaconIntervalSec'] as int?;
+    if (savedBeaconInterval != null && savedBeaconInterval > 0) {
+      _blueAprsBeaconIntervalSec = savedBeaconInterval;
+    }
     // Only auto-start if previously enabled AND location is set
     if (config['enabled'] != true || !hasLocation) {
       if (config['enabled'] == true && !hasLocation) {
@@ -226,14 +284,20 @@ class AprsService {
     _saveConfig();
     _initAsync(callsign);
 
-    // Activate BlueAPRS bridge if BLE is available
-    try {
-      final ble = BLEMessageService();
-      if (ble.isInitialized) {
-        BlueAprsService().activate();
+    // Activate BlueAPRS bridge if enabled and BLE is available
+    if (_blueAprsEnabled) {
+      try {
+        final ble = BLEMessageService();
+        if (ble.isInitialized) {
+          final blueAprs = BlueAprsService();
+          blueAprs.activate();
+          if (_blueAprsBeaconEnabled) {
+            blueAprs.startBeacon(_blueAprsBeaconIntervalSec);
+          }
+        }
+      } catch (_) {
+        // BLE not available — ignore
       }
-    } catch (_) {
-      // BLE not available — ignore
     }
   }
 
@@ -846,6 +910,9 @@ class AprsService {
       'latitude': _savedLat,
       'longitude': _savedLon,
       'subscribedTags': _subscribedTags.toList(),
+      'blueAprsEnabled': _blueAprsEnabled,
+      'blueAprsBeaconEnabled': _blueAprsBeaconEnabled,
+      'blueAprsBeaconIntervalSec': _blueAprsBeaconIntervalSec,
     });
   }
 
