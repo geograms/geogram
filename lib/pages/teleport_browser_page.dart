@@ -228,6 +228,15 @@ class _TeleportBrowserPageState extends State<TeleportBrowserPage> {
     );
   }
 
+  /// Whether a bridge is available on this platform (implemented + native deps present).
+  bool _isBridgeAvailable(String bridgeId) {
+    if (!_implementedIds.contains(bridgeId)) return false;
+    // Telegram and Signal require native FFI libraries — check at runtime
+    if (bridgeId == 'telegram') return TelegramService.isAvailable;
+    if (bridgeId == 'signal') return SignalService.isAvailable;
+    return true;
+  }
+
   void _showAboutDialog() {
     showDialog(
       context: context,
@@ -450,6 +459,16 @@ class _TeleportBrowserPageState extends State<TeleportBrowserPage> {
         clipBehavior: Clip.antiAlias,
         child: InkWell(
           onTap: () {
+            // Guard FFI-dependent bridges — show snackbar if native lib missing
+            if (!_isBridgeAvailable(bridge.id) && !_isBridgeActive(bridge.id)) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(I18nService().t('teleport_bridge_coming_soon_msg', params: [bridge.name])),
+                  duration: const Duration(seconds: 2),
+                ),
+              );
+              return;
+            }
             if (bridge.id == 'telegram') {
               _onTelegramTap();
               return;
@@ -542,7 +561,7 @@ class _TeleportBrowserPageState extends State<TeleportBrowserPage> {
                   child: Text(
                     showActive
                         ? I18nService().t('teleport_bridge_status_active')
-                        : _implementedIds.contains(bridge.id)
+                        : _isBridgeAvailable(bridge.id)
                         ? I18nService().t('teleport_bridge_status_available')
                         : I18nService().t('teleport_bridge_status_coming_soon'),
                     style: TextStyle(
