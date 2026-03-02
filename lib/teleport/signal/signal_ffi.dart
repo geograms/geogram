@@ -61,9 +61,10 @@ class SignalFfi {
   static void _loadLibrary() {
     if (_lib != null) return;
 
+    // On Android, bare name resolves from APK jniLibs; on Linux, try common paths
     final paths = [
-      'lib/libsignal_bridge.so',
       'libsignal_bridge.so',
+      'lib/libsignal_bridge.so',
       '/usr/lib/libsignal_bridge.so',
       '/usr/local/lib/libsignal_bridge.so',
     ];
@@ -79,7 +80,7 @@ class SignalFfi {
     }
 
     throw UnsupportedError(
-        'Could not load libsignal_bridge. Place libsignal_bridge.so in linux/signal/{arch}/');
+        'Could not load libsignal_bridge. Place libsignal_bridge.so in jniLibs/{abi}/ (Android) or linux/signal/{arch}/ (Linux)');
   }
 
   void _bindFunctions() {

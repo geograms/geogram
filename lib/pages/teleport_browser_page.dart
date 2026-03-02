@@ -542,12 +542,7 @@ class _TeleportBrowserPageState extends State<TeleportBrowserPage> {
                   child: Text(
                     showActive
                         ? I18nService().t('teleport_bridge_status_active')
-                        : (bridge.id == 'aprs' ||
-                              bridge.id == 'meshcore' ||
-                              bridge.id == 'irc' ||
-                              bridge.id == 'xmpp' ||
-                              bridge.id == 'nostr' ||
-                              bridge.id == 'bluesky')
+                        : _implementedIds.contains(bridge.id)
                         ? I18nService().t('teleport_bridge_status_available')
                         : I18nService().t('teleport_bridge_status_coming_soon'),
                     style: TextStyle(

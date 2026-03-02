@@ -61,9 +61,10 @@ class TdlibFfi {
   static void _loadLibrary() {
     if (_lib != null) return;
 
+    // On Android, bare name resolves from APK jniLibs; on Linux, try common paths
     final paths = [
-      'lib/libtdjson.so',
       'libtdjson.so',
+      'lib/libtdjson.so',
       'libtdjson.so.1',
       '/usr/lib/libtdjson.so',
       '/usr/local/lib/libtdjson.so',
@@ -80,7 +81,7 @@ class TdlibFfi {
     }
 
     throw UnsupportedError(
-        'Could not load libtdjson. Place libtdjson.so in linux/tdlib/{arch}/');
+        'Could not load libtdjson. Place libtdjson.so in jniLibs/{abi}/ (Android) or linux/tdlib/{arch}/ (Linux)');
   }
 
   void _bindFunctions() {

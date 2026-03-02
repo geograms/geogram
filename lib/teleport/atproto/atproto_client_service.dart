@@ -402,10 +402,7 @@ class AtprotoClientService {
       next = next.copyWith(password: _generatePassword());
       changed = true;
     }
-    if (!next.enabled) {
-      next = next.copyWith(enabled: true);
-      changed = true;
-    }
+    // Don't force-enable — let the user opt in via the settings page
 
     if (changed) {
       await saveConfig(next);
