@@ -49,6 +49,11 @@ This document catalogs reusable UI components available in the Geogram codebase.
 - [APRS Message Utils](#aprsmessageutils) - Constants, text splitting, and display merging for APRS messages
 - [APRS Geo-Chat Panel](#aprs-geo-chat-panel) - Floating map overlay for sending/receiving position reports with comments
 
+### MeshCore Components
+- [MeshCore Protocol Codec](#meshcore-protocol-codec) - Pure Dart binary encode/decode for MeshCore BLE commands (CLI-reusable)
+- [MeshCore BLE Client](#meshcore-ble-client) - Nordic UART BLE transport with scan, connect, send/receive
+- [MeshCore Message Bubble](#meshcore-message-bubble) - Chat bubble with SNR indicator and ACK checkmark
+
 ### Hashing Utilities
 - [TLSH (Locality Sensitive Hash)](#tlsh-locality-sensitive-hash) - Fuzzy similarity hashing for binary data
 - [SHA1 Content Hashing](#sha1-content-hashing) - Exact content deduplication via crypto package
@@ -9948,3 +9953,87 @@ final echo = AprsService().sendGeoChat('Hello from here');
 
 - `aprs_geochat` — List all geo-chat messages (sender, lat, lon, comment, timestamp, isOutgoing, distKm)
 - `aprs_send_geochat` — Send a geo-chat message: `{"action":"aprs_send_geochat","text":"Hello"}`
+
+## MeshCore Protocol Codec
+
+**File:** `lib/teleport/meshcore/meshcore_protocol.dart`
+
+Pure Dart binary encoder/decoder for the MeshCore companion radio BLE protocol. No Flutter dependency — reusable from CLI tools.
+
+### Encoding
+
+```dart
+import 'package:geogram/teleport/meshcore/meshcore_protocol.dart';
+
+// Start session
+final cmd = encodeAppStart(); // → [0x01]
+
+// Sync device clock
+final timeCmd = encodeSetDeviceTime(DateTime.now());
+
+// Send direct message (32-byte Ed25519 pub key)
+final sendCmd = encodeSendTxtMsg(pubKey32, 'Hello mesh!');
+
+// Send channel message (index 0-7)
+final chCmd = encodeSendChannelTxtMsg(0, 'Hello channel!');
+
+// Poll next queued message
+final syncCmd = encodeSyncNextMessage();
+```
+
+### Decoding
+
+```dart
+final response = decodeResponse(rawBytes);
+switch (response) {
+  case SelfInfoResponse():
+    print('Device: ${response.name}, key: ${bytesToHex(response.pubKey)}');
+  case ContactMessageResponse():
+    print('From: ${response.senderPrefixHex}, text: ${response.text}, SNR: ${response.snr}');
+  case NoMoreMessagesResponse():
+    print('All messages synced');
+  case PushMsgWaiting():
+    // Poll with encodeSyncNextMessage()
+}
+```
+
+### Constants
+- `meshCoreMaxTextBytes = 133` — Maximum message text length
+- Command codes: `MeshCoreCmd.appStart`, `.sendTxtMsg`, `.syncNextMessage`, etc.
+- Response codes: `MeshCoreResp.selfInfo`, `.contactMessage`, `.channelMessage`, etc.
+- Push codes: `MeshCorePush.msgWaiting`, `.sendConfirmed`, `.advert`, etc.
+
+## MeshCore BLE Client
+
+**File:** `lib/teleport/meshcore/meshcore_ble_client.dart`
+
+Nordic UART Service (NUS) BLE transport for communicating with MeshCore companion radios. Handles scan, connect, send, and receive with Linux BlueZ retry patterns.
+
+```dart
+final client = MeshCoreBleClient();
+
+// Scan for MeshCore devices (filters by NUS UUID)
+final devices = await client.scanForDevices();
+
+// Connect
+await client.connect(devices.first.device);
+
+// Send command and wait for specific response
+final resp = await client.sendAndWait(
+  encodeAppStart(),
+  expectedCode: MeshCoreResp.selfInfo,
+);
+
+// Listen to all responses
+client.responses.listen((response) { ... });
+```
+
+## MeshCore Message Bubble
+
+**File:** `lib/teleport/meshcore/widgets/meshcore_message_bubble.dart`
+
+Chat bubble widget with SNR signal quality badge (color-coded: green/orange/red) and ACK delivery checkmark (single check = sent, double check = acknowledged).
+
+```dart
+MeshCoreMessageBubble(message: meshCoreMessage)
+```

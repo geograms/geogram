@@ -54,6 +54,7 @@ import 'teleport/irc/irc_service.dart';
 import 'teleport/xmpp/xmpp_service.dart';
 import 'teleport/nostr/nostr_client_service.dart';
 import 'teleport/atproto/atproto_client_service.dart';
+import 'teleport/meshcore/meshcore_service.dart';
 import 'services/window_state_service.dart';
 import 'services/tray_service.dart';
 import 'services/group_sync_service.dart';
@@ -703,6 +704,14 @@ void main() async {
         if (atprotoStorage != null) {
           AtprotoClientService().autoStart(atprotoStorage).catchError((e) {
             LogService().log('AT Proto auto-start failed: $e');
+          });
+        }
+
+        // Auto-start MeshCore LoRa mesh background service
+        final meshcoreStorage = AppService().profileStorage;
+        if (meshcoreStorage != null) {
+          MeshCoreService().autoStart(meshcoreStorage).catchError((e) {
+            LogService().log('MeshCore auto-start failed: $e');
           });
         }
       }

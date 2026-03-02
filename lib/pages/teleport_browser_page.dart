@@ -28,6 +28,8 @@ import '../teleport/nostr/nostr_client_service.dart';
 import '../teleport/nostr/pages/nostr_main_page.dart';
 import '../teleport/atproto/atproto_client_service.dart';
 import '../teleport/atproto/pages/atproto_main_page.dart';
+import '../teleport/meshcore/meshcore_service.dart';
+import '../teleport/meshcore/pages/meshcore_main_page.dart';
 
 /// Browser page for the "Teleport" app — lists platform bridges
 class TeleportBrowserPage extends StatefulWidget {
@@ -52,6 +54,7 @@ class _TeleportBrowserPageState extends State<TeleportBrowserPage> {
   StreamSubscription<XmppEvent>? _xmppSub;
   StreamSubscription<NostrClientEvent>? _nostrSub;
   StreamSubscription<AtprotoClientEvent>? _atprotoSub;
+  StreamSubscription<MeshCoreEvent>? _meshcoreSub;
 
   /// Planned platform bridges
   static const List<_BridgeInfo> _bridges = [
@@ -75,6 +78,13 @@ class _TeleportBrowserPageState extends State<TeleportBrowserPage> {
       description: 'Amateur radio packet reporting and messaging',
       icon: Icons.cell_tower,
       color: Color(0xFFE65100),
+    ),
+    _BridgeInfo(
+      id: 'meshcore',
+      name: 'MeshCore',
+      description: 'LoRa mesh radio messaging via BLE',
+      icon: Icons.radio,
+      color: Color(0xFF00BCD4),
     ),
     _BridgeInfo(
       id: 'whatsapp',
@@ -125,6 +135,7 @@ class _TeleportBrowserPageState extends State<TeleportBrowserPage> {
     'telegram',
     'signal',
     'aprs',
+    'meshcore',
     'irc',
     'xmpp',
     'nostr',
@@ -156,6 +167,9 @@ class _TeleportBrowserPageState extends State<TeleportBrowserPage> {
     _atprotoSub = AtprotoClientService().events.listen((_) {
       if (mounted) setState(() {});
     });
+    _meshcoreSub = MeshCoreService().events.listen((_) {
+      if (mounted) setState(() {});
+    });
   }
 
   @override
@@ -165,6 +179,7 @@ class _TeleportBrowserPageState extends State<TeleportBrowserPage> {
     _xmppSub?.cancel();
     _nostrSub?.cancel();
     _atprotoSub?.cancel();
+    _meshcoreSub?.cancel();
     super.dispose();
   }
 
@@ -342,6 +357,14 @@ class _TeleportBrowserPageState extends State<TeleportBrowserPage> {
     await storage.registerBridge(enabled: false);
   }
 
+  void _onMeshCoreTap() {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => MeshCoreMainPage(appPath: widget.appPath),
+      ),
+    );
+  }
+
   void _onAprsTap() {
     Navigator.of(context).push(
       MaterialPageRoute(builder: (_) => AprsMainPage(appPath: widget.appPath)),
@@ -410,6 +433,8 @@ class _TeleportBrowserPageState extends State<TeleportBrowserPage> {
         bridge.id == 'nostr' && NostrClientService().isAnyConnected;
     final isAtprotoConnected =
         bridge.id == 'bluesky' && AtprotoClientService().isAuthenticated;
+    final isMeshCoreConnected =
+        bridge.id == 'meshcore' && MeshCoreService().isConnected;
     final showActive =
         isActive ||
         isTelegramRunning ||
@@ -418,7 +443,8 @@ class _TeleportBrowserPageState extends State<TeleportBrowserPage> {
         isIrcConnected ||
         isXmppConnected ||
         isNostrConnected ||
-        isAtprotoConnected;
+        isAtprotoConnected ||
+        isMeshCoreConnected;
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
@@ -430,6 +456,10 @@ class _TeleportBrowserPageState extends State<TeleportBrowserPage> {
           onTap: () {
             if (bridge.id == 'telegram') {
               _onTelegramTap();
+              return;
+            }
+            if (bridge.id == 'meshcore') {
+              _onMeshCoreTap();
               return;
             }
             if (bridge.id == 'aprs') {
@@ -517,6 +547,7 @@ class _TeleportBrowserPageState extends State<TeleportBrowserPage> {
                     showActive
                         ? 'Active'
                         : (bridge.id == 'aprs' ||
+                              bridge.id == 'meshcore' ||
                               bridge.id == 'irc' ||
                               bridge.id == 'xmpp' ||
                               bridge.id == 'nostr' ||
