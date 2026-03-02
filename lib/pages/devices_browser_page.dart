@@ -857,6 +857,23 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
                     ],
                   ),
                 ),
+                if (_devicesService.getRemovedDevices().isNotEmpty) ...[
+                  const PopupMenuDivider(),
+                  PopupMenuItem<String>(
+                    value: 'restore_removed',
+                    child: Row(
+                      children: [
+                        Icon(
+                          Icons.restore,
+                          size: 20,
+                          color: theme.colorScheme.primary,
+                        ),
+                        const SizedBox(width: 12),
+                        Text(_i18n.t('restore_removed')),
+                      ],
+                    ),
+                  ),
+                ],
               ],
             ),
           ],
@@ -1392,7 +1409,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
 
     if (confirmed == true) {
       for (final device in offlineDevices) {
-        await _devicesService.removeDevice(device.callsign);
+        await _devicesService.removeDevice(device.callsign, permanent: true);
         if (_selectedDevice?.callsign == device.callsign) {
           _selectedDevice = null;
         }
@@ -1998,7 +2015,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
     );
 
     if (confirmed == true) {
-      await _devicesService.removeDevice(device.callsign);
+      await _devicesService.removeDevice(device.callsign, permanent: true);
       if (_selectedDevice?.callsign == device.callsign) {
         setState(() => _selectedDevice = null);
       }
@@ -2033,7 +2050,71 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
           _showMoveToFolderDialog(_selectedCallsigns.toList());
         }
         break;
+      case 'restore_removed':
+        _showRestoreRemovedDialog();
+        break;
     }
+  }
+
+  /// Show dialog to restore previously removed devices
+  Future<void> _showRestoreRemovedDialog() async {
+    final removed = _devicesService.getRemovedDevices().toList()..sort();
+    if (removed.isEmpty) return;
+
+    await showDialog<void>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          final currentRemoved = _devicesService.getRemovedDevices().toList()..sort();
+          return AlertDialog(
+            title: Text(_i18n.t('restore_removed')),
+            content: SizedBox(
+              width: 300,
+              child: currentRemoved.isEmpty
+                  ? Text(_i18n.t('no_removed_devices'))
+                  : Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(_i18n.t('restore_removed_description')),
+                        const SizedBox(height: 16),
+                        ...currentRemoved.map((callsign) => ListTile(
+                          dense: true,
+                          title: Text(callsign),
+                          trailing: IconButton(
+                            icon: const Icon(Icons.restore),
+                            tooltip: _i18n.t('restore'),
+                            onPressed: () {
+                              _devicesService.restoreDevice(callsign);
+                              setDialogState(() {});
+                              // If no more removed devices, close dialog
+                              if (_devicesService.getRemovedDevices().isEmpty) {
+                                Navigator.pop(context);
+                              }
+                            },
+                          ),
+                        )),
+                      ],
+                    ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: Text(_i18n.t('close')),
+              ),
+              if (currentRemoved.isNotEmpty)
+                FilledButton(
+                  onPressed: () {
+                    _devicesService.restoreAllDevices();
+                    Navigator.pop(context);
+                  },
+                  child: Text(_i18n.t('restore_all')),
+                ),
+            ],
+          );
+        },
+      ),
+    );
+    setState(() {});
   }
 
   /// Show dialog to create a new folder
@@ -2159,7 +2240,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
 
     if (confirmed == true) {
       for (final callsign in _selectedCallsigns.toList()) {
-        await _devicesService.removeDevice(callsign);
+        await _devicesService.removeDevice(callsign, permanent: true);
         if (_selectedDevice?.callsign == callsign) {
           _selectedDevice = null;
         }

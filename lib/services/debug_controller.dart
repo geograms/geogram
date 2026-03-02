@@ -1377,6 +1377,40 @@ class DebugController {
           'nickname': nickname,
         };
 
+      case 'remove_device':
+        final rmCallsign = params['callsign'] as String?;
+        if (rmCallsign == null || rmCallsign.isEmpty) {
+          return {'success': false, 'error': 'Missing callsign parameter'};
+        }
+        final permanent = params['permanent'] as bool? ?? true;
+        await DevicesService().removeDevice(rmCallsign, permanent: permanent);
+        return {
+          'success': true,
+          'message': 'Device removed: $rmCallsign (permanent: $permanent)',
+          'callsign': rmCallsign,
+          'permanent': permanent,
+        };
+
+      case 'restore_device':
+        final restoreCallsign = params['callsign'] as String?;
+        if (restoreCallsign == null || restoreCallsign.isEmpty) {
+          return {'success': false, 'error': 'Missing callsign parameter'};
+        }
+        DevicesService().restoreDevice(restoreCallsign);
+        return {
+          'success': true,
+          'message': 'Device restored: $restoreCallsign',
+          'callsign': restoreCallsign,
+        };
+
+      case 'get_removed_devices':
+        final removedSet = DevicesService().getRemovedDevices();
+        return {
+          'success': true,
+          'removedDevices': removedSet.toList(),
+          'total': removedSet.length,
+        };
+
       case 'open_station_chat':
         triggerOpenStationChat();
         return {

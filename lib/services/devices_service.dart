@@ -121,6 +121,7 @@ class DevicesService {
     }
 
     await _cacheService.initialize();
+    _loadRemovedDevices();
     await _loadCachedDevices();
 
     // Skip BLE in internet-only mode
@@ -953,7 +954,7 @@ class DevicesService {
         if (bleDevice.latitude != null) device.latitude = bleDevice.latitude;
         if (bleDevice.longitude != null) device.longitude = bleDevice.longitude;
         if (bleDevice.nickname != null) device.nickname = bleDevice.nickname;
-      } else {
+      } else if (!_isDeviceRemoved(callsign)) {
         // Add new device discovered via BLE
         final connectionMethods = isBLEPlus
             ? ['bluetooth', 'bluetooth_plus']
@@ -1041,6 +1042,8 @@ class DevicesService {
       final cachedCallsigns = await _cacheService.getCachedDevices();
 
       for (final callsign in cachedCallsigns) {
+        if (_isDeviceRemoved(callsign)) continue;
+
         final cacheTime = await _cacheService.getCacheTime(callsign);
         final cachedRelayUrl = await _cacheService.getCachedRelayUrl(callsign);
 
@@ -1110,7 +1113,8 @@ class DevicesService {
       try {
         for (final station in _stationService.getAllStations()) {
           if (station.callsign != null &&
-              !_devices.containsKey(station.callsign!.toUpperCase())) {
+              !_devices.containsKey(station.callsign!.toUpperCase()) &&
+              !_isDeviceRemoved(station.callsign!)) {
             _devices[station.callsign!.toUpperCase()] = RemoteDevice(
               callsign: station.callsign!,
               name: station.name,
@@ -1183,6 +1187,49 @@ class DevicesService {
     final config = ConfigService();
     final pinned = config.get('pinnedDevices', <dynamic>[]) as List<dynamic>;
     return pinned.map((e) => e.toString()).toSet();
+  }
+
+  // --- Persistent removed-devices blocklist ---
+
+  /// In-memory cache of permanently removed device callsigns
+  Set<String> _removedDevices = {};
+
+  /// Load removed devices from persistent config
+  void _loadRemovedDevices() {
+    final config = ConfigService();
+    final removed = config.get('removedDevices', <dynamic>[]) as List<dynamic>;
+    _removedDevices = removed.map((e) => e.toString().toUpperCase()).toSet();
+  }
+
+  /// Persist the removed devices set to config
+  void _saveRemovedDevices() {
+    ConfigService().set('removedDevices', _removedDevices.toList());
+  }
+
+  /// Check if a device was permanently removed by the user
+  bool _isDeviceRemoved(String callsign) {
+    return _removedDevices.contains(callsign.toUpperCase());
+  }
+
+  /// Get the set of permanently removed callsigns (for UI)
+  Set<String> getRemovedDevices() => Set.unmodifiable(_removedDevices);
+
+  /// Restore a previously removed device so it can be re-discovered
+  void restoreDevice(String callsign) {
+    final normalized = callsign.toUpperCase();
+    if (_removedDevices.remove(normalized)) {
+      _saveRemovedDevices();
+      LogService().log('DevicesService: Restored removed device $normalized');
+    }
+  }
+
+  /// Restore all previously removed devices
+  void restoreAllDevices() {
+    if (_removedDevices.isNotEmpty) {
+      _removedDevices.clear();
+      _saveRemovedDevices();
+      LogService().log('DevicesService: Restored all removed devices');
+    }
   }
 
   /// Pin a device (appears at top of list)
@@ -1410,12 +1457,12 @@ class DevicesService {
   Future<void> deleteFolder(String folderId) async {
     if (folderId == defaultFolderId) return; // Can't delete default folder
 
-    // Remove all devices in this folder
+    // Remove all devices in this folder (permanent so they don't reappear)
     final devicesToRemove = _devices.values
         .where((d) => d.folderId == folderId)
         .toList();
     for (final device in devicesToRemove) {
-      await removeDevice(device.callsign);
+      await removeDevice(device.callsign, permanent: true);
     }
 
     // Remove the folder
@@ -2250,7 +2297,7 @@ class DevicesService {
         LogService().log(
           'DevicesService: Updated station device: $normalizedCallsign',
         );
-      } else {
+      } else if (!_isDeviceRemoved(normalizedCallsign)) {
         // Add new device for the station
         _devices[normalizedCallsign] = RemoteDevice(
           callsign: normalizedCallsign,
@@ -2367,7 +2414,7 @@ class DevicesService {
         LogService().log(
           'DevicesService: Updated ${result.type} $normalizedCallsign with local network ($localUrl)',
         );
-      } else {
+      } else if (!_isDeviceRemoved(normalizedCallsign)) {
         // Create new device discovered on local network
         _devices[normalizedCallsign] = RemoteDevice(
           callsign: normalizedCallsign,
@@ -2816,6 +2863,7 @@ class DevicesService {
     }
 
     if (!_devices.containsKey(normalizedCallsign)) {
+      if (_isDeviceRemoved(normalizedCallsign)) return;
       _devices[normalizedCallsign] = RemoteDevice(
         callsign: normalizedCallsign,
         name: name ?? normalizedCallsign,
@@ -2854,9 +2902,17 @@ class DevicesService {
     syncDeviceToConnectionManager(normalizedCallsign);
   }
 
-  /// Remove a device
-  Future<void> removeDevice(String callsign) async {
+  /// Remove a device. When [permanent] is true, the device is added to a
+  /// persistent blocklist so discovery cycles won't re-add it.
+  Future<void> removeDevice(String callsign, {bool permanent = false}) async {
     final normalizedCallsign = callsign.toUpperCase();
+    if (permanent) {
+      _removedDevices.add(normalizedCallsign);
+      _saveRemovedDevices();
+      LogService().log(
+        'DevicesService: Permanently removed device $normalizedCallsign',
+      );
+    }
     _devices.remove(normalizedCallsign);
     await _cacheService.clearCache(normalizedCallsign);
     _notifyListeners();

@@ -2711,6 +2711,27 @@ Sample `add_device` response:
 
 The `add_device` action fetches the device's `/api/status` endpoint to retrieve its nickname, making the device identifiable in the UI dropdown. If the device is unreachable, `nickname` will be `null`.
 
+- Permanently remove a device (won't reappear from discovery):
+```bash
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action":"remove_device","callsign":"X1BOB","permanent":true}'
+```
+
+- Restore a previously removed device (allows re-discovery):
+```bash
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action":"restore_device","callsign":"X1BOB"}'
+```
+
+- List all permanently removed devices:
+```bash
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action":"get_removed_devices"}'
+```
+
 **Response - Success (200 OK):**
 ```json
 {
