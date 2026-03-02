@@ -340,7 +340,8 @@ class IrcClient {
                     capNegotiating = true;
                     socket?.write('CAP REQ :${req.join(' ')}\r\n');
                     socket?.flush();
-                  } else if (capNegotiating) {
+                  } else {
+                    // Server supports CAP but offers nothing we want — end negotiation
                     socket?.write('CAP END\r\n');
                     socket?.flush();
                     capNegotiating = false;

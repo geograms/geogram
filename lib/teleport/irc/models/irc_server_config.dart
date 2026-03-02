@@ -95,8 +95,8 @@ class IrcServerConfig {
       id: 'efnet',
       name: 'EFnet',
       host: 'irc.efnet.org',
-      port: 6697,
-      useTls: true,
+      port: 6667,
+      useTls: false,
     ),
     IrcServerConfig(
       id: 'undernet',
@@ -106,18 +106,11 @@ class IrcServerConfig {
       useTls: false,
     ),
     IrcServerConfig(
-      id: 'ircnet',
-      name: 'IRCnet',
-      host: 'open.ircnet.net',
-      port: 6667,
-      useTls: false,
-    ),
-    IrcServerConfig(
       id: 'dalnet',
       name: 'DALnet',
       host: 'irc.dal.net',
-      port: 6697,
-      useTls: true,
+      port: 6667,
+      useTls: false,
     ),
     IrcServerConfig(
       id: 'rizon',
