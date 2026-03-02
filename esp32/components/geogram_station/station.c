@@ -7,6 +7,11 @@
 #include "tiles.h"
 #endif
 
+#if BOARD_MODEL == MODEL_KV4P
+#include "model_init.h"
+#include "sa818_radio.h"
+#endif
+
 #ifdef CONFIG_GEOGRAM_MESH_ENABLED
 #include "mesh_bsp.h"
 #endif
@@ -225,7 +230,14 @@ size_t station_build_status_json(char *buffer, size_t size) {
 #endif
 
     // Features
+#if BOARD_MODEL == MODEL_KV4P
+    {
+        sa818_radio_handle_t _radio = model_get_sa818_radio();
+        geo_json_add_bool(&builder, "enable_aprs", _radio ? sa818_radio_is_powered(_radio) : false);
+    }
+#else
     geo_json_add_bool(&builder, "enable_aprs", false);
+#endif
     geo_json_add_int(&builder, "chat_rooms", 0);
 
     // Network ports
