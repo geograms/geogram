@@ -45,7 +45,7 @@ class LanTransport extends Transport with TransportMixin {
   final Duration reachabilityTimeout;
 
   LanTransport({
-    this.timeout = const Duration(seconds: 30),
+    this.timeout = const Duration(seconds: 5),
     this.reachabilityTimeout = const Duration(seconds: 3),
   });
 

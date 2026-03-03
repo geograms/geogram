@@ -5,6 +5,7 @@
 
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../services/debug_controller.dart';
 import '../services/device_apps_service.dart';
 import '../services/devices_service.dart';
@@ -157,6 +158,13 @@ class _DeviceDetailPageState extends State<DeviceDetailPage> {
           ),
         );
         break;
+      case 'shared':
+        // Open shared folders in system browser via device URL
+        final deviceUrl = widget.device.url;
+        if (deviceUrl != null) {
+          launchUrl(Uri.parse('$deviceUrl/shared/'));
+        }
+        break;
     }
   }
 
@@ -170,6 +178,8 @@ class _DeviceDetailPageState extends State<DeviceDetailPage> {
         return Icons.event;
       case 'alerts':
         return Icons.warning;
+      case 'shared':
+        return Icons.folder_shared;
       default:
         return Icons.apps;
     }
@@ -186,6 +196,8 @@ class _DeviceDetailPageState extends State<DeviceDetailPage> {
         return Colors.purple;
       case 'alerts':
         return Colors.orange;
+      case 'shared':
+        return Colors.teal;
       default:
         return theme.colorScheme.primary;
     }

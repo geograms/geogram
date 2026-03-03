@@ -74,6 +74,7 @@ import '../models/mirror_config.dart';
 import 'encrypted_storage_stub.dart' if (dart.library.ui) 'encrypted_storage_service.dart';
 import 'place_feedback_service.dart';
 import 'station_alert_service.dart';
+import '../api/handlers/apps_handler.dart';
 import '../api/handlers/blog_handler.dart';
 import '../api/handlers/video_handler.dart';
 import 'station_service.dart';
@@ -530,6 +531,11 @@ class LogApiService with ChatModificationMixin {
       return await _handleP2PRequest(request, urlPath, headers);
     }
 
+    // Apps discovery endpoint: single call returns all app availability + counts
+    if (urlPath == 'api/apps' && request.method == 'GET') {
+      return await _handleAppsDiscoveryRequest(headers);
+    }
+
     // Events API endpoints (public read-only access to events)
     if (urlPath == 'api/events' || urlPath == 'api/events/' || urlPath.startsWith('api/events/')) {
       return await _handleEventsRequest(request, urlPath, headers);
@@ -695,6 +701,7 @@ class LogApiService with ChatModificationMixin {
           '/api/backup/status': 'GET current backup/restore status',
           '/api/backup/restore': 'POST start restore from provider',
           '/api/backup/discover': 'POST start discovery, GET /api/backup/discover/{id} for status',
+          '/api/apps': 'GET aggregated app availability and item counts',
           '/api/events': 'List all events (supports ?year=YYYY)',
           '/api/events/{eventId}': 'Get event details',
           '/api/events/{eventId}/items': 'List event files and folders',
@@ -7189,6 +7196,63 @@ function cleanup() {
   }
 
   // ============================================================
+  // ============================================================
+  // Apps Discovery Endpoint
+  // ============================================================
+
+  /// Handle GET /api/apps — aggregated app availability + counts
+  Future<shelf.Response> _handleAppsDiscoveryRequest(
+    Map<String, String> headers,
+  ) async {
+    try {
+      late final String dataDir;
+      try {
+        dataDir = StorageConfig().baseDir;
+      } catch (e) {
+        return shelf.Response.internalServerError(
+          body: jsonEncode({'error': 'Storage not initialized'}),
+          headers: headers,
+        );
+      }
+
+      String callsign = '';
+      try {
+        final profile = ProfileService().getProfile();
+        callsign = profile.callsign;
+      } catch (e) {
+        return shelf.Response.internalServerError(
+          body: jsonEncode({'error': 'Profile not initialized'}),
+          headers: headers,
+        );
+      }
+
+      final storage = FilesystemProfileStorage('$dataDir/devices/$callsign');
+      final handler = AppsHandler(
+        storage: storage,
+        log: (level, message) => LogService().log('AppsHandler [$level]: $message'),
+      );
+
+      final result = await handler.getApps();
+      final statusCode = result['http_status'] as int? ?? 200;
+
+      return shelf.Response(
+        statusCode,
+        body: jsonEncode(result),
+        headers: headers,
+      );
+    } catch (e) {
+      LogService().log('Error in apps discovery API: $e');
+      return shelf.Response.internalServerError(
+        body: jsonEncode({
+          'success': false,
+          'error': 'Internal server error',
+          'timestamp': DateTime.now().millisecondsSinceEpoch ~/ 1000,
+        }),
+        headers: headers,
+      );
+    }
+  }
+
   // Events API Endpoints (public read-only access)
   // ============================================================
 

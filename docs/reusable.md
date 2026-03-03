@@ -37,6 +37,9 @@ This document catalogs reusable UI components available in the Geogram codebase.
 - [ConferencePeerManager](#conferencepeermanager) - Legacy audio WebRTC mesh peer connections (deprecated)
 - [ConferenceService](#conferenceservice) - Orchestration (SFU topology, host/join, role management, promote/demote)
 
+### API Handlers (Shared between CLI and Desktop stations)
+- [AppsHandler](#appshandler) - Aggregated app discovery (`GET /api/apps`) — returns availability + counts for blog, chat, events, alerts, shared in a single call
+
 ### Shared Folder Components
 - [SharedFolder Model](#sharedfolder-model) - Data model for shared folder entries (JSON serialization, visibility)
 - [SharedFolderService](#sharedfolderservice) - ProfileStorage CRUD for shared folder entries
@@ -9383,6 +9386,29 @@ await ConferenceService().discoverAndJoin('ABCD@X1SU86');
 - `stateStream` — ConferenceState changes (idle/starting/active/ending)
 - `events` — ConferenceEvent stream (peer connected/disconnected/role_changed)
 - `isLocalMuted`, `toggleMute()`, `endConference()`
+
+---
+
+## AppsHandler
+
+**File:** `lib/api/handlers/apps_handler.dart`
+
+Shared handler for `GET /api/apps` — returns aggregated app availability and item counts in a single response. Used by both `PureStationServer` (CLI) and `LogApiService` (Desktop). Performs cheap filesystem scans via `ProfileStorage` (not full data loads), making it much faster than querying each app endpoint individually.
+
+**Constructor:** `AppsHandler({required ProfileStorage storage, void Function(String, String)? log})`
+
+**Methods:**
+- `getApps()` → `Future<Map<String, dynamic>>` — returns `{success, timestamp, apps: {blog, chat, events, alerts, shared}}`
+
+**Usage:**
+```dart
+final handler = AppsHandler(
+  storage: FilesystemProfileStorage('$dataDir/devices/$callsign'),
+  log: (level, message) => print('[$level] $message'),
+);
+final result = await handler.getApps();
+// result['apps']['blog'] == {'available': true, 'count': 5}
+```
 
 ---
 

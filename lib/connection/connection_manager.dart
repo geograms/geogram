@@ -45,7 +45,7 @@ class ConnectionManager {
   final Map<String, Transport> _transports = {};
 
   /// Routing strategy for transport selection
-  RoutingStrategy _routingStrategy = const PriorityRoutingStrategy();
+  RoutingStrategy _routingStrategy = PriorityRoutingStrategy();
 
   /// Message queue for store-and-forward
   final Queue<TransportMessage> _messageQueue = Queue();

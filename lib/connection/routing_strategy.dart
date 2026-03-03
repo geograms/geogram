@@ -38,9 +38,16 @@ class PriorityRoutingStrategy implements RoutingStrategy {
   /// Timeout for reachability checks
   final Duration reachabilityTimeout;
 
-  const PriorityRoutingStrategy({
+  /// TTL for cached reachability results
+  final Duration cacheTtl;
+
+  /// Static reachability cache: key = "{transportId}:{callsign}" → (reachable, timestamp)
+  static final Map<String, _ReachCacheEntry> _reachCache = {};
+
+  PriorityRoutingStrategy({
     this.filterUnreachable = true,
     this.reachabilityTimeout = const Duration(seconds: 2),
+    this.cacheTtl = const Duration(seconds: 10),
   });
 
   @override
@@ -59,11 +66,20 @@ class PriorityRoutingStrategy implements RoutingStrategy {
     // Optionally filter to reachable transports
     if (filterUnreachable) {
       final reachableTransports = <Transport>[];
+      final now = DateTime.now();
 
       LogService().log('PriorityRoutingStrategy: Checking canReach($callsign) for ${transports.length} transports');
 
-      // Check reachability in parallel with timeout
+      // Check reachability in parallel with timeout, using cache
       final futures = transports.map((t) async {
+        final cacheKey = '${t.id}:$callsign';
+        final cached = _reachCache[cacheKey];
+        if (cached != null && now.difference(cached.timestamp) < cacheTtl) {
+          LogService().log('PriorityRoutingStrategy: ${t.id} canReach($callsign) = ${cached.reachable} (cached)');
+          if (cached.reachable) return t;
+          return null;
+        }
+
         try {
           final canReach = await t.canReach(callsign).timeout(
             reachabilityTimeout,
@@ -72,9 +88,11 @@ class PriorityRoutingStrategy implements RoutingStrategy {
               return false;
             },
           );
+          _reachCache[cacheKey] = _ReachCacheEntry(canReach, now);
           LogService().log('PriorityRoutingStrategy: ${t.id} canReach($callsign) = $canReach');
           if (canReach) return t;
         } catch (e) {
+          _reachCache[cacheKey] = _ReachCacheEntry(false, now);
           LogService().log('PriorityRoutingStrategy: ${t.id} canReach() ERROR: $e');
         }
         return null;
@@ -101,6 +119,16 @@ class PriorityRoutingStrategy implements RoutingStrategy {
 
     return transports;
   }
+
+  /// Clear the reachability cache (useful for testing or forced refresh)
+  static void clearCache() => _reachCache.clear();
+}
+
+/// Internal cache entry for reachability results
+class _ReachCacheEntry {
+  final bool reachable;
+  final DateTime timestamp;
+  _ReachCacheEntry(this.reachable, this.timestamp);
 }
 
 /// Quality-based routing strategy

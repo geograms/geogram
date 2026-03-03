@@ -1819,6 +1819,35 @@ Receives and merges messages from a remote device during sync.
 
 ---
 
+### Apps Discovery
+
+#### GET /api/apps
+
+Returns all available apps on this device with availability and item counts. This is a fast, single-call alternative to querying each app endpoint individually.
+
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "timestamp": 1709500000,
+  "apps": {
+    "blog": {"available": true, "count": 5},
+    "chat": {"available": true, "count": 2},
+    "events": {"available": false, "count": 0},
+    "alerts": {"available": true, "count": 1},
+    "shared": {"available": true, "count": 3}
+  }
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `apps` | object | Map of app type to availability info |
+| `apps.{type}.available` | bool | Whether the app has any content |
+| `apps.{type}.count` | int | Number of items (posts, rooms, events, etc.) |
+
+---
+
 ### Blog
 
 The Blog API provides access to blog posts stored on a device. Posts are stored in a folder-based structure with comments in separate files.

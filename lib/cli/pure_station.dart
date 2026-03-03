@@ -19,6 +19,7 @@ import '../services/event_service.dart';
 import '../services/profile_storage.dart';
 import '../util/app_constants.dart';
 import '../api/handlers/alert_handler.dart';
+import '../api/handlers/apps_handler.dart';
 import '../api/handlers/place_handler.dart';
 import '../api/handlers/feedback_handler.dart';
 import '../api/common/station_info.dart';
@@ -820,6 +821,7 @@ class PureStationServer with EmailHandlerMixin, BlogHandlerMixin, ConsoleCommand
 
   // Shared API handlers
   AlertHandler? _alertApi;
+  AppsHandler? _appsApi;
   PlaceHandler? _placeApi;
   FeedbackHandler? _feedbackApi;
 
@@ -992,6 +994,20 @@ class PureStationServer with EmailHandlerMixin, BlogHandlerMixin, ConsoleCommand
       );
     }
     return _alertApi!;
+  }
+
+  /// Get the shared apps discovery handler (lazy initialization)
+  AppsHandler get appsApi {
+    if (_appsApi == null) {
+      if (_dataDir == null) {
+        throw StateError('appsApi accessed before init() - _dataDir is null');
+      }
+      _appsApi = AppsHandler(
+        storage: FilesystemProfileStorage('$_dataDir/devices/${_settings.callsign}'),
+        log: (level, message) => _log(level, message),
+      );
+    }
+    return _appsApi!;
   }
 
   /// Get the shared places API handlers (lazy initialization)
@@ -2740,6 +2756,8 @@ class PureStationServer with EmailHandlerMixin, BlogHandlerMixin, ConsoleCommand
         await _handleConsoleVmRequest(request);
       } else if (path == '/api/cli' && method == 'POST') {
         await _handleCliCommand(request);
+      } else if (path == '/api/apps' && method == 'GET') {
+        await _handleAppsApi(request);
       } else if (path == '/alerts') {
         await _handleAlertsPage(request);
       } else if (path == '/api/alerts' || path == '/api/alerts/list') {
@@ -4137,6 +4155,28 @@ class PureStationServer with EmailHandlerMixin, BlogHandlerMixin, ConsoleCommand
   }
 
   /// Handle GET /api/alerts - JSON API for fetching alerts
+  /// Handle GET /api/apps — aggregated app discovery
+  Future<void> _handleAppsApi(HttpRequest request) async {
+    try {
+      final result = await appsApi.getApps();
+      final statusCode = result['http_status'] as int? ?? 200;
+
+      request.response.statusCode = statusCode;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode(result));
+    } catch (e) {
+      _log('ERROR', 'Error in apps API: $e');
+      request.response.statusCode = 500;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({
+        'success': false,
+        'error': 'Internal server error',
+        'timestamp': DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      }));
+    }
+    await request.response.close();
+  }
+
   /// Query parameters:
   ///   - since: Unix timestamp (seconds) - only return alerts updated after this time
   ///   - lat: latitude for distance filtering
