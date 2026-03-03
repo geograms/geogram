@@ -129,6 +129,7 @@ import 'pages/task_settings_page.dart';
 import 'pages/theme_settings_page.dart';
 import 'pages/mirror_settings_page.dart';
 import 'pages/mirror_wizard_page.dart';
+import 'pages/hotspot_settings_page.dart';
 import 'widgets/profile_switcher.dart';
 import 'widgets/transfer/incoming_transfer_dialog.dart';
 import 'transfer/services/p2p_transfer_service.dart';
@@ -2062,6 +2063,20 @@ class _HomePageState extends State<HomePage> {
                     );
                   },
                 ),
+                if (Platform.isAndroid)
+                  ListTile(
+                    leading: const Icon(Icons.wifi_tethering),
+                    title: Text(_i18n.t('hotspot')),
+                    onTap: () {
+                      Navigator.pop(context);
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) => const HotspotSettingsPage(),
+                        ),
+                      );
+                    },
+                  ),
                 if (_profileService.getProfile().isRelay)
                   ListTile(
                     leading: const Icon(Icons.cell_tower, color: Colors.orange),

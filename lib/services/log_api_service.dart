@@ -106,6 +106,7 @@ import '../server/mixins/chat_modification_mixin.dart';
 import '../models/shared_folder.dart';
 import 'shared_folder_service.dart';
 import 'groups_service.dart';
+import 'hotspot_portal_service.dart';
 import '../models/app.dart';
 
 class LogApiService with ChatModificationMixin {
@@ -2157,6 +2158,11 @@ function cleanup() {
       // Handle task monitor debug actions
       if (action.toLowerCase().startsWith('task_')) {
         return _handleTaskAction(action.toLowerCase(), params, headers);
+      }
+
+      // Handle hotspot portal debug actions
+      if (action.toLowerCase().startsWith('hotspot_portal_')) {
+        return await _handleHotspotPortalAction(action.toLowerCase(), params, headers);
       }
 
       final debugController = DebugController();
@@ -18919,6 +18925,70 @@ function cleanup() {
       }
     } catch (e) {
       LogService().log('LocalBackupAction error: $e');
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'error': e.toString()}),
+        headers: headers,
+      );
+    }
+  }
+
+  // ============================================================
+  // Hotspot Portal Debug Actions
+  // ============================================================
+
+  Future<shelf.Response> _handleHotspotPortalAction(
+    String action,
+    Map<String, dynamic> params,
+    Map<String, String> headers,
+  ) async {
+    final portal = HotspotPortalService();
+
+    try {
+      switch (action) {
+        case 'hotspot_portal_status':
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'running': portal.isRunning,
+              'dns_running': portal.isDnsRunning,
+              'port': portal.port,
+            }),
+            headers: headers,
+          );
+
+        case 'hotspot_portal_start':
+          await portal.start(
+            gatewayIp: params['gateway_ip'] as String? ?? HotspotPortalService.defaultGatewayIp,
+            stationName: params['station_name'] as String? ?? 'Geogram',
+          );
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'action': 'started',
+              'port': portal.port,
+            }),
+            headers: headers,
+          );
+
+        case 'hotspot_portal_stop':
+          await portal.stop();
+          return shelf.Response.ok(
+            jsonEncode({'success': true, 'action': 'stopped'}),
+            headers: headers,
+          );
+
+        default:
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': false,
+              'error': 'Unknown hotspot portal action: $action',
+              'available': ['hotspot_portal_start', 'hotspot_portal_stop', 'hotspot_portal_status'],
+            }),
+            headers: headers,
+          );
+      }
+    } catch (e) {
+      LogService().log('HotspotPortalAction error: $e');
       return shelf.Response.internalServerError(
         body: jsonEncode({'error': e.toString()}),
         headers: headers,

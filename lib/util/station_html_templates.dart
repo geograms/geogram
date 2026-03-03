@@ -1478,4 +1478,144 @@ ${getStationHomepageScript(devicesJson)}
 </body>
 </html>''';
   }
+
+  /// Build the captive portal landing page.
+  ///
+  /// Shown when a device connects to the Wi-Fi Direct hotspot and the OS
+  /// opens its captive-portal browser. Uses the Terminimal theme and
+  /// navigation-card layout from the station home page.
+  static String buildPortalHomePage({
+    required String stationName,
+    required String gatewayIp,
+    required int port,
+  }) {
+    final baseUrl = 'http://$gatewayIp:$port';
+
+    return '''
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${escapeHtml(stationName)} — Geogram Portal</title>
+  <style>
+${getBaseStyles()}
+${getDownloadStyles()}
+.portal-hero {
+  text-align: center;
+  padding: 30px 0 20px;
+}
+.portal-hero h1 {
+  font-size: 1.6rem;
+  margin: 0 0 8px;
+}
+.portal-hero p {
+  color: var(--accent-alpha-70);
+  margin: 0;
+}
+.nav-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 15px;
+  margin: 20px 0 30px;
+}
+.nav-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  background: var(--background);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 20px 15px;
+  text-decoration: none;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  text-align: center;
+}
+.nav-card:hover {
+  border-color: var(--accent);
+  box-shadow: var(--shadow);
+}
+.nav-card-icon { font-size: 2rem; }
+.nav-card-title { font-weight: bold; }
+.nav-card-desc { font-size: 0.85rem; color: var(--accent-alpha-70); }
+.cta-section {
+  text-align: center;
+  padding: 30px;
+  background: var(--accent-alpha-20);
+  border-radius: 8px;
+  margin: 20px 0;
+}
+.cta-section h2 { margin: 0 0 10px; color: var(--accent); }
+.cta-section p { margin: 0 0 20px; }
+.cta-btn {
+  display: inline-block;
+  background: var(--accent);
+  color: #000;
+  padding: 12px 30px;
+  border-radius: 6px;
+  text-decoration: none;
+  font-weight: bold;
+  font-size: 1rem;
+}
+.cta-btn:hover { opacity: 0.9; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header class="header">
+      <div class="header__inner">
+        <div class="header__logo">
+          <div class="logo">${escapeHtml(stationName)}</div>
+        </div>
+      </div>
+    </header>
+
+    <main class="main">
+      <section class="portal-hero">
+        <h1>Welcome to ${escapeHtml(stationName)}</h1>
+        <p>You're connected via Geogram hotspot</p>
+      </section>
+
+      <section class="nav-cards">
+        <a href="$baseUrl/blog/" class="nav-card">
+          <span class="nav-card-icon">&#128221;</span>
+          <span class="nav-card-title">Blog</span>
+          <span class="nav-card-desc">Articles and posts</span>
+        </a>
+        <a href="$baseUrl/chat/" class="nav-card">
+          <span class="nav-card-icon">&#128172;</span>
+          <span class="nav-card-title">Chat</span>
+          <span class="nav-card-desc">Join conversations</span>
+        </a>
+        <a href="$baseUrl/files/" class="nav-card">
+          <span class="nav-card-icon">&#128193;</span>
+          <span class="nav-card-title">Files</span>
+          <span class="nav-card-desc">Downloads and media</span>
+        </a>
+        <a href="$baseUrl/download" class="nav-card">
+          <span class="nav-card-icon">&#128229;</span>
+          <span class="nav-card-title">Download</span>
+          <span class="nav-card-desc">Get Geogram</span>
+        </a>
+      </section>
+
+      <section class="cta-section">
+        <h2>Get Geogram</h2>
+        <p>Download the app for your device and join the network</p>
+        <a href="$baseUrl/download" class="cta-btn">Download Now</a>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <div class="footer__inner">
+        <div class="copyright">
+          <span>published via geogram</span>
+        </div>
+      </div>
+    </footer>
+  </div>
+</body>
+</html>''';
+  }
 }

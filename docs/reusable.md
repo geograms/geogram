@@ -130,6 +130,9 @@ This document catalogs reusable UI components available in the Geogram codebase.
 - [TransferService](#transferservice) - Centralized multi-transport transfers with caching and resume
 - [MirrorSyncService](#mirrorsyncservice) - Simple one-way folder sync with NOSTR authentication
 - [MirrorAutoSyncService](#mirrorautosyncservice) - Periodic auto-sync timer with station relay fallback
+- [DnsResponder](#dnsresponder) - Captive portal DNS responder (UDP port 53, resolves all queries to gateway IP)
+- [HotspotPortalService](#hotspotportalservice) - Captive portal HTTP server with portal home page and download page
+- [Hotspot Toggle Pattern](#hotspot-toggle-pattern) - Shared Wi-Fi Direct hotspot toggle logic (used by station_dashboard_page and hotspot_settings_page)
 - [NostrClientService.searchFeed](#nostrclientservicesearchfeed) - Search in-memory NOSTR feed items
 - [NostrClientService.followUser/unfollowUser/likeEvent](#nostrclientservicefollowuserunfollowuserlikeevent) - Follow/unfollow users and like posts
 - [NostrNip19.decode](#nostrnip19decode) - Decode nostr: URIs (note/npub/nevent/nprofile/naddr)
@@ -4138,6 +4141,78 @@ print(MirrorAutoSyncService.instance.toJson());
 - Direct LAN → station relay fallback (3s probe timeout)
 - `MirrorSyncAllResult` with per-peer details
 - Guard flag prevents overlapping syncs
+
+---
+
+### DnsResponder
+
+**File:** `lib/services/dns_responder.dart`
+
+Minimal UDP DNS responder for captive portal detection. Listens on port 53 and answers every DNS query with an A record pointing to the specified gateway IP.
+
+**Usage:**
+```dart
+final dns = DnsResponder();
+await dns.start('192.168.49.1');  // All DNS queries → 192.168.49.1
+// ...
+await dns.stop();
+```
+
+**Key Features:**
+- Pure `dart:io` (no dependencies)
+- Responds to all query types with A record
+- 60-second TTL
+- Handles multiple questions per packet
+
+---
+
+### HotspotPortalService
+
+**File:** `lib/services/hotspot_portal_service.dart`
+
+Captive portal HTTP server + DNS responder orchestration. Manages the web portal (NOT the Wi-Fi Direct hotspot — that's `WifiDirectService`).
+
+**Usage:**
+```dart
+final portal = HotspotPortalService();
+await portal.start(stationName: 'MyStation');
+// Portal available at http://192.168.49.1:3456/
+await portal.stop();
+```
+
+**Key Features:**
+- HTTP server on port 3456 with captive portal detection (Android, Apple, Windows, Firefox)
+- Portal home page via `StationHtmlTemplates.buildPortalHomePage()`
+- Download page via `StationHtmlTemplates.buildDownloadPage()`
+- Debug API at `POST /api/debug/hotspot-portal` (actions: `start`, `stop`)
+- DNS responder on port 53 (best-effort, needs root)
+
+---
+
+### Hotspot Toggle Pattern
+
+**Files:** `lib/pages/station_dashboard_page.dart`, `lib/pages/hotspot_settings_page.dart`
+
+Both pages share the same Wi-Fi Direct hotspot toggle pattern using `WifiDirectService`. The service talks to a single Android `MethodChannel`, so multiple Dart instances safely share the same native group.
+
+**Pattern:**
+```dart
+final wifiDirect = WifiDirectService();
+
+// Check existing state
+final enabled = await wifiDirect.isHotspotEnabled();
+if (enabled) {
+  final info = await wifiDirect.getHotspotInfo();
+}
+
+// Toggle on (requests permissions first)
+await Permission.location.request();
+await Permission.nearbyWifiDevices.request();
+final info = await wifiDirect.enableHotspot(stationName);
+
+// Toggle off
+await wifiDirect.disableHotspot();
+```
 
 ---
 

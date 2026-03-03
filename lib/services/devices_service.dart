@@ -467,6 +467,11 @@ class DevicesService {
       case DebugAction.nostrDisconnect:
         // NOSTR client actions are handled directly by LogApiService
         break;
+      case DebugAction.hotspotPortalStart:
+      case DebugAction.hotspotPortalStop:
+      case DebugAction.hotspotPortalStatus:
+        // Hotspot portal actions are handled directly by LogApiService
+        break;
     }
   }
 

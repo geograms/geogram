@@ -2517,6 +2517,9 @@ Triggers a debug action.
 | `shared_list` | List all shared folder entries with metadata | None |
 | `shared_test_access` | Test access control for a given pubkey | `pubkey` (optional): Hex pubkey to test. Returns accessibility per folder |
 | `shared_test_cookie` | Test cookie parsing from HTTP headers | `headers` (required): Raw HTTP headers string to parse for `geogram_nostr_pubkey` cookie |
+| `hotspot_portal_start` | Start the captive portal HTTP server + DNS | `gateway_ip` (optional): Gateway IP (default: 192.168.49.1), `station_name` (optional): Station name for portal title |
+| `hotspot_portal_stop` | Stop the captive portal server and DNS | None |
+| `hotspot_portal_status` | Get portal server status | None. Returns running state, DNS state, port, gateway IP |
 
 Place feedback actions send signed events to the station and only update local cache files if the place folder can be resolved via `place_path` or `callsign`.
 

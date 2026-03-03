@@ -219,6 +219,15 @@ enum DebugAction {
 
   /// Disconnect from a NOSTR relay
   nostrDisconnect,
+
+  /// Start the captive portal HTTP server + DNS
+  hotspotPortalStart,
+
+  /// Stop the captive portal server and DNS
+  hotspotPortalStop,
+
+  /// Get portal server status
+  hotspotPortalStatus,
 }
 
 /// Toast message to be displayed
