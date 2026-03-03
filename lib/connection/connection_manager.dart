@@ -428,6 +428,22 @@ class ConnectionManager {
 
     try {
       final localPort = LogApiService().port;
+
+      // Guard: don't forward if the local API server isn't running yet
+      if (localPort <= 0) {
+        LogService().log('ConnectionManager: Local API server not ready (port=$localPort), returning 503');
+        statusCode = 503;
+        responseBody = jsonEncode({'error': 'Local API server not ready'});
+        await _sendApiResponse(
+          requestId: message.id,
+          targetCallsign: message.targetCallsign,
+          statusCode: statusCode,
+          body: responseBody,
+          sourceTransportId: message.sourceTransportId,
+        );
+        return;
+      }
+
       final uri = Uri.parse('http://localhost:$localPort$path');
 
       // Prepare headers
@@ -482,13 +498,17 @@ class ConnectionManager {
     }
 
     // Send response back to requester via the same transport it arrived on
-    await _sendApiResponse(
-      requestId: message.id,
-      targetCallsign: message.targetCallsign,
-      statusCode: statusCode,
-      body: responseBody,
-      sourceTransportId: message.sourceTransportId,
-    );
+    try {
+      await _sendApiResponse(
+        requestId: message.id,
+        targetCallsign: message.targetCallsign,
+        statusCode: statusCode,
+        body: responseBody,
+        sourceTransportId: message.sourceTransportId,
+      );
+    } catch (e) {
+      LogService().log('ConnectionManager: Error sending API response back: $e');
+    }
   }
 
   /// Send API response back to the requester

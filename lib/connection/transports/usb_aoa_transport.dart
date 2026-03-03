@@ -546,167 +546,192 @@ class UsbAoaTransport extends Transport with TransportMixin {
 
   /// Handle incoming USB data and convert to TransportMessages
   void _handleIncomingData(Uint8List data) {
-    LogService().log('UsbAoaTransport: [RECV] Got ${data.length} bytes from USB');
-    // Add to receive buffer
-    _receiveBuffer.addAll(data);
+    try {
+      LogService().log('UsbAoaTransport: [RECV] Got ${data.length} bytes from USB');
+      // Add to receive buffer
+      _receiveBuffer.addAll(data);
 
-    // Process complete messages from buffer
-    while (_receiveBuffer.length >= 4) {
-      // Read length prefix (4 bytes, big-endian)
-      final lengthBytes = Uint8List.fromList(_receiveBuffer.sublist(0, 4));
-      final length = lengthBytes.buffer.asByteData().getUint32(0, Endian.big);
-
-      // Check if we have the complete message
-      if (_receiveBuffer.length < 4 + length) {
-        break; // Wait for more data
+      // Guard against corrupted length prefix causing unbounded buffering
+      // If the buffer grows beyond 1MB, something went wrong — reset it
+      if (_receiveBuffer.length > 1024 * 1024) {
+        LogService().log('UsbAoaTransport: Receive buffer overflow (${_receiveBuffer.length} bytes), resetting');
+        _receiveBuffer.clear();
+        return;
       }
 
-      // Extract message
-      final messageBytes = _receiveBuffer.sublist(4, 4 + length);
-      _receiveBuffer.removeRange(0, 4 + length);
+      // Process complete messages from buffer
+      while (_receiveBuffer.length >= 4) {
+        // Read length prefix (4 bytes, big-endian)
+        final lengthBytes = Uint8List.fromList(_receiveBuffer.sublist(0, 4));
+        final length = lengthBytes.buffer.asByteData().getUint32(0, Endian.big);
 
-      try {
-        final messageStr = utf8.decode(messageBytes);
-        final envelope = jsonDecode(messageStr) as Map<String, dynamic>;
-        _processEnvelope(envelope);
-      } catch (e) {
-        LogService().log('UsbAoaTransport: Error processing message: $e');
+        // Sanity check: reject absurdly large messages (> 512KB)
+        if (length > 512 * 1024) {
+          LogService().log('UsbAoaTransport: Invalid message length ($length bytes), resetting buffer');
+          _receiveBuffer.clear();
+          return;
+        }
+
+        // Check if we have the complete message
+        if (_receiveBuffer.length < 4 + length) {
+          break; // Wait for more data
+        }
+
+        // Extract message
+        final messageBytes = _receiveBuffer.sublist(4, 4 + length);
+        _receiveBuffer.removeRange(0, 4 + length);
+
+        try {
+          final messageStr = utf8.decode(messageBytes);
+          final envelope = jsonDecode(messageStr) as Map<String, dynamic>;
+          _processEnvelope(envelope);
+        } catch (e) {
+          LogService().log('UsbAoaTransport: Error processing message: $e');
+        }
       }
+    } catch (e) {
+      LogService().log('UsbAoaTransport: Unhandled error in _handleIncomingData: $e');
+      // Don't let buffer corruption propagate — reset and continue
+      _receiveBuffer.clear();
     }
   }
 
   /// Process a received JSON envelope
   void _processEnvelope(Map<String, dynamic> envelope) {
-    final channel = envelope['channel'] as String?;
-    final contentStr = envelope['content'] as String?;
-
-    if (channel == null || contentStr == null) {
-      LogService().log('UsbAoaTransport: Invalid envelope - missing channel or content');
-      return;
-    }
-
-    dynamic content;
     try {
-      content = jsonDecode(contentStr);
-    } catch (_) {
-      content = contentStr;
-    }
+      final channel = envelope['channel'] as String?;
+      final contentStr = envelope['content'] as String?;
 
-    // Determine message type from channel
-    TransportMessageType type;
-    switch (channel) {
-      case '_dm':
-        type = TransportMessageType.directMessage;
-        break;
-      case '_api':
-        type = TransportMessageType.apiRequest;
-        break;
-      case '_api_response':
-        type = TransportMessageType.apiResponse;
-        break;
-      case '_system':
-        type = TransportMessageType.ping;
-        break;
-      case '_hello':
-        // Handle callsign exchange
-        if (content is Map && content['callsign'] != null) {
-          final remoteCallsign = content['callsign'].toString();
-          _usbService.setRemoteCallsign(remoteCallsign);
-          LogService().log('UsbAoaTransport: Received hello from $remoteCallsign');
-          _stopHelloRetry(); // Stop retrying - handshake successful
+      if (channel == null || contentStr == null) {
+        LogService().log('UsbAoaTransport: Invalid envelope - missing channel or content');
+        return;
+      }
 
-          // Always send hello back to handle restart scenarios where one side
-          // already knows the callsign but the other side restarted
-          LogService().log('UsbAoaTransport: Sending hello reply...');
-          _sendHello();
+      dynamic content;
+      try {
+        content = jsonDecode(contentStr);
+      } catch (_) {
+        content = contentStr;
+      }
+
+      // Determine message type from channel
+      TransportMessageType type;
+      switch (channel) {
+        case '_dm':
+          type = TransportMessageType.directMessage;
+          break;
+        case '_api':
+          type = TransportMessageType.apiRequest;
+          break;
+        case '_api_response':
+          type = TransportMessageType.apiResponse;
+          break;
+        case '_system':
+          type = TransportMessageType.ping;
+          break;
+        case '_hello':
+          // Handle callsign exchange
+          if (content is Map && content['callsign'] != null) {
+            final remoteCallsign = content['callsign'].toString();
+            _usbService.setRemoteCallsign(remoteCallsign);
+            LogService().log('UsbAoaTransport: Received hello from $remoteCallsign');
+            _stopHelloRetry(); // Stop retrying - handshake successful
+
+            // Always send hello back to handle restart scenarios where one side
+            // already knows the callsign but the other side restarted
+            LogService().log('UsbAoaTransport: Sending hello reply...');
+            _sendHello();
+          }
+          return; // Don't emit hello messages
+        default:
+          type = TransportMessageType.chatMessage;
+      }
+
+      // Handle API responses - complete pending request
+      if (type == TransportMessageType.apiResponse && content is Map) {
+        final responseData = content['type'] == 'api_response'
+            ? content
+            : {'type': 'api_response', ...content};
+
+        final requestId = responseData['id']?.toString();
+        if (requestId != null) {
+          final pendingRequest = _pendingRequests.remove(requestId);
+          if (pendingRequest != null) {
+            pendingRequest.stopwatch.stop();
+            final statusCode = responseData['statusCode'] as int? ?? 200;
+            final body = responseData['body'];
+            LogService().log('UsbAoaTransport: Received API response for $requestId (status: $statusCode)');
+            pendingRequest.completer.complete(TransportResult.success(
+              transportUsed: id,
+              statusCode: statusCode,
+              responseData: body,
+              latency: pendingRequest.stopwatch.elapsed,
+            ));
+            return;
+          }
         }
-        return; // Don't emit hello messages
-      default:
-        type = TransportMessageType.chatMessage;
-    }
+        return; // Don't emit orphan API responses
+      }
 
-    // Handle API responses - complete pending request
-    if (type == TransportMessageType.apiResponse && content is Map) {
-      final responseData = content['type'] == 'api_response'
-          ? content
-          : {'type': 'api_response', ...content};
-
-      final requestId = responseData['id']?.toString();
-      if (requestId != null) {
-        final pendingRequest = _pendingRequests.remove(requestId);
-        if (pendingRequest != null) {
-          pendingRequest.stopwatch.stop();
-          final statusCode = responseData['statusCode'] as int? ?? 200;
-          final body = responseData['body'];
-          LogService().log('UsbAoaTransport: Received API response for $requestId (status: $statusCode)');
-          pendingRequest.completer.complete(TransportResult.success(
-            transportUsed: id,
-            statusCode: statusCode,
-            responseData: body,
-            latency: pendingRequest.stopwatch.elapsed,
-          ));
-          return;
+      // Try to parse content for signed events
+      Map<String, dynamic>? signedEvent;
+      dynamic payload = content;
+      if (content is Map<String, dynamic>) {
+        if (content.containsKey('sig') && content.containsKey('pubkey')) {
+          signedEvent = content;
+        } else {
+          payload = content;
         }
       }
-      return; // Don't emit orphan API responses
-    }
 
-    // Try to parse content for signed events
-    Map<String, dynamic>? signedEvent;
-    dynamic payload = content;
-    if (content is Map<String, dynamic>) {
-      if (content.containsKey('sig') && content.containsKey('pubkey')) {
-        signedEvent = content;
+      // Build TransportMessage for API requests
+      TransportMessage message;
+      if (type == TransportMessageType.apiRequest && content is Map) {
+        final headers = <String, String>{};
+        if (content['headers'] is Map) {
+          (content['headers'] as Map).forEach((key, value) {
+            if (key == null || value == null) return;
+            headers[key.toString()] = value.toString();
+          });
+        }
+        message = TransportMessage(
+          id: content['id']?.toString() ?? 'usb-${DateTime.now().millisecondsSinceEpoch}',
+          targetCallsign: _usbService.remoteCallsign ?? 'USB',
+          type: TransportMessageType.apiRequest,
+          method: content['method']?.toString(),
+          path: content['path']?.toString(),
+          headers: headers.isEmpty ? null : headers,
+          payload: content['body'],
+          sourceTransportId: id,
+        );
       } else {
-        payload = content;
+        message = TransportMessage(
+          id: 'usb-${DateTime.now().millisecondsSinceEpoch}',
+          targetCallsign: _usbService.remoteCallsign ?? 'USB',
+          type: type,
+          path: channel,
+          payload: payload,
+          signedEvent: signedEvent,
+          sourceTransportId: id,
+        );
       }
-    }
 
-    // Build TransportMessage for API requests
-    TransportMessage message;
-    if (type == TransportMessageType.apiRequest && content is Map) {
-      final headers = <String, String>{};
-      if (content['headers'] is Map) {
-        (content['headers'] as Map).forEach((key, value) {
-          if (key == null || value == null) return;
-          headers[key.toString()] = value.toString();
-        });
+      emitIncomingMessage(message);
+
+      // Register the device if we know their callsign
+      final remoteCallsign = _usbService.remoteCallsign;
+      if (remoteCallsign != null) {
+        registerDevice(
+          remoteCallsign,
+          metadata: {
+            'source': 'usb',
+            'manufacturer': _usbService.accessoryInfo?.manufacturer,
+            'model': _usbService.accessoryInfo?.model,
+          },
+        );
       }
-      message = TransportMessage(
-        id: content['id']?.toString() ?? 'usb-${DateTime.now().millisecondsSinceEpoch}',
-        targetCallsign: _usbService.remoteCallsign ?? 'USB',
-        type: TransportMessageType.apiRequest,
-        method: content['method']?.toString(),
-        path: content['path']?.toString(),
-        headers: headers.isEmpty ? null : headers,
-        payload: content['body'],
-        sourceTransportId: id,
-      );
-    } else {
-      message = TransportMessage(
-        id: 'usb-${DateTime.now().millisecondsSinceEpoch}',
-        targetCallsign: _usbService.remoteCallsign ?? 'USB',
-        type: type,
-        path: channel,
-        payload: payload,
-        signedEvent: signedEvent,
-        sourceTransportId: id,
-      );
-    }
-
-    emitIncomingMessage(message);
-
-    // Register the device if we know their callsign
-    final remoteCallsign = _usbService.remoteCallsign;
-    if (remoteCallsign != null) {
-      registerDevice(
-        remoteCallsign,
-        metadata: {
-          'source': 'usb',
-          'manufacturer': _usbService.accessoryInfo?.manufacturer,
-          'model': _usbService.accessoryInfo?.model,
-        },
-      );
+    } catch (e) {
+      LogService().log('UsbAoaTransport: Error in _processEnvelope: $e');
     }
   }
 

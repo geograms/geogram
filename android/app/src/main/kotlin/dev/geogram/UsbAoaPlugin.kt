@@ -68,6 +68,9 @@ class UsbAoaPlugin(
     private val isReading = AtomicBoolean(false)
     private val isDisposed = AtomicBoolean(false)
 
+    /// Flag to track if handleAccessoryAttached was already called (prevents double-open race)
+    private val alreadyAttached = AtomicBoolean(false)
+
     private var permissionReceiver: BroadcastReceiver? = null
     private var detachReceiver: BroadcastReceiver? = null
     private var attachReceiver: BroadcastReceiver? = null
@@ -95,7 +98,16 @@ class UsbAoaPlugin(
         Log.d(TAG, "UsbAoaPlugin initialized, USB manager available: ${usbManager != null}")
 
         // Delay accessory check to let activity fully initialize
+        // Skip if handleAccessoryAttached was already called (cold start via USB_ACCESSORY_ATTACHED intent)
         mainHandler.postDelayed({
+            if (alreadyAttached.get()) {
+                Log.d(TAG, "Skipping delayed accessory check - already attached via intent")
+                return@postDelayed
+            }
+            if (isDisposed.get()) {
+                Log.d(TAG, "Skipping delayed accessory check - plugin disposed")
+                return@postDelayed
+            }
             Log.d(TAG, "Checking for existing accessory (delayed)...")
             checkForExistingAccessory()
         }, 500)
@@ -105,7 +117,10 @@ class UsbAoaPlugin(
      * Clean up resources
      */
     fun dispose() {
-        isDisposed.set(true)
+        if (isDisposed.getAndSet(true)) {
+            Log.w(TAG, "dispose() called but already disposed")
+            return
+        }
         close()
         stopAccessoryPolling()
         unregisterReceivers()
@@ -133,6 +148,12 @@ class UsbAoaPlugin(
      * Handle method calls from Dart
      */
     private fun handleMethodCall(call: MethodCall, result: MethodChannel.Result) {
+        if (isDisposed.get()) {
+            Log.w(TAG, "handleMethodCall(${call.method}) ignored - plugin disposed")
+            result.error("DISPOSED", "UsbAoaPlugin has been disposed", null)
+            return
+        }
+
         when (call.method) {
             "initialize" -> {
                 result.success(usbManager != null)
@@ -194,7 +215,13 @@ class UsbAoaPlugin(
      * Handle USB accessory attached intent (called from MainActivity)
      */
     fun handleAccessoryAttached(accessory: UsbAccessory) {
+        if (isDisposed.get()) {
+            Log.w(TAG, "handleAccessoryAttached ignored - plugin disposed")
+            return
+        }
+
         Log.d(TAG, "handleAccessoryAttached: ${accessory.manufacturer} ${accessory.model}")
+        alreadyAttached.set(true)
         this.accessory = accessory
 
         // Check if we have permission
@@ -789,6 +816,10 @@ class UsbAoaPlugin(
      * Notify Dart of successful connection
      */
     private fun notifyConnected(accessory: UsbAccessory) {
+        if (isDisposed.get()) {
+            Log.w(TAG, "notifyConnected ignored - plugin disposed")
+            return
+        }
         methodChannel?.invokeMethod("onAccessoryConnected", mapOf(
             "manufacturer" to accessory.manufacturer,
             "model" to accessory.model,
@@ -803,6 +834,10 @@ class UsbAoaPlugin(
      * Notify Dart of disconnection
      */
     private fun notifyDisconnected() {
+        if (isDisposed.get()) {
+            Log.w(TAG, "notifyDisconnected ignored - plugin disposed")
+            return
+        }
         methodChannel?.invokeMethod("onAccessoryDisconnected", null)
     }
 
@@ -810,6 +845,10 @@ class UsbAoaPlugin(
      * Notify Dart of received data
      */
     private fun notifyDataReceived(data: ByteArray) {
+        if (isDisposed.get()) {
+            Log.w(TAG, "notifyDataReceived ignored - plugin disposed")
+            return
+        }
         Log.d(TAG, "Received ${data.size} bytes, forwarding to Dart")
         methodChannel?.invokeMethod("onDataReceived", mapOf(
             "data" to data
