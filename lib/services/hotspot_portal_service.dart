@@ -87,7 +87,7 @@ class HotspotPortalService {
         return _serveCss();
       default:
         // Unknown non-API paths also redirect to portal
-        if (!path.startsWith('/api/')) {
+        if (!path.startsWith('/api')) {
           return _redirectToPortal();
         }
         // Let LogApiService handle API routes

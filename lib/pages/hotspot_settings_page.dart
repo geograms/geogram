@@ -52,6 +52,17 @@ class _HotspotSettingsPageState extends State<HotspotSettingsPage> {
           _hotspotPassword = info['passphrase'] as String?;
           _hotspotClients = (info['clientCount'] as int?) ?? 0;
         });
+
+        // Auto-start portal DNS if hotspot is already running
+        if (!_portalService.isActive) {
+          try {
+            await _portalService.start(
+                stationName: _hotspotSsid ?? 'Geogram');
+            if (mounted) setState(() {});
+          } catch (e) {
+            LogService().log('Portal auto-start failed: $e');
+          }
+        }
       }
     }
   }

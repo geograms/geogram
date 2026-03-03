@@ -312,12 +312,10 @@ class LogApiService with ChatModificationMixin {
       return shelf.Response.ok('', headers: headers);
     }
 
-    // Captive portal routes — delegate when portal is active
+    // Portal routes — always serve portal pages (for LAN and hotspot users)
     final portal = HotspotPortalService();
-    if (portal.isActive) {
-      final portalResponse = portal.handleShelfRequest(request);
-      if (portalResponse != null) return portalResponse;
-    }
+    final portalResponse = portal.handleShelfRequest(request);
+    if (portalResponse != null) return portalResponse;
 
     final urlPath = request.url.path;
 

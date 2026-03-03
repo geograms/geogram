@@ -15,6 +15,7 @@ import '../models/station_node.dart';
 import '../services/station_node_service.dart';
 import '../services/wifi_direct_service.dart';
 import '../services/i18n_service.dart';
+import '../services/hotspot_portal_service.dart';
 import '../services/log_service.dart';
 import 'station_setup_root_page.dart';
 import 'station_setup_remote_page.dart';
@@ -89,6 +90,16 @@ class _StationDashboardPageState extends State<StationDashboardPage> {
           _hotspotPassword = info['passphrase'] as String?;
           _hotspotClients = (info['clientCount'] as int?) ?? 0;
         });
+
+        // Auto-start portal DNS if hotspot already running
+        final portal = HotspotPortalService();
+        if (!portal.isActive) {
+          try {
+            await portal.start(stationName: stationName);
+          } catch (e) {
+            LogService().log('Portal auto-start failed: $e');
+          }
+        }
       }
     }
   }
@@ -953,12 +964,24 @@ class _StationDashboardPageState extends State<StationDashboardPage> {
             _hotspotPassword = info['passphrase'] as String?;
             _hotspotClients = (info['clientCount'] as int?) ?? 0;
           });
+
+          // Auto-start portal DNS for captive portal detection
+          try {
+            await HotspotPortalService().start(stationName: stationName);
+          } catch (e) {
+            LogService().log('Portal auto-start failed: $e');
+          }
         } else if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(content: Text('Failed to enable hotspot')),
           );
         }
       } else {
+        // Stop portal DNS before disabling hotspot
+        final portal = HotspotPortalService();
+        if (portal.isActive) {
+          await portal.stop();
+        }
         final success = await _wifiDirectService.disableHotspot();
         if (mounted) {
           if (success) {

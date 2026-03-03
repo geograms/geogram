@@ -107,8 +107,8 @@ class DnsResponder {
     // Header
     builder.add(id); // Transaction ID
     builder.add([0x81, 0x80]); // Flags: response, authoritative, recursion available
-    builder.add([0, qdCount >> 8, 0, qdCount & 0xFF]); // QD count (same as query)
-    builder.add([0, qdCount >> 8, 0, qdCount & 0xFF]); // AN count (one answer per question)
+    builder.add([(qdCount >> 8) & 0xFF, qdCount & 0xFF]); // QD count (same as query)
+    builder.add([(qdCount >> 8) & 0xFF, qdCount & 0xFF]); // AN count (one answer per question)
     builder.add([0, 0]); // NS count
     builder.add([0, 0]); // AR count
 
