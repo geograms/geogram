@@ -4,10 +4,13 @@
  */
 
 import 'dart:async';
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import '../models/local_backup_models.dart';
 import '../services/backup_service.dart';
 import '../services/devices_service.dart';
 import '../services/i18n_service.dart';
+import '../services/local_backup_service.dart';
 import '../models/backup_models.dart';
 
 /// Backup management page with wizard-style role selection.
@@ -22,6 +25,7 @@ class BackupBrowserPage extends StatefulWidget {
 class _BackupBrowserPageState extends State<BackupBrowserPage> {
   final BackupService _backupService = BackupService();
   final DevicesService _devicesService = DevicesService();
+  final LocalBackupService _localBackupService = LocalBackupService();
   final I18nService _i18n = I18nService();
 
   // Current view state
@@ -43,6 +47,10 @@ class _BackupBrowserPageState extends State<BackupBrowserPage> {
   // Available providers
   List<AvailableBackupProvider> _lanProviders = [];
   List<AvailableBackupProvider> _stationProviders = [];
+
+  // Local backup state
+  List<LocalBackupSnapshot> _localSnapshots = [];
+  LocalBackupStatus _localBackupStatus = LocalBackupStatus.idle();
 
   // Stream subscriptions
   StreamSubscription<BackupStatus>? _statusSubscription;
@@ -187,6 +195,8 @@ class _BackupBrowserPageState extends State<BackupBrowserPage> {
         return _buildProviderDashboard();
       case _BackupViewState.selectProvider:
         return _buildProviderSelectionPage();
+      case _BackupViewState.localBackupDashboard:
+        return _buildLocalBackupDashboard();
     }
   }
 
@@ -244,6 +254,16 @@ class _BackupBrowserPageState extends State<BackupBrowserPage> {
                 title: _i18n.t('backup_role_provider'),
                 description: _i18n.t('backup_role_provider_description'),
                 onTap: _enableProviderMode,
+              ),
+
+              const SizedBox(height: 16),
+
+              // Local Backup option
+              _buildRoleCard(
+                icon: Icons.phone_android,
+                title: _i18n.t('backup_local'),
+                description: _i18n.t('backup_local_description'),
+                onTap: _enterLocalBackup,
               ),
             ],
           ),
@@ -1568,6 +1588,14 @@ class _BackupBrowserPageState extends State<BackupBrowserPage> {
                   _showProviderSettingsDialog();
                 },
               ),
+            ListTile(
+              leading: const Icon(Icons.phone_android),
+              title: Text(_i18n.t('backup_local')),
+              onTap: () {
+                Navigator.pop(context);
+                _enterLocalBackup();
+              },
+            ),
           ],
         ),
       ),
@@ -1735,6 +1763,362 @@ class _BackupBrowserPageState extends State<BackupBrowserPage> {
     );
   }
 
+  // ============================================================
+  // LOCAL BACKUP
+  // ============================================================
+
+  void _enterLocalBackup() {
+    _localBackupService.initialize();
+    setState(() => _viewState = _BackupViewState.localBackupDashboard);
+    _refreshLocalSnapshots();
+  }
+
+  Future<void> _refreshLocalSnapshots() async {
+    final snapshots = await _localBackupService.listSnapshots();
+    if (mounted) {
+      setState(() => _localSnapshots = snapshots);
+    }
+  }
+
+  Future<void> _pickLocalBackupFolder() async {
+    final result = await FilePicker.platform.getDirectoryPath(
+      dialogTitle: _i18n.t('backup_local_select_folder'),
+    );
+    if (result != null && mounted) {
+      _localBackupService.setBackupFolder(result);
+      setState(() {});
+    }
+  }
+
+  Future<void> _createLocalBackup() async {
+    setState(() {
+      _localBackupStatus = LocalBackupStatus(isInProgress: true);
+    });
+
+    final snapshot = await _localBackupService.createBackup();
+
+    if (mounted) {
+      setState(() {
+        _localBackupStatus = _localBackupService.status;
+      });
+      await _refreshLocalSnapshots();
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(snapshot != null
+              ? _i18n.t('backup_local_complete')
+              : _i18n.t('backup_local_failed', params: [_localBackupService.status.error ?? 'Unknown error'])),
+        ),
+      );
+    }
+  }
+
+  Future<void> _restoreLocalBackup(LocalBackupSnapshot snapshot) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(_i18n.t('backup_confirm_restore')),
+        content: Text(_i18n.t('backup_local_restore_confirm')),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(_i18n.t('cancel')),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(_i18n.t('backup_restore')),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
+    setState(() {
+      _localBackupStatus = LocalBackupStatus(isInProgress: true);
+    });
+
+    final success = await _localBackupService.restoreSnapshot(snapshot.filePath);
+
+    if (mounted) {
+      setState(() {
+        _localBackupStatus = _localBackupService.status;
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(success
+              ? _i18n.t('backup_local_restore_success')
+              : _i18n.t('backup_local_failed', params: [_localBackupService.status.error ?? 'Unknown error'])),
+        ),
+      );
+    }
+  }
+
+  Future<void> _deleteLocalBackup(LocalBackupSnapshot snapshot) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(_i18n.t('backup_local_delete_confirm')),
+        content: Text(snapshot.fileName),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(_i18n.t('cancel')),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(context).colorScheme.error,
+            ),
+            child: Text(_i18n.t('delete')),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
+    await _localBackupService.deleteSnapshot(snapshot.filePath);
+    await _refreshLocalSnapshots();
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(_i18n.t('backup_deleted'))),
+      );
+    }
+  }
+
+  Widget _buildLocalBackupDashboard() {
+    final theme = Theme.of(context);
+    final settings = _localBackupService.settings;
+    final folderPath = settings.backupFolderPath;
+
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Back button
+          TextButton.icon(
+            onPressed: () => setState(() => _viewState = _BackupViewState.roleSelection),
+            icon: const Icon(Icons.arrow_back),
+            label: Text(_i18n.t('backup_switch_role')),
+          ),
+          const SizedBox(height: 8),
+
+          // Backup folder section
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    _i18n.t('backup_local_folder'),
+                    style: theme.textTheme.titleSmall,
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          folderPath ?? _i18n.t('backup_local_select_folder'),
+                          style: theme.textTheme.bodyMedium?.copyWith(
+                            color: folderPath != null
+                                ? theme.colorScheme.onSurface
+                                : theme.colorScheme.onSurfaceVariant,
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      TextButton(
+                        onPressed: _pickLocalBackupFolder,
+                        child: Text(_i18n.t('backup_local_change_folder')),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+
+          // Backup Now button + progress
+          SizedBox(
+            width: double.infinity,
+            child: FilledButton.icon(
+              onPressed: folderPath != null && !_localBackupStatus.isInProgress
+                  ? _createLocalBackup
+                  : null,
+              icon: const Icon(Icons.backup),
+              label: Text(_i18n.t('backup_local_now')),
+            ),
+          ),
+
+          if (_localBackupStatus.isInProgress) ...[
+            const SizedBox(height: 8),
+            LinearProgressIndicator(value: _localBackupStatus.progress > 0 ? _localBackupStatus.progress : null),
+            const SizedBox(height: 4),
+            Text(
+              _localBackupStatus.currentFile != null
+                  ? '${_i18n.t('backup_local_in_progress')} ${_localBackupStatus.currentFile}'
+                  : _i18n.t('backup_local_in_progress'),
+              style: theme.textTheme.bodySmall,
+            ),
+          ],
+
+          const SizedBox(height: 24),
+
+          // Backup History
+          Text(
+            _i18n.t('backup_local_snapshots'),
+            style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 8),
+
+          if (_localSnapshots.isEmpty)
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Center(
+                  child: Text(
+                    _i18n.t('backup_local_no_snapshots'),
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ),
+              ),
+            )
+          else
+            ...List.generate(_localSnapshots.length, (i) {
+              final snap = _localSnapshots[i];
+              return Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        _formatDate(snap.createdAt),
+                        style: theme.textTheme.titleSmall,
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        '${snap.totalFiles} files \u2022 ${_formatLocalBytes(snap.totalBytes)} (ZIP ${_formatLocalBytes(snap.archiveSizeBytes)})',
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.end,
+                        children: [
+                          TextButton(
+                            onPressed: () => _restoreLocalBackup(snap),
+                            child: Text(_i18n.t('backup_restore')),
+                          ),
+                          const SizedBox(width: 8),
+                          TextButton(
+                            onPressed: () => _deleteLocalBackup(snap),
+                            style: TextButton.styleFrom(
+                              foregroundColor: theme.colorScheme.error,
+                            ),
+                            child: Text(_i18n.t('delete')),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            }),
+
+          const SizedBox(height: 24),
+
+          // Auto Backup settings
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                children: [
+                  SwitchListTile(
+                    title: Text(_i18n.t('backup_local_auto_backup')),
+                    value: settings.autoBackupEnabled,
+                    onChanged: folderPath != null
+                        ? (v) {
+                            _localBackupService.updateSettings(autoBackupEnabled: v);
+                            setState(() {});
+                          }
+                        : null,
+                    contentPadding: EdgeInsets.zero,
+                  ),
+                  ListTile(
+                    title: Text(_i18n.t('backup_local_auto_interval')),
+                    subtitle: Text('${(settings.autoBackupIntervalMinutes / 60).round()} hours'),
+                    contentPadding: EdgeInsets.zero,
+                    trailing: DropdownButton<int>(
+                      value: settings.autoBackupIntervalMinutes,
+                      items: const [
+                        DropdownMenuItem(value: 60, child: Text('1h')),
+                        DropdownMenuItem(value: 360, child: Text('6h')),
+                        DropdownMenuItem(value: 720, child: Text('12h')),
+                        DropdownMenuItem(value: 1440, child: Text('24h')),
+                        DropdownMenuItem(value: 4320, child: Text('3d')),
+                        DropdownMenuItem(value: 10080, child: Text('7d')),
+                      ],
+                      onChanged: (v) {
+                        if (v != null) {
+                          _localBackupService.updateSettings(autoBackupIntervalMinutes: v);
+                          setState(() {});
+                        }
+                      },
+                    ),
+                  ),
+                  ListTile(
+                    title: Text(_i18n.t('backup_local_max_snapshots')),
+                    subtitle: Text('${settings.maxSnapshots}'),
+                    contentPadding: EdgeInsets.zero,
+                    trailing: DropdownButton<int>(
+                      value: settings.maxSnapshots,
+                      items: const [
+                        DropdownMenuItem(value: 3, child: Text('3')),
+                        DropdownMenuItem(value: 5, child: Text('5')),
+                        DropdownMenuItem(value: 10, child: Text('10')),
+                        DropdownMenuItem(value: 20, child: Text('20')),
+                        DropdownMenuItem(value: 50, child: Text('50')),
+                      ],
+                      onChanged: (v) {
+                        if (v != null) {
+                          _localBackupService.updateSettings(maxSnapshots: v);
+                          setState(() {});
+                        }
+                      },
+                    ),
+                  ),
+                  if (settings.lastBackupAt != null)
+                    ListTile(
+                      title: Text(_i18n.t('backup_last')),
+                      subtitle: Text(_formatDate(settings.lastBackupAt!)),
+                      contentPadding: EdgeInsets.zero,
+                    ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _formatLocalBytes(int bytes) {
+    if (bytes < 1024) return '$bytes B';
+    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
+    if (bytes < 1024 * 1024 * 1024) return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+    return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(1)} GB';
+  }
+
   Color _getStatusColor(BackupRelationshipStatus? status) {
     switch (status) {
       case BackupRelationshipStatus.pending:
@@ -1754,4 +2138,5 @@ enum _BackupViewState {
   clientDashboard,
   providerDashboard,
   selectProvider,
+  localBackupDashboard,
 }

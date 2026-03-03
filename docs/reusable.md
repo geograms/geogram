@@ -10110,3 +10110,31 @@ Chat bubble widget with SNR signal quality badge (color-coded: green/orange/red)
 ```dart
 MeshCoreMessageBubble(message: meshCoreMessage)
 ```
+
+## LocalBackupService
+
+**File:** `lib/services/local_backup_service.dart`
+**Models:** `lib/models/local_backup_models.dart`
+
+Singleton service for creating and restoring local ZIP archive backups of the active profile. Supports both filesystem and encrypted (SQLite) profiles. Includes auto-backup timer and snapshot pruning.
+
+```dart
+final service = LocalBackupService();
+service.initialize();
+
+// Configure
+service.setBackupFolder('/path/to/backups');
+service.updateSettings(autoBackupEnabled: true, maxSnapshots: 10);
+
+// Create/list/restore/delete
+final snapshot = await service.createBackup();
+final snapshots = await service.listSnapshots();
+await service.restoreSnapshot(snapshot.filePath);
+await service.deleteSnapshot(snapshot.filePath);
+
+// Auto-backup timer
+service.startAutoBackup();
+service.stopAutoBackup();
+```
+
+Debug API actions: `local_backup_set_folder`, `local_backup_create`, `local_backup_list`, `local_backup_restore`, `local_backup_delete`, `local_backup_status`.

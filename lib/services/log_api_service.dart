@@ -46,6 +46,7 @@ import '../teleport/atproto/atproto_client_service.dart';
 import '../teleport/atproto/atproto_local_pds_service.dart';
 import '../teleport/irc/models/irc_server_config.dart';
 import 'sqlite_loader.dart';
+import 'local_backup_service.dart';
 import '../version.dart';
 import '../models/chat_channel.dart';
 import '../models/chat_message.dart';
@@ -2101,6 +2102,11 @@ function cleanup() {
       // Handle shared folder debug actions
       if (action.toLowerCase().startsWith('shared_')) {
         return await _handleSharedAction(action.toLowerCase(), params, headers);
+      }
+
+      // Handle local backup debug actions
+      if (action.toLowerCase().startsWith('local_backup_')) {
+        return await _handleLocalBackupAction(action.toLowerCase(), params, headers);
       }
 
       // Handle Telegram cache debug actions
@@ -18782,6 +18788,141 @@ function cleanup() {
           jsonEncode({'success': false, 'error': 'Unknown task action: $action'}),
           headers: headers,
         );
+    }
+  }
+
+  /// Handle local backup debug actions.
+  Future<shelf.Response> _handleLocalBackupAction(
+    String action,
+    Map<String, dynamic> params,
+    Map<String, String> headers,
+  ) async {
+    final service = LocalBackupService();
+    service.initialize();
+
+    try {
+      switch (action) {
+        case 'local_backup_set_folder':
+          final folderPath = params['path'] as String?;
+          if (folderPath == null || folderPath.isEmpty) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({'success': false, 'error': 'Missing path parameter'}),
+              headers: headers,
+            );
+          }
+          service.setBackupFolder(folderPath);
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'message': 'Backup folder set',
+              'path': folderPath,
+            }),
+            headers: headers,
+          );
+
+        case 'local_backup_create':
+          final snapshot = await service.createBackup();
+          if (snapshot == null) {
+            return shelf.Response.ok(
+              jsonEncode({
+                'success': false,
+                'error': service.status.error ?? 'Backup failed',
+              }),
+              headers: headers,
+            );
+          }
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'message': 'Backup created',
+              'snapshot': snapshot.toJson(),
+            }),
+            headers: headers,
+          );
+
+        case 'local_backup_list':
+          final snapshots = await service.listSnapshots();
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'snapshots': snapshots.map((s) => s.toJson()).toList(),
+            }),
+            headers: headers,
+          );
+
+        case 'local_backup_restore':
+          final fileName = params['file'] as String?;
+          if (fileName == null || fileName.isEmpty) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({'success': false, 'error': 'Missing file parameter'}),
+              headers: headers,
+            );
+          }
+          final folder = service.settings.backupFolderPath;
+          if (folder == null) {
+            return shelf.Response.ok(
+              jsonEncode({'success': false, 'error': 'No backup folder configured'}),
+              headers: headers,
+            );
+          }
+          final filePath = path.join(folder, fileName);
+          final success = await service.restoreSnapshot(filePath);
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': success,
+              'message': success ? 'Restore complete' : (service.status.error ?? 'Restore failed'),
+            }),
+            headers: headers,
+          );
+
+        case 'local_backup_delete':
+          final fileName = params['file'] as String?;
+          if (fileName == null || fileName.isEmpty) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({'success': false, 'error': 'Missing file parameter'}),
+              headers: headers,
+            );
+          }
+          final folder = service.settings.backupFolderPath;
+          if (folder == null) {
+            return shelf.Response.ok(
+              jsonEncode({'success': false, 'error': 'No backup folder configured'}),
+              headers: headers,
+            );
+          }
+          final filePath = path.join(folder, fileName);
+          final deleted = await service.deleteSnapshot(filePath);
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': deleted,
+              'message': deleted ? 'Snapshot deleted' : 'File not found',
+            }),
+            headers: headers,
+          );
+
+        case 'local_backup_status':
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'settings': service.settings.toJson(),
+              'status': service.status.toJson(),
+              'auto_backup_running': service.isAutoBackupRunning,
+            }),
+            headers: headers,
+          );
+
+        default:
+          return shelf.Response.ok(
+            jsonEncode({'success': false, 'error': 'Unknown local backup action: $action'}),
+            headers: headers,
+          );
+      }
+    } catch (e) {
+      LogService().log('LocalBackupAction error: $e');
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'error': e.toString()}),
+        headers: headers,
+      );
     }
   }
 }

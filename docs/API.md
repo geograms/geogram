@@ -4322,3 +4322,57 @@ The authorization event must include:
 | 401 | Missing or invalid Nostr auth |
 | 403 | Not authorized to delete this blob |
 | 404 | Blob not found |
+
+---
+
+## Local Backup
+
+Debug API actions for managing local ZIP archive backups of the active profile.
+
+### Set Backup Folder
+
+```bash
+curl -X POST http://localhost:8080/api/debug \
+  -H 'Content-Type: application/json' \
+  -d '{"action": "local_backup_set_folder", "path": "/tmp/geogram-backups"}'
+```
+
+### Create Backup
+
+```bash
+curl -X POST http://localhost:8080/api/debug \
+  -H 'Content-Type: application/json' \
+  -d '{"action": "local_backup_create"}'
+```
+
+### List Snapshots
+
+```bash
+curl -X POST http://localhost:8080/api/debug \
+  -H 'Content-Type: application/json' \
+  -d '{"action": "local_backup_list"}'
+```
+
+### Restore Snapshot
+
+```bash
+curl -X POST http://localhost:8080/api/debug \
+  -H 'Content-Type: application/json' \
+  -d '{"action": "local_backup_restore", "file": "geogram-backup-CALLSIGN-2026-03-03-143000.zip"}'
+```
+
+### Delete Snapshot
+
+```bash
+curl -X POST http://localhost:8080/api/debug \
+  -H 'Content-Type: application/json' \
+  -d '{"action": "local_backup_delete", "file": "geogram-backup-CALLSIGN-2026-03-03-143000.zip"}'
+```
+
+### Get Status
+
+```bash
+curl -X POST http://localhost:8080/api/debug \
+  -H 'Content-Type: application/json' \
+  -d '{"action": "local_backup_status"}'
+```
