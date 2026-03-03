@@ -3,6 +3,7 @@
 /// Used by both Flutter embedded and CLI station servers
 
 import 'html_utils.dart';
+import 'nostr_login_scripts.dart';
 
 /// Shared HTML templates for station server pages
 class StationHtmlTemplates {
@@ -609,8 +610,9 @@ ${getDownloadStyles()}
   }
 
   /// NOSTR likes/reactions JavaScript for blog post pages.
-  /// Returns a <script> block that handles NOSTR NIP-07 extension detection,
-  /// like/unlike toggling, and UI updates.
+  /// Returns a <script> block that handles like/unlike toggling.
+  /// Relies on the unified Nostr login component (nostr_login_scripts.dart)
+  /// which provides window.nostr via either browser extension or generated keys.
   static String getNostrLikesScript({
     required String postId,
     required String authorNpub,
@@ -628,48 +630,30 @@ ${getDownloadStyles()}
   let userPubkey = null;
   let isLiked = false;
 
-  function onNostrAvailable() {
+  function onNostrConnected(pubkey) {
+    userPubkey = pubkey;
     document.getElementById('feedback-section').style.display = 'flex';
-    window.nostr.getPublicKey().then(function(pk) {
-      userPubkey = pk;
-      if (likedPubkeys.includes(pk)) {
-        isLiked = true;
-        updateUI($likesCount);
-      }
-    }).catch(function(e) {
-      console.log('User denied public key access');
-    });
+    if (likedPubkeys.includes(pubkey)) {
+      isLiked = true;
+      updateUI($likesCount);
+    }
   }
 
   function init() {
-    if (typeof window.nostr !== 'undefined') {
-      onNostrAvailable();
-      return;
-    }
-    var _nostr;
-    Object.defineProperty(window, 'nostr', {
-      configurable: true,
-      enumerable: true,
-      get: function() { return _nostr; },
-      set: function(value) {
-        _nostr = value;
-        Object.defineProperty(window, 'nostr', {
-          value: _nostr, writable: true, configurable: true, enumerable: true
-        });
-        onNostrAvailable();
-      }
+    // Listen for unified Nostr login connection event
+    document.addEventListener('nostr-connected', function(e) {
+      onNostrConnected(e.detail.pubkey);
     });
-    setTimeout(function() {
-      if (typeof window.nostr === 'undefined') {
-        document.getElementById('nostr-notice').style.display = 'block';
-      }
-    }, 3000);
+    // If already connected (e.g. auto-reconnect from saved keys)
+    if (window.GeogramNostr && window.GeogramNostr.connected && window.GeogramNostr.pubkey) {
+      onNostrConnected(window.GeogramNostr.pubkey);
+    }
   }
 
   window.toggleLike = async function() {
-    if (!userPubkey) {
-      try { userPubkey = await window.nostr.getPublicKey(); }
-      catch (e) { alert('Please allow access to your NOSTR public key'); return; }
+    if (!userPubkey || !window.nostr) {
+      alert('Please connect with Nostr first');
+      return;
     }
     const button = document.getElementById('like-button');
     button.disabled = true;
@@ -856,9 +840,6 @@ ${getDownloadStyles()}
           <span>Like</span>
         </button>
         <span class="like-count" id="like-count">${likesCount > 0 ? "$likesCount like${likesCount != 1 ? "s" : ""}" : ""}</span>
-      </div>
-      <div class="nostr-notice" id="nostr-notice" style="display: none;">
-        <a href="https://getalby.com" target="_blank">Install a NOSTR extension</a> to like this post
       </div>''' : '';
 
     final backHtml = backUrl != null ? '''
@@ -877,6 +858,8 @@ ${getDownloadStyles()}
           )
         : '';
 
+    final nostrHeaderHtml = getNostrLoginHeaderHtml();
+
     final headerHtml = '''
   <header class="header">
     <div class="header__inner">
@@ -885,9 +868,13 @@ ${getDownloadStyles()}
           <div class="logo">${escapeHtml(logo)}</div>
         </a>
       </div>
+      $nostrHeaderHtml
     </div>
     ${menuItems.isNotEmpty ? '<nav class="menu"><ul class="menu__inner">$menuItems</ul></nav>' : ''}
   </header>''';
+
+    final nostrStyles = getNostrLoginStyles();
+    final nostrScripts = getNostrLoginScripts();
 
     return '''<!DOCTYPE html>
 <html lang="en">
@@ -895,6 +882,7 @@ ${getDownloadStyles()}
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1">
   <title>${escapeHtml(postTitle)} - ${escapeHtml(author)}</title>
+  $nostrStyles
   <style>$globalStyles</style>
   ${appStyles.isNotEmpty ? '<style>$appStyles</style>' : ''}
 </head>
@@ -927,6 +915,7 @@ $headerHtml
   </footer>
 </div>
 $nostrScript
+<script>$nostrScripts</script>
 </body>
 </html>''';
   }
