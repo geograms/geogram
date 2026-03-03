@@ -4,10 +4,9 @@
 /// [LogApiService]'s existing HTTP server on port 3456. Does NOT bind its own
 /// HTTP server — the routes are served through [LogApiService._handleRequest].
 ///
-/// When the station server is running (shared port 3456), this service only
-/// handles captive portal probe detection — all real page routes are served by
-/// the station server. When the station server is NOT running, this service
-/// serves fallback pages using the same shared templates and [WebNavigation].
+/// Reuses the station server's actual pages — [StationServerService.buildHomepageHtml]
+/// for the homepage, [WebNavigation] for navigation, and [StationHtmlTemplates]
+/// for the download page. No separate "portal" pages.
 library;
 
 import 'package:shelf/shelf.dart' as shelf;
@@ -16,7 +15,8 @@ import '../util/station_html_templates.dart';
 import '../util/web_navigation.dart';
 import 'dns_responder.dart';
 import 'log_service.dart';
-import 'station_server_service_stub.dart' if (dart.library.ui) 'station_server_service.dart';
+import 'station_server_service_stub.dart'
+    if (dart.library.ui) 'station_server_service.dart';
 
 class HotspotPortalService {
   static final HotspotPortalService _instance =
@@ -68,14 +68,13 @@ class HotspotPortalService {
 
   // ── Shelf request handler ───────────────────────────────────────
 
-  /// Handle a shelf request if it matches a portal route.
-  /// Returns a [shelf.Response] for portal paths, or `null` to let
+  /// Handle a shelf request if it matches a portal/page route.
+  /// Returns a [shelf.Response] for handled paths, or `null` to let
   /// LogApiService handle it normally (e.g. `/api/*` routes).
   ///
-  /// When the station server is running on the shared port, we only handle
-  /// captive portal probes — the station server serves all real pages.
-  /// When the station server is NOT running, we serve fallback pages using
-  /// the same shared templates and [WebNavigation].
+  /// Reuses the station server's [buildHomepageHtml] for the homepage
+  /// and [StationHtmlTemplates.buildDownloadPage] with [WebNavigation]
+  /// for the download page — same pages visitors see on the station.
   shelf.Response? handleShelfRequest(shelf.Request request) {
     final path = '/${request.url.path}';
 
@@ -89,22 +88,22 @@ class HotspotPortalService {
       return null;
     }
 
-    // If station server is running, let it handle all page routes
-    if (StationServerService().isRunning) {
-      return null;
-    }
-
-    // Station server not running — serve fallback pages
+    // Serve pages — reuse station server's actual pages
     switch (path) {
       case '/':
-        return _servePortalHome();
+        return _serveHomepage();
       case '/download':
       case '/download/':
         return _serveDownloadPage();
       case '/styles.css':
         return _serveCss();
       default:
-        // Redirect unknown paths to portal home
+        // If station server is running, let it handle other routes
+        // (chat, blog, device pages, etc.) on the shared port
+        if (StationServerService().isRunning) {
+          return null;
+        }
+        // Station server not running — redirect unknown paths to home
         return _redirectToPortal();
     }
   }
@@ -127,26 +126,20 @@ class HotspotPortalService {
     return shelf.Response.found(portalUrl);
   }
 
-  // ── Page handlers ─────────────────────────────────────────────
+  // ── Page handlers (reuse station server pages) ─────────────────
 
-  shelf.Response _servePortalHome() {
-    final menuItems = WebNavigation.generateStationMenuItems(
-      activeApp: 'home',
-      hasChat: true,
-      hasDownload: true,
-    );
-
-    final html = StationHtmlTemplates.buildPortalHomePage(
-      stationName: _stationName,
-      gatewayIp: _gatewayIp,
-      port: portalPort,
-      menuItems: menuItems,
-      hasChat: true,
-    );
-    return shelf.Response.ok(
-      html,
-      headers: {'Content-Type': 'text/html; charset=utf-8'},
-    );
+  /// Serve the station homepage — exact same page as the station server.
+  shelf.Response _serveHomepage() {
+    final stationServer = StationServerService();
+    final html = stationServer.buildHomepageHtml();
+    if (html != null) {
+      return shelf.Response.ok(
+        html,
+        headers: {'Content-Type': 'text/html; charset=utf-8'},
+      );
+    }
+    // Station server not initialized — minimal redirect
+    return _redirectToPortal();
   }
 
   shelf.Response _serveDownloadPage() {

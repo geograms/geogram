@@ -1774,11 +1774,31 @@ class StationServerService {
 
   /// Handle / root endpoint
   Future<void> _handleRoot(HttpRequest request) async {
-    final profile = ProfileService().getProfile();
-    final stationName = profile.nickname.isNotEmpty ? profile.nickname : 'Geogram Station';
+    request.response.headers.contentType = ContentType.html;
+    request.response.write(buildHomepageHtml());
+  }
 
-    // Build devices list HTML
+  /// Build the station homepage HTML using the shared template.
+  /// Public so the portal service can reuse the exact same page.
+  String buildHomepageHtml() {
+    final profile = ProfileService().getProfile();
+    final stationName = profile.nickname.isNotEmpty ? profile.nickname : profile.callsign;
+
+    final uptime = _startTime != null
+        ? DateTime.now().difference(_startTime!).inMinutes
+        : 0;
+    final uptimeStr = formatUptimeFromMinutes(uptime);
+
+    final menuItems = WebNavigation.generateStationMenuItems(
+      activeApp: 'home',
+      hasChat: true,
+      hasDownload: true,
+    );
+
+    // Build devices list HTML and collect coordinates for map
     final devicesHtml = StringBuffer();
+    final devicesWithLocation = <Map<String, dynamic>>[];
+
     for (final client in _clients.values) {
       final callsign = client.callsign ?? client.id;
       final nickname = client.nickname ?? callsign;
@@ -1789,13 +1809,27 @@ class StationServerService {
           ? '${client.latitude!.toStringAsFixed(2)}, ${client.longitude!.toStringAsFixed(2)}'
           : '';
 
+      if (client.latitude != null && client.longitude != null) {
+        devicesWithLocation.add({
+          'callsign': callsign,
+          'nickname': nickname,
+          'lat': client.latitude,
+          'lng': client.longitude,
+          'icon': 'laptop',
+        });
+      }
+
+      final nicknameHtml = (nickname != callsign)
+          ? '<div class="device-nickname">${escapeHtml(nickname)}</div>'
+          : '';
+
       devicesHtml.writeln('''
         <a href="/$callsign/" class="device-card">
           <div class="device-header">
             <span class="device-callsign">$callsign</span>
             <span class="connection-badge $connectionType">$connectionLabel</span>
           </div>
-          <div class="device-nickname">${escapeHtml(nickname)}</div>
+          $nicknameHtml
           <div class="device-meta">
             Connected since $connectedAgo${location.isNotEmpty ? ' · $location' : ''}
           </div>
@@ -1803,429 +1837,23 @@ class StationServerService {
       ''');
     }
 
-    final noDevicesDisplay = _clients.isEmpty ? 'block' : 'none';
-    final devicesDisplay = _clients.isEmpty ? 'none' : 'grid';
+    final devicesJson = devicesWithLocation.map((d) =>
+      '{"callsign":"${d['callsign']}","nickname":"${escapeHtml(d['nickname'] as String)}","lat":${d['lat']},"lng":${d['lng']},"icon":"${d['icon']}"}'
+    ).join(',');
 
-    request.response.headers.contentType = ContentType.html;
-    request.response.write('''
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>$stationName - Geogram Station</title>
-  <style>
-/* Terminimal theme */
-:root {
-  --accent: rgb(255,168,106);
-  --accent-alpha-70: rgba(255,168,106,.7);
-  --accent-alpha-20: rgba(255,168,106,.2);
-  --background: #101010;
-  --color: #f0f0f0;
-  --border-color: rgba(255,240,224,.125);
-  --shadow: 0 4px 6px rgba(0,0,0,.3);
-}
-@media (prefers-color-scheme: light) {
-  :root {
-    --accent: rgb(240,128,48);
-    --accent-alpha-70: rgba(240,128,48,.7);
-    --accent-alpha-20: rgba(240,128,48,.2);
-    --background: white;
-    --color: #201030;
-    --border-color: rgba(0,0,16,.125);
-    --shadow: 0 4px 6px rgba(0,0,0,.1);
-  }
-}
-html { box-sizing: border-box; }
-*, *:before, *:after { box-sizing: inherit; }
-body {
-  margin: 0; padding: 0;
-  font-family: Hack, DejaVu Sans Mono, Monaco, Consolas, Ubuntu Mono, monospace;
-  font-size: 1rem; line-height: 1.54;
-  background-color: var(--background); color: var(--color);
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-}
-a { color: inherit; }
-h1, h2 { font-weight: bold; line-height: 1.3; }
-h1 { font-size: 1.4rem; }
-h2 { font-size: 1.2rem; margin: 0 0 20px 0; }
-
-.container {
-  max-width: 900px;
-  margin: 0 auto;
-  padding: 40px 20px;
-  min-height: 100vh;
-  display: flex;
-  flex-direction: column;
-}
-.header {
-  text-align: center;
-  padding-bottom: 30px;
-  border-bottom: 1px solid var(--border-color);
-  margin-bottom: 30px;
-}
-.header-nav {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: 8px;
-  margin-bottom: 20px;
-  font-size: 0.9rem;
-}
-.header-nav a {
-  color: var(--accent);
-  text-decoration: none;
-}
-.header-nav a:hover { text-decoration: underline; }
-.header-nav .separator { color: var(--accent-alpha-70); }
-.header-nav .active { color: var(--accent-alpha-70); }
-.logo {
-  display: inline-block;
-  font-size: 1.6rem;
-  font-weight: bold;
-  background: var(--accent);
-  color: #000;
-  padding: 8px 16px;
-  margin-bottom: 10px;
-}
-.subtitle {
-  color: var(--accent-alpha-70);
-  margin: 0;
-  font-size: 0.95rem;
-}
-.main { flex: 1; }
-
-/* Station Info */
-.station-info { margin-bottom: 40px; }
-.info-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-  gap: 15px;
-}
-.info-item {
-  background: var(--accent-alpha-20);
-  padding: 15px;
-  border-radius: 8px;
-  text-align: center;
-}
-.info-label {
-  display: block;
-  font-size: 0.75rem;
-  color: var(--accent-alpha-70);
-  margin-bottom: 5px;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-}
-.info-value {
-  display: block;
-  font-size: 1.1rem;
-  font-weight: bold;
-}
-.status-online { color: #4ade80; }
-
-/* Devices Section */
-.devices-section { margin-bottom: 40px; }
-.section-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding-bottom: 15px;
-  border-bottom: 1px solid var(--border-color);
-  margin-bottom: 20px;
-}
-.section-header h2 { margin: 0; }
-.devices-grid {
-  display: $devicesDisplay;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-  gap: 20px;
-}
-.device-card {
-  display: block;
-  background: var(--background);
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-  padding: 20px;
-  text-decoration: none;
-  transition: border-color 0.2s ease, box-shadow 0.2s ease;
-}
-.device-card:hover {
-  border-color: var(--accent);
-  box-shadow: var(--shadow);
-}
-.device-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 10px;
-}
-.device-callsign {
-  font-size: 1.1rem;
-  font-weight: bold;
-  color: var(--accent);
-}
-.connection-badge {
-  font-size: 0.7rem;
-  padding: 3px 8px;
-  border-radius: 4px;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  background: var(--accent-alpha-20);
-  color: var(--accent);
-}
-.connection-badge.localWifi { background: rgba(74, 222, 128, 0.2); color: #4ade80; }
-.connection-badge.internet { background: rgba(96, 165, 250, 0.2); color: #60a5fa; }
-.connection-badge.bluetooth { background: rgba(167, 139, 250, 0.2); color: #a78bfa; }
-.connection-badge.lora, .connection-badge.radio { background: rgba(251, 191, 36, 0.2); color: #fbbf24; }
-.device-nickname { font-size: 1rem; margin-bottom: 8px; }
-.device-meta { font-size: 0.85rem; color: var(--accent-alpha-70); }
-
-.no-devices {
-  display: $noDevicesDisplay;
-  text-align: center;
-  padding: 40px 20px;
-  background: var(--accent-alpha-20);
-  border-radius: 8px;
-}
-.no-devices p { margin: 0 0 10px 0; }
-.no-devices .hint { font-size: 0.9rem; color: var(--accent-alpha-70); margin: 0; }
-
-/* API Section */
-.api-section { margin-bottom: 40px; }
-.api-list { display: flex; flex-direction: column; gap: 10px; }
-.api-link {
-  display: flex;
-  align-items: center;
-  gap: 15px;
-  padding: 12px 15px;
-  background: var(--accent-alpha-20);
-  border-radius: 6px;
-  text-decoration: none;
-  transition: background 0.2s ease;
-}
-.api-link:hover { background: var(--accent-alpha-70); }
-.api-method {
-  font-size: 0.75rem;
-  font-weight: bold;
-  padding: 2px 8px;
-  background: var(--accent);
-  color: var(--background);
-  border-radius: 4px;
-}
-.api-path { font-family: monospace; font-weight: bold; }
-.api-desc { color: var(--accent-alpha-70); margin-left: auto; font-size: 0.9rem; }
-
-/* Footer */
-.footer {
-  padding: 30px 0;
-  border-top: 1px solid var(--border-color);
-  margin-top: auto;
-  text-align: center;
-  color: var(--accent-alpha-70);
-  font-size: 0.9rem;
-}
-.footer a { color: var(--accent); text-decoration: none; }
-.footer a:hover { text-decoration: underline; }
-
-@media (max-width: 600px) {
-  .info-grid { grid-template-columns: repeat(2, 1fr); }
-  .devices-grid { grid-template-columns: 1fr; }
-  .api-link { flex-wrap: wrap; }
-  .api-desc { width: 100%; margin-left: 0; margin-top: 5px; }
-}
-  </style>
-</head>
-<body>
-  <div class="container">
-    <header class="header">
-      <nav class="header-nav">
-        <ul>${WebNavigation.generateStationMenuItems(activeApp: 'home', hasChat: false, hasDownload: true)}</ul>
-      </nav>
-      <div class="logo">${escapeHtml(stationName)}</div>
-      <p class="subtitle">Geogram Relay Server</p>
-    </header>
-
-    <main class="main">
-      <section class="station-info">
-        <div class="info-grid">
-          <div class="info-item">
-            <span class="info-label">Version</span>
-            <span class="info-value">$appVersion</span>
-          </div>
-          <div class="info-item">
-            <span class="info-label">Callsign</span>
-            <span class="info-value">${profile.callsign}</span>
-          </div>
-          <div class="info-item">
-            <span class="info-label">Connected</span>
-            <span class="info-value" id="connected-count">${_clients.length} ${_clients.length == 1 ? 'device' : 'devices'}</span>
-          </div>
-          <div class="info-item">
-            <span class="info-label">Uptime</span>
-            <span class="info-value" id="uptime-value">${formatUptimeFromMinutes(_startTime != null ? DateTime.now().difference(_startTime!).inMinutes : 0)}</span>
-          </div>
-          <div class="info-item">
-            <span class="info-label">Status</span>
-            <span class="info-value status-online">Running</span>
-          </div>
-        </div>
-      </section>
-
-      <section class="devices-section">
-        <div class="section-header">
-          <h2>Connected Devices</h2>
-        </div>
-        <div class="devices-grid">
-          ${devicesHtml.toString()}
-        </div>
-        <div class="no-devices">
-          <p>No devices currently connected.</p>
-          <p class="hint">Devices will appear here when they connect to this station.</p>
-        </div>
-      </section>
-
-      <section class="api-section">
-        <div class="section-header">
-          <h2>API Endpoints</h2>
-        </div>
-        <div class="api-list">
-          <a href="/api/status" class="api-link">
-            <span class="api-method">GET</span>
-            <span class="api-path">/api/status</span>
-            <span class="api-desc">Station status and info</span>
-          </a>
-          <a href="/api/clients" class="api-link">
-            <span class="api-method">GET</span>
-            <span class="api-path">/api/clients</span>
-            <span class="api-desc">Connected devices list</span>
-          </a>
-        </div>
-      </section>
-    </main>
-
-    <footer class="footer">
-      <span>Powered by <a href="https://geogram.radio">Geogram</a></span>
-    </footer>
-  </div>
-
-  <script>
-    // Dynamic updates every 10 seconds
-    setInterval(async function() {
-      try {
-        // Fetch clients and status in parallel
-        const [clientsResponse, statusResponse] = await Promise.all([
-          fetch('/api/clients'),
-          fetch('/api/status')
-        ]);
-        const clientsData = await clientsResponse.json();
-        const statusData = await statusResponse.json();
-
-        updateDeviceCards(clientsData.clients || []);
-
-        // Update uptime display
-        const uptimeEl = document.getElementById('uptime-value');
-        if (uptimeEl && typeof statusData.uptime === 'number') {
-          uptimeEl.textContent = formatUptime(statusData.uptime);
-        }
-
-        // Update connected devices count
-        const connectedEl = document.getElementById('connected-count');
-        if (connectedEl && typeof statusData.connected_devices === 'number') {
-          const count = statusData.connected_devices;
-          connectedEl.textContent = count + (count === 1 ? ' device' : ' devices');
-        }
-      } catch (e) {
-        console.error('Failed to refresh:', e);
-      }
-    }, 10000);
-
-    // Format uptime (minutes) to human readable string
-    function formatUptime(minutes) {
-      if (minutes < 1) return '0 minutes';
-
-      const days = Math.floor(minutes / 1440); // 1440 minutes per day
-      const hours = Math.floor((minutes % 1440) / 60);
-      const mins = minutes % 60;
-
-      const parts = [];
-      if (days > 0) parts.push(days + (days === 1 ? ' day' : ' days'));
-      if (hours > 0) parts.push(hours + (hours === 1 ? ' hour' : ' hours'));
-      if (mins > 0 && days === 0) parts.push(mins + (mins === 1 ? ' minute' : ' minutes'));
-
-      return parts.length === 0 ? '0 minutes' : parts.join(' ');
-    }
-
-    function formatTimeAgo(isoString) {
-      const then = new Date(isoString);
-      const now = new Date();
-      const diff = Math.floor((now - then) / 1000);
-
-      if (diff >= 2592000) { // 30 days
-        const months = Math.floor(diff / 2592000);
-        return months + (months === 1 ? ' month' : ' months') + ' ago';
-      } else if (diff >= 604800) { // 7 days
-        const weeks = Math.floor(diff / 604800);
-        return weeks + (weeks === 1 ? ' week' : ' weeks') + ' ago';
-      } else if (diff >= 86400) {
-        const days = Math.floor(diff / 86400);
-        return days + (days === 1 ? ' day' : ' days') + ' ago';
-      } else if (diff >= 3600) {
-        const hours = Math.floor(diff / 3600);
-        return hours + (hours === 1 ? ' hour' : ' hours') + ' ago';
-      } else if (diff >= 60) {
-        const minutes = Math.floor(diff / 60);
-        return minutes + (minutes === 1 ? ' minute' : ' minutes') + ' ago';
-      } else {
-        return 'just now';
-      }
-    }
-
-    function escapeHtml(text) {
-      const div = document.createElement('div');
-      div.textContent = text;
-      return div.innerHTML;
-    }
-
-    function updateDeviceCards(clients) {
-      const grid = document.querySelector('.devices-grid');
-      const emptyState = document.querySelector('.no-devices');
-
-      if (!grid || !emptyState) return;
-
-      if (clients.length === 0) {
-        grid.style.display = 'none';
-        emptyState.style.display = 'block';
-        return;
-      }
-
-      grid.style.display = 'grid';
-      emptyState.style.display = 'none';
-
-      // Rebuild device cards
-      grid.innerHTML = clients.map(c => {
-        const callsign = c.callsign || 'Unknown';
-        const nickname = c.nickname || callsign;
-        const connType = c.connection_type || 'websocket';
-        const connLabel = connType.charAt(0).toUpperCase() + connType.slice(1);
-        const location = (c.latitude && c.longitude)
-          ? ' · ' + c.latitude.toFixed(2) + ', ' + c.longitude.toFixed(2)
-          : '';
-        return '<a href="/' + callsign + '/" class="device-card">' +
-          '<div class="device-header">' +
-            '<span class="device-callsign">' + escapeHtml(callsign) + '</span>' +
-            '<span class="connection-badge ' + connType + '">' + connLabel + '</span>' +
-          '</div>' +
-          '<div class="device-nickname">' + escapeHtml(nickname) + '</div>' +
-          '<div class="device-meta">' +
-            'Connected since ' + formatTimeAgo(c.connected_at) + location +
-          '</div>' +
-        '</a>';
-      }).join('');
-    }
-  </script>
-</body>
-</html>
-''');
+    return StationHtmlTemplates.buildStationHomepage(
+      stationName: stationName,
+      callsign: profile.callsign,
+      version: appVersion,
+      uptimeStr: uptimeStr,
+      clientCount: _clients.length,
+      devicesHtml: devicesHtml.toString(),
+      devicesJson: devicesJson,
+      menuItems: menuItems,
+      hasDevicesWithLocation: devicesWithLocation.isNotEmpty,
+      globalStyles: StationHtmlTemplates.getBaseStyles(),
+      stationStyles: '',
+    );
   }
 
   /// Handle /download endpoint - serve downloads page using shared template
