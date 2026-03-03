@@ -36,6 +36,7 @@ import '../util/feedback_folder_utils.dart';
 import '../util/nostr_crypto.dart';
 import '../util/nostr_key_generator.dart';
 import '../models/update_notification.dart';
+import '../models/update_settings.dart' show UpdateAssetType;
 import '../models/blog_post.dart';
 import '../models/app.dart';
 import '../models/shared_folder.dart';
@@ -1414,14 +1415,15 @@ class WebSocketService {
   }
 
   /// Serve the download page listing available update binaries.
-  /// Reads release.json from the updates directory on disk.
+  /// Scans the updates directory on disk for versioned binary folders,
+  /// and also reads release.json if present (synced from station).
   static Future<({int statusCode, String contentType, List<int> body})> _handleDownloadPage() async {
     final updatesDir = '${StorageConfig().baseDir}/updates';
     Map<String, String> availableAssets = {};
     String? releaseVersion;
     String? releaseNotes;
 
-    // Read release.json to discover available binaries
+    // First try release.json (synced from station server)
     try {
       final releaseFile = File('$updatesDir/release.json');
       if (await releaseFile.exists()) {
@@ -1438,6 +1440,55 @@ class WebSocketService {
       }
     } catch (e) {
       LogService().log('Error reading release.json for download page: $e');
+    }
+
+    // If no assets from release.json, scan disk for versioned binaries
+    if (availableAssets.isEmpty) {
+      try {
+        final dir = Directory(updatesDir);
+        if (await dir.exists()) {
+          // Find version directories, sorted descending
+          final versionDirs = <String, Directory>{};
+          await for (final entity in dir.list()) {
+            if (entity is Directory) {
+              final name = entity.path.split('/').last;
+              if (RegExp(r'^\d+\.\d+').hasMatch(name)) {
+                versionDirs[name] = entity;
+              }
+            }
+          }
+
+          if (versionDirs.isNotEmpty) {
+            // Sort versions descending, pick latest
+            final sortedVersions = versionDirs.keys.toList()
+              ..sort((a, b) {
+                final aParts = a.split('.').map((p) => int.tryParse(p) ?? 0).toList();
+                final bParts = b.split('.').map((p) => int.tryParse(p) ?? 0).toList();
+                for (var i = 0; i < aParts.length && i < bParts.length; i++) {
+                  if (aParts[i] != bParts[i]) return bParts[i].compareTo(aParts[i]);
+                }
+                return bParts.length.compareTo(aParts.length);
+              });
+
+            final latestVersion = sortedVersions.first;
+            releaseVersion ??= latestVersion;
+            final latestDir = versionDirs[latestVersion]!;
+
+            // Scan files in the latest version directory
+            await for (final file in latestDir.list()) {
+              if (file is File) {
+                final filename = file.path.split('/').last;
+                final assetType = UpdateAssetType.fromFilename(filename);
+                if (assetType != UpdateAssetType.unknown) {
+                  availableAssets[assetType.name] = '/updates/$latestVersion/$filename';
+                }
+              }
+            }
+          }
+        }
+      } catch (e) {
+        LogService().log('Error scanning updates directory: $e');
+      }
     }
 
     final profile = ProfileService().getProfile();

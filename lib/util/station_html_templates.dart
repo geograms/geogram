@@ -424,40 +424,48 @@ ${getDownloadStyles()}
 
     final cards = <String>[];
 
-    // Android APK (kebab-case key from release.json)
-    if (availableAssets.containsKey('android-apk')) {
+    // Helper to check both camelCase (from UpdateAssetType.name) and kebab-case keys
+    String? assetUrl(String camelKey, String kebabKey) =>
+        availableAssets[camelKey] ?? availableAssets[kebabKey];
+
+    // Android APK
+    final androidUrl = assetUrl('androidApk', 'android-apk');
+    if (androidUrl != null) {
       cards.add(_buildPlatformCard(
-        url: availableAssets['android-apk']!,
+        url: androidUrl,
         icon: '&#129302;', // Robot face for Android
         name: 'Android',
         desc: 'APK for Android devices',
       ));
     }
 
-    // Linux Desktop (kebab-case key from release.json)
-    if (availableAssets.containsKey('linux-desktop')) {
+    // Linux Desktop
+    final linuxUrl = assetUrl('linuxDesktop', 'linux-desktop');
+    if (linuxUrl != null) {
       cards.add(_buildPlatformCard(
-        url: availableAssets['linux-desktop']!,
+        url: linuxUrl,
         icon: '&#128039;', // Penguin for Linux
         name: 'Linux',
         desc: 'tar.gz for Linux x64',
       ));
     }
 
-    // Windows Desktop (kebab-case key from release.json)
-    if (availableAssets.containsKey('windows-desktop')) {
+    // Windows Desktop
+    final windowsUrl = assetUrl('windowsDesktop', 'windows-desktop');
+    if (windowsUrl != null) {
       cards.add(_buildPlatformCard(
-        url: availableAssets['windows-desktop']!,
+        url: windowsUrl,
         icon: '&#128187;', // Computer for Windows
         name: 'Windows',
         desc: 'ZIP for Windows x64',
       ));
     }
 
-    // macOS Desktop (kebab-case key from release.json)
-    if (availableAssets.containsKey('macos-desktop')) {
+    // macOS Desktop
+    final macosUrl = assetUrl('macosDesktop', 'macos-desktop');
+    if (macosUrl != null) {
       cards.add(_buildPlatformCard(
-        url: availableAssets['macos-desktop']!,
+        url: macosUrl,
         icon: '&#127822;', // Apple for macOS
         name: 'macOS',
         desc: 'ZIP for macOS x64',

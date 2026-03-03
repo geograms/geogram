@@ -843,6 +843,17 @@ class AppService {
     int depth = 1,
   }) async {
     final apps = await getPublicApps(appsPath: appsPath, storage: storage);
+
+    // Check if download page should be shown (updates directory has content)
+    bool hasDownload = false;
+    try {
+      final updatesDir = Directory('${StorageConfig().baseDir}/updates');
+      if (await updatesDir.exists()) {
+        // Always show download — even if empty, it explains how updates work
+        hasDownload = true;
+      }
+    } catch (_) {}
+
     return WebNavigation.generateDeviceMenuItems(
       activeApp: activeApp,
       hasBlog: apps['blog']!,
@@ -852,6 +863,7 @@ class AppService {
       hasFiles: apps['files']!,
       hasShared: apps['shared']!,
       hasAlerts: apps['alerts']!,
+      hasDownload: hasDownload,
       isRootLevel: isRootLevel,
       depth: depth,
     );

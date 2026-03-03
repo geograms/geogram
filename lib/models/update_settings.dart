@@ -63,7 +63,7 @@ enum UpdateAssetType {
     }
   }
 
-  /// Pattern to match asset filename from GitHub releases
+  /// Pattern to match asset filename from GitHub releases or local binaries
   static UpdateAssetType fromFilename(String filename) {
     final lower = filename.toLowerCase();
     if (lower == 'geogram.apk') return UpdateAssetType.androidApk;
@@ -75,6 +75,8 @@ enum UpdateAssetType {
     if (lower.contains('macos')) return UpdateAssetType.macosDesktop;
     if (lower.contains('ios') && lower.endsWith('.ipa')) return UpdateAssetType.iosUnsigned;
     if (lower.contains('web')) return UpdateAssetType.web;
+    // Bare binary name (e.g., "geogram" with no extension) — Linux desktop self-update
+    if (lower == 'geogram') return UpdateAssetType.linuxDesktop;
     return UpdateAssetType.unknown;
   }
 
