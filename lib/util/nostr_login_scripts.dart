@@ -983,14 +983,8 @@ String getNostrLoginScripts() {
     // Poll for NIP-07 extension
     detectNostr(10, function(extensionAvailable) {
       if (extensionAvailable) {
-        // Extension found — it takes priority
-        var savedPubkey = null;
-        try { savedPubkey = localStorage.getItem('geogram_nostr_pubkey'); } catch(e) {}
-        if (savedPubkey) {
-          // Auto-connect via extension
-          connectViaExtension();
-        }
-        // Otherwise button is visible, click will use extension
+        // Extension found — always auto-connect (prompts authorization if needed)
+        connectViaExtension();
       } else {
         // No extension — check for saved local private key
         var savedPrivkey = null;

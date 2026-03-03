@@ -272,8 +272,9 @@ class AppService {
       // Get app-specific styles (global styles served separately via /styles.css)
       final combinedStyles = await themeService.getAppStyles('www') ?? '';
 
-      // Use callsign as the display name
-      final displayName = _currentCallsign ?? 'My Website';
+      // Use nickname as display name, falling back to callsign
+      final profile = ProfileService().getProfile();
+      final displayName = profile.displayName.isNotEmpty ? profile.displayName : (_currentCallsign ?? 'My Website');
       final description = 'A personal website published via geogram';
 
       // Derive apps directory from the www app's storage path
@@ -603,11 +604,16 @@ class AppService {
         appsPath: p.dirname(blogAppPath),
       );
 
+      // Use nickname as display name, falling back to callsign
+      final blogDisplayName = ProfileService().getProfile().displayName.isNotEmpty
+          ? ProfileService().getProfile().displayName
+          : (_currentCallsign ?? 'Blog');
+
       // Process template
       final html = themeService.processTemplate(template, {
-        'TITLE': _currentCallsign ?? 'Blog',
-        'COLLECTION_NAME': _currentCallsign ?? 'Blog',
-        'APP_NAME': _currentCallsign ?? 'Blog',
+        'TITLE': blogDisplayName,
+        'COLLECTION_NAME': blogDisplayName,
+        'APP_NAME': blogDisplayName,
         'APP_DESCRIPTION': '${publishedPosts.length} post${publishedPosts.length != 1 ? 's' : ''}',
         'CONTENT': postsHtml.toString(),
         'MENU_ITEMS': menuItems,
@@ -968,11 +974,16 @@ class AppService {
         appsPath: p.dirname(chatAppPath),
       );
 
+      // Use nickname as display name, falling back to callsign
+      final chatDisplayName = ProfileService().getProfile().displayName.isNotEmpty
+          ? ProfileService().getProfile().displayName
+          : (_currentCallsign ?? 'Chat');
+
       // Process template
       final html = themeService.processTemplate(template, {
-        'TITLE': _currentCallsign ?? 'Chat',
-        'COLLECTION_NAME': _currentCallsign ?? 'Chat',
-        'APP_NAME': _currentCallsign ?? 'Chat',
+        'TITLE': chatDisplayName,
+        'COLLECTION_NAME': chatDisplayName,
+        'APP_NAME': chatDisplayName,
         'APP_DESCRIPTION': '${channels.length} channel${channels.length != 1 ? 's' : ''}',
         'CONTENT': messagesHtml.toString(),
         'CHANNELS_LIST': channelsHtml.toString(),
