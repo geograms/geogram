@@ -90,6 +90,7 @@ class AppSyncConfig {
 | `lib/models/mirror_config.dart` | Data models (MirrorPeer, AppSyncConfig, MirrorConfig) |
 | `lib/services/mirror_config_service.dart` | Config persistence (load/save mirror_config.json) |
 | `lib/services/mirror_sync_service.dart` | Sync engine: challenge-response auth, manifest diff, file download |
+| `lib/services/mirror_auto_sync_service.dart` | Periodic auto-sync timer + `syncAllPeers()` shared logic |
 | `lib/services/log_api_service.dart` | HTTP server — mirror API endpoints (lines 13064+) |
 | `lib/pages/mirror_wizard_page.dart` | Add Mirror Device wizard UI |
 | `lib/pages/mirror_settings_page.dart` | Mirror settings + Sync Now / Sync All |
@@ -307,6 +308,94 @@ curl -X POST http://localhost:3456/api/debug \
 }
 ```
 
+#### `mirror_auto_sync_status` — Check auto-sync timer state
+
+```bash
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action": "mirror_auto_sync_status"}'
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "active": true,
+  "interval_minutes": 15,
+  "is_syncing": false,
+  "last_sync_at": "2026-03-03T12:00:00.000Z"
+}
+```
+
+#### `mirror_auto_sync_trigger` — Trigger an immediate sync of all peers
+
+```bash
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action": "mirror_auto_sync_trigger"}'
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "files_added": 5,
+  "files_modified": 2,
+  "files_uploaded": 1,
+  "errors": 0,
+  "peers_skipped": 0,
+  "peers_synced": 1,
+  "details": [{"peer": "X1ABC", "app": "blog", "added": 5, "modified": 2, "uploaded": 1}]
+}
+```
+
+#### `mirror_relay_status` — Check station relay URLs per peer
+
+```bash
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action": "mirror_relay_status"}'
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "station_connected": true,
+  "station_url": "wss://station.example.com",
+  "peers": [
+    {
+      "callsign": "X1ABC123",
+      "direct_address": "192.168.1.50:3456",
+      "station_relay_url": "https://station.example.com/device/X1ABC123",
+      "addresses": ["192.168.1.50:3456", "station://station.example.com/device/X1ABC123"]
+    }
+  ]
+}
+```
+
+## Auto-Sync
+
+When mirror is enabled with `autoSync: true` in connection preferences, the `MirrorAutoSyncService` runs a periodic timer (default every 15 minutes) that syncs all peers automatically.
+
+- Timer is started after profile load and stopped on profile switch
+- Subscribes to `MirrorConfigService.configStream` to react to config changes (enable/disable, interval change)
+- Guarded by `_isSyncing` flag to prevent overlapping syncs
+- Falls back to station relay when direct LAN connection fails
+
+## Station Relay
+
+Mirror sync works over LAN by default (direct HTTP to `http://peer-ip:3456/api/mirror/*`). When devices aren't on the same network, sync requests are relayed through the station's device proxy.
+
+**How it works:**
+
+1. When a device connects to a station via WebSocket, relay addresses (`station://host/device/{callsign}`) are added to each mirror peer's address list
+2. When auto-sync runs, it probes the direct address first (3s timeout)
+3. If direct fails, falls back to station relay URL (`https://host/device/{callsign}/api/mirror/*`)
+4. The station's existing HTTP proxy forwards the request through WebSocket to the target device
+5. Binary transfers work through base64 encoding in WebSocket messages
+6. On disconnect, relay addresses are cleaned up
+
 ## Testing Mirror Between Two Devices
 
 ### Manual test via debug API (curl)
@@ -360,14 +449,13 @@ curl -X POST http://192.168.1.50:3456/api/debug \
 
 ## Implementation Gaps (TODO)
 
-These are the pieces that need to be wired up:
-
-1. **`POST /api/mirror/pair` endpoint** — not yet implemented. Needed for mutual peer registration.
-2. **`npub` field on `MirrorPeer`** — model needs this field for authentication.
-3. **`_finishWizard()` in mirror_wizard_page.dart** — currently only saves config, needs to call pair endpoint + syncFolder().
-4. **`_syncNow()` in mirror_settings_page.dart** — currently a TODO, needs to call syncFolder() for each enabled app.
-5. **`_syncAll()` in mirror_settings_page.dart** — currently a TODO, needs to loop all peers and sync.
-6. **`_allowedPeers` persistence** — in-memory map resets on restart. Needs to be loaded from mirror_config.json peers on startup.
+~~1. `POST /api/mirror/pair` endpoint~~ — Done.
+~~2. `npub` field on `MirrorPeer`~~ — Done.
+~~3. `_finishWizard()` in mirror_wizard_page.dart~~ — Done.
+~~4. `_syncNow()` / `_syncAll()`~~ — Done (shared via `MirrorAutoSyncService.syncAllPeers()`).
+~~5. `_allowedPeers` persistence~~ — Done (loaded from config on startup).
+~~6. Auto-sync timer~~ — Done (`MirrorAutoSyncService`).
+~~7. Station relay fallback~~ — Done (direct → station proxy fallback).
 
 ## Security
 

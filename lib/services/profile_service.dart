@@ -11,6 +11,7 @@ import '../services/app_service.dart';
 import '../services/encrypted_storage_stub.dart' if (dart.library.ui) '../services/encrypted_storage_service.dart';
 import '../services/storage_config.dart';
 import '../services/signing_service.dart';
+import '../services/mirror_auto_sync_service.dart';
 import '../services/mirror_config_service.dart';
 import '../services/mirror_sync_service.dart';
 import '../services/app_args.dart';
@@ -471,9 +472,11 @@ class ProfileService {
 
     // Clear stale mirror runtime state from the old profile, then load
     // the new profile's mirror config so listeners see correct state.
+    MirrorAutoSyncService.instance.stop();
     MirrorSyncService.instance.resetForProfileSwitch();
     await MirrorConfigService.instance.setStorage(AppService().profileStorage);
     MirrorSyncService.instance.loadAllowedPeersFromConfig();
+    MirrorAutoSyncService.instance.start();
 
     // Switch logs to profile-specific directory
     await LogService().switchToProfile(newProfile.callsign);
@@ -750,9 +753,11 @@ class ProfileService {
       await AppService().setActiveCallsign(profile.callsign);
 
       // Clear stale mirror runtime state, then load new profile's config
+      MirrorAutoSyncService.instance.stop();
       MirrorSyncService.instance.resetForProfileSwitch();
       await MirrorConfigService.instance.setStorage(AppService().profileStorage);
       MirrorSyncService.instance.loadAllowedPeersFromConfig();
+      MirrorAutoSyncService.instance.start();
 
       // Switch logs to profile-specific directory
       await LogService().switchToProfile(profile.callsign);

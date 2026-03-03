@@ -11,6 +11,7 @@ import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as p;
 import '../services/log_service.dart';
 import '../services/log_api_service.dart';
+import '../services/mirror_config_service.dart';
 import '../services/profile_service.dart';
 import '../services/app_service.dart';
 import '../services/signing_service.dart';
@@ -313,6 +314,8 @@ class WebSocketService {
                 // Enable foreground service keep-alive on Android
                 // This ensures the WebSocket stays alive even when the display is off
                 _enableForegroundKeepAlive();
+                // Populate station relay addresses for mirror peers
+                _updateMirrorRelayAddresses();
               } else {
                 LogService().log('✗ Hello rejected');
                 LogService().log('Reason: ${data['message']}');
@@ -443,6 +446,9 @@ class WebSocketService {
 
     // Disable foreground service keep-alive on Android
     _disableForegroundKeepAlive();
+
+    // Clean up station relay addresses from mirror peers
+    _clearMirrorRelayAddresses();
 
     // Fire disconnected event
     _fireConnectionStateChanged(false);
@@ -1843,6 +1849,55 @@ class WebSocketService {
       await file.writeAsString(jsonEncode(data));
     } catch (e) {
       LogService().log('WebSocket: Failed to write heartbeat: $e');
+    }
+  }
+
+  /// Populate station relay addresses for all mirror peers after station connect.
+  ///
+  /// Derives the HTTP base URL from the connected WebSocket URL and stores a
+  /// `station://host/device/{peerCallsign}` address in each peer's addresses list.
+  void _updateMirrorRelayAddresses() {
+    if (_stationUrl == null) return;
+    try {
+      final wsUri = Uri.parse(_stationUrl!);
+
+      final configService = MirrorConfigService.instance;
+      final config = configService.config;
+      if (config == null || !config.enabled) return;
+
+      for (final peer in config.peers) {
+        final relayAddr = 'station://${wsUri.host}${wsUri.hasPort ? ':${wsUri.port}' : ''}/device/${peer.callsign}';
+        if (!peer.addresses.contains(relayAddr)) {
+          peer.addresses.add(relayAddr);
+          LogService().log('MirrorRelay: added relay address for ${peer.callsign}: $relayAddr');
+        }
+      }
+      // Save updated addresses (fire-and-forget).
+      configService.saveConfig(config);
+    } catch (e) {
+      LogService().log('MirrorRelay: failed to update relay addresses: $e');
+    }
+  }
+
+  /// Remove station relay addresses from all mirror peers on disconnect.
+  void _clearMirrorRelayAddresses() {
+    try {
+      final configService = MirrorConfigService.instance;
+      final config = configService.config;
+      if (config == null) return;
+
+      var changed = false;
+      for (final peer in config.peers) {
+        final before = peer.addresses.length;
+        peer.addresses.removeWhere((a) => a.startsWith('station://'));
+        if (peer.addresses.length != before) changed = true;
+      }
+      if (changed) {
+        configService.saveConfig(config);
+        LogService().log('MirrorRelay: cleared relay addresses');
+      }
+    } catch (e) {
+      LogService().log('MirrorRelay: failed to clear relay addresses: $e');
     }
   }
 

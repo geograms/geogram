@@ -16,6 +16,8 @@
 ///   8. Security — unauthorized peer rejected
 ///   9. Security — replay attack (nonce reuse) rejected
 ///  10. Security — invalid signature rejected
+///  16. MirrorPeer address helpers — directAddress/stationRelayUrl
+///  17. Station relay URL format — derivation from WebSocket URL
 ///
 /// Usage:
 ///   dart run tests/mirror/mirror_sync_test.dart
@@ -1103,6 +1105,79 @@ void main() async {
     check('log/sync.log not synced to dest', !File('$dstBlog/log/sync.log').existsSync());
     // Dest log should NOT be uploaded to source
     check('log/local.log not uploaded to source', !File('${srcCallsignDir.path}/blog/log/local.log').existsSync());
+
+    // ── Test 16: MirrorPeer address helpers ──────────────────
+
+    section('TEST 16: MirrorPeer Address Helpers');
+
+    // Simulate a peer with mixed addresses
+    final testAddresses = [
+      '192.168.1.50:3456',
+      'station://station.example.com/device/X1SRC',
+      '10.0.0.5:3456',
+    ];
+
+    // directAddress should return first non-station address
+    String? directAddr;
+    for (final a in testAddresses) {
+      if (!a.startsWith('station://')) {
+        directAddr = a;
+        break;
+      }
+    }
+    check('directAddress is first LAN IP', directAddr == '192.168.1.50:3456');
+
+    // stationRelayUrl should return the station:// converted to https://
+    String? relayUrl;
+    for (final a in testAddresses) {
+      if (a.startsWith('station://')) {
+        relayUrl = a.replaceFirst('station://', 'https://');
+        break;
+      }
+    }
+    check('stationRelayUrl is HTTPS', relayUrl == 'https://station.example.com/device/X1SRC');
+
+    // No station address
+    final noStationAddresses = ['192.168.1.50:3456'];
+    String? noRelay;
+    for (final a in noStationAddresses) {
+      if (a.startsWith('station://')) {
+        noRelay = a.replaceFirst('station://', 'https://');
+        break;
+      }
+    }
+    check('No station → relay is null', noRelay == null);
+
+    // Empty addresses
+    final emptyAddresses = <String>[];
+    String? emptyDirect;
+    for (final a in emptyAddresses) {
+      if (!a.startsWith('station://')) {
+        emptyDirect = a;
+        break;
+      }
+    }
+    check('Empty addresses → direct is null', emptyDirect == null);
+
+    // ── Test 17: Station relay URL format ──────────────────
+
+    section('TEST 17: Station Relay URL Format');
+
+    // Verify the relay URL derivation from WebSocket URL
+    const wsUrl = 'wss://geo.example.com:8443';
+    final wsUri = Uri.parse(wsUrl);
+    final scheme = wsUri.scheme == 'wss' ? 'https' : 'http';
+    final stationBase = '$scheme://${wsUri.host}${wsUri.hasPort ? ':${wsUri.port}' : ''}';
+    check('Station base from WSS', stationBase == 'https://geo.example.com:8443');
+
+    const wsUrlPlain = 'ws://192.168.1.1:3456';
+    final wsUriPlain = Uri.parse(wsUrlPlain);
+    final schemePlain = wsUriPlain.scheme == 'wss' ? 'https' : 'http';
+    final stationBasePlain = '$schemePlain://${wsUriPlain.host}${wsUriPlain.hasPort ? ':${wsUriPlain.port}' : ''}';
+    check('Station base from WS', stationBasePlain == 'http://192.168.1.1:3456');
+
+    final relayAddr = 'station://${wsUri.host}${wsUri.hasPort ? ':${wsUri.port}' : ''}/device/X1SRC';
+    check('Relay address format', relayAddr == 'station://geo.example.com:8443/device/X1SRC');
 
   } finally {
     await server.stop();

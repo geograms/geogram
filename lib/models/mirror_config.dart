@@ -309,6 +309,26 @@ class MirrorPeer {
     this.platform,
   }) : apps = apps ?? {};
 
+  /// First non-relay address (LAN IP / direct URL), or null if none.
+  String? get directAddress {
+    for (final a in addresses) {
+      if (!a.startsWith('station://')) return a;
+    }
+    return null;
+  }
+
+  /// Station relay HTTP URL derived from a `station://host/device/callsign`
+  /// address, or null if none.
+  String? get stationRelayUrl {
+    for (final a in addresses) {
+      if (a.startsWith('station://')) {
+        // station://host:port/device/CALL → https://host:port/device/CALL
+        return a.replaceFirst('station://', 'https://');
+      }
+    }
+    return null;
+  }
+
   /// Check if peer is currently online
   bool get isOnline =>
       connectionState == PeerConnectionState.connected ||

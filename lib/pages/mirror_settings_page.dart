@@ -6,6 +6,7 @@ library;
 import 'package:flutter/material.dart';
 
 import '../models/mirror_config.dart';
+import '../services/mirror_auto_sync_service.dart';
 import '../services/mirror_config_service.dart';
 import '../services/mirror_sync_service.dart';
 import '../widgets/transfer/transfer_progress_widget.dart';
@@ -712,63 +713,21 @@ class _MirrorSettingsPageState extends State<MirrorSettingsPage> {
 
     final dialog = _showSyncProgressDialog(context);
 
-    final syncService = MirrorSyncService.instance;
-    var totalAdded = 0;
-    var totalModified = 0;
-    var totalUploaded = 0;
-    var errors = 0;
-    var skipped = 0;
-
-    for (final peer in peers) {
-      if (peer.addresses.isEmpty) {
-        skipped++;
-        continue;
-      }
-      final peerUrl = 'http://${peer.addresses.first}';
-      final enabledApps = _configService.getEnabledAppsForPeer(peer.peerId);
-
-      for (final appId in enabledApps) {
-        final appConfig = peer.apps[appId];
-        if (appConfig == null) continue;
-        final style = appConfig.style;
-        if (style == SyncStyle.paused) continue;
-        try {
-          final result = await syncService.syncFolder(
-            peerUrl,
-            appId,
-            peerCallsign: peer.callsign,
-            syncStyle: style,
-            ignorePatterns: appConfig.ignorePatterns,
-            onProgress: dialog.onProgress,
-            // Don't pass active profile's storage — syncFolder uses
-            // callsignDir (derived from peerCallsign) for filesystem ops.
-          );
-          if (result.success) {
-            totalAdded += result.filesAdded;
-            totalModified += result.filesModified;
-            totalUploaded += result.filesUploaded;
-          } else {
-            errors++;
-          }
-        } catch (_) {
-          errors++;
-        }
-      }
-
-      await _configService.markPeerSynced(peer.peerId);
-    }
+    final result = await MirrorAutoSyncService.instance.syncAllPeers(
+      onProgress: dialog.onProgress,
+    );
 
     dialog.close();
 
     if (mounted) {
       final parts = <String>[];
-      if (totalAdded > 0) parts.add('+$totalAdded new');
-      if (totalModified > 0) parts.add('~$totalModified updated');
-      if (totalUploaded > 0) parts.add('↑$totalUploaded uploaded');
-      if (skipped > 0) parts.add('$skipped peer(s) skipped — no address');
+      if (result.filesAdded > 0) parts.add('+${result.filesAdded} new');
+      if (result.filesModified > 0) parts.add('~${result.filesModified} updated');
+      if (result.filesUploaded > 0) parts.add('↑${result.filesUploaded} uploaded');
+      if (result.peersSkipped > 0) parts.add('${result.peersSkipped} peer(s) skipped — no address');
       final summary = parts.isEmpty ? 'No changes.' : parts.join(', ');
-      final msg = errors > 0
-          ? 'Sync done with $errors error(s). $summary'
+      final msg = result.errors > 0
+          ? 'Sync done with ${result.errors} error(s). $summary'
           : 'Sync complete. $summary';
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(msg)),

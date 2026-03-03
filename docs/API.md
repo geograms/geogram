@@ -3734,6 +3734,21 @@ curl -X POST http://localhost:3456/api/debug \
   -H "Content-Type: application/json" \
   -d '{"action": "mirror_open_wizard"}'
 
+# Check auto-sync timer status
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action": "mirror_auto_sync_status"}'
+
+# Trigger immediate sync of all peers (with relay fallback)
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action": "mirror_auto_sync_trigger"}'
+
+# Check station relay URLs per peer
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action": "mirror_relay_status"}'
+
 # List all profiles
 curl -X POST http://localhost:3456/api/debug \
   -H "Content-Type: application/json" \

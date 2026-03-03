@@ -65,6 +65,7 @@ import '../models/blog_post.dart';
 import '../models/report.dart';
 import 'alert_feedback_service.dart';
 import 'alert_sharing_service.dart';
+import 'mirror_auto_sync_service.dart';
 import 'mirror_config_service.dart';
 import 'mirror_sync_service.dart';
 import '../models/mirror_config.dart';
@@ -15856,6 +15857,55 @@ function cleanup() {
             headers: headers,
           );
 
+        case 'mirror_auto_sync_status':
+          final autoSync = MirrorAutoSyncService.instance;
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              ...autoSync.toJson(),
+            }),
+            headers: headers,
+          );
+
+        case 'mirror_auto_sync_trigger':
+          final autoSync = MirrorAutoSyncService.instance;
+          final result = await autoSync.syncAllPeers();
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              ...result.toJson(),
+            }),
+            headers: headers,
+          );
+
+        case 'mirror_relay_status':
+          final configService = MirrorConfigService.instance;
+          final config = configService.config;
+          final wsService = WebSocketService();
+          final stationConnected = wsService.connectedUrl != null;
+
+          final peerRelays = <Map<String, dynamic>>[];
+          if (config != null) {
+            for (final peer in config.peers) {
+              peerRelays.add({
+                'callsign': peer.callsign,
+                'direct_address': peer.directAddress,
+                'station_relay_url': peer.stationRelayUrl,
+                'addresses': peer.addresses,
+              });
+            }
+          }
+
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'station_connected': stationConnected,
+              'station_url': wsService.connectedUrl,
+              'peers': peerRelays,
+            }),
+            headers: headers,
+          );
+
         case 'mirror_open_settings':
           DebugController().triggerMirrorOpenSettings();
           return shelf.Response.ok(
@@ -15889,6 +15939,9 @@ function cleanup() {
                 'mirror_remove_allowed_peer',
                 'mirror_sync_all',
                 'mirror_config',
+                'mirror_auto_sync_status',
+                'mirror_auto_sync_trigger',
+                'mirror_relay_status',
                 'mirror_open_settings',
                 'mirror_open_wizard',
               ],

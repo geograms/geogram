@@ -129,6 +129,7 @@ This document catalogs reusable UI components available in the Geogram codebase.
 - [ChatFileDownloadManager](#chatfiledownloadmanager) - Connection-aware file downloads with progress and resume
 - [TransferService](#transferservice) - Centralized multi-transport transfers with caching and resume
 - [MirrorSyncService](#mirrorsyncservice) - Simple one-way folder sync with NOSTR authentication
+- [MirrorAutoSyncService](#mirrorautosyncservice) - Periodic auto-sync timer with station relay fallback
 - [NostrClientService.searchFeed](#nostrclientservicesearchfeed) - Search in-memory NOSTR feed items
 - [NostrClientService.followUser/unfollowUser/likeEvent](#nostrclientservicefollowuserunfollowuserlikeevent) - Follow/unfollow users and like posts
 - [NostrNip19.decode](#nostrnip19decode) - Decode nostr: URIs (note/npub/nevent/nprofile/naddr)
@@ -4105,6 +4106,38 @@ bool isIgnored(String relativePath, List<String> patterns);
 - Token-based session management (1 hour expiry)
 - Range header support for resumable downloads
 - Path traversal protection
+
+---
+
+### MirrorAutoSyncService
+
+**File:** `lib/services/mirror_auto_sync_service.dart`
+
+Periodic auto-sync timer + shared `syncAllPeers()` logic with station relay fallback.
+
+**Usage:**
+```dart
+// Start auto-sync (subscribes to config stream)
+MirrorAutoSyncService.instance.start();
+
+// Stop auto-sync
+MirrorAutoSyncService.instance.stop();
+
+// Trigger immediate sync (with relay fallback)
+final result = await MirrorAutoSyncService.instance.syncAllPeers();
+print('Added: ${result.filesAdded}, Errors: ${result.errors}');
+
+// Check status
+print(MirrorAutoSyncService.instance.toJson());
+// → {active: true, interval_minutes: 15, is_syncing: false, last_sync_at: ...}
+```
+
+**Key Features:**
+- Periodic timer driven by `ConnectionPreferences.autoSync` and `syncIntervalMinutes`
+- Subscribes to `MirrorConfigService.configStream` for live config changes
+- Direct LAN → station relay fallback (3s probe timeout)
+- `MirrorSyncAllResult` with per-peer details
+- Guard flag prevents overlapping syncs
 
 ---
 
