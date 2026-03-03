@@ -9,6 +9,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:path/path.dart' as path;
 import 'package:shelf/shelf.dart' as shelf;
 import 'package:shelf/shelf_io.dart' as shelf_io;
+import 'hotspot_portal_service.dart';
 import 'log_service.dart';
 import 'profile_service.dart';
 import 'signing_service.dart';
@@ -309,6 +310,13 @@ class LogApiService with ChatModificationMixin {
 
     if (request.method == 'OPTIONS') {
       return shelf.Response.ok('', headers: headers);
+    }
+
+    // Captive portal routes — delegate when portal is active
+    final portal = HotspotPortalService();
+    if (portal.isActive) {
+      final portalResponse = portal.handleShelfRequest(request);
+      if (portalResponse != null) return portalResponse;
     }
 
     final urlPath = request.url.path;
@@ -18949,9 +18957,9 @@ function cleanup() {
           return shelf.Response.ok(
             jsonEncode({
               'success': true,
-              'running': portal.isRunning,
+              'active': portal.isActive,
               'dns_running': portal.isDnsRunning,
-              'port': portal.port,
+              'port': HotspotPortalService.portalPort,
             }),
             headers: headers,
           );
@@ -18965,7 +18973,7 @@ function cleanup() {
             jsonEncode({
               'success': true,
               'action': 'started',
-              'port': portal.port,
+              'port': HotspotPortalService.portalPort,
             }),
             headers: headers,
           );

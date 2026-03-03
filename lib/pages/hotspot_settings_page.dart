@@ -1,5 +1,3 @@
-import 'dart:io';
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -13,12 +11,8 @@ import '../services/wifi_direct_service.dart';
 
 /// Settings page for Wi-Fi Direct hotspot + captive portal.
 ///
-/// Two tabs:
-///   1. **Wi-Fi** — hotspot on/off, SSID, passphrase, QR code
-///   2. **Portal** — captive portal server + DNS responder controls
-///
-/// Reuses the same [WifiDirectService] pattern as [StationDashboardPage] —
-/// does NOT create its own Wi-Fi Direct group.
+/// Single page — hotspot toggle, Wi-Fi QR code, portal status/QR.
+/// Portal auto-enables when hotspot is turned on and auto-disables when off.
 class HotspotSettingsPage extends StatefulWidget {
   const HotspotSettingsPage({super.key});
 
@@ -26,14 +20,11 @@ class HotspotSettingsPage extends StatefulWidget {
   State<HotspotSettingsPage> createState() => _HotspotSettingsPageState();
 }
 
-class _HotspotSettingsPageState extends State<HotspotSettingsPage>
-    with SingleTickerProviderStateMixin {
+class _HotspotSettingsPageState extends State<HotspotSettingsPage> {
   final I18nService _i18n = I18nService();
   final WifiDirectService _wifiDirectService = WifiDirectService();
   final HotspotPortalService _portalService = HotspotPortalService();
   final StationNodeService _stationNodeService = StationNodeService();
-
-  late TabController _tabController;
 
   // Hotspot state
   bool _hotspotEnabled = false;
@@ -42,20 +33,10 @@ class _HotspotSettingsPageState extends State<HotspotSettingsPage>
   int _hotspotClients = 0;
   bool _hotspotLoading = false;
 
-  // Portal state
-  bool _portalLoading = false;
-
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 2, vsync: this);
     _checkHotspotStatus();
-  }
-
-  @override
-  void dispose() {
-    _tabController.dispose();
-    super.dispose();
   }
 
   Future<void> _checkHotspotStatus() async {
@@ -105,6 +86,14 @@ class _HotspotSettingsPageState extends State<HotspotSettingsPage>
             _hotspotPassword = info['passphrase'] as String?;
             _hotspotClients = (info['clientCount'] as int?) ?? 0;
           });
+
+          // Auto-start portal (DNS only — HTTP routes via LogApiService)
+          try {
+            await _portalService.start(stationName: stationName);
+          } catch (e) {
+            LogService().log('Portal auto-start failed: $e');
+          }
+          if (mounted) setState(() {});
         } else if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('Failed to enable hotspot')),
@@ -112,7 +101,7 @@ class _HotspotSettingsPageState extends State<HotspotSettingsPage>
         }
       } else {
         // Stop portal first, then hotspot
-        if (_portalService.isRunning) {
+        if (_portalService.isActive) {
           await _portalService.stop();
         }
         final success = await _wifiDirectService.disableHotspot();
@@ -143,30 +132,6 @@ class _HotspotSettingsPageState extends State<HotspotSettingsPage>
     }
   }
 
-  Future<void> _togglePortal(bool enabled) async {
-    setState(() => _portalLoading = true);
-
-    try {
-      if (enabled) {
-        final node = _stationNodeService.stationNode;
-        final stationName = node?.name ?? node?.callsign ?? 'Geogram';
-        await _portalService.start(stationName: stationName);
-      } else {
-        await _portalService.stop();
-      }
-      if (mounted) setState(() {});
-    } catch (e) {
-      LogService().log('Error toggling portal: $e');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: $e')),
-        );
-      }
-    } finally {
-      if (mounted) setState(() => _portalLoading = false);
-    }
-  }
-
   void _copyToClipboard(String text) {
     Clipboard.setData(ClipboardData(text: text));
     ScaffoldMessenger.of(context).showSnackBar(
@@ -177,292 +142,210 @@ class _HotspotSettingsPageState extends State<HotspotSettingsPage>
     );
   }
 
-  // ── Build ────────────────────────────────────────────────────────
+  // ── Build ──────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(_i18n.t('hotspot')),
-        bottom: TabBar(
-          controller: _tabController,
-          tabs: [
-            Tab(
-              icon: Badge(
-                isLabelVisible: _hotspotClients > 0,
-                label: Text('$_hotspotClients'),
-                child: const Icon(Icons.wifi),
-              ),
-              text: 'Wi-Fi',
-            ),
-            Tab(
-              icon: Badge(
-                isLabelVisible: _portalService.isRunning,
-                backgroundColor: Colors.green,
-                smallSize: 8,
-                child: const Icon(Icons.language),
-              ),
-              text: 'Portal',
-            ),
-          ],
-        ),
-      ),
-      body: TabBarView(
-        controller: _tabController,
-        children: [
-          _buildWifiTab(),
-          _buildPortalTab(),
-        ],
-      ),
-    );
-  }
-
-  // ── Wi-Fi Tab ────────────────────────────────────────────────────
-
-  Widget _buildWifiTab() {
-    return ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
-        // Hotspot toggle card
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Icon(
-                      Icons.wifi_tethering,
-                      color: _hotspotEnabled ? Colors.green : Colors.grey,
-                    ),
-                    const SizedBox(width: 8),
-                    const Expanded(
-                      child: Text(
-                        'Wi-Fi Hotspot',
-                        style: TextStyle(fontWeight: FontWeight.bold),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                    if (_hotspotLoading)
-                      const SizedBox(
-                        width: 20,
-                        height: 20,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    else
-                      Switch(
-                        value: _hotspotEnabled,
-                        onChanged: _toggleHotspot,
-                      ),
-                  ],
-                ),
-                if (_hotspotEnabled) ...[
-                  const SizedBox(height: 12),
-                  _buildInfoRow('SSID', _hotspotSsid ?? 'Loading...'),
-                  const SizedBox(height: 4),
-                  _buildInfoRow('Password', _hotspotPassword ?? '...'),
-                  const SizedBox(height: 4),
-                  _buildInfoRow('Clients', '$_hotspotClients connected'),
-                ] else ...[
-                  const SizedBox(height: 8),
-                  Text(
-                    'Enable to create a hotspot that other devices can connect to directly.',
-                    style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-                  ),
-                ],
-              ],
-            ),
-          ),
-        ),
-
-        // Wi-Fi QR code card (visible when hotspot is on)
-        if (_hotspotEnabled && _hotspotSsid != null && _hotspotPassword != null)
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                children: [
-                  const Text(
-                    'Scan to connect',
-                    style: TextStyle(fontWeight: FontWeight.bold),
-                  ),
-                  const SizedBox(height: 12),
-                  Container(
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: QrImageView(
-                      data:
-                          'WIFI:T:WPA;S:$_hotspotSsid;P:$_hotspotPassword;;',
-                      version: QrVersions.auto,
-                      size: 200,
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      OutlinedButton.icon(
-                        onPressed: () => _copyToClipboard(
-                          'SSID: $_hotspotSsid\nPassword: $_hotspotPassword',
-                        ),
-                        icon: const Icon(Icons.copy, size: 16),
-                        label: const Text('Copy credentials'),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-          ),
-      ],
-    );
-  }
-
-  // ── Portal Tab ───────────────────────────────────────────────────
-
-  Widget _buildPortalTab() {
     final portalUrl =
         'http://${HotspotPortalService.defaultGatewayIp}:${HotspotPortalService.portalPort}/';
 
-    return ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
-        // Portal toggle card
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Icon(
-                      Icons.language,
-                      color: _portalService.isRunning
-                          ? Colors.green
-                          : Colors.grey,
-                    ),
-                    const SizedBox(width: 8),
-                    const Expanded(
-                      child: Text(
-                        'Captive Portal',
-                        style: TextStyle(fontWeight: FontWeight.bold),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                    if (_portalLoading)
-                      const SizedBox(
-                        width: 20,
-                        height: 20,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    else
-                      Switch(
-                        value: _portalService.isRunning,
-                        onChanged: _hotspotEnabled ? _togglePortal : null,
-                      ),
-                  ],
-                ),
-                if (_portalService.isRunning) ...[
-                  const SizedBox(height: 12),
-                  _buildStatusRow(
-                    'HTTP Server',
-                    'Running on port ${HotspotPortalService.portalPort}',
-                    Colors.green,
-                  ),
-                  const SizedBox(height: 4),
-                  _buildStatusRow(
-                    'DNS Responder',
-                    _portalService.isDnsRunning ? 'Running' : 'Unavailable',
-                    _portalService.isDnsRunning ? Colors.green : Colors.orange,
-                  ),
-                ] else ...[
-                  const SizedBox(height: 8),
-                  Text(
-                    _hotspotEnabled
-                        ? 'Enable to serve a web portal to connected devices.'
-                        : 'Enable the hotspot first to use the captive portal.',
-                    style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-                  ),
-                ],
-              ],
-            ),
-          ),
-        ),
-
-        // Portal QR code card (visible when portal is running)
-        if (_portalService.isRunning)
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                children: [
-                  const Text(
-                    'Portal URL',
-                    style: TextStyle(fontWeight: FontWeight.bold),
-                  ),
-                  const SizedBox(height: 12),
-                  Container(
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: QrImageView(
-                      data: portalUrl,
-                      version: QrVersions.auto,
-                      size: 200,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    portalUrl,
-                    style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-                    textAlign: TextAlign.center,
-                  ),
-                  const SizedBox(height: 12),
-                  OutlinedButton.icon(
-                    onPressed: () => _copyToClipboard(portalUrl),
-                    icon: const Icon(Icons.copy, size: 16),
-                    label: const Text('Copy URL'),
-                  ),
-                ],
-              ),
-            ),
-          ),
-
-        // Info card
-        if (_portalService.isRunning)
+    return Scaffold(
+      appBar: AppBar(title: Text(_i18n.t('hotspot'))),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          // Hotspot toggle card
           Card(
             child: Padding(
               padding: const EdgeInsets.all(16),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text(
-                    'How it works',
-                    style: TextStyle(fontWeight: FontWeight.bold),
+                  Row(
+                    children: [
+                      Icon(
+                        Icons.wifi_tethering,
+                        color: _hotspotEnabled ? Colors.green : Colors.grey,
+                      ),
+                      const SizedBox(width: 8),
+                      const Expanded(
+                        child: Text(
+                          'Wi-Fi Hotspot',
+                          style: TextStyle(fontWeight: FontWeight.bold),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      if (_hotspotLoading)
+                        const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      else
+                        Switch(
+                          value: _hotspotEnabled,
+                          onChanged: _toggleHotspot,
+                        ),
+                    ],
                   ),
-                  const SizedBox(height: 8),
-                  Text(
-                    'When someone connects to your hotspot, their device '
-                    'automatically opens the portal page showing your blog, '
-                    'chat rooms, shared files, and download links for Geogram.',
-                    style: TextStyle(fontSize: 13, color: Colors.grey[600]),
-                  ),
+                  if (_hotspotEnabled) ...[
+                    const SizedBox(height: 12),
+                    _buildInfoRow('SSID', _hotspotSsid ?? 'Loading...'),
+                    const SizedBox(height: 4),
+                    _buildInfoRow('Password', _hotspotPassword ?? '...'),
+                    const SizedBox(height: 4),
+                    _buildInfoRow('Clients', '$_hotspotClients connected'),
+                  ] else ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      'Enable to create a hotspot that other devices can '
+                      'connect to directly.',
+                      style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                    ),
+                  ],
                 ],
               ),
             ),
           ),
-      ],
+
+          // Wi-Fi QR code card (visible when hotspot is on)
+          if (_hotspotEnabled &&
+              _hotspotSsid != null &&
+              _hotspotPassword != null)
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  children: [
+                    const Text(
+                      'Scan to connect',
+                      style: TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(height: 12),
+                    Container(
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: QrImageView(
+                        data:
+                            'WIFI:T:WPA;S:$_hotspotSsid;P:$_hotspotPassword;;',
+                        version: QrVersions.auto,
+                        size: 200,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        OutlinedButton.icon(
+                          onPressed: () => _copyToClipboard(
+                            'SSID: $_hotspotSsid\nPassword: $_hotspotPassword',
+                          ),
+                          icon: const Icon(Icons.copy, size: 16),
+                          label: const Text('Copy credentials'),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+
+          // Portal status + QR (visible when hotspot is on)
+          if (_hotspotEnabled) ...[
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(
+                          Icons.language,
+                          color: _portalService.isActive
+                              ? Colors.green
+                              : Colors.grey,
+                        ),
+                        const SizedBox(width: 8),
+                        const Expanded(
+                          child: Text(
+                            'Captive Portal',
+                            style: TextStyle(fontWeight: FontWeight.bold),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    _buildStatusRow(
+                      'Portal Routes',
+                      _portalService.isActive ? 'Active' : 'Inactive',
+                      _portalService.isActive ? Colors.green : Colors.grey,
+                    ),
+                    const SizedBox(height: 4),
+                    _buildStatusRow(
+                      'DNS Responder',
+                      _portalService.isDnsRunning ? 'Running' : 'Unavailable',
+                      _portalService.isDnsRunning
+                          ? Colors.green
+                          : Colors.orange,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+
+            // Portal QR code card
+            if (_portalService.isActive)
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    children: [
+                      const Text(
+                        'Portal URL',
+                        style: TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                      const SizedBox(height: 12),
+                      Container(
+                        padding: const EdgeInsets.all(16),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: QrImageView(
+                          data: portalUrl,
+                          version: QrVersions.auto,
+                          size: 200,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        portalUrl,
+                        style:
+                            TextStyle(fontSize: 12, color: Colors.grey[600]),
+                        textAlign: TextAlign.center,
+                      ),
+                      const SizedBox(height: 12),
+                      OutlinedButton.icon(
+                        onPressed: () => _copyToClipboard(portalUrl),
+                        icon: const Icon(Icons.copy, size: 16),
+                        label: const Text('Copy URL'),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+          ],
+        ],
+      ),
     );
   }
 
-  // ── Helpers ──────────────────────────────────────────────────────
+  // ── Helpers ────────────────────────────────────────────────────
 
   Widget _buildInfoRow(String label, String value) {
     return Row(
@@ -477,7 +360,8 @@ class _HotspotSettingsPageState extends State<HotspotSettingsPage>
         Expanded(
           child: Row(
             children: [
-              Expanded(child: Text(value, style: const TextStyle(fontSize: 13))),
+              Expanded(
+                  child: Text(value, style: const TextStyle(fontSize: 13))),
               if (label == 'SSID' || label == 'Password')
                 IconButton(
                   icon: const Icon(Icons.copy, size: 16),
