@@ -223,19 +223,28 @@ class UpdateService {
 
     _isChecking = true;
     try {
+      ReleaseInfo? release;
+
       // Try station first if enabled (offgrid-first)
       if (_settings?.useStationForUpdates == true) {
-        final stationRelease = await _checkStationForUpdates();
-        if (stationRelease != null) {
-          _latestRelease = stationRelease;
-          await _updateCheckResult(stationRelease);
-          return stationRelease;
+        release = await _checkStationForUpdates();
+        if (release == null) {
+          LogService().log('Station update check failed or unavailable, falling back to GitHub');
         }
-        LogService().log('Station update check failed or unavailable, falling back to GitHub');
       }
 
       // Fall back to GitHub (or use directly if station disabled)
-      return await _checkGitHubForUpdates();
+      release ??= await _checkGitHubForUpdates();
+
+      if (release != null) {
+        _latestRelease = release;
+        await _updateCheckResult(release);
+
+        // Mirror all platform binaries in the background for the download page
+        _mirrorAllPlatformBinaries(release);
+      }
+
+      return release;
     } catch (e) {
       LogService().log('Error checking for updates: $e');
       return null;
@@ -312,13 +321,124 @@ class UpdateService {
       }
 
       final json = jsonDecode(response.body) as Map<String, dynamic>;
-      _latestRelease = ReleaseInfo.fromGitHubJson(json);
-
-      await _updateCheckResult(_latestRelease!);
-      return _latestRelease;
+      return ReleaseInfo.fromGitHubJson(json);
     } catch (e) {
       LogService().log('Error checking GitHub for updates: $e');
       return null;
+    }
+  }
+
+  /// Mirror all platform binaries (Android, Linux, Windows) to the local
+  /// updates directory so the download page can serve them to other devices.
+  /// Runs in the background — does not block the update check flow.
+  void _mirrorAllPlatformBinaries(ReleaseInfo release) {
+    // Fire-and-forget — log errors but don't block
+    _mirrorAllPlatformBinariesAsync(release).catchError((e) {
+      LogService().log('Error mirroring platform binaries: $e');
+    });
+  }
+
+  bool _isMirroring = false;
+
+  Future<void> _mirrorAllPlatformBinariesAsync(ReleaseInfo release) async {
+    if (_isMirroring || kIsWeb) return;
+    _isMirroring = true;
+
+    try {
+      final updatesDir = await getUpdatesDirectory();
+      final versionDir = Directory('$updatesDir/${release.version}');
+      if (!await versionDir.exists()) {
+        await versionDir.create(recursive: true);
+      }
+
+      // Save release.json locally so the download page can read it
+      final releaseJson = {
+        'status': 'available',
+        'version': release.version,
+        'tagName': release.tagName,
+        'name': release.name,
+        'body': release.body,
+        'publishedAt': release.publishedAt,
+        'htmlUrl': release.htmlUrl,
+        'assets': release.assets,
+        'assetFilenames': release.assetFilenames,
+      };
+      await File('$updatesDir/release.json')
+          .writeAsString(const JsonEncoder.withIndent('  ').convert(releaseJson));
+
+      // Download each platform binary that we don't already have
+      // Only mirror the main platforms: Android, Linux Desktop, Windows Desktop
+      const targetTypes = [
+        UpdateAssetType.androidApk,
+        UpdateAssetType.linuxDesktop,
+        UpdateAssetType.windowsDesktop,
+      ];
+
+      int downloaded = 0;
+      int skipped = 0;
+
+      for (final assetType in targetTypes) {
+        final url = release.getAssetUrl(assetType);
+        final filename = release.assetFilenames[assetType.name];
+        if (url == null || filename == null) continue;
+
+        final targetFile = File('${versionDir.path}/$filename');
+        if (await targetFile.exists() && await targetFile.length() > 1000) {
+          skipped++;
+          continue;
+        }
+
+        try {
+          LogService().log('Mirroring ${assetType.name}: $filename');
+          final response = await http.get(
+            Uri.parse(url),
+            headers: {'User-Agent': 'Geogram-Updater'},
+          ).timeout(const Duration(minutes: 10));
+
+          if (response.statusCode == 200 && response.bodyBytes.isNotEmpty) {
+            await targetFile.writeAsBytes(response.bodyBytes);
+            downloaded++;
+            LogService().log('Mirrored $filename (${(response.bodyBytes.length / (1024 * 1024)).toStringAsFixed(1)}MB)');
+          }
+        } catch (e) {
+          LogService().log('Failed to mirror $filename: $e');
+        }
+      }
+
+      if (downloaded > 0 || skipped > 0) {
+        LogService().log('Binary mirror: $downloaded new, $skipped existing');
+      }
+
+      // Clean up old version directories, keep only the latest
+      await _cleanupOldMirroredVersions(updatesDir, release.version);
+    } finally {
+      _isMirroring = false;
+    }
+  }
+
+  /// Remove old version directories, keeping only the latest mirrored version
+  /// and the current running version.
+  Future<void> _cleanupOldMirroredVersions(String updatesDir, String keepVersion) async {
+    try {
+      final dir = Directory(updatesDir);
+      await for (final entity in dir.list()) {
+        if (entity is Directory) {
+          final name = entity.path.split('/').last;
+          // Skip if it's the version we want to keep or the current app version
+          if (name == keepVersion || name == appVersion) continue;
+          // Only delete version-looking directories
+          if (RegExp(r'^\d+\.\d+').hasMatch(name)) {
+            // Check if pinned
+            final pinnedMarker = File('$updatesDir/$name.pinned');
+            if (await pinnedMarker.exists()) continue;
+
+            LogService().log('Removing old mirrored version: $name');
+            await entity.delete(recursive: true);
+          }
+        }
+      }
+    } catch (e) {
+      LogService().log('Error cleaning up old mirrored versions: $e');
     }
   }
 
