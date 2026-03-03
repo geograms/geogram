@@ -4,19 +4,15 @@
 /// [LogApiService]'s existing HTTP server on port 3456. Does NOT bind its own
 /// HTTP server — the routes are served through [LogApiService._handleRequest].
 ///
-/// Reuses the station server's actual pages — [StationServerService.buildHomepageHtml]
-/// for the homepage, [WebNavigation] for navigation, and [StationHtmlTemplates]
-/// for the download page. No separate "portal" pages.
+/// Serves the device's own web page (same as p2p.radio/{callsign}) by
+/// delegating to [WebSocketService.handleLocalHttpRequest].
 library;
 
 import 'package:shelf/shelf.dart' as shelf;
 
-import '../util/station_html_templates.dart';
-import '../util/web_navigation.dart';
 import 'dns_responder.dart';
 import 'log_service.dart';
-import 'station_server_service_stub.dart'
-    if (dart.library.ui) 'station_server_service.dart';
+import 'websocket_service.dart';
 
 class HotspotPortalService {
   static final HotspotPortalService _instance =
@@ -72,10 +68,9 @@ class HotspotPortalService {
   /// Returns a [shelf.Response] for handled paths, or `null` to let
   /// LogApiService handle it normally (e.g. `/api/*` routes).
   ///
-  /// Reuses the station server's [buildHomepageHtml] for the homepage
-  /// and [StationHtmlTemplates.buildDownloadPage] with [WebNavigation]
-  /// for the download page — same pages visitors see on the station.
-  shelf.Response? handleShelfRequest(shelf.Request request) {
+  /// Serves the device's own web page by delegating to
+  /// [WebSocketService.handleLocalHttpRequest].
+  Future<shelf.Response?> handleShelfRequest(shelf.Request request) async {
     final path = '/${request.url.path}';
 
     // Captive portal detection endpoints → redirect to portal home
@@ -88,24 +83,75 @@ class HotspotPortalService {
       return null;
     }
 
-    // Serve pages — reuse station server's actual pages
-    switch (path) {
-      case '/':
-        return _serveHomepage();
-      case '/download':
-      case '/download/':
-        return _serveDownloadPage();
-      case '/styles.css':
-        return _serveCss();
-      default:
-        // If station server is running, let it handle other routes
-        // (chat, blog, device pages, etc.) on the shared port
-        if (StationServerService().isRunning) {
-          return null;
-        }
-        // Station server not running — redirect unknown paths to home
-        return _redirectToPortal();
+    // Map URL paths to device content paths
+    final devicePath = _mapToDevicePath(path);
+    if (devicePath == null) {
+      return null; // fall through to LogApiService
     }
+
+    try {
+      final result = await WebSocketService.handleLocalHttpRequest(
+        request.method,
+        devicePath,
+      );
+
+      return shelf.Response(
+        result.statusCode,
+        body: result.body,
+        headers: {'Content-Type': result.contentType},
+      );
+    } catch (e) {
+      LogService().log('Portal error serving $path: $e');
+      return shelf.Response.internalServerError(
+        body: 'Internal Server Error',
+        headers: {'Content-Type': 'text/plain'},
+      );
+    }
+  }
+
+  /// Map a portal URL path to the device content path format
+  /// used by [WebSocketService.handleLocalHttpRequest].
+  String? _mapToDevicePath(String path) {
+    // Homepage → www/index.html
+    if (path == '/' || path == '/index.html') {
+      return '/www/index.html';
+    }
+
+    // Blog post rendering (markdown → HTML)
+    // /blog/2025-12-04_hello-everyone.html → /api/blog/2025-12-04_hello-everyone.html
+    if (path.startsWith('/blog/') && path.endsWith('.html') && path != '/blog/index.html') {
+      final filename = path.substring('/blog/'.length);
+      return '/api/blog/$filename';
+    }
+
+    // Blog index
+    if (path == '/blog' || path == '/blog/' || path == '/blog/index.html') {
+      return '/blog/index.html';
+    }
+
+    // Chat index
+    if (path == '/chat' || path == '/chat/' || path == '/chat/index.html') {
+      return '/chat/index.html';
+    }
+
+    // Top-level CSS → www/styles.css
+    if (path == '/styles.css') {
+      return '/www/styles.css';
+    }
+
+    // Shared folders
+    if (path.startsWith('/shared/') || path == '/shared') {
+      return path;
+    }
+
+    // Any other /{app}/{file} path — pass through directly
+    // (e.g., /blog/styles.css, /chat/styles.css, /www/some-file.png)
+    final parts = path.split('/').where((p) => p.isNotEmpty).toList();
+    if (parts.isNotEmpty) {
+      return path;
+    }
+
+    return null;
   }
 
   bool _isCaptivePortalProbe(String path) {
@@ -124,48 +170,6 @@ class HotspotPortalService {
   shelf.Response _redirectToPortal() {
     final portalUrl = 'http://$_gatewayIp:$portalPort/';
     return shelf.Response.found(portalUrl);
-  }
-
-  // ── Page handlers (reuse station server pages) ─────────────────
-
-  /// Serve the station homepage — exact same page as the station server.
-  shelf.Response _serveHomepage() {
-    final stationServer = StationServerService();
-    final html = stationServer.buildHomepageHtml();
-    if (html != null) {
-      return shelf.Response.ok(
-        html,
-        headers: {'Content-Type': 'text/html; charset=utf-8'},
-      );
-    }
-    // Station server not initialized — minimal redirect
-    return _redirectToPortal();
-  }
-
-  shelf.Response _serveDownloadPage() {
-    final menuItems = WebNavigation.generateStationMenuItems(
-      activeApp: 'download',
-      hasChat: true,
-      hasDownload: true,
-    );
-
-    final html = StationHtmlTemplates.buildDownloadPage(
-      stationName: _stationName,
-      menuItems: menuItems,
-    );
-    return shelf.Response.ok(
-      html,
-      headers: {'Content-Type': 'text/html; charset=utf-8'},
-    );
-  }
-
-  shelf.Response _serveCss() {
-    final css = '${StationHtmlTemplates.getBaseStyles()}\n'
-        '${StationHtmlTemplates.getDownloadStyles()}';
-    return shelf.Response.ok(
-      css,
-      headers: {'Content-Type': 'text/css; charset=utf-8'},
-    );
   }
 
   // ── Debug API (JSON status) ───────────────────────────────────

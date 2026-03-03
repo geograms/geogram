@@ -4182,7 +4182,7 @@ await portal.stop();
 
 **Key Features:**
 - HTTP server on port 3456 with captive portal detection (Android, Apple, Windows, Firefox)
-- Portal home page via `StationHtmlTemplates.buildPortalHomePage()`
+- Portal serves device's own web page via `WebSocketService.handleLocalHttpRequest()`
 - Download page via `StationHtmlTemplates.buildDownloadPage()`
 - Debug API at `POST /api/debug/hotspot-portal` (actions: `start`, `stop`)
 - DNS responder on port 53 (best-effort, needs root)

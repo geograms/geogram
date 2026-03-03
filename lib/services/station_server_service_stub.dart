@@ -19,5 +19,4 @@ class StationServerService {
   Future<bool> start() async => false;
   Future<void> stop() async {}
   Map<String, dynamic> getStatus() => {'running': false};
-  String? buildHomepageHtml() => null;
 }

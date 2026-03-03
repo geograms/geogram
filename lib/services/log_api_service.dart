@@ -314,7 +314,7 @@ class LogApiService with ChatModificationMixin {
 
     // Portal routes — always serve portal pages (for LAN and hotspot users)
     final portal = HotspotPortalService();
-    final portalResponse = portal.handleShelfRequest(request);
+    final portalResponse = await portal.handleShelfRequest(request);
     if (portalResponse != null) return portalResponse;
 
     final urlPath = request.url.path;

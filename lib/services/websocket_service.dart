@@ -28,6 +28,7 @@ import '../services/web_theme_service.dart';
 import '../util/html_utils.dart';
 import '../util/station_html_templates.dart';
 import '../util/nostr_event.dart';
+import '../util/nostr_bundle.dart';
 import '../util/nostr_login_scripts.dart';
 import '../util/tlsh.dart';
 import '../util/event_bus.dart';
@@ -766,7 +767,9 @@ class WebSocketService {
     }
   }
 
-  /// Handle HTTP request from station (for www collection proxying and blog API)
+  /// Handle HTTP request from station (for www collection proxying and blog API).
+  /// Delegates to [handleLocalHttpRequest] for content, then sends the result
+  /// back through the WebSocket channel.
   Future<void> _handleHttpRequest(
     String? requestId,
     String? method,
@@ -788,298 +791,278 @@ class WebSocketService {
     try {
       LogService().log('Station proxy HTTP request: $method $path');
 
-      // Handle blog requests - render markdown to HTML
-      // Path format: /api/blog/{filename}.html
-      if (path.startsWith('/api/blog/') && path.endsWith('.html')) {
-        await _handleBlogApiRequest(requestId, path);
-        return;
-      }
-
-      // Forward ALL /api/* requests to local LogApiService HTTP server
-      // This enables DM, chat, status, and other API calls to work through station proxy
-      if (path.startsWith('/api/')) {
+      // Forward ALL /api/* requests (except blog rendering) to LogApiService
+      if (path.startsWith('/api/') && !(path.startsWith('/api/blog/') && path.endsWith('.html'))) {
         await _forwardToLocalApi(requestId, method, path, headersJson, body);
         return;
       }
 
       // Handle blog HTML requests with device identifier prefix
       // Path format: /{callsign}/blog/{filename}.html (from _handleBlogRequest)
-      // Static blog files start with /blog/ (from _handleCallsignOrNicknameWww)
-      // Only forward to API if path has callsign prefix (not starting with /blog/)
       if (path.contains('/blog/') && path.endsWith('.html') && !path.startsWith('/blog/')) {
         await _forwardToLocalApi(requestId, method, path, headersJson, body);
         return;
       }
 
-      // Parse path: should be /{appName}/{filePath}
-      // e.g., /blog/index.html, /www/index.html
-      final parts = path.split('/').where((p) => p.isNotEmpty).toList();
-      if (parts.isEmpty) {
-        throw Exception('Invalid path format: $path');
+      // Delegate to the shared local handler
+      final result = await handleLocalHttpRequest(method, path, headersJson: headersJson);
+
+      // Send result back via WebSocket
+      if (result.contentType.startsWith('text/')) {
+        _sendHttpResponse(requestId, result.statusCode, {'Content-Type': result.contentType}, utf8.decode(result.body));
+      } else {
+        _sendHttpResponse(requestId, result.statusCode, {'Content-Type': result.contentType}, base64Encode(result.body), isBase64: true);
       }
 
-      final appName = parts[0];
-      final filePath = parts.length > 1 ? '/${parts.sublist(1).join('/')}' : '/';
-
-      // Load collection - match by folder name (last segment of storagePath) or type
-      final appService = AppService();
-      var apps = await appService.loadApps();
-      LogService().log('HTTP_REQUEST: Looking for app "$appName" among ${apps.length} apps: ${apps.map((a) => '${a.type}@${a.storagePath?.split("/").last}').join(", ")}');
-      var app = apps.cast<App?>().firstWhere(
-        (c) {
-          if (c?.storagePath != null) {
-            final segments = c!.storagePath!.split('/').where((s) => s.isNotEmpty).toList();
-            final folderName = segments.isNotEmpty ? segments.last : '';
-            return folderName == appName;
-          }
-          return c?.title == appName;
-        },
-        orElse: () => null,
-      );
-
-      // Fallback: match by type for single-instance apps
-      app ??= apps.cast<App?>().firstWhere(
-        (c) => c?.type == appName,
-        orElse: () => null,
-      );
-
-      // If www collection not found, create it on-demand
-      if (app == null && appName == 'www') {
-        LogService().log('Creating www collection on-demand...');
-        try {
-          app = await appService.createApp(
-            title: 'Www',
-            description: '',
-            type: 'www',
-          );
-          // Generate default index.html
-          await appService.generateDefaultWwwIndex(app);
-          LogService().log('Created www collection on-demand: ${app.storagePath}');
-        } catch (e) {
-          LogService().log('Error creating www collection on-demand: $e');
-          throw Exception('Collection not found: $appName');
-        }
-      } else if (app == null) {
-        throw Exception('Collection not found: $appName');
-      }
-
-      // Security check: reject access to private collections
-      if (app.visibility == 'private') {
-        LogService().log('⚠ Rejected HTTP request for private collection: $appName');
-        _sendHttpResponse(requestId, 403, {'Content-Type': 'text/plain'}, 'Forbidden');
-        return;
-      }
-
-      final storagePath = app.storagePath;
-      if (storagePath == null) {
-        throw Exception('Collection has no storage path: $appName');
-      }
-
-      // For shared collection, resolve files from shared folder entries' disk locations
-      if (appName == 'shared') {
-        await _handleSharedFolderRequest(requestId, filePath, storagePath, headersJson);
-        return;
-      }
-
-      // For www collection requesting index.html, regenerate it dynamically
-      // This ensures the page always reflects the current state of available apps
-      if (appName == 'www' && (filePath == '/' || filePath == '/index.html')) {
-        LogService().log('Regenerating www index.html dynamically...');
-        await appService.generateDefaultWwwIndex(app);
-      }
-
-      // For blog collection requesting index.html, regenerate it dynamically
-      if (appName == 'blog' && (filePath == '/' || filePath == '/index.html')) {
-        LogService().log('Regenerating blog index.html dynamically...');
-        await appService.generateBlogIndex(storagePath);
-      }
-
-      // For chat collection requesting index.html, regenerate it dynamically
-      if (appName == 'chat' && (filePath == '/' || filePath == '/index.html')) {
-        LogService().log('Regenerating chat index.html dynamically...');
-        await appService.generateChatIndex(storagePath);
-        // Read the generated file via ProfileStorage
-        final chatProfileStorage = AppService().profileStorage;
-        if (chatProfileStorage != null) {
-          final chatAppStorage = ScopedProfileStorage.fromAbsolutePath(chatProfileStorage, storagePath);
-          final chatFileBytes = await chatAppStorage.readBytes('index.html');
-          if (chatFileBytes != null) {
-            final fileContent = base64Encode(chatFileBytes);
-            _sendHttpResponse(
-              requestId,
-              200,
-              {'Content-Type': 'text/html'},
-              fileContent,
-              isBase64: true,
-            );
-            LogService().log('Sent chat HTTP response: 200 OK (${chatFileBytes.length} bytes)');
-            return;
-          }
-        }
-      }
-
-      // Read file via ProfileStorage
-      final profileStorage = AppService().profileStorage;
-      if (profileStorage == null) {
-        _sendHttpResponse(requestId, 500, {'Content-Type': 'text/plain'}, 'Storage not available');
-        return;
-      }
-
-      final appStorage = ScopedProfileStorage.fromAbsolutePath(profileStorage, storagePath);
-      final relativePath = filePath.startsWith('/') ? filePath.substring(1) : filePath;
-      final fileBytes = await appStorage.readBytes(relativePath);
-
-      if (fileBytes == null) {
-        LogService().log('File not found: $storagePath$filePath');
-        _sendHttpResponse(requestId, 404, {'Content-Type': 'text/plain'}, 'Not Found');
-        return;
-      }
-
-      final fileContent = base64Encode(fileBytes);
-
-      // Determine content type
-      final contentType = _getContentType(filePath);
-
-      // Send successful response
-      _sendHttpResponse(
-        requestId,
-        200,
-        {'Content-Type': contentType},
-        fileContent,
-        isBase64: true,
-      );
-
-      LogService().log('Sent HTTP response: 200 OK (${fileBytes.length} bytes)');
+      LogService().log('Sent HTTP response: ${result.statusCode} (${result.body.length} bytes)');
     } catch (e) {
       LogService().log('Error handling HTTP request: $e');
       _sendHttpResponse(requestId, 500, {'Content-Type': 'text/plain'}, 'Internal Server Error: $e');
     }
   }
 
-  /// Handle HTTP requests for the 'shared' app type.
+  /// Handle an HTTP request locally — serves device web content.
+  /// Used by both WebSocket proxy and the local portal service.
+  /// Returns (statusCode, contentType, body bytes).
+  static Future<({int statusCode, String contentType, List<int> body})> handleLocalHttpRequest(
+    String method,
+    String path, {
+    String? headersJson,
+  }) async {
+    // Handle blog API requests - render markdown to HTML
+    // Path format: /api/blog/{filename}.html
+    if (path.startsWith('/api/blog/') && path.endsWith('.html')) {
+      return _handleBlogApiRequestLocal(path);
+    }
+
+    // Serve CSS from theme system: /styles.css (global) or /{app}/styles.css
+    if (path.endsWith('/styles.css') || path == '/styles.css') {
+      try {
+        final themeService = WebThemeService();
+        await themeService.init();
+        // Determine app type from path
+        final segments = path.split('/').where((s) => s.isNotEmpty).toList();
+        final appType = segments.length >= 2 ? segments[0] : 'www';
+        final combinedStyles = await themeService.getCombinedStyles(appType);
+        return (statusCode: 200, contentType: 'text/css', body: utf8.encode(combinedStyles));
+      } catch (e) {
+        LogService().log('Error serving theme CSS for $path: $e');
+        // Fall through to file-based serving
+      }
+    }
+
+    // Serve nostr-tools JS bundle
+    if (path == '/lib/nostr.bundle.js') {
+      final js = getNostrBundleJs();
+      return (statusCode: 200, contentType: 'application/javascript', body: utf8.encode(js));
+    }
+
+    // Parse path: should be /{appName}/{filePath}
+    // e.g., /blog/index.html, /www/index.html
+    final parts = path.split('/').where((p) => p.isNotEmpty).toList();
+    if (parts.isEmpty) {
+      return (statusCode: 400, contentType: 'text/plain', body: utf8.encode('Invalid path format: $path'));
+    }
+
+    final appName = parts[0];
+    final filePath = parts.length > 1 ? '/${parts.sublist(1).join('/')}' : '/';
+
+    // Load collection - match by folder name (last segment of storagePath) or type
+    final appService = AppService();
+    var apps = await appService.loadApps();
+    LogService().log('HTTP_REQUEST: Looking for app "$appName" among ${apps.length} apps: ${apps.map((a) => '${a.type}@${a.storagePath?.split("/").last}').join(", ")}');
+    var app = apps.cast<App?>().firstWhere(
+      (c) {
+        if (c?.storagePath != null) {
+          final segments = c!.storagePath!.split('/').where((s) => s.isNotEmpty).toList();
+          final folderName = segments.isNotEmpty ? segments.last : '';
+          return folderName == appName;
+        }
+        return c?.title == appName;
+      },
+      orElse: () => null,
+    );
+
+    // Fallback: match by type for single-instance apps
+    app ??= apps.cast<App?>().firstWhere(
+      (c) => c?.type == appName,
+      orElse: () => null,
+    );
+
+    // If www collection not found, create it on-demand
+    if (app == null && appName == 'www') {
+      LogService().log('Creating www collection on-demand...');
+      try {
+        app = await appService.createApp(
+          title: 'Www',
+          description: '',
+          type: 'www',
+        );
+        await appService.generateDefaultWwwIndex(app);
+        LogService().log('Created www collection on-demand: ${app.storagePath}');
+      } catch (e) {
+        LogService().log('Error creating www collection on-demand: $e');
+        return (statusCode: 404, contentType: 'text/plain', body: utf8.encode('Collection not found: $appName'));
+      }
+    } else if (app == null) {
+      return (statusCode: 404, contentType: 'text/plain', body: utf8.encode('Collection not found: $appName'));
+    }
+
+    // Security check: reject access to private collections
+    if (app.visibility == 'private') {
+      LogService().log('Rejected HTTP request for private collection: $appName');
+      return (statusCode: 403, contentType: 'text/plain', body: utf8.encode('Forbidden'));
+    }
+
+    final storagePath = app.storagePath;
+    if (storagePath == null) {
+      return (statusCode: 500, contentType: 'text/plain', body: utf8.encode('Collection has no storage path: $appName'));
+    }
+
+    // For shared collection, resolve files from shared folder entries' disk locations
+    if (appName == 'shared') {
+      return WebSocketService()._handleSharedFolderRequestLocal(filePath, storagePath, headersJson);
+    }
+
+    // For www collection requesting index.html, regenerate it dynamically
+    if (appName == 'www' && (filePath == '/' || filePath == '/index.html')) {
+      LogService().log('Regenerating www index.html dynamically...');
+      await appService.generateDefaultWwwIndex(app);
+    }
+
+    // For blog collection requesting index.html, regenerate it dynamically
+    if (appName == 'blog' && (filePath == '/' || filePath == '/index.html')) {
+      LogService().log('Regenerating blog index.html dynamically...');
+      await appService.generateBlogIndex(storagePath);
+    }
+
+    // For chat collection requesting index.html, regenerate it dynamically
+    if (appName == 'chat' && (filePath == '/' || filePath == '/index.html')) {
+      LogService().log('Regenerating chat index.html dynamically...');
+      await appService.generateChatIndex(storagePath);
+    }
+
+    // Read file via ProfileStorage
+    final profileStorage = AppService().profileStorage;
+    if (profileStorage == null) {
+      return (statusCode: 500, contentType: 'text/plain', body: utf8.encode('Storage not available'));
+    }
+
+    final appStorage = ScopedProfileStorage.fromAbsolutePath(profileStorage, storagePath);
+    final relativePath = filePath.startsWith('/') ? filePath.substring(1) : filePath;
+    final fileBytes = await appStorage.readBytes(relativePath);
+
+    if (fileBytes == null) {
+      LogService().log('File not found: $storagePath$filePath');
+      return (statusCode: 404, contentType: 'text/plain', body: utf8.encode('Not Found'));
+    }
+
+    final contentType = _getContentType(filePath);
+    return (statusCode: 200, contentType: contentType, body: fileBytes);
+  }
+
+  /// Handle shared folder requests — returns response data.
   /// Resolves shared folder entries and serves files from their actual disk locations.
   /// Path format: /{folderSlug}/{filePath} or / for index
-  Future<void> _handleSharedFolderRequest(String requestId, String filePath, String storagePath, String? headersStr) async {
-    try {
-      // Set up the shared folder service
-      final profileStorage = AppService().profileStorage;
-      if (profileStorage == null) {
-        _sendHttpResponse(requestId, 500, {'Content-Type': 'text/plain'}, 'Storage not available');
-        return;
-      }
-
-      final scopedStorage = ScopedProfileStorage.fromAbsolutePath(profileStorage, storagePath);
-      final service = SharedFolderService();
-      service.setStorage(scopedStorage);
-      await service.initializeApp(storagePath);
-
-      final folders = await service.loadAll();
-
-      // Serve styles.css for the shared app
-      if (filePath == '/styles.css') {
-        try {
-          final themeService = WebThemeService();
-          await themeService.init();
-          final combinedStyles = await themeService.getCombinedStyles('shared');
-          _sendHttpResponse(requestId, 200, {'Content-Type': 'text/css'}, base64Encode(utf8.encode(combinedStyles)), isBase64: true);
-        } catch (e) {
-          LogService().log('Error serving shared styles.css: $e');
-          _sendHttpResponse(requestId, 404, {'Content-Type': 'text/plain'}, 'Not Found');
-        }
-        return;
-      }
-
-      // Index page: list all shared folders
-      if (filePath == '/' || filePath == '/index.html') {
-        final html = await _generateSharedIndexHtml(folders, storagePath, headersStr);
-        _sendHttpResponse(requestId, 200, {'Content-Type': 'text/html'}, base64Encode(utf8.encode(html)), isBase64: true);
-        return;
-      }
-
-      // Parse: /{folderSlug}/{rest}
-      final parts = filePath.split('/').where((p) => p.isNotEmpty).toList();
-      if (parts.isEmpty) {
-        _sendHttpResponse(requestId, 404, {'Content-Type': 'text/plain'}, 'Not Found');
-        return;
-      }
-
-      final folderSlug = Uri.decodeComponent(parts[0]);
-      final remainingPath = parts.length > 1 ? parts.sublist(1).map(Uri.decodeComponent).join('/') : '';
-
-      // Find matching shared folder entry by sanitized title
-      final entry = folders.cast<SharedFolder?>().firstWhere(
-        (f) => f?.sanitizedFilename == folderSlug,
-        orElse: () => null,
-      );
-
-      if (entry == null) {
-        LogService().log('Shared folder not found for slug: $folderSlug');
-        _sendHttpResponse(requestId, 404, {'Content-Type': 'text/plain'}, 'Shared folder not found');
-        return;
-      }
-
-      // Check visibility
-      if (entry.visibility == SharedFolderVisibility.private_) {
-        _sendHttpResponse(requestId, 403, {'Content-Type': 'text/plain'}, 'Forbidden');
-        return;
-      }
-
-      if (entry.visibility == SharedFolderVisibility.restricted) {
-        final visitorPubkey = _extractNostrPubkeyFromHeaders(headersStr);
-        if (!await _isAuthorizedReader(entry, visitorPubkey)) {
-          _sendHttpResponse(requestId, 403, {'Content-Type': 'text/plain'}, 'Forbidden');
-          return;
-        }
-      }
-
-      // Serve styles.css for subfolder paths (e.g., /{folderSlug}/styles.css)
-      if (remainingPath == 'styles.css') {
-        try {
-          final themeService = WebThemeService();
-          await themeService.init();
-          final combinedStyles = await themeService.getCombinedStyles('shared');
-          _sendHttpResponse(requestId, 200, {'Content-Type': 'text/css'}, base64Encode(utf8.encode(combinedStyles)), isBase64: true);
-        } catch (e) {
-          _sendHttpResponse(requestId, 404, {'Content-Type': 'text/plain'}, 'Not Found');
-        }
-        return;
-      }
-
-      final diskPath = entry.location;
-
-      // If no remaining path or index.html, generate directory listing
-      if (remainingPath.isEmpty || remainingPath == 'index.html') {
-        final dirHtml = await _generateDirectoryListing(diskPath, entry.title, folderSlug, storagePath);
-        _sendHttpResponse(requestId, 200, {'Content-Type': 'text/html'}, base64Encode(utf8.encode(dirHtml)), isBase64: true);
-        return;
-      }
-
-      // Serve actual file from disk
-      final targetPath = '$diskPath/$remainingPath';
-      final file = File(targetPath);
-
-      if (!await file.exists()) {
-        LogService().log('File not found: $targetPath');
-        _sendHttpResponse(requestId, 404, {'Content-Type': 'text/plain'}, 'Not Found');
-        return;
-      }
-
-      final fileBytes = await file.readAsBytes();
-      final contentType = _getContentType(remainingPath);
-
-      _sendHttpResponse(
-        requestId,
-        200,
-        {'Content-Type': contentType},
-        base64Encode(fileBytes),
-        isBase64: true,
-      );
-
-      LogService().log('Shared: Served $targetPath (${fileBytes.length} bytes)');
-    } catch (e) {
-      LogService().log('Error handling shared folder request: $e');
-      _sendHttpResponse(requestId, 500, {'Content-Type': 'text/plain'}, 'Internal Server Error: $e');
+  Future<({int statusCode, String contentType, List<int> body})> _handleSharedFolderRequestLocal(
+    String filePath,
+    String storagePath,
+    String? headersStr,
+  ) async {
+    final profileStorage = AppService().profileStorage;
+    if (profileStorage == null) {
+      return (statusCode: 500, contentType: 'text/plain', body: utf8.encode('Storage not available'));
     }
+
+    final scopedStorage = ScopedProfileStorage.fromAbsolutePath(profileStorage, storagePath);
+    final service = SharedFolderService();
+    service.setStorage(scopedStorage);
+    await service.initializeApp(storagePath);
+
+    final folders = await service.loadAll();
+
+    // Serve styles.css for the shared app
+    if (filePath == '/styles.css') {
+      try {
+        final themeService = WebThemeService();
+        await themeService.init();
+        final combinedStyles = await themeService.getCombinedStyles('shared');
+        return (statusCode: 200, contentType: 'text/css', body: utf8.encode(combinedStyles));
+      } catch (e) {
+        LogService().log('Error serving shared styles.css: $e');
+        return (statusCode: 404, contentType: 'text/plain', body: utf8.encode('Not Found'));
+      }
+    }
+
+    // Index page: list all shared folders
+    if (filePath == '/' || filePath == '/index.html') {
+      final html = await _generateSharedIndexHtml(folders, storagePath, headersStr);
+      return (statusCode: 200, contentType: 'text/html', body: utf8.encode(html));
+    }
+
+    // Parse: /{folderSlug}/{rest}
+    final parts = filePath.split('/').where((p) => p.isNotEmpty).toList();
+    if (parts.isEmpty) {
+      return (statusCode: 404, contentType: 'text/plain', body: utf8.encode('Not Found'));
+    }
+
+    final folderSlug = Uri.decodeComponent(parts[0]);
+    final remainingPath = parts.length > 1 ? parts.sublist(1).map(Uri.decodeComponent).join('/') : '';
+
+    final entry = folders.cast<SharedFolder?>().firstWhere(
+      (f) => f?.sanitizedFilename == folderSlug,
+      orElse: () => null,
+    );
+
+    if (entry == null) {
+      LogService().log('Shared folder not found for slug: $folderSlug');
+      return (statusCode: 404, contentType: 'text/plain', body: utf8.encode('Shared folder not found'));
+    }
+
+    if (entry.visibility == SharedFolderVisibility.private_) {
+      return (statusCode: 403, contentType: 'text/plain', body: utf8.encode('Forbidden'));
+    }
+
+    if (entry.visibility == SharedFolderVisibility.restricted) {
+      final visitorPubkey = _extractNostrPubkeyFromHeaders(headersStr);
+      if (!await _isAuthorizedReader(entry, visitorPubkey)) {
+        return (statusCode: 403, contentType: 'text/plain', body: utf8.encode('Forbidden'));
+      }
+    }
+
+    // Serve styles.css for subfolder paths
+    if (remainingPath == 'styles.css') {
+      try {
+        final themeService = WebThemeService();
+        await themeService.init();
+        final combinedStyles = await themeService.getCombinedStyles('shared');
+        return (statusCode: 200, contentType: 'text/css', body: utf8.encode(combinedStyles));
+      } catch (e) {
+        return (statusCode: 404, contentType: 'text/plain', body: utf8.encode('Not Found'));
+      }
+    }
+
+    final diskPath = entry.location;
+
+    // Directory listing
+    if (remainingPath.isEmpty || remainingPath == 'index.html') {
+      final dirHtml = await _generateDirectoryListing(diskPath, entry.title, folderSlug, storagePath);
+      return (statusCode: 200, contentType: 'text/html', body: utf8.encode(dirHtml));
+    }
+
+    // Serve actual file from disk
+    final targetPath = '$diskPath/$remainingPath';
+    final file = File(targetPath);
+
+    if (!await file.exists()) {
+      LogService().log('File not found: $targetPath');
+      return (statusCode: 404, contentType: 'text/plain', body: utf8.encode('Not Found'));
+    }
+
+    final fileBytes = await file.readAsBytes();
+    final contentType = _getContentType(remainingPath);
+    LogService().log('Shared: Served $targetPath (${fileBytes.length} bytes)');
+    return (statusCode: 200, contentType: contentType, body: fileBytes);
   }
 
   /// Generate an index page listing all shared folders (themed)
@@ -1313,122 +1296,111 @@ class WebSocketService {
     return false;
   }
 
-  /// Handle blog API request from station
+  /// Static handler for blog API requests — returns response data.
   /// Path format: /api/blog/{filename}.html
-  Future<void> _handleBlogApiRequest(String requestId, String path) async {
-    try {
-      // Extract filename from path: /api/blog/2025-12-04_hello-everyone.html
-      final regex = RegExp(r'^/api/blog/([^/]+)\.html$');
-      final match = regex.firstMatch(path);
+  static Future<({int statusCode, String contentType, List<int> body})> _handleBlogApiRequestLocal(String path) async {
+    final regex = RegExp(r'^/api/blog/([^/]+)\.html$');
+    final match = regex.firstMatch(path);
+    if (match == null) {
+      return (statusCode: 400, contentType: 'text/plain', body: utf8.encode('Invalid blog path'));
+    }
 
-      if (match == null) {
-        _sendHttpResponse(requestId, 400, {'Content-Type': 'text/plain'}, 'Invalid blog path');
-        return;
-      }
+    final filename = match.group(1)!;
+    final yearMatch = RegExp(r'^(\d{4})-').firstMatch(filename);
+    if (yearMatch == null) {
+      return (statusCode: 400, contentType: 'text/plain', body: utf8.encode('Invalid blog filename format'));
+    }
+    final year = yearMatch.group(1)!;
 
-      final filename = match.group(1)!;  // e.g., "2025-12-04_hello-everyone"
+    final apps = await AppService().loadApps();
+    final profileStorage = AppService().profileStorage;
+    if (profileStorage == null) {
+      return (statusCode: 500, contentType: 'text/plain', body: utf8.encode('Storage not available'));
+    }
 
-      // Extract year from filename (format: YYYY-MM-DD_title)
-      final yearMatch = RegExp(r'^(\d{4})-').firstMatch(filename);
-      if (yearMatch == null) {
-        _sendHttpResponse(requestId, 400, {'Content-Type': 'text/plain'}, 'Invalid blog filename format');
-        return;
-      }
-      final year = yearMatch.group(1)!;
+    BlogPost? foundPost;
+    List<String> foundPostLikedHexPubkeys = [];
 
-      // Search for blog post in all public blog collections
-      final apps = await AppService().loadApps();
-      final profileStorage = AppService().profileStorage;
-      BlogPost? foundPost;
-      String? appName;
-      List<String> foundPostLikedHexPubkeys = [];
+    for (final app in apps) {
+      if (app.visibility == 'private') continue;
+      if (app.type != 'blog') continue;
+      final storagePath = app.storagePath;
+      if (storagePath == null) continue;
 
-      if (profileStorage == null) {
-        _sendHttpResponse(requestId, 500, {'Content-Type': 'text/plain'}, 'Storage not available');
-        return;
-      }
+      final appStorage = ScopedProfileStorage.fromAbsolutePath(profileStorage, storagePath);
+      final postRelativePath = '$year/$filename/post.md';
+      final content = await appStorage.readString(postRelativePath);
 
-      for (final app in apps) {
-        // Skip private collections and non-blog collections
-        if (app.visibility == 'private') continue;
-        if (app.type != 'blog') continue;
+      if (content != null) {
+        try {
+          foundPost = BlogPost.fromText(content, filename);
 
-        final storagePath = app.storagePath;
-        if (storagePath == null) continue;
+          final postFolderPath = '$year/$filename';
+          final feedbackCounts = await FeedbackFolderUtils.getAllFeedbackCounts(
+            postFolderPath,
+            storage: appStorage,
+          );
+          foundPost = foundPost.copyWith(
+            likesCount: feedbackCounts[FeedbackFolderUtils.feedbackTypeLikes] ?? 0,
+            dislikesCount: feedbackCounts[FeedbackFolderUtils.feedbackTypeDislikes] ?? 0,
+            pointsCount: feedbackCounts[FeedbackFolderUtils.feedbackTypePoints] ?? 0,
+          );
 
-        // Create scoped storage for this blog app
-        final appStorage = ScopedProfileStorage.fromAbsolutePath(profileStorage, storagePath);
-
-        // Blog structure: {appFolder}/{year}/{postId}/post.md
-        final postRelativePath = '$year/$filename/post.md';
-        final content = await appStorage.readString(postRelativePath);
-
-        if (content != null) {
-          try {
-            foundPost = BlogPost.fromText(content, filename);
-            appName = app.title;
-
-            // Load feedback counts
-            final postFolderPath = '$year/$filename';
-            final feedbackCounts = await FeedbackFolderUtils.getAllFeedbackCounts(
-              postFolderPath,
-              storage: appStorage,
-            );
-            foundPost = foundPost.copyWith(
-              likesCount: feedbackCounts[FeedbackFolderUtils.feedbackTypeLikes] ?? 0,
-              dislikesCount: feedbackCounts[FeedbackFolderUtils.feedbackTypeDislikes] ?? 0,
-              pointsCount: feedbackCounts[FeedbackFolderUtils.feedbackTypePoints] ?? 0,
-            );
-
-            // Read liked npubs and convert to hex pubkeys for client-side checking
-            final likedNpubs = await FeedbackFolderUtils.readFeedbackFile(
-              postFolderPath,
-              FeedbackFolderUtils.feedbackTypeLikes,
-              storage: appStorage,
-            );
-            foundPostLikedHexPubkeys = <String>[];
-            for (final npub in likedNpubs) {
-              try {
-                foundPostLikedHexPubkeys.add(NostrCrypto.decodeNpub(npub));
-              } catch (_) {}
-            }
-            break;
-          } catch (e) {
-            LogService().log('Error parsing blog file: $e');
+          final likedNpubs = await FeedbackFolderUtils.readFeedbackFile(
+            postFolderPath,
+            FeedbackFolderUtils.feedbackTypeLikes,
+            storage: appStorage,
+          );
+          foundPostLikedHexPubkeys = <String>[];
+          for (final npub in likedNpubs) {
+            try {
+              foundPostLikedHexPubkeys.add(NostrCrypto.decodeNpub(npub));
+            } catch (_) {}
           }
+          break;
+        } catch (e) {
+          LogService().log('Error parsing blog file: $e');
         }
       }
-
-      if (foundPost == null) {
-        _sendHttpResponse(requestId, 404, {'Content-Type': 'text/plain'}, 'Blog post not found');
-        return;
-      }
-
-      // Only serve published posts
-      if (foundPost.isDraft) {
-        _sendHttpResponse(requestId, 403, {'Content-Type': 'text/plain'}, 'This post is not published');
-        return;
-      }
-
-      // Get user profile for author info
-      final profile = ProfileService().getProfile();
-      final author = profile.nickname.isNotEmpty ? profile.nickname : profile.callsign;
-
-      // Convert markdown content to HTML
-      final htmlContent = md.markdownToHtml(
-        foundPost.content,
-        extensionSet: md.ExtensionSet.gitHubWeb,
-      );
-
-      // Build full HTML page
-      final html = _buildBlogHtmlPage(foundPost, htmlContent, author, foundPostLikedHexPubkeys);
-
-      _sendHttpResponse(requestId, 200, {'Content-Type': 'text/html'}, html);
-      LogService().log('Sent blog post: ${foundPost.title} (${html.length} bytes)');
-    } catch (e) {
-      LogService().log('Error handling blog API request: $e');
-      _sendHttpResponse(requestId, 500, {'Content-Type': 'text/plain'}, 'Internal Server Error: $e');
     }
+
+    if (foundPost == null) {
+      return (statusCode: 404, contentType: 'text/plain', body: utf8.encode('Blog post not found'));
+    }
+
+    if (foundPost.isDraft) {
+      return (statusCode: 403, contentType: 'text/plain', body: utf8.encode('This post is not published'));
+    }
+
+    final profile = ProfileService().getProfile();
+    final author = profile.nickname.isNotEmpty ? profile.nickname : profile.callsign;
+
+    final htmlContent = md.markdownToHtml(
+      foundPost.content,
+      extensionSet: md.ExtensionSet.gitHubWeb,
+    );
+
+    final html = _buildBlogHtmlPageStatic(foundPost, htmlContent, author, foundPostLikedHexPubkeys);
+    LogService().log('Served blog post: ${foundPost.title} (${html.length} bytes)');
+    return (statusCode: 200, contentType: 'text/html', body: utf8.encode(html));
+  }
+
+  /// Build HTML page for blog post (static version)
+  static String _buildBlogHtmlPageStatic(BlogPost post, String htmlContent, String author, [List<String> likedHexPubkeys = const []]) {
+    return StationHtmlTemplates.buildBlogPostPage(
+      postTitle: post.title,
+      postDate: post.displayDate,
+      author: author,
+      htmlContent: htmlContent,
+      description: post.description,
+      tags: post.tags,
+      postId: post.id,
+      npub: post.npub,
+      likesCount: post.likesCount,
+      likedHexPubkeys: likedHexPubkeys,
+      globalStyles: StationHtmlTemplates.getBaseStyles(),
+      appStyles: '',
+    );
   }
 
   /// Forward API request to local LogApiService
@@ -1480,24 +1452,6 @@ class WebSocketService {
     }
   }
 
-  /// Build HTML page for blog post
-  String _buildBlogHtmlPage(BlogPost post, String htmlContent, String author, [List<String> likedHexPubkeys = const []]) {
-    return StationHtmlTemplates.buildBlogPostPage(
-      postTitle: post.title,
-      postDate: post.displayDate,
-      author: author,
-      htmlContent: htmlContent,
-      description: post.description,
-      tags: post.tags,
-      postId: post.id,
-      npub: post.npub,
-      likesCount: post.likesCount,
-      likedHexPubkeys: likedHexPubkeys,
-      globalStyles: StationHtmlTemplates.getBaseStyles(),
-      appStyles: '',
-    );
-  }
-
 
   /// Send HTTP response to station
   void _sendHttpResponse(
@@ -1520,7 +1474,7 @@ class WebSocketService {
   }
 
   /// Get content type based on file extension
-  String _getContentType(String filePath) {
+  static String _getContentType(String filePath) {
     final ext = filePath.toLowerCase().split('.').last;
     switch (ext) {
       case 'html':

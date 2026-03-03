@@ -344,6 +344,9 @@ class AppService {
         'MENU_ITEMS': menuItems,
         'DATA_JSON': '{"files": []}',
         'SCRIPTS': '',
+        'NOSTR_STYLES': getNostrLoginStyles(),
+        'NOSTR_HEADER': getNostrLoginHeaderHtml(),
+        'NOSTR_SCRIPTS': getNostrLoginScripts(),
         'GENERATED_DATE': DateTime.now().toIso8601String(),
       });
 
@@ -609,6 +612,9 @@ class AppService {
         'CONTENT': postsHtml.toString(),
         'MENU_ITEMS': menuItems,
         'DATA_JSON': jsonEncode({'posts': publishedPosts}),
+        'NOSTR_STYLES': getNostrLoginStyles(),
+        'NOSTR_HEADER': getNostrLoginHeaderHtml(),
+        'NOSTR_SCRIPTS': getNostrLoginScripts(),
       });
 
       // Write index.html + styles.css via ProfileStorage

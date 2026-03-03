@@ -328,6 +328,8 @@ class ThemesEmbedded {
   <title>Blog - {{COLLECTION_NAME}}</title>
   <link rel="stylesheet" href="/styles.css">
   <link rel="stylesheet" href="styles.css">
+  <script src="/lib/nostr.bundle.js"></script>
+  {{NOSTR_STYLES}}
 </head>
 <body>
 <div class="container">
@@ -338,6 +340,7 @@ class ThemesEmbedded {
           <div class="logo">{{COLLECTION_NAME}}</div>
         </a>
       </div>
+      {{NOSTR_HEADER}}
     </div>
     <nav class="menu">
       <ul class="menu__inner">
@@ -360,6 +363,9 @@ class ThemesEmbedded {
     </div>
   </footer>
 </div>
+<script>
+{{NOSTR_SCRIPTS}}
+</script>
 </body>
 </html>
 ''';
@@ -3482,6 +3488,8 @@ hr {
   <title>{{TITLE}}</title>
   <link rel="stylesheet" href="/styles.css">
   <link rel="stylesheet" href="styles.css">
+  <script src="/lib/nostr.bundle.js"></script>
+  {{NOSTR_STYLES}}
 </head>
 <body>
 <div class="container">
@@ -3492,6 +3500,7 @@ hr {
           <div class="logo">{{COLLECTION_NAME}}</div>
         </a>
       </div>
+      {{NOSTR_HEADER}}
     </div>
     <nav class="menu">
       <ul class="menu__inner">
@@ -3512,6 +3521,9 @@ hr {
     </div>
   </footer>
 </div>
+<script>
+{{NOSTR_SCRIPTS}}
+</script>
 </body>
 </html>
 ''';
