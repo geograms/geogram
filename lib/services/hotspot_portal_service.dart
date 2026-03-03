@@ -4,17 +4,19 @@
 /// [LogApiService]'s existing HTTP server on port 3456. Does NOT bind its own
 /// HTTP server — the routes are served through [LogApiService._handleRequest].
 ///
-/// - Captive portal detection endpoints → 302 redirect to portal home
-/// - Portal home page (navigation cards for blog, chat, files, download)
-/// - Download page with platform cards
-/// - Static CSS
+/// When the station server is running (shared port 3456), this service only
+/// handles captive portal probe detection — all real page routes are served by
+/// the station server. When the station server is NOT running, this service
+/// serves fallback pages using the same shared templates and [WebNavigation].
 library;
 
 import 'package:shelf/shelf.dart' as shelf;
 
 import '../util/station_html_templates.dart';
+import '../util/web_navigation.dart';
 import 'dns_responder.dart';
 import 'log_service.dart';
+import 'station_server_service_stub.dart' if (dart.library.ui) 'station_server_service.dart';
 
 class HotspotPortalService {
   static final HotspotPortalService _instance =
@@ -69,14 +71,30 @@ class HotspotPortalService {
   /// Handle a shelf request if it matches a portal route.
   /// Returns a [shelf.Response] for portal paths, or `null` to let
   /// LogApiService handle it normally (e.g. `/api/*` routes).
+  ///
+  /// When the station server is running on the shared port, we only handle
+  /// captive portal probes — the station server serves all real pages.
+  /// When the station server is NOT running, we serve fallback pages using
+  /// the same shared templates and [WebNavigation].
   shelf.Response? handleShelfRequest(shelf.Request request) {
     final path = '/${request.url.path}';
 
-    // Captive portal detection endpoints → redirect to portal
+    // Captive portal detection endpoints → redirect to portal home
     if (_isCaptivePortalProbe(path)) {
       return _redirectToPortal();
     }
 
+    // API routes always fall through to LogApiService
+    if (path.startsWith('/api')) {
+      return null;
+    }
+
+    // If station server is running, let it handle all page routes
+    if (StationServerService().isRunning) {
+      return null;
+    }
+
+    // Station server not running — serve fallback pages
     switch (path) {
       case '/':
         return _servePortalHome();
@@ -86,12 +104,8 @@ class HotspotPortalService {
       case '/styles.css':
         return _serveCss();
       default:
-        // Unknown non-API paths also redirect to portal
-        if (!path.startsWith('/api')) {
-          return _redirectToPortal();
-        }
-        // Let LogApiService handle API routes
-        return null;
+        // Redirect unknown paths to portal home
+        return _redirectToPortal();
     }
   }
 
@@ -116,10 +130,18 @@ class HotspotPortalService {
   // ── Page handlers ─────────────────────────────────────────────
 
   shelf.Response _servePortalHome() {
+    final menuItems = WebNavigation.generateStationMenuItems(
+      activeApp: 'home',
+      hasChat: true,
+      hasDownload: true,
+    );
+
     final html = StationHtmlTemplates.buildPortalHomePage(
       stationName: _stationName,
       gatewayIp: _gatewayIp,
       port: portalPort,
+      menuItems: menuItems,
+      hasChat: true,
     );
     return shelf.Response.ok(
       html,
@@ -128,11 +150,11 @@ class HotspotPortalService {
   }
 
   shelf.Response _serveDownloadPage() {
-    final menuItems = '''
-      <li><a href="/">home</a></li>
-      <li class="separator">|</li>
-      <li class="active"><a href="/download">download</a></li>
-    ''';
+    final menuItems = WebNavigation.generateStationMenuItems(
+      activeApp: 'download',
+      hasChat: true,
+      hasDownload: true,
+    );
 
     final html = StationHtmlTemplates.buildDownloadPage(
       stationName: _stationName,

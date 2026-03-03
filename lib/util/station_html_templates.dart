@@ -1488,6 +1488,10 @@ ${getStationHomepageScript(devicesJson)}
     required String stationName,
     required String gatewayIp,
     required int port,
+    required String menuItems,
+    bool hasBlog = false,
+    bool hasChat = false,
+    bool hasFiles = false,
   }) {
     final baseUrl = 'http://$gatewayIp:$port';
 
@@ -1566,33 +1570,40 @@ ${getDownloadStyles()}
     <header class="header">
       <div class="header__inner">
         <div class="header__logo">
-          <div class="logo">${escapeHtml(stationName)}</div>
+          <a href="$baseUrl/" style="text-decoration: none;">
+            <div class="logo">${escapeHtml(stationName)}</div>
+          </a>
         </div>
       </div>
+      <nav class="menu">
+        <ul class="menu__inner">
+          $menuItems
+        </ul>
+      </nav>
     </header>
 
     <main class="main">
       <section class="portal-hero">
         <h1>Welcome to ${escapeHtml(stationName)}</h1>
-        <p>You're connected via Geogram hotspot</p>
+        <p>Geogram Station</p>
       </section>
 
       <section class="nav-cards">
-        <a href="$baseUrl/blog/" class="nav-card">
+${hasBlog ? '''        <a href="$baseUrl/blog/" class="nav-card">
           <span class="nav-card-icon">&#128221;</span>
           <span class="nav-card-title">Blog</span>
           <span class="nav-card-desc">Articles and posts</span>
-        </a>
-        <a href="$baseUrl/chat/" class="nav-card">
+        </a>''' : ''}
+${hasChat ? '''        <a href="$baseUrl/chat/" class="nav-card">
           <span class="nav-card-icon">&#128172;</span>
           <span class="nav-card-title">Chat</span>
           <span class="nav-card-desc">Join conversations</span>
-        </a>
-        <a href="$baseUrl/files/" class="nav-card">
+        </a>''' : ''}
+${hasFiles ? '''        <a href="$baseUrl/files/" class="nav-card">
           <span class="nav-card-icon">&#128193;</span>
           <span class="nav-card-title">Files</span>
           <span class="nav-card-desc">Downloads and media</span>
-        </a>
+        </a>''' : ''}
         <a href="$baseUrl/download" class="nav-card">
           <span class="nav-card-icon">&#128229;</span>
           <span class="nav-card-title">Download</span>
