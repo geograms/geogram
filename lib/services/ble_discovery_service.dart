@@ -268,10 +268,10 @@ class BLEDiscoveryService {
         }
       });
 
-      // Start scanning WITHOUT service filter to see all devices
-      // Then filter in _processAdvertisement
+      // Filter by Geogram service UUID so only real Geogram devices
+      // reach _processAdvertisement (non-Geogram BLE devices are ignored)
       await FlutterBluePlus.startScan(
-        // withServices: [Guid(serviceUUID)],  // Disabled for debugging
+        withServices: [Guid(serviceUUID)],
         timeout: timeout,
       );
 
@@ -581,70 +581,25 @@ class BLEDiscoveryService {
           return;
         }
 
-        // BlueZ variants sometimes prepend bytes before payload; recover marker.
-        final markerIndex = raw.indexOf(geogramMarker);
-        if (markerIndex > 0) {
-          final recovered = raw.sublist(markerIndex);
-          LogService().log(
-            'BLEDiscovery: Recovered Geogram marker at offset $markerIndex for ${result.device.remoteId.str}',
-          );
-          _addOrUpdateDevice(result, recovered);
-          return;
-        }
-
-        // Fallback for payloads missing marker but still in Geogram format:
-        // [device_id][callsign...], typically under manufacturer 0xFFFF.
-        if (entry.key == 0xFFFF &&
-            raw.length >= 2 &&
-            raw[0] >= 1 &&
-            raw[0] <= 15) {
-          final firstCallsignByte = raw[1];
-          final looksAsciiCallsign =
-              (firstCallsignByte >= 0x30 && firstCallsignByte <= 0x39) ||
-              (firstCallsignByte >= 0x41 && firstCallsignByte <= 0x5A);
-          if (looksAsciiCallsign) {
-            final synthesized = <int>[geogramMarker, ...raw];
-            LogService().log(
-              'BLEDiscovery: Recovered Geogram payload without marker for ${result.device.remoteId.str}',
-            );
-            _addOrUpdateDevice(result, synthesized);
-            return;
-          }
-        }
-
-        // Also accept explicit Geogram local name for devices with malformed payloads.
-        if (entry.key == 0xFFFF &&
-            (result.advertisementData.advName == 'Geogram' ||
-                result.device.platformName == 'Geogram')) {
-          LogService().log(
-            'BLEDiscovery: Accepting Geogram-name device with non-standard manufacturer payload: ${result.device.remoteId.str}',
-          );
-          _addOrUpdateDevice(result, raw);
-          return;
-        }
+        // Note: Loose fallbacks (BlueZ marker-at-offset recovery, marker-less
+        // heuristic, name-only with arbitrary payload) were removed because they
+        // caused false-positive matches with non-Geogram BLE devices. The service
+        // UUID scan filter (fix A) ensures only real Geogram devices reach here,
+        // so the marker check above is sufficient.
       }
     }
 
-    // Also accept devices advertising as "Geogram" by name
-    final advName = result.advertisementData.advName;
-    final platformName = result.device.platformName;
-    if (advName == 'Geogram' || platformName == 'Geogram') {
-      LogService().log(
-        'BLEDiscovery: Found Geogram device by name: ${result.device.remoteId.str}',
-      );
-      // Try to extract callsign from manufacturer data if available
-      List<int>? callsignData;
-      if (mfgData.isNotEmpty) {
-        for (final entry in mfgData.entries) {
-          if (entry.value.isNotEmpty) {
-            callsignData = entry.value;
-            break;
-          }
-        }
-      }
-      _addOrUpdateDevice(result, callsignData);
-      return;
-    }
+    // Note: Name-only acceptance ("Geogram" BLE name without proper marker)
+    // was removed — it accepted arbitrary manufacturer data as callsign bytes,
+    // producing garbage names in the UI. With service UUID filtering active,
+    // real Geogram devices will always match via marker or service data above.
+  }
+
+  /// Validate that a parsed callsign looks like a real callsign
+  /// (printable ASCII, reasonable length, no control characters)
+  bool _isValidCallsign(String callsign) {
+    if (callsign.isEmpty || callsign.length > 18) return false;
+    return callsign.codeUnits.every((c) => c >= 0x20 && c < 0x7F);
   }
 
   /// Add or update a discovered device
@@ -681,6 +636,14 @@ class BLEDiscoveryService {
       } catch (e) {
         LogService().log('BLEDiscovery: Error parsing advertising data: $e');
       }
+    }
+
+    // Reject devices with invalid callsigns (garbage bytes from non-Geogram devices)
+    if (callsign != null && !_isValidCallsign(callsign)) {
+      LogService().log(
+        'BLEDiscovery: Rejecting device $deviceId with invalid callsign: "$callsign"',
+      );
+      return;
     }
 
     if (_discoveredDevices.containsKey(deviceId)) {
