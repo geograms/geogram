@@ -164,8 +164,14 @@ h3 { font-size: 1rem; margin: 0 0 10px 0; color: var(--accent); }
   box-shadow: var(--shadow);
 }
 .download-icon {
-  font-size: 1.5rem;
   flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  color: var(--accent);
+}
+.download-icon svg {
+  width: 100%;
+  height: 100%;
 }
 .download-name {
   font-weight: bold;
@@ -428,12 +434,17 @@ ${getDownloadStyles()}
     String? assetUrl(String camelKey, String kebabKey) =>
         availableAssets[camelKey] ?? availableAssets[kebabKey];
 
+    // SVG icons matching geogram.radio/#downloads
+    const androidIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="14" height="20" rx="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>';
+    const linuxIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>';
+    const windowsIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/></svg>';
+
     // Android APK
     final androidUrl = assetUrl('androidApk', 'android-apk');
     if (androidUrl != null) {
       cards.add(_buildPlatformCard(
         url: androidUrl,
-        icon: '&#129302;', // Robot face for Android
+        icon: androidIcon,
         name: 'Android',
         desc: 'APK for Android devices',
       ));
@@ -444,7 +455,7 @@ ${getDownloadStyles()}
     if (linuxUrl != null) {
       cards.add(_buildPlatformCard(
         url: linuxUrl,
-        icon: '&#128039;', // Penguin for Linux
+        icon: linuxIcon,
         name: 'Linux',
         desc: 'tar.gz for Linux x64',
       ));
@@ -455,7 +466,7 @@ ${getDownloadStyles()}
     if (windowsUrl != null) {
       cards.add(_buildPlatformCard(
         url: windowsUrl,
-        icon: '&#128187;', // Computer for Windows
+        icon: windowsIcon,
         name: 'Windows',
         desc: 'ZIP for Windows x64',
       ));
@@ -466,7 +477,7 @@ ${getDownloadStyles()}
     if (macosUrl != null) {
       cards.add(_buildPlatformCard(
         url: macosUrl,
-        icon: '&#127822;', // Apple for macOS
+        icon: linuxIcon,
         name: 'macOS',
         desc: 'ZIP for macOS x64',
       ));
