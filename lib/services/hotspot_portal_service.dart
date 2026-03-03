@@ -95,10 +95,19 @@ class HotspotPortalService {
         devicePath,
       );
 
+      final headers = <String, String>{'Content-Type': result.contentType};
+
+      // Add Content-Disposition for binary file downloads
+      if (devicePath.startsWith('/updates/')) {
+        final filename = devicePath.split('/').last;
+        headers['Content-Disposition'] = 'attachment; filename="$filename"';
+        headers['Content-Length'] = result.body.length.toString();
+      }
+
       return shelf.Response(
         result.statusCode,
         body: result.body,
-        headers: {'Content-Type': result.contentType},
+        headers: headers,
       );
     } catch (e) {
       LogService().log('Portal error serving $path: $e');
@@ -137,6 +146,16 @@ class HotspotPortalService {
     // Top-level CSS → www/styles.css
     if (path == '/styles.css') {
       return '/www/styles.css';
+    }
+
+    // Download page
+    if (path == '/download' || path == '/download/' || path == '/download/index.html') {
+      return '/download';
+    }
+
+    // Update binary files: /updates/{version}/{filename}
+    if (path.startsWith('/updates/')) {
+      return path;
     }
 
     // Shared folders

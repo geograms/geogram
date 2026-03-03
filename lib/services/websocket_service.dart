@@ -857,6 +857,16 @@ class WebSocketService {
       return (statusCode: 200, contentType: 'application/javascript', body: utf8.encode(js));
     }
 
+    // Serve download page with available update binaries
+    if (path == '/download' || path == '/download/' || path == '/download/index.html') {
+      return _handleDownloadPage();
+    }
+
+    // Serve update binary files: /updates/{version}/{filename}
+    if (path.startsWith('/updates/')) {
+      return _handleUpdateFileServe(path);
+    }
+
     // Parse path: should be /{appName}/{filePath}
     // e.g., /blog/index.html, /www/index.html
     final parts = path.split('/').where((p) => p.isNotEmpty).toList();
@@ -1401,6 +1411,92 @@ class WebSocketService {
       globalStyles: StationHtmlTemplates.getBaseStyles(),
       appStyles: '',
     );
+  }
+
+  /// Serve the download page listing available update binaries.
+  /// Reads release.json from the updates directory on disk.
+  static Future<({int statusCode, String contentType, List<int> body})> _handleDownloadPage() async {
+    final updatesDir = '${StorageConfig().baseDir}/updates';
+    Map<String, String> availableAssets = {};
+    String? releaseVersion;
+    String? releaseNotes;
+
+    // Read release.json to discover available binaries
+    try {
+      final releaseFile = File('$updatesDir/release.json');
+      if (await releaseFile.exists()) {
+        final content = await releaseFile.readAsString();
+        final release = jsonDecode(content) as Map<String, dynamic>;
+
+        releaseVersion = release['version'] as String?;
+        releaseNotes = release['body'] as String?;
+
+        final assets = release['assets'];
+        if (assets is Map<String, dynamic>) {
+          availableAssets = Map<String, String>.from(assets);
+        }
+      }
+    } catch (e) {
+      LogService().log('Error reading release.json for download page: $e');
+    }
+
+    final profile = ProfileService().getProfile();
+    final displayName = profile.nickname.isNotEmpty ? profile.nickname : profile.callsign;
+
+    // Generate device menu with download as active
+    final menuItems = await AppService().generateDeviceMenu(
+      activeApp: 'download',
+      appsPath: null,
+    );
+
+    final html = StationHtmlTemplates.buildDownloadPage(
+      stationName: displayName,
+      menuItems: menuItems,
+      availableAssets: availableAssets,
+      releaseVersion: releaseVersion,
+      releaseNotes: releaseNotes,
+    );
+
+    return (statusCode: 200, contentType: 'text/html', body: utf8.encode(html));
+  }
+
+  /// Serve update binary files from disk: /updates/{version}/{filename}
+  static Future<({int statusCode, String contentType, List<int> body})> _handleUpdateFileServe(String path) async {
+    final parts = path.split('/').where((p) => p.isNotEmpty).toList();
+    if (parts.length < 3) {
+      return (statusCode: 400, contentType: 'text/plain', body: utf8.encode('Invalid path: expected /updates/{version}/{filename}'));
+    }
+
+    final version = parts[1];
+    final filename = parts.sublist(2).join('/');
+    final updatesDir = '${StorageConfig().baseDir}/updates';
+    final filePath = '$updatesDir/$version/$filename';
+    final file = File(filePath);
+
+    if (!await file.exists()) {
+      LogService().log('Update file not found: $filePath');
+      return (statusCode: 404, contentType: 'text/plain', body: utf8.encode('File not found: $filename'));
+    }
+
+    try {
+      final fileBytes = await file.readAsBytes();
+
+      // Content type based on extension
+      String contentType = 'application/octet-stream';
+      if (filename.endsWith('.apk')) {
+        contentType = 'application/vnd.android.package-archive';
+      } else if (filename.endsWith('.zip')) {
+        contentType = 'application/zip';
+      } else if (filename.endsWith('.tar.gz') || filename.endsWith('.tgz')) {
+        contentType = 'application/gzip';
+      }
+
+      LogService().log('Served update file: $filename (${(fileBytes.length / (1024 * 1024)).toStringAsFixed(1)}MB)');
+      return (statusCode: 200, contentType: contentType, body: fileBytes);
+    } catch (e) {
+      LogService().log('Error serving update file: $e');
+      return (statusCode: 500, contentType: 'text/plain', body: utf8.encode('Error reading file'));
+    }
   }
 
   /// Forward API request to local LogApiService
