@@ -1,4 +1,0 @@
-dependencies:
-  ssh_cli_server:
-    override_path: '../../../'
-  david-cermak/libssh: "*"

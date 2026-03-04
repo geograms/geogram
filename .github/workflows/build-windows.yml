@@ -70,7 +70,18 @@ jobs:
         $zipPath = "$onnxDir\onnxruntime.zip"
 
         Write-Host "Downloading ONNX Runtime v$onnxVersion..."
-        Invoke-WebRequest -Uri $url -OutFile $zipPath -UseBasicParsing
+        $maxRetries = 3
+        for ($i = 1; $i -le $maxRetries; $i++) {
+          try {
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+            Invoke-WebRequest -Uri $url -OutFile $zipPath -UseBasicParsing
+            break
+          } catch {
+            Write-Host "Download attempt $i/$maxRetries failed: $_"
+            if ($i -eq $maxRetries) { throw }
+            Start-Sleep -Seconds 5
+          }
+        }
 
         # Extract
         Write-Host "Extracting..."
