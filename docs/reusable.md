@@ -10304,3 +10304,4 @@ Debug API actions: `local_backup_set_folder`, `local_backup_create`, `local_back
 - Per-group settings with cascading resolution (`appType:sourceId` → `appType` → `_default` → hardcoded) via `NowGroupSettings`
 - Per-group item limits and TTL-based expiry with periodic pruning timer
 - Collapsible two-level UI sections with long-press settings bottom sheet
+- IRC integration: `IrcService._addMessage()` fires `NowItemEvent` for incoming messages; sourceId format `serverId:channel` enables direct navigation to `IrcChatPage`

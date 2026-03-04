@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import '../models/now_item.dart';
 import '../services/now_service.dart';
 import '../services/i18n_service.dart';
+import '../teleport/irc/pages/irc_chat_page.dart';
 import '../util/app_type_theme.dart';
 
 /// Activity feed page showing recent events across all apps
@@ -340,8 +341,21 @@ class _NowPageState extends State<NowPage> {
   void _navigateToSource(NowItem item) {
     switch (item.appType) {
       case 'chat':
-      case 'irc':
         Navigator.pushNamed(context, '/chat', arguments: item.sourceId);
+        break;
+      case 'irc':
+        // sourceId is "serverId:channel"
+        final parts = item.sourceId.split(':');
+        if (parts.length >= 2) {
+          final serverId = parts[0];
+          final channel = parts.sublist(1).join(':');
+          Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (_) =>
+                  IrcChatPage(serverId: serverId, channel: channel),
+            ),
+          );
+        }
         break;
       case 'dm':
         Navigator.pushNamed(context, '/dm', arguments: item.sourceId);

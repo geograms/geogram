@@ -20,6 +20,7 @@ import '../../services/app_service.dart';
 import '../../services/log_service.dart';
 import '../../services/profile_service.dart';
 import '../../services/profile_storage.dart';
+import '../../util/event_bus.dart';
 import '../../util/task_monitor_helpers.dart';
 import 'irc_cache_service.dart';
 import 'irc_client.dart';
@@ -741,6 +742,23 @@ class IrcService {
       if (queue.length >= _writeFlushThreshold) {
         _flushServerWrites(msg.serverConfigId);
       }
+    }
+
+    // Fire NowItemEvent for incoming user messages (not system, not outgoing)
+    if (!msg.isSystemMessage && !msg.isOutgoing) {
+      final config = _configs[msg.serverConfigId];
+      final serverName = config?.name ?? msg.serverConfigId;
+      EventBus().fire(NowItemEvent(
+        id: 'irc:${msg.serverConfigId}:${msg.channel}:${msg.timestamp.millisecondsSinceEpoch}',
+        appType: 'irc',
+        sourceId: '${msg.serverConfigId}:${msg.channel}',
+        sourceName: '${msg.channel} ($serverName)',
+        callsign: msg.sender,
+        summary: msg.type == IrcMessageType.action
+            ? '* ${msg.sender} ${msg.text}'
+            : msg.text,
+        priority: NowPriority.chat,
+      ));
     }
 
     _uiDirty = true;
