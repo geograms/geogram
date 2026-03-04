@@ -253,8 +253,6 @@ class _NowPageState extends State<NowPage> {
             const SizedBox(width: 8),
             Expanded(
               child: RichText(
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
                 text: TextSpan(
                   children: [
                     TextSpan(

@@ -3148,6 +3148,10 @@ curl -X POST http://localhost:3456/api/debug \
 - `group` can be `"_default"`, `"appType"`, or `"appType:sourceId"` for cascading resolution
 - Settings resolution: `appType:sourceId` → `appType` → `_default` → hardcoded (5 items, 1440 min)
 
+**POST /api/debug/now/remove-group** — Remove all items for a source group
+- Body: `{ "appType": "irc", "sourceId": "libera:#geogram" }`
+- Removes all items matching the given appType + sourceId from the feed
+
 ---
 
 ### Devices (Debug)

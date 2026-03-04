@@ -910,6 +910,14 @@ class NowItemEvent extends AppEvent {
       'NowItemEvent(appType: $appType, source: $sourceName, from: $callsign, priority: $priority)';
 }
 
+/// Fired when a source should be removed from the Now feed (e.g. leaving an IRC channel)
+class NowGroupRemoveEvent extends AppEvent {
+  final String appType;
+  final String sourceId;
+
+  NowGroupRemoveEvent({required this.appType, required this.sourceId});
+}
+
 /// P2P download progress event (receiver tracks locally)
 /// Fired as the receiver downloads files from sender
 class P2PDownloadProgressEvent extends AppEvent {

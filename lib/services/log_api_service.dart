@@ -19335,6 +19335,31 @@ function cleanup() {
       }
     }
 
+    // POST /api/debug/now/remove-group — remove a source group from the feed
+    if (urlPath == 'api/debug/now/remove-group' && request.method == 'POST') {
+      try {
+        final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+        final appType = body['appType'] as String?;
+        final sourceId = body['sourceId'] as String?;
+        if (appType == null || sourceId == null) {
+          return shelf.Response.badRequest(
+            body: jsonEncode({'error': 'appType and sourceId required'}),
+            headers: headers,
+          );
+        }
+        nowService.removeGroup(appType, sourceId);
+        return shelf.Response.ok(
+          jsonEncode({'success': true, 'removed': '$appType:$sourceId'}),
+          headers: headers,
+        );
+      } catch (e) {
+        return shelf.Response.badRequest(
+          body: jsonEncode({'error': e.toString()}),
+          headers: headers,
+        );
+      }
+    }
+
     return shelf.Response.notFound(
       jsonEncode({'error': 'Unknown now endpoint: $urlPath'}),
       headers: headers,

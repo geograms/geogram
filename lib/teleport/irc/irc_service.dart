@@ -332,6 +332,10 @@ class IrcService {
   /// Part a channel on a server.
   void partChannel(String serverId, String channel) {
     _clients[serverId]?.partChannel(channel);
+    EventBus().fire(NowGroupRemoveEvent(
+      appType: 'irc',
+      sourceId: '$serverId:$channel',
+    ));
   }
 
   /// Mark a channel as read — resets unread count in memory and persists

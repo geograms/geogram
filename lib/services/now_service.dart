@@ -24,6 +24,7 @@ class NowService {
   EventSubscription<NowItemEvent>? _subscription;
   EventSubscription<AlertReceivedEvent>? _alertSubscription;
   EventSubscription<EmailNotificationEvent>? _emailSubscription;
+  EventSubscription<NowGroupRemoveEvent>? _removeSubscription;
   bool _initialized = false;
   Timer? _expiryTimer;
 
@@ -201,6 +202,11 @@ class NowService {
       ));
     });
 
+    // Subscribe to group removal events (e.g. leaving an IRC channel)
+    _removeSubscription = EventBus().on<NowGroupRemoveEvent>((event) {
+      removeGroup(event.appType, event.sourceId);
+    });
+
     // Periodic expiry pruning every 60 seconds
     _expiryTimer = Timer.periodic(const Duration(seconds: 60), (_) {
       _pruneExpired();
@@ -208,6 +214,16 @@ class NowService {
 
     _initialized = true;
     LogService().log('NowService initialized');
+  }
+
+  /// Remove all items for a given appType:sourceId group
+  void removeGroup(String appType, String sourceId) {
+    final before = _items.length;
+    _items.removeWhere((i) => i.appType == appType && i.sourceId == sourceId);
+    if (_items.length != before) {
+      _broadcast();
+      LogService().log('NowService: Removed group $appType:$sourceId');
+    }
   }
 
   void _handleEvent(NowItemEvent event) {
@@ -404,6 +420,7 @@ class NowService {
     _subscription?.cancel();
     _alertSubscription?.cancel();
     _emailSubscription?.cancel();
+    _removeSubscription?.cancel();
     _expiryTimer?.cancel();
     _itemsController.close();
     _unreadCountController.close();
