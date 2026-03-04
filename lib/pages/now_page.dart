@@ -10,7 +10,11 @@ import '../models/device_source.dart';
 import '../services/devices_service.dart';
 import '../services/now_service.dart';
 import '../services/i18n_service.dart';
+import '../services/profile_service.dart';
 import '../services/station_service.dart';
+import '../services/direct_message_service.dart';
+import '../teleport/irc/irc_service.dart';
+import '../teleport/telegram/telegram_service.dart';
 import 'events_browser_page.dart';
 import 'remote_blog_browser_page.dart';
 import 'remote_chat_browser_page.dart';
@@ -36,6 +40,8 @@ class _NowPageState extends State<NowPage> {
   final I18nService _i18n = I18nService();
   StreamSubscription<List<NowItem>>? _itemsSubscription;
   List<NowItem> _items = [];
+  final Map<String, TextEditingController> _replyControllers = {};
+  final Map<String, FocusNode> _replyFocusNodes = {};
 
   @override
   void initState() {
@@ -49,6 +55,12 @@ class _NowPageState extends State<NowPage> {
   @override
   void dispose() {
     _itemsSubscription?.cancel();
+    for (final c in _replyControllers.values) {
+      c.dispose();
+    }
+    for (final f in _replyFocusNodes.values) {
+      f.dispose();
+    }
     super.dispose();
   }
 
@@ -218,9 +230,128 @@ class _NowPageState extends State<NowPage> {
           Divider(height: 1, color: colorScheme.outlineVariant.withAlpha(60)),
           // Card body — chronological messages
           ...card.items.map((item) => _buildMessageRow(item)),
+          if (_isReplyable(card.appType)) _buildReplyRow(card),
         ],
       ),
     );
+  }
+
+  static bool _isReplyable(String appType) =>
+      const {'chat', 'irc', 'dm', 'telegram', 'aprs'}.contains(appType);
+
+  TextEditingController _getReplyController(String appType, String sourceId) {
+    final key = '$appType:$sourceId';
+    return _replyControllers.putIfAbsent(key, () => TextEditingController());
+  }
+
+  FocusNode _getReplyFocusNode(String appType, String sourceId) {
+    final key = '$appType:$sourceId';
+    return _replyFocusNodes.putIfAbsent(key, () => FocusNode());
+  }
+
+  Widget _buildReplyRow(_CardData card) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 2, 4, 6),
+      child: Row(
+        children: [
+          Expanded(
+            child: TextField(
+              controller: _getReplyController(card.appType, card.sourceId),
+              focusNode: _getReplyFocusNode(card.appType, card.sourceId),
+              style: const TextStyle(fontSize: 13),
+              decoration: InputDecoration(
+                hintText: _i18n.t('reply'),
+                hintStyle: TextStyle(
+                  fontSize: 13,
+                  color: colorScheme.onSurface.withAlpha(100),
+                ),
+                isDense: true,
+                contentPadding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(20),
+                  borderSide: BorderSide(
+                    color: colorScheme.outlineVariant.withAlpha(80),
+                  ),
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(20),
+                  borderSide: BorderSide(
+                    color: colorScheme.outlineVariant.withAlpha(80),
+                  ),
+                ),
+              ),
+              textInputAction: TextInputAction.send,
+              onSubmitted: (_) => _sendReply(card),
+            ),
+          ),
+          const SizedBox(width: 4),
+          SizedBox(
+            width: 32,
+            height: 32,
+            child: IconButton(
+              padding: EdgeInsets.zero,
+              iconSize: 18,
+              icon: Icon(Icons.send, color: colorScheme.primary),
+              onPressed: () => _sendReply(card),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _sendReply(_CardData card) async {
+    final key = '${card.appType}:${card.sourceId}';
+    final controller = _replyControllers[key];
+    if (controller == null) return;
+    final text = controller.text.trim();
+    if (text.isEmpty) return;
+
+    try {
+      switch (card.appType) {
+        case 'chat':
+          final station = StationService().getPreferredStation();
+          if (station != null) {
+            final profile = ProfileService().getProfile();
+            final url = station.url
+                .replaceFirst('wss://', 'https://')
+                .replaceFirst('ws://', 'http://');
+            await StationService().postRoomMessage(
+              url, card.sourceId, profile.callsign, text,
+            );
+          }
+          break;
+        case 'irc':
+          final parts = card.sourceId.split(':');
+          if (parts.length >= 2) {
+            final serverId = parts[0];
+            final channel = parts.sublist(1).join(':');
+            IrcService().sendMessage(serverId, channel, text);
+          }
+          break;
+        case 'dm':
+          await DirectMessageService().sendMessage(card.sourceId, text);
+          break;
+        case 'telegram':
+          final chatId = int.tryParse(card.sourceId);
+          if (chatId != null) {
+            await TelegramService().chatService?.sendMessage(chatId, text);
+          }
+          break;
+        case 'aprs':
+          AprsService().sendMessage(card.sourceId, text);
+          break;
+      }
+      controller.clear();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Send failed: $e')),
+        );
+      }
+    }
   }
 
   Widget _buildUnreadBadge(int count) {
