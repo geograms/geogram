@@ -119,17 +119,6 @@ class ChatNotificationService {
     _unreadCounts[roomId] = (_unreadCounts[roomId] ?? 0) + 1;
     LogService().log('ChatNotificationService: New message in $roomId (unread: ${_unreadCounts[roomId]})');
 
-    // Fire NowItemEvent for the activity feed
-    EventBus().fire(NowItemEvent(
-      id: 'chat:$roomId:${DateTime.now().toIso8601String()}',
-      appType: 'chat',
-      sourceId: roomId,
-      sourceName: roomId,
-      callsign: update.callsign,
-      summary: 'New message in $roomId',
-      priority: NowPriority.chat,
-    ));
-
     unawaited(_notifyChatUpdate(update));
 
     // Notify listeners
@@ -244,8 +233,30 @@ class ChatNotificationService {
     final resolved = await _resolveChatMessage(update);
     if (resolved == null) {
       LogService().log('ChatNotificationService: Unable to resolve message for $roomId');
+      // Fire fallback NowItemEvent with generic content so the event isn't lost
+      EventBus().fire(NowItemEvent(
+        id: 'chat:$roomId:${DateTime.now().toIso8601String()}',
+        appType: 'chat',
+        sourceId: roomId,
+        sourceName: roomId,
+        callsign: update.callsign,
+        summary: 'New message in $roomId',
+        priority: NowPriority.chat,
+      ));
       return;
     }
+
+    // Fire NowItemEvent with resolved sender and content
+    final roomName = await _getRoomName(roomId);
+    EventBus().fire(NowItemEvent(
+      id: 'chat:$roomId:${DateTime.now().toIso8601String()}',
+      appType: 'chat',
+      sourceId: roomId,
+      sourceName: roomName ?? roomId,
+      callsign: resolved.callsign,
+      summary: resolved.content,
+      priority: NowPriority.chat,
+    ));
 
     // Cache the message so it's immediately available when the UI opens
     _cacheResolvedMessage(update, resolved);
@@ -280,6 +291,20 @@ class ChatNotificationService {
     if (!resolved.hasSignature) return;
 
     unawaited(_cacheService.mergeMessages(station.callsign!, roomId, [resolved]));
+  }
+
+  /// Try to get a friendly room name from cached rooms
+  Future<String?> _getRoomName(String roomId) async {
+    try {
+      final station = _stationService.getPreferredStation();
+      if (station == null || station.callsign == null || station.callsign!.isEmpty) return null;
+      await _cacheService.initialize();
+      final rooms = await _cacheService.loadChatRooms(station.callsign!, station.url);
+      for (final room in rooms) {
+        if (room.id == roomId) return room.name;
+      }
+    } catch (_) {}
+    return null;
   }
 
   Future<StationChatMessage?> _resolveChatMessage(

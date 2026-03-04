@@ -6,8 +6,13 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import '../models/now_item.dart';
+import '../models/device_source.dart';
+import '../services/devices_service.dart';
 import '../services/now_service.dart';
 import '../services/i18n_service.dart';
+import '../services/station_service.dart';
+import 'remote_chat_browser_page.dart';
+import 'remote_chat_room_page.dart';
 import '../teleport/aprs/aprs_service.dart';
 import '../teleport/aprs/models/aprs_conversation.dart';
 import '../teleport/aprs/pages/aprs_conversation_page.dart';
@@ -331,7 +336,27 @@ class _NowPageState extends State<NowPage> {
   void _navigateToSource(NowItem item) {
     switch (item.appType) {
       case 'chat':
-        Navigator.pushNamed(context, '/chat', arguments: item.sourceId);
+        final station = StationService().getPreferredStation();
+        if (station != null && station.url.isNotEmpty) {
+          final device = RemoteDevice(
+            callsign: station.callsign ?? 'STATION',
+            name: station.name,
+            url: station.url.replaceFirst('wss://', 'https://').replaceFirst('ws://', 'http://'),
+            apps: [],
+            source: DeviceSourceType.station,
+          );
+          Navigator.of(context).push(MaterialPageRoute(
+            builder: (_) => RemoteChatRoomPage(
+              device: device,
+              room: ChatRoom(
+                id: item.sourceId,
+                name: item.sourceName,
+                memberCount: 0,
+                visibility: 'public',
+              ),
+            ),
+          ));
+        }
         break;
       case 'irc':
         final parts = item.sourceId.split(':');
@@ -488,6 +513,8 @@ class _NowPageState extends State<NowPage> {
 
   IconData _getAppTypeIcon(String appType) {
     switch (appType) {
+      case 'chat':
+        return Icons.chat;
       case 'dm':
         return Icons.message;
       case 'alert':
