@@ -357,7 +357,11 @@ class _NowPageState extends State<NowPage> {
           }
           break;
         case 'aprs':
-          AprsService().sendMessage(card.sourceId, text);
+          if (card.sourceId == 'geochat') {
+            AprsService().sendGeoChat(text);
+          } else {
+            AprsService().sendMessage(card.sourceId, text);
+          }
           break;
       }
       controller.clear();

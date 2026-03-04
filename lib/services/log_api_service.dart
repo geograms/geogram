@@ -19282,6 +19282,53 @@ function cleanup() {
       }
     }
 
+    // POST /api/debug/now/reply — simulate sending a reply from a Now card
+    // Body: {"appType":"aprs","sourceId":"geochat","text":"hello"}
+    if (urlPath == 'api/debug/now/reply' && request.method == 'POST') {
+      try {
+        final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+        final appType = body['appType'] as String?;
+        final sourceId = body['sourceId'] as String?;
+        final text = body['text'] as String?;
+        if (appType == null || sourceId == null || text == null || text.isEmpty) {
+          return shelf.Response.badRequest(
+            body: jsonEncode({'error': 'appType, sourceId, and text required'}),
+            headers: headers,
+          );
+        }
+
+        String? error;
+        switch (appType) {
+          case 'aprs':
+            if (sourceId == 'geochat') {
+              final sent = AprsService().sendGeoChat(text);
+              if (sent == null) error = 'sendGeoChat returned null (not connected or no position)';
+            } else {
+              AprsService().sendMessage(sourceId, text);
+            }
+            break;
+          default:
+            error = 'now/reply debug only supports aprs for now';
+        }
+
+        if (error != null) {
+          return shelf.Response.ok(
+            jsonEncode({'success': false, 'error': error}),
+            headers: headers,
+          );
+        }
+        return shelf.Response.ok(
+          jsonEncode({'success': true, 'appType': appType, 'sourceId': sourceId, 'text': text}),
+          headers: headers,
+        );
+      } catch (e) {
+        return shelf.Response.badRequest(
+          body: jsonEncode({'error': e.toString()}),
+          headers: headers,
+        );
+      }
+    }
+
     // POST /api/debug/now/clear — clear all items
     if (urlPath == 'api/debug/now/clear' && request.method == 'POST') {
       nowService.clearAll();

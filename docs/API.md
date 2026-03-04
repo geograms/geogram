@@ -3136,6 +3136,11 @@ curl -X POST http://localhost:3456/api/debug \
 - Body: `{ "appType": "chat", "sourceId": "test-room", "sourceName": "Test Room", "callsign": "TEST", "summary": "Test message", "priority": 5 }`
 - Optional: `"id"` (auto-generated if omitted)
 
+**POST /api/debug/now/reply** — Simulate sending a reply from a Now card
+- Body: `{ "appType": "aprs", "sourceId": "geochat", "text": "hello" }`
+- For APRS geochat (`sourceId: "geochat"`): calls `sendGeoChat()` (position report)
+- For APRS direct (`sourceId: "CALLSIGN"`): calls `sendMessage()` (directed message)
+
 **POST /api/debug/now/clear** — Clear all items
 
 **POST /api/debug/now/mark-read** — Mark all items as read
