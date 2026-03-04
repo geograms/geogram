@@ -143,11 +143,42 @@ class _TeleportBrowserPageState extends State<TeleportBrowserPage> {
     'bluesky',
   };
 
-  /// Bridges sorted: implemented first, "Coming Soon" at the bottom.
-  static final List<_BridgeInfo> _sortedBridges = [
-    ..._bridges.where((b) => _implementedIds.contains(b.id)),
-    ..._bridges.where((b) => !_implementedIds.contains(b.id)),
-  ];
+  /// Dynamic sort: active first, then available, then coming soon.
+  /// Called on every build so the order reflects live service state.
+  List<_BridgeInfo> _getSortedBridges() {
+    int tierOf(_BridgeInfo b) {
+      if (_isRuntimeActive(b.id)) return 0;           // Active
+      if (_isBridgeAvailable(b.id)) return 1;          // Available / installable
+      return 2;                                         // Coming soon
+    }
+    final sorted = List<_BridgeInfo>.from(_bridges);
+    sorted.sort((a, b) => tierOf(a).compareTo(tierOf(b)));
+    return sorted;
+  }
+
+  /// Check if a bridge has a live runtime connection right now.
+  bool _isRuntimeActive(String bridgeId) {
+    switch (bridgeId) {
+      case 'telegram':
+        return TelegramService().isRunning;
+      case 'signal':
+        return SignalService().isRunning;
+      case 'aprs':
+        return AprsService().isEnabled;
+      case 'irc':
+        return IrcService().isAnyConnected;
+      case 'xmpp':
+        return XmppService().isAnyConnected;
+      case 'nostr':
+        return NostrClientService().isAnyConnected;
+      case 'bluesky':
+        return AtprotoClientService().isAuthenticated;
+      case 'meshcore':
+        return MeshCoreService().isConnected;
+      default:
+        return _isBridgeActive(bridgeId);
+    }
+  }
 
   @override
   void initState() {
@@ -293,12 +324,15 @@ class _TeleportBrowserPageState extends State<TeleportBrowserPage> {
       ),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
-          : ListView.builder(
-              padding: const EdgeInsets.symmetric(vertical: 8),
-              itemCount: _sortedBridges.length,
-              itemBuilder: (context, index) =>
-                  _buildBridgeCard(_sortedBridges[index], theme),
-            ),
+          : Builder(builder: (context) {
+              final sorted = _getSortedBridges();
+              return ListView.builder(
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                itemCount: sorted.length,
+                itemBuilder: (context, index) =>
+                    _buildBridgeCard(sorted[index], theme),
+              );
+            }),
     );
   }
 
@@ -427,29 +461,7 @@ class _TeleportBrowserPageState extends State<TeleportBrowserPage> {
   }
 
   Widget _buildBridgeCard(_BridgeInfo bridge, ThemeData theme) {
-    final isActive = _isBridgeActive(bridge.id);
-    final isTelegramRunning =
-        bridge.id == 'telegram' && TelegramService().isRunning;
-    final isSignalRunning = bridge.id == 'signal' && SignalService().isRunning;
-    final isAprsEnabled = bridge.id == 'aprs' && AprsService().isEnabled;
-    final isIrcConnected = bridge.id == 'irc' && IrcService().isAnyConnected;
-    final isXmppConnected = bridge.id == 'xmpp' && XmppService().isAnyConnected;
-    final isNostrConnected =
-        bridge.id == 'nostr' && NostrClientService().isAnyConnected;
-    final isAtprotoConnected =
-        bridge.id == 'bluesky' && AtprotoClientService().isAuthenticated;
-    final isMeshCoreConnected =
-        bridge.id == 'meshcore' && MeshCoreService().isConnected;
-    final showActive =
-        isActive ||
-        isTelegramRunning ||
-        isSignalRunning ||
-        isAprsEnabled ||
-        isIrcConnected ||
-        isXmppConnected ||
-        isNostrConnected ||
-        isAtprotoConnected ||
-        isMeshCoreConnected;
+    final showActive = _isRuntimeActive(bridge.id);
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
