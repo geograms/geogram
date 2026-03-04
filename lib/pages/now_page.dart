@@ -239,6 +239,10 @@ class _NowPageState extends State<NowPage> {
     final dimAlpha = isNearExpiry ? 100 : 255;
     final colorScheme = Theme.of(context).colorScheme;
 
+    final truncatedSummary = item.summary.length > 60
+        ? '${item.summary.substring(0, 60)}...'
+        : item.summary;
+
     return InkWell(
       onTap: () {
         _nowService.markAsRead(item.id);
@@ -252,8 +256,8 @@ class _NowPageState extends State<NowPage> {
             _buildPriorityDot(item.priority),
             const SizedBox(width: 8),
             Expanded(
-              child: RichText(
-                text: TextSpan(
+              child: SelectableText.rich(
+                TextSpan(
                   children: [
                     TextSpan(
                       text: '${item.callsign}: ',
@@ -265,7 +269,7 @@ class _NowPageState extends State<NowPage> {
                       ),
                     ),
                     TextSpan(
-                      text: item.summary,
+                      text: truncatedSummary,
                       style: TextStyle(
                         fontWeight:
                             item.isRead ? FontWeight.normal : FontWeight.w500,
