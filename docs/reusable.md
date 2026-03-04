@@ -10299,5 +10299,8 @@ Debug API actions: `local_backup_set_folder`, `local_backup_create`, `local_back
 **Reusable patterns**:
 - Muting sources via ConfigService (`now.mutedSources`)
 - Read state tracking via ConfigService (`now.readItems`, capped at 500)
-- Priority-based sorting with grouping by appType
+- Priority-based sorting with two-level grouping (appType → sourceId)
 - Badge count via StreamController broadcast
+- Per-group settings with cascading resolution (`appType:sourceId` → `appType` → `_default` → hardcoded) via `NowGroupSettings`
+- Per-group item limits and TTL-based expiry with periodic pruning timer
+- Collapsible two-level UI sections with long-press settings bottom sheet

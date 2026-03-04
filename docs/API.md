@@ -3140,6 +3140,14 @@ curl -X POST http://localhost:3456/api/debug \
 
 **POST /api/debug/now/mark-read** — Mark all items as read
 
+**GET /api/debug/now/settings** — Get all group settings
+- Returns: `{ settings: { "_default": { "maxItems": 5, "expiryMinutes": 1440 }, ... } }`
+
+**POST /api/debug/now/settings** — Set group settings
+- Body: `{ "group": "chat", "maxItems": 10, "expiryMinutes": 1440 }`
+- `group` can be `"_default"`, `"appType"`, or `"appType:sourceId"` for cascading resolution
+- Settings resolution: `appType:sourceId` → `appType` → `_default` → hardcoded (5 items, 1440 min)
+
 ---
 
 ### Devices (Debug)

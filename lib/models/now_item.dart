@@ -5,6 +5,31 @@
 
 import '../util/event_bus.dart';
 
+/// Per-group settings for the Now activity feed (max items & expiry)
+class NowGroupSettings {
+  final int maxItems;
+  final int expiryMinutes; // 0 = never expire
+
+  static const int defaultMaxItems = 5;
+  static const int defaultExpiryMinutes = 1440; // 24h
+
+  const NowGroupSettings({
+    this.maxItems = defaultMaxItems,
+    this.expiryMinutes = defaultExpiryMinutes,
+  });
+
+  Map<String, dynamic> toJson() => {
+        'maxItems': maxItems,
+        'expiryMinutes': expiryMinutes,
+      };
+
+  factory NowGroupSettings.fromJson(Map<String, dynamic> json) =>
+      NowGroupSettings(
+        maxItems: json['maxItems'] as int? ?? defaultMaxItems,
+        expiryMinutes: json['expiryMinutes'] as int? ?? defaultExpiryMinutes,
+      );
+}
+
 /// A stored activity feed item, created from a NowItemEvent
 class NowItem {
   final String id;

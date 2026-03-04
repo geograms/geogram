@@ -1420,5 +1420,10 @@
   "now_empty": "Keine aktuelle Aktivität",
   "now_mute_source": "Quelle stummschalten",
   "now_unmute_source": "Stummschaltung aufheben",
-  "now_mark_all_read": "Alle als gelesen markieren"
+  "now_mark_all_read": "Alle als gelesen markieren",
+  "now_max_items": "Max. Einträge",
+  "now_expiry": "Läuft ab nach",
+  "now_expiry_hours": "{0}h",
+  "now_show_more": "Mehr anzeigen",
+  "now_group_settings": "Gruppeneinstellungen"
 }

@@ -19300,6 +19300,41 @@ function cleanup() {
       );
     }
 
+    // GET /api/debug/now/settings — get all group settings
+    if (urlPath == 'api/debug/now/settings' && request.method == 'GET') {
+      final settings = <String, dynamic>{};
+      for (final entry in nowService.allGroupSettings.entries) {
+        settings[entry.key] = entry.value.toJson();
+      }
+      return shelf.Response.ok(
+        jsonEncode({'settings': settings}),
+        headers: headers,
+      );
+    }
+
+    // POST /api/debug/now/settings — set group settings
+    if (urlPath == 'api/debug/now/settings' && request.method == 'POST') {
+      try {
+        final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+        final group = body['group'] as String? ?? '_default';
+        final maxItems = body['maxItems'] as int? ?? NowGroupSettings.defaultMaxItems;
+        final expiryMinutes = body['expiryMinutes'] as int? ?? NowGroupSettings.defaultExpiryMinutes;
+        nowService.setGroupSettings(
+          group,
+          NowGroupSettings(maxItems: maxItems, expiryMinutes: expiryMinutes),
+        );
+        return shelf.Response.ok(
+          jsonEncode({'success': true, 'group': group, 'maxItems': maxItems, 'expiryMinutes': expiryMinutes}),
+          headers: headers,
+        );
+      } catch (e) {
+        return shelf.Response.badRequest(
+          body: jsonEncode({'error': e.toString()}),
+          headers: headers,
+        );
+      }
+    }
+
     return shelf.Response.notFound(
       jsonEncode({'error': 'Unknown now endpoint: $urlPath'}),
       headers: headers,

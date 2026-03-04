@@ -25,6 +25,7 @@ class NowService {
   EventSubscription<AlertReceivedEvent>? _alertSubscription;
   EventSubscription<EmailNotificationEvent>? _emailSubscription;
   bool _initialized = false;
+  Timer? _expiryTimer;
 
   final _itemsController = StreamController<List<NowItem>>.broadcast();
   final _unreadCountController = StreamController<int>.broadcast();
@@ -49,11 +50,108 @@ class NowService {
   /// Current unread count
   int get unreadCount => _items.where((i) => !i.isRead).length;
 
+  // ---- Group settings ----
+
+  Map<String, NowGroupSettings> _groupSettings = {};
+
+  void _loadGroupSettings() {
+    final raw = ConfigService()
+        .getNestedValue('now.groupSettings', <String, dynamic>{});
+    if (raw is Map) {
+      _groupSettings = {};
+      for (final entry in raw.entries) {
+        try {
+          _groupSettings[entry.key as String] =
+              NowGroupSettings.fromJson(Map<String, dynamic>.from(entry.value as Map));
+        } catch (_) {}
+      }
+    }
+  }
+
+  void _saveGroupSettings() {
+    final map = <String, dynamic>{};
+    for (final entry in _groupSettings.entries) {
+      map[entry.key] = entry.value.toJson();
+    }
+    ConfigService().setNestedValue('now.groupSettings', map);
+  }
+
+  /// Resolve group settings: "appType:sourceId" → "appType" → "_default" → hardcoded
+  NowGroupSettings getGroupSettings(String appType, String sourceId) {
+    final specific = _groupSettings['$appType:$sourceId'];
+    if (specific != null) return specific;
+    final byType = _groupSettings[appType];
+    if (byType != null) return byType;
+    final defaults = _groupSettings['_default'];
+    if (defaults != null) return defaults;
+    return const NowGroupSettings();
+  }
+
+  /// Set group settings for a key (e.g. "chat", "chat:general", "_default")
+  void setGroupSettings(String key, NowGroupSettings settings) {
+    _groupSettings[key] = settings;
+    _saveGroupSettings();
+    _enforceGroupLimits();
+    _broadcast();
+  }
+
+  /// Remove override for a key, falling back to parent
+  void resetGroupSettings(String key) {
+    _groupSettings.remove(key);
+    _saveGroupSettings();
+    _broadcast();
+  }
+
+  /// All group settings (for debug API)
+  Map<String, NowGroupSettings> get allGroupSettings =>
+      Map.unmodifiable(_groupSettings);
+
+  // ---- Two-level grouped items ----
+
+  /// Returns items grouped as {appType: {sourceId: [items]}}
+  /// Each sub-list is capped to maxItems, expired items removed, sorted newest first
+  Map<String, Map<String, List<NowItem>>> get groupedItems {
+    final now = DateTime.now();
+    final result = <String, Map<String, List<NowItem>>>{};
+
+    // Build the two-level map
+    for (final item in _items) {
+      final settings = getGroupSettings(item.appType, item.sourceId);
+
+      // Skip expired
+      if (settings.expiryMinutes > 0) {
+        if (now.difference(item.timestamp).inMinutes > settings.expiryMinutes) {
+          continue;
+        }
+      }
+
+      result
+          .putIfAbsent(item.appType, () => <String, List<NowItem>>{})
+          .putIfAbsent(item.sourceId, () => <NowItem>[])
+          .add(item);
+    }
+
+    // Sort each sub-list newest first and cap at maxItems
+    for (final appType in result.keys) {
+      for (final sourceId in result[appType]!.keys) {
+        final list = result[appType]![sourceId]!;
+        list.sort((a, b) => b.timestamp.compareTo(a.timestamp));
+        final settings = getGroupSettings(appType, sourceId);
+        if (list.length > settings.maxItems) {
+          result[appType]![sourceId] = list.sublist(0, settings.maxItems);
+        }
+      }
+    }
+
+    return result;
+  }
+
   /// Initialize the service
   void initialize() {
     if (_initialized) return;
     _loadReadState();
     _loadMutedSources();
+    _loadGroupSettings();
     _subscription = EventBus().on<NowItemEvent>(_handleEvent);
 
     // Also subscribe to alert and email events to convert them to NowItemEvents
@@ -87,6 +185,11 @@ class NowService {
       ));
     });
 
+    // Periodic expiry pruning every 60 seconds
+    _expiryTimer = Timer.periodic(const Duration(seconds: 60), (_) {
+      _pruneExpired();
+    });
+
     _initialized = true;
     LogService().log('NowService initialized');
   }
@@ -112,7 +215,10 @@ class NowService {
 
     _items.insert(0, item);
 
-    // Cap at max items (remove oldest)
+    // Enforce per-group limits for this item's group
+    _enforceGroupLimit(event.appType, event.sourceId);
+
+    // Cap at global max items (remove oldest)
     while (_items.length > _maxItems) {
       _items.removeLast();
     }
@@ -121,6 +227,54 @@ class NowService {
     LogService().log(
       'NowService: Added ${event.appType} item from ${event.callsign} (priority ${event.priority})',
     );
+  }
+
+  /// Enforce maxItems for a specific appType:sourceId group
+  void _enforceGroupLimit(String appType, String sourceId) {
+    final settings = getGroupSettings(appType, sourceId);
+    final groupItems = _items
+        .where((i) => i.appType == appType && i.sourceId == sourceId)
+        .toList()
+      ..sort((a, b) => b.timestamp.compareTo(a.timestamp));
+
+    if (groupItems.length > settings.maxItems) {
+      final toRemove = groupItems.sublist(settings.maxItems);
+      for (final item in toRemove) {
+        _items.remove(item);
+      }
+    }
+  }
+
+  /// Enforce maxItems for all groups (called when settings change)
+  void _enforceGroupLimits() {
+    final groups = <String, List<NowItem>>{};
+    for (final item in _items) {
+      final key = '${item.appType}:${item.sourceId}';
+      groups.putIfAbsent(key, () => []).add(item);
+    }
+    for (final entry in groups.entries) {
+      final parts = entry.key.split(':');
+      final appType = parts[0];
+      final sourceId = parts.sublist(1).join(':');
+      _enforceGroupLimit(appType, sourceId);
+    }
+  }
+
+  /// Remove expired items based on per-group expiryMinutes
+  void _pruneExpired() {
+    final now = DateTime.now();
+    final before = _items.length;
+    _items.removeWhere((item) {
+      final settings = getGroupSettings(item.appType, item.sourceId);
+      if (settings.expiryMinutes <= 0) return false;
+      return now.difference(item.timestamp).inMinutes > settings.expiryMinutes;
+    });
+    if (_items.length != before) {
+      _broadcast();
+      LogService().log(
+        'NowService: Pruned ${before - _items.length} expired items',
+      );
+    }
   }
 
   // ---- Muting ----
@@ -228,6 +382,7 @@ class NowService {
     _subscription?.cancel();
     _alertSubscription?.cancel();
     _emailSubscription?.cancel();
+    _expiryTimer?.cancel();
     _itemsController.close();
     _unreadCountController.close();
   }

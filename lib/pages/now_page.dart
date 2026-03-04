@@ -23,6 +23,8 @@ class _NowPageState extends State<NowPage> {
   final I18nService _i18n = I18nService();
   StreamSubscription<List<NowItem>>? _itemsSubscription;
   List<NowItem> _items = [];
+  final Set<String> _collapsedAppTypes = {};
+  final Set<String> _collapsedSources = {};
 
   @override
   void initState() {
@@ -63,65 +65,201 @@ class _NowPageState extends State<NowPage> {
       );
     }
 
-    // Group items by appType
-    final grouped = <String, List<NowItem>>{};
-    for (final item in _items) {
-      grouped.putIfAbsent(item.appType, () => []).add(item);
-    }
+    final grouped = _nowService.groupedItems;
 
-    // Sort groups by best (lowest) priority in each group
+    // Sort appType groups by best (lowest) priority
     final sortedTypes = grouped.keys.toList()
       ..sort((a, b) {
-        final aPriority = grouped[a]!.map((i) => i.priority).reduce((a, b) => a < b ? a : b);
-        final bPriority = grouped[b]!.map((i) => i.priority).reduce((a, b) => a < b ? a : b);
-        return aPriority.compareTo(bPriority);
+        int bestPriority(String appType) {
+          int best = 999;
+          for (final sources in grouped[appType]!.values) {
+            for (final item in sources) {
+              if (item.priority < best) best = item.priority;
+            }
+          }
+          return best;
+        }
+        return bestPriority(a).compareTo(bestPriority(b));
       });
 
-    return ListView.builder(
-      itemCount: sortedTypes.length,
-      itemBuilder: (context, sectionIndex) {
-        final appType = sortedTypes[sectionIndex];
-        final sectionItems = grouped[appType]!;
+    final widgets = <Widget>[];
+    for (var i = 0; i < sortedTypes.length; i++) {
+      final appType = sortedTypes[i];
+      final sources = grouped[appType]!;
+      final isCollapsed = _collapsedAppTypes.contains(appType);
 
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Section header
+      // Total item count for this appType
+      final totalCount =
+          sources.values.fold<int>(0, (sum, list) => sum + list.length);
+
+      // AppType header
+      widgets.add(
+        InkWell(
+          onTap: () => setState(() {
+            if (isCollapsed) {
+              _collapsedAppTypes.remove(appType);
+            } else {
+              _collapsedAppTypes.add(appType);
+            }
+          }),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+            child: Row(
+              children: [
+                Icon(
+                  isCollapsed
+                      ? Icons.chevron_right
+                      : Icons.expand_more,
+                  size: 18,
+                  color: Theme.of(context).colorScheme.primary,
+                ),
+                const SizedBox(width: 4),
+                Icon(
+                  _getAppTypeIcon(appType),
+                  size: 18,
+                  color: Theme.of(context).colorScheme.primary,
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  _getAppTypeLabel(appType),
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: Theme.of(context).colorScheme.primary,
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  '($totalCount)',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Theme.of(context)
+                        .colorScheme
+                        .onSurface
+                        .withAlpha(120),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+
+      if (!isCollapsed) {
+        // Sort sources by newest item timestamp
+        final sortedSourceIds = sources.keys.toList()
+          ..sort((a, b) {
+            final aTime = sources[a]!.first.timestamp;
+            final bTime = sources[b]!.first.timestamp;
+            return bTime.compareTo(aTime);
+          });
+
+        for (final sourceId in sortedSourceIds) {
+          final sourceItems = sources[sourceId]!;
+          final sourceName = sourceItems.first.sourceName;
+          final sourceKey = '$appType:$sourceId';
+          final isSourceCollapsed = _collapsedSources.contains(sourceKey);
+          final settings =
+              _nowService.getGroupSettings(appType, sourceId);
+          final hasMore = sourceItems.length >= settings.maxItems;
+
+          // Source sub-header
+          widgets.add(
             InkWell(
-              onLongPress: () => _showMuteDialog(appType, sectionItems),
+              onTap: () => setState(() {
+                if (isSourceCollapsed) {
+                  _collapsedSources.remove(sourceKey);
+                } else {
+                  _collapsedSources.add(sourceKey);
+                }
+              }),
+              onLongPress: () =>
+                  _showGroupSettingsSheet(appType, sourceId, sourceName),
               child: Padding(
-                padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+                padding: const EdgeInsets.fromLTRB(40, 6, 16, 2),
                 child: Row(
                   children: [
                     Icon(
-                      _getAppTypeIcon(appType),
-                      size: 18,
-                      color: Theme.of(context).colorScheme.primary,
+                      isSourceCollapsed
+                          ? Icons.chevron_right
+                          : Icons.expand_more,
+                      size: 16,
+                      color: Theme.of(context)
+                          .colorScheme
+                          .onSurface
+                          .withAlpha(180),
                     ),
-                    const SizedBox(width: 8),
+                    const SizedBox(width: 4),
+                    Expanded(
+                      child: Text(
+                        sourceName.isNotEmpty ? sourceName : sourceId,
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w500,
+                          color: Theme.of(context)
+                              .colorScheme
+                              .onSurface
+                              .withAlpha(200),
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
                     Text(
-                      _getAppTypeLabel(appType),
+                      '(${sourceItems.length})',
                       style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                        color: Theme.of(context).colorScheme.primary,
+                        fontSize: 11,
+                        color: Theme.of(context)
+                            .colorScheme
+                            .onSurface
+                            .withAlpha(120),
                       ),
                     ),
                   ],
                 ),
               ),
             ),
-            // Items in section
-            ...sectionItems.map((item) => _buildItemTile(item)),
-            if (sectionIndex < sortedTypes.length - 1) const Divider(height: 1),
-          ],
-        );
-      },
-    );
+          );
+
+          if (!isSourceCollapsed) {
+            for (final item in sourceItems) {
+              widgets.add(_buildItemTile(item));
+            }
+            if (hasMore) {
+              widgets.add(
+                Padding(
+                  padding: const EdgeInsets.only(left: 56, bottom: 4),
+                  child: Text(
+                    _i18n.t('now_show_more'),
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: Theme.of(context).colorScheme.primary,
+                      fontStyle: FontStyle.italic,
+                    ),
+                  ),
+                ),
+              );
+            }
+          }
+        }
+      }
+
+      if (i < sortedTypes.length - 1) {
+        widgets.add(const Divider(height: 1));
+      }
+    }
+
+    return ListView(children: widgets);
   }
 
   Widget _buildItemTile(NowItem item) {
     final age = _formatAge(item.timestamp);
+    final settings =
+        _nowService.getGroupSettings(item.appType, item.sourceId);
+
+    // Dim items close to expiring (within 10% of TTL remaining)
+    final isNearExpiry = settings.expiryMinutes > 0 &&
+        DateTime.now().difference(item.timestamp).inMinutes >
+            settings.expiryMinutes * 0.9;
 
     return ListTile(
       dense: true,
@@ -131,6 +269,9 @@ class _NowPageState extends State<NowPage> {
         style: TextStyle(
           fontWeight: item.isRead ? FontWeight.normal : FontWeight.bold,
           fontSize: 14,
+          color: isNearExpiry
+              ? Theme.of(context).colorScheme.onSurface.withAlpha(100)
+              : null,
         ),
       ),
       subtitle: Text(
@@ -140,6 +281,9 @@ class _NowPageState extends State<NowPage> {
         style: TextStyle(
           fontWeight: item.isRead ? FontWeight.normal : FontWeight.w500,
           fontSize: 13,
+          color: isNearExpiry
+              ? Theme.of(context).colorScheme.onSurface.withAlpha(80)
+              : null,
         ),
       ),
       trailing: Column(
@@ -194,8 +338,6 @@ class _NowPageState extends State<NowPage> {
   }
 
   void _navigateToSource(NowItem item) {
-    // Navigation is handled by appType + sourceId
-    // For now, we navigate to the appropriate browser page
     switch (item.appType) {
       case 'chat':
       case 'irc':
@@ -211,44 +353,111 @@ class _NowPageState extends State<NowPage> {
         Navigator.pushNamed(context, '/alerts', arguments: item.sourceId);
         break;
       default:
-        // For unhandled types, just mark as read
         break;
     }
   }
 
-  void _showMuteDialog(String appType, List<NowItem> items) {
-    // Get unique sources in this section
-    final sources = <String, String>{};
-    for (final item in items) {
-      sources[item.sourceId] = item.sourceName;
-    }
+  void _showGroupSettingsSheet(
+      String appType, String sourceId, String sourceName) {
+    final settings = _nowService.getGroupSettings(appType, sourceId);
+    var maxItems = settings.maxItems.toDouble();
+    var expiryHours = settings.expiryMinutes / 60.0;
+    final isMuted = _nowService.isSourceMuted(appType, sourceId);
+    final label = sourceName.isNotEmpty ? sourceName : sourceId;
 
     showModalBottomSheet(
       context: context,
-      builder: (context) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: sources.entries.map((entry) {
-            final isMuted = _nowService.isSourceMuted(appType, entry.key);
-            return ListTile(
-              leading: Icon(isMuted ? Icons.volume_off : Icons.volume_up),
-              title: Text(entry.value.isNotEmpty ? entry.value : entry.key),
-              subtitle: Text(
-                isMuted ? _i18n.t('now_unmute_source') : _i18n.t('now_mute_source'),
-              ),
-              onTap: () {
-                _nowService.toggleSourceMute(appType, entry.key);
-                Navigator.pop(context);
-              },
-            );
-          }).toList(),
+      builder: (context) => StatefulBuilder(
+        builder: (context, setSheetState) => SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '${_i18n.t('now_group_settings')} — $label',
+                  style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                // Mute toggle
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading:
+                      Icon(isMuted ? Icons.volume_off : Icons.volume_up),
+                  title: Text(isMuted
+                      ? _i18n.t('now_unmute_source')
+                      : _i18n.t('now_mute_source')),
+                  onTap: () {
+                    _nowService.toggleSourceMute(appType, sourceId);
+                    Navigator.pop(context);
+                  },
+                ),
+                const Divider(),
+                // Max items slider
+                Row(
+                  children: [
+                    Text(_i18n.t('now_max_items')),
+                    const Spacer(),
+                    Text('${maxItems.round()}'),
+                  ],
+                ),
+                Slider(
+                  value: maxItems,
+                  min: 1,
+                  max: 50,
+                  divisions: 49,
+                  onChanged: (v) => setSheetState(() => maxItems = v),
+                ),
+                const SizedBox(height: 8),
+                // Expiry slider
+                Row(
+                  children: [
+                    Text(_i18n.t('now_expiry')),
+                    const Spacer(),
+                    Text(_i18n
+                        .t('now_expiry_hours')
+                        .replaceAll('{0}', expiryHours.round().toString())),
+                  ],
+                ),
+                Slider(
+                  value: expiryHours.clamp(0, 168),
+                  min: 0,
+                  max: 168, // 7 days
+                  divisions: 168,
+                  onChanged: (v) =>
+                      setSheetState(() => expiryHours = v),
+                ),
+                const SizedBox(height: 16),
+                // Save button
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    onPressed: () {
+                      _nowService.setGroupSettings(
+                        '$appType:$sourceId',
+                        NowGroupSettings(
+                          maxItems: maxItems.round(),
+                          expiryMinutes: (expiryHours * 60).round(),
+                        ),
+                      );
+                      Navigator.pop(context);
+                    },
+                    child: Text(_i18n.t('save')),
+                  ),
+                ),
+              ],
+            ),
+          ),
         ),
       ),
     );
   }
 
   IconData _getAppTypeIcon(String appType) {
-    // Map activity feed app types to icons, falling back to app_type_theme
     switch (appType) {
       case 'dm':
         return Icons.message;
@@ -262,12 +471,10 @@ class _NowPageState extends State<NowPage> {
   }
 
   String _getAppTypeLabel(String appType) {
-    // Try i18n key first, then capitalize
     final key = 'app_type_$appType';
     final translated = _i18n.t(key);
     if (translated != key) return translated;
 
-    // Fallback: capitalize
     switch (appType) {
       case 'dm':
         return 'Direct Messages';

@@ -1421,5 +1421,10 @@
   "now_empty": "No recent activity",
   "now_mute_source": "Mute this source",
   "now_unmute_source": "Unmute this source",
-  "now_mark_all_read": "Mark all as read"
+  "now_mark_all_read": "Mark all as read",
+  "now_max_items": "Max items",
+  "now_expiry": "Expires after",
+  "now_expiry_hours": "{0}h",
+  "now_show_more": "Show more",
+  "now_group_settings": "Group settings"
 }

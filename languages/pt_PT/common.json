@@ -1414,5 +1414,10 @@
   "now_empty": "Sem atividade recente",
   "now_mute_source": "Silenciar esta fonte",
   "now_unmute_source": "Ativar esta fonte",
-  "now_mark_all_read": "Marcar tudo como lido"
+  "now_mark_all_read": "Marcar tudo como lido",
+  "now_max_items": "Máximo de itens",
+  "now_expiry": "Expira após",
+  "now_expiry_hours": "{0}h",
+  "now_show_more": "Ver mais",
+  "now_group_settings": "Definições do grupo"
 }
