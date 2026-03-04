@@ -3961,26 +3961,11 @@ function cleanup() {
 
         author = senderCallsign;
 
-      } else if (body.containsKey('content')) {
-        // Simple message from device owner (no auth required for device's own messages)
-        content = body['content'] as String;
-
-        // Use device's profile
-        try {
-          final profile = ProfileService().getProfile();
-          author = profile.callsign;
-          npub = profile.npub;
-        } catch (e) {
-          return shelf.Response.internalServerError(
-            body: jsonEncode({'error': 'Profile not initialized'}),
-            headers: headers,
-          );
-        }
       } else {
-        return shelf.Response.badRequest(
-          body: jsonEncode({
-            'error': 'Missing content or event field',
-            'hint': 'Provide either "content" for device message or "event" for NOSTR-signed message',
+        return shelf.Response.forbidden(
+          jsonEncode({
+            'error': 'NOSTR signed event required',
+            'code': 'SIGNATURE_REQUIRED',
           }),
           headers: headers,
         );
@@ -4148,24 +4133,11 @@ function cleanup() {
           body['_sha1_from_event'] = sha1Tag;
         }
 
-      } else if (body.containsKey('content')) {
-        // Simple message - use device's profile
-        content = body['content'] as String;
-        try {
-          final profile = ProfileService().getProfile();
-          author = profile.callsign;
-          npub = profile.npub;
-        } catch (e) {
-          return shelf.Response.internalServerError(
-            body: jsonEncode({'error': 'Profile not initialized'}),
-            headers: headers,
-          );
-        }
       } else {
-        return shelf.Response.badRequest(
-          body: jsonEncode({
-            'error': 'Missing content or event field',
-            'hint': 'Provide either "content" for device message or "event" for NOSTR-signed message',
+        return shelf.Response.forbidden(
+          jsonEncode({
+            'error': 'NOSTR signed event required',
+            'code': 'SIGNATURE_REQUIRED',
           }),
           headers: headers,
         );

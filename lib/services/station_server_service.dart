@@ -2825,19 +2825,12 @@ h2 { font-size: 1.2rem; margin: 0 0 20px 0; }
           npub = event.npub;
           signature = event.sig;
           eventId = event.id;
-        } else if (body.containsKey('content')) {
-          content = body['content'] as String;
-          author = body['callsign'] as String? ?? ProfileService().getProfile().callsign;
-          npub = body['npub'] as String?;
-          signature = body['signature'] as String?;
-          eventId = body['event_id'] as String?;
-          createdAt = body['created_at'] as int?;
         } else {
-          request.response.statusCode = 400;
+          request.response.statusCode = 403;
           request.response.headers.contentType = ContentType.json;
           request.response.write(jsonEncode({
-            'error': 'Missing content or event field',
-            'hint': 'Provide either \"content\" or \"event\"',
+            'error': 'NOSTR signed event required',
+            'code': 'SIGNATURE_REQUIRED',
           }));
           return;
         }
@@ -2981,19 +2974,12 @@ h2 { font-size: 1.2rem; margin: 0 0 20px 0; }
         if (voiceFile != null) {
           content = ''; // Voice messages have empty display content
         }
-      } else if (body.containsKey('content')) {
-        content = body['content'] as String;
-        author = body['callsign'] as String? ?? senderCallsign;
-        npub = body['npub'] as String?;
-        signature = body['signature'] as String?;
-        eventId = body['event_id'] as String?;
-        createdAt = body['created_at'] as int?;
       } else {
-        request.response.statusCode = 400;
+        request.response.statusCode = 403;
         request.response.headers.contentType = ContentType.json;
         request.response.write(jsonEncode({
-          'error': 'Missing content or event field',
-          'hint': 'Provide either \"content\" or \"event\"',
+          'error': 'NOSTR signed event required',
+          'code': 'SIGNATURE_REQUIRED',
         }));
         return;
       }

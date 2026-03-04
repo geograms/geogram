@@ -7733,12 +7733,25 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, EmailHandlerMixin,
           return;
         }
 
-        // Optional NOSTR fields
+        // Required NOSTR signature fields
         var npub = data['npub'] as String?;
         final pubkey = data['pubkey'] as String?;
         final eventId = data['event_id'] as String?;
         final signature = data['signature'] as String?;
         final createdAt = data['created_at'] as int?;
+
+        if (pubkey == null || pubkey.isEmpty ||
+            signature == null || signature.isEmpty ||
+            eventId == null || eventId.isEmpty) {
+          request.response
+            ..statusCode = HttpStatus.forbidden
+            ..headers.contentType = ContentType.json
+            ..write(jsonEncode({
+              'error': 'Valid NOSTR signature required',
+              'code': 'SIGNATURE_REQUIRED',
+            }));
+          return;
+        }
 
         // Derive npub from pubkey if not provided
         if ((npub == null || npub.isEmpty) && pubkey != null && pubkey.isNotEmpty) {
@@ -7749,30 +7762,37 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, EmailHandlerMixin,
           }
         }
 
-        // Verify signature if present
+        // Verify NOSTR signature (mandatory)
         bool isVerified = false;
-        final hasSig = signature != null && signature.isNotEmpty;
-        if (hasSig && pubkey != null && pubkey.isNotEmpty && eventId != null) {
-          try {
-            // Reconstruct and verify the NOSTR event
-            final event = NostrEvent(
-              id: eventId,
-              pubkey: pubkey,
-              createdAt: createdAt ?? (DateTime.now().millisecondsSinceEpoch ~/ 1000),
-              kind: 1,
-              tags: [['t', 'chat'], ['room', roomId], ['callsign', senderCallsign]],
-              content: content,
-              sig: signature,
-            );
-            isVerified = event.verify();
-            if (isVerified) {
-              _log('INFO', 'HTTP POST message signature verified for $senderCallsign');
-            } else {
-              _log('WARN', 'HTTP POST message signature verification failed for $senderCallsign');
-            }
-          } catch (e) {
-            _log('WARN', 'Error verifying HTTP POST message signature: $e');
+        try {
+          final event = NostrEvent(
+            id: eventId!,
+            pubkey: pubkey!,
+            createdAt: createdAt ?? (DateTime.now().millisecondsSinceEpoch ~/ 1000),
+            kind: 1,
+            tags: [['t', 'chat'], ['room', roomId], ['callsign', senderCallsign]],
+            content: content,
+            sig: signature!,
+          );
+          isVerified = event.verify();
+          if (isVerified) {
+            _log('INFO', 'HTTP POST message signature verified for $senderCallsign');
+          } else {
+            _log('WARN', 'HTTP POST message signature verification failed for $senderCallsign');
           }
+        } catch (e) {
+          _log('WARN', 'Error verifying HTTP POST message signature: $e');
+        }
+
+        if (!isVerified) {
+          request.response
+            ..statusCode = HttpStatus.forbidden
+            ..headers.contentType = ContentType.json
+            ..write(jsonEncode({
+              'error': 'Valid NOSTR signature required',
+              'code': 'SIGNATURE_REQUIRED',
+            }));
+          return;
         }
 
         // Extract metadata (file attachments, etc.)
@@ -7797,7 +7817,7 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, EmailHandlerMixin,
               ? DateTime.fromMillisecondsSinceEpoch(createdAt * 1000, isUtc: true)
               : DateTime.now().toUtc(),
           verified: isVerified,
-          hasSignature: hasSig,
+          hasSignature: true,
           metadata: metadata,
         );
 
