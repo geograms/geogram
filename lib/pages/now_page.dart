@@ -26,6 +26,7 @@ import '../teleport/aprs/pages/aprs_conversation_page.dart';
 import '../teleport/irc/pages/irc_chat_page.dart';
 import '../teleport/telegram/pages/telegram_chat_page.dart';
 import '../util/app_type_theme.dart';
+import '../util/event_bus.dart';
 
 /// Activity feed page showing recent events as source-grouped cards
 class NowPage extends StatefulWidget {
@@ -345,6 +346,19 @@ class _NowPageState extends State<NowPage> {
           break;
       }
       controller.clear();
+
+      // Show the user's own message in the feed for visual confirmation
+      final myCallsign = ProfileService().getProfile().callsign;
+      final summary = text.length > 100 ? '${text.substring(0, 100)}...' : text;
+      EventBus().fire(NowItemEvent(
+        id: '${card.appType}:${card.sourceId}:reply:${DateTime.now().toIso8601String()}',
+        appType: card.appType,
+        sourceId: card.sourceId,
+        sourceName: card.sourceName,
+        callsign: myCallsign,
+        summary: summary,
+        priority: NowPriority.routine,
+      ));
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
