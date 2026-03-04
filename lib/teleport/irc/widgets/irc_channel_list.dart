@@ -187,20 +187,8 @@ class _ChannelBrowserPageState extends State<_ChannelBrowserPage> {
           event.serverId == widget.serverId) {
         final channelName = event.data as String?;
         if (mounted && channelName != null) {
-          final wasPending = _pendingJoins.remove(channelName.toLowerCase());
+          _pendingJoins.remove(channelName.toLowerCase());
           setState(() {});
-          // If this was a user-initiated join from this browser, open the chat
-          if (wasPending) {
-            Navigator.of(context).pop(); // close browser
-            Navigator.of(context).push(
-              MaterialPageRoute(
-                builder: (_) => IrcChatPage(
-                  serverId: widget.serverId,
-                  channel: channelName,
-                ),
-              ),
-            );
-          }
         }
       }
     });
@@ -389,7 +377,7 @@ class _ChannelBrowserPageState extends State<_ChannelBrowserPage> {
                                 ),
                                 subtitle: isJoined
                                     ? Text(
-                                        'Joined — tap to open',
+                                        'Joined',
                                         style: theme.textTheme.bodySmall?.copyWith(
                                           color: Colors.green.withValues(alpha: 0.7),
                                         ),
@@ -439,25 +427,12 @@ class _ChannelBrowserPageState extends State<_ChannelBrowserPage> {
                                       ),
                                   ],
                                 ),
-                                onTap: isPending
+                                onTap: isPending || isJoined
                                     ? null
-                                    : isJoined
-                                        ? () {
-                                            // Already joined — open chat directly
-                                            Navigator.of(context).pop(); // close browser
-                                            Navigator.of(context).push(
-                                              MaterialPageRoute(
-                                                builder: (_) => IrcChatPage(
-                                                  serverId: widget.serverId,
-                                                  channel: name,
-                                                ),
-                                              ),
-                                            );
-                                          }
-                                        : () {
-                                            setState(() => _pendingJoins.add(name.toLowerCase()));
-                                            IrcService().joinChannel(widget.serverId, name);
-                                          },
+                                    : () {
+                                        setState(() => _pendingJoins.add(name.toLowerCase()));
+                                        IrcService().joinChannel(widget.serverId, name);
+                                      },
                               );
                             },
                           ),
@@ -474,7 +449,7 @@ class _ChannelBrowserPageState extends State<_ChannelBrowserPage> {
     setState(() => _pendingJoins.add(ch.toLowerCase()));
     IrcService().joinChannel(widget.serverId, ch);
     _manualController.clear();
-    // Will auto-navigate to chat on channelJoined event
+    // Channel will appear as joined once channelJoined event fires
   }
 }
 
