@@ -6,7 +6,6 @@
 import 'dart:async';
 import '../models/station_chat_room.dart';
 import '../models/update_notification.dart';
-import '../services/dm_notification_service.dart';
 import '../util/event_bus.dart';
 import 'config_service.dart';
 import 'station_cache_service.dart';
@@ -260,22 +259,6 @@ class ChatNotificationService {
 
     // Cache the message so it's immediately available when the UI opens
     _cacheResolvedMessage(update, resolved);
-
-    // Try to get image path if it's an image attachment
-    String? imagePath;
-    final fileName = resolved.metadata['file'] ?? resolved.metadata['voice'];
-    if (fileName != null && _isImageFile(fileName)) {
-      imagePath = await _tryGetCachedImagePath(update, roomId, fileName);
-    }
-
-    await DMNotificationService().showChatRoomMessage(
-      roomId: roomId,
-      fromCallsign: resolved.callsign,
-      content: resolved.content,
-      verified: resolved.verified,
-      fileName: fileName,
-      imagePath: imagePath,
-    );
   }
 
   /// Cache a resolved message from a notification so the UI has it immediately
@@ -361,61 +344,6 @@ class ChatNotificationService {
     }
 
     return null;
-  }
-
-  /// Try to get the cached image path for a file attachment
-  Future<String?> _tryGetCachedImagePath(
-    UpdateNotification update,
-    String roomId,
-    String fileName,
-  ) async {
-    try {
-      await _cacheService.initialize();
-      final station = _stationService.getPreferredStation();
-
-      final candidateKeys = <String?>[
-        update.callsign,
-        station?.callsign,
-        station?.name,
-      ];
-
-      for (final cacheKey in candidateKeys) {
-        if (cacheKey == null || cacheKey.isEmpty) continue;
-        final cachedPath = await _cacheService.getChatFilePath(cacheKey, roomId, fileName);
-        if (cachedPath != null) {
-          LogService().log('ChatNotificationService: Found cached image at $cachedPath');
-          return cachedPath;
-        }
-      }
-
-      // Try to download the image if station is available
-      if (station != null && station.url.isNotEmpty) {
-        // Use station callsign as cache key to match how chat_browser_page caches files
-        final downloadedPath = await _stationService.downloadRoomFile(
-          station.url,
-          roomId,
-          fileName,
-          cacheKey: station.callsign,
-        );
-        if (downloadedPath != null) {
-          LogService().log('ChatNotificationService: Downloaded image to $downloadedPath');
-          return downloadedPath;
-        }
-      }
-    } catch (e) {
-      LogService().log('ChatNotificationService: Failed to get image path: $e');
-    }
-    return null;
-  }
-
-  bool _isImageFile(String filename) {
-    final lower = filename.toLowerCase();
-    return lower.endsWith('.jpg') ||
-        lower.endsWith('.jpeg') ||
-        lower.endsWith('.png') ||
-        lower.endsWith('.gif') ||
-        lower.endsWith('.webp') ||
-        lower.endsWith('.bmp');
   }
 
   /// Set the currently viewed room (clears its unread count)

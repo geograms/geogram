@@ -22,7 +22,6 @@ import '../util/event_bus.dart';
 import '../util/nostr_crypto.dart';
 import '../util/nostr_event.dart';
 import 'app_service.dart';
-import 'dm_notification_service.dart';
 import 'log_service.dart';
 import 'profile_service.dart';
 import 'profile_storage.dart';
@@ -1785,22 +1784,27 @@ class EmailService {
     required String threadId,
   }) async {
     try {
-      await DMNotificationService().showEmailMessage(
-        fromAddress: from,
-        subject: subject,
-        preview: _buildEmailPreview(content),
-        threadId: threadId,
-      );
-    } catch (e) {
-      LogService().log('EmailService: Failed to show email notification: $e');
-    }
-  }
+      // Extract sender display name (part before @)
+      final normalized = from.trim();
+      final atIndex = normalized.indexOf('@');
+      final senderDisplay = atIndex > 0
+          ? normalized.substring(0, atIndex).toUpperCase()
+          : normalized.toUpperCase();
 
-  String _buildEmailPreview(String content) {
-    final normalized = content.trim().replaceAll(RegExp(r'\s+'), ' ');
-    if (normalized.isEmpty) return '';
-    if (normalized.length <= 120) return normalized;
-    return '${normalized.substring(0, 120)}...';
+      final displaySubject = subject.trim().isEmpty ? '(No Subject)' : subject.trim();
+
+      EventBus().fire(NowItemEvent(
+        id: 'email:$threadId:${DateTime.now().toIso8601String()}',
+        appType: 'email',
+        sourceId: threadId,
+        sourceName: senderDisplay,
+        callsign: senderDisplay,
+        summary: displaySubject,
+        priority: NowPriority.email,
+      ));
+    } catch (e) {
+      LogService().log('EmailService: Failed to fire email NowItemEvent: $e');
+    }
   }
 
   // ============================================

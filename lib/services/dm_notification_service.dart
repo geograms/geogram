@@ -54,18 +54,15 @@ class DMNotificationService {
   /// Pending action from notification tap - checked on app resume
   static NotificationAction? pendingAction;
 
-  static const String _messageGroupKey = 'geogram_messages';
-  static const int _summaryNotificationId = 900100;
-  static const int _maxSummaryLines = 10;
-
   final FlutterLocalNotificationsPlugin _notificationsPlugin =
       FlutterLocalNotificationsPlugin();
+
+  /// Expose the plugin so NowNotificationBridge can show/cancel notifications
+  FlutterLocalNotificationsPlugin get notificationsPlugin => _notificationsPlugin;
+
   EventSubscription<DirectMessageReceivedEvent>? _dmEventSubscription;
-  EventSubscription<ChatMessageEvent>? _chatEventSubscription;
   bool _initialized = false;
   bool _permissionRequested = false;
-  final List<String> _recentMessageLines = [];
-  int _totalMessageCount = 0;
 
   /// Initialize the notification service
   /// Set [skipPermissionRequest] to true to defer permission request (e.g., for first launch onboarding)
@@ -213,6 +210,23 @@ class DMNotificationService {
               EventBus().fire(ChatNotificationTappedEvent(roomId: roomId));
             });
           }
+        } else if (payload != null && payload.startsWith('now:')) {
+          final data = payload.substring('now:'.length);
+          final parts = data.split(':');
+          if (parts.length >= 2) {
+            final prefs = await SharedPreferences.getInstance();
+            await prefs.remove(_pendingActionKey);
+            final appType = parts[0];
+            final sourceId = parts[1];
+            final sourceName = parts.length >= 3 ? parts.sublist(2).join(':') : '';
+            Future.delayed(const Duration(milliseconds: 500), () {
+              EventBus().fire(NowNotificationTappedEvent(
+                appType: appType,
+                sourceId: sourceId,
+                sourceName: sourceName,
+              ));
+            });
+          }
         }
       }
     } catch (e) {
@@ -279,9 +293,6 @@ class DMNotificationService {
     _dmEventSubscription = EventBus().on<DirectMessageReceivedEvent>((event) {
       _handleIncomingDM(event);
     });
-    _chatEventSubscription = EventBus().on<ChatMessageEvent>((event) {
-      _handleIncomingChatMessage(event);
-    });
     LogService().log(
       'DMNotificationService: Subscribed to DirectMessageReceivedEvent',
     );
@@ -306,14 +317,7 @@ class DMNotificationService {
       return;
     }
 
-    // Show notification
-    await _showNotification(
-      fromCallsign: event.fromCallsign,
-      content: event.content,
-      verified: event.verified,
-    );
-
-    // Fire NowItemEvent for the activity feed
+    // Fire NowItemEvent for the activity feed (bridge handles notification)
     final summary = event.content.length > 100
         ? '${event.content.substring(0, 100)}...'
         : event.content;
@@ -332,325 +336,6 @@ class DMNotificationService {
     );
   }
 
-  /// Handle incoming chat message (group/room)
-  Future<void> _handleIncomingChatMessage(ChatMessageEvent event) async {
-    await showChatRoomMessage(
-      roomId: event.roomId,
-      fromCallsign: event.callsign,
-      content: event.content,
-      verified: event.verified,
-    );
-  }
-
-  /// Show a notification for a chat room message (public API for station updates)
-  Future<void> showChatRoomMessage({
-    required String roomId,
-    required String fromCallsign,
-    required String content,
-    required bool verified,
-    String? fileName,
-    String? imagePath,
-  }) async {
-    if (!_initialized || !_isSupportedPlatform()) return;
-
-    final settings = NotificationService().getSettings();
-    if (!settings.enableNotifications || !settings.notifyNewMessages) {
-      LogService().log(
-        'DMNotificationService: Notifications disabled in settings',
-      );
-      return;
-    }
-
-    final myCallsign = ProfileService().getProfile().callsign;
-    if (myCallsign.isEmpty || fromCallsign == myCallsign) {
-      return;
-    }
-
-    await _showChatNotification(
-      roomId: roomId,
-      fromCallsign: fromCallsign,
-      content: content,
-      verified: verified,
-      fileName: fileName,
-      imagePath: imagePath,
-    );
-  }
-
-  /// Show a notification for incoming email messages.
-  Future<void> showEmailMessage({
-    required String fromAddress,
-    required String subject,
-    required String preview,
-    required String threadId,
-  }) async {
-    if (!_initialized || !_isSupportedPlatform()) return;
-
-    final settings = NotificationService().getSettings();
-    if (!settings.enableNotifications || !settings.notifyNewMessages) {
-      LogService().log(
-        'DMNotificationService: Notifications disabled in settings',
-      );
-      return;
-    }
-
-    final sender = _extractEmailSenderDisplay(fromAddress);
-    final displaySubject = subject.trim().isEmpty
-        ? '(No Subject)'
-        : subject.trim();
-    final body = _buildEmailNotificationBody(
-      subject: displaySubject,
-      preview: preview,
-    );
-
-    final androidDetails = AndroidNotificationDetails(
-      'email_channel',
-      'Email',
-      channelDescription: 'Notifications for incoming email',
-      importance: Importance.high,
-      priority: Priority.high,
-      enableVibration: settings.vibrationEnabled,
-      playSound: settings.soundEnabled,
-      groupKey: _messageGroupKey,
-    );
-
-    final iosDetails = DarwinNotificationDetails(
-      presentAlert: true,
-      presentBadge: true,
-      presentSound: settings.soundEnabled,
-    );
-
-    const linuxDetails = LinuxNotificationDetails(
-      urgency: LinuxNotificationUrgency.normal,
-    );
-
-    final notificationDetails = NotificationDetails(
-      android: androidDetails,
-      iOS: iosDetails,
-      linux: linuxDetails,
-    );
-
-    final notificationId =
-        'email:$fromAddress:$displaySubject:${DateTime.now().millisecondsSinceEpoch}'
-            .hashCode
-            .abs();
-
-    final title = 'Email from $sender';
-    await _notificationsPlugin.show(
-      notificationId,
-      title,
-      body,
-      notificationDetails,
-      payload: 'email:$threadId',
-    );
-
-    LogService().log(
-      'DMNotificationService: Showed email notification from $sender (subject: $displaySubject)',
-    );
-
-    _recordRecentMessage('$title: $displaySubject');
-    await _showSummaryNotification();
-  }
-
-  /// Show a notification for a direct message
-  Future<void> _showNotification({
-    required String fromCallsign,
-    required String content,
-    required bool verified,
-  }) async {
-    // Get notification settings
-    final settings = NotificationService().getSettings();
-
-    // Truncate long messages for notification
-    final displayContent = content.length > 100
-        ? '${content.substring(0, 100)}...'
-        : content;
-
-    // Add verification indicator
-    final verifiedBadge = verified ? '✓ ' : '';
-    final title = '$verifiedBadge$fromCallsign';
-
-    // Android notification details
-    final androidDetails = AndroidNotificationDetails(
-      'dm_channel', // Channel ID
-      'Direct Messages', // Channel name
-      channelDescription: 'Notifications for direct messages',
-      importance: Importance.high,
-      priority: Priority.high,
-      enableVibration: settings.vibrationEnabled,
-      playSound: settings.soundEnabled,
-      groupKey: _messageGroupKey,
-    );
-
-    // iOS notification details
-    final iosDetails = DarwinNotificationDetails(
-      presentAlert: true,
-      presentBadge: true,
-      presentSound: settings.soundEnabled,
-    );
-
-    // Linux notification details
-    const linuxDetails = LinuxNotificationDetails(
-      urgency: LinuxNotificationUrgency.normal,
-    );
-
-    final notificationDetails = NotificationDetails(
-      android: androidDetails,
-      iOS: iosDetails,
-      linux: linuxDetails,
-    );
-
-    // Use fromCallsign hash as notification ID to allow multiple notifications
-    final notificationId = fromCallsign.hashCode.abs();
-
-    await _notificationsPlugin.show(
-      notificationId,
-      title,
-      displayContent,
-      notificationDetails,
-      payload: 'dm:$fromCallsign', // Store callsign for tap handling
-    );
-
-    _recordRecentMessage('$title: $displayContent');
-    await _showSummaryNotification();
-  }
-
-  /// Show a notification for a chat room message
-  Future<void> _showChatNotification({
-    required String roomId,
-    required String fromCallsign,
-    required String content,
-    required bool verified,
-    String? fileName,
-    String? imagePath,
-  }) async {
-    final settings = NotificationService().getSettings();
-
-    // Build display content: show text content, or file description if no text
-    String displayContent;
-    if (content.isNotEmpty) {
-      displayContent = content.length > 100
-          ? '${content.substring(0, 100)}...'
-          : content;
-      // Add file indicator if there's also a file
-      if (fileName != null && fileName.isNotEmpty) {
-        displayContent = '$displayContent 📎';
-      }
-    } else if (fileName != null && fileName.isNotEmpty) {
-      // No text content, show file description
-      final isImage = _isImageFile(fileName);
-      final isVoice = _isVoiceFile(fileName);
-      if (isImage) {
-        displayContent = '📷 Image';
-      } else if (isVoice) {
-        displayContent = '🎤 Voice message';
-      } else {
-        displayContent = '📎 $fileName';
-      }
-    } else {
-      displayContent = '';
-    }
-
-    final verifiedBadge = verified ? '✓ ' : '';
-    final title = '$verifiedBadge$fromCallsign • $roomId';
-
-    // Build Android notification details with optional BigPicture style
-    StyleInformation? styleInfo;
-    if (imagePath != null && imagePath.isNotEmpty) {
-      styleInfo = BigPictureStyleInformation(
-        FilePathAndroidBitmap(imagePath),
-        contentTitle: title,
-        summaryText: displayContent.isNotEmpty ? displayContent : null,
-        hideExpandedLargeIcon: true,
-      );
-    }
-
-    final androidDetails = AndroidNotificationDetails(
-      'chat_channel',
-      'Chat Rooms',
-      channelDescription: 'Notifications for chat rooms',
-      importance: Importance.high,
-      priority: Priority.high,
-      enableVibration: settings.vibrationEnabled,
-      playSound: settings.soundEnabled,
-      groupKey: _messageGroupKey,
-      styleInformation: styleInfo,
-      largeIcon: imagePath != null ? FilePathAndroidBitmap(imagePath) : null,
-    );
-
-    final iosDetails = DarwinNotificationDetails(
-      presentAlert: true,
-      presentBadge: true,
-      presentSound: settings.soundEnabled,
-    );
-
-    const linuxDetails = LinuxNotificationDetails(
-      urgency: LinuxNotificationUrgency.normal,
-    );
-
-    final notificationDetails = NotificationDetails(
-      android: androidDetails,
-      iOS: iosDetails,
-      linux: linuxDetails,
-    );
-
-    final notificationId = '$roomId:$fromCallsign'.hashCode.abs();
-
-    await _notificationsPlugin.show(
-      notificationId,
-      title,
-      displayContent,
-      notificationDetails,
-      payload: 'chat:$roomId',
-    );
-
-    _recordRecentMessage('$title: $displayContent');
-    await _showSummaryNotification();
-  }
-
-  bool _isImageFile(String filename) {
-    final lower = filename.toLowerCase();
-    return lower.endsWith('.jpg') ||
-        lower.endsWith('.jpeg') ||
-        lower.endsWith('.png') ||
-        lower.endsWith('.gif') ||
-        lower.endsWith('.webp') ||
-        lower.endsWith('.bmp');
-  }
-
-  bool _isVoiceFile(String filename) {
-    final lower = filename.toLowerCase();
-    return lower.endsWith('.m4a') ||
-        lower.endsWith('.aac') ||
-        lower.endsWith('.mp3') ||
-        lower.endsWith('.wav') ||
-        lower.endsWith('.ogg');
-  }
-
-  String _extractEmailSenderDisplay(String fromAddress) {
-    final normalized = fromAddress.trim();
-    final atIndex = normalized.indexOf('@');
-    if (atIndex > 0) {
-      return normalized.substring(0, atIndex).toUpperCase();
-    }
-    return normalized.toUpperCase();
-  }
-
-  String _buildEmailNotificationBody({
-    required String subject,
-    required String preview,
-  }) {
-    final normalizedPreview = preview.trim().replaceAll(RegExp(r'\s+'), ' ');
-    if (normalizedPreview.isEmpty) {
-      return _truncateNotificationText(subject, 160);
-    }
-    final combined = '$subject - $normalizedPreview';
-    return _truncateNotificationText(combined, 160);
-  }
-
-  String _truncateNotificationText(String text, int maxChars) {
-    if (text.length <= maxChars) return text;
-    return '${text.substring(0, maxChars)}...';
-  }
 
   /// Handle notification tap
   void _onNotificationTapped(NotificationResponse response) {
@@ -698,6 +383,19 @@ class DMNotificationService {
         }
       } else if (type == 'nav') {
         EventBus().fire(NavigateToDevicesEvent());
+      } else if (type == 'now') {
+        // Generic Now item tap: payload = "now:appType:sourceId:sourceName"
+        final parts = data.split(':');
+        if (parts.length >= 2) {
+          final appType = parts[0];
+          final sourceId = parts.length >= 2 ? parts[1] : '';
+          final sourceName = parts.length >= 3 ? parts.sublist(2).join(':') : '';
+          EventBus().fire(NowNotificationTappedEvent(
+            appType: appType,
+            sourceId: sourceId,
+            sourceName: sourceName,
+          ));
+        }
       }
       // Don't set pendingAction — the event handles immediate cases,
       // SharedPreferences handles cold-start via _checkPendingNotification()
@@ -756,58 +454,6 @@ class DMNotificationService {
   /// Dispose resources
   void dispose() {
     _dmEventSubscription?.cancel();
-    _chatEventSubscription?.cancel();
   }
 
-  void _recordRecentMessage(String line) {
-    _totalMessageCount += 1;
-    _recentMessageLines.insert(0, line);
-    if (_recentMessageLines.length > _maxSummaryLines) {
-      _recentMessageLines.removeRange(
-        _maxSummaryLines,
-        _recentMessageLines.length,
-      );
-    }
-  }
-
-  Future<void> _showSummaryNotification() async {
-    if (defaultTargetPlatform != TargetPlatform.android) return;
-    if (_recentMessageLines.isEmpty) return;
-
-    final settings = NotificationService().getSettings();
-    if (!settings.enableNotifications || !settings.notifyNewMessages) {
-      return;
-    }
-
-    final lines = _recentMessageLines.reversed.toList();
-    final inboxStyle = InboxStyleInformation(
-      lines,
-      contentTitle: 'Messages ($_totalMessageCount)',
-      summaryText: '$_totalMessageCount total',
-    );
-
-    final androidDetails = AndroidNotificationDetails(
-      'messages_summary',
-      'Messages',
-      channelDescription: 'Summary of recent messages',
-      importance: Importance.low,
-      priority: Priority.low,
-      enableVibration: false,
-      playSound: false,
-      styleInformation: inboxStyle,
-      groupKey: _messageGroupKey,
-      setAsGroupSummary: true,
-      groupAlertBehavior: GroupAlertBehavior.summary,
-    );
-
-    final notificationDetails = NotificationDetails(android: androidDetails);
-
-    await _notificationsPlugin.show(
-      _summaryNotificationId,
-      'Geogram',
-      '$_totalMessageCount new messages',
-      notificationDetails,
-      payload: 'nav:devices',
-    );
-  }
 }

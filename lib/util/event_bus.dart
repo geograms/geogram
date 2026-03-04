@@ -969,6 +969,14 @@ class PlaceCreatedEvent extends AppEvent {
       'PlaceCreatedEvent(placeId: $placeId, author: $author, name: $name)';
 }
 
+/// Notification tapped for a Now item (generic handler for types without dedicated events)
+class NowNotificationTappedEvent extends AppEvent {
+  final String appType;
+  final String sourceId;
+  final String sourceName;
+  NowNotificationTappedEvent({required this.appType, required this.sourceId, required this.sourceName});
+}
+
 /// P2P download progress event (receiver tracks locally)
 /// Fired as the receiver downloads files from sender
 class P2PDownloadProgressEvent extends AppEvent {

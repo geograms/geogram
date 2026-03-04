@@ -32,6 +32,7 @@ import 'services/i18n_service.dart';
 import 'services/chat_notification_service.dart';
 import 'services/station_content_notification_service.dart';
 import 'services/now_service.dart';
+import 'services/now_notification_bridge.dart';
 import 'services/station_chat_queue_service.dart';
 import 'services/dm_notification_service.dart';
 import 'services/backup_notification_service.dart';
@@ -86,6 +87,14 @@ import 'pages/email_browser_page.dart';
 import 'pages/forum_browser_page.dart';
 import 'pages/blog_browser_page.dart';
 import 'pages/now_page.dart';
+import 'pages/remote_blog_browser_page.dart';
+import 'pages/remote_chat_room_page.dart';
+import 'pages/remote_chat_browser_page.dart' show ChatRoom;
+import 'models/device_source.dart';
+import 'teleport/irc/pages/irc_chat_page.dart';
+import 'teleport/telegram/pages/telegram_chat_page.dart';
+import 'teleport/aprs/pages/aprs_conversation_page.dart';
+import 'teleport/aprs/models/aprs_conversation.dart';
 import 'pages/log_browser_page.dart';
 import 'pages/events_browser_page.dart';
 import 'pages/news_browser_page.dart';
@@ -794,6 +803,7 @@ class _GeogramAppState extends State<GeogramApp> with WidgetsBindingObserver {
   EventSubscription<ChatNotificationTappedEvent>? _chatNotificationSubscription;
   EventSubscription<TransferOfferReceivedEvent>? _transferOfferSubscription;
   EventSubscription<MirrorPairCompletedEvent>? _mirrorPairSubscription;
+  EventSubscription<NowNotificationTappedEvent>? _nowNotificationSubscription;
 
   @override
   void initState() {
@@ -870,6 +880,14 @@ class _GeogramAppState extends State<GeogramApp> with WidgetsBindingObserver {
       );
     });
 
+    // Subscribe to generic Now notification taps (irc, telegram, aprs, alert, blog, events, places)
+    _nowNotificationSubscription = EventBus().on<NowNotificationTappedEvent>((event) {
+      LogService().log(
+        'GeogramApp: Now notification tapped for ${event.appType}:${event.sourceId}',
+      );
+      _navigateToNowSource(event.appType, event.sourceId, event.sourceName);
+    });
+
     // Check for pending notification on startup (handles cold start)
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _checkPendingNotification();
@@ -886,6 +904,7 @@ class _GeogramAppState extends State<GeogramApp> with WidgetsBindingObserver {
     _navigateToDevicesSubscription?.cancel();
     _transferOfferSubscription?.cancel();
     _mirrorPairSubscription?.cancel();
+    _nowNotificationSubscription?.cancel();
     // Close all encrypted storage connections
     EncryptedStorageService().closeAllArchives();
     super.dispose();
@@ -956,6 +975,16 @@ class _GeogramAppState extends State<GeogramApp> with WidgetsBindingObserver {
         break;
       case 'email':
         await _navigateToEmailThread(action.data);
+        break;
+      case 'now':
+        // Generic Now item: data = "appType:sourceId:sourceName"
+        final parts = action.data.split(':');
+        if (parts.length >= 2) {
+          final appType = parts[0];
+          final sourceId = parts[1];
+          final sourceName = parts.length >= 3 ? parts.sublist(2).join(':') : '';
+          _navigateToNowSource(appType, sourceId, sourceName);
+        }
         break;
     }
   }
@@ -1082,6 +1111,106 @@ class _GeogramAppState extends State<GeogramApp> with WidgetsBindingObserver {
     );
   }
 
+  /// Navigate to a Now source by appType (mirrors NowPage._navigateToSource)
+  void _navigateToNowSource(String appType, String sourceId, String sourceName) {
+    if (_navigatorKey.currentState == null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _navigateToNowSource(appType, sourceId, sourceName);
+      });
+      return;
+    }
+
+    switch (appType) {
+      case 'irc':
+        final parts = sourceId.split(':');
+        if (parts.length >= 2) {
+          _navigatorKey.currentState!.push(MaterialPageRoute(
+            builder: (_) => IrcChatPage(serverId: parts[0], channel: parts.sublist(1).join(':')),
+          ));
+        }
+        break;
+      case 'telegram':
+        final chatId = int.tryParse(sourceId);
+        if (chatId != null) {
+          _navigatorKey.currentState!.push(MaterialPageRoute(
+            builder: (_) => TelegramChatPage(chatId: chatId, chatTitle: sourceName),
+          ));
+        }
+        break;
+      case 'aprs':
+        final isTag = sourceId.startsWith('#');
+        _navigatorKey.currentState!.push(MaterialPageRoute(
+          builder: (_) => AprsConversationPage(
+            conversationId: sourceId,
+            conversationType: isTag ? AprsConversationType.tag : AprsConversationType.direct,
+            partnerPosition: AprsService().lastKnownPositions[sourceId],
+          ),
+        ));
+        break;
+      case 'alert':
+        _navigatorKey.currentState!.pushNamed('/alerts', arguments: sourceId);
+        break;
+      case 'chat':
+        final station = StationService().getPreferredStation();
+        if (station != null && station.url.isNotEmpty) {
+          final device = RemoteDevice(
+            callsign: station.callsign ?? 'STATION',
+            name: station.name,
+            url: station.url.replaceFirst('wss://', 'https://').replaceFirst('ws://', 'http://'),
+            apps: [],
+            source: DeviceSourceType.station,
+          );
+          _navigatorKey.currentState!.push(MaterialPageRoute(
+            builder: (_) => RemoteChatRoomPage(
+              device: device,
+              room: ChatRoom(id: sourceId, name: sourceName, memberCount: 0, visibility: 'public'),
+            ),
+          ));
+        }
+        break;
+      case 'blog':
+        final station = StationService().getPreferredStation();
+        if (station != null && station.url.isNotEmpty) {
+          final device = RemoteDevice(
+            callsign: station.callsign ?? 'STATION',
+            name: station.name,
+            url: station.url.replaceFirst('wss://', 'https://').replaceFirst('ws://', 'http://'),
+            apps: [],
+            source: DeviceSourceType.station,
+          );
+          _navigatorKey.currentState!.push(MaterialPageRoute(
+            builder: (_) => RemoteBlogBrowserPage(device: device),
+          ));
+        }
+        break;
+      case 'events':
+        final station = StationService().getPreferredStation();
+        if (station != null && station.url.isNotEmpty) {
+          _navigatorKey.currentState!.push(MaterialPageRoute(
+            builder: (_) => EventsBrowserPage(
+              remoteDeviceUrl: station.url.replaceFirst('wss://', 'https://').replaceFirst('ws://', 'http://'),
+              remoteDeviceCallsign: station.callsign,
+              remoteDeviceName: station.name,
+            ),
+          ));
+        }
+        break;
+      case 'places':
+        final station = StationService().getPreferredStation();
+        if (station != null && station.url.isNotEmpty) {
+          final url = station.url.replaceFirst('wss://', 'https://').replaceFirst('ws://', 'http://');
+          _navigatorKey.currentState!.push(MaterialPageRoute(
+            builder: (_) => ReportBrowserPage(
+              remoteDeviceUrl: url,
+              remoteDeviceCallsign: station.callsign,
+              remoteDeviceName: station.name,
+            ),
+          ));
+        }
+        break;
+    }
+  }
+
   /// Show incoming transfer offer dialog
   void _showTransferOfferDialog(TransferOfferReceivedEvent event) async {
     final offer = P2PTransferService().getOffer(event.offerId);
@@ -1201,8 +1330,9 @@ class _HomePageState extends State<HomePage> {
       }
     });
 
-    // Initialize NowService and subscribe to unread count
+    // Initialize NowService and notification bridge, subscribe to unread count
     NowService().initialize();
+    NowNotificationBridge().initialize();
     _unreadNowCount = NowService().unreadCount;
     _unreadNowSubscription = NowService().unreadCountStream.listen((count) {
       if (count != _unreadNowCount && mounted) {
