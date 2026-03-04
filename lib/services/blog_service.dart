@@ -11,6 +11,7 @@ import '../util/blog_folder_utils.dart';
 import '../util/feedback_folder_utils.dart';
 import '../util/nostr_crypto.dart';
 import '../util/nostr_event.dart';
+import '../util/event_bus.dart';
 import 'log_service.dart';
 import 'app_service.dart';
 import 'profile_storage.dart';
@@ -396,6 +397,13 @@ class BlogService {
       await _storage.writeString('$postRelativePath/post.md', postContent);
 
       LogService().log('BlogService: Created post: $postId');
+
+      // Notify Now feed
+      EventBus().fire(BlogPostPublishedEvent(
+        postId: postId,
+        author: author,
+        title: title,
+      ));
 
       // Regenerate blog cache
       if (_appPath != null) {

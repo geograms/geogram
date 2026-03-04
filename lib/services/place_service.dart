@@ -9,6 +9,7 @@ import 'dart:math';
 import '../models/place.dart';
 import '../util/place_parser.dart';
 import 'location_service.dart';
+import '../util/event_bus.dart';
 import 'log_service.dart';
 import 'profile_storage.dart';
 import 'storage_config.dart';
@@ -290,6 +291,13 @@ class PlaceService {
 
       // Write place.txt file
       await _storage.writeString(placeFilePath, content);
+
+      // Notify Now feed
+      EventBus().fire(PlaceCreatedEvent(
+        placeId: placeFolderName,
+        author: place.author,
+        name: place.name,
+      ));
 
       return null; // Success
     } catch (e) {

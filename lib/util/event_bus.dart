@@ -918,6 +918,57 @@ class NowGroupRemoveEvent extends AppEvent {
   NowGroupRemoveEvent({required this.appType, required this.sourceId});
 }
 
+/// Fired when a blog post is published locally
+class BlogPostPublishedEvent extends AppEvent {
+  final String postId;
+  final String author;
+  final String title;
+
+  BlogPostPublishedEvent({
+    required this.postId,
+    required this.author,
+    required this.title,
+  });
+
+  @override
+  String toString() =>
+      'BlogPostPublishedEvent(postId: $postId, author: $author, title: $title)';
+}
+
+/// Fired when an event is created locally
+class EventCreatedEvent extends AppEvent {
+  final String eventId;
+  final String author;
+  final String title;
+
+  EventCreatedEvent({
+    required this.eventId,
+    required this.author,
+    required this.title,
+  });
+
+  @override
+  String toString() =>
+      'EventCreatedEvent(eventId: $eventId, author: $author, title: $title)';
+}
+
+/// Fired when a place is created/saved locally
+class PlaceCreatedEvent extends AppEvent {
+  final String placeId;
+  final String author;
+  final String name;
+
+  PlaceCreatedEvent({
+    required this.placeId,
+    required this.author,
+    required this.name,
+  });
+
+  @override
+  String toString() =>
+      'PlaceCreatedEvent(placeId: $placeId, author: $author, name: $name)';
+}
+
 /// P2P download progress event (receiver tracks locally)
 /// Fired as the receiver downloads files from sender
 class P2PDownloadProgressEvent extends AppEvent {

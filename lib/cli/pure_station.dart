@@ -1931,6 +1931,17 @@ class PureStationServer with EmailHandlerMixin, BlogHandlerMixin, ConsoleCommand
         await _startHttpsServer();
       }
 
+      // Listen for content creation events and broadcast to connected clients
+      EventBus().on<BlogPostPublishedEvent>((event) {
+        _broadcastUpdate('UPDATE:${event.author}/blog/${event.postId}');
+      });
+      EventBus().on<EventCreatedEvent>((event) {
+        _broadcastUpdate('UPDATE:${event.author}/events/${event.eventId}');
+      });
+      EventBus().on<PlaceCreatedEvent>((event) {
+        _broadcastUpdate('UPDATE:${event.author}/places/${event.placeId}');
+      });
+
       return true;
     } catch (e) {
       _log('ERROR', 'Failed to start station server: $e');

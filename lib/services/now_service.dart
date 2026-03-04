@@ -25,6 +25,9 @@ class NowService {
   EventSubscription<AlertReceivedEvent>? _alertSubscription;
   EventSubscription<EmailNotificationEvent>? _emailSubscription;
   EventSubscription<NowGroupRemoveEvent>? _removeSubscription;
+  EventSubscription<BlogPostPublishedEvent>? _blogSubscription;
+  EventSubscription<EventCreatedEvent>? _eventSubscription;
+  EventSubscription<PlaceCreatedEvent>? _placeSubscription;
   bool _initialized = false;
   Timer? _expiryTimer;
 
@@ -199,6 +202,45 @@ class NowService {
         callsign: event.recipient ?? '',
         summary: event.message,
         priority: NowPriority.email,
+      ));
+    });
+
+    // Subscribe to blog post events
+    _blogSubscription = EventBus().on<BlogPostPublishedEvent>((event) {
+      _handleEvent(NowItemEvent(
+        id: 'blog:${event.postId}',
+        appType: 'blog',
+        sourceId: event.postId,
+        sourceName: event.author,
+        callsign: event.author,
+        summary: event.title,
+        priority: NowPriority.blog,
+      ));
+    });
+
+    // Subscribe to event creation events
+    _eventSubscription = EventBus().on<EventCreatedEvent>((event) {
+      _handleEvent(NowItemEvent(
+        id: 'event:${event.eventId}',
+        appType: 'events',
+        sourceId: event.eventId,
+        sourceName: event.title,
+        callsign: event.author,
+        summary: event.title,
+        priority: NowPriority.event,
+      ));
+    });
+
+    // Subscribe to place creation events
+    _placeSubscription = EventBus().on<PlaceCreatedEvent>((event) {
+      _handleEvent(NowItemEvent(
+        id: 'place:${event.placeId}',
+        appType: 'places',
+        sourceId: event.placeId,
+        sourceName: event.name,
+        callsign: event.author,
+        summary: event.name,
+        priority: NowPriority.routine,
       ));
     });
 
@@ -420,6 +462,9 @@ class NowService {
     _subscription?.cancel();
     _alertSubscription?.cancel();
     _emailSubscription?.cancel();
+    _blogSubscription?.cancel();
+    _eventSubscription?.cancel();
+    _placeSubscription?.cancel();
     _removeSubscription?.cancel();
     _expiryTimer?.cancel();
     _itemsController.close();

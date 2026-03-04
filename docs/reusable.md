@@ -10305,3 +10305,4 @@ Debug API actions: `local_backup_set_folder`, `local_backup_create`, `local_back
 - Per-group item limits and TTL-based expiry with periodic pruning timer
 - Collapsible two-level UI sections with long-press settings bottom sheet
 - IRC integration: `IrcService._addMessage()` fires `NowItemEvent` for incoming messages; sourceId format `serverId:channel` enables direct navigation to `IrcChatPage`
+- Blog/Events/Places integration: Local services fire `BlogPostPublishedEvent`, `EventCreatedEvent`, `PlaceCreatedEvent` → NowService converts to `NowItemEvent`. Station broadcasts `UPDATE:` to clients. `StationContentNotificationService` listens for remote UPDATE notifications and fires `NowItemEvent` for client-side display.

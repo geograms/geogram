@@ -11,8 +11,11 @@ import '../services/devices_service.dart';
 import '../services/now_service.dart';
 import '../services/i18n_service.dart';
 import '../services/station_service.dart';
+import 'events_browser_page.dart';
+import 'remote_blog_browser_page.dart';
 import 'remote_chat_browser_page.dart';
 import 'remote_chat_room_page.dart';
+import 'report_browser_page.dart';
 import '../teleport/aprs/aprs_service.dart';
 import '../teleport/aprs/models/aprs_conversation.dart';
 import '../teleport/aprs/pages/aprs_conversation_page.dart';
@@ -410,6 +413,52 @@ class _NowPageState extends State<NowPage> {
           ),
         );
         break;
+      case 'blog':
+        final station = StationService().getPreferredStation();
+        if (station != null && station.url.isNotEmpty) {
+          final device = RemoteDevice(
+            callsign: station.callsign ?? 'STATION',
+            name: station.name,
+            url: station.url
+                .replaceFirst('wss://', 'https://')
+                .replaceFirst('ws://', 'http://'),
+            apps: [],
+            source: DeviceSourceType.station,
+          );
+          Navigator.of(context).push(MaterialPageRoute(
+            builder: (_) => RemoteBlogBrowserPage(device: device),
+          ));
+        }
+        break;
+      case 'events':
+        final station = StationService().getPreferredStation();
+        if (station != null && station.url.isNotEmpty) {
+          Navigator.of(context).push(MaterialPageRoute(
+            builder: (_) => EventsBrowserPage(
+              remoteDeviceUrl: station.url
+                  .replaceFirst('wss://', 'https://')
+                  .replaceFirst('ws://', 'http://'),
+              remoteDeviceCallsign: station.callsign,
+              remoteDeviceName: station.name,
+            ),
+          ));
+        }
+        break;
+      case 'places':
+        final station = StationService().getPreferredStation();
+        if (station != null && station.url.isNotEmpty) {
+          final url = station.url
+              .replaceFirst('wss://', 'https://')
+              .replaceFirst('ws://', 'http://');
+          Navigator.of(context).push(MaterialPageRoute(
+            builder: (_) => ReportBrowserPage(
+              remoteDeviceUrl: url,
+              remoteDeviceCallsign: station.callsign,
+              remoteDeviceName: station.name,
+            ),
+          ));
+        }
+        break;
       default:
         break;
     }
@@ -525,6 +574,14 @@ class _NowPageState extends State<NowPage> {
         return Icons.cell_tower;
       case 'telegram':
         return Icons.send;
+      case 'blog':
+        return Icons.article;
+      case 'events':
+        return Icons.event;
+      case 'places':
+        return Icons.place;
+      case 'email':
+        return Icons.email;
       default:
         return getAppTypeIcon(appType);
     }

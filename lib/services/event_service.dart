@@ -11,6 +11,7 @@ import '../models/event_item.dart';
 import '../models/event_update.dart';
 import '../models/event_registration.dart';
 import '../models/event_link.dart';
+import '../util/event_bus.dart';
 import '../util/feedback_comment_utils.dart';
 import '../util/feedback_folder_utils.dart';
 import 'contact_service.dart';
@@ -328,6 +329,14 @@ class EventService {
       }
 
       print('EventService: Created event: $folderName');
+
+      // Notify Now feed
+      EventBus().fire(EventCreatedEvent(
+        eventId: folderName,
+        author: author,
+        title: title,
+      ));
+
       return event;
     } catch (e) {
       print('EventService: Error creating event: $e');

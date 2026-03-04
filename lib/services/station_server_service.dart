@@ -4589,6 +4589,14 @@ h2 { font-size: 1.2rem; margin: 0 0 20px 0; }
       final file = File(filePath);
       await file.writeAsBytes(bytes, flush: true);
 
+      // Fire event so station broadcasts UPDATE to connected clients
+      final folderName = relativePath.split('/').where((p) => p.isNotEmpty).lastOrNull ?? relativePath;
+      EventBus().fire(PlaceCreatedEvent(
+        placeId: folderName,
+        author: callsign,
+        name: folderName,
+      ));
+
       request.response.statusCode = 201;
       request.response.headers.contentType = ContentType.json;
       request.response.write(jsonEncode({
@@ -5343,6 +5351,13 @@ h2 { font-size: 1.2rem; margin: 0 0 20px 0; }
       final filePath = path.join(contributorDir.path, targetName);
       final file = File(filePath);
       await file.writeAsBytes(bytes, flush: true);
+
+      // Fire event so station broadcasts UPDATE to connected clients
+      EventBus().fire(EventCreatedEvent(
+        eventId: eventId,
+        author: sanitizedCallsign,
+        title: eventId,
+      ));
 
       request.response.statusCode = 201;
       request.response.headers.contentType = ContentType.json;

@@ -30,6 +30,7 @@ import 'services/station_discovery_service.dart';
 import 'services/notification_service.dart';
 import 'services/i18n_service.dart';
 import 'services/chat_notification_service.dart';
+import 'services/station_content_notification_service.dart';
 import 'services/now_service.dart';
 import 'services/station_chat_queue_service.dart';
 import 'services/dm_notification_service.dart';
@@ -378,6 +379,10 @@ void main() async {
     // Initialize chat notification service (needed for unread counts)
     ChatNotificationService().initialize();
     LogService().log('ChatNotificationService initialized');
+
+    // Initialize station content notification service (blog/events/places in Now feed)
+    StationContentNotificationService().initialize();
+    LogService().log('StationContentNotificationService initialized');
 
     // Initialize station chat queue processing (keeps retrying queued sends)
     StationChatQueueService().initialize();
