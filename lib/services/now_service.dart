@@ -30,6 +30,17 @@ class NowService {
   final _itemsController = StreamController<List<NowItem>>.broadcast();
   final _unreadCountController = StreamController<int>.broadcast();
 
+  /// Whether the Now feed is currently visible to the user.
+  /// When true, new items are auto-marked as read and unreadCount reports 0.
+  bool _feedVisible = false;
+  bool get feedVisible => _feedVisible;
+  set feedVisible(bool value) {
+    if (_feedVisible == value) return;
+    _feedVisible = value;
+    if (value) markAllAsRead();
+    _broadcast();
+  }
+
   /// Stream of feed items (sorted by priority then timestamp)
   Stream<List<NowItem>> get itemsStream => _itemsController.stream;
 
@@ -47,8 +58,9 @@ class NowService {
     return sorted;
   }
 
-  /// Current unread count
-  int get unreadCount => _items.where((i) => !i.isRead).length;
+  /// Current unread count (0 when feed is visible)
+  int get unreadCount =>
+      _feedVisible ? 0 : _items.where((i) => !i.isRead).length;
 
   // ---- Group settings ----
 
@@ -211,10 +223,16 @@ class NowService {
 
     final item = NowItem.fromEvent(event);
 
-    // Check read state
-    final readIds = _getReadIds();
-    if (readIds.contains(item.id)) {
+    // Auto-read if feed is visible, otherwise check persisted read state
+    if (_feedVisible) {
       item.isRead = true;
+      final readIds = _getReadIds()..add(item.id);
+      _saveReadIds(readIds);
+    } else {
+      final readIds = _getReadIds();
+      if (readIds.contains(item.id)) {
+        item.isRead = true;
+      }
     }
 
     _items.insert(0, item);

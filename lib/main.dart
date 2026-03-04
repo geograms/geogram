@@ -1265,6 +1265,7 @@ class _HomePageState extends State<HomePage> {
     if (panelIndex != null && panelIndex >= 0 && panelIndex < _pages.length) {
       setState(() {
         _selectedIndex = panelIndex;
+        NowService().feedVisible = (panelIndex == 1);
       });
       // Reset the notifier to allow repeated navigations to same panel
       _debugController.panelNotifier.value = null;
@@ -1959,6 +1960,7 @@ class _HomePageState extends State<HomePage> {
           onDestinationSelected: (int index) {
             setState(() {
               _selectedIndex = index;
+              NowService().feedVisible = (index == 1);
             });
             Navigator.pop(context);
           },
@@ -2230,10 +2232,7 @@ class _HomePageState extends State<HomePage> {
           onDestinationSelected: (int index) {
             setState(() {
               _selectedIndex = index;
-              // Mark all Now items as read when switching to Now tab
-              if (index == 1) {
-                NowService().markAllAsRead();
-              }
+              NowService().feedVisible = (index == 1);
             });
           },
           destinations: [
