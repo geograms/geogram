@@ -264,6 +264,11 @@ class _MessageBubbleWidgetState extends State<MessageBubbleWidget> {
 
   @override
   Widget build(BuildContext context) {
+    // System messages (e.g. retention changes) render as centered grey text
+    if (widget.message.isSystemMessage) {
+      return _buildSystemMessage(context);
+    }
+
     final theme = Theme.of(context);
     final profileService = ProfileService();
     final currentProfile = profileService.getProfile();
@@ -1177,6 +1182,32 @@ class _MessageBubbleWidgetState extends State<MessageBubbleWidget> {
       return emoji;
     }
     return normalizedKey;
+  }
+
+  /// Render a system message as centered grey text (no bubble)
+  Widget _buildSystemMessage(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
+      child: Center(
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 12),
+          decoration: BoxDecoration(
+            color: Colors.grey.withValues(alpha: 0.15),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Text(
+            widget.message.content,
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              color: Colors.grey,
+              fontSize: 12,
+              fontStyle: FontStyle.italic,
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   /// Show message options (copy, etc.)

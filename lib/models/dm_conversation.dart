@@ -4,6 +4,7 @@
  */
 
 import 'chat_message.dart';
+import '../services/message_retention_service.dart';
 
 /// Represents a 1:1 direct message conversation between two callsigns
 class DMConversation {
@@ -40,6 +41,9 @@ class DMConversation {
   /// Most recent message author
   String? lastMessageAuthor;
 
+  /// Message retention period (null = forever / off)
+  RetentionPeriod? retentionPeriod;
+
   DMConversation({
     required this.otherCallsign,
     required this.myCallsign,
@@ -51,6 +55,7 @@ class DMConversation {
     this.isOnline = false,
     this.lastMessagePreview,
     this.lastMessageAuthor,
+    this.retentionPeriod,
   });
 
   /// Get the display name for this conversation
@@ -122,6 +127,9 @@ class DMConversation {
       isOnline: json['isOnline'] as bool? ?? false,
       lastMessagePreview: json['lastMessagePreview'] as String?,
       lastMessageAuthor: json['lastMessageAuthor'] as String?,
+      retentionPeriod: json['message_retention'] != null
+          ? keyToRetention(json['message_retention'] as String?)
+          : null,
     );
   }
 
@@ -139,6 +147,8 @@ class DMConversation {
       'isOnline': isOnline,
       if (lastMessagePreview != null) 'lastMessagePreview': lastMessagePreview,
       if (lastMessageAuthor != null) 'lastMessageAuthor': lastMessageAuthor,
+      if (retentionPeriod != null && retentionPeriod != RetentionPeriod.forever)
+        'message_retention': retentionToKey(retentionPeriod!),
     };
   }
 
@@ -154,6 +164,7 @@ class DMConversation {
     bool? isOnline,
     String? lastMessagePreview,
     String? lastMessageAuthor,
+    RetentionPeriod? retentionPeriod,
   }) {
     return DMConversation(
       otherCallsign: otherCallsign ?? this.otherCallsign,
@@ -166,6 +177,7 @@ class DMConversation {
       isOnline: isOnline ?? this.isOnline,
       lastMessagePreview: lastMessagePreview ?? this.lastMessagePreview,
       lastMessageAuthor: lastMessageAuthor ?? this.lastMessageAuthor,
+      retentionPeriod: retentionPeriod ?? this.retentionPeriod,
     );
   }
 

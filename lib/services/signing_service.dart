@@ -147,6 +147,7 @@ class SigningService {
     Map<String, String> metadata,
     Profile profile, {
     int? createdAt,
+    List<List<String>>? extraTags,
   }) async {
     try {
       if (!canSign(profile)) {
@@ -160,16 +161,19 @@ class SigningService {
       final roomId = metadata['room'] ?? metadata['channel'] ?? 'main';
       final callsign = metadata['callsign'] ?? profile.callsign;
 
+      final tags = <List<String>>[
+        ['t', 'chat'],
+        ['room', roomId],
+        ['callsign', callsign],
+        if (extraTags != null) ...extraTags,
+      ];
+
       // Create a NOSTR event for signing
       // Use provided createdAt to match message timestamp exactly
       final event = NostrEvent.textNote(
         pubkeyHex: pubkeyHex,
         content: content,
-        tags: [
-          ['t', 'chat'],
-          ['room', roomId],
-          ['callsign', callsign],
-        ],
+        tags: tags,
         createdAt: createdAt,
       );
 

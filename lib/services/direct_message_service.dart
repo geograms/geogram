@@ -17,6 +17,7 @@ import '../util/nostr_crypto.dart';
 import '../util/nostr_event.dart';
 import '../util/reaction_utils.dart';
 import 'log_service.dart';
+import 'message_retention_service.dart';
 import 'profile_service.dart';
 import 'signing_service.dart';
 import 'chat_service.dart';
@@ -93,10 +94,21 @@ class DirectMessageService {
   /// Whether using encrypted storage
   bool get useEncryptedStorage => _storage?.isEncrypted ?? false;
 
+  /// Expose storage for use by MessageRetentionService
+  ProfileStorage? get storage => _storage;
+
+  /// Expose chat base path for retention service
+  String? get chatBasePath => _chatBasePath;
+
   /// Set the profile storage for file operations
   /// NOTE: DMs currently use filesystem directly due to cross-profile nature.
   void setStorage(ProfileStorage storage) {
     _storage = storage;
+  }
+
+  /// Invalidate the message cache for a conversation (e.g. after retention purge)
+  void invalidateCache(String callsign) {
+    _messageCache.remove(callsign.toUpperCase());
   }
 
   /// Message cache: callsign -> cached messages
@@ -268,10 +280,24 @@ class DirectMessageService {
       await _createConfig(relativePath, normalizedCallsign);
     }
 
+    // Load retention period from config.json
+    RetentionPeriod? retentionPeriod;
+    try {
+      final configContent = await _storage!.readString('$relativePath/config.json');
+      if (configContent != null) {
+        final config = json.decode(configContent) as Map<String, dynamic>;
+        final retKey = config['message_retention'] as String?;
+        if (retKey != null) {
+          retentionPeriod = keyToRetention(retKey);
+        }
+      }
+    } catch (_) {}
+
     final conversation = DMConversation(
       otherCallsign: normalizedCallsign,
       myCallsign: _myCallsign,
       path: path,
+      retentionPeriod: retentionPeriod,
     );
 
     _conversations[normalizedCallsign] = conversation;
@@ -412,6 +438,10 @@ class DirectMessageService {
     // Load stored npub from config.json for identity binding
     final storedNpub = config?['otherNpub'] as String?;
 
+    // Load retention period from config.json
+    final retKey = config?['message_retention'] as String?;
+    final retentionPeriod = retKey != null ? keyToRetention(retKey) : null;
+
     // Build absolute path for DMConversation
     final absolutePath = getDMPath(otherCallsign);
 
@@ -420,6 +450,7 @@ class DirectMessageService {
       myCallsign: _myCallsign,
       path: absolutePath,
       otherNpub: storedNpub,
+      retentionPeriod: retentionPeriod,
     );
 
     // Try to get cached metadata from config.json first (fast path)
@@ -595,6 +626,168 @@ class DirectMessageService {
     _triggerBackgroundDelivery();
 
     LogService().log('DM: Message queued for $normalizedCallsign (optimistic UI)');
+  }
+
+  /// Set message retention period for a DM conversation.
+  /// Updates local config, sends a control event to the other device,
+  /// and immediately purges expired messages if applicable.
+  Future<void> setRetention(String otherCallsign, RetentionPeriod period) async {
+    await initialize();
+    final normalizedCallsign = otherCallsign.toUpperCase();
+    final relativePath = normalizedCallsign;
+
+    // 1. Update local config.json
+    final configPath = '$relativePath/config.json';
+    Map<String, dynamic> config;
+    try {
+      final content = await _storage!.readString(configPath);
+      config = content != null
+          ? json.decode(content) as Map<String, dynamic>
+          : <String, dynamic>{};
+    } catch (_) {
+      config = <String, dynamic>{};
+    }
+    MessageRetentionService().setRetentionInConfig(config, period);
+    await _storage!.writeString(
+        configPath, const JsonEncoder.withIndent('  ').convert(config));
+
+    // 2. Update in-memory conversation
+    final conversation = await getOrCreateConversation(normalizedCallsign);
+    conversation.retentionPeriod = period;
+
+    // 3. Send retention-change control event to the other device
+    final profile = _myProfile;
+    final periodKey = retentionToKey(period) ?? 'forever';
+    final humanLabel = retentionLabel(period);
+    final controlContent = period == RetentionPeriod.forever
+        ? 'Disappearing messages turned off'
+        : 'Messages set to delete after $humanLabel';
+
+    // Build a signed NOSTR event with retention tags
+    final signingService = SigningService();
+    await signingService.initialize();
+
+    if (signingService.canSign(profile)) {
+      final createdAt = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+      final signedEvent = await signingService.generateSignedEvent(
+        controlContent,
+        {
+          'room': normalizedCallsign,
+          'callsign': profile.callsign,
+        },
+        profile,
+        createdAt: createdAt,
+        extraTags: [
+          ['t', 'dm_retention'],
+          ['retention', periodKey],
+        ],
+      );
+
+      if (signedEvent != null && signedEvent.sig != null) {
+        // Create a system message locally
+        final systemMsg = ChatMessage.now(
+          author: profile.callsign,
+          content: controlContent,
+          metadata: {
+            'system': 'true',
+            'created_at': signedEvent.createdAt.toString(),
+            'npub': profile.npub,
+            'eventId': signedEvent.id!,
+            'signature': signedEvent.sig!,
+            'verified': 'true',
+            'status': 'pending',
+          },
+        );
+
+        // Save locally and queue for delivery
+        await _saveToQueue(normalizedCallsign, systemMsg);
+        _addMessageToCache(normalizedCallsign, systemMsg);
+        _fireMessageEvent(systemMsg, normalizedCallsign, fromSync: false);
+        _triggerBackgroundDelivery();
+      }
+    }
+
+    // 4. Fire retention changed event
+    EventBus().fire(DMRetentionChangedEvent(
+      callsign: normalizedCallsign,
+      periodKey: periodKey,
+    ));
+
+    // 5. Immediately purge expired messages
+    if (period != RetentionPeriod.forever) {
+      final purged = await MessageRetentionService()
+          .purgeConversation(_storage!, relativePath, period);
+      if (purged) {
+        invalidateCache(normalizedCallsign);
+      }
+    }
+
+    _notifyListeners();
+    LogService().log('DM: Retention set to $periodKey for $normalizedCallsign');
+  }
+
+  /// Handle an incoming retention-change control event.
+  /// Called from station server when a dm_retention tagged event arrives.
+  Future<void> handleIncomingRetentionChange(
+      String otherCallsign, String periodKey, ChatMessage systemMessage) async {
+    await initialize();
+    final normalizedCallsign = otherCallsign.toUpperCase();
+    final relativePath = normalizedCallsign;
+    final period = keyToRetention(periodKey);
+
+    // Update local config.json
+    final configPath = '$relativePath/config.json';
+    Map<String, dynamic> config;
+    try {
+      final content = await _storage!.readString(configPath);
+      config = content != null
+          ? json.decode(content) as Map<String, dynamic>
+          : <String, dynamic>{};
+    } catch (_) {
+      config = <String, dynamic>{};
+    }
+    MessageRetentionService().setRetentionInConfig(config, period);
+    await _storage!.writeString(
+        configPath, const JsonEncoder.withIndent('  ').convert(config));
+
+    // Update in-memory conversation
+    final conversation = await getOrCreateConversation(normalizedCallsign);
+    conversation.retentionPeriod = period;
+
+    // Save system message
+    await saveIncomingMessage(normalizedCallsign, systemMessage);
+
+    // Fire retention changed event
+    EventBus().fire(DMRetentionChangedEvent(
+      callsign: normalizedCallsign,
+      periodKey: periodKey,
+    ));
+
+    // Purge expired messages if applicable
+    if (period != RetentionPeriod.forever) {
+      final purged = await MessageRetentionService()
+          .purgeConversation(_storage!, relativePath, period);
+      if (purged) {
+        invalidateCache(normalizedCallsign);
+      }
+    }
+
+    LogService().log('DM: Remote retention change to $periodKey for $normalizedCallsign');
+  }
+
+  /// Get retention period for a conversation
+  Future<RetentionPeriod> getRetention(String otherCallsign) async {
+    await initialize();
+    final relativePath = otherCallsign.toUpperCase();
+    final configPath = '$relativePath/config.json';
+    try {
+      final content = await _storage!.readString(configPath);
+      if (content != null) {
+        final config = json.decode(content) as Map<String, dynamic>;
+        return MessageRetentionService().getRetentionForConfig(config);
+      }
+    } catch (_) {}
+    return RetentionPeriod.forever;
   }
 
   /// Trigger background delivery via DMQueueService

@@ -240,6 +240,9 @@ class ChatMessage implements Comparable<ChatMessage> {
   /// Get quoted message excerpt (optional)
   String? get quotedExcerpt => getMeta('quote_excerpt');
 
+  /// Check if message is a system message (e.g. retention change notice)
+  bool get isSystemMessage => getMeta('system') == 'true';
+
   /// Check if message is a poll
   bool get isPoll => hasMeta('Poll');
 

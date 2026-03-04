@@ -1767,6 +1767,47 @@ Sends a direct message to a device. Messages are signed with the sender's NOSTR 
 }
 ```
 
+#### GET /api/dm/{callsign}/retention
+
+Gets the current message retention (disappearing messages) setting for a DM conversation.
+
+**Parameters:**
+| Parameter | Description |
+|-----------|-------------|
+| `callsign` | Target device's callsign |
+
+**Response (200 OK):**
+```json
+{
+  "callsign": "CR7BBQ",
+  "retention": "1w",
+  "label": "1 week"
+}
+```
+
+Valid retention values: `1d` (1 day), `1w` (1 week), `1m` (1 month), `1y` (1 year), `forever` (keep all).
+
+#### POST /api/dm/{callsign}/retention
+
+Sets the message retention period for a DM conversation. Updates local config, sends a signed control event to the other device, and immediately purges expired messages.
+
+**Request Body:**
+```json
+{
+  "retention": "1w"
+}
+```
+
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "callsign": "CR7BBQ",
+  "retention": "1w",
+  "label": "1 week"
+}
+```
+
 #### GET /api/dm/sync/{callsign}
 
 Gets messages for synchronization with a remote device.

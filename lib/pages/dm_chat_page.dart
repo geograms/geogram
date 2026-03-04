@@ -16,8 +16,10 @@ import '../services/profile_service.dart';
 import '../services/chat_file_download_manager.dart';
 import '../services/chat_file_upload_manager.dart';
 import '../util/event_bus.dart';
+import '../services/message_retention_service.dart';
 import '../widgets/message_list_widget.dart';
 import '../widgets/message_input_widget.dart';
+import '../widgets/retention_picker_widget.dart';
 import '../widgets/voice_recorder_widget.dart';
 import '../services/audio_service.dart';
 import '../services/audio_platform_stub.dart'
@@ -60,6 +62,7 @@ class _DMChatPageState extends State<DMChatPage> {
   EventSubscription<DMMessageStatusChangedEvent>? _statusSubscription;
   EventSubscription<ChatDownloadProgressEvent>? _downloadSubscription;
   EventSubscription<ChatUploadProgressEvent>? _uploadSubscription;
+  EventSubscription<DMRetentionChangedEvent>? _retentionSubscription;
 
   @override
   void initState() {
@@ -78,6 +81,7 @@ class _DMChatPageState extends State<DMChatPage> {
     _statusSubscription?.cancel();
     _downloadSubscription?.cancel();
     _uploadSubscription?.cancel();
+    _retentionSubscription?.cancel();
     super.dispose();
   }
 
@@ -139,6 +143,14 @@ class _DMChatPageState extends State<DMChatPage> {
       if (event.receiverCallsign == otherUpper) {
         // Refresh UI to show upload progress
         if (mounted) setState(() {});
+      }
+    });
+
+    // Listen for retention period changes
+    _retentionSubscription = EventBus().on<DMRetentionChangedEvent>((event) {
+      if (event.callsign == otherUpper) {
+        // Reload conversation to get updated retention + reload messages (may have been purged)
+        _initializeChat();
       }
     });
   }
@@ -692,6 +704,21 @@ class _DMChatPageState extends State<DMChatPage> {
               tooltip: _i18n.t('sync'),
               onPressed: _syncMessages,
             ),
+          // Disappearing messages timer icon
+          IconButton(
+            icon: Icon(
+              _conversation?.retentionPeriod != null &&
+                      _conversation!.retentionPeriod != RetentionPeriod.forever
+                  ? Icons.timer
+                  : Icons.timer_outlined,
+              color: _conversation?.retentionPeriod != null &&
+                      _conversation!.retentionPeriod != RetentionPeriod.forever
+                  ? Colors.amber
+                  : null,
+            ),
+            tooltip: 'Disappearing messages',
+            onPressed: _showRetentionPicker,
+          ),
           // Info button
           IconButton(
             icon: const Icon(Icons.info_outline),
@@ -835,6 +862,15 @@ class _DMChatPageState extends State<DMChatPage> {
     );
   }
 
+  Future<void> _showRetentionPicker() async {
+    final current = _conversation?.retentionPeriod ?? RetentionPeriod.forever;
+    final picked = await showRetentionPicker(context, current);
+    if (picked == null || picked == current) return;
+
+    await _dmService.setRetention(widget.otherCallsign, picked);
+    // UI updates via DMRetentionChangedEvent subscription
+  }
+
   void _showConversationInfo() {
     final device = _devicesService.getDevice(widget.otherCallsign);
     final nickname = device?.displayName;
@@ -859,6 +895,11 @@ class _DMChatPageState extends State<DMChatPage> {
               _infoRow('Messages', '${_messages.length}'),
               _infoRow('Last activity', _conversation!.lastActivityText),
               _infoRow('Sync status', _conversation!.syncStatusText),
+              _infoRow(
+                'Auto-delete',
+                retentionLabel(
+                    _conversation!.retentionPeriod ?? RetentionPeriod.forever),
+              ),
             ],
             if (device?.url != null) ...[
               const SizedBox(height: 8),

@@ -2974,6 +2974,56 @@ h2 { font-size: 1.2rem; margin: 0 0 20px 0; }
         if (voiceFile != null) {
           content = ''; // Voice messages have empty display content
         }
+
+        // Check for retention-change control message (identified by 'retention' tag)
+        final retentionKey = event.getTagValue('retention');
+        if (retentionKey != null) {
+
+          // Build system message metadata
+          final retMetadata = <String, String>{
+            'system': 'true',
+            if (createdAt != null) 'created_at': createdAt.toString(),
+            if (npub != null) 'npub': npub,
+            if (eventId != null) 'eventId': eventId,
+            if (signature != null) 'signature': signature,
+            'verified': 'true',
+          };
+
+          ChatMessage systemMsg;
+          if (createdAt != null) {
+            systemMsg = ChatMessage(
+              author: author,
+              timestamp: ChatFormat.epochToTimestamp(createdAt),
+              content: content,
+              metadata: retMetadata,
+            );
+          } else {
+            systemMsg = ChatMessage.now(
+              author: author,
+              content: content,
+              metadata: retMetadata,
+            );
+          }
+
+          // Delegate to DirectMessageService for config update + event firing
+          final dmService = DirectMessageService();
+          await dmService.initialize();
+          await dmService.handleIncomingRetentionChange(
+              senderCallsign, retentionKey, systemMsg);
+
+          LogService().log('StationServerService: Received retention change to $retentionKey from $author');
+
+          request.response.statusCode = 201;
+          request.response.headers.contentType = ContentType.json;
+          request.response.write(jsonEncode({
+            'success': true,
+            'timestamp': systemMsg.timestamp,
+            'author': author,
+            'eventId': eventId,
+            'type': 'retention_change',
+          }));
+          return;
+        }
       } else {
         request.response.statusCode = 403;
         request.response.headers.contentType = ContentType.json;
