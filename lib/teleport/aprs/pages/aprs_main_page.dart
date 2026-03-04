@@ -148,9 +148,9 @@ class _AprsMainPageState extends State<AprsMainPage> {
           ],
           bottom: TabBar(
             tabs: [
+              Tab(text: I18nService().t('aprs_tab_map')),
               Tab(text: I18nService().t('aprs_tab_stream')),
               Tab(text: I18nService().t('aprs_tab_messages')),
-              Tab(text: I18nService().t('aprs_tab_map')),
             ],
           ),
         ),
@@ -160,12 +160,6 @@ class _AprsMainPageState extends State<AprsMainPage> {
             Expanded(
               child: TabBarView(
                 children: [
-                  _StreamTab(
-                    packets: aprs.streamPackets,
-                    myLocation: myLoc,
-                    radiusKm: effectiveRadius,
-                  ),
-                  AprsConversationList(myLocation: myLoc),
                   _MapTab(
                     myLocation: myLoc,
                     lastKnownPositions: aprs.lastKnownPositions,
@@ -173,6 +167,12 @@ class _AprsMainPageState extends State<AprsMainPage> {
                     geoChatMessages: aprs.geoChatMessages,
                     radiusKm: effectiveRadius,
                   ),
+                  _StreamTab(
+                    packets: aprs.streamPackets,
+                    myLocation: myLoc,
+                    radiusKm: effectiveRadius,
+                  ),
+                  AprsConversationList(myLocation: myLoc),
                 ],
               ),
             ),

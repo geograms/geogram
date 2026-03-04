@@ -93,6 +93,12 @@ class AprsService {
   final Set<String> _recentPacketHashes = {};
   static const int _maxRecentHashes = 5000;
 
+  // Geochat comment dedup — suppresses repeated identical comments from same
+  // callsign within a 1-hour window (GPS drift causes slightly different coords
+  // but the same comment text).
+  final Map<String, DateTime> _geoChatDedup = {};
+  static const Duration _geoChatDedupWindow = Duration(hours: 1);
+
   /// Last known position per callsign — updated from position packets.
   /// Used to show distance for message packets (which don't carry coordinates).
   final Map<String, (double, double)> lastKnownPositions = {};
@@ -459,6 +465,7 @@ class AprsService {
     geoChatMessages.clear();
     lastKnownPositions.clear();
     _recentPacketHashes.clear();
+    _geoChatDedup.clear();
     _uiDirtyStream = true;
     _uiDirtyMessages = true;
   }
@@ -470,6 +477,7 @@ class AprsService {
     messages.clear();
     geoChatMessages.clear();
     lastKnownPositions.clear();
+    _geoChatDedup.clear();
     _eventController.add(const AprsEvent(AprsEventType.packetReceived));
     _eventController.add(const AprsEvent(AprsEventType.messageReceived));
   }
@@ -477,6 +485,7 @@ class AprsService {
   /// Clear geo-chat messages from the display list.
   void clearGeoChat() {
     geoChatMessages.clear();
+    _geoChatDedup.clear();
     _eventController.add(const AprsEvent(AprsEventType.packetReceived));
   }
 
@@ -862,23 +871,40 @@ class AprsService {
 
     // Collect human-authored position comments for geo-chat (skip beacons)
     if (packet.isHumanGeoChat) {
-      geoChatMessages.add(packet);
-      if (geoChatMessages.length > _maxMessages) {
-        geoChatMessages.removeRange(0, geoChatMessages.length - _maxMessages);
-      }
-      _uiDirtyMessages = true;
+      // Comment-based dedup: suppress identical comments from the same callsign
+      // within a 1-hour window (GPS drift causes different coords but same text).
+      final dedupKey = '${packet.fromCallsign}\x00${packet.comment ?? ''}';
+      final now = DateTime.now();
+      final prev = _geoChatDedup[dedupKey];
+      if (prev != null && now.difference(prev) < _geoChatDedupWindow) {
+        // Duplicate within window — skip
+      } else {
+        _geoChatDedup[dedupKey] = now;
+        // Prune stale entries when map gets large
+        if (_geoChatDedup.length > 500) {
+          _geoChatDedup.removeWhere(
+            (_, ts) => now.difference(ts) >= _geoChatDedupWindow,
+          );
+        }
 
-      // Fire NowItemEvent for incoming geo-chat
-      if (!packet.isOutgoing) {
-        EventBus().fire(NowItemEvent(
-          id: 'aprs:geo:${packet.fromCallsign}:${packet.timestamp.millisecondsSinceEpoch}',
-          appType: 'aprs',
-          sourceId: 'geochat',
-          sourceName: 'APRS Geo Chat',
-          callsign: packet.fromCallsign,
-          summary: packet.comment ?? '',
-          priority: NowPriority.chat,
-        ));
+        geoChatMessages.add(packet);
+        if (geoChatMessages.length > _maxMessages) {
+          geoChatMessages.removeRange(0, geoChatMessages.length - _maxMessages);
+        }
+        _uiDirtyMessages = true;
+
+        // Fire NowItemEvent for incoming geo-chat
+        if (!packet.isOutgoing) {
+          EventBus().fire(NowItemEvent(
+            id: 'aprs:geo:${packet.fromCallsign}:${packet.timestamp.millisecondsSinceEpoch}',
+            appType: 'aprs',
+            sourceId: 'geochat',
+            sourceName: 'APRS Geo Chat',
+            callsign: packet.fromCallsign,
+            summary: packet.comment ?? '',
+            priority: NowPriority.chat,
+          ));
+        }
       }
     }
   }
