@@ -15,6 +15,8 @@ import 'profile_service.dart';
 import 'signing_service.dart';
 import 'app_service.dart';
 import 'debug_controller.dart';
+import 'now_service.dart';
+import '../models/now_item.dart';
 import 'task_monitor_service.dart';
 import 'security_service.dart';
 import 'storage_config.dart';
@@ -22,6 +24,7 @@ import 'user_location_service.dart';
 import 'chat_service.dart';
 import 'profile_storage.dart';
 import 'direct_message_service.dart';
+import 'message_retention_service.dart';
 import 'devices_service.dart';
 import 'conference_service.dart';
 import 'device_apps_service.dart';
@@ -375,6 +378,11 @@ class LogApiService with ChatModificationMixin {
       return _handleFileContentRequest(request, headers);
     }
 
+    // Now (activity feed) debug endpoints
+    if (urlPath.startsWith('api/debug/now') && SecurityService().debugApiEnabled) {
+      return await _handleNowDebugRequest(request, urlPath, headers);
+    }
+
     // Debug API endpoint (only if enabled in security settings)
     if (urlPath == 'api/debug') {
       if (!SecurityService().debugApiEnabled) {
@@ -489,6 +497,17 @@ class LogApiService with ChatModificationMixin {
         } else if (request.method == 'POST') {
           return await _handleDMPostMessageRequest(request, targetCallsign, headers);
         }
+      }
+    }
+
+    // GET/POST /api/dm/{callsign}/retention - get or set message retention
+    final dmRetentionMatch = RegExp(r'^api/dm/([^/]+)/retention$').firstMatch(urlPath);
+    if (dmRetentionMatch != null) {
+      final targetCallsign = Uri.decodeComponent(dmRetentionMatch.group(1)!).toUpperCase();
+      if (request.method == 'GET') {
+        return await _handleDMGetRetention(request, targetCallsign, headers);
+      } else if (request.method == 'POST') {
+        return await _handleDMSetRetention(request, targetCallsign, headers);
       }
     }
 
@@ -690,6 +709,7 @@ class LogApiService with ChatModificationMixin {
           '/api/chat/{roomId}/files': 'List files in a chat room',
           '/api/dm/conversations': 'List direct message conversations',
           '/api/dm/{callsign}/messages': 'GET/POST direct messages with a device',
+          '/api/dm/{callsign}/retention': 'GET/POST message retention (disappearing messages) for a DM conversation',
           '/api/dm/sync/{callsign}': 'Sync DM messages with remote device',
           '/api/backup/settings': 'GET/PUT backup provider settings',
           '/api/backup/availability': 'GET provider availability (requires NOSTR auth)',
@@ -5509,6 +5529,69 @@ function cleanup() {
       );
     } catch (e) {
       LogService().log('LogApiService: Error listing DM conversations: $e');
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'error': e.toString()}),
+        headers: headers,
+      );
+    }
+  }
+
+  /// Handle GET /api/dm/{callsign}/retention - get retention period
+  Future<shelf.Response> _handleDMGetRetention(
+    shelf.Request request,
+    String targetCallsign,
+    Map<String, String> headers,
+  ) async {
+    try {
+      final dmService = DirectMessageService();
+      await dmService.initialize();
+
+      final period = await dmService.getRetention(targetCallsign);
+      final key = retentionToKey(period) ?? 'forever';
+
+      return shelf.Response.ok(
+        jsonEncode({
+          'callsign': targetCallsign,
+          'retention': key,
+          'label': retentionLabel(period),
+        }),
+        headers: headers,
+      );
+    } catch (e) {
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'error': e.toString()}),
+        headers: headers,
+      );
+    }
+  }
+
+  /// Handle POST /api/dm/{callsign}/retention - set retention period
+  /// Body: {"retention": "1d"} — valid values: 1d, 1w, 1m, 1y, forever (or null)
+  Future<shelf.Response> _handleDMSetRetention(
+    shelf.Request request,
+    String targetCallsign,
+    Map<String, String> headers,
+  ) async {
+    try {
+      final bodyStr = await request.readAsString();
+      final body = jsonDecode(bodyStr) as Map<String, dynamic>;
+      final retKey = body['retention'] as String?;
+      final period = keyToRetention(retKey);
+
+      final dmService = DirectMessageService();
+      await dmService.initialize();
+      await dmService.setRetention(targetCallsign, period);
+
+      return shelf.Response.ok(
+        jsonEncode({
+          'success': true,
+          'callsign': targetCallsign,
+          'retention': retentionToKey(period) ?? 'forever',
+          'label': retentionLabel(period),
+        }),
+        headers: headers,
+      );
+    } catch (e) {
       return shelf.Response.internalServerError(
         body: jsonEncode({'error': e.toString()}),
         headers: headers,
@@ -19141,5 +19224,85 @@ function cleanup() {
         headers: headers,
       );
     }
+  }
+
+  /// Handle /api/debug/now/* endpoints
+  Future<shelf.Response> _handleNowDebugRequest(
+    shelf.Request request,
+    String urlPath,
+    Map<String, String> headers,
+  ) async {
+    final nowService = NowService();
+
+    // GET /api/debug/now — list current feed items
+    if (urlPath == 'api/debug/now' && request.method == 'GET') {
+      final items = nowService.items.map((i) => i.toJson()).toList();
+      return shelf.Response.ok(
+        jsonEncode({
+          'items': items,
+          'total': items.length,
+          'unread': nowService.unreadCount,
+        }),
+        headers: headers,
+      );
+    }
+
+    // POST /api/debug/now/inject — inject a test NowItemEvent
+    if (urlPath == 'api/debug/now/inject' && request.method == 'POST') {
+      try {
+        final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+        final appType = body['appType'] as String? ?? 'chat';
+        final sourceId = body['sourceId'] as String? ?? 'test-room';
+        final sourceName = body['sourceName'] as String? ?? 'Test Room';
+        final callsign = body['callsign'] as String? ?? 'TEST';
+        final summary = body['summary'] as String? ?? 'Test message';
+        final priority = body['priority'] as int? ?? NowPriority.chat;
+        final id = body['id'] as String? ??
+            '$appType:$sourceId:${DateTime.now().toIso8601String()}';
+
+        EventBus().fire(NowItemEvent(
+          id: id,
+          appType: appType,
+          sourceId: sourceId,
+          sourceName: sourceName,
+          callsign: callsign,
+          summary: summary,
+          priority: priority,
+        ));
+
+        return shelf.Response.ok(
+          jsonEncode({'success': true, 'id': id}),
+          headers: headers,
+        );
+      } catch (e) {
+        return shelf.Response.badRequest(
+          body: jsonEncode({'error': e.toString()}),
+          headers: headers,
+        );
+      }
+    }
+
+    // POST /api/debug/now/clear — clear all items
+    if (urlPath == 'api/debug/now/clear' && request.method == 'POST') {
+      nowService.clearAll();
+      return shelf.Response.ok(
+        jsonEncode({'success': true}),
+        headers: headers,
+      );
+    }
+
+    // POST /api/debug/now/mark-read — mark all as read
+    if (urlPath == 'api/debug/now/mark-read' && request.method == 'POST') {
+      nowService.markAllAsRead();
+      return shelf.Response.ok(
+        jsonEncode({'success': true}),
+        headers: headers,
+      );
+    }
+
+    return shelf.Response.notFound(
+      jsonEncode({'error': 'Unknown now endpoint: $urlPath'}),
+      headers: headers,
+    );
   }
 }

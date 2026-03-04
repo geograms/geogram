@@ -7,6 +7,7 @@ import 'dart:async';
 import '../models/station_chat_room.dart';
 import '../models/update_notification.dart';
 import '../services/dm_notification_service.dart';
+import '../util/event_bus.dart';
 import 'config_service.dart';
 import 'station_cache_service.dart';
 import 'station_service.dart';
@@ -117,6 +118,17 @@ class ChatNotificationService {
     // Increment unread count for this room
     _unreadCounts[roomId] = (_unreadCounts[roomId] ?? 0) + 1;
     LogService().log('ChatNotificationService: New message in $roomId (unread: ${_unreadCounts[roomId]})');
+
+    // Fire NowItemEvent for the activity feed
+    EventBus().fire(NowItemEvent(
+      id: 'chat:$roomId:${DateTime.now().toIso8601String()}',
+      appType: 'chat',
+      sourceId: roomId,
+      sourceName: roomId,
+      callsign: update.callsign,
+      summary: 'New message in $roomId',
+      priority: NowPriority.chat,
+    ));
 
     unawaited(_notifyChatUpdate(update));
 

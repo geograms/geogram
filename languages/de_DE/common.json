@@ -1415,5 +1415,10 @@
   "ssid_12": "Station (CLI)",
   "ssid_13": "Wetterstation",
   "ssid_14": "Eingebettet / IoT",
-  "ssid_15": "Experimentell"
+  "ssid_15": "Experimentell",
+  "now": "Jetzt",
+  "now_empty": "Keine aktuelle Aktivität",
+  "now_mute_source": "Quelle stummschalten",
+  "now_unmute_source": "Stummschaltung aufheben",
+  "now_mark_all_read": "Alle als gelesen markieren"
 }

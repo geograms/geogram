@@ -30,6 +30,7 @@ import 'services/station_discovery_service.dart';
 import 'services/notification_service.dart';
 import 'services/i18n_service.dart';
 import 'services/chat_notification_service.dart';
+import 'services/now_service.dart';
 import 'services/station_chat_queue_service.dart';
 import 'services/dm_notification_service.dart';
 import 'services/backup_notification_service.dart';
@@ -47,6 +48,7 @@ import 'services/network_monitor_service.dart';
 import 'services/user_location_service.dart';
 import 'services/direct_message_service.dart';
 import 'services/dm_queue_service.dart';
+import 'services/message_retention_service.dart';
 import 'services/websocket_service.dart';
 import 'services/backup_service.dart';
 import 'teleport/aprs/aprs_service.dart';
@@ -82,6 +84,7 @@ import 'pages/chat_browser_page.dart';
 import 'pages/email_browser_page.dart';
 import 'pages/forum_browser_page.dart';
 import 'pages/blog_browser_page.dart';
+import 'pages/now_page.dart';
 import 'pages/log_browser_page.dart';
 import 'pages/events_browser_page.dart';
 import 'pages/news_browser_page.dart';
@@ -664,6 +667,10 @@ void main() async {
       await DMQueueService().initialize();
       LogService().log('DMQueueService initialized');
 
+      // Start message retention cleanup timer (purges expired DM messages every 30 min)
+      MessageRetentionService().startCleanupTimer();
+      LogService().log('MessageRetentionService cleanup timer started');
+
       // Auto-start APRS-IS background service
       if (firstLaunchComplete) {
         final aprsStorage = AppService().profileStorage;
@@ -822,7 +829,7 @@ class _GeogramAppState extends State<GeogramApp> with WidgetsBindingObserver {
 
     // Subscribe to navigate-to-devices events (e.g., summary notification tap)
     _navigateToDevicesSubscription = EventBus().on<NavigateToDevicesEvent>((_) {
-      DebugController().navigateToPanel(2);
+      DebugController().navigateToPanel(PanelIndex.devices);
     });
 
     // Subscribe to incoming P2P transfer offers
@@ -1127,7 +1134,9 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage> {
   int _selectedIndex = 0;
   int _unreadDmCount = 0;
+  int _unreadNowCount = 0;
   StreamSubscription<Map<String, int>>? _unreadSubscription;
+  StreamSubscription<int>? _unreadNowSubscription;
   StreamSubscription<DebugActionEvent>? _debugActionSubscription;
   StreamSubscription? _stationStateSubscription;
   EventSubscription<NavigateToHomeEvent>? _navigateHomeSubscription;
@@ -1140,9 +1149,10 @@ class _HomePageState extends State<HomePage> {
   bool _isSearchFocused = false;
 
   // Hidden pages (not ready): BotPage
-  // Indices: 0=Apps, 1=Maps, 2=Devices, 3=Log
+  // Indices: 0=Apps, 1=Now, 2=Maps, 3=Devices, 4=Log
   List<Widget> get _pages => [
     AppsPage(searchQuery: _searchQuery, onAppSelected: _clearSearchAndUnfocus),
+    const NowPage(),
     const MapsBrowserPage(),
     const DevicesBrowserPage(),
     // BotPage(),  // Hidden: not ready
@@ -1182,6 +1192,17 @@ class _HomePageState extends State<HomePage> {
       if (total != _unreadDmCount && mounted) {
         setState(() {
           _unreadDmCount = total;
+        });
+      }
+    });
+
+    // Initialize NowService and subscribe to unread count
+    NowService().initialize();
+    _unreadNowCount = NowService().unreadCount;
+    _unreadNowSubscription = NowService().unreadCountStream.listen((count) {
+      if (count != _unreadNowCount && mounted) {
+        setState(() {
+          _unreadNowCount = count;
         });
       }
     });
@@ -1232,6 +1253,7 @@ class _HomePageState extends State<HomePage> {
     _debugActionSubscription?.cancel();
     _navigateHomeSubscription?.cancel();
     _unreadSubscription?.cancel();
+    _unreadNowSubscription?.cancel();
     _stationStateSubscription?.cancel();
     super.dispose();
   }
@@ -1807,7 +1829,7 @@ class _HomePageState extends State<HomePage> {
           return;
         }
         // Check if DevicesBrowserPage needs to handle back (viewing device details)
-        if (_selectedIndex == 2 && DevicesBrowserPage.onBackPressed != null) {
+        if (_selectedIndex == 3 && DevicesBrowserPage.onBackPressed != null) {
           // Let DevicesBrowserPage handle it - it will clear the selected device
           final handled = DevicesBrowserPage.onBackPressed!();
           if (handled) {
@@ -1826,8 +1848,8 @@ class _HomePageState extends State<HomePage> {
       child: Scaffold(
         // Disable swipe gesture to open settings drawer - only open via menu icon
         endDrawerEnableOpenDragGesture: false,
-        // Show AppBar only on Apps panel (index 0) for full-screen Map/Devices
-        appBar: _selectedIndex == 0
+        // Show AppBar only on Apps panel (index 0) and Now panel (index 1) for full-screen Map/Devices
+        appBar: _selectedIndex == 0 || _selectedIndex == 1
             ? AppBar(
                 automaticallyImplyLeading: false,
                 leading: _isSearchFocused
@@ -1891,6 +1913,15 @@ class _HomePageState extends State<HomePage> {
                   ],
                 ),
                 actions: [
+                  // Mark all as read button on Now panel
+                  if (_selectedIndex == 1 && _unreadNowCount > 0)
+                    IconButton(
+                      icon: const Icon(Icons.done_all),
+                      tooltip: _i18n.t('now_mark_all_read'),
+                      onPressed: () {
+                        NowService().markAllAsRead();
+                      },
+                    ),
                   // Show station indicator if current profile is a station
                   if (_profileService.getProfile().isRelay)
                     IconButton(
@@ -1946,6 +1977,23 @@ class _HomePageState extends State<HomePage> {
               icon: const Icon(Icons.apps_outlined),
               selectedIcon: const Icon(Icons.apps),
               label: Text(_i18n.t('apps')),
+            ),
+            NavigationDrawerDestination(
+              icon: Badge(
+                isLabelVisible: _unreadNowCount > 0,
+                label: Text(
+                  _unreadNowCount > 99 ? '99+' : _unreadNowCount.toString(),
+                ),
+                child: const Icon(Icons.dynamic_feed_outlined),
+              ),
+              selectedIcon: Badge(
+                isLabelVisible: _unreadNowCount > 0,
+                label: Text(
+                  _unreadNowCount > 99 ? '99+' : _unreadNowCount.toString(),
+                ),
+                child: const Icon(Icons.dynamic_feed),
+              ),
+              label: Text(_i18n.t('now')),
             ),
             NavigationDrawerDestination(
               icon: const Icon(Icons.map_outlined),
@@ -2178,10 +2226,14 @@ class _HomePageState extends State<HomePage> {
         ),
         body: _pages[_selectedIndex],
         bottomNavigationBar: NavigationBar(
-          selectedIndex: _selectedIndex < 3 ? _selectedIndex : 0,
+          selectedIndex: _selectedIndex < 4 ? _selectedIndex : 0,
           onDestinationSelected: (int index) {
             setState(() {
               _selectedIndex = index;
+              // Mark all Now items as read when switching to Now tab
+              if (index == 1) {
+                NowService().markAllAsRead();
+              }
             });
           },
           destinations: [
@@ -2189,6 +2241,23 @@ class _HomePageState extends State<HomePage> {
               icon: const Icon(Icons.apps_outlined),
               selectedIcon: const Icon(Icons.apps),
               label: _i18n.t('apps'),
+            ),
+            NavigationDestination(
+              icon: Badge(
+                isLabelVisible: _unreadNowCount > 0,
+                label: Text(
+                  _unreadNowCount > 99 ? '99+' : _unreadNowCount.toString(),
+                ),
+                child: const Icon(Icons.dynamic_feed_outlined),
+              ),
+              selectedIcon: Badge(
+                isLabelVisible: _unreadNowCount > 0,
+                label: Text(
+                  _unreadNowCount > 99 ? '99+' : _unreadNowCount.toString(),
+                ),
+                child: const Icon(Icons.dynamic_feed),
+              ),
+              label: _i18n.t('now'),
             ),
             NavigationDestination(
               icon: const Icon(Icons.map_outlined),

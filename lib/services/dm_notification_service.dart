@@ -313,6 +313,20 @@ class DMNotificationService {
       verified: event.verified,
     );
 
+    // Fire NowItemEvent for the activity feed
+    final summary = event.content.length > 100
+        ? '${event.content.substring(0, 100)}...'
+        : event.content;
+    EventBus().fire(NowItemEvent(
+      id: 'dm:${event.fromCallsign}:${DateTime.now().toIso8601String()}',
+      appType: 'dm',
+      sourceId: event.fromCallsign,
+      sourceName: event.fromCallsign,
+      callsign: event.fromCallsign,
+      summary: summary,
+      priority: NowPriority.directMessage,
+    ));
+
     LogService().log(
       'DMNotificationService: Showed notification for message from ${event.fromCallsign}',
     );

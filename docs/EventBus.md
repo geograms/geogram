@@ -491,6 +491,48 @@ EventBus().on<PositionUpdatedEvent>((event) {
 
 ---
 
+## NowItemEvent
+
+Activity feed event. Any service can fire this to appear in the "Now" panel.
+
+**Fields:**
+- `id` (String) — Unique identifier (e.g., `chat:main:2026-03-04T10:30:00`)
+- `appType` (String) — Source type: `chat`, `dm`, `alert`, `email`, `forum`, `blog`, `event`, `irc`, etc.
+- `sourceId` (String) — Room ID, thread ID, alert ID, etc.
+- `sourceName` (String) — Human-readable name
+- `callsign` (String) — Who caused the activity
+- `summary` (String) — Short preview text
+- `priority` (int) — 1 (highest) to 10 (lowest), use `NowPriority` constants
+
+**Priority constants** (`NowPriority`):
+| Value | Constant | Source |
+|-------|----------|--------|
+| 1 | `alertUrgent` | Emergency/urgent alerts |
+| 2 | `alertAttention` | Attention alerts |
+| 3 | `directMessage` | Direct messages |
+| 4 | `email` | Email |
+| 5 | `chat` | Chat, IRC, Telegram, XMPP |
+| 6 | `forum` | Forum posts |
+| 7 | `blog` | Blog posts |
+| 8 | `event` | Events |
+| 9 | `sharedFile` | Shared files |
+| 10 | `routine` | Info alerts, NNTP |
+
+**Usage:**
+```dart
+EventBus().fire(NowItemEvent(
+  id: 'chat:general:${DateTime.now().toIso8601String()}',
+  appType: 'chat',
+  sourceId: 'general',
+  sourceName: 'General Chat',
+  callsign: 'CR7BBQ',
+  summary: 'Hello everyone!',
+  priority: NowPriority.chat,
+));
+```
+
+---
+
 ## Future Extensions
 
 Events defined but not yet integrated:

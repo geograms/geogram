@@ -1409,5 +1409,10 @@
   "ssid_12": "Estação (CLI)",
   "ssid_13": "Estação meteorológica",
   "ssid_14": "Embarcado / IoT",
-  "ssid_15": "Experimental"
+  "ssid_15": "Experimental",
+  "now": "Agora",
+  "now_empty": "Sem atividade recente",
+  "now_mute_source": "Silenciar esta fonte",
+  "now_unmute_source": "Ativar esta fonte",
+  "now_mark_all_read": "Marcar tudo como lido"
 }

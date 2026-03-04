@@ -3086,6 +3086,21 @@ curl -X POST http://localhost:3456/api/debug \
 
 ---
 
+### Now Feed
+
+**GET /api/debug/now** — List current feed items
+- Returns: `{ items: [...], total: int, unread: int }`
+
+**POST /api/debug/now/inject** — Inject a test NowItemEvent
+- Body: `{ "appType": "chat", "sourceId": "test-room", "sourceName": "Test Room", "callsign": "TEST", "summary": "Test message", "priority": 5 }`
+- Optional: `"id"` (auto-generated if omitted)
+
+**POST /api/debug/now/clear** — Clear all items
+
+**POST /api/debug/now/mark-read** — Mark all items as read
+
+---
+
 ### Devices (Debug)
 
 #### GET /api/devices

@@ -140,6 +140,8 @@ This document catalogs reusable UI components available in the Geogram codebase.
 - [NostrClientService.followUser/unfollowUser/likeEvent](#nostrclientservicefollowuserunfollowuserlikeevent) - Follow/unfollow users and like posts
 - [NostrNip19.decode](#nostrnip19decode) - Decode nostr: URIs (note/npub/nevent/nprofile/naddr)
 - [GeogramApi](#geogramapi) - Unified transport-agnostic API facade
+- [MessageRetentionService](#messageretentionservice) - Shared message retention/auto-delete logic for DMs and group chat
+- [RetentionPickerWidget](#retentionpickerwidget) - Reusable retention period picker dialog
 - [FileBrowserCacheService](#filebrowsercacheservice) - Persistent cache for file browser operations
 - [SQLiteLoader](#sqliteloader) - Platform-aware SQLite database loading
 - [BackupEncryption (ECIES)](#backupencryption-ecies) - ECIES encryption for arbitrary data using npub/nsec
@@ -4215,6 +4217,52 @@ final info = await wifiDirect.enableHotspot(stationName);
 
 // Toggle off
 await wifiDirect.disableHotspot();
+```
+
+---
+
+### MessageRetentionService
+
+**File:** `lib/services/message_retention_service.dart`
+
+Shared singleton service for message retention (disappearing messages). Handles retention period configuration, message purging, and periodic cleanup. Designed to be reusable across DMs and group chat rooms.
+
+**Key Components:**
+- `RetentionPeriod` enum: `oneDay`, `oneWeek`, `oneMonth`, `oneYear`, `forever`
+- `retentionLabel()`, `retentionToDuration()`, `retentionToKey()`/`keyToRetention()` — conversion helpers
+- `purgeExpiredMessages(content, period)` — pure function, filters message text by timestamp
+- `getRetentionForConfig(config)` / `setRetentionInConfig(config, period)` — read/write `message_retention` in config.json
+- `purgeConversation(storage, path, period)` — I/O method to purge a conversation's messages.txt
+- `startCleanupTimer()` / `stopCleanupTimer()` — periodic (30 min) scan of all DM conversations
+
+**Config format:** `"message_retention": "1d"` / `"1w"` / `"1m"` / `"1y"` / `null` (forever)
+
+**Usage:**
+```dart
+// Set retention for a DM conversation
+await DirectMessageService().setRetention('CR7BBQ', RetentionPeriod.oneWeek);
+
+// Pure purge (no I/O)
+final filtered = MessageRetentionService().purgeExpiredMessages(rawText, RetentionPeriod.oneDay);
+
+// Start background cleanup timer
+MessageRetentionService().startCleanupTimer();
+```
+
+---
+
+### RetentionPickerWidget
+
+**File:** `lib/widgets/retention_picker_widget.dart`
+
+Reusable dialog for selecting a message retention period. Returns `RetentionPeriod?` (null if cancelled).
+
+**Usage:**
+```dart
+final picked = await showRetentionPicker(context, currentPeriod);
+if (picked != null) {
+  await DirectMessageService().setRetention(otherCallsign, picked);
+}
 ```
 
 ---
@@ -10239,3 +10287,17 @@ service.stopAutoBackup();
 ```
 
 Debug API actions: `local_backup_set_folder`, `local_backup_create`, `local_backup_list`, `local_backup_restore`, `local_backup_delete`, `local_backup_status`.
+
+---
+
+## NowService — EventBus-driven activity feed
+
+**Pattern**: Singleton service that aggregates events from multiple sources via a single EventBus event type (`NowItemEvent`). Any service can participate by firing `NowItemEvent` — no coupling required.
+
+**Key components**: `NowItemEvent` (event_bus.dart), `NowItem` (models/now_item.dart), `NowService` (services/now_service.dart), `NowPage` (pages/now_page.dart)
+
+**Reusable patterns**:
+- Muting sources via ConfigService (`now.mutedSources`)
+- Read state tracking via ConfigService (`now.readItems`, capped at 500)
+- Priority-based sorting with grouping by appType
+- Badge count via StreamController broadcast

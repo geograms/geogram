@@ -851,6 +851,65 @@ class TransferOfferStatusChangedEvent extends AppEvent {
       'TransferOfferStatusChangedEvent(id: $offerId, status: $status)';
 }
 
+/// Fired when a DM conversation's message retention period changes
+/// (locally or received from remote)
+class DMRetentionChangedEvent extends AppEvent {
+  final String callsign;
+  final String periodKey; // '1d', '1w', '1m', '1y', or 'forever'
+
+  DMRetentionChangedEvent({
+    required this.callsign,
+    required this.periodKey,
+  });
+
+  @override
+  String toString() =>
+      'DMRetentionChangedEvent(callsign: $callsign, period: $periodKey)';
+}
+
+// ============================================================
+// Now Activity Feed Events
+// ============================================================
+
+/// Priority constants for NowItemEvent
+class NowPriority {
+  static const int alertUrgent = 1;
+  static const int alertAttention = 2;
+  static const int directMessage = 3;
+  static const int email = 4;
+  static const int chat = 5;
+  static const int forum = 6;
+  static const int blog = 7;
+  static const int event = 8;
+  static const int sharedFile = 9;
+  static const int routine = 10;
+}
+
+/// Activity feed item event — fired by any service that wants to appear in the Now panel
+class NowItemEvent extends AppEvent {
+  final String id; // unique ID (e.g., "chat:main:2026-03-04T10:30:00")
+  final String appType; // "chat", "dm", "alert", "email", "forum", "blog", "event", "irc", etc.
+  final String sourceId; // room ID, thread ID, alert ID, etc.
+  final String sourceName; // human-readable: "General Chat", "CR7BBQ", etc.
+  final String callsign; // who caused the activity
+  final String summary; // short preview text
+  final int priority; // 1 (highest) to 10 (lowest)
+
+  NowItemEvent({
+    required this.id,
+    required this.appType,
+    required this.sourceId,
+    required this.sourceName,
+    required this.callsign,
+    required this.summary,
+    required this.priority,
+  });
+
+  @override
+  String toString() =>
+      'NowItemEvent(appType: $appType, source: $sourceName, from: $callsign, priority: $priority)';
+}
+
 /// P2P download progress event (receiver tracks locally)
 /// Fired as the receiver downloads files from sender
 class P2PDownloadProgressEvent extends AppEvent {

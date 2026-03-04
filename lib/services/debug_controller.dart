@@ -258,16 +258,19 @@ class DebugActionEvent {
 /// Panel indices for navigation
 class PanelIndex {
   static const int apps = 0;
-  static const int maps = 1;
-  static const int devices = 2;
-  static const int settings = 3;
-  static const int logs = 4;
+  static const int now = 1;
+  static const int maps = 2;
+  static const int devices = 3;
+  static const int settings = 4;
+  static const int logs = 5;
 
   /// Get panel name from index
   static String getName(int index) {
     switch (index) {
       case apps:
         return 'apps';
+      case now:
+        return 'now';
       case maps:
         return 'maps';
       case devices:
@@ -287,6 +290,10 @@ class PanelIndex {
       case 'apps':
       case 'home':
         return apps;
+      case 'now':
+      case 'feed':
+      case 'activity':
+        return now;
       case 'maps':
       case 'map':
         return maps;
