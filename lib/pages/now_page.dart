@@ -89,10 +89,49 @@ class _NowPageState extends State<NowPage> {
     // Sort cards by most recent activity first
     cards.sort((a, b) => b.newestTimestamp.compareTo(a.newestTimestamp));
 
-    return ListView.builder(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      itemCount: cards.length,
-      itemBuilder: (context, index) => _buildCard(cards[index]),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        const minCardWidth = 300.0;
+        final columns = (constraints.maxWidth / minCardWidth).floor().clamp(1, 4);
+
+        if (columns == 1) {
+          return ListView.builder(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            itemCount: cards.length,
+            itemBuilder: (context, index) => _buildCard(cards[index]),
+          );
+        }
+
+        // Distribute cards into columns (shortest column first for masonry effect)
+        final columnCards = List.generate(columns, (_) => <_CardData>[]);
+        for (final card in cards) {
+          // Pick the column with fewest items (rough height balance)
+          var minCol = 0;
+          for (var c = 1; c < columns; c++) {
+            if (columnCards[c].length < columnCards[minCol].length) minCol = c;
+          }
+          columnCards[minCol].add(card);
+        }
+
+        return SingleChildScrollView(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              for (var c = 0; c < columns; c++) ...[
+                if (c > 0) const SizedBox(width: 8),
+                Expanded(
+                  child: Column(
+                    children: [
+                      for (final card in columnCards[c]) _buildCard(card),
+                    ],
+                  ),
+                ),
+              ],
+            ],
+          ),
+        );
+      },
     );
   }
 
