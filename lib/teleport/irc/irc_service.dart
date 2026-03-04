@@ -764,6 +764,35 @@ class IrcService {
 
     // In-memory list
     final list = _messages.putIfAbsent(key, () => []);
+
+    // Deduplicate: if a non-system message has identical text within the last
+    // 5 messages, update the existing entry's timestamp instead of adding a
+    // new row (avoids bot-spam polluting the database).
+    if (!msg.isSystemMessage && !msg.isOutgoing) {
+      final recentStart = list.length > 5 ? list.length - 5 : 0;
+      for (var i = list.length - 1; i >= recentStart; i--) {
+        final existing = list[i];
+        if (existing.text == msg.text &&
+            existing.sender == msg.sender &&
+            !existing.isSystemMessage) {
+          list[i] = IrcMessage(
+            serverConfigId: existing.serverConfigId,
+            channel: existing.channel,
+            sender: existing.sender,
+            text: existing.text,
+            timestamp: msg.timestamp,
+            isOutgoing: existing.isOutgoing,
+            type: existing.type,
+          );
+          // Update channel last message but skip write queue & NowItemEvent
+          final ch = _channels[key];
+          if (ch != null) ch.lastMessage = list[i];
+          _uiDirty = true;
+          return;
+        }
+      }
+    }
+
     list.add(msg);
     if (list.length > 5000) {
       list.removeRange(0, list.length - 5000);
