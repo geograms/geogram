@@ -11,7 +11,7 @@ import '../services/i18n_service.dart';
 import '../teleport/irc/pages/irc_chat_page.dart';
 import '../util/app_type_theme.dart';
 
-/// Activity feed page showing recent events across all apps
+/// Activity feed page showing recent events as source-grouped cards
 class NowPage extends StatefulWidget {
   const NowPage({super.key});
 
@@ -24,8 +24,6 @@ class _NowPageState extends State<NowPage> {
   final I18nService _i18n = I18nService();
   StreamSubscription<List<NowItem>>? _itemsSubscription;
   List<NowItem> _items = [];
-  final Set<String> _collapsedAppTypes = {};
-  final Set<String> _collapsedSources = {};
 
   @override
   void initState() {
@@ -68,252 +66,192 @@ class _NowPageState extends State<NowPage> {
 
     final grouped = _nowService.groupedItems;
 
-    // Sort appType groups by best (lowest) priority
-    final sortedTypes = grouped.keys.toList()
-      ..sort((a, b) {
-        int bestPriority(String appType) {
-          int best = 999;
-          for (final sources in grouped[appType]!.values) {
-            for (final item in sources) {
-              if (item.priority < best) best = item.priority;
-            }
-          }
-          return best;
-        }
-        return bestPriority(a).compareTo(bestPriority(b));
-      });
+    // Flatten to a list of (appType, sourceId, items) sorted by newest message
+    final cards = <_CardData>[];
+    for (final appType in grouped.keys) {
+      for (final sourceId in grouped[appType]!.keys) {
+        final items = grouped[appType]![sourceId]!;
+        if (items.isEmpty) continue;
+        // Items are already sorted chronologically (oldest first) from service
+        final newestTimestamp = items.last.timestamp;
+        final unreadCount = items.where((i) => !i.isRead).length;
+        cards.add(_CardData(
+          appType: appType,
+          sourceId: sourceId,
+          sourceName: items.first.sourceName,
+          items: items,
+          newestTimestamp: newestTimestamp,
+          unreadCount: unreadCount,
+        ));
+      }
+    }
 
-    final widgets = <Widget>[];
-    for (var i = 0; i < sortedTypes.length; i++) {
-      final appType = sortedTypes[i];
-      final sources = grouped[appType]!;
-      final isCollapsed = _collapsedAppTypes.contains(appType);
+    // Sort cards by most recent activity first
+    cards.sort((a, b) => b.newestTimestamp.compareTo(a.newestTimestamp));
 
-      // Total item count for this appType
-      final totalCount =
-          sources.values.fold<int>(0, (sum, list) => sum + list.length);
+    return ListView.builder(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      itemCount: cards.length,
+      itemBuilder: (context, index) => _buildCard(cards[index]),
+    );
+  }
 
-      // AppType header
-      widgets.add(
-        InkWell(
-          onTap: () => setState(() {
-            if (isCollapsed) {
-              _collapsedAppTypes.remove(appType);
-            } else {
-              _collapsedAppTypes.add(appType);
-            }
-          }),
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-            child: Row(
-              children: [
-                Icon(
-                  isCollapsed
-                      ? Icons.chevron_right
-                      : Icons.expand_more,
-                  size: 18,
-                  color: Theme.of(context).colorScheme.primary,
-                ),
-                const SizedBox(width: 4),
-                Icon(
-                  _getAppTypeIcon(appType),
-                  size: 18,
-                  color: Theme.of(context).colorScheme.primary,
-                ),
-                const SizedBox(width: 8),
-                Text(
-                  _getAppTypeLabel(appType),
-                  style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                    color: Theme.of(context).colorScheme.primary,
-                  ),
-                ),
-                const SizedBox(width: 6),
-                Text(
-                  '($totalCount)',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: Theme.of(context)
-                        .colorScheme
-                        .onSurface
-                        .withAlpha(120),
-                  ),
-                ),
-              ],
-            ),
-          ),
+  Widget _buildCard(_CardData card) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+
+    return Card(
+      elevation: 0,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(
+          color: colorScheme.outlineVariant.withAlpha(80),
         ),
-      );
-
-      if (!isCollapsed) {
-        // Sort sources by newest item timestamp
-        final sortedSourceIds = sources.keys.toList()
-          ..sort((a, b) {
-            final aTime = sources[a]!.first.timestamp;
-            final bTime = sources[b]!.first.timestamp;
-            return bTime.compareTo(aTime);
-          });
-
-        for (final sourceId in sortedSourceIds) {
-          final sourceItems = sources[sourceId]!;
-          final sourceName = sourceItems.first.sourceName;
-          final sourceKey = '$appType:$sourceId';
-          final isSourceCollapsed = _collapsedSources.contains(sourceKey);
-          final settings =
-              _nowService.getGroupSettings(appType, sourceId);
-          final hasMore = sourceItems.length >= settings.maxItems;
-
-          // Source sub-header
-          widgets.add(
-            InkWell(
-              onTap: () => setState(() {
-                if (isSourceCollapsed) {
-                  _collapsedSources.remove(sourceKey);
-                } else {
-                  _collapsedSources.add(sourceKey);
-                }
-              }),
-              onLongPress: () =>
-                  _showGroupSettingsSheet(appType, sourceId, sourceName),
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(40, 6, 16, 2),
-                child: Row(
-                  children: [
-                    Icon(
-                      isSourceCollapsed
-                          ? Icons.chevron_right
-                          : Icons.expand_more,
-                      size: 16,
-                      color: Theme.of(context)
-                          .colorScheme
-                          .onSurface
-                          .withAlpha(180),
+      ),
+      margin: const EdgeInsets.only(bottom: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Card header
+          InkWell(
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
+            onTap: () => _navigateToSourceFromCard(card),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(12, 10, 4, 8),
+              child: Row(
+                children: [
+                  Icon(
+                    _getAppTypeIcon(card.appType),
+                    size: 18,
+                    color: colorScheme.primary,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      card.sourceName.isNotEmpty
+                          ? card.sourceName
+                          : card.sourceId,
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: colorScheme.onSurface,
+                      ),
+                      overflow: TextOverflow.ellipsis,
                     ),
-                    const SizedBox(width: 4),
-                    Expanded(
-                      child: Text(
-                        sourceName.isNotEmpty ? sourceName : sourceId,
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w500,
-                          color: Theme.of(context)
-                              .colorScheme
-                              .onSurface
-                              .withAlpha(200),
-                        ),
-                        overflow: TextOverflow.ellipsis,
+                  ),
+                  if (card.unreadCount > 0) ...[
+                    const SizedBox(width: 8),
+                    _buildUnreadBadge(card.unreadCount),
+                  ],
+                  SizedBox(
+                    width: 32,
+                    height: 32,
+                    child: IconButton(
+                      padding: EdgeInsets.zero,
+                      iconSize: 18,
+                      icon: Icon(
+                        Icons.more_vert,
+                        color: colorScheme.onSurface.withAlpha(150),
+                      ),
+                      onPressed: () => _showGroupSettingsSheet(
+                        card.appType,
+                        card.sourceId,
+                        card.sourceName,
                       ),
                     ),
-                    Text(
-                      '(${sourceItems.length})',
+                  ),
+                ],
+              ),
+            ),
+          ),
+          Divider(height: 1, color: colorScheme.outlineVariant.withAlpha(60)),
+          // Card body — chronological messages
+          ...card.items.map((item) => _buildMessageRow(item)),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildUnreadBadge(int count) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.primary,
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Text(
+        count > 99 ? '99+' : '$count',
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 11,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMessageRow(NowItem item) {
+    final age = _formatAge(item.timestamp);
+    final settings =
+        _nowService.getGroupSettings(item.appType, item.sourceId);
+    final isNearExpiry = settings.expiryMinutes > 0 &&
+        DateTime.now().difference(item.timestamp).inMinutes >
+            settings.expiryMinutes * 0.9;
+    final dimAlpha = isNearExpiry ? 100 : 255;
+    final colorScheme = Theme.of(context).colorScheme;
+
+    return InkWell(
+      onTap: () {
+        _nowService.markAsRead(item.id);
+        _navigateToSource(item);
+      },
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _buildPriorityDot(item.priority),
+            const SizedBox(width: 8),
+            Expanded(
+              child: RichText(
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                text: TextSpan(
+                  children: [
+                    TextSpan(
+                      text: '${item.callsign}: ',
                       style: TextStyle(
-                        fontSize: 11,
-                        color: Theme.of(context)
-                            .colorScheme
-                            .onSurface
-                            .withAlpha(120),
+                        fontWeight:
+                            item.isRead ? FontWeight.w500 : FontWeight.bold,
+                        fontSize: 13,
+                        color: colorScheme.onSurface.withAlpha(dimAlpha),
+                      ),
+                    ),
+                    TextSpan(
+                      text: item.summary,
+                      style: TextStyle(
+                        fontWeight:
+                            item.isRead ? FontWeight.normal : FontWeight.w500,
+                        fontSize: 13,
+                        color: colorScheme.onSurface
+                            .withAlpha(isNearExpiry ? 80 : 200),
                       ),
                     ),
                   ],
                 ),
               ),
             ),
-          );
-
-          if (!isSourceCollapsed) {
-            for (final item in sourceItems) {
-              widgets.add(_buildItemTile(item));
-            }
-            if (hasMore) {
-              widgets.add(
-                Padding(
-                  padding: const EdgeInsets.only(left: 56, bottom: 4),
-                  child: Text(
-                    _i18n.t('now_show_more'),
-                    style: TextStyle(
-                      fontSize: 11,
-                      color: Theme.of(context).colorScheme.primary,
-                      fontStyle: FontStyle.italic,
-                    ),
-                  ),
-                ),
-              );
-            }
-          }
-        }
-      }
-
-      if (i < sortedTypes.length - 1) {
-        widgets.add(const Divider(height: 1));
-      }
-    }
-
-    return ListView(children: widgets);
-  }
-
-  Widget _buildItemTile(NowItem item) {
-    final age = _formatAge(item.timestamp);
-    final settings =
-        _nowService.getGroupSettings(item.appType, item.sourceId);
-
-    // Dim items close to expiring (within 10% of TTL remaining)
-    final isNearExpiry = settings.expiryMinutes > 0 &&
-        DateTime.now().difference(item.timestamp).inMinutes >
-            settings.expiryMinutes * 0.9;
-
-    return ListTile(
-      dense: true,
-      leading: _buildPriorityDot(item.priority),
-      title: Text(
-        item.callsign,
-        style: TextStyle(
-          fontWeight: item.isRead ? FontWeight.normal : FontWeight.bold,
-          fontSize: 14,
-          color: isNearExpiry
-              ? Theme.of(context).colorScheme.onSurface.withAlpha(100)
-              : null,
-        ),
-      ),
-      subtitle: Text(
-        item.summary,
-        maxLines: 2,
-        overflow: TextOverflow.ellipsis,
-        style: TextStyle(
-          fontWeight: item.isRead ? FontWeight.normal : FontWeight.w500,
-          fontSize: 13,
-          color: isNearExpiry
-              ? Theme.of(context).colorScheme.onSurface.withAlpha(80)
-              : null,
-        ),
-      ),
-      trailing: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        crossAxisAlignment: CrossAxisAlignment.end,
-        children: [
-          Text(
-            age,
-            style: TextStyle(
-              fontSize: 11,
-              color: Theme.of(context).colorScheme.onSurface.withAlpha(150),
-            ),
-          ),
-          if (!item.isRead)
-            Container(
-              margin: const EdgeInsets.only(top: 4),
-              width: 8,
-              height: 8,
-              decoration: BoxDecoration(
-                color: Theme.of(context).colorScheme.primary,
-                shape: BoxShape.circle,
+            const SizedBox(width: 8),
+            Text(
+              age,
+              style: TextStyle(
+                fontSize: 11,
+                color: colorScheme.onSurface.withAlpha(120),
               ),
             ),
-        ],
+          ],
+        ),
       ),
-      onTap: () {
-        _nowService.markAsRead(item.id);
-        _navigateToSource(item);
-      },
     );
   }
 
@@ -332,10 +270,17 @@ class _NowPageState extends State<NowPage> {
     }
 
     return Container(
-      width: 10,
-      height: 10,
+      margin: const EdgeInsets.only(top: 4),
+      width: 8,
+      height: 8,
       decoration: BoxDecoration(color: color, shape: BoxShape.circle),
     );
+  }
+
+  void _navigateToSourceFromCard(_CardData card) {
+    if (card.items.isNotEmpty) {
+      _navigateToSource(card.items.first);
+    }
   }
 
   void _navigateToSource(NowItem item) {
@@ -344,7 +289,6 @@ class _NowPageState extends State<NowPage> {
         Navigator.pushNamed(context, '/chat', arguments: item.sourceId);
         break;
       case 'irc':
-        // sourceId is "serverId:channel"
         final parts = item.sourceId.split(':');
         if (parts.length >= 2) {
           final serverId = parts[0];
@@ -397,7 +341,6 @@ class _NowPageState extends State<NowPage> {
                   ),
                 ),
                 const SizedBox(height: 16),
-                // Mute toggle
                 ListTile(
                   contentPadding: EdgeInsets.zero,
                   leading:
@@ -411,7 +354,6 @@ class _NowPageState extends State<NowPage> {
                   },
                 ),
                 const Divider(),
-                // Max items slider
                 Row(
                   children: [
                     Text(_i18n.t('now_max_items')),
@@ -427,7 +369,6 @@ class _NowPageState extends State<NowPage> {
                   onChanged: (v) => setSheetState(() => maxItems = v),
                 ),
                 const SizedBox(height: 8),
-                // Expiry slider
                 Row(
                   children: [
                     Text(_i18n.t('now_expiry')),
@@ -440,13 +381,12 @@ class _NowPageState extends State<NowPage> {
                 Slider(
                   value: expiryHours.clamp(0, 168),
                   min: 0,
-                  max: 168, // 7 days
+                  max: 168,
                   divisions: 168,
                   onChanged: (v) =>
                       setSheetState(() => expiryHours = v),
                 ),
                 const SizedBox(height: 16),
-                // Save button
                 SizedBox(
                   width: double.infinity,
                   child: ElevatedButton(
@@ -484,23 +424,6 @@ class _NowPageState extends State<NowPage> {
     }
   }
 
-  String _getAppTypeLabel(String appType) {
-    final key = 'app_type_$appType';
-    final translated = _i18n.t(key);
-    if (translated != key) return translated;
-
-    switch (appType) {
-      case 'dm':
-        return 'Direct Messages';
-      case 'alert':
-        return 'Alerts';
-      case 'irc':
-        return 'IRC';
-      default:
-        return appType[0].toUpperCase() + appType.substring(1);
-    }
-  }
-
   String _formatAge(DateTime timestamp) {
     final diff = DateTime.now().difference(timestamp);
     if (diff.inMinutes < 1) return _i18n.t('just_now');
@@ -512,4 +435,23 @@ class _NowPageState extends State<NowPage> {
     }
     return _i18n.t('days_ago').replaceAll('{0}', '${diff.inDays}');
   }
+}
+
+/// Internal data class for card rendering
+class _CardData {
+  final String appType;
+  final String sourceId;
+  final String sourceName;
+  final List<NowItem> items;
+  final DateTime newestTimestamp;
+  final int unreadCount;
+
+  _CardData({
+    required this.appType,
+    required this.sourceId,
+    required this.sourceName,
+    required this.items,
+    required this.newestTimestamp,
+    required this.unreadCount,
+  });
 }

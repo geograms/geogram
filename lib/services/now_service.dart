@@ -131,15 +131,19 @@ class NowService {
           .add(item);
     }
 
-    // Sort each sub-list newest first and cap at maxItems
+    // Cap at maxItems (keep newest), then sort chronologically (oldest first)
     for (final appType in result.keys) {
       for (final sourceId in result[appType]!.keys) {
         final list = result[appType]![sourceId]!;
+        // Sort newest first to pick the most recent N items
         list.sort((a, b) => b.timestamp.compareTo(a.timestamp));
         final settings = getGroupSettings(appType, sourceId);
-        if (list.length > settings.maxItems) {
-          result[appType]![sourceId] = list.sublist(0, settings.maxItems);
-        }
+        final capped = list.length > settings.maxItems
+            ? list.sublist(0, settings.maxItems)
+            : list;
+        // Now sort chronologically (oldest first) for display
+        capped.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+        result[appType]![sourceId] = capped;
       }
     }
 
