@@ -4,6 +4,7 @@
  */
 
 import 'dart:async';
+import 'package:dbus/dbus.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -57,17 +58,19 @@ class DMNotificationService {
   final FlutterLocalNotificationsPlugin _notificationsPlugin =
       FlutterLocalNotificationsPlugin();
 
-  /// Show a notification via the shared plugin instance
-  Future<void> showNotification(int id, String? title, String? body,
-      NotificationDetails details, {String? payload}) =>
-    _notificationsPlugin.show(id, title, body, details, payload: payload);
-
-  /// Cancel a notification by ID
-  Future<void> cancelNotification(int id) => _notificationsPlugin.cancel(id);
+  /// Expose the plugin so NowNotificationBridge can show/cancel notifications
+  FlutterLocalNotificationsPlugin get notificationsPlugin => _notificationsPlugin;
 
   EventSubscription<DirectMessageReceivedEvent>? _dmEventSubscription;
   bool _initialized = false;
   bool _permissionRequested = false;
+
+  // Linux D-Bus notification tracking
+  DBusClient? _dbusClient;
+  StreamSubscription<DBusSignal>? _dbusActionSub;
+  StreamSubscription<DBusSignal>? _dbusClosedSub;
+  final Map<int, int> _nidToSystemId = {};        // flutter nid → D-Bus systemId
+  final Map<int, String> _systemIdToPayload = {}; // D-Bus systemId → payload
 
   /// Initialize the notification service
   /// Set [skipPermissionRequest] to true to defer permission request (e.g., for first launch onboarding)
@@ -171,6 +174,11 @@ class DMNotificationService {
     // Desktop platforms (Linux/Windows/macOS) don't require explicit permission
     if (_isDesktopPlatform()) {
       _permissionRequested = true;
+    }
+
+    // Set up D-Bus notification listener on Linux for reliable click handling
+    if (defaultTargetPlatform == TargetPlatform.linux) {
+      _initLinuxDbus();
     }
 
     LogService().log(
@@ -446,9 +454,162 @@ class DMNotificationService {
     return null;
   }
 
+  // ---------------------------------------------------------------------------
+  // Linux D-Bus notification support
+  // ---------------------------------------------------------------------------
+
+  /// Initialize D-Bus client and ActionInvoked listener for Linux
+  void _initLinuxDbus() {
+    try {
+      _dbusClient = DBusClient.session();
+
+      // Listen for notification clicks (ActionInvoked signal)
+      final actionStream = DBusSignalStream(
+        _dbusClient!,
+        interface: 'org.freedesktop.Notifications',
+        name: 'ActionInvoked',
+        path: DBusObjectPath('/org/freedesktop/Notifications'),
+      );
+      _dbusActionSub = actionStream.listen((signal) {
+        if (signal.values.length >= 2) {
+          final systemId = (signal.values[0] as DBusUint32).value;
+          final actionKey = (signal.values[1] as DBusString).value;
+          if (actionKey == 'default') {
+            final payload = _systemIdToPayload.remove(systemId);
+            _nidToSystemId.removeWhere((_, v) => v == systemId);
+            if (payload != null) {
+              LogService().log(
+                'DMNotificationService: D-Bus ActionInvoked for payload: $payload',
+              );
+              _handlePayload(payload);
+            }
+          }
+        }
+      });
+
+      // Listen for notification dismissals to clean up tracking maps
+      final closedStream = DBusSignalStream(
+        _dbusClient!,
+        interface: 'org.freedesktop.Notifications',
+        name: 'NotificationClosed',
+        path: DBusObjectPath('/org/freedesktop/Notifications'),
+      );
+      _dbusClosedSub = closedStream.listen((signal) {
+        if (signal.values.isNotEmpty) {
+          final systemId = (signal.values[0] as DBusUint32).value;
+          _systemIdToPayload.remove(systemId);
+          _nidToSystemId.removeWhere((_, v) => v == systemId);
+        }
+      });
+
+      LogService().log(
+        'DMNotificationService: D-Bus notification listener initialized',
+      );
+    } catch (e) {
+      LogService().log(
+        'DMNotificationService: Failed to initialize D-Bus listener: $e',
+      );
+    }
+  }
+
+  /// Show a notification via D-Bus directly (Linux) to capture the systemId
+  Future<void> _showLinuxNotification(
+    int nid, String title, String body, String? payload,
+  ) async {
+    if (_dbusClient == null) return;
+
+    try {
+      final replacesId = _nidToSystemId[nid] ?? 0;
+      final object = DBusRemoteObject(
+        _dbusClient!,
+        name: 'org.freedesktop.Notifications',
+        path: DBusObjectPath('/org/freedesktop/Notifications'),
+      );
+      final result = await object.callMethod(
+        'org.freedesktop.Notifications',
+        'Notify',
+        [
+          const DBusString('Geogram'),
+          DBusUint32(replacesId),
+          const DBusString('geogram'),
+          DBusString(title),
+          DBusString(body),
+          DBusArray(DBusSignature('s'), [
+            const DBusString('default'),
+            const DBusString('Open'),
+          ]),
+          DBusDict(DBusSignature('s'), DBusSignature('v'), {}),
+          const DBusInt32(-1),
+        ],
+        replySignature: DBusSignature('u'),
+      );
+
+      final systemId = (result.returnValues[0] as DBusUint32).value;
+      _nidToSystemId[nid] = systemId;
+      if (payload != null) {
+        _systemIdToPayload[systemId] = payload;
+      }
+    } catch (e) {
+      LogService().log('DMNotificationService: D-Bus Notify failed: $e');
+      // Fallback to plugin
+      await _notificationsPlugin.show(
+        nid, title, body, const NotificationDetails(), payload: payload,
+      );
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Public notification API (used by NowNotificationBridge)
+  // ---------------------------------------------------------------------------
+
+  /// Show a notification — on Linux uses D-Bus directly, elsewhere the plugin
+  Future<void> showNotification(
+    int nid, String title, String body, NotificationDetails details, {
+    String? payload,
+  }) async {
+    if (defaultTargetPlatform == TargetPlatform.linux) {
+      await _showLinuxNotification(nid, title, body, payload);
+    } else {
+      await _notificationsPlugin.show(
+        nid, title, body, details, payload: payload,
+      );
+    }
+  }
+
+  /// Cancel a notification — on Linux uses D-Bus CloseNotification
+  Future<void> cancelNotification(int nid) async {
+    if (defaultTargetPlatform == TargetPlatform.linux) {
+      final systemId = _nidToSystemId.remove(nid);
+      if (systemId != null) {
+        _systemIdToPayload.remove(systemId);
+        try {
+          final object = DBusRemoteObject(
+            _dbusClient!,
+            name: 'org.freedesktop.Notifications',
+            path: DBusObjectPath('/org/freedesktop/Notifications'),
+          );
+          await object.callMethod(
+            'org.freedesktop.Notifications',
+            'CloseNotification',
+            [DBusUint32(systemId)],
+          );
+        } catch (e) {
+          LogService().log(
+            'DMNotificationService: D-Bus CloseNotification failed: $e',
+          );
+        }
+      }
+    } else {
+      await _notificationsPlugin.cancel(nid);
+    }
+  }
+
   /// Dispose resources
   void dispose() {
     _dmEventSubscription?.cancel();
+    _dbusActionSub?.cancel();
+    _dbusClosedSub?.cancel();
+    _dbusClient?.close();
   }
 
 }
