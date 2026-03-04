@@ -91,7 +91,7 @@ class _NowPageState extends State<NowPage> {
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        const minCardWidth = 300.0;
+        const minCardWidth = 170.0;
         final columns = (constraints.maxWidth / minCardWidth).floor().clamp(1, 4);
 
         if (columns == 1) {
