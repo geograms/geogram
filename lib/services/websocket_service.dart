@@ -166,82 +166,31 @@ class WebSocketService {
         platform = 'Desktop';
       }
 
-      // Get location: prefer profile, fallback to UserLocationService (GPS/IP-based)
-      double? latitude = profile.latitude;
-      double? longitude = profile.longitude;
-
-      // If profile has no location, try UserLocationService
-      if (latitude == null || longitude == null) {
-        final userLocation = UserLocationService().currentLocation;
-        if (userLocation != null && userLocation.isValid) {
-          latitude = userLocation.latitude;
-          longitude = userLocation.longitude;
-          LogService().log('HELLO: Using ${userLocation.source} location: $latitude, $longitude');
-        }
-      }
-
-      // Apply location granularity from Security settings before sharing
-      final (roundedLat, roundedLon) = SecurityService().applyLocationGranularity(latitude, longitude);
-
-      // Create hello event (include nickname for friendly URL support, location for distance)
-      final event = NostrEvent.createHello(
-        npub: profile.npub,
-        callsign: profile.callsign,
-        nickname: profile.nickname,
-        color: profile.preferredColor,
-        latitude: roundedLat,
-        longitude: roundedLon,
-        platform: platform,
-        ssid: profile.ssid,
-      );
-      event.calculateId();
-
-      // Sign using SigningService (handles both extension and nsec)
-      final signingService = SigningService();
-      await signingService.initialize();
-      final signedEvent = await signingService.signEvent(event, profile);
-      if (signedEvent == null) {
-        LogService().log('Failed to sign hello event');
-        return false;
-      }
-
-      // Build hello message
-      final helloMessage = {
-        'type': 'hello',
-        'event': signedEvent.toJson(),
-      };
-
-      final helloJson = jsonEncode(helloMessage);
-      LogService().log('');
-      LogService().log('SENDING HELLO MESSAGE');
-      LogService().log('══════════════════════════════════════');
-      LogService().log('Message type: hello');
-      LogService().log('Event ID: ${signedEvent.id?.substring(0, 16)}...');
-      LogService().log('Callsign: ${profile.callsign}');
-      if (profile.nickname.isNotEmpty) {
-        LogService().log('Nickname: ${profile.nickname}');
-      }
-      LogService().log('Content: ${signedEvent.content}');
-      LogService().log('');
-      LogService().log('Full message:');
-      LogService().log(helloJson);
-      LogService().log('══════════════════════════════════════');
-
-      // Send hello
-      try {
-        _lastHelloAt = DateTime.now();
-        _recordHeartbeat('hello_sent');
-        _channel!.sink.add(helloJson);
-      } catch (e) {
-        LogService().log('Error sending hello: $e');
-        _handleConnectionLoss();
-        return false;
-      }
+      // Set up listener FIRST, then wait for challenge before sending HELLO
+      // This enables HELLO protocol v2 challenge-response authentication
+      final challengeCompleter = Completer<String?>();
+      bool helloPending = true;
 
       // Listen for messages
       LogService().log('Setting up WebSocket message listener (${kIsWeb ? "Web" : "Native"})...');
       _subscription = _channel!.stream.listen(
         (message) {
+          // Intercept challenge message before HELLO is sent
+          if (helloPending) {
+            try {
+              final decoded = jsonDecode(message as String);
+              if (decoded is Map<String, dynamic> && decoded['type'] == 'challenge') {
+                final nonce = decoded['nonce'] as String?;
+                LogService().log('Received challenge nonce from server');
+                if (!challengeCompleter.isCompleted) {
+                  challengeCompleter.complete(nonce);
+                }
+                return;
+              }
+            } catch (_) {
+              // Not JSON or not a challenge, continue
+            }
+          }
           try {
             final rawMessage = message as String;
             LogService().log('[WS-RX] Received ${rawMessage.length} chars');
@@ -408,6 +357,91 @@ class WebSocketService {
         },
         cancelOnError: true,
       );
+
+      // Wait for challenge from server (up to 5 seconds, then fall back to v1)
+      String? challengeNonce;
+      try {
+        challengeNonce = await challengeCompleter.future.timeout(
+          const Duration(seconds: 5),
+        );
+      } on TimeoutException {
+        LogService().log('No challenge received within 5s, using HELLO v1 (legacy)');
+      }
+
+      // Get location: prefer profile, fallback to UserLocationService (GPS/IP-based)
+      double? latitude = profile.latitude;
+      double? longitude = profile.longitude;
+
+      // If profile has no location, try UserLocationService
+      if (latitude == null || longitude == null) {
+        final userLocation = UserLocationService().currentLocation;
+        if (userLocation != null && userLocation.isValid) {
+          latitude = userLocation.latitude;
+          longitude = userLocation.longitude;
+          LogService().log('HELLO: Using ${userLocation.source} location: $latitude, $longitude');
+        }
+      }
+
+      // Apply location granularity from Security settings before sharing
+      final (roundedLat, roundedLon) = SecurityService().applyLocationGranularity(latitude, longitude);
+
+      // Create hello event (include challenge nonce for v2 authentication)
+      final event = NostrEvent.createHello(
+        npub: profile.npub,
+        callsign: profile.callsign,
+        nickname: profile.nickname,
+        color: profile.preferredColor,
+        latitude: roundedLat,
+        longitude: roundedLon,
+        platform: platform,
+        ssid: profile.ssid,
+        challenge: challengeNonce,
+      );
+      event.calculateId();
+
+      // Sign using SigningService (handles both extension and nsec)
+      final signingService = SigningService();
+      await signingService.initialize();
+      final signedEvent = await signingService.signEvent(event, profile);
+      if (signedEvent == null) {
+        LogService().log('Failed to sign hello event');
+        return false;
+      }
+
+      // Build hello message with protocol version
+      final helloMessage = {
+        'type': 'hello',
+        if (challengeNonce != null) 'protocol': 2,
+        'event': signedEvent.toJson(),
+      };
+
+      final helloJson = jsonEncode(helloMessage);
+      LogService().log('');
+      LogService().log('SENDING HELLO MESSAGE (v${challengeNonce != null ? 2 : 1})');
+      LogService().log('══════════════════════════════════════');
+      LogService().log('Message type: hello');
+      LogService().log('Event ID: ${signedEvent.id?.substring(0, 16)}...');
+      LogService().log('Callsign: ${profile.callsign}');
+      if (profile.nickname.isNotEmpty) {
+        LogService().log('Nickname: ${profile.nickname}');
+      }
+      LogService().log('Content: ${signedEvent.content}');
+      LogService().log('');
+      LogService().log('Full message:');
+      LogService().log(helloJson);
+      LogService().log('══════════════════════════════════════');
+
+      // Send hello
+      helloPending = false;
+      try {
+        _lastHelloAt = DateTime.now();
+        _recordHeartbeat('hello_sent');
+        _channel!.sink.add(helloJson);
+      } catch (e) {
+        LogService().log('Error sending hello: $e');
+        _handleConnectionLoss();
+        return false;
+      }
 
       // Wait a bit for response
       await Future.delayed(const Duration(seconds: 2));

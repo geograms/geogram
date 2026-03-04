@@ -2,6 +2,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
@@ -437,6 +438,22 @@ class PureConnectedClient implements EmailClient, BlogClient, ConnectedClientRea
   DateTime connectedAt;
   DateTime lastActivity;
 
+  // Challenge-response authentication (HELLO protocol v2)
+  String? pendingChallenge;
+  int helloProtocol = 1;
+  bool verified = false;
+
+  // Multi-device responsiveness tracking
+  int successCount = 0;
+  int failCount = 0;
+
+  /// Success rate for adaptive device ordering (0.0 to 1.0)
+  double get successRate {
+    final total = successCount + failCount;
+    if (total == 0) return 0.5;
+    return successCount / total;
+  }
+
   PureConnectedClient({
     required this.socket,
     required this.id,
@@ -467,6 +484,10 @@ class PureConnectedClient implements EmailClient, BlogClient, ConnectedClientRea
         'longitude': longitude,
         'connected_at': connectedAt.toIso8601String(),
         'last_activity': lastActivity.toIso8601String(),
+        'protocol': helloProtocol,
+        'verified': verified,
+        'success_count': successCount,
+        'fail_count': failCount,
       };
 }
 
@@ -665,6 +686,15 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, EmailHandlerMixin,
     }
   }
   @override
+  List<EmailClient> emailFindAllClientsByCallsign(String callsign) {
+    final upper = callsign.toUpperCase();
+    final matches = _clients.values
+        .where((c) => c.callsign?.toUpperCase() == upper)
+        .toList();
+    matches.sort((a, b) => b.successRate.compareTo(a.successRate));
+    return matches;
+  }
+  @override
   bool emailSafeSocketSend(PureConnectedClient client, String data) => _safeSocketSend(client, data);
 
   // ── ConferenceMixin interface ───────────────────────────────────
@@ -702,6 +732,9 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, EmailHandlerMixin,
   @override
   BlogClient? blogFindConnectedClientByIdentifier(String identifier) =>
       _findConnectedClientByIdentifier(identifier);
+  @override
+  List<BlogClient> blogFindAllClientsByIdentifier(String identifier) =>
+      _findAllClientsByIdentifier(identifier);
   @override
   Future<bool> blogProxyToClient(
       BlogClient client, HttpRequest request, String filename) async {
@@ -2101,6 +2134,13 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, EmailHandlerMixin,
     }
   }
 
+  /// Generate a random 32-byte hex nonce for challenge-response
+  String _generateChallengeNonce() {
+    final random = Random.secure();
+    final bytes = List<int>.generate(32, (_) => random.nextInt(256));
+    return bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+  }
+
   /// Remove a client and clean up associated resources
   void _removeClient(String clientId, {String reason = 'disconnected'}) {
     final client = _clients.remove(clientId);
@@ -2616,10 +2656,22 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, EmailHandlerMixin,
         address: request.connectionInfo?.remoteAddress.address,
       );
 
+      // Generate challenge nonce for HELLO protocol v2
+      final nonce = _generateChallengeNonce();
+      client.pendingChallenge = nonce;
+
       _clients[clientId] = client;
       _stats.totalConnections++;
       _stats.lastConnection = DateTime.now();
       _log('INFO', 'WebSocket client connected: $clientId from ${client.address} (total clients: ${_clients.length})');
+
+      // Send challenge to client
+      final challenge = {
+        'type': 'challenge',
+        'nonce': nonce,
+        'timestamp': DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      };
+      socket.add(jsonEncode(challenge));
 
       _nostrRelay?.registerConnection(
         clientId,
@@ -2759,6 +2811,39 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, EmailHandlerMixin,
               break;
             }
 
+            // Protocol versioning and challenge-response verification
+            final protocol = message['protocol'] as int? ?? 1;
+            client.helloProtocol = protocol;
+
+            if (protocol >= 2 && event != null) {
+              // v2: Verify challenge-response
+              final verifyError = NostrEvent.verifyHelloEvent(
+                eventJson: event,
+                expectedChallenge: client.pendingChallenge,
+              );
+              if (verifyError != null) {
+                final response = {
+                  'type': 'hello_ack',
+                  'success': false,
+                  'error': 'identity_verification_failed',
+                  'message': verifyError,
+                  'station_id': _settings.callsign,
+                };
+                client.socket.add(jsonEncode(response));
+                _log('SECURITY', 'HELLO v2 rejected: $verifyError (client: ${client.id})');
+                _removeClient(client.id, reason: 'identity_verification_failed');
+                break;
+              }
+              client.verified = true;
+              _log('INFO', 'HELLO v2 verified for ${callsign ?? npub}');
+            } else {
+              // v1 legacy: accept but log security warning
+              _log('SECURITY', 'HELLO v1 (legacy, no challenge verification) from ${callsign ?? npub} (client: ${client.id})');
+            }
+
+            // Clear the pending challenge (consumed)
+            client.pendingChallenge = null;
+
             // SECURITY: Check for NIP-05 callsign collision before proceeding
             // This prevents email impersonation and misdelivery
             if (callsign != null) {
@@ -2802,20 +2887,21 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, EmailHandlerMixin,
               }
             }
 
-            // DEDUP: Close any existing zombie connections with same callsign+npub
-            // This handles cases where the server never received a proper disconnect
-            if (callsign != null && npub != null) {
+            // DEDUP: Only close connections from the SAME remote address (same device reconnecting).
+            // Multiple devices with the same callsign+npub are now legitimate (multi-device support).
+            if (callsign != null && npub != null && client.address != null) {
               final callsignUpper = callsign.toUpperCase();
               final zombies = _clients.values.where((c) =>
-                c.id != client.id &&  // Not the current connection
+                c.id != client.id &&
                 c.callsign != null &&
                 c.callsign!.toUpperCase() == callsignUpper &&
-                c.npub == npub
+                c.npub == npub &&
+                c.address == client.address  // Same physical device reconnecting
               ).toList();
 
               for (final zombie in zombies) {
-                _log('INFO', 'Closing zombie connection for $callsign (id: ${zombie.id}, replacing with ${client.id})');
-                _removeClient(zombie.id, reason: 'replaced_by_new_connection');
+                _log('INFO', 'Closing zombie connection for $callsign from same address ${client.address} (id: ${zombie.id}, replacing with ${client.id})');
+                _removeClient(zombie.id, reason: 'replaced_by_same_device');
               }
             }
 
@@ -6967,28 +7053,13 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, EmailHandlerMixin,
     final subParts = parts.sublist(1).where((p) => p.isNotEmpty).toList();
     final filePath = subParts.isNotEmpty ? subParts.join('/') : 'index.html';
 
-    // Find the client by callsign or nickname (case-insensitive)
-    PureConnectedClient? foundClient;
-    for (final c in _clients.values) {
-      // Check callsign first (primary identifier)
-      if (c.callsign?.toLowerCase() == identifier) {
-        foundClient = c;
-        break;
-      }
-      // Check nickname (friendly URL)
-      if (c.nickname != null && c.nickname!.toLowerCase() == identifier) {
-        foundClient = c;
-        break;
-      }
-    }
-
-    if (foundClient == null) {
+    // Check if any client matches this identifier
+    final clients = _findAllClientsByIdentifier(identifier);
+    if (clients.isEmpty) {
       request.response.statusCode = 404;
       request.response.write('Device not connected');
       return;
     }
-
-    final client = foundClient;
 
     // Route to the appropriate collection based on the first path segment
     // Use centralized app types list from app_constants.dart
@@ -7004,15 +7075,76 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, EmailHandlerMixin,
       appPath = '/www/$filePath';
     }
 
-    // Proxy to device
-    final requestId = DateTime.now().millisecondsSinceEpoch.toString();
+    // Try all devices sequentially (most responsive first)
+    final response = await _proxyToAnyDevice(identifier, 'GET', appPath);
+
+    if (response == null) {
+      request.response.statusCode = 504;
+      request.response.write('Gateway Timeout: No device responded');
+      return;
+    }
+
+    request.response.statusCode = response['statusCode'] ?? 500;
+    final body = response['responseBody'] ?? '';
+    final isBase64 = response['isBase64'] == true;
+
+    // Set content type based on file extension
+    final ext = appPath.split('.').last.toLowerCase();
+    final contentTypes = {
+      'html': 'text/html',
+      'htm': 'text/html',
+      'css': 'text/css',
+      'js': 'application/javascript',
+      'json': 'application/json',
+      'png': 'image/png',
+      'jpg': 'image/jpeg',
+      'jpeg': 'image/jpeg',
+      'gif': 'image/gif',
+      'svg': 'image/svg+xml',
+      'ico': 'image/x-icon',
+      'txt': 'text/plain',
+    };
+    final contentType = contentTypes[ext] ?? 'application/octet-stream';
+    request.response.headers.set('Content-Type', contentType);
+
+    if (isBase64) {
+      request.response.add(base64Decode(body));
+    } else {
+      request.response.write(body);
+    }
+  }
+
+  /// Pending proxy requests waiting for device response
+  final Map<String, Completer<Map<String, dynamic>>> _pendingProxyRequests = {};
+
+  /// Find ALL connected clients matching a callsign or nickname, sorted by responsiveness
+  List<PureConnectedClient> _findAllClientsByIdentifier(String identifier) {
+    final lower = identifier.toLowerCase();
+    final matches = _clients.values.where((c) =>
+      c.callsign?.toLowerCase() == lower ||
+      (c.nickname != null && c.nickname!.toLowerCase() == lower)
+    ).toList();
+    matches.sort((a, b) => b.successRate.compareTo(a.successRate));
+    return matches;
+  }
+
+  /// Proxy a request to a single device. Returns the response map without writing to HttpResponse.
+  /// Updates successCount/failCount on the client.
+  Future<Map<String, dynamic>?> _proxySingleDevice(
+    PureConnectedClient client,
+    String method,
+    String path,
+    String headers,
+    String body,
+  ) async {
+    final requestId = '${DateTime.now().millisecondsSinceEpoch}_${client.id}';
     final proxyRequest = {
       'type': 'HTTP_REQUEST',
       'requestId': requestId,
-      'method': 'GET',
-      'path': appPath,
-      'headers': '',
-      'body': '',
+      'method': method,
+      'path': path,
+      'headers': headers,
+      'body': body,
     };
 
     final completer = Completer<Map<String, dynamic>>();
@@ -7020,63 +7152,57 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, EmailHandlerMixin,
 
     try {
       client.socket.add(jsonEncode(proxyRequest));
-
-      final response = await completer.future.timeout(
-        const Duration(seconds: 30),
-        onTimeout: () => {'statusCode': 504, 'responseBody': 'Gateway Timeout'},
-      );
-
-      request.response.statusCode = response['statusCode'] ?? 500;
-      final body = response['responseBody'] ?? '';
-      final isBase64 = response['isBase64'] == true;
-
-      // Set content type based on file extension (use appPath which has the actual filename)
-      final ext = appPath.split('.').last.toLowerCase();
-      final contentTypes = {
-        'html': 'text/html',
-        'htm': 'text/html',
-        'css': 'text/css',
-        'js': 'application/javascript',
-        'json': 'application/json',
-        'png': 'image/png',
-        'jpg': 'image/jpeg',
-        'jpeg': 'image/jpeg',
-        'gif': 'image/gif',
-        'svg': 'image/svg+xml',
-        'ico': 'image/x-icon',
-        'txt': 'text/plain',
-      };
-      final contentType = contentTypes[ext] ?? 'application/octet-stream';
-      request.response.headers.set('Content-Type', contentType);
-
-      if (isBase64) {
-        request.response.add(base64Decode(body));
+      final response = await completer.future.timeout(const Duration(seconds: 5));
+      final statusCode = response['statusCode'] as int? ?? 500;
+      if (statusCode >= 200 && statusCode < 400) {
+        client.successCount++;
+      } else if (statusCode == 404) {
+        // 404 is not the device's fault, don't penalize
       } else {
-        request.response.write(body);
+        client.failCount++;
       }
+      return response;
+    } on TimeoutException {
+      client.failCount++;
+      return null;
     } catch (e) {
-      request.response.statusCode = 502;
-      request.response.write('Bad Gateway: $e');
+      client.failCount++;
+      return null;
     } finally {
       _pendingProxyRequests.remove(requestId);
     }
   }
 
-  /// Pending proxy requests waiting for device response
-  final Map<String, Completer<Map<String, dynamic>>> _pendingProxyRequests = {};
+  /// Try all devices for a callsign/nickname sequentially (most responsive first).
+  /// Returns the first 200 response, or last non-null response, or null.
+  Future<Map<String, dynamic>?> _proxyToAnyDevice(
+    String identifier,
+    String method,
+    String path, {
+    String headers = '',
+    String body = '',
+  }) async {
+    final clients = _findAllClientsByIdentifier(identifier);
+    if (clients.isEmpty) return null;
 
-  /// Proxy an HTTP request to a connected device via WebSocket
-  Future<void> _proxyRequestToDevice(HttpRequest request, String callsign, String apiPath) async {
-    // Find the client by callsign (case-insensitive)
-    PureConnectedClient? foundClient;
-    for (final c in _clients.values) {
-      if (c.callsign?.toUpperCase() == callsign.toUpperCase()) {
-        foundClient = c;
-        break;
+    Map<String, dynamic>? lastResponse;
+    for (final client in clients) {
+      final response = await _proxySingleDevice(client, method, path, headers, body);
+      if (response != null) {
+        lastResponse = response;
+        final statusCode = response['statusCode'] as int? ?? 500;
+        if (statusCode >= 200 && statusCode < 400) {
+          return response; // Success, return immediately
+        }
       }
     }
+    return lastResponse;
+  }
 
-    if (foundClient == null) {
+  /// Proxy an HTTP request to a connected device via WebSocket (multi-device aware)
+  Future<void> _proxyRequestToDevice(HttpRequest request, String callsign, String apiPath) async {
+    final clients = _findAllClientsByIdentifier(callsign);
+    if (clients.isEmpty) {
       request.response.statusCode = 404;
       request.response.headers.contentType = ContentType.json;
       request.response.write(jsonEncode({
@@ -7087,86 +7213,59 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, EmailHandlerMixin,
       return;
     }
 
-    final client = foundClient;
-    _log('INFO', 'Device proxy: ${request.method} -> ${client.callsign} $apiPath');
+    _log('INFO', 'Device proxy: ${request.method} -> $callsign $apiPath (${clients.length} device(s))');
 
-    // Proxy request to device via WebSocket
-    final requestId = DateTime.now().millisecondsSinceEpoch.toString();
-    final proxyRequest = {
-      'type': 'HTTP_REQUEST',
-      'requestId': requestId,
-      'method': request.method,
-      'path': apiPath,
-      'headers': jsonEncode({}),
-      'body': '',
-    };
-
-    // Read request body if present
+    // Read request body first (can only be read once)
+    String requestBody = '';
     if (request.contentLength > 0) {
-      final body = await utf8.decodeStream(request);
-      proxyRequest['body'] = body;
+      requestBody = await utf8.decodeStream(request);
     }
 
-    // Send request to device and wait for response
-    final completer = Completer<Map<String, dynamic>>();
-    _pendingProxyRequests[requestId] = completer;
+    // Try all devices sequentially
+    final response = await _proxyToAnyDevice(
+      callsign, request.method, apiPath,
+      headers: jsonEncode({}),
+      body: requestBody,
+    );
 
-    try {
-      client.socket.add(jsonEncode(proxyRequest));
-
-      // Wait for response with timeout
-      final response = await completer.future.timeout(
-        const Duration(seconds: 30),
-        onTimeout: () => {
-          'type': 'HTTP_RESPONSE',
-          'statusCode': 504,
-          'responseHeaders': '{"Content-Type": "application/json"}',
-          'responseBody': jsonEncode({
-            'error': 'Gateway Timeout',
-            'message': 'Device ${callsign.toUpperCase()} did not respond in time',
-          }),
-          'isBase64': false,
-        },
-      );
-
-      request.response.statusCode = response['statusCode'] ?? 500;
-      if (response['responseHeaders'] != null) {
-        try {
-          final headers = jsonDecode(response['responseHeaders'] as String) as Map<String, dynamic>;
-          headers.forEach((key, value) {
-            if (key.toLowerCase() == 'content-type') {
-              final ct = value.toString();
-              if (ct.contains('json')) {
-                request.response.headers.contentType = ContentType.json;
-              } else if (ct.contains('html')) {
-                request.response.headers.contentType = ContentType.html;
-              } else if (ct.contains('text')) {
-                request.response.headers.contentType = ContentType.text;
-              }
-            }
-          });
-        } catch (_) {}
-      }
-
-      final body = response['responseBody'] ?? '';
-      final isBase64 = response['isBase64'] == true;
-      if (isBase64) {
-        request.response.add(base64Decode(body));
-      } else {
-        request.response.write(body);
-      }
-
-      _log('INFO', 'Device proxy response: ${response['statusCode']} for ${client.callsign} $apiPath');
-    } catch (e) {
-      request.response.statusCode = 502;
+    if (response == null) {
+      request.response.statusCode = 504;
       request.response.headers.contentType = ContentType.json;
       request.response.write(jsonEncode({
-        'error': 'Bad Gateway',
-        'message': e.toString(),
+        'error': 'Gateway Timeout',
+        'message': 'No device responded for ${callsign.toUpperCase()}',
       }));
-    } finally {
-      _pendingProxyRequests.remove(requestId);
+      return;
     }
+
+    request.response.statusCode = response['statusCode'] ?? 500;
+    if (response['responseHeaders'] != null) {
+      try {
+        final headers = jsonDecode(response['responseHeaders'] as String) as Map<String, dynamic>;
+        headers.forEach((key, value) {
+          if (key.toLowerCase() == 'content-type') {
+            final ct = value.toString();
+            if (ct.contains('json')) {
+              request.response.headers.contentType = ContentType.json;
+            } else if (ct.contains('html')) {
+              request.response.headers.contentType = ContentType.html;
+            } else if (ct.contains('text')) {
+              request.response.headers.contentType = ContentType.text;
+            }
+          }
+        });
+      } catch (_) {}
+    }
+
+    final body = response['responseBody'] ?? '';
+    final isBase64 = response['isBase64'] == true;
+    if (isBase64) {
+      request.response.add(base64Decode(body));
+    } else {
+      request.response.write(body);
+    }
+
+    _log('INFO', 'Device proxy response: ${response['statusCode']} for $callsign $apiPath');
   }
 
   /// Handle /.well-known/nostr.json endpoint for NIP-05 verification

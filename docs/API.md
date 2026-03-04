@@ -3127,6 +3127,48 @@ curl -X POST http://localhost:3456/api/debug \
 
 ---
 
+### Connected Devices (Server-Side)
+
+**GET /api/debug/connected-devices** — Show all connected devices grouped by callsign with protocol version, verification status, and responsiveness stats
+
+```bash
+curl -s https://p2p.radio/api/debug/connected-devices | jq
+```
+
+Returns:
+```json
+{
+  "total_connections": 3,
+  "unique_callsigns": 2,
+  "devices_by_callsign": {
+    "X1SU86": [
+      {
+        "id": "1709568000000",
+        "callsign": "X1SU86",
+        "protocol": 2,
+        "verified": true,
+        "success_count": 15,
+        "fail_count": 1,
+        "platform": "Linux",
+        "connected_at": "..."
+      },
+      {
+        "id": "1709568001000",
+        "callsign": "X1SU86",
+        "protocol": 2,
+        "verified": true,
+        "success_count": 3,
+        "fail_count": 0,
+        "platform": "Android",
+        "connected_at": "..."
+      }
+    ]
+  }
+}
+```
+
+---
+
 ### Now Feed
 
 **GET /api/debug/now** — List current feed items

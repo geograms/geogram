@@ -4,6 +4,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
@@ -22,6 +23,7 @@ import '../services/nostr_storage_paths.dart';
 import '../services/nip05_registry_service.dart';
 import '../services/geoip_service.dart';
 import '../util/nostr_crypto.dart';
+import '../util/nostr_event.dart';
 import '../services/profile_storage.dart';
 import '../api/handlers/alert_handler.dart';
 import '../api/handlers/place_handler.dart';
@@ -436,6 +438,10 @@ abstract class StationServerBase {
     else if (path == '/api/clients' || path == '/api/devices') {
       await _handleClients(request);
     }
+    // Debug: connected devices with multi-device and auth info
+    else if (path == '/api/debug/connected-devices') {
+      await _handleDebugConnectedDevices(request);
+    }
     // Blossom endpoints
     else if (path.startsWith('/blossom')) {
       await _handleBlossomRequest(request);
@@ -486,9 +492,21 @@ abstract class StationServerBase {
         connectionType: connectionType,
       );
 
+      // Generate challenge nonce for HELLO protocol v2
+      final nonce = _generateChallengeNonce();
+      client.pendingChallenge = nonce;
+
       _clients[clientId] = client;
       _stats.recordConnection();
       log('INFO', 'WebSocket client connected: $clientId from $remoteAddress');
+
+      // Send challenge to client
+      final challenge = {
+        'type': 'challenge',
+        'nonce': nonce,
+        'timestamp': DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      };
+      socket.add(jsonEncode(challenge));
 
       // Register with NOSTR relay
       _nostrRelay?.registerConnection(
@@ -640,6 +658,39 @@ abstract class StationServerBase {
       return;
     }
 
+    // Protocol versioning and challenge-response verification
+    final protocol = message['protocol'] as int? ?? 1;
+    client.helloProtocol = protocol;
+
+    if (protocol >= 2 && event != null) {
+      // v2: Verify challenge-response
+      final verifyError = NostrEvent.verifyHelloEvent(
+        eventJson: event,
+        expectedChallenge: client.pendingChallenge,
+      );
+      if (verifyError != null) {
+        final response = {
+          'type': 'hello_ack',
+          'success': false,
+          'error': 'identity_verification_failed',
+          'message': verifyError,
+          'station_id': _settings.callsign,
+        };
+        client.socket.add(jsonEncode(response));
+        log('SECURITY', 'HELLO v2 rejected: $verifyError (client: ${client.id})');
+        _removeClient(client.id, reason: 'identity_verification_failed');
+        return;
+      }
+      client.verified = true;
+      log('INFO', 'HELLO v2 verified for ${callsign ?? npub}');
+    } else {
+      // v1 legacy: accept but log security warning
+      log('SECURITY', 'HELLO v1 (legacy, no challenge verification) from ${callsign ?? npub} (client: ${client.id})');
+    }
+
+    // Clear the pending challenge (consumed)
+    client.pendingChallenge = null;
+
     // Check NIP-05 collision
     if (callsign != null) {
       final registry = Nip05RegistryService();
@@ -758,18 +809,33 @@ abstract class StationServerBase {
         return target != null ? safeSocketSend(target, msg) : false;
       },
       findClientByCallsign: _findClientByCallsign,
+      findAllClientsByCallsign: _findAllClientsByCallsign,
       getStationDomain: () => _settings.sslDomain ?? _settings.callsign.toLowerCase(),
     );
   }
 
-  /// Find a connected client by callsign
+  /// Find a connected client by callsign (returns most responsive one)
   String? _findClientByCallsign(String callsign) {
-    for (final entry in _clients.entries) {
-      if (entry.value.callsign?.toUpperCase() == callsign.toUpperCase()) {
-        return entry.key;
-      }
-    }
-    return null;
+    final all = _findAllClientsByCallsign(callsign);
+    return all.isNotEmpty ? all.first : null;
+  }
+
+  /// Find ALL connected clients matching a callsign, sorted by responsiveness
+  List<String> _findAllClientsByCallsign(String callsign) {
+    final upper = callsign.toUpperCase();
+    final matches = _clients.entries
+        .where((e) => e.value.callsign?.toUpperCase() == upper)
+        .toList();
+    // Sort by success rate descending
+    matches.sort((a, b) => b.value.successRate.compareTo(a.value.successRate));
+    return matches.map((e) => e.key).toList();
+  }
+
+  /// Generate a random 32-byte hex nonce for challenge-response
+  String _generateChallengeNonce() {
+    final random = Random.secure();
+    final bytes = List<int>.generate(32, (_) => random.nextInt(256));
+    return bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
   }
 
   void _removeClient(String clientId, {String reason = 'disconnected'}) {
@@ -865,6 +931,24 @@ abstract class StationServerBase {
     request.response.write(jsonEncode({
       'count': clientList.length,
       'clients': clientList,
+    }));
+  }
+
+  Future<void> _handleDebugConnectedDevices(HttpRequest request) async {
+    request.response.headers.contentType = ContentType.json;
+
+    // Group clients by callsign
+    final byCallsign = <String, List<Map<String, dynamic>>>{};
+    for (final client in _clients.values) {
+      final cs = client.callsign?.toUpperCase() ?? 'UNKNOWN';
+      byCallsign.putIfAbsent(cs, () => []);
+      byCallsign[cs]!.add(client.toJson());
+    }
+
+    request.response.write(jsonEncode({
+      'total_connections': _clients.length,
+      'unique_callsigns': byCallsign.length,
+      'devices_by_callsign': byCallsign,
     }));
   }
 

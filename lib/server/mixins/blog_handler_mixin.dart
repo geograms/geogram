@@ -36,6 +36,9 @@ mixin BlogHandlerMixin {
   /// Find a connected WebSocket client by nickname or callsign.
   BlogClient? blogFindConnectedClientByIdentifier(String identifier);
 
+  /// Find ALL connected WebSocket clients by nickname or callsign (multi-device).
+  List<BlogClient> blogFindAllClientsByIdentifier(String identifier);
+
   /// Proxy a blog request to a connected client. Returns true if handled.
   Future<bool> blogProxyToClient(
       BlogClient client, HttpRequest request, String filename);
@@ -64,15 +67,15 @@ mixin BlogHandlerMixin {
     final filename = match.group(2)!; // blog filename without .html
 
     try {
-      // First, try to find a connected WebSocket client with this nickname/callsign
-      final client = blogFindConnectedClientByIdentifier(identifier);
+      // Try all connected WebSocket clients with this nickname/callsign (multi-device)
+      final clients = blogFindAllClientsByIdentifier(identifier);
 
-      if (client != null) {
+      for (final client in clients) {
         blogLog('INFO',
             'Proxying blog request to connected client: ${client.callsign} (${client.nickname ?? "no nickname"})');
         final handled = await blogProxyToClient(client, request, filename);
         if (handled) return;
-        // If proxy failed, fall through to local search
+        // If proxy failed for this device, try next one
       }
 
       // Fallback: Try to find the blog locally on the station server

@@ -71,8 +71,11 @@ import 'smtp_server.dart' show MIMEParser;
 /// Callback type for sending messages to clients
 typedef SendToClientCallback = bool Function(String clientId, String message);
 
-/// Callback type for finding a client by callsign
+/// Callback type for finding a client by callsign (returns most responsive)
 typedef FindClientByCallsignCallback = String? Function(String callsign);
+
+/// Callback type for finding ALL clients by callsign (multi-device support)
+typedef FindAllClientsByCallsignCallback = List<String> Function(String callsign);
 
 /// Callback type for getting station domain
 typedef GetStationDomainCallback = String Function();
@@ -1029,6 +1032,7 @@ class EmailRelayService {
     required SendToClientCallback sendToClient,
     required FindClientByCallsignCallback findClientByCallsign,
     required GetStationDomainCallback getStationDomain,
+    FindAllClientsByCallsignCallback? findAllClientsByCallsign,
   }) async {
     try {
       final parser = MIMEParser(rawMessage);
@@ -1080,17 +1084,24 @@ class EmailRelayService {
 
       bool anyDelivered = false;
 
-      // Deliver to each local recipient
+      // Deliver to each local recipient (all devices for multi-device support)
       for (final recipientAddr in to) {
         final callsign = _extractCallsign(recipientAddr);
-        final clientId = findClientByCallsign(callsign);
+        final clientIds = findAllClientsByCallsign != null
+            ? findAllClientsByCallsign(callsign)
+            : <String>[if (findClientByCallsign(callsign) case final id?) id];
 
-        if (clientId != null) {
-          // Online: deliver immediately via WebSocket
-          if (sendToClient(clientId, jsonEncode(emailMessage))) {
-            anyDelivered = true;
+        if (clientIds.isNotEmpty) {
+          // Online: deliver to ALL connected devices via WebSocket
+          final encodedMessage = jsonEncode(emailMessage);
+          for (final clientId in clientIds) {
+            if (sendToClient(clientId, encodedMessage)) {
+              anyDelivered = true;
+            }
+          }
+          if (anyDelivered) {
             LogService().log(
-              'External email delivered: $senderEmail -> $callsign (thread: $threadId)',
+              'External email delivered: $senderEmail -> $callsign (${clientIds.length} device(s), thread: $threadId)',
             );
           }
         } else {
@@ -1290,6 +1301,7 @@ class EmailRelayService {
     required SendToClientCallback sendToClient,
     required FindClientByCallsignCallback findClientByCallsign,
     required GetStationDomainCallback getStationDomain,
+    FindAllClientsByCallsignCallback? findAllClientsByCallsign,
   }) {
     final requestedThreadId = (message['thread_id'] as String?)?.trim();
     final threadId = (requestedThreadId != null && requestedThreadId.isNotEmpty)
@@ -1426,15 +1438,24 @@ class EmailRelayService {
         'delivered_at': DateTime.now().toUtc().toIso8601String(),
       };
 
-      // Find recipient client
-      final targetClientId = findClientByCallsign(targetCallsign);
+      // Find ALL recipient devices (multi-device support)
+      final targetClientIds = findAllClientsByCallsign != null
+          ? findAllClientsByCallsign(targetCallsign)
+          : <String>[if (findClientByCallsign(targetCallsign) case final id?) id];
 
-      if (targetClientId != null) {
-        // Recipient is connected - deliver immediately
-        if (sendToClient(targetClientId, jsonEncode(deliveryMessage))) {
+      if (targetClientIds.isNotEmpty) {
+        // Recipient is connected - deliver to ALL devices
+        final encodedMessage = jsonEncode(deliveryMessage);
+        bool anySuccess = false;
+        for (final targetClientId in targetClientIds) {
+          if (sendToClient(targetClientId, encodedMessage)) {
+            anySuccess = true;
+          }
+        }
+        if (anySuccess) {
           deliveryResults[recipientStr] = 'delivered';
           LogService().log(
-            'Email delivered: $senderCallsign -> $targetCallsign (thread: $threadId)',
+            'Email delivered: $senderCallsign -> $targetCallsign (${targetClientIds.length} device(s), thread: $threadId)',
           );
         } else {
           deliveryResults[recipientStr] = 'failed';

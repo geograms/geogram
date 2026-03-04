@@ -140,6 +140,7 @@ class NostrEvent {
 
   /// Create hello event for WebSocket connection
   /// Optionally includes location coordinates for distance calculation
+  /// If [challenge] is provided, adds a ["challenge", nonce] tag for v2 auth
   factory NostrEvent.createHello({
     required String npub,
     required String callsign,
@@ -149,6 +150,7 @@ class NostrEvent {
     double? longitude,
     String? platform,
     int? ssid,
+    String? challenge,
   }) {
     // Convert npub to pubkey hex
     final pubkeyHex = NostrCrypto.decodeNpub(npub);
@@ -176,6 +178,10 @@ class NostrEvent {
     // Include APRS-style SSID for device identification
     if (ssid != null && ssid > 0) {
       tags.add(['ssid', ssid.toString()]);
+    }
+    // Include challenge nonce for v2 authentication
+    if (challenge != null && challenge.isNotEmpty) {
+      tags.add(['challenge', challenge]);
     }
     // Build content with platform name
     final platformName = platform ?? 'Desktop';
@@ -326,6 +332,58 @@ class NostrEvent {
 
     // Verify Schnorr signature
     return NostrCrypto.schnorrVerify(id!, sig!, pubkey);
+  }
+
+  /// Verify a v2 HELLO event with challenge-response.
+  /// Returns null if valid, error string if not.
+  ///
+  /// Checks:
+  /// 1. Event signature is valid (Schnorr)
+  /// 2. Challenge nonce in event matches the server's pending challenge
+  /// 3. created_at is fresh (within 10 minutes)
+  /// 4. Callsign derives from npub (prevents vanity key spoofing)
+  static String? verifyHelloEvent({
+    required Map<String, dynamic> eventJson,
+    required String? expectedChallenge,
+  }) {
+    try {
+      final event = NostrEvent.fromJson(eventJson);
+
+      // 1. Verify signature
+      if (!event.verify()) {
+        return 'Invalid event signature';
+      }
+
+      // 2. Verify challenge nonce
+      if (expectedChallenge == null || expectedChallenge.isEmpty) {
+        return 'No pending challenge for this connection';
+      }
+      final challengeTag = event.getTagValue('challenge');
+      if (challengeTag == null || challengeTag != expectedChallenge) {
+        return 'Challenge nonce mismatch';
+      }
+
+      // 3. Check freshness (within 10 minutes)
+      final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+      final age = (now - event.createdAt).abs();
+      if (age > 600) {
+        return 'Event too old (${age}s, max 600s)';
+      }
+
+      // 4. Verify callsign derives from npub
+      final claimedCallsign = event.getTagValue('callsign');
+      if (claimedCallsign != null) {
+        final derivedSuffix = NostrCrypto.deriveCallsign(event.pubkey);
+        final expectedCallsign = 'X1$derivedSuffix';
+        if (claimedCallsign.toUpperCase() != expectedCallsign.toUpperCase()) {
+          return 'Callsign "$claimedCallsign" does not derive from npub (expected "$expectedCallsign")';
+        }
+      }
+
+      return null; // Valid
+    } catch (e) {
+      return 'Verification error: $e';
+    }
   }
 
   /// Convert to JSON for transmission

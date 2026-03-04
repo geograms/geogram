@@ -82,6 +82,22 @@ class StationClient {
   DateTime connectedAt;
   DateTime lastActivity;
 
+  // Challenge-response authentication (HELLO protocol v2)
+  String? pendingChallenge; // Nonce sent to client for verification
+  int helloProtocol = 1; // Protocol version used by client (1=legacy, 2=challenge-response)
+  bool verified = false; // Whether challenge-response passed
+
+  // Multi-device responsiveness tracking
+  int successCount = 0; // Successful proxy responses
+  int failCount = 0; // Timeouts/errors
+
+  /// Success rate for adaptive device ordering (0.0 to 1.0)
+  double get successRate {
+    final total = successCount + failCount;
+    if (total == 0) return 0.5; // Neutral for new connections
+    return successCount / total;
+  }
+
   StationClient({
     required this.socket,
     required this.id,
@@ -141,6 +157,10 @@ class StationClient {
       if (ssid > 0) 'ssid': ssid,
       'connected_at': connectedAt.toIso8601String(),
       'last_activity': lastActivity.toIso8601String(),
+      'protocol': helloProtocol,
+      'verified': verified,
+      'success_count': successCount,
+      'fail_count': failCount,
     };
   }
 }

@@ -27,6 +27,9 @@ mixin EmailHandlerMixin {
   /// Find a connected client by callsign (case-insensitive). Returns null if not found.
   EmailClient? emailFindClientByCallsign(String callsign);
 
+  /// Find ALL connected clients by callsign (multi-device support).
+  List<EmailClient> emailFindAllClientsByCallsign(String callsign);
+
   /// Send a message to a connected client. Returns true on success.
   bool emailSafeSocketSend(covariant EmailClient client, String data);
 
@@ -40,6 +43,7 @@ mixin EmailHandlerMixin {
       senderId: client.id,
       sendToClient: _sendToClient,
       findClientByCallsign: _findClientId,
+      findAllClientsByCallsign: _findAllClientIds,
       getStationDomain: () => stationDomain,
     );
   }
@@ -67,6 +71,7 @@ mixin EmailHandlerMixin {
       rawMessage: rawMessage,
       sendToClient: _sendToClient,
       findClientByCallsign: _findClientId,
+      findAllClientsByCallsign: _findAllClientIds,
       getStationDomain: () => stationDomain,
     );
   }
@@ -89,5 +94,11 @@ mixin EmailHandlerMixin {
 
   String? _findClientId(String callsign) {
     return emailFindClientByCallsign(callsign)?.id;
+  }
+
+  List<String> _findAllClientIds(String callsign) {
+    return emailFindAllClientsByCallsign(callsign)
+        .map((c) => c.id)
+        .toList();
   }
 }
