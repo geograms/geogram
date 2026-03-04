@@ -330,12 +330,50 @@ class IrcService {
   }
 
   /// Part a channel on a server.
+  /// Sends PART to the server, then immediately cleans up local state
+  /// (memory, cache, auto-join config) and emits channelLeft so the UI
+  /// closes without waiting for the server echo.
   void partChannel(String serverId, String channel) {
     _clients[serverId]?.partChannel(channel);
+
+    final key = '$serverId:$channel';
+
+    // Remove from in-memory channels and messages immediately
+    _channels.remove(key);
+    _messages.remove(key);
+    _typingUsers.remove(key);
+
+    // Remove from SQLite cache
+    _cacheService?.removeChannel(serverId, channel);
+
+    // Remove from autoJoinChannels config so it doesn't rejoin on reconnect
+    final config = _configs[serverId];
+    if (config != null &&
+        config.autoJoinChannels
+            .any((c) => c.toLowerCase() == channel.toLowerCase())) {
+      final updated = config.copyWith(
+        autoJoinChannels: config.autoJoinChannels
+            .where((c) => c.toLowerCase() != channel.toLowerCase())
+            .toList(),
+      );
+      _configs[serverId] = updated;
+      _saveConfigs();
+    }
+
+    // Emit channelLeft immediately so the chat page pops
+    _emitEvent(IrcEvent(
+      IrcEventType.channelLeft,
+      serverId: serverId,
+      data: channel,
+    ));
+
+    // Remove from Now feed
     EventBus().fire(NowGroupRemoveEvent(
       appType: 'irc',
-      sourceId: '$serverId:$channel',
+      sourceId: key,
     ));
+
+    LogService().log('IrcService: parted $channel on $serverId');
   }
 
   /// Mark a channel as read — resets unread count in memory and persists
@@ -594,14 +632,17 @@ class IrcService {
         _channels[key]?.users.remove(nick);
         final myNick = _clients[serverId]?.currentNick ?? '';
         if (nick == myNick) {
-          _channels.remove(key);
-          // Remove channel from cache
-          _cacheService?.removeChannel(serverId, channel);
-          _emitEvent(IrcEvent(
-            IrcEventType.channelLeft,
-            serverId: serverId,
-            data: channel,
-          ));
+          // partChannel() already cleaned up; this handles server-initiated
+          // removals (kick echo, etc.) or if the PART wasn't triggered locally.
+          if (_channels.containsKey(key)) {
+            _channels.remove(key);
+            _cacheService?.removeChannel(serverId, channel);
+            _emitEvent(IrcEvent(
+              IrcEventType.channelLeft,
+              serverId: serverId,
+              data: channel,
+            ));
+          }
         } else {
           final msg = IrcMessage(
             serverConfigId: serverId,
