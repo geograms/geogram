@@ -10,6 +10,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import '../../services/log_service.dart';
+import '../../util/event_bus.dart';
 import 'telegram_log.dart';
 import 'models/telegram_chat.dart';
 import 'models/telegram_forum_topic.dart';
@@ -96,6 +97,21 @@ class TelegramChatService {
           final msg = TelegramMessage.fromTdlib(msgJson);
           _cache?.cacheMessage(msg.chatId, msg);
           _onEvent(TelegramEventType.newMessage, msg);
+
+          // Fire NowItemEvent for incoming messages with text
+          if (!msg.isOutgoing && msg.text != null && msg.text!.isNotEmpty) {
+            final chat = _chats[msg.chatId];
+            final chatTitle = chat?.title ?? 'Telegram ${msg.chatId}';
+            EventBus().fire(NowItemEvent(
+              id: 'telegram:${msg.chatId}:${msg.id}',
+              appType: 'telegram',
+              sourceId: '${msg.chatId}',
+              sourceName: chatTitle,
+              callsign: msg.senderName ?? 'Unknown',
+              summary: msg.text!,
+              priority: NowPriority.chat,
+            ));
+          }
         }
         break;
 

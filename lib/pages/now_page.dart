@@ -12,6 +12,7 @@ import '../teleport/aprs/aprs_service.dart';
 import '../teleport/aprs/models/aprs_conversation.dart';
 import '../teleport/aprs/pages/aprs_conversation_page.dart';
 import '../teleport/irc/pages/irc_chat_page.dart';
+import '../teleport/telegram/pages/telegram_chat_page.dart';
 import '../util/app_type_theme.dart';
 
 /// Activity feed page showing recent events as source-grouped cards
@@ -354,6 +355,19 @@ class _NowPageState extends State<NowPage> {
       case 'alert':
         Navigator.pushNamed(context, '/alerts', arguments: item.sourceId);
         break;
+      case 'telegram':
+        final chatId = int.tryParse(item.sourceId);
+        if (chatId != null) {
+          Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (_) => TelegramChatPage(
+                chatId: chatId,
+                chatTitle: item.sourceName,
+              ),
+            ),
+          );
+        }
+        break;
       case 'aprs':
         final isTag = item.sourceId.startsWith('#');
         Navigator.of(context).push(
@@ -482,6 +496,8 @@ class _NowPageState extends State<NowPage> {
         return Icons.tag;
       case 'aprs':
         return Icons.cell_tower;
+      case 'telegram':
+        return Icons.send;
       default:
         return getAppTypeIcon(appType);
     }
