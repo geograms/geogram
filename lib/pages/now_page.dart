@@ -629,7 +629,7 @@ class _NowPageState extends State<NowPage> {
     final settings = _nowService.getGroupSettings(appType, sourceId);
     var maxItems = settings.maxItems.toDouble();
     var expiryHours = settings.expiryMinutes / 60.0;
-    var priorityOverride = settings.priorityOverride;
+    var priorityOverride = settings.priorityOverride ?? 5;
     final isMuted = _nowService.isSourceMuted(appType, sourceId);
     final isPinned = _nowService.isSourcePinned(appType, sourceId);
     final label = sourceName.isNotEmpty ? sourceName : sourceId;
@@ -671,28 +671,23 @@ class _NowPageState extends State<NowPage> {
                   contentPadding: EdgeInsets.zero,
                   leading: const Icon(Icons.priority_high),
                   title: const Text('Notification Priority'),
-                  trailing: DropdownButton<int?>(
+                  trailing: DropdownButton<int>(
                     value: priorityOverride,
                     underline: const SizedBox.shrink(),
                     isDense: true,
-                    items: [
-                      const DropdownMenuItem<int?>(
-                        value: null,
-                        child: Text('Default'),
-                      ),
-                      ...List.generate(10, (i) {
-                        final level = i + 1;
-                        String suffix = '';
-                        if (level == 1) suffix = ' — Urgent popup';
-                        if (level == 2) suffix = ' — Attention popup';
-                        return DropdownMenuItem<int?>(
-                          value: level,
-                          child: Text('$level$suffix'),
-                        );
-                      }),
-                    ],
-                    onChanged: (v) =>
-                        setSheetState(() => priorityOverride = v),
+                    items: List.generate(10, (i) {
+                      final level = i + 1;
+                      String suffix = '';
+                      if (level == 1) suffix = ' — Urgent popup';
+                      if (level == 2) suffix = ' — Attention popup';
+                      return DropdownMenuItem<int>(
+                        value: level,
+                        child: Text('$level$suffix'),
+                      );
+                    }),
+                    onChanged: (v) {
+                      if (v != null) setSheetState(() => priorityOverride = v);
+                    },
                   ),
                 ),
                 // Pin card
