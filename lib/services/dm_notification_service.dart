@@ -57,8 +57,13 @@ class DMNotificationService {
   final FlutterLocalNotificationsPlugin _notificationsPlugin =
       FlutterLocalNotificationsPlugin();
 
-  /// Expose the plugin so NowNotificationBridge can show/cancel notifications
-  FlutterLocalNotificationsPlugin get notificationsPlugin => _notificationsPlugin;
+  /// Show a notification via the shared plugin instance
+  Future<void> showNotification(int id, String? title, String? body,
+      NotificationDetails details, {String? payload}) =>
+    _notificationsPlugin.show(id, title, body, details, payload: payload);
+
+  /// Cancel a notification by ID
+  Future<void> cancelNotification(int id) => _notificationsPlugin.cancel(id);
 
   EventSubscription<DirectMessageReceivedEvent>? _dmEventSubscription;
   bool _initialized = false;
@@ -212,13 +217,13 @@ class DMNotificationService {
           }
         } else if (payload != null && payload.startsWith('now:')) {
           final data = payload.substring('now:'.length);
-          final parts = data.split(':');
+          final parts = data.split('|');
           if (parts.length >= 2) {
             final prefs = await SharedPreferences.getInstance();
             await prefs.remove(_pendingActionKey);
             final appType = parts[0];
             final sourceId = parts[1];
-            final sourceName = parts.length >= 3 ? parts.sublist(2).join(':') : '';
+            final sourceName = parts.length >= 3 ? parts.sublist(2).join('|') : '';
             Future.delayed(const Duration(milliseconds: 500), () {
               EventBus().fire(NowNotificationTappedEvent(
                 appType: appType,
@@ -337,11 +342,8 @@ class DMNotificationService {
   }
 
 
-  /// Handle notification tap
+  /// Handle notification tap (plugin callback)
   void _onNotificationTapped(NotificationResponse response) {
-    // This callback is called when notification is tapped:
-    // - App in foreground: called immediately
-    // - App in background: called when app resumes
     print('NOTIFICATION_DEBUG: *** _onNotificationTapped CALLED ***');
     print(
       'NOTIFICATION_DEBUG: actionId=${response.actionId}, id=${response.id}',
@@ -352,55 +354,48 @@ class DMNotificationService {
       print('NOTIFICATION_DEBUG: payload is null, returning');
       return;
     }
+    _handlePayload(payload);
+  }
 
+  /// Core payload handler — called from plugin callback and D-Bus fallback
+  void _handlePayload(String payload) {
     LogService().log(
-      'DMNotificationService: Notification tapped with payload: $payload',
+      'DMNotificationService: Handling notification payload: $payload',
     );
 
-    // Parse payload (format: "type:data", e.g., "dm:CALLSIGN")
     final colonIndex = payload.indexOf(':');
-    if (colonIndex > 0) {
-      final type = payload.substring(0, colonIndex);
-      final data = payload.substring(colonIndex + 1);
-      print('NOTIFICATION_DEBUG: parsed type=$type, data=$data');
+    if (colonIndex <= 0) return;
 
-      // Restore window from tray if hidden (desktop)
-      if (_isDesktopPlatform() && TrayService().isWindowHidden) {
-        TrayService().restoreFromTray();
-      }
+    final type = payload.substring(0, colonIndex);
+    final data = payload.substring(colonIndex + 1);
 
-      // Fire event for immediate navigation (foreground + background resume)
-      if (type == 'dm') {
-        print('NOTIFICATION_DEBUG: Firing DMNotificationTappedEvent for $data');
-        EventBus().fire(DMNotificationTappedEvent(targetCallsign: data));
-      } else if (type == 'email') {
-        if (data.isNotEmpty) {
-          EventBus().fire(EmailNotificationTappedEvent(threadId: data));
-        }
-      } else if (type == 'chat') {
-        if (data.isNotEmpty) {
-          EventBus().fire(ChatNotificationTappedEvent(roomId: data));
-        }
-      } else if (type == 'nav') {
-        EventBus().fire(NavigateToDevicesEvent());
-      } else if (type == 'now') {
-        // Generic Now item tap: payload = "now:appType:sourceId:sourceName"
-        final parts = data.split(':');
-        if (parts.length >= 2) {
-          final appType = parts[0];
-          final sourceId = parts.length >= 2 ? parts[1] : '';
-          final sourceName = parts.length >= 3 ? parts.sublist(2).join(':') : '';
-          EventBus().fire(NowNotificationTappedEvent(
-            appType: appType,
-            sourceId: sourceId,
-            sourceName: sourceName,
-          ));
-        }
+    // Restore window from tray if hidden (desktop)
+    if (_isDesktopPlatform() && TrayService().isWindowHidden) {
+      TrayService().restoreFromTray();
+    }
+
+    if (type == 'dm') {
+      EventBus().fire(DMNotificationTappedEvent(targetCallsign: data));
+    } else if (type == 'email') {
+      if (data.isNotEmpty) {
+        EventBus().fire(EmailNotificationTappedEvent(threadId: data));
       }
-      // Don't set pendingAction — the event handles immediate cases,
-      // SharedPreferences handles cold-start via _checkPendingNotification()
-    } else {
-      print('NOTIFICATION_DEBUG: No colon in payload, cannot parse');
+    } else if (type == 'chat') {
+      if (data.isNotEmpty) {
+        EventBus().fire(ChatNotificationTappedEvent(roomId: data));
+      }
+    } else if (type == 'nav') {
+      EventBus().fire(NavigateToDevicesEvent());
+    } else if (type == 'now') {
+      // Generic Now item tap: payload = "now:appType|sourceId|sourceName"
+      final parts = data.split('|');
+      if (parts.length >= 2) {
+        EventBus().fire(NowNotificationTappedEvent(
+          appType: parts[0],
+          sourceId: parts[1],
+          sourceName: parts.length >= 3 ? parts.sublist(2).join('|') : '',
+        ));
+      }
     }
   }
 

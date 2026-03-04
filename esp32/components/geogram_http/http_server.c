@@ -519,6 +519,7 @@ static esp_err_t connect_post_handler(httpd_req_t *req)
         httpd_resp_set_type(req, "application/json");
         httpd_resp_send(req, "{\"ok\":true}", -1);
     } else {
+#if BOARD_MODEL == MODEL_KV4P
         // No callback — attempt STA connection directly (KV4P standalone mode)
         ESP_LOGI(TAG, "Connecting to WiFi: %s", ssid);
         esp_err_t conn_err = geogram_wifi_connect_sta(ssid, password);
@@ -528,6 +529,10 @@ static esp_err_t connect_post_handler(httpd_req_t *req)
         } else {
             httpd_resp_send(req, "{\"ok\":true}", -1);
         }
+#else
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req, "{\"ok\":false,\"error\":\"no config callback\"}", -1);
+#endif
     }
 
     return ESP_OK;

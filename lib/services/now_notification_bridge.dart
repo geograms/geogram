@@ -39,9 +39,6 @@ class NowNotificationBridge {
   final List<String> _recentLines = [];
   int _totalCount = 0;
 
-  FlutterLocalNotificationsPlugin get _plugin =>
-      DMNotificationService().notificationsPlugin;
-
   void initialize() {
     if (_initialized) return;
 
@@ -78,14 +75,15 @@ class NowNotificationBridge {
       }
     }
     for (final nid in toCancel) {
-      _plugin.cancel(nid);
+      DMNotificationService().cancelNotification(nid);
       _activeNotifications.remove(nid);
     }
 
-    // --- Show notifications for new unread items ---
+    // --- Show notifications for new unread items (priority <= 2 only) ---
     for (final item in currentItems) {
       if (item.isRead) continue;
       if (_bootstrapIds.contains(item.id)) continue;
+      if (item.priority > 2) continue; // Only popup for urgent/attention
 
       final nid = _notificationId(item.id);
       if (_activeNotifications.containsKey(nid)) continue;
@@ -129,7 +127,9 @@ class NowNotificationBridge {
       iOS: iosDetails,
     );
 
-    await _plugin.show(nid, title, body, notificationDetails, payload: payload);
+    await DMNotificationService().showNotification(
+      nid, title, body, notificationDetails, payload: payload,
+    );
 
     _recordLine('$title: $body');
 
@@ -178,8 +178,8 @@ class NowNotificationBridge {
       case 'chat':
         return 'chat:${item.sourceId}';
       default:
-        // Generic Now handler: "now:appType:sourceId:sourceName"
-        return 'now:${item.appType}:${item.sourceId}:${item.sourceName}';
+        // Generic Now handler: "now:appType|sourceId|sourceName"
+        return 'now:${item.appType}|${item.sourceId}|${item.sourceName}';
     }
   }
 
@@ -270,7 +270,7 @@ class NowNotificationBridge {
 
     final notificationDetails = NotificationDetails(android: androidDetails);
 
-    await _plugin.show(
+    await DMNotificationService().showNotification(
       _summaryNotificationId,
       'Geogram',
       '$_totalCount new messages',
@@ -281,7 +281,7 @@ class NowNotificationBridge {
 
   void _cancelAll() {
     for (final nid in _activeNotifications.keys) {
-      _plugin.cancel(nid);
+      DMNotificationService().cancelNotification(nid);
     }
     _activeNotifications.clear();
   }
