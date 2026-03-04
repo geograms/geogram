@@ -9,6 +9,8 @@ import '../util/event_bus.dart';
 class NowGroupSettings {
   final int maxItems;
   final int expiryMinutes; // 0 = never expire
+  final int? priorityOverride; // null = use item's own priority, 1-10 = override
+  final bool pinned; // true = card always sorts to top
 
   static const int defaultMaxItems = 5;
   static const int defaultExpiryMinutes = 1440; // 24h
@@ -16,17 +18,23 @@ class NowGroupSettings {
   const NowGroupSettings({
     this.maxItems = defaultMaxItems,
     this.expiryMinutes = defaultExpiryMinutes,
+    this.priorityOverride,
+    this.pinned = false,
   });
 
   Map<String, dynamic> toJson() => {
         'maxItems': maxItems,
         'expiryMinutes': expiryMinutes,
+        if (priorityOverride != null) 'priorityOverride': priorityOverride,
+        'pinned': pinned,
       };
 
   factory NowGroupSettings.fromJson(Map<String, dynamic> json) =>
       NowGroupSettings(
         maxItems: json['maxItems'] as int? ?? defaultMaxItems,
         expiryMinutes: json['expiryMinutes'] as int? ?? defaultExpiryMinutes,
+        priorityOverride: json['priorityOverride'] as int?,
+        pinned: json['pinned'] as bool? ?? false,
       );
 }
 

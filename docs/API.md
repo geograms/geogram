@@ -3144,9 +3144,11 @@ curl -X POST http://localhost:3456/api/debug \
 - Returns: `{ settings: { "_default": { "maxItems": 5, "expiryMinutes": 1440 }, ... } }`
 
 **POST /api/debug/now/settings** — Set group settings
-- Body: `{ "group": "chat", "maxItems": 10, "expiryMinutes": 1440 }`
+- Body: `{ "group": "chat", "maxItems": 10, "expiryMinutes": 1440, "priorityOverride": 1, "pinned": true }`
 - `group` can be `"_default"`, `"appType"`, or `"appType:sourceId"` for cascading resolution
 - Settings resolution: `appType:sourceId` → `appType` → `_default` → hardcoded (5 items, 1440 min)
+- `priorityOverride` (int, optional): Override item priority for this group (1-2 triggers desktop popups). Omit or `null` to use the item's own priority.
+- `pinned` (bool, default false): When true, the card sorts to the top of the Now feed
 
 **POST /api/debug/now/remove-group** — Remove all items for a source group
 - Body: `{ "appType": "irc", "sourceId": "libera:#geogram" }`

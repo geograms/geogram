@@ -111,8 +111,14 @@ class _NowPageState extends State<NowPage> {
       }
     }
 
-    // Sort cards by most recent activity first
-    cards.sort((a, b) => b.newestTimestamp.compareTo(a.newestTimestamp));
+    // Pinned cards first, then by most recent activity
+    cards.sort((a, b) {
+      final aPinned = _nowService.isSourcePinned(a.appType, a.sourceId);
+      final bPinned = _nowService.isSourcePinned(b.appType, b.sourceId);
+      if (aPinned && !bPinned) return -1;
+      if (!aPinned && bPinned) return 1;
+      return b.newestTimestamp.compareTo(a.newestTimestamp);
+    });
 
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -203,6 +209,15 @@ class _NowPageState extends State<NowPage> {
                       overflow: TextOverflow.ellipsis,
                     ),
                   ),
+                  if (_nowService.isSourcePinned(card.appType, card.sourceId))
+                    Padding(
+                      padding: const EdgeInsets.only(right: 4),
+                      child: Icon(
+                        Icons.push_pin,
+                        size: 14,
+                        color: colorScheme.primary.withAlpha(180),
+                      ),
+                    ),
                   if (card.unreadCount > 0) ...[
                     const SizedBox(width: 8),
                     _buildUnreadBadge(card.unreadCount),
@@ -614,11 +629,14 @@ class _NowPageState extends State<NowPage> {
     final settings = _nowService.getGroupSettings(appType, sourceId);
     var maxItems = settings.maxItems.toDouble();
     var expiryHours = settings.expiryMinutes / 60.0;
+    var priorityOverride = settings.priorityOverride;
     final isMuted = _nowService.isSourceMuted(appType, sourceId);
+    final isPinned = _nowService.isSourcePinned(appType, sourceId);
     final label = sourceName.isNotEmpty ? sourceName : sourceId;
 
     showModalBottomSheet(
       context: context,
+      isScrollControlled: true,
       builder: (context) => StatefulBuilder(
         builder: (context, setSheetState) => SafeArea(
           child: Padding(
@@ -644,6 +662,65 @@ class _NowPageState extends State<NowPage> {
                       : _i18n.t('now_mute_source')),
                   onTap: () {
                     _nowService.toggleSourceMute(appType, sourceId);
+                    Navigator.pop(context);
+                  },
+                ),
+                const Divider(),
+                // Priority override
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.priority_high),
+                  title: const Text('Notification Priority'),
+                  trailing: DropdownButton<int?>(
+                    value: priorityOverride,
+                    underline: const SizedBox.shrink(),
+                    isDense: true,
+                    items: [
+                      const DropdownMenuItem<int?>(
+                        value: null,
+                        child: Text('Default'),
+                      ),
+                      ...List.generate(10, (i) {
+                        final level = i + 1;
+                        String suffix = '';
+                        if (level == 1) suffix = ' — Urgent popup';
+                        if (level == 2) suffix = ' — Attention popup';
+                        return DropdownMenuItem<int?>(
+                          value: level,
+                          child: Text('$level$suffix'),
+                        );
+                      }),
+                    ],
+                    onChanged: (v) =>
+                        setSheetState(() => priorityOverride = v),
+                  ),
+                ),
+                // Pin card
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(
+                      isPinned ? Icons.push_pin : Icons.push_pin_outlined),
+                  title: Text(isPinned ? 'Unpin' : 'Pin to Top'),
+                  onTap: () {
+                    _nowService.setGroupSettings(
+                      '$appType:$sourceId',
+                      NowGroupSettings(
+                        maxItems: settings.maxItems,
+                        expiryMinutes: settings.expiryMinutes,
+                        priorityOverride: settings.priorityOverride,
+                        pinned: !isPinned,
+                      ),
+                    );
+                    Navigator.pop(context);
+                  },
+                ),
+                // Clear messages
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.delete_sweep),
+                  title: const Text('Clear Messages'),
+                  onTap: () {
+                    _nowService.removeGroup(appType, sourceId);
                     Navigator.pop(context);
                   },
                 ),
@@ -690,6 +767,8 @@ class _NowPageState extends State<NowPage> {
                         NowGroupSettings(
                           maxItems: maxItems.round(),
                           expiryMinutes: (expiryHours * 60).round(),
+                          priorityOverride: priorityOverride,
+                          pinned: isPinned,
                         ),
                       );
                       Navigator.pop(context);

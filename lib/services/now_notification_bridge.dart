@@ -83,7 +83,8 @@ class NowNotificationBridge {
     for (final item in currentItems) {
       if (item.isRead) continue;
       if (_bootstrapIds.contains(item.id)) continue;
-      if (item.priority > 2) continue; // Only popup for urgent/attention
+      final effectivePriority = NowService().getEffectivePriority(item);
+      if (effectivePriority > 2) continue; // Only popup for urgent/attention
 
       final nid = _notificationId(item.id);
       if (_activeNotifications.containsKey(nid)) continue;

@@ -19319,12 +19319,26 @@ function cleanup() {
         final group = body['group'] as String? ?? '_default';
         final maxItems = body['maxItems'] as int? ?? NowGroupSettings.defaultMaxItems;
         final expiryMinutes = body['expiryMinutes'] as int? ?? NowGroupSettings.defaultExpiryMinutes;
+        final priorityOverride = body['priorityOverride'] as int?;
+        final pinned = body['pinned'] as bool? ?? false;
         nowService.setGroupSettings(
           group,
-          NowGroupSettings(maxItems: maxItems, expiryMinutes: expiryMinutes),
+          NowGroupSettings(
+            maxItems: maxItems,
+            expiryMinutes: expiryMinutes,
+            priorityOverride: priorityOverride,
+            pinned: pinned,
+          ),
         );
         return shelf.Response.ok(
-          jsonEncode({'success': true, 'group': group, 'maxItems': maxItems, 'expiryMinutes': expiryMinutes}),
+          jsonEncode({
+            'success': true,
+            'group': group,
+            'maxItems': maxItems,
+            'expiryMinutes': expiryMinutes,
+            'priorityOverride': priorityOverride,
+            'pinned': pinned,
+          }),
           headers: headers,
         );
       } catch (e) {

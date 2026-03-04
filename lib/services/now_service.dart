@@ -122,6 +122,17 @@ class NowService {
   Map<String, NowGroupSettings> get allGroupSettings =>
       Map.unmodifiable(_groupSettings);
 
+  /// Effective priority for an item (respects per-group override)
+  int getEffectivePriority(NowItem item) {
+    return getGroupSettings(item.appType, item.sourceId).priorityOverride ??
+        item.priority;
+  }
+
+  /// Whether a source card is pinned to top
+  bool isSourcePinned(String appType, String sourceId) {
+    return getGroupSettings(appType, sourceId).pinned;
+  }
+
   // ---- Two-level grouped items ----
 
   /// Returns items grouped as {appType: {sourceId: [items]}}
