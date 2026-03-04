@@ -3856,6 +3856,111 @@ function cleanup() {
         signature = event.sig;
         eventId = event.id;
 
+      } else if (body.containsKey('content') &&
+          body.containsKey('signature') &&
+          body.containsKey('pubkey')) {
+        // Flat NOSTR-signed message from remote user
+        content = body['content'] as String;
+        final senderCallsign = body['callsign'] as String?;
+        final pubkey = body['pubkey'] as String;
+        signature = body['signature'] as String?;
+        eventId = body['event_id'] as String?;
+        final rawCreatedAt = body['created_at'];
+
+        if (senderCallsign == null || senderCallsign.isEmpty) {
+          return shelf.Response.badRequest(
+            body: jsonEncode({
+              'error': 'Missing callsign for signed message',
+              'code': 'MISSING_CALLSIGN',
+            }),
+            headers: headers,
+          );
+        }
+
+        // Derive npub from pubkey
+        npub = body['npub'] as String?;
+        if (npub == null || npub.isEmpty) {
+          try {
+            npub = NostrCrypto.encodeNpub(pubkey);
+          } catch (e) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'error': 'Invalid pubkey',
+                'code': 'INVALID_PUBKEY',
+              }),
+              headers: headers,
+            );
+          }
+        }
+
+        // Parse created_at
+        final ts = rawCreatedAt is int
+            ? rawCreatedAt
+            : int.tryParse(rawCreatedAt?.toString() ?? '');
+        createdAt = ts ?? (DateTime.now().millisecondsSinceEpoch ~/ 1000);
+
+        // Verify NOSTR signature
+        if (signature == null ||
+            signature!.isEmpty ||
+            eventId == null ||
+            eventId!.isEmpty) {
+          return shelf.Response.forbidden(
+            jsonEncode({
+              'error': 'Missing signature or event_id for signed message',
+              'code': 'MISSING_SIGNATURE',
+            }),
+            headers: headers,
+          );
+        }
+
+        try {
+          final event = NostrEvent(
+            id: eventId!,
+            pubkey: pubkey,
+            createdAt: createdAt!,
+            kind: 1,
+            tags: [
+              ['t', 'chat'],
+              ['room', roomId],
+              ['callsign', senderCallsign],
+            ],
+            content: content,
+            sig: signature!,
+          );
+          if (!event.verify()) {
+            return shelf.Response.forbidden(
+              jsonEncode({
+                'error': 'Invalid signature',
+                'code': 'INVALID_SIGNATURE',
+              }),
+              headers: headers,
+            );
+          }
+        } catch (e) {
+          return shelf.Response.forbidden(
+            jsonEncode({
+              'error': 'Signature verification failed: $e',
+              'code': 'SIGNATURE_ERROR',
+            }),
+            headers: headers,
+          );
+        }
+
+        // Check room access for actual sender
+        final canAccess =
+            await _canAccessChatRoom(roomId, npub, callsign: senderCallsign);
+        if (!canAccess) {
+          return shelf.Response.forbidden(
+            jsonEncode({
+              'error': 'Sender not authorized for this room',
+              'code': 'AUTHOR_ACCESS_DENIED',
+            }),
+            headers: headers,
+          );
+        }
+
+        author = senderCallsign;
+
       } else if (body.containsKey('content')) {
         // Simple message from device owner (no auth required for device's own messages)
         content = body['content'] as String;
