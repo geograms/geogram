@@ -8,6 +8,9 @@ import 'package:flutter/material.dart';
 import '../models/now_item.dart';
 import '../services/now_service.dart';
 import '../services/i18n_service.dart';
+import '../teleport/aprs/aprs_service.dart';
+import '../teleport/aprs/models/aprs_conversation.dart';
+import '../teleport/aprs/pages/aprs_conversation_page.dart';
 import '../teleport/irc/pages/irc_chat_page.dart';
 import '../util/app_type_theme.dart';
 
@@ -351,6 +354,23 @@ class _NowPageState extends State<NowPage> {
       case 'alert':
         Navigator.pushNamed(context, '/alerts', arguments: item.sourceId);
         break;
+      case 'aprs':
+        final isTag = item.sourceId.startsWith('#');
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => AprsConversationPage(
+              conversationId: item.sourceId,
+              conversationType: isTag
+                  ? AprsConversationType.tag
+                  : item.sourceId == 'geochat'
+                      ? AprsConversationType.direct
+                      : AprsConversationType.direct,
+              partnerPosition:
+                  AprsService().lastKnownPositions[item.sourceId],
+            ),
+          ),
+        );
+        break;
       default:
         break;
     }
@@ -460,6 +480,8 @@ class _NowPageState extends State<NowPage> {
         return Icons.campaign;
       case 'irc':
         return Icons.tag;
+      case 'aprs':
+        return Icons.cell_tower;
       default:
         return getAppTypeIcon(appType);
     }

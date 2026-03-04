@@ -20,6 +20,7 @@ import '../../services/ble_message_service.dart';
 import '../../services/location_provider_service.dart';
 import '../../services/log_service.dart';
 import '../../services/profile_storage.dart';
+import '../../util/event_bus.dart';
 import 'aprs_cache_service.dart';
 import 'aprs_is_client.dart';
 import 'blue_aprs_service.dart';
@@ -829,6 +830,28 @@ class AprsService {
         messages.removeRange(0, messages.length - _maxMessages);
       }
       _uiDirtyMessages = true;
+
+      // Fire NowItemEvent for incoming APRS messages (not outgoing, not ACK/REJ)
+      if (!packet.isOutgoing) {
+        final sourceId = packet.isTagMessage
+            ? packet.messageTag!
+            : packet.fromCallsign;
+        final sourceName = packet.isTagMessage
+            ? 'APRS ${packet.messageTag}'
+            : 'APRS ${packet.fromCallsign}';
+        final summary = packet.isTagMessage
+            ? packet.messageBody ?? ''
+            : packet.messageText ?? '';
+        EventBus().fire(NowItemEvent(
+          id: 'aprs:msg:${packet.fromCallsign}:${packet.timestamp.millisecondsSinceEpoch}',
+          appType: 'aprs',
+          sourceId: sourceId,
+          sourceName: sourceName,
+          callsign: packet.fromCallsign,
+          summary: summary,
+          priority: NowPriority.chat,
+        ));
+      }
     } else {
       streamPackets.add(packet);
       if (streamPackets.length > _maxStreamPackets) {
@@ -844,6 +867,19 @@ class AprsService {
         geoChatMessages.removeRange(0, geoChatMessages.length - _maxMessages);
       }
       _uiDirtyMessages = true;
+
+      // Fire NowItemEvent for incoming geo-chat
+      if (!packet.isOutgoing) {
+        EventBus().fire(NowItemEvent(
+          id: 'aprs:geo:${packet.fromCallsign}:${packet.timestamp.millisecondsSinceEpoch}',
+          appType: 'aprs',
+          sourceId: 'geochat',
+          sourceName: 'APRS Geo Chat',
+          callsign: packet.fromCallsign,
+          summary: packet.comment ?? '',
+          priority: NowPriority.chat,
+        ));
+      }
     }
   }
 
