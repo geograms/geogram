@@ -2198,6 +2198,11 @@ function cleanup() {
         return await _handleHotspotPortalAction(action.toLowerCase(), params, headers);
       }
 
+      // Handle karma debug actions
+      if (action.toLowerCase().startsWith('karma_')) {
+        return await _handleKarmaAction(action.toLowerCase(), params, headers);
+      }
+
       final debugController = DebugController();
       final result = await debugController.executeAction(action, params);
 
@@ -19441,5 +19446,138 @@ function cleanup() {
       jsonEncode({'error': 'Unknown now endpoint: $urlPath'}),
       headers: headers,
     );
+  }
+
+  // ============================================================
+  // Karma Debug Actions
+  // ============================================================
+
+  Future<shelf.Response> _handleKarmaAction(
+    String action,
+    Map<String, dynamic> params,
+    Map<String, String> headers,
+  ) async {
+    try {
+      final stationServer = StationServerService();
+
+      // Ensure karma store is initialized
+      if (stationServer.dataDir == null) {
+        await stationServer.initialize();
+      }
+
+      switch (action) {
+        case 'karma_award':
+          final callsign = params['callsign'] as String?;
+          final karmaAction = params['karma_action'] as String?;
+          final meta = (params['meta'] as Map<String, dynamic>?) ?? {};
+
+          if (callsign == null || karmaAction == null) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Missing callsign or karma_action',
+              }),
+              headers: headers,
+            );
+          }
+
+          final points = await stationServer.karmaRecord(
+            callsign: callsign,
+            action: karmaAction,
+            meta: meta,
+          );
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'callsign': callsign.toUpperCase(),
+              'action': karmaAction,
+              'points_awarded': points,
+            }),
+            headers: headers,
+          );
+
+        case 'karma_profile':
+          final callsign = (params['callsign'] as String?) ??
+              ProfileService().getProfile().callsign;
+          final profile = await stationServer.karmaStore.readProfile(
+            callsign.toUpperCase(),
+          );
+          final todayPoints = await stationServer.karmaStore.getTodayPoints(
+            callsign.toUpperCase(),
+          );
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'callsign': callsign.toUpperCase(),
+              'profile': profile?.toJson(),
+              'today_points': todayPoints,
+            }),
+            headers: headers,
+          );
+
+        case 'karma_history':
+          final callsign = (params['callsign'] as String?) ??
+              ProfileService().getProfile().callsign;
+          final limit = (params['limit'] as int?) ?? 50;
+          final events = await stationServer.karmaStore.readEvents(
+            callsign.toUpperCase(),
+            limit: limit,
+          );
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'callsign': callsign.toUpperCase(),
+              'events': events.map((e) => e.toJson()).toList(),
+              'count': events.length,
+            }),
+            headers: headers,
+          );
+
+        case 'karma_leaderboard':
+          final period = (params['period'] as String?) ?? 'alltime';
+          final entries = await stationServer.karmaStore.readLeaderboard(period);
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'period': period,
+              'entries': entries.map((e) => e.toJson()).toList(),
+            }),
+            headers: headers,
+          );
+
+        case 'karma_recompute':
+          await stationServer.karmaLeaderboard.recomputeAll();
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'message': 'Leaderboards recomputed',
+            }),
+            headers: headers,
+          );
+
+        default:
+          return shelf.Response.badRequest(
+            body: jsonEncode({
+              'success': false,
+              'error': 'Unknown karma action: $action',
+              'available': [
+                'karma_award',
+                'karma_profile',
+                'karma_history',
+                'karma_leaderboard',
+                'karma_recompute',
+              ],
+            }),
+            headers: headers,
+          );
+      }
+    } catch (e, stack) {
+      LogService().log('LogApiService: Karma action error: $e');
+      LogService().log('Stack: $stack');
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'success': false, 'error': e.toString()}),
+        headers: headers,
+      );
+    }
   }
 }

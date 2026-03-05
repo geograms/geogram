@@ -131,6 +131,7 @@ import 'pages/qr_browser_page.dart';
 import 'pages/shared_browser_page.dart';
 import 'pages/teleport_browser_page.dart';
 import 'pages/conference_home_page.dart';
+import 'pages/karma_page.dart';
 import 'pages/website_browser_page.dart';
 import 'pages/profile_management_page.dart';
 import 'pages/create_app_page.dart';
@@ -2497,6 +2498,7 @@ class _AppsPageState extends State<AppsPage> {
     _DefaultAppType('backup', Icons.backup),
     _DefaultAppType('console', Icons.terminal),
     _DefaultAppType('reader', Icons.menu_book),
+    _DefaultAppType('karma', Icons.emoji_events),
   ];
 
   @override
@@ -3015,6 +3017,8 @@ class _AppsPageState extends State<AppsPage> {
                                           appPath: appEntry.storagePath ?? '',
                                           appTitle: appEntry.title,
                                         )
+                                      : appEntry.type == 'karma'
+                                      ? const KarmaPage()
                                       : AppBrowserPage(app: appEntry);
 
                                   LogService().log(

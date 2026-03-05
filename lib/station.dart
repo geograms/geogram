@@ -58,6 +58,8 @@ import 'server/mixins/console_command_mixin.dart';
 import 'server/mixins/chat_moderation_mixin.dart';
 import 'server/mixins/chat_nip05_mixin.dart';
 import 'server/mixins/conference_mixin.dart';
+import 'server/mixins/karma_mixin.dart';
+import 'server/karma/karma_engine.dart';
 import 'cli/themes_embedded.dart';
 
 /// App version - use central version.dart for consistency
@@ -617,7 +619,7 @@ class PureTileCache {
 }
 
 /// Unified station server for CLI and Android modes
-class StationServer with RateLimitMixin, HealthWatchdogMixin, EmailHandlerMixin, BlogHandlerMixin, ConsoleCommandMixin, ChatNip05Mixin, ChatModerationMixin, ConferenceMixin, XmppServerMixin
+class StationServer with RateLimitMixin, HealthWatchdogMixin, EmailHandlerMixin, BlogHandlerMixin, ConsoleCommandMixin, ChatNip05Mixin, ChatModerationMixin, ConferenceMixin, XmppServerMixin, KarmaMixin
     implements StationCommandInterface {
   HttpServer? _httpServer;
   HttpServer? _httpsServer;
@@ -830,6 +832,19 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, EmailHandlerMixin,
 
   @override
   void logCrash(String reason) => _logCrash(reason);
+
+  // KarmaMixin requires: karmaBroadcastToCallsign()
+  @override
+  void karmaBroadcastToCallsign(String callsign, String payload) {
+    final cs = callsign.toUpperCase();
+    for (final client in _clients.values) {
+      if (client.callsign?.toUpperCase() == cs) {
+        try {
+          client.socket.add(payload);
+        } catch (_) {}
+      }
+    }
+  }
 
   /// Get the shared alert API handlers (lazy initialization)
   /// Must only be called after init() has been called (when _dataDir is set)
@@ -1831,13 +1846,22 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, EmailHandlerMixin,
       // Listen for content creation events and broadcast to connected clients
       EventBus().on<BlogPostPublishedEvent>((event) {
         _broadcastUpdate('UPDATE:${event.author}/blog/${event.postId}');
+        karmaRecord(callsign: event.author, action: 'blog_published',
+            meta: {'post_id': event.postId});
       });
       EventBus().on<EventCreatedEvent>((event) {
         _broadcastUpdate('UPDATE:${event.author}/events/${event.eventId}');
+        karmaRecord(callsign: event.author, action: 'event_created',
+            meta: {'event_id': event.eventId});
       });
       EventBus().on<PlaceCreatedEvent>((event) {
         _broadcastUpdate('UPDATE:${event.author}/places/${event.placeId}');
+        karmaRecord(callsign: event.author, action: 'place_created',
+            meta: {'place_id': event.placeId});
       });
+
+      // Start karma service
+      await startKarmaService();
 
       return true;
     } catch (e) {
@@ -1926,6 +1950,9 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, EmailHandlerMixin,
 
     // Stop health watchdog
     stopHealthWatchdog();
+
+    // Stop karma service
+    stopKarmaService();
 
     // Close all client connections
     for (final client in _clients.values) {
@@ -2400,6 +2427,18 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, EmailHandlerMixin,
       signature: msg.signature,
       verified: msg.verified,
     ));
+
+    // Record chat message karma (with anti-gaming validation)
+    final content = msg.content;
+    final cs = msg.senderCallsign;
+    if (content.isNotEmpty) {
+      final prev = karmaPreviousChatMessage(cs);
+      if (KarmaEngine.isValidChatMessage(content, prev)) {
+        karmaSetPreviousChatMessage(cs, content);
+        karmaRecord(callsign: cs, action: 'chat_message',
+            meta: {'room_id': msg.roomId, 'msg_length': content.length});
+      }
+    }
   }
 
   List<ChatMessage> getChatHistory(String roomId, {int limit = 20, String? before}) {
@@ -2578,6 +2617,8 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, EmailHandlerMixin,
         await _handleEmailReject(request);
       } else if (path == '/api/email/allowlist') {
         await _handleEmailAllowlist(request);
+      } else if (path.startsWith('/api/karma/')) {
+        await handleKarmaRequest(request);
       } else if (path.startsWith('/api/feedback/')) {
         await _handleFeedbackApi(request);
       } else if (path.startsWith('/api/alerts/') && method == 'POST') {
@@ -2952,6 +2993,11 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, EmailHandlerMixin,
             client.socket.add(jsonEncode(response));
             final nicknameInfo = client.nickname != null ? ' [${client.nickname}]' : '';
             _log('INFO', 'Hello from: ${client.callsign ?? "unknown"}$nicknameInfo (${client.deviceType ?? "unknown"}) npub=${npub.substring(0, 20)}...');
+
+            // Record daily login karma
+            if (callsign != null) {
+              karmaRecord(callsign: callsign, action: 'daily_login');
+            }
 
             // Deliver any pending emails for this client
             if (callsign != null) {
@@ -5438,6 +5484,10 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, EmailHandlerMixin,
             request.response.write(jsonEncode({'error': 'Unknown feedback action'}));
             return;
         }
+        // Record karma for successful feedback actions
+        if (result['success'] == true) {
+          _recordFeedbackKarma(action, contentType, contentId, jsonBody, callsign);
+        }
       } else {
         request.response.statusCode = 405;
         request.response.headers.contentType = ContentType.json;
@@ -5464,6 +5514,51 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, EmailHandlerMixin,
         'error': 'Internal server error',
         'message': e.toString(),
       }));
+    }
+  }
+
+  /// Record karma for feedback actions (likes, comments, verifications).
+  void _recordFeedbackKarma(
+    String action,
+    String contentType,
+    String contentId,
+    Map<String, dynamic> body,
+    String? ownerCallsign,
+  ) {
+    // Get the actor's callsign from the NOSTR event in the body
+    String? actorNpub;
+    try {
+      final pubkey = body['pubkey'] as String?;
+      if (pubkey != null && pubkey.isNotEmpty) {
+        actorNpub = NostrCrypto.encodeNpub(pubkey);
+      }
+    } catch (_) {}
+
+    String? actorCallsign;
+    if (actorNpub != null) {
+      actorCallsign = Nip05RegistryService().getRegistrationByNpub(actorNpub)?.callsign;
+    }
+    if (actorCallsign == null) return;
+
+    // Block self-interaction
+    if (ownerCallsign != null && KarmaEngine.isSelfInteraction(actorCallsign, ownerCallsign)) {
+      return;
+    }
+
+    // Award karma to the actor
+    final giverAction = KarmaEngine.feedbackToKarmaAction(action, isGiver: true);
+    if (giverAction != null) {
+      karmaRecord(callsign: actorCallsign, action: giverAction,
+          meta: {'content_type': contentType, 'content_id': contentId});
+    }
+
+    // Award karma to the content owner
+    if (ownerCallsign != null) {
+      final receiverAction = KarmaEngine.feedbackToKarmaAction(action, isGiver: false);
+      if (receiverAction != null) {
+        karmaRecord(callsign: ownerCallsign, action: receiverAction,
+            meta: {'content_type': contentType, 'content_id': contentId, 'from': actorCallsign});
+      }
     }
   }
 

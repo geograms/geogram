@@ -38,6 +38,7 @@ import 'endpoints/backup_api.dart';
 import 'endpoints/dm_api.dart';
 import 'endpoints/updates_api.dart';
 import 'endpoints/console_api.dart';
+import 'endpoints/karma_api.dart';
 
 export 'api_response.dart';
 export 'api_error.dart';
@@ -53,6 +54,7 @@ export 'endpoints/backup_api.dart';
 export 'endpoints/dm_api.dart';
 export 'endpoints/updates_api.dart';
 export 'endpoints/console_api.dart';
+export 'endpoints/karma_api.dart';
 
 /// Main API facade for device-to-device communication
 ///
@@ -104,6 +106,9 @@ class GeogramApi {
 
   /// Console command API
   late final ConsoleApi console = ConsoleApi(this);
+
+  /// Karma gamification API
+  late final KarmaApi karma = KarmaApi(this);
 
   // ============================================================
   // Core Request Methods

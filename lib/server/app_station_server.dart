@@ -11,6 +11,7 @@ import 'mixins/stun_mixin.dart';
 import 'mixins/rate_limit_mixin.dart';
 import 'mixins/health_watchdog_mixin.dart';
 import 'mixins/atproto_pds_mixin.dart';
+import 'mixins/karma_mixin.dart';
 import '../services/log_service.dart';
 import '../services/config_service.dart';
 import '../services/storage_config.dart';
@@ -19,7 +20,7 @@ import '../services/profile_service.dart';
 /// App station server implementation
 /// Extends the unified base class with Flutter/App-specific features
 class AppStationServer extends StationServerBase
-    with SslMixin, StunMixin, RateLimitMixin, HealthWatchdogMixin, AtprotoPdsMixin {
+    with SslMixin, StunMixin, RateLimitMixin, HealthWatchdogMixin, AtprotoPdsMixin, KarmaMixin {
 
   // Singleton
   static final AppStationServer _instance = AppStationServer._internal();
@@ -108,6 +109,9 @@ class AppStationServer extends StationServerBase
       await startAtprotoPds();
     }
 
+    // Start karma service
+    await startKarmaService();
+
     log('INFO', 'App station server started');
   }
 
@@ -124,6 +128,9 @@ class AppStationServer extends StationServerBase
 
     // Stop health watchdog
     stopHealthWatchdog();
+
+    // Stop karma service
+    stopKarmaService();
 
     log('INFO', 'App station server stopped');
   }

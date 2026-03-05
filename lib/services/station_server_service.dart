@@ -56,6 +56,7 @@ import 'nostr_storage_paths.dart';
 import 'email_relay_service.dart';
 import 'stun_server_service.dart';
 import 'geoip_service.dart';
+import '../server/mixins/karma_mixin.dart';
 
 class _UploadPayload {
   final Uint8List bytes;
@@ -412,7 +413,7 @@ class _BackupProviderEntry {
 }
 
 /// Station server service for CLI mode
-class StationServerService {
+class StationServerService with KarmaMixin {
   static final StationServerService _instance = StationServerService._internal();
   factory StationServerService() => _instance;
   StationServerService._internal();
@@ -510,6 +511,26 @@ class StationServerService {
   /// Get the actual port the station server is running on
   /// Returns null if server is not running
   int? get runningPort => _runningPort;
+
+  // ============ KarmaMixin abstract dependencies ============
+  @override
+  void log(String level, String message) =>
+      LogService().log('Karma: [$level] $message');
+
+  @override
+  String? get dataDir => _appDir;
+
+  @override
+  void karmaBroadcastToCallsign(String callsign, String payload) {
+    final cs = callsign.toUpperCase();
+    for (final client in _clients.values) {
+      if (client.callsign?.toUpperCase() == cs) {
+        try {
+          client.socket.add(payload);
+        } catch (_) {}
+      }
+    }
+  }
 
   /// Initialize station server service
   Future<void> initialize() async {
@@ -652,6 +673,9 @@ class StationServerService {
         }
       }
 
+      // Start karma gamification service
+      await startKarmaService();
+
       return true;
     } catch (e) {
       LogService().log('Failed to start station server: $e');
@@ -670,6 +694,9 @@ class StationServerService {
     // Stop update polling
     _updatePollTimer?.cancel();
     _updatePollTimer = null;
+
+    // Stop karma service
+    stopKarmaService();
 
     // Stop STUN server
     await StunServerService().stop();
@@ -731,7 +758,10 @@ class StationServerService {
       }
 
       // Route requests
-      if (path == '/api/status' || path == '/status') {
+      if (path.startsWith('/api/karma/')) {
+        await handleKarmaRequest(request);
+        return;
+      } else if (path == '/api/status' || path == '/status') {
         await _handleStatus(request);
       } else if (path == '/api/geoip') {
         await _handleGeoIp(request);
@@ -1261,6 +1291,11 @@ class StationServerService {
     client.socket.add(jsonEncode(response));
 
     LogService().log('Hello from client: $callsign (npub: ${npub?.substring(0, 20)}...)');
+
+    // Award karma for daily login
+    if (callsign != null) {
+      karmaRecord(callsign: callsign, action: 'daily_login');
+    }
 
     // Deliver any pending emails for this client
     if (callsign != null) {

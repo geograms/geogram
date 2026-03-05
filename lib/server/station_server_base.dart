@@ -29,6 +29,7 @@ import '../api/handlers/alert_handler.dart';
 import '../api/handlers/place_handler.dart';
 import '../api/handlers/feedback_handler.dart';
 import '../version.dart';
+import 'mixins/karma_mixin.dart';
 
 /// Abstract base class for station servers
 /// Provides shared functionality for HTTP server, WebSocket, tile caching, NOSTR services
@@ -462,6 +463,10 @@ abstract class StationServerBase {
     else if (path == '/.well-known/nostr.json') {
       await _handleWellKnownNostr(request);
     }
+    // Karma API
+    else if (path.startsWith('/api/karma/') || path == '/api/karma/stats') {
+      await _handleKarmaRoute(request);
+    }
     // Root
     else if (path == '/') {
       await _handleRoot(request);
@@ -751,6 +756,11 @@ abstract class StationServerBase {
     client.socket.add(jsonEncode(response));
     log('INFO', 'Hello from: ${client.callsign ?? "unknown"} (${client.deviceType ?? "unknown"})');
 
+    // Record daily login karma
+    if (callsign != null && this is KarmaMixin) {
+      (this as KarmaMixin).karmaRecord(callsign: callsign, action: 'daily_login');
+    }
+
     // Deliver pending internal emails
     if (callsign != null) {
       EmailRelayService().deliverPendingEmails(
@@ -762,7 +772,6 @@ abstract class StationServerBase {
         },
         getStationDomain: () => _settings.sslDomain ?? _settings.callsign.toLowerCase(),
       );
-
     }
   }
 
@@ -1187,6 +1196,17 @@ abstract class StationServerBase {
 ''');
   }
 
+  // ============ Karma Route Delegation ============
+
+  Future<void> _handleKarmaRoute(HttpRequest request) async {
+    if (this is KarmaMixin) {
+      await (this as KarmaMixin).handleKarmaRequest(request);
+    } else {
+      request.response.statusCode = 501;
+      request.response.write('Karma not available');
+    }
+  }
+
   // ============ Update Mirror ============
 
   void _startUpdatePolling() {
@@ -1249,6 +1269,17 @@ abstract class StationServerBase {
       chunks.add(chunk);
     }
     return chunks.expand((e) => e).toList();
+  }
+
+  /// Broadcast a payload to all connected clients matching a callsign.
+  /// Used by KarmaMixin for real-time karma updates.
+  void karmaBroadcastToCallsign(String callsign, String payload) {
+    final cs = callsign.toUpperCase();
+    for (final client in _clients.values) {
+      if (client.callsign?.toUpperCase() == cs) {
+        safeSocketSend(client, payload);
+      }
+    }
   }
 
   /// Safely send data to a client

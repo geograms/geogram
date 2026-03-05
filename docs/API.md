@@ -2406,6 +2406,52 @@ curl "http://localhost:3456/log?filter=Service&limit=20"
 
 ---
 
+### Karma API
+
+The Karma API provides gamification features — points, streaks, levels, and leaderboards. Points are awarded automatically for user actions (login, chat, content creation, feedback).
+
+#### Public Endpoints (no auth required)
+
+##### GET /api/karma/stats
+Station-wide karma statistics.
+
+##### GET /api/karma/leaderboard/{period}
+Leaderboard for a period: `weekly`, `monthly`, `yearly`, `alltime`. Query: `?limit=20`.
+
+#### Authenticated Endpoints (require `Authorization: Nostr <base64_signed_event>`)
+
+##### GET /api/karma/profile/{callsign}
+User's karma profile: points, level, streak, today's activity, rank.
+
+##### GET /api/karma/history/{callsign}
+Point history (paginated). Query: `?limit=50&offset=0`.
+
+##### GET /api/karma/streak/{callsign}
+Streak details: current streak, longest streak, multiplier.
+
+#### Debug Endpoints (localhost only)
+
+##### GET /api/karma/debug
+List available debug endpoints.
+
+##### POST /api/karma/debug/award
+Manually award karma points.
+```json
+{"callsign": "X1SU86", "action": "daily_login", "meta": {}}
+```
+Available actions: `daily_login`, `chat_message`, `chat_reaction`, `blog_published`, `place_created`, `alert_created`, `event_created`, `like_given`, `like_received`, `comment_given`, `comment_received`, `verify_given`, `alert_verified`.
+
+##### GET /api/karma/debug/profile/{callsign}
+Get profile without NOSTR auth (debug only).
+
+##### GET /api/karma/debug/history/{callsign}
+Get history without NOSTR auth (debug only).
+
+##### POST /api/karma/debug/recompute
+Force immediate leaderboard recomputation.
+
+---
+
 ### Debug API
 
 The Debug API allows triggering actions in the Geogram desktop client remotely. This is useful for automation, testing, and integration with external tools.
@@ -2551,6 +2597,11 @@ Triggers a debug action.
 | `station_send_chat` | Send a message to a station room (bypasses UI) | `room` (optional): Room ID (default: "general"), `content` (optional): Message text, `image_path` (optional): Absolute path to image file |
 | `station_delete_chat` | Delete a message from a station room | `room` (optional): Room ID (default: "general"), `timestamp` (required): Message timestamp, `event_id` (optional): NOSTR event ID, `local` (optional): true to delete from local station |
 | `station_edit_chat` | Edit a message in a station room | `room` (optional): Room ID (default: "general"), `timestamp` (required): Message timestamp, `content` (required): New message text, `event_id` (optional): NOSTR event ID |
+| `karma_award` | Award karma points to a callsign | `callsign` (required): Target callsign, `karma_action` (required): Action type (e.g., `daily_login`, `chat_message`, `blog_published`), `meta` (optional): Additional metadata |
+| `karma_profile` | Get karma profile for a callsign | `callsign` (optional): Target callsign (default: current user) |
+| `karma_history` | Get karma event history | `callsign` (optional): Target callsign (default: current user), `limit` (optional): Max events (default: 50) |
+| `karma_leaderboard` | Get leaderboard for a period | `period` (optional): `weekly`, `monthly`, `yearly`, `alltime` (default: `alltime`) |
+| `karma_recompute` | Force leaderboard recomputation | None |
 | `open_console` | Open the Console collection and auto-launch the first session | `session_id` (optional): Session ID to focus (default: first session) |
 | `console_status` | Report Console VM status (files present, rootfs extraction marker, recent logs) | None |
 | `email_compose` | Create a draft email | `to` (required): Recipient email(s) comma-separated, `subject` (required): Subject line, `content` (optional): Message body, `cc` (optional): CC recipients comma-separated, `station` (optional): Station domain (default: preferred station or p2p.radio) |
@@ -3123,6 +3174,26 @@ curl -X POST http://localhost:3456/api/debug \
 curl -X POST http://localhost:3456/api/debug \
   -H "Content-Type: application/json" \
   -d '{"action": "station_edit_chat", "room": "general", "timestamp": "2026-02-18 19:47_53", "content": "Updated message text"}'
+
+# Award karma points
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action": "karma_award", "callsign": "X1SU86", "karma_action": "daily_login"}'
+
+# Get karma profile
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action": "karma_profile", "callsign": "X1SU86"}'
+
+# Get karma leaderboard
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action": "karma_leaderboard", "period": "alltime"}'
+
+# Force leaderboard recomputation
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action": "karma_recompute"}'
 ```
 
 ---

@@ -16,11 +16,12 @@ import 'mixins/smtp_mixin.dart';
 import 'mixins/rate_limit_mixin.dart';
 import 'mixins/health_watchdog_mixin.dart';
 import 'mixins/atproto_pds_mixin.dart';
+import 'mixins/karma_mixin.dart';
 
 /// CLI station server implementation
 /// Extends the unified base class with CLI-specific features (SMTP, logging to file)
 class CliStationServer extends StationServerBase
-    with SslMixin, SmtpMixin, RateLimitMixin, HealthWatchdogMixin, AtprotoPdsMixin {
+    with SslMixin, SmtpMixin, RateLimitMixin, HealthWatchdogMixin, AtprotoPdsMixin, KarmaMixin {
 
   // CLI-specific state
   String? _configDir;
@@ -150,6 +151,9 @@ class CliStationServer extends StationServerBase
       await startAtprotoPds();
     }
 
+    // Start karma service
+    await startKarmaService();
+
     log('INFO', 'CLI station server started');
   }
 
@@ -163,6 +167,9 @@ class CliStationServer extends StationServerBase
 
     // Stop AT Proto PDS
     await stopAtprotoPds();
+
+    // Stop karma service
+    stopKarmaService();
 
     // Stop SMTP server
     await stopSmtpServer();

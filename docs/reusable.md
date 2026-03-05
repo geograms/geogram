@@ -37,6 +37,14 @@ This document catalogs reusable UI components available in the Geogram codebase.
 - [ConferencePeerManager](#conferencepeermanager) - Legacy audio WebRTC mesh peer connections (deprecated)
 - [ConferenceService](#conferenceservice) - Orchestration (SFU topology, host/join, role management, promote/demote)
 
+### Karma Gamification
+- [KarmaMixin](#karmamixin) - Station mixin: `karmaRecord()`, API handlers, periodic leaderboard recomputation
+- [KarmaEngine](#karmaengine) - Pure business logic: point values, daily caps, streak multipliers, levels, validation
+- [KarmaStore](#karmastore) - File I/O: append-only JSONL event logs, cached profiles, streaks, leaderboards
+- [KarmaLeaderboard](#karmaleaderboard) - Leaderboard computation and caching for weekly/monthly/yearly/alltime
+- [KarmaPage](#karmapage) - Client-side dashboard: level, streak, daily progress, category cards, leaderboard
+- [KarmaApi](#karmaapi) - Client-side API wrapper for karma endpoints
+
 ### API Handlers (Shared between CLI and Desktop stations)
 - [AppsHandler](#appshandler) - Aggregated app discovery (`GET /api/apps`) — returns availability + counts for blog, chat, events, alerts, shared in a single call
 
