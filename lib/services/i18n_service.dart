@@ -44,6 +44,7 @@ class I18nService {
     'qr',
     'music',
     'teleport',
+    'karma',
   ];
 
   // Notifier for UI updates when language changes
