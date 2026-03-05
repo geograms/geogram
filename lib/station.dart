@@ -10189,10 +10189,23 @@ class SslCertificateManager {
     }
   }
 
-  /// Parse certificate expiry from PEM (simplified)
+  /// Parse certificate expiry from PEM using openssl
   DateTime? _parseCertificateExpiry(String pemCert) {
-    // This would need proper X509 parsing in production
-    // For now, return null and rely on file existence
+    try {
+      // Use -dateopt iso_8601 for unambiguous machine-readable output
+      final result = Process.runSync('openssl', [
+        'x509', '-noout', '-enddate', '-dateopt', 'iso_8601',
+        '-in', certPath,
+      ]);
+      if (result.exitCode == 0) {
+        // Output format: notAfter=2026-06-03T07:22:26Z
+        final output = (result.stdout as String).trim();
+        final match = RegExp(r'notAfter=(.+)').firstMatch(output);
+        if (match != null) {
+          return DateTime.parse(match.group(1)!.trim());
+        }
+      }
+    } catch (_) {}
     return null;
   }
 
@@ -10203,7 +10216,15 @@ class SslCertificateManager {
     final info = await _getCertificateInfo();
     final daysUntilExpiry = info['daysUntilExpiry'] as int?;
 
-    if (daysUntilExpiry != null && daysUntilExpiry <= 30) {
+    if (daysUntilExpiry == null) {
+      stdout.writeln('[SSL] Could not determine certificate expiry — skipping auto-renewal check');
+      return true;
+    }
+
+    stdout.writeln('[SSL] Certificate expires in $daysUntilExpiry days');
+
+    if (daysUntilExpiry <= 30) {
+      stdout.writeln('[SSL] Certificate expiring soon — starting auto-renewal...');
       return await renewCertificate(staging: false);
     }
 
