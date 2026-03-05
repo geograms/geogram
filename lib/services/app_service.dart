@@ -215,6 +215,7 @@ class AppService {
     'blog',
     'alerts',
     'log',
+    'karma',
   ];
 
   /// Ensure default apps exist for the current profile
