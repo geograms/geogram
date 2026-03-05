@@ -57,6 +57,7 @@ import '../server/mixins/email_handler_mixin.dart';
 import '../server/mixins/blog_handler_mixin.dart';
 import '../server/mixins/console_command_mixin.dart';
 import '../server/mixins/conference_mixin.dart';
+import '../server/mixins/karma_mixin.dart';
 import 'themes_embedded.dart';
 
 /// App version - use central version.dart for consistency
@@ -794,7 +795,7 @@ class PureTileCache {
 }
 
 /// Pure Dart station server for CLI mode
-class PureStationServer with EmailHandlerMixin, BlogHandlerMixin, ConsoleCommandMixin, ChatModificationMixin, ChatNip05Mixin, ChatModerationMixin, ConferenceMixin, XmppServerMixin
+class PureStationServer with EmailHandlerMixin, BlogHandlerMixin, ConsoleCommandMixin, ChatModificationMixin, ChatNip05Mixin, ChatModerationMixin, ConferenceMixin, XmppServerMixin, KarmaMixin
     implements StationCommandInterface {
   HttpServer? _httpServer;
   HttpServer? _httpsServer;
@@ -903,6 +904,19 @@ class PureStationServer with EmailHandlerMixin, BlogHandlerMixin, ConsoleCommand
   // ── XmppServerMixin interface ───────────────────────────────────
   @override
   void log(String level, String message) => _log(level, message);
+
+  // ── KarmaMixin interface ──────────────────────────────────────
+  @override
+  void karmaBroadcastToCallsign(String callsign, String payload) {
+    final cs = callsign.toUpperCase();
+    for (final client in _clients.values) {
+      if (client.callsign?.toUpperCase() == cs) {
+        try {
+          client.socket.add(payload);
+        } catch (_) {}
+      }
+    }
+  }
 
   // ── BlogHandlerMixin interface ──────────────────────────────────
   @override
@@ -1821,6 +1835,9 @@ class PureStationServer with EmailHandlerMixin, BlogHandlerMixin, ConsoleCommand
       _running = true;
       _startTime = DateTime.now();
 
+      // Start karma gamification service
+      await startKarmaService();
+
       // Initialize NIP-05 registry for identity verification
       final nip05Registry = Nip05RegistryService();
       if (_dataDir != null) {
@@ -2056,6 +2073,9 @@ class PureStationServer with EmailHandlerMixin, BlogHandlerMixin, ConsoleCommand
 
   Future<void> stop() async {
     if (!_running) return;
+
+    // Stop karma service
+    stopKarmaService();
 
     // Stop heartbeat timer
     _stopHeartbeat();
@@ -2724,7 +2744,10 @@ class PureStationServer with EmailHandlerMixin, BlogHandlerMixin, ConsoleCommand
         return;
       }
 
-      if (path == '/api/status' || path == '/status') {
+      if (path.startsWith('/api/karma/')) {
+        await handleKarmaRequest(request);
+        return;
+      } else if (path == '/api/status' || path == '/status') {
         await _handleStatus(request);
       } else if (path.startsWith('/blossom')) {
         await _handleBlossomRequest(request);
@@ -3185,6 +3208,11 @@ class PureStationServer with EmailHandlerMixin, BlogHandlerMixin, ConsoleCommand
             client.socket.add(jsonEncode(response));
             final nicknameInfo = client.nickname != null ? ' [${client.nickname}]' : '';
             _log('INFO', 'Hello from: ${client.callsign ?? "unknown"}$nicknameInfo (${client.deviceType ?? "unknown"}) npub=${npub.substring(0, 20)}...');
+
+            // Award karma for daily login
+            if (callsign != null) {
+              karmaRecord(callsign: callsign, action: 'daily_login');
+            }
 
             // Deliver any pending emails for this client
             if (callsign != null) {
