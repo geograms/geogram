@@ -98,13 +98,26 @@ class _AprsMainPageState extends State<AprsMainPage> {
               value: aprs.isEnabled,
               onChanged: (on) {
                 if (on) {
+                  // Auto-obtain position from available sources if not set
                   if (!aprs.hasLocation) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text(I18nService().t('aprs_set_location_first')),
-                      ),
-                    );
-                    return;
+                    final locPos = LocationProviderService().currentPosition;
+                    final userLoc = UserLocationService().currentLocation;
+                    if (locPos != null) {
+                      final profileStorage = AppService().profileStorage;
+                      if (profileStorage != null) aprs.setStorage(profileStorage);
+                      aprs.setLocation(locPos.latitude, locPos.longitude);
+                    } else if (userLoc != null && userLoc.isValid) {
+                      final profileStorage = AppService().profileStorage;
+                      if (profileStorage != null) aprs.setStorage(profileStorage);
+                      aprs.setLocation(userLoc.latitude, userLoc.longitude);
+                    } else {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(I18nService().t('aprs_set_location_first')),
+                        ),
+                      );
+                      return;
+                    }
                   }
                   final profileStorage = AppService().profileStorage;
                   if (profileStorage != null) aprs.setStorage(profileStorage);
@@ -769,14 +782,15 @@ class _MapTabState extends State<_MapTab> with AutomaticKeepAliveClientMixin {
               onClose: () => setState(() => _showGeoChat = false),
             ),
           ),
-        // Toggle FAB (mobile only)
-        if (!isWideScreen)
+        // Toggle FAB (mobile only, hidden when panel is open so it
+        // doesn't overlap the send button)
+        if (!isWideScreen && !_showGeoChat)
           Positioned(
             right: 12,
             bottom: 12,
             child: FloatingActionButton.small(
-              onPressed: () => setState(() => _showGeoChat = !_showGeoChat),
-              child: Icon(_showGeoChat ? Icons.close : Icons.chat_bubble_outline),
+              onPressed: () => setState(() => _showGeoChat = true),
+              child: const Icon(Icons.chat_bubble_outline),
             ),
           ),
       ],
