@@ -328,6 +328,17 @@ class UpdateService {
     }
   }
 
+  /// Ensure platform binaries are mirrored locally for the download page.
+  /// If release info is already cached, mirrors directly; otherwise triggers
+  /// checkForUpdates() which will mirror as a side-effect.
+  void ensureBinariesMirrored() {
+    if (_latestRelease != null) {
+      _mirrorAllPlatformBinaries(_latestRelease!);
+    } else {
+      checkForUpdates();
+    }
+  }
+
   /// Mirror all platform binaries (Android, Linux, Windows) to the local
   /// updates directory so the download page can serve them to other devices.
   /// Runs in the background — does not block the update check flow.

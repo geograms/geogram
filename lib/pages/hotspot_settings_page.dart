@@ -7,6 +7,7 @@ import '../services/hotspot_portal_service.dart';
 import '../services/i18n_service.dart';
 import '../services/log_service.dart';
 import '../services/station_node_service.dart';
+import '../services/update_service.dart';
 import '../services/wifi_direct_service.dart';
 
 /// Settings page for Wi-Fi Direct hotspot + captive portal.
@@ -104,6 +105,10 @@ class _HotspotSettingsPageState extends State<HotspotSettingsPage> {
           } catch (e) {
             LogService().log('Portal auto-start failed: $e');
           }
+
+          // Ensure platform binaries are downloaded for the download page
+          UpdateService().ensureBinariesMirrored();
+
           if (mounted) setState(() {});
         } else if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(

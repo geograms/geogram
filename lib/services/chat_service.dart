@@ -578,12 +578,18 @@ class ChatService {
         // Parse file date from filename (YYYY-MM-DD_chat.txt)
         final dateStr = file.name.substring(0, 10); // YYYY-MM-DD
 
-        // Skip if outside date range
+        // Skip if outside date range (compare date-only, not time)
         if (startDate != null || endDate != null) {
           try {
             final fileDate = DateTime.parse(dateStr);
-            if (startDate != null && fileDate.isBefore(startDate)) continue;
-            if (endDate != null && fileDate.isAfter(endDate)) continue;
+            final startDay = startDate != null
+                ? DateTime(startDate.year, startDate.month, startDate.day)
+                : null;
+            final endDay = endDate != null
+                ? DateTime(endDate.year, endDate.month, endDate.day)
+                : null;
+            if (startDay != null && fileDate.isBefore(startDay)) continue;
+            if (endDay != null && fileDate.isAfter(endDay)) continue;
           } catch (e) {
             continue; // Skip files with invalid dates
           }

@@ -3605,7 +3605,7 @@ function cleanup() {
         return await _handleRemoteDeviceChatMessages(deviceCallsign, roomId, request, headers);
       }
 
-      await _initializeChatServiceIfNeeded();
+      await _initializeChatServiceIfNeeded(createIfMissing: true);
 
       final chatService = ChatService();
       final channel = chatService.getChannel(roomId);
@@ -3691,19 +3691,35 @@ function cleanup() {
       DateTime? startDate;
       DateTime? endDate;
       if (afterParam != null) {
-        startDate = DateTime.tryParse(afterParam);
+        // Geogram timestamps use underscore before seconds: YYYY-MM-DD HH:MM_SS
+        final normalized = afterParam.replaceAll('_', ':');
+        startDate = DateTime.tryParse(normalized);
       }
       if (beforeParam != null) {
-        endDate = DateTime.tryParse(beforeParam);
+        final normalized = beforeParam.replaceAll('_', ':');
+        endDate = DateTime.tryParse(normalized);
       }
 
-      // Load messages
-      final messages = await chatService.loadMessages(
+      // Load messages (file-level filtering is day-granularity)
+      var messages = await chatService.loadMessages(
         roomId,
         startDate: startDate,
         endDate: endDate,
-        limit: limit + 1, // Fetch one extra to determine if there are more
+        limit: 10000, // Load generously, filter by time below
       );
+
+      // Apply time-level filtering for after/before parameters
+      if (startDate != null) {
+        messages = messages.where((m) => m.dateTime.isAfter(startDate!)).toList();
+      }
+      if (endDate != null) {
+        messages = messages.where((m) => m.dateTime.isBefore(endDate!)).toList();
+      }
+
+      // Apply limit after time filtering
+      if (messages.length > limit + 1) {
+        messages = messages.sublist(messages.length - (limit + 1));
+      }
 
       final hasMore = messages.length > limit;
       final returnMessages = hasMore ? messages.sublist(0, limit) : messages;
@@ -3753,7 +3769,7 @@ function cleanup() {
     Map<String, String> headers,
   ) async {
     try {
-      await _initializeChatServiceIfNeeded();
+      await _initializeChatServiceIfNeeded(createIfMissing: true);
 
       final chatService = ChatService();
       final channel = chatService.getChannel(roomId);
