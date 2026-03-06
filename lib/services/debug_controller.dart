@@ -19,6 +19,7 @@ import 'usb_aoa_service.dart';
 import 'profile_storage.dart';
 import 'shared_folder_service.dart';
 import '../models/shared_folder.dart';
+import '../teleport/bitchat/bitchat_service.dart';
 
 /// Debug action types that can be triggered via API
 enum DebugAction {
@@ -1127,6 +1128,16 @@ class DebugController {
         'description': 'List all shared folder entries',
         'params': {},
       },
+      {
+        'action': 'bitchat_status',
+        'description': 'Get BitChat service status (identity, BLE state, peers, messages)',
+        'params': {},
+      },
+      {
+        'action': 'bitchat_enable',
+        'description': 'Enable BitChat service (generate identity if needed, start BLE)',
+        'params': {},
+      },
     ];
   }
 
@@ -1591,6 +1602,12 @@ class DebugController {
       case 'shared_list':
         return _sharedList();
 
+      case 'bitchat_status':
+        return _bitchatStatus();
+
+      case 'bitchat_enable':
+        return _bitchatEnable();
+
       default:
         return {
           'success': false,
@@ -1873,6 +1890,41 @@ class DebugController {
           'visibility': f.visibility.value,
           'slug': f.sanitizedFilename,
         }).toList(),
+      };
+    } catch (e) {
+      return {'success': false, 'error': e.toString()};
+    }
+  }
+
+  // ── BitChat debug actions ──────────────────────────────────────
+
+  Future<Map<String, dynamic>> _bitchatStatus() async {
+    final service = BitchatService();
+    final status = service.getStatus();
+    final cacheInfo = await service.cacheService?.inspect();
+    return {
+      'success': true,
+      ...status,
+      if (cacheInfo != null) 'cache': cacheInfo,
+    };
+  }
+
+  Future<Map<String, dynamic>> _bitchatEnable() async {
+    try {
+      final service = BitchatService();
+      if (!service.isEnabled) {
+        final storage = AppService().profileStorage;
+        if (storage == null) {
+          return {'success': false, 'error': 'No profile storage available'};
+        }
+        service.setStorage(storage);
+        await service.ensureIdentity();
+        await service.enableAsync();
+      }
+      return {
+        'success': true,
+        'message': 'BitChat enabled',
+        ...service.getStatus(),
       };
     } catch (e) {
       return {'success': false, 'error': e.toString()};

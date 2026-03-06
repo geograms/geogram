@@ -2641,6 +2641,8 @@ Triggers a debug action.
 | `hotspot_portal_start` | Start the captive portal HTTP server + DNS | `gateway_ip` (optional): Gateway IP (default: 192.168.49.1), `station_name` (optional): Station name for portal title |
 | `hotspot_portal_stop` | Stop the captive portal server and DNS | None |
 | `hotspot_portal_status` | Get portal server status | None. Returns running state, DNS state, port, gateway IP |
+| `bitchat_status` | Get BitChat service status (identity, BLE state, peers, messages, cache) | None |
+| `bitchat_enable` | Enable BitChat service (generate identity if needed, start BLE) | None |
 
 Place feedback actions send signed events to the station and only update local cache files if the place folder can be resolved via `place_path` or `callsign`.
 

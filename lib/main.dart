@@ -59,6 +59,7 @@ import 'teleport/xmpp/xmpp_service.dart';
 import 'teleport/nostr/nostr_client_service.dart';
 import 'teleport/atproto/atproto_client_service.dart';
 import 'teleport/meshcore/meshcore_service.dart';
+import 'teleport/bitchat/bitchat_service.dart';
 import 'services/window_state_service.dart';
 import 'services/tray_service.dart';
 import 'services/group_sync_service.dart';
@@ -737,6 +738,14 @@ void main() async {
             LogService().log('MeshCore auto-start failed: $e');
           });
         }
+
+        // Auto-start BitChat BLE mesh background service
+        final bitchatStorage = AppService().profileStorage;
+        if (bitchatStorage != null) {
+          BitchatService().autoStart(bitchatStorage).catchError((e) {
+            LogService().log('BitChat auto-start failed: $e');
+          });
+        }
       }
 
       // Ensure chat rooms exist for all device folders with chat enabled
@@ -923,6 +932,7 @@ class _GeogramAppState extends State<GeogramApp> with WidgetsBindingObserver {
       ConfigService().saveNow();
       IrcService().flushWrites();
       XmppService().flushWrites();
+      BitchatService().flushWrites();
     }
 
     if (state == AppLifecycleState.resumed) {

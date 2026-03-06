@@ -30,6 +30,8 @@ import '../teleport/atproto/atproto_client_service.dart';
 import '../teleport/atproto/pages/atproto_main_page.dart';
 import '../teleport/meshcore/meshcore_service.dart';
 import '../teleport/meshcore/pages/meshcore_main_page.dart';
+import '../teleport/bitchat/bitchat_service.dart';
+import '../teleport/bitchat/pages/bitchat_main_page.dart';
 import '../services/i18n_service.dart';
 
 /// Browser page for the "Teleport" app — lists platform bridges
@@ -56,6 +58,7 @@ class _TeleportBrowserPageState extends State<TeleportBrowserPage> {
   StreamSubscription<NostrClientEvent>? _nostrSub;
   StreamSubscription<AtprotoClientEvent>? _atprotoSub;
   StreamSubscription<MeshCoreEvent>? _meshcoreSub;
+  StreamSubscription<BitchatEvent>? _bitchatSub;
 
   /// Planned platform bridges
   static const List<_BridgeInfo> _bridges = [
@@ -86,6 +89,13 @@ class _TeleportBrowserPageState extends State<TeleportBrowserPage> {
       descriptionKey: 'teleport_meshcore_desc',
       icon: Icons.radio,
       color: Color(0xFF00BCD4),
+    ),
+    _BridgeInfo(
+      id: 'bitchat',
+      name: 'BitChat',
+      descriptionKey: 'teleport_bitchat_desc',
+      icon: Icons.bluetooth_connected,
+      color: Color(0xFFFF9100),
     ),
     _BridgeInfo(
       id: 'whatsapp',
@@ -141,6 +151,7 @@ class _TeleportBrowserPageState extends State<TeleportBrowserPage> {
     'xmpp',
     'nostr',
     'bluesky',
+    'bitchat',
   };
 
   /// Dynamic sort: active first, then available, then coming soon.
@@ -175,6 +186,8 @@ class _TeleportBrowserPageState extends State<TeleportBrowserPage> {
         return AtprotoClientService().isAuthenticated;
       case 'meshcore':
         return MeshCoreService().isConnected;
+      case 'bitchat':
+        return BitchatService().isEnabled;
       default:
         return _isBridgeActive(bridgeId);
     }
@@ -202,6 +215,9 @@ class _TeleportBrowserPageState extends State<TeleportBrowserPage> {
     _meshcoreSub = MeshCoreService().events.listen((_) {
       if (mounted) setState(() {});
     });
+    _bitchatSub = BitchatService().events.listen((_) {
+      if (mounted) setState(() {});
+    });
   }
 
   @override
@@ -212,6 +228,7 @@ class _TeleportBrowserPageState extends State<TeleportBrowserPage> {
     _nostrSub?.cancel();
     _atprotoSub?.cancel();
     _meshcoreSub?.cancel();
+    _bitchatSub?.cancel();
     super.dispose();
   }
 
@@ -404,6 +421,14 @@ class _TeleportBrowserPageState extends State<TeleportBrowserPage> {
     );
   }
 
+  void _onBitchatTap() {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => BitchatMainPage(appPath: widget.appPath),
+      ),
+    );
+  }
+
   void _onAprsTap() {
     Navigator.of(context).push(
       MaterialPageRoute(builder: (_) => AprsMainPage(appPath: widget.appPath)),
@@ -487,6 +512,10 @@ class _TeleportBrowserPageState extends State<TeleportBrowserPage> {
             }
             if (bridge.id == 'meshcore') {
               _onMeshCoreTap();
+              return;
+            }
+            if (bridge.id == 'bitchat') {
+              _onBitchatTap();
               return;
             }
             if (bridge.id == 'aprs') {

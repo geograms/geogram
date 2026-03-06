@@ -67,6 +67,17 @@ This document catalogs reusable UI components available in the Geogram codebase.
 - [MeshCore BLE Client](#meshcore-ble-client) - Nordic UART BLE transport with scan, connect, send/receive
 - [MeshCore Message Bubble](#meshcore-message-bubble) - Chat bubble with SNR indicator and ACK checkmark
 
+### BitChat Components
+- [BitChat Protocol](#bitchat-protocol) - Pure Dart binary encode/decode for BitChat mesh packets (CLI-reusable)
+- [BitChat BLE Client](#bitchat-ble-client) - Multi-peer BLE transport with mesh relay
+- [BitChat Service](#bitchat-service) - Singleton with event stream, bloom filter dedup, batch writes
+- [BitChat Message Bubble](#bitchat-message-bubble) - Chat bubble with hop count indicator and delivery status
+
+### Pure Dart Utilities
+- [Geohash](#geohash) - Geohash encode/decode/neighbors (pure Dart, CLI-reusable)
+- [Noise XX Handshake](#noise-xx-handshake) - Noise Protocol XX pattern using cryptography package
+- [Bloom Filter](#bloom-filter) - Probabilistic set membership for message dedup
+
 ### Hashing Utilities
 - [TLSH (Locality Sensitive Hash)](#tlsh-locality-sensitive-hash) - Fuzzy similarity hashing for binary data
 - [SHA1 Content Hashing](#sha1-content-hashing) - Exact content deduplication via crypto package
@@ -10314,3 +10325,114 @@ Debug API actions: `local_backup_set_folder`, `local_backup_create`, `local_back
 - Collapsible two-level UI sections with long-press settings bottom sheet
 - IRC integration: `IrcService._addMessage()` fires `NowItemEvent` for incoming messages; sourceId format `serverId:channel` enables direct navigation to `IrcChatPage`
 - Blog/Events/Places integration: Local services fire `BlogPostPublishedEvent`, `EventCreatedEvent`, `PlaceCreatedEvent` → NowService converts to `NowItemEvent`. Station broadcasts `UPDATE:` to clients. `StationContentNotificationService` listens for remote UPDATE notifications and fires `NowItemEvent` for client-side display.
+
+---
+
+## BitChat Protocol
+
+**File**: `lib/teleport/bitchat/bitchat_protocol.dart`
+**Pattern**: Pure Dart binary protocol codec with sealed classes (CLI-reusable, no Flutter deps)
+
+Encodes/decodes BitChat mesh packets: 13-byte header (version, type, TTL, timestamp, flags, payload length, hop count), 8-byte sender ID, optional 8-byte recipient ID, variable payload.
+
+```dart
+// Encode
+final data = encodeBroadcast(senderId: sid, text: 'hello');
+final data = encodeDirect(senderId: sid, recipientId: rid, text: 'hi');
+final data = encodeAck(senderId: sid, messageUuid: uuid);
+final data = encodeAnnounce(senderId: sid, nickname: 'bob', geohash: 'u33d');
+
+// Decode
+final packet = decodePacket(rawBytes);
+switch (packet) {
+  case BitchatBroadcastPacket(): ...
+  case BitchatDirectPacket(): ...
+  case BitchatAckPacket(): ...
+  case BitchatAnnouncePacket(): ...
+}
+```
+
+---
+
+## BitChat BLE Client
+
+**File**: `lib/teleport/bitchat/bitchat_ble_client.dart`
+**Pattern**: Multi-peer BLE transport with mesh relay (follows MeshCore BLE client pattern)
+
+Manages concurrent BLE connections to multiple BitChat peers. Scans by service UUID, connects, chunks by MTU, reassembles packets from notifications.
+
+```dart
+final client = BitchatBleClient();
+client.enable();
+final peers = await client.scanForPeers();
+await client.connectToPeer(peers.first.device);
+await client.broadcastToAll(packetBytes);
+client.packets.listen((rawData) { ... });
+```
+
+---
+
+## BitChat Service
+
+**File**: `lib/teleport/bitchat/bitchat_service.dart`
+**Pattern**: Singleton with event stream, bloom filter dedup, 500ms UI throttle, 2s batch writes
+
+```dart
+final service = BitchatService();
+service.autoStart(storage);
+service.enable();
+service.updateLocation(lat, lon);
+await service.sendBroadcast('hello mesh');
+await service.sendPrivate('hi', recipientId);
+service.events.listen((e) { ... });
+```
+
+---
+
+## BitChat Message Bubble
+
+**File**: `lib/teleport/bitchat/widgets/bitchat_message_bubble.dart`
+**Pattern**: Chat bubble with hop count badge, delivery status icons, sender color via `teleportSenderColor()`
+
+---
+
+## Geohash
+
+**File**: `lib/util/geohash.dart`
+**Pattern**: Pure Dart, CLI-reusable. Encode/decode lat/lon to geohash strings, compute 8 neighbors.
+
+```dart
+final hash = geohashEncode(38.7, -9.14, precision: 6); // 'eyc4p2'
+final decoded = geohashDecode(hash); // center + error margins
+final neighbors = geohashNeighbors(hash); // 8 surrounding cells
+final region = geohashRegion(38.7, -9.14, precision: 4); // center + 8 neighbors
+```
+
+---
+
+## Noise XX Handshake
+
+**File**: `lib/util/noise_xx.dart`
+**Pattern**: Noise Protocol Framework XX pattern using `cryptography` package (X25519 + ChaCha20-Poly1305 + SHA-256)
+
+```dart
+final kp = await NoiseXXHandshake.generateKeyPair();
+final initiator = NoiseXXHandshake(staticKeyPair: kp);
+final msg1 = await initiator.initiatorHello();
+// ... exchange messages ...
+final transport = await initiator.split();
+final encrypted = await transport.encrypt(plaintext);
+```
+
+---
+
+## Bloom Filter
+
+**File**: `lib/util/bloom_filter.dart`
+**Pattern**: Pure Dart probabilistic set membership. Used for message UUID dedup.
+
+```dart
+final filter = BloomFilter(capacity: 10000, errorRate: 0.01);
+filter.addString(messageUuid);
+if (filter.mightContainString(uuid)) { /* probably seen */ }
+```
