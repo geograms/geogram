@@ -353,5 +353,8 @@
   "meshtastic_region_section": "Region",
   "meshtastic_region_label": "Region",
   "meshtastic_auto_start": "Auto-start",
-  "meshtastic_auto_start_desc": "Start Meshtastic service when app launches"
+  "meshtastic_auto_start_desc": "Start Meshtastic service when app launches",
+  "meshtastic_log_level_section": "Logging",
+  "meshtastic_log_level_label": "Log Level",
+  "meshtastic_log_level_desc": "Controls verbosity of Meshtastic log output"
 }

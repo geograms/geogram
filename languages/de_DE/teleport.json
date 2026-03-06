@@ -353,5 +353,8 @@
   "meshtastic_region_section": "Region",
   "meshtastic_region_label": "Region",
   "meshtastic_auto_start": "Autostart",
-  "meshtastic_auto_start_desc": "Meshtastic-Dienst beim App-Start starten"
+  "meshtastic_auto_start_desc": "Meshtastic-Dienst beim App-Start starten",
+  "meshtastic_log_level_section": "Protokollierung",
+  "meshtastic_log_level_label": "Protokollstufe",
+  "meshtastic_log_level_desc": "Steuert die Ausführlichkeit der Meshtastic-Protokollausgabe"
 }

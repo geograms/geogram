@@ -9,6 +9,24 @@
 /// Active transport type.
 enum MeshtasticTransport { ble, mqtt, http }
 
+/// Log verbosity for the Meshtastic service.
+enum MeshtasticLogLevel {
+  /// No logging.
+  off,
+
+  /// Errors only.
+  error,
+
+  /// Errors + warnings.
+  warn,
+
+  /// Errors + warnings + informational (default).
+  info,
+
+  /// Everything including packet-level detail.
+  debug,
+}
+
 class MeshtasticConfig {
   /// BLE device ID of the connected radio.
   final String bleDeviceId;
@@ -35,6 +53,9 @@ class MeshtasticConfig {
   /// Auto-start on app launch.
   final bool autoStart;
 
+  /// Log verbosity level.
+  final MeshtasticLogLevel logLevel;
+
   const MeshtasticConfig({
     this.bleDeviceId = '',
     this.mqttBroker = 'mqtt.meshtastic.org',
@@ -47,6 +68,7 @@ class MeshtasticConfig {
     this.activeTransport = MeshtasticTransport.ble,
     this.myNodeNum = 0,
     this.autoStart = false,
+    this.logLevel = MeshtasticLogLevel.info,
   });
 
   Map<String, dynamic> toJson() => {
@@ -61,6 +83,7 @@ class MeshtasticConfig {
         'activeTransport': activeTransport.name,
         'myNodeNum': myNodeNum,
         'autoStart': autoStart,
+        'logLevel': logLevel.name,
       };
 
   factory MeshtasticConfig.fromJson(Map<String, dynamic> json) {
@@ -79,6 +102,10 @@ class MeshtasticConfig {
       ),
       myNodeNum: json['myNodeNum'] as int? ?? 0,
       autoStart: json['autoStart'] as bool? ?? false,
+      logLevel: MeshtasticLogLevel.values.firstWhere(
+        (l) => l.name == json['logLevel'],
+        orElse: () => MeshtasticLogLevel.info,
+      ),
     );
   }
 
@@ -94,6 +121,7 @@ class MeshtasticConfig {
     MeshtasticTransport? activeTransport,
     int? myNodeNum,
     bool? autoStart,
+    MeshtasticLogLevel? logLevel,
   }) {
     return MeshtasticConfig(
       bleDeviceId: bleDeviceId ?? this.bleDeviceId,
@@ -107,6 +135,7 @@ class MeshtasticConfig {
       activeTransport: activeTransport ?? this.activeTransport,
       myNodeNum: myNodeNum ?? this.myNodeNum,
       autoStart: autoStart ?? this.autoStart,
+      logLevel: logLevel ?? this.logLevel,
     );
   }
 }

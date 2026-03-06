@@ -75,7 +75,9 @@ class MeshtasticConversation {
 class MeshtasticService {
   static final MeshtasticService _instance = MeshtasticService._internal();
   factory MeshtasticService() => _instance;
-  MeshtasticService._internal();
+  MeshtasticService._internal() {
+    _bleClient.onLog = _onBleLog;
+  }
 
   bool _enabled = false;
   bool _initializing = false;
@@ -123,6 +125,34 @@ class MeshtasticService {
   List<MeshtasticChannelConfig> get channels =>
       _channels.values.where((c) => c.isEnabled).toList();
   MeshtasticCacheService? get cacheService => _cacheService;
+  MeshtasticLogLevel get logLevel =>
+      _config?.logLevel ?? MeshtasticLogLevel.info;
+
+  // ---------------------------------------------------------------------------
+  // Logging
+  // ---------------------------------------------------------------------------
+
+  void _log(MeshtasticLogLevel level, String message) {
+    final current = _config?.logLevel ?? MeshtasticLogLevel.info;
+    if (current == MeshtasticLogLevel.off) return;
+    if (level.index < current.index) return;
+    LogService().log(message);
+  }
+
+  void _onBleLog(String level, String message) {
+    final mapped = MeshtasticLogLevel.values.firstWhere(
+      (l) => l.name == level,
+      orElse: () => MeshtasticLogLevel.info,
+    );
+    _log(mapped, message);
+  }
+
+  void setLogLevel(MeshtasticLogLevel level) {
+    if (_config == null) return;
+    _config = _config!.copyWith(logLevel: level);
+    _cacheService?.saveConfig(_config!);
+    _log(MeshtasticLogLevel.info, 'MeshtasticService: log level set to ${level.name}');
+  }
 
   // ---------------------------------------------------------------------------
   // Lifecycle
@@ -141,14 +171,14 @@ class MeshtasticService {
         return;
       }
 
-      LogService().log('MeshtasticService: auto-starting');
+      _log(MeshtasticLogLevel.info, 'MeshtasticService: auto-starting');
       _enabled = true;
       _startUiTimer();
       _startWriteTimer();
       await _loadCachedData();
       _startListening();
     } catch (e) {
-      LogService().log('MeshtasticService: autoStart error: $e');
+      _log(MeshtasticLogLevel.error, 'MeshtasticService: autoStart error: $e');
     } finally {
       _initializing = false;
     }
@@ -169,9 +199,9 @@ class MeshtasticService {
       _startListening();
       _eventController
           .add(const MeshtasticEvent(MeshtasticEventType.configChanged));
-      LogService().log('MeshtasticService: enabled');
+      _log(MeshtasticLogLevel.info, 'MeshtasticService: enabled');
     } catch (e) {
-      LogService().log('MeshtasticService: enable error: $e');
+      _log(MeshtasticLogLevel.error, 'MeshtasticService: enable error: $e');
     } finally {
       _initializing = false;
     }
@@ -236,13 +266,12 @@ class MeshtasticService {
   void _requestConfig() {
     _wantConfigId = Random().nextInt(0x7FFFFFFF) + 1;
     _configReady = false;
-    LogService().log(
-      'MeshtasticService: requesting config (id=$_wantConfigId)',
-    );
+    _log(MeshtasticLogLevel.debug,
+      'MeshtasticService: requesting config (id=$_wantConfigId)');
 
     final toRadio = MeshtasticToRadio(wantConfigId: _wantConfigId);
     _bleClient.sendToRadio(toRadio).catchError((e) {
-      LogService().log('MeshtasticService: sendToRadio error: $e');
+      _log(MeshtasticLogLevel.error, 'MeshtasticService: sendToRadio error: $e');
     });
   }
 
@@ -300,7 +329,7 @@ class MeshtasticService {
     try {
       await _bleClient.sendToRadio(toRadio);
     } catch (e) {
-      LogService().log('MeshtasticService: send error: $e');
+      _log(MeshtasticLogLevel.error, 'MeshtasticService: send error: $e');
       return null;
     }
 
@@ -326,7 +355,7 @@ class MeshtasticService {
     _writeQueue.add(msg);
     _uiDirty = true;
 
-    LogService().log('MeshtasticService: sent message to ch:$channelIndex');
+    _log(MeshtasticLogLevel.debug, 'MeshtasticService: sent message to ch:$channelIndex');
     return msg;
   }
 
@@ -394,6 +423,7 @@ class MeshtasticService {
       'messageCount': _messages.length,
       'nodeCount': _nodes.length,
       'channelCount': _channels.values.where((c) => c.isEnabled).length,
+      'logLevel': logLevel.name,
     };
   }
 
@@ -453,10 +483,9 @@ class MeshtasticService {
     if (fromRadio.configCompleteId != 0) {
       if (fromRadio.configCompleteId == _wantConfigId) {
         _configReady = true;
-        LogService().log(
+        _log(MeshtasticLogLevel.info,
           'MeshtasticService: config complete '
-          '(nodes=${_nodes.length}, channels=${_channels.values.where((c) => c.isEnabled).length})',
-        );
+          '(nodes=${_nodes.length}, channels=${_channels.values.where((c) => c.isEnabled).length})');
         _eventController
             .add(const MeshtasticEvent(MeshtasticEventType.configComplete));
         _uiDirty = true;
@@ -470,9 +499,8 @@ class MeshtasticService {
   }
 
   void _handleMyNodeInfo(MeshtasticMyNodeInfo myInfo) {
-    LogService().log(
-      'MeshtasticService: my node num = ${myInfo.myNodeNum}',
-    );
+    _log(MeshtasticLogLevel.debug,
+      'MeshtasticService: my node num = ${myInfo.myNodeNum}');
     _config = (_config ?? const MeshtasticConfig())
         .copyWith(myNodeNum: myInfo.myNodeNum);
     _cacheService?.saveConfig(_config!);
@@ -635,7 +663,7 @@ class MeshtasticService {
         );
       }
     } catch (e) {
-      LogService().log('MeshtasticService: position decode error: $e');
+      _log(MeshtasticLogLevel.warn, 'MeshtasticService: position decode error: $e');
     }
   }
 
@@ -665,7 +693,7 @@ class MeshtasticService {
         MeshtasticEvent(MeshtasticEventType.nodeUpdated, node),
       );
     } catch (e) {
-      LogService().log('MeshtasticService: nodeinfo decode error: $e');
+      _log(MeshtasticLogLevel.warn, 'MeshtasticService: nodeinfo decode error: $e');
     }
   }
 
@@ -701,7 +729,7 @@ class MeshtasticService {
         }
       }
     } catch (e) {
-      LogService().log('MeshtasticService: telemetry decode error: $e');
+      _log(MeshtasticLogLevel.warn, 'MeshtasticService: telemetry decode error: $e');
     }
   }
 
@@ -728,7 +756,7 @@ class MeshtasticService {
         if (msg.packetId != 0) _seenPacketIds.add(msg.packetId);
       }
     } catch (e) {
-      LogService().log('MeshtasticService: loadCachedData error: $e');
+      _log(MeshtasticLogLevel.error, 'MeshtasticService: loadCachedData error: $e');
     }
   }
 

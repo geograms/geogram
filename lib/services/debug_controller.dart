@@ -21,6 +21,7 @@ import 'shared_folder_service.dart';
 import '../models/shared_folder.dart';
 import '../teleport/bitchat/bitchat_service.dart';
 import '../teleport/meshtastic/meshtastic_service.dart';
+import '../teleport/meshtastic/models/meshtastic_config.dart';
 
 /// Debug action types that can be triggered via API
 enum DebugAction {
@@ -236,6 +237,9 @@ enum DebugAction {
 
   /// Enable Meshtastic service
   meshtasticEnable,
+
+  /// Set Meshtastic log level
+  meshtasticLogLevel,
 }
 
 /// Toast message to be displayed
@@ -1155,6 +1159,11 @@ class DebugController {
         'description': 'Enable Meshtastic service (create config if needed)',
         'params': {},
       },
+      {
+        'action': 'meshtastic_log_level',
+        'description': 'Set Meshtastic log level (off, error, warn, info, debug)',
+        'params': {'level': 'string (off|error|warn|info|debug)'},
+      },
     ];
   }
 
@@ -1631,6 +1640,9 @@ class DebugController {
       case 'meshtastic_enable':
         return _meshtasticEnable();
 
+      case 'meshtastic_log_level':
+        return _meshtasticLogLevel(params);
+
       default:
         return {
           'success': false,
@@ -1986,6 +1998,30 @@ class DebugController {
     } catch (e) {
       return {'success': false, 'error': e.toString()};
     }
+  }
+
+  Future<Map<String, dynamic>> _meshtasticLogLevel(
+      Map<String, dynamic> params) async {
+    final levelStr = params['level'] as String?;
+    if (levelStr == null) {
+      return {
+        'success': true,
+        'logLevel': MeshtasticService().logLevel.name,
+        'available': MeshtasticLogLevel.values.map((l) => l.name).toList(),
+      };
+    }
+
+    final level = MeshtasticLogLevel.values.firstWhere(
+      (l) => l.name == levelStr,
+      orElse: () => MeshtasticLogLevel.info,
+    );
+
+    MeshtasticService().setLogLevel(level);
+    return {
+      'success': true,
+      'logLevel': level.name,
+      'message': 'Log level set to ${level.name}',
+    };
   }
 
   /// Dispose resources

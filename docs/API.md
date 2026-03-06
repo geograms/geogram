@@ -2645,6 +2645,7 @@ Triggers a debug action.
 | `bitchat_enable` | Enable BitChat service (generate identity if needed, start BLE) | None |
 | `meshtastic_status` | Get Meshtastic service status (BLE state, nodes, channels, messages, cache) | None |
 | `meshtastic_enable` | Enable Meshtastic service (create config if needed) | None |
+| `meshtastic_log_level` | Set Meshtastic log level (returns current if no level param) | `level` (off\|error\|warn\|info\|debug) |
 
 Place feedback actions send signed events to the station and only update local cache files if the place folder can be resolved via `place_path` or `callsign`.
 

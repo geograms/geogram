@@ -37,6 +37,8 @@ class MeshtasticScanResult {
 
 /// BLE client for communicating with a Meshtastic radio.
 class MeshtasticBleClient {
+  /// Optional log callback. If null, logs go directly to LogService.
+  void Function(String level, String message)? onLog;
   // Meshtastic BLE Service UUID
   static final Guid _serviceGuid =
       Guid('6ba1b218-15a8-461f-9fa8-5dcae273eafd');
@@ -71,6 +73,14 @@ class MeshtasticBleClient {
   String? get connectedDeviceId => _device?.remoteId.str;
 
   bool _readingFromRadio = false;
+
+  void _log(String level, String message) {
+    if (onLog != null) {
+      onLog!(level, message);
+    } else {
+      LogService().log(message);
+    }
+  }
 
   void _setState(MeshtasticBleState newState) {
     _state = newState;
@@ -107,7 +117,7 @@ class MeshtasticBleClient {
       );
       await Future.delayed(timeout);
     } catch (e) {
-      LogService().log('MeshtasticBLE: scan error: $e');
+      _log('error', 'MeshtasticBLE: scan error: $e');
     } finally {
       try {
         await FlutterBluePlus.stopScan();
@@ -116,7 +126,7 @@ class MeshtasticBleClient {
     }
 
     _setState(MeshtasticBleState.disconnected);
-    LogService().log('MeshtasticBLE: scan found ${results.length} devices');
+    _log('info', 'MeshtasticBLE: scan found ${results.length} devices');
     return results.values.toList()
       ..sort((a, b) => b.rssi.compareTo(a.rssi));
   }
@@ -141,15 +151,14 @@ class MeshtasticBleClient {
 
       for (int attempt = 1; attempt <= 3; attempt++) {
         try {
-          LogService().log(
-            'MeshtasticBLE: connect attempt $attempt/3 to ${device.remoteId.str}',
-          );
+          _log('debug',
+            'MeshtasticBLE: connect attempt $attempt/3 to ${device.remoteId.str}');
           await bleDevice.connect(timeout: connectTimeout);
           connected = true;
           break;
         } catch (e) {
-          LogService()
-              .log('MeshtasticBLE: connect attempt $attempt failed: $e');
+          _log('warn',
+              'MeshtasticBLE: connect attempt $attempt failed: $e');
           if (e.toString().contains('Bad state: No element') && attempt < 3) {
             bleDevice = BluetoothDevice.fromId(device.remoteId.str);
           }
@@ -164,9 +173,9 @@ class MeshtasticBleClient {
       // Request higher MTU
       try {
         final mtu = await bleDevice.requestMtu(512);
-        LogService().log('MeshtasticBLE: MTU negotiated: $mtu');
+        _log('debug', 'MeshtasticBLE: MTU negotiated: $mtu');
       } catch (e) {
-        LogService().log('MeshtasticBLE: MTU request failed: $e');
+        _log('warn', 'MeshtasticBLE: MTU request failed: $e');
       }
 
       // Discover services with retry
@@ -174,9 +183,8 @@ class MeshtasticBleClient {
       for (int attempt = 1; attempt <= 3; attempt++) {
         services = await bleDevice.discoverServices();
         if (services.isNotEmpty) break;
-        LogService().log(
-          'MeshtasticBLE: service discovery attempt $attempt empty',
-        );
+        _log('debug',
+          'MeshtasticBLE: service discovery attempt $attempt empty');
         await Future.delayed(Duration(milliseconds: 300 * attempt));
       }
 
@@ -212,13 +220,12 @@ class MeshtasticBleClient {
         for (int attempt = 1; attempt <= 3; attempt++) {
           try {
             await _fromNumChar!.setNotifyValue(true);
-            LogService()
-                .log('MeshtasticBLE: subscribed to FromNum notifications');
+            _log('debug',
+                'MeshtasticBLE: subscribed to FromNum notifications');
             break;
           } catch (e) {
-            LogService().log(
-              'MeshtasticBLE: FromNum subscribe attempt $attempt failed: $e',
-            );
+            _log('warn',
+              'MeshtasticBLE: FromNum subscribe attempt $attempt failed: $e');
             if (attempt == 3) rethrow;
             await Future.delayed(Duration(milliseconds: 200 * attempt));
           }
@@ -239,19 +246,18 @@ class MeshtasticBleClient {
       // Listen for disconnection
       _connStateSub = bleDevice.connectionState.listen((connState) {
         if (connState == BluetoothConnectionState.disconnected) {
-          LogService().log('MeshtasticBLE: device disconnected');
+          _log('info', 'MeshtasticBLE: device disconnected');
           _cleanupConnection();
           _setState(MeshtasticBleState.disconnected);
         }
       });
 
       _setState(MeshtasticBleState.connected);
-      LogService().log(
-        'MeshtasticBLE: connected to ${device.remoteId.str}',
-      );
+      _log('info',
+        'MeshtasticBLE: connected to ${device.remoteId.str}');
       return true;
     } catch (e) {
-      LogService().log('MeshtasticBLE: connect failed: $e');
+      _log('error', 'MeshtasticBLE: connect failed: $e');
       _cleanupConnection();
       _setState(MeshtasticBleState.disconnected);
       return false;
@@ -318,11 +324,11 @@ class MeshtasticBleClient {
             _responseController.add(fromRadio);
           }
         } catch (e) {
-          LogService().log('MeshtasticBLE: decode error: $e');
+          _log('warn', 'MeshtasticBLE: decode error: $e');
         }
       }
     } catch (e) {
-      LogService().log('MeshtasticBLE: drainFromRadio error: $e');
+      _log('error', 'MeshtasticBLE: drainFromRadio error: $e');
     } finally {
       _readingFromRadio = false;
     }

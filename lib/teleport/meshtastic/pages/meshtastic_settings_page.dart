@@ -224,6 +224,33 @@ class _MeshtasticSettingsPageState extends State<MeshtasticSettingsPage> {
               }
             },
           ),
+
+          const Divider(),
+
+          // Log level
+          _sectionHeader(
+              I18nService().t('meshtastic_log_level_section'), theme),
+          ListTile(
+            leading: const Icon(Icons.bug_report),
+            title: Text(I18nService().t('meshtastic_log_level_label')),
+            subtitle: Text(I18nService().t('meshtastic_log_level_desc')),
+            trailing: DropdownButton<MeshtasticLogLevel>(
+              value: _service.logLevel,
+              underline: const SizedBox.shrink(),
+              onChanged: (val) {
+                if (val != null) {
+                  _service.setLogLevel(val);
+                  setState(() {});
+                }
+              },
+              items: MeshtasticLogLevel.values
+                  .map((l) => DropdownMenuItem(
+                        value: l,
+                        child: Text(l.name.toUpperCase()),
+                      ))
+                  .toList(),
+            ),
+          ),
         ],
       ),
     );

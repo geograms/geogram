@@ -474,6 +474,7 @@ class DevicesService {
         break;
       case DebugAction.meshtasticStatus:
       case DebugAction.meshtasticEnable:
+      case DebugAction.meshtasticLogLevel:
         // Meshtastic actions are handled directly by LogApiService
         break;
     }

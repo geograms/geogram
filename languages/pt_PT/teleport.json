@@ -353,5 +353,8 @@
   "meshtastic_region_section": "Região",
   "meshtastic_region_label": "Região",
   "meshtastic_auto_start": "Início automático",
-  "meshtastic_auto_start_desc": "Iniciar o serviço Meshtastic ao abrir a aplicação"
+  "meshtastic_auto_start_desc": "Iniciar o serviço Meshtastic ao abrir a aplicação",
+  "meshtastic_log_level_section": "Registo",
+  "meshtastic_log_level_label": "Nível de Registo",
+  "meshtastic_log_level_desc": "Controla a verbosidade do registo do Meshtastic"
 }
