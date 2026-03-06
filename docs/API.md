@@ -2643,6 +2643,8 @@ Triggers a debug action.
 | `hotspot_portal_status` | Get portal server status | None. Returns running state, DNS state, port, gateway IP |
 | `bitchat_status` | Get BitChat service status (identity, BLE state, peers, messages, cache) | None |
 | `bitchat_enable` | Enable BitChat service (generate identity if needed, start BLE) | None |
+| `meshtastic_status` | Get Meshtastic service status (BLE state, nodes, channels, messages, cache) | None |
+| `meshtastic_enable` | Enable Meshtastic service (create config if needed) | None |
 
 Place feedback actions send signed events to the station and only update local cache files if the place folder can be resolved via `place_path` or `callsign`.
 

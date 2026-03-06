@@ -73,6 +73,13 @@ This document catalogs reusable UI components available in the Geogram codebase.
 - [BitChat Service](#bitchat-service) - Singleton with event stream, bloom filter dedup, batch writes
 - [BitChat Message Bubble](#bitchat-message-bubble) - Chat bubble with hop count indicator and delivery status
 
+### Meshtastic Components
+- [Meshtastic Protobuf Codec](#meshtastic-protobuf-codec) - Hand-coded protobuf encoder/decoder for Meshtastic wire format (pure Dart, CLI-reusable)
+- [Meshtastic Crypto](#meshtastic-crypto) - AES256-CTR channel encryption with PSK expansion (pure Dart, CLI-reusable)
+- [Meshtastic BLE Client](#meshtastic-ble-client) - Meshtastic BLE transport with two-step notification model
+- [Meshtastic Service](#meshtastic-service) - Singleton with config dump flow, packet routing, node database
+- [Meshtastic Message Bubble](#meshtastic-message-bubble) - Chat bubble with SNR, RSSI, hop count badges
+
 ### Pure Dart Utilities
 - [Geohash](#geohash) - Geohash encode/decode/neighbors (pure Dart, CLI-reusable)
 - [Noise XX Handshake](#noise-xx-handshake) - Noise Protocol XX pattern using cryptography package
@@ -10393,6 +10400,62 @@ service.events.listen((e) { ... });
 
 **File**: `lib/teleport/bitchat/widgets/bitchat_message_bubble.dart`
 **Pattern**: Chat bubble with hop count badge, delivery status icons, sender color via `teleportSenderColor()`
+
+---
+
+## Meshtastic Protobuf Codec
+
+**File**: `lib/teleport/meshtastic/meshtastic_protobuf.dart`
+**Pattern**: Pure Dart protobuf wire format encoder/decoder. No generated code, no protobuf dependency. CLI-reusable.
+
+Implements `ProtobufWriter` and `ProtobufReader` for generic protobuf wire types (varint, fixed32, length-delimited, fixed64). Also contains all Meshtastic-specific message classes (FromRadio, ToRadio, MeshPacket, Data, User, Position, NodeInfo, Channel, ServiceEnvelope) with encode/decode methods.
+
+BLE framing helpers: `frameBlePacket()` (0x94C3 + 2-byte BE length), `deframeBleData()`.
+
+```dart
+// Encode a ToRadio message
+final toRadio = MeshtasticToRadio(wantConfigId: 12345);
+final bytes = toRadio.encode();
+final frame = frameBlePacket(bytes);
+
+// Decode a FromRadio message
+final fromRadio = MeshtasticFromRadio.decode(payload);
+if (fromRadio.packet != null) { /* handle mesh packet */ }
+```
+
+---
+
+## Meshtastic Crypto
+
+**File**: `lib/teleport/meshtastic/meshtastic_crypto.dart`
+**Pattern**: AES256-CTR encryption for Meshtastic channel packets using `pointycastle`. Pure Dart, CLI-reusable.
+
+```dart
+final key = expandPsk(Uint8List.fromList([0x01])); // Default LongFast key
+final encrypted = encryptMeshtastic(plaintext, key, packetId, fromNode);
+final decrypted = decryptMeshtastic(ciphertext, key, packetId, fromNode);
+```
+
+---
+
+## Meshtastic BLE Client
+
+**File**: `lib/teleport/meshtastic/meshtastic_ble_client.dart`
+**Pattern**: BLE transport with Meshtastic service UUID and two-step notification model (FromNum notifies, then read FromRadio repeatedly until empty).
+
+---
+
+## Meshtastic Service
+
+**File**: `lib/teleport/meshtastic/meshtastic_service.dart`
+**Pattern**: Singleton service with event stream, config request flow (wantConfigId -> MyNodeInfo/NodeInfo/Channel/configComplete), packet routing by portnum, node database, channel PSK decryption.
+
+---
+
+## Meshtastic Message Bubble
+
+**File**: `lib/teleport/meshtastic/widgets/meshtastic_message_bubble.dart`
+**Pattern**: Chat bubble with SNR badge, RSSI badge, hop count badge, delivery status icons. Uses `teleportSenderColor()` from shared utilities.
 
 ---
 

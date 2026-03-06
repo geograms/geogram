@@ -472,6 +472,10 @@ class DevicesService {
       case DebugAction.hotspotPortalStatus:
         // Hotspot portal actions are handled directly by LogApiService
         break;
+      case DebugAction.meshtasticStatus:
+      case DebugAction.meshtasticEnable:
+        // Meshtastic actions are handled directly by LogApiService
+        break;
     }
   }
 

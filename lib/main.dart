@@ -60,6 +60,7 @@ import 'teleport/nostr/nostr_client_service.dart';
 import 'teleport/atproto/atproto_client_service.dart';
 import 'teleport/meshcore/meshcore_service.dart';
 import 'teleport/bitchat/bitchat_service.dart';
+import 'teleport/meshtastic/meshtastic_service.dart';
 import 'services/window_state_service.dart';
 import 'services/tray_service.dart';
 import 'services/group_sync_service.dart';
@@ -746,6 +747,14 @@ void main() async {
             LogService().log('BitChat auto-start failed: $e');
           });
         }
+
+        // Auto-start Meshtastic LoRa mesh background service
+        final meshtasticStorage = AppService().profileStorage;
+        if (meshtasticStorage != null) {
+          MeshtasticService().autoStart(meshtasticStorage).catchError((e) {
+            LogService().log('Meshtastic auto-start failed: $e');
+          });
+        }
       }
 
       // Ensure chat rooms exist for all device folders with chat enabled
@@ -933,6 +942,7 @@ class _GeogramAppState extends State<GeogramApp> with WidgetsBindingObserver {
       IrcService().flushWrites();
       XmppService().flushWrites();
       BitchatService().flushWrites();
+      MeshtasticService().flushWrites();
     }
 
     if (state == AppLifecycleState.resumed) {

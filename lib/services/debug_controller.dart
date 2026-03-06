@@ -20,6 +20,7 @@ import 'profile_storage.dart';
 import 'shared_folder_service.dart';
 import '../models/shared_folder.dart';
 import '../teleport/bitchat/bitchat_service.dart';
+import '../teleport/meshtastic/meshtastic_service.dart';
 
 /// Debug action types that can be triggered via API
 enum DebugAction {
@@ -229,6 +230,12 @@ enum DebugAction {
 
   /// Get portal server status
   hotspotPortalStatus,
+
+  /// Get Meshtastic service status
+  meshtasticStatus,
+
+  /// Enable Meshtastic service
+  meshtasticEnable,
 }
 
 /// Toast message to be displayed
@@ -1138,6 +1145,16 @@ class DebugController {
         'description': 'Enable BitChat service (generate identity if needed, start BLE)',
         'params': {},
       },
+      {
+        'action': 'meshtastic_status',
+        'description': 'Get Meshtastic service status (BLE state, nodes, channels, messages)',
+        'params': {},
+      },
+      {
+        'action': 'meshtastic_enable',
+        'description': 'Enable Meshtastic service (create config if needed)',
+        'params': {},
+      },
     ];
   }
 
@@ -1608,6 +1625,12 @@ class DebugController {
       case 'bitchat_enable':
         return _bitchatEnable();
 
+      case 'meshtastic_status':
+        return _meshtasticStatus();
+
+      case 'meshtastic_enable':
+        return _meshtasticEnable();
+
       default:
         return {
           'success': false,
@@ -1924,6 +1947,40 @@ class DebugController {
       return {
         'success': true,
         'message': 'BitChat enabled',
+        ...service.getStatus(),
+      };
+    } catch (e) {
+      return {'success': false, 'error': e.toString()};
+    }
+  }
+
+  // ── Meshtastic debug actions ────────────────────────────────────
+
+  Future<Map<String, dynamic>> _meshtasticStatus() async {
+    final service = MeshtasticService();
+    final status = service.getStatus();
+    final cacheInfo = await service.cacheService?.inspect();
+    return {
+      'success': true,
+      ...status,
+      if (cacheInfo != null) 'cache': cacheInfo,
+    };
+  }
+
+  Future<Map<String, dynamic>> _meshtasticEnable() async {
+    try {
+      final service = MeshtasticService();
+      if (!service.isEnabled) {
+        final storage = AppService().profileStorage;
+        if (storage == null) {
+          return {'success': false, 'error': 'No profile storage available'};
+        }
+        service.setStorage(storage);
+        await service.enableAsync();
+      }
+      return {
+        'success': true,
+        'message': 'Meshtastic enabled',
         ...service.getStatus(),
       };
     } catch (e) {
