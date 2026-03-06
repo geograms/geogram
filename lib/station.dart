@@ -2477,8 +2477,20 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, EmailHandlerMixin,
     recordRequestForWatchdog();  // Track for health watchdog
 
     try {
-      // Check if IP is banned
-      if (isIpBanned(ip)) {
+      // Exempt safe, high-traffic paths from rate limiting:
+      // - Tile requests (map tiles, high volume by nature)
+      // - Root page and static web assets
+      // - Public API status/karma endpoints
+      final isExemptPath = path.startsWith('/tiles/') ||
+          path == '/' ||
+          path.startsWith('/web/') ||
+          path == '/api/status' ||
+          path.startsWith('/api/karma/leaderboard') ||
+          path == '/api/karma/stats' ||
+          path == '/favicon.ico';
+
+      // Check if IP is banned (only for non-exempt paths)
+      if (!isExemptPath && isIpBanned(ip)) {
         recordErrorForWatchdog();  // Track for attack detection
         request.response.statusCode = 429;
         request.response.write('Too Many Requests');
@@ -2489,8 +2501,8 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, EmailHandlerMixin,
         return;
       }
 
-      // Check rate limits
-      if (!checkRateLimit(ip)) {
+      // Check rate limits (only for non-exempt paths)
+      if (!isExemptPath && !checkRateLimit(ip)) {
         recordErrorForWatchdog();  // Track for attack detection
         banIp(ip);
         request.response.statusCode = 429;

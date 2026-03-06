@@ -2692,11 +2692,22 @@ class PureStationServer with EmailHandlerMixin, BlogHandlerMixin, ConsoleCommand
     _requestsThisMinute++;  // Track for health watchdog
 
     try {
-      // Meet pages are user-facing — exempt from rate limiting
-      final isMeetPath = _isCallsignMeetPath(path);
+      // Exempt safe, high-traffic paths from rate limiting:
+      // - Meet pages (user-facing public pages)
+      // - Tile requests (map tiles, high volume by nature)
+      // - Root page and static web assets
+      // - Public API status/karma endpoints
+      final isExemptPath = _isCallsignMeetPath(path) ||
+          path.startsWith('/tiles/') ||
+          path == '/' ||
+          path.startsWith('/web/') ||
+          path == '/api/status' ||
+          path.startsWith('/api/karma/leaderboard') ||
+          path == '/api/karma/stats' ||
+          path == '/favicon.ico';
 
-      // Check if IP is banned
-      if (!isMeetPath && _isIpBanned(ip)) {
+      // Check if IP is banned (only for non-exempt paths)
+      if (!isExemptPath && _isIpBanned(ip)) {
         _errorsThisMinute++;  // Track for attack detection
         request.response.statusCode = 429;
         request.response.write('Too Many Requests');
@@ -2707,8 +2718,8 @@ class PureStationServer with EmailHandlerMixin, BlogHandlerMixin, ConsoleCommand
         return;
       }
 
-      // Check rate limits
-      if (!isMeetPath && !_checkRateLimit(ip)) {
+      // Check rate limits (only for non-exempt paths)
+      if (!isExemptPath && !_checkRateLimit(ip)) {
         _errorsThisMinute++;  // Track for attack detection
         _banIp(ip);
         request.response.statusCode = 429;
