@@ -1181,6 +1181,12 @@ class DevicesService {
         if (a.isOnline != b.isOnline) {
           return a.isOnline ? -1 : 1;
         }
+        // Then local connections (BLE, LAN, etc.) before Internet-only
+        final aLocal = a.hasLocalConnection;
+        final bLocal = b.hasLocalConnection;
+        if (aLocal != bLocal) {
+          return aLocal ? -1 : 1;
+        }
         // Then sort by display name
         return a.displayName.compareTo(b.displayName);
       });
@@ -3274,6 +3280,17 @@ class RemoteDevice {
         return method;
     }
   }
+
+  /// Whether this device has any local/direct connection (not Internet)
+  static const _localMethods = {
+    'wifi', 'wifi_local', 'wifi-local', 'lan',
+    'bluetooth', 'bluetooth_plus', 'ble_plus', 'ble+',
+    'lora', 'radio', 'esp32mesh', 'esp32_mesh',
+    'wifi_halow', 'wifi-halow', 'halow', 'usb', 'usb_aoa',
+  };
+
+  bool get hasLocalConnection =>
+      connectionMethods.any((m) => _localMethods.contains(m.toLowerCase()));
 
   /// Get status string
   String get statusText {
