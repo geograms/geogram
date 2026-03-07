@@ -3,8 +3,12 @@
  * License: Apache-2.0
  */
 
+import 'dart:io';
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:window_manager/window_manager.dart';
 
 import '../models/reader_models.dart';
 import '../services/manga_service.dart';
@@ -51,17 +55,31 @@ class _MangaReaderPageState extends State<MangaReaderPage> {
   void initState() {
     super.initState();
     _loadPages();
-    // Hide system UI for immersive reading
-    SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+    _enterFullScreen();
   }
 
   @override
   void dispose() {
     _pageController.dispose();
     _scrollController.dispose();
-    // Restore system UI
-    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+    _exitFullScreen();
     super.dispose();
+  }
+
+  void _enterFullScreen() {
+    if (!kIsWeb && (Platform.isLinux || Platform.isWindows || Platform.isMacOS)) {
+      windowManager.setFullScreen(true);
+    } else {
+      SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+    }
+  }
+
+  void _exitFullScreen() {
+    if (!kIsWeb && (Platform.isLinux || Platform.isWindows || Platform.isMacOS)) {
+      windowManager.setFullScreen(false);
+    } else {
+      SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+    }
   }
 
   Future<void> _loadPages() async {
