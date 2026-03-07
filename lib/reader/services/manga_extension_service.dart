@@ -429,7 +429,7 @@ class MangaExtensionService {
     '''{
   "id": "mangapill",
   "name": "MangaPill",
-  "version": "1.3.0",
+  "version": "1.3.1",
   "api_version": 1,
   "language": "en",
   "base_url": "https://mangapill.com",
