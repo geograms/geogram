@@ -2070,15 +2070,25 @@ class _HomePageState extends State<HomePage> {
                   ],
                 ),
                 actions: [
-                  // Mark all as read button on Now panel
-                  if (_selectedIndex == 1 && _unreadNowCount > 0)
-                    IconButton(
-                      icon: const Icon(Icons.done_all),
-                      tooltip: _i18n.t('now_mark_all_read'),
-                      onPressed: () {
-                        NowService().markAllAsRead();
-                      },
-                    ),
+                  // Now panel actions
+                  if (_selectedIndex == 1) ...[
+                    if (_unreadNowCount > 0)
+                      IconButton(
+                        icon: const Icon(Icons.done_all),
+                        tooltip: _i18n.t('now_mark_all_read'),
+                        onPressed: () {
+                          NowService().markAllAsRead();
+                        },
+                      ),
+                    if (NowService().items.isNotEmpty)
+                      IconButton(
+                        icon: const Icon(Icons.clear_all),
+                        tooltip: _i18n.t('clear_all'),
+                        onPressed: () {
+                          NowService().clearAll();
+                        },
+                      ),
+                  ],
                   // Show station indicator if current profile is a station
                   if (_profileService.getProfile().isRelay)
                     IconButton(
