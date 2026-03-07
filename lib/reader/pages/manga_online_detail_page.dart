@@ -52,6 +52,13 @@ class _MangaOnlineDetailPageState extends State<MangaOnlineDetailPage> {
   String? _seriesDir;
   String? _error;
 
+  // Series info
+  String? _description;
+  String? _author;
+  String? _status;
+  List<String> _genres = [];
+  String? _coverUrl;
+
   // Download state
   bool _downloading = false;
   String _downloadStatus = '';
@@ -88,9 +95,23 @@ class _MangaOnlineDetailPageState extends State<MangaOnlineDetailPage> {
         _localChapterNumbers = await _getLocalChapterNumbers(_seriesDir!);
       }
 
-      // Fetch remote chapters
-      _chapters = await _extensionService.listChapters(
-          widget.extensionId, widget.mangaId);
+      // Fetch series info and chapters in parallel
+      final futures = await Future.wait([
+        _extensionService.getSeriesInfo(widget.extensionId, widget.mangaId),
+        _extensionService.listChapters(widget.extensionId, widget.mangaId),
+      ]);
+
+      final seriesInfo = futures[0] as Map<String, dynamic>;
+      _chapters = futures[1] as List<ChapterInfo>;
+
+      _description = seriesInfo['description'] as String?;
+      _author = seriesInfo['author'] as String?;
+      _status = seriesInfo['status'] as String?;
+      _coverUrl = seriesInfo['thumbnail'] as String? ?? widget.thumbnailUrl;
+      final genres = seriesInfo['genres'];
+      if (genres is List) {
+        _genres = genres.map((g) => g.toString()).toList();
+      }
 
       if (mounted) {
         setState(() => _loading = false);
@@ -139,14 +160,15 @@ class _MangaOnlineDetailPageState extends State<MangaOnlineDetailPage> {
       );
 
       // Download thumbnail if available
-      if (widget.thumbnailUrl != null) {
+      final thumbUrl = _coverUrl ?? widget.thumbnailUrl;
+      if (thumbUrl != null) {
         try {
           final headers =
               _extensionService.getImageHeaders(widget.extensionId);
           final cookies =
               _extensionService.getCookies(widget.extensionId);
           final response = await MangaScraper().downloadImage(
-            widget.thumbnailUrl!,
+            thumbUrl,
             headers: headers,
             cookies: cookies,
             extensionId: widget.extensionId,
@@ -377,11 +399,12 @@ class _MangaOnlineDetailPageState extends State<MangaOnlineDetailPage> {
     final theme = Theme.of(context);
     final missingCount =
         _chapters.where((c) => !_localChapterNumbers.contains(c.number)).length;
+    final displayThumb = _coverUrl ?? widget.thumbnailUrl;
 
     return Scaffold(
       body: CustomScrollView(
         slivers: [
-          // Header
+          // Header with cover image
           SliverAppBar(
             expandedHeight: 200,
             pinned: true,
@@ -409,9 +432,9 @@ class _MangaOnlineDetailPageState extends State<MangaOnlineDetailPage> {
               background: Stack(
                 fit: StackFit.expand,
                 children: [
-                  if (widget.thumbnailUrl != null)
+                  if (displayThumb != null)
                     Image.network(
-                      widget.thumbnailUrl!,
+                      displayThumb,
                       fit: BoxFit.cover,
                       errorBuilder: (_, __, ___) => Container(
                         color: Colors.purple.withValues(alpha: 0.3),
@@ -436,19 +459,135 @@ class _MangaOnlineDetailPageState extends State<MangaOnlineDetailPage> {
             ),
           ),
 
-          // Info section
+          // Series info section
           SliverToBoxAdapter(
             child: Padding(
               padding: const EdgeInsets.all(16),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // Source chip
-                  Chip(
-                    avatar: const Icon(Icons.extension, size: 16),
-                    label: Text(widget.extensionName),
-                    visualDensity: VisualDensity.compact,
+                  // Cover + metadata row
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // Small cover thumbnail
+                      if (displayThumb != null)
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(8),
+                          child: SizedBox(
+                            width: 100,
+                            height: 140,
+                            child: Image.network(
+                              displayThumb,
+                              fit: BoxFit.cover,
+                              errorBuilder: (_, __, ___) => Container(
+                                color: Colors.purple.withValues(alpha: 0.2),
+                                child: const Icon(Icons.auto_stories,
+                                    color: Colors.purple),
+                              ),
+                            ),
+                          ),
+                        ),
+                      if (displayThumb != null) const SizedBox(width: 16),
+
+                      // Metadata
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            // Source
+                            Chip(
+                              avatar: const Icon(Icons.extension, size: 16),
+                              label: Text(widget.extensionName),
+                              visualDensity: VisualDensity.compact,
+                            ),
+                            if (_author != null && _author!.isNotEmpty) ...[
+                              const SizedBox(height: 4),
+                              Row(
+                                children: [
+                                  Icon(Icons.person, size: 16,
+                                      color: theme.colorScheme.onSurface
+                                          .withValues(alpha: 0.6)),
+                                  const SizedBox(width: 6),
+                                  Expanded(
+                                    child: Text(
+                                      _author!,
+                                      style: theme.textTheme.bodyMedium,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
+                            if (_status != null && _status!.isNotEmpty) ...[
+                              const SizedBox(height: 4),
+                              Row(
+                                children: [
+                                  Icon(
+                                    _status!.toLowerCase().contains('ongoing')
+                                        ? Icons.autorenew
+                                        : Icons.check_circle_outline,
+                                    size: 16,
+                                    color: _status!.toLowerCase().contains('ongoing')
+                                        ? Colors.blue
+                                        : Colors.green,
+                                  ),
+                                  const SizedBox(width: 6),
+                                  Text(
+                                    _status!,
+                                    style: theme.textTheme.bodyMedium?.copyWith(
+                                      color: _status!.toLowerCase().contains('ongoing')
+                                          ? Colors.blue
+                                          : Colors.green,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
+                            if (!_loading) ...[
+                              const SizedBox(height: 4),
+                              Text(
+                                '${_chapters.length} chapters',
+                                style: theme.textTheme.bodyMedium?.copyWith(
+                                  color: theme.colorScheme.onSurface
+                                      .withValues(alpha: 0.6),
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                    ],
                   ),
+
+                  // Genres
+                  if (_genres.isNotEmpty) ...[
+                    const SizedBox(height: 12),
+                    Wrap(
+                      spacing: 6,
+                      runSpacing: 4,
+                      children: _genres.map((g) => Chip(
+                        label: Text(g, style: const TextStyle(fontSize: 11)),
+                        visualDensity: VisualDensity.compact,
+                        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        padding: EdgeInsets.zero,
+                      )).toList(),
+                    ),
+                  ],
+
+                  // Description
+                  if (_description != null && _description!.trim().isNotEmpty) ...[
+                    const SizedBox(height: 12),
+                    Text(
+                      _description!.trim(),
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        color: theme.colorScheme.onSurface.withValues(alpha: 0.7),
+                      ),
+                      maxLines: 6,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
 
                   const SizedBox(height: 8),
 
@@ -467,7 +606,7 @@ class _MangaOnlineDetailPageState extends State<MangaOnlineDetailPage> {
                         ),
                       ],
                     )
-                  else
+                  else if (!_loading)
                     Row(
                       children: [
                         OutlinedButton.icon(

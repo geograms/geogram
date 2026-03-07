@@ -409,17 +409,23 @@ class _MangaExtensionBrowsePageState extends State<MangaExtensionBrowsePage>
     List<MangaSearchResult> results,
     String extensionId,
   ) {
-    return GridView.builder(
-      padding: const EdgeInsets.all(16),
-      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: 3,
-        childAspectRatio: 0.55,
-        crossAxisSpacing: 12,
-        mainAxisSpacing: 12,
-      ),
-      itemCount: results.length,
-      itemBuilder: (context, index) {
-        return _buildMangaCard(theme, results[index], extensionId);
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        // Responsive columns: aim for ~120px wide cards
+        final columns = (constraints.maxWidth / 130).floor().clamp(3, 8);
+        return GridView.builder(
+          padding: const EdgeInsets.all(12),
+          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: columns,
+            childAspectRatio: 0.6,
+            crossAxisSpacing: 10,
+            mainAxisSpacing: 10,
+          ),
+          itemCount: results.length,
+          itemBuilder: (context, index) {
+            return _buildMangaCard(theme, results[index], extensionId);
+          },
+        );
       },
     );
   }

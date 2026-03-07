@@ -1350,6 +1350,43 @@ class DebugController {
           return {'success': false, 'error': e.toString()};
         }
 
+      case 'manga_detail':
+        try {
+          final extService = MangaExtensionService();
+          if (!extService.isInitialized) {
+            final appsPath = AppService().getDefaultAppsPath();
+            final readerPath = '$appsPath/reader';
+            final extensionsDir = ReaderPathUtils.extensionsDir(readerPath);
+            await extService.initialize(extensionsDir);
+          }
+          final extensionId = params['extension_id'] as String?;
+          final mangaId = params['manga_id'] as String?;
+          if (extensionId == null || mangaId == null) {
+            return {'success': false, 'error': 'Missing extension_id or manga_id'};
+          }
+          final seriesInfo = await extService.getSeriesInfo(extensionId, mangaId);
+          final chapters = await extService.listChapters(extensionId, mangaId);
+          return {
+            'success': true,
+            'series_info': seriesInfo,
+            'chapters_count': chapters.length,
+            'first_chapters': chapters.take(3).map((c) => {
+              'id': c.id,
+              'number': c.number,
+              'title': c.title,
+            }).toList(),
+            'last_chapters': chapters.length > 3
+                ? chapters.skip(chapters.length - 3).map((c) => {
+                    'id': c.id,
+                    'number': c.number,
+                    'title': c.title,
+                  }).toList()
+                : [],
+          };
+        } catch (e) {
+          return {'success': false, 'error': e.toString()};
+        }
+
       case 'toast':
         final message = params['message'] as String?;
         if (message == null || message.isEmpty) {

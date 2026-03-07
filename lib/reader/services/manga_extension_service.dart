@@ -161,6 +161,29 @@ class MangaExtensionService {
     return results;
   }
 
+  /// Get series info (description, author, status, genres) from a specific extension
+  Future<Map<String, dynamic>> getSeriesInfo(
+      String extensionId, String mangaId) async {
+    final ext = _extensions[extensionId];
+    if (ext == null) throw Exception('Extension not found: $extensionId');
+
+    final vars = {
+      'base_url': ext.baseUrl,
+      'id': mangaId,
+    };
+
+    final results = await _scraper.scrape(
+      config: ext.series,
+      vars: vars,
+      headers: _scraper.resolveHeaders(ext.headers, vars),
+      cookies: _cookies[extensionId] ?? {},
+      extensionId: extensionId,
+      rateLimitMs: ext.rateLimitMs,
+    );
+
+    return results.isNotEmpty ? results.first : {};
+  }
+
   /// Get chapter list for a manga from a specific extension
   Future<List<ChapterInfo>> listChapters(
       String extensionId, String mangaId) async {

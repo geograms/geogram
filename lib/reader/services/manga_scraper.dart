@@ -187,7 +187,15 @@ class MangaScraper {
       return _applyFieldProcessing(element.text, field);
     }
 
-    if (field.selector == null) return null;
+    if (field.selector == null) {
+      // No selector — extract attr/text from the element itself
+      if (field.attr != null || field.text) {
+        final rawValue = _extractRawValue(element, field);
+        if (rawValue == null || rawValue.isEmpty) return null;
+        return _applyFieldProcessing(rawValue, field);
+      }
+      return null;
+    }
 
     if (field.list) {
       // Collect all matching elements
