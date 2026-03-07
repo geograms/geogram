@@ -32,6 +32,7 @@ import '../services/station_alert_service.dart';
 import '../services/app_service.dart';
 import '../services/websocket_service.dart';
 import '../services/routing_service.dart';
+import '../version.dart' show appVersion;
 import 'report_detail_page.dart';
 import 'place_detail_page.dart';
 import 'event_detail_page.dart';
@@ -86,6 +87,15 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
   double? _routeDistanceMeters;
   double? _routeDurationSeconds;
 
+  // Search state
+  final TextEditingController _searchController = TextEditingController();
+  final FocusNode _searchFocusNode = FocusNode();
+  List<_SearchResult> _searchResults = [];
+  bool _isSearching = false;
+  bool _showSearchBar = false;
+  _SearchResult? _searchMarker; // Pinned search result on map
+  Timer? _searchDebounce;
+
   // Auto-refresh timer (every 5 minutes)
   Timer? _autoRefreshTimer;
   static const Duration _autoRefreshInterval = Duration(minutes: 5);
@@ -134,6 +144,9 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
     _profileService.profileNotifier.removeListener(_profileListener);
     _moveReloadTimer?.cancel();
     _autoRefreshTimer?.cancel();
+    _searchDebounce?.cancel();
+    _searchController.dispose();
+    _searchFocusNode.dispose();
     _tabController.dispose();
     super.dispose();
   }
@@ -1348,8 +1361,193 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
                 ),
               ],
             ),
+            // Search pin marker
+            if (_searchMarker != null)
+              MarkerLayer(
+                markers: [
+                  Marker(
+                    point: LatLng(_searchMarker!.latitude, _searchMarker!.longitude),
+                    width: 50,
+                    height: 50,
+                    child: const Icon(Icons.location_on, color: Colors.red, size: 50),
+                  ),
+                ],
+              ),
           ],
         ),
+
+        // Search bar overlay
+        if (_showSearchBar)
+          Positioned(
+            top: 8,
+            left: 16,
+            right: 80,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Material(
+                  elevation: 4,
+                  borderRadius: BorderRadius.circular(28),
+                  child: TextField(
+                    controller: _searchController,
+                    focusNode: _searchFocusNode,
+                    onChanged: _onSearchChanged,
+                    decoration: InputDecoration(
+                      hintText: _i18n.t('search_place'),
+                      prefixIcon: const Icon(Icons.search),
+                      suffixIcon: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (_isSearching)
+                            const Padding(
+                              padding: EdgeInsets.all(12),
+                              child: SizedBox(
+                                width: 20,
+                                height: 20,
+                                child: CircularProgressIndicator(strokeWidth: 2),
+                              ),
+                            ),
+                          if (_searchController.text.isNotEmpty)
+                            IconButton(
+                              icon: const Icon(Icons.clear),
+                              onPressed: _clearSearch,
+                            ),
+                          IconButton(
+                            icon: const Icon(Icons.close),
+                            onPressed: () => setState(() {
+                              _showSearchBar = false;
+                              _searchResults = [];
+                            }),
+                          ),
+                        ],
+                      ),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(28),
+                        borderSide: BorderSide.none,
+                      ),
+                      filled: true,
+                      fillColor: Theme.of(context).colorScheme.surface,
+                      contentPadding: const EdgeInsets.symmetric(vertical: 12),
+                    ),
+                  ),
+                ),
+                if (_searchResults.isNotEmpty)
+                  Container(
+                    margin: const EdgeInsets.only(top: 4),
+                    constraints: const BoxConstraints(maxHeight: 300),
+                    decoration: BoxDecoration(
+                      color: Theme.of(context).colorScheme.surface,
+                      borderRadius: BorderRadius.circular(12),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.15),
+                          blurRadius: 8,
+                          offset: const Offset(0, 4),
+                        ),
+                      ],
+                    ),
+                    child: ListView.builder(
+                      shrinkWrap: true,
+                      padding: EdgeInsets.zero,
+                      itemCount: _searchResults.length,
+                      itemBuilder: (context, index) {
+                        final result = _searchResults[index];
+                        return ListTile(
+                          leading: Icon(result.icon, size: 24),
+                          title: Text(
+                            result.title,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          subtitle: result.subtitle != null
+                              ? Text(result.subtitle!, maxLines: 1, overflow: TextOverflow.ellipsis)
+                              : null,
+                          dense: true,
+                          onTap: () => _selectSearchResult(result),
+                        );
+                      },
+                    ),
+                  ),
+              ],
+            ),
+          ),
+
+        // Search marker detail panel
+        if (_searchMarker != null && _selectedItem == null)
+          Positioned(
+            bottom: 16,
+            left: 16,
+            right: 16,
+            child: Material(
+              elevation: 8,
+              borderRadius: BorderRadius.circular(12),
+              child: Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Theme.of(context).colorScheme.surface,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.location_on, color: Colors.red, size: 32),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            _searchMarker!.title,
+                            style: Theme.of(context).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.bold),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          if (_searchMarker!.subtitle != null)
+                            Text(
+                              _searchMarker!.subtitle!,
+                              style: Theme.of(context).textTheme.bodySmall,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                        ],
+                      ),
+                    ),
+                    PopupMenuButton<TravelMode>(
+                      icon: const Icon(Icons.directions),
+                      tooltip: _i18n.t('navigate'),
+                      onSelected: _navigateToSearchMarker,
+                      itemBuilder: (context) => [
+                        PopupMenuItem(
+                          value: TravelMode.driving,
+                          child: Row(
+                            children: [
+                              const Icon(Icons.directions_car),
+                              const SizedBox(width: 8),
+                              Text(_i18n.t('driving')),
+                            ],
+                          ),
+                        ),
+                        PopupMenuItem(
+                          value: TravelMode.walking,
+                          child: Row(
+                            children: [
+                              const Icon(Icons.directions_walk),
+                              const SizedBox(width: 8),
+                              Text(_i18n.t('walking')),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.close),
+                      onPressed: () => setState(() => _searchMarker = null),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
 
         // Zoom controls
         Positioned(
@@ -1358,6 +1556,24 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
+              // Search button
+              FloatingActionButton.small(
+                heroTag: 'search',
+                onPressed: () {
+                  setState(() => _showSearchBar = !_showSearchBar);
+                  if (_showSearchBar) {
+                    Future.delayed(const Duration(milliseconds: 100), () {
+                      _searchFocusNode.requestFocus();
+                    });
+                  }
+                },
+                tooltip: _i18n.t('search'),
+                backgroundColor: _showSearchBar
+                    ? Theme.of(context).colorScheme.primaryContainer
+                    : null,
+                child: const Icon(Icons.search),
+              ),
+              const SizedBox(height: 8),
               // Zoom in button
               FloatingActionButton.small(
                 heroTag: 'zoom_in',
@@ -1660,6 +1876,147 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
         );
       },
     );
+  }
+
+  // ============ Map Search ============
+
+  void _onSearchChanged(String query) {
+    _searchDebounce?.cancel();
+    if (query.trim().isEmpty) {
+      setState(() {
+        _searchResults = [];
+        _isSearching = false;
+      });
+      return;
+    }
+    _searchDebounce = Timer(const Duration(milliseconds: 400), () {
+      _performSearch(query.trim());
+    });
+  }
+
+  Future<void> _performSearch(String query) async {
+    setState(() => _isSearching = true);
+
+    final results = <_SearchResult>[];
+
+    // 1. Check if query is coordinates (e.g. "38.72, -9.14" or "38.72 -9.14")
+    final coordMatch = RegExp(r'^(-?\d+\.?\d*)[,\s]+(-?\d+\.?\d*)$').firstMatch(query);
+    if (coordMatch != null) {
+      final lat = double.tryParse(coordMatch.group(1)!);
+      final lon = double.tryParse(coordMatch.group(2)!);
+      if (lat != null && lon != null && lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180) {
+        results.add(_SearchResult(
+          title: '${lat.toStringAsFixed(4)}, ${lon.toStringAsFixed(4)}',
+          subtitle: _i18n.t('coordinates'),
+          latitude: lat,
+          longitude: lon,
+          icon: Icons.pin_drop,
+        ));
+      }
+    }
+
+    // 2. Search existing map items by name
+    final lowerQuery = query.toLowerCase();
+    for (final item in _allItems) {
+      if (item.title.toLowerCase().contains(lowerQuery) ||
+          (item.subtitle?.toLowerCase().contains(lowerQuery) ?? false)) {
+        results.add(_SearchResult(
+          title: item.title,
+          subtitle: item.distanceString,
+          latitude: item.latitude,
+          longitude: item.longitude,
+          icon: _getTypeIcon(item.type),
+          mapItem: item,
+        ));
+      }
+      if (results.length >= 5) break;
+    }
+
+    // 3. Geocode via Nominatim if we have few local results and query isn't coordinates
+    if (results.length < 3 && coordMatch == null) {
+      try {
+        final encoded = Uri.encodeComponent(query);
+        final response = await http.get(
+          Uri.parse('https://nominatim.openstreetmap.org/search?q=$encoded&format=json&limit=5'),
+          headers: {'User-Agent': 'Geogram/$appVersion'},
+        ).timeout(const Duration(seconds: 5));
+
+        if (response.statusCode == 200) {
+          final List<dynamic> data = json.decode(response.body);
+          for (final item in data) {
+            final lat = double.tryParse(item['lat']?.toString() ?? '');
+            final lon = double.tryParse(item['lon']?.toString() ?? '');
+            if (lat != null && lon != null) {
+              results.add(_SearchResult(
+                title: item['display_name']?.toString() ?? query,
+                subtitle: item['type']?.toString(),
+                latitude: lat,
+                longitude: lon,
+                icon: Icons.location_on,
+              ));
+            }
+          }
+        }
+      } catch (e) {
+        LogService().log('MapSearch: Nominatim failed: $e');
+      }
+    }
+
+    if (mounted) {
+      setState(() {
+        _searchResults = results;
+        _isSearching = false;
+      });
+    }
+  }
+
+  void _selectSearchResult(_SearchResult result) {
+    setState(() {
+      _searchResults = [];
+      _searchFocusNode.unfocus();
+
+      if (result.mapItem != null) {
+        // It's an existing map item — select it
+        _selectedItem = result.mapItem;
+        _searchMarker = null;
+      } else {
+        // It's a geocoded/coordinate result — place a search marker
+        _searchMarker = result;
+        _selectedItem = null;
+      }
+    });
+
+    // Move map to result
+    if (_mapReady) {
+      _mapController.move(LatLng(result.latitude, result.longitude), 14);
+    }
+  }
+
+  void _clearSearch() {
+    _searchController.clear();
+    setState(() {
+      _searchResults = [];
+      _searchMarker = null;
+      _showSearchBar = false;
+    });
+  }
+
+  void _navigateToSearchMarker(TravelMode mode) {
+    if (_searchMarker == null) return;
+    // Create a temporary MapItem from search result for routing
+    final marker = _searchMarker!;
+    final tempItem = MapItem(
+      type: MapItemType.place,
+      id: 'search_${marker.latitude}_${marker.longitude}',
+      title: marker.title,
+      latitude: marker.latitude,
+      longitude: marker.longitude,
+    );
+    setState(() {
+      _selectedItem = tempItem;
+      _searchMarker = null;
+    });
+    _navigateTo(tempItem, mode);
   }
 
   // ============ Navigation Routing ============
@@ -2006,4 +2363,23 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
       ),
     );
   }
+}
+
+/// Search result model for map search
+class _SearchResult {
+  final String title;
+  final String? subtitle;
+  final double latitude;
+  final double longitude;
+  final IconData icon;
+  final MapItem? mapItem; // non-null if this is an existing map item
+
+  const _SearchResult({
+    required this.title,
+    this.subtitle,
+    required this.latitude,
+    required this.longitude,
+    required this.icon,
+    this.mapItem,
+  });
 }

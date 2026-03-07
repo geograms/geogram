@@ -1120,7 +1120,8 @@ abstract class StationServerBase {
 
   Future<void> _handleRoadDataRequest(HttpRequest request) async {
     _roadHandler ??= RoadHandler(
-      getSettings: () => _settings,
+      getOsmFallbackEnabled: () => _settings.osmFallbackEnabled,
+      getHttpRequestTimeout: () => _settings.httpRequestTimeout,
       tilesDirectory: _tilesDirectory!,
       log: (level, message) => log(level, message),
     );

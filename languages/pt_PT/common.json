@@ -1427,5 +1427,6 @@
   "no_road_data": "Sem dados de estradas. Descarregue nas definições de cache do mapa.",
   "road_data": "Dados de Estradas",
   "download_road_data": "Descarregar Dados de Estradas",
-  "road_data_downloaded": "Dados de estradas descarregados com sucesso"
+  "road_data_downloaded": "Dados de estradas descarregados com sucesso",
+  "search_place": "Pesquisar local ou coordenadas..."
 }

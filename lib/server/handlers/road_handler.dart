@@ -6,26 +6,27 @@ import 'dart:io';
 import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
 
-import '../station_settings.dart';
 import '../../version.dart';
 
-/// Handler for road data endpoints
+/// Handler for road data endpoints.
+/// Works with both StationServerBase and PureStationServer since it only
+/// requires osmFallbackEnabled and httpRequestTimeout via callbacks.
 class RoadHandler {
-  final StationSettings Function() getSettings;
+  final bool Function() getOsmFallbackEnabled;
+  final int Function() getHttpRequestTimeout;
   final String tilesDirectory;
   final void Function(String, String) log;
 
   RoadHandler({
-    required this.getSettings,
+    required this.getOsmFallbackEnabled,
+    required this.getHttpRequestTimeout,
     required this.tilesDirectory,
     required this.log,
   });
 
   /// Handle GET /api/roads?south=X&west=X&north=X&east=X
   Future<void> handleRoadDataRequest(HttpRequest request) async {
-    final settings = getSettings();
-
-    if (!settings.osmFallbackEnabled) {
+    if (!getOsmFallbackEnabled()) {
       request.response.statusCode = 503;
       request.response.write('Road data service disabled');
       return;
@@ -73,7 +74,8 @@ class RoadHandler {
     }
 
     // Fetch from Overpass API
-    final overpassData = await _fetchFromOverpass(south, west, north, east, settings.httpRequestTimeout);
+    final timeout = getHttpRequestTimeout();
+    final overpassData = await _fetchFromOverpass(south, west, north, east, timeout);
     if (overpassData != null) {
       // Cache to disk
       try {

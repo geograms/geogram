@@ -1433,5 +1433,6 @@
   "no_road_data": "Keine Straßendaten im Cache. In Karteneinstellungen herunterladen.",
   "road_data": "Straßendaten",
   "download_road_data": "Straßendaten herunterladen",
-  "road_data_downloaded": "Straßendaten erfolgreich heruntergeladen"
+  "road_data_downloaded": "Straßendaten erfolgreich heruntergeladen",
+  "search_place": "Ort oder Koordinaten suchen..."
 }

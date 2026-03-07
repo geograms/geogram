@@ -1434,5 +1434,6 @@
   "no_road_data": "No road data cached. Download in Map Cache settings.",
   "road_data": "Road Data",
   "download_road_data": "Download Road Data",
-  "road_data_downloaded": "Road data downloaded successfully"
+  "road_data_downloaded": "Road data downloaded successfully",
+  "search_place": "Search place or coordinates..."
 }

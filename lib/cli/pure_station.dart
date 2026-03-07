@@ -23,6 +23,7 @@ import '../api/handlers/alert_handler.dart';
 import '../api/handlers/apps_handler.dart';
 import '../api/handlers/place_handler.dart';
 import '../api/handlers/feedback_handler.dart';
+import '../server/handlers/road_handler.dart';
 import '../api/common/station_info.dart';
 import '../services/nip05_registry_service.dart';
 import '../services/email_relay_service.dart';
@@ -2837,6 +2838,8 @@ class PureStationServer with EmailHandlerMixin, BlogHandlerMixin, ConsoleCommand
         _stats.totalTileRequests++;
         _stats.lastTileRequest = DateTime.now();
         await _handleTileRequest(request);
+      } else if (path == '/api/roads') {
+        await _handleRoadDataRequest(request);
       } else if (path.startsWith('/bot/models/')) {
         await _handleBotModelRequest(request);
       } else if (path.startsWith('/console/vm/')) {
@@ -9275,6 +9278,18 @@ class PureStationServer with EmailHandlerMixin, BlogHandlerMixin, ConsoleCommand
       request.response.statusCode = 500;
       request.response.write(jsonEncode({'status': 'error', 'error': e.toString()}));
     }
+  }
+
+  RoadHandler? _roadHandler;
+
+  Future<void> _handleRoadDataRequest(HttpRequest request) async {
+    _roadHandler ??= RoadHandler(
+      getOsmFallbackEnabled: () => _settings.osmFallbackEnabled,
+      getHttpRequestTimeout: () => _settings.httpRequestTimeout,
+      tilesDirectory: _tilesDirectory!,
+      log: (level, message) => _log(level, message),
+    );
+    await _roadHandler!.handleRoadDataRequest(request);
   }
 
   Future<void> _handleTileRequest(HttpRequest request) async {
