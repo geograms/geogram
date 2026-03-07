@@ -237,8 +237,24 @@ class _MangaReaderPageState extends State<MangaReaderPage> {
 
   void _setZoom(double scale) {
     setState(() => _currentScale = scale);
-    final matrix = Matrix4.diagonal3Values(scale, scale, 1.0);
-    _transformController.value = matrix;
+
+    // Get the viewport size to center the content
+    final renderBox = context.findRenderObject() as RenderBox?;
+    if (renderBox != null) {
+      final viewportSize = renderBox.size;
+      // Translate so the scaled content is centered
+      final dx = (viewportSize.width - viewportSize.width * scale) / 2;
+      final dy = (viewportSize.height - viewportSize.height * scale) / 2;
+      final matrix = Matrix4.identity()
+        ..setEntry(0, 3, dx.clamp(0, double.infinity))
+        ..setEntry(1, 3, dy.clamp(0, double.infinity))
+        ..setEntry(0, 0, scale)
+        ..setEntry(1, 1, scale);
+      _transformController.value = matrix;
+    } else {
+      _transformController.value =
+          Matrix4.diagonal3Values(scale, scale, 1.0);
+    }
   }
 
   @override
@@ -458,6 +474,13 @@ class _MangaReaderPageState extends State<MangaReaderPage> {
           transformationController: _transformController,
           minScale: 0.25,
           maxScale: 5.0,
+          panEnabled: _currentScale > 1.0,
+          onInteractionUpdate: (details) {
+            final scale = _transformController.value.getMaxScaleOnAxis();
+            if ((scale - _currentScale).abs() > 0.01) {
+              setState(() => _currentScale = scale);
+            }
+          },
           onInteractionEnd: (_) {
             final scale = _transformController.value.getMaxScaleOnAxis();
             setState(() => _currentScale = scale);
@@ -479,8 +502,15 @@ class _MangaReaderPageState extends State<MangaReaderPage> {
   Widget _buildWebtoonView() {
     return InteractiveViewer(
       transformationController: _transformController,
-      minScale: 1.0,
+      minScale: 0.25,
       maxScale: 5.0,
+      panEnabled: _currentScale > 1.0,
+      onInteractionUpdate: (details) {
+        final scale = _transformController.value.getMaxScaleOnAxis();
+        if ((scale - _currentScale).abs() > 0.01) {
+          setState(() => _currentScale = scale);
+        }
+      },
       onInteractionEnd: (_) {
         final scale = _transformController.value.getMaxScaleOnAxis();
         setState(() => _currentScale = scale);

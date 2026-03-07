@@ -43,9 +43,21 @@ class MangaExtensionService {
     final dir = Directory(_extensionsDir!);
     if (!await dir.exists()) {
       await dir.create(recursive: true);
-      return;
     }
 
+    // Auto-install bundled extensions if none exist on disk
+    bool hasAny = false;
+    await for (final entity in dir.list()) {
+      if (entity is Directory) {
+        hasAny = true;
+        break;
+      }
+    }
+    if (!hasAny) {
+      await _installBundledExtensions();
+    }
+
+    // Load all extensions from disk
     await for (final entity in dir.list()) {
       if (entity is Directory) {
         try {
@@ -283,6 +295,186 @@ class MangaExtensionService {
           .log('MangaExtensionService: Error saving cookies for $extensionId: $e');
     }
   }
+
+  // ============ Bundled Extensions ============
+
+  /// Install built-in extensions on first run
+  Future<void> _installBundledExtensions() async {
+    for (final manifest in _bundledExtensions) {
+      try {
+        final json = jsonDecode(manifest) as Map<String, dynamic>;
+        final id = json['id'] as String;
+        final targetDir = Directory('$_extensionsDir/$id');
+        await targetDir.create(recursive: true);
+        final file = File('${targetDir.path}/extension.json');
+        await file.writeAsString(
+          const JsonEncoder.withIndent('  ').convert(json),
+        );
+        LogService()
+            .log('MangaExtensionService: Installed bundled extension $id');
+      } catch (e) {
+        LogService().log(
+            'MangaExtensionService: Error installing bundled extension: $e');
+      }
+    }
+  }
+
+  /// Restore bundled extensions (re-install all)
+  Future<void> restoreBundledExtensions() async {
+    await _installBundledExtensions();
+    await loadExtensions();
+  }
+
+  static final List<String> _bundledExtensions = [
+    // Mangakakalot
+    '''{
+  "id": "mangakakalot",
+  "name": "Mangakakalot",
+  "version": "1.0.0",
+  "api_version": 1,
+  "language": "en",
+  "base_url": "https://mangakakalot.com",
+  "rate_limit_ms": 1000,
+  "needs_webview": false,
+  "headers": {
+    "Referer": "{base_url}",
+    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+  },
+  "search": {
+    "url": "{base_url}/search/story/{query}",
+    "list_selector": "div.story_item",
+    "fields": {
+      "id": { "selector": "h3 a", "attr": "href" },
+      "title": { "selector": "h3 a", "text": true },
+      "thumbnail": { "selector": "a img", "attr": "src" },
+      "description": { "selector": ".story_item_right span:last-child", "text": true }
+    }
+  },
+  "series": {
+    "url": "{id}",
+    "fields": {
+      "title": { "selector": "h1", "text": true },
+      "description": { "selector": "#noidungm", "text": true },
+      "thumbnail": { "selector": ".manga-info-pic img", "attr": "src" }
+    }
+  },
+  "chapters": {
+    "url": "{id}",
+    "list_selector": "div.chapter-list div.row a",
+    "fields": {
+      "id": { "attr": "href" },
+      "title": { "text": true },
+      "number": { "regex": "Chapter (\\\\d+(?:\\\\.\\\\d+)?)", "type": "number" }
+    },
+    "order": "desc"
+  },
+  "pages": {
+    "url": "{chapter_id}",
+    "list_selector": "div#vungdoc img, div.container-chapter-reader img",
+    "image_attr": "src",
+    "referer": "{base_url}"
+  }
+}''',
+
+    // Chapmanganato (manganato.com)
+    '''{
+  "id": "chapmanganato",
+  "name": "Chapmanganato",
+  "version": "1.0.0",
+  "api_version": 1,
+  "language": "en",
+  "base_url": "https://chapmanganato.to",
+  "rate_limit_ms": 1000,
+  "needs_webview": false,
+  "headers": {
+    "Referer": "{base_url}",
+    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+  },
+  "search": {
+    "url": "{base_url}/search/story/{query}",
+    "list_selector": "div.search-story-item",
+    "fields": {
+      "id": { "selector": "a.item-img", "attr": "href" },
+      "title": { "selector": "a.item-img", "attr": "title" },
+      "thumbnail": { "selector": "a.item-img img", "attr": "src" },
+      "description": { "selector": ".item-right span:last-child", "text": true }
+    }
+  },
+  "series": {
+    "url": "{id}",
+    "fields": {
+      "title": { "selector": "h1", "text": true },
+      "description": { "selector": "#panel-story-info-description", "text": true },
+      "thumbnail": { "selector": ".info-image img", "attr": "src" }
+    }
+  },
+  "chapters": {
+    "url": "{id}",
+    "list_selector": ".row-content-chapter li a",
+    "fields": {
+      "id": { "attr": "href" },
+      "title": { "text": true },
+      "number": { "regex": "Chapter (\\\\d+(?:\\\\.\\\\d+)?)", "type": "number" }
+    },
+    "order": "desc"
+  },
+  "pages": {
+    "url": "{chapter_id}",
+    "list_selector": ".container-chapter-reader img",
+    "image_attr": "src",
+    "referer": "{base_url}"
+  }
+}''',
+
+    // MangaPill
+    '''{
+  "id": "mangapill",
+  "name": "MangaPill",
+  "version": "1.0.0",
+  "api_version": 1,
+  "language": "en",
+  "base_url": "https://mangapill.com",
+  "rate_limit_ms": 1000,
+  "needs_webview": false,
+  "headers": {
+    "Referer": "{base_url}",
+    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+  },
+  "search": {
+    "url": "{base_url}/search?q={query}&type=&status=",
+    "list_selector": ".my-3.justify-end",
+    "fields": {
+      "id": { "selector": "a", "attr": "href" },
+      "title": { "selector": "a div", "text": true },
+      "thumbnail": { "selector": "a figure img", "attr": "data-src" }
+    }
+  },
+  "series": {
+    "url": "{base_url}{id}",
+    "fields": {
+      "title": { "selector": "h1", "text": true },
+      "description": { "selector": ".limit-html p", "text": true },
+      "thumbnail": { "selector": "figure img", "attr": "data-src" }
+    }
+  },
+  "chapters": {
+    "url": "{base_url}{id}",
+    "list_selector": "#chapters a",
+    "fields": {
+      "id": { "attr": "href" },
+      "title": { "text": true },
+      "number": { "regex": "Chapter (\\\\d+(?:\\\\.\\\\d+)?)", "type": "number" }
+    },
+    "order": "desc"
+  },
+  "pages": {
+    "url": "{base_url}{chapter_id}",
+    "list_selector": "chapter-page img",
+    "image_attr": "data-src",
+    "referer": "{base_url}"
+  }
+}''',
+  ];
 
   // ============ Helpers ============
 

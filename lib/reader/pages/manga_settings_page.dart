@@ -43,18 +43,31 @@ class _MangaSettingsPageState extends State<MangaSettingsPage> {
       await _extensionService.initialize(extensionsDir);
     }
 
-    setState(() {
-      _extensions = _extensionService.extensions;
-      _loading = false;
-    });
+    if (mounted) {
+      setState(() {
+        _extensions = _extensionService.extensions;
+        _loading = false;
+      });
+    }
   }
 
-  void _addExtension() {
+  void _restoreBundled() async {
+    setState(() => _loading = true);
+    await _extensionService.restoreBundledExtensions();
+    await _loadExtensions();
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Built-in extensions restored')),
+      );
+    }
+  }
+
+  void _addFromPath() {
     final controller = TextEditingController();
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Add extension'),
+        title: const Text('Import extension'),
         content: TextField(
           controller: controller,
           autofocus: true,
@@ -74,17 +87,22 @@ class _MangaSettingsPageState extends State<MangaSettingsPage> {
               if (path.isEmpty) return;
 
               if (!Directory(path).existsSync()) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Directory does not exist')),
-                );
+                if (ctx.mounted) {
+                  ScaffoldMessenger.of(ctx).showSnackBar(
+                    const SnackBar(content: Text('Directory does not exist')),
+                  );
+                }
                 return;
               }
 
               if (!File('$path/extension.json').existsSync()) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                      content: Text('No extension.json found in directory')),
-                );
+                if (ctx.mounted) {
+                  ScaffoldMessenger.of(ctx).showSnackBar(
+                    const SnackBar(
+                        content:
+                            Text('No extension.json found in directory')),
+                  );
+                }
                 return;
               }
 
@@ -105,7 +123,7 @@ class _MangaSettingsPageState extends State<MangaSettingsPage> {
                 }
               }
             },
-            child: const Text('Add'),
+            child: const Text('Import'),
           ),
         ],
       ),
@@ -117,7 +135,8 @@ class _MangaSettingsPageState extends State<MangaSettingsPage> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Remove extension'),
-        content: Text('Remove "${ext.name}"? Series links to this extension will stop working.'),
+        content: Text(
+            'Remove "${ext.name}"? Series linked to this extension will stop updating.'),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
@@ -149,20 +168,36 @@ class _MangaSettingsPageState extends State<MangaSettingsPage> {
           ? const Center(child: CircularProgressIndicator())
           : ListView(
               children: [
+                // Extensions header
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-                  child: Text(
-                    'Extensions',
-                    style: theme.textTheme.titleMedium?.copyWith(
-                      color: theme.colorScheme.primary,
-                    ),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          'Extensions',
+                          style: theme.textTheme.titleMedium?.copyWith(
+                            color: theme.colorScheme.primary,
+                          ),
+                        ),
+                      ),
+                      Text(
+                        '${_extensions.length} installed',
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: theme.colorScheme.onSurface
+                              .withValues(alpha: 0.5),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
+
+                // Extension list
                 if (_extensions.isEmpty)
                   Padding(
                     padding: const EdgeInsets.all(16),
                     child: Text(
-                      'No extensions installed. Tap + to add one.',
+                      'No extensions installed.',
                       style: theme.textTheme.bodyMedium?.copyWith(
                         color: theme.colorScheme.onSurface
                             .withValues(alpha: 0.5),
@@ -182,18 +217,29 @@ class _MangaSettingsPageState extends State<MangaSettingsPage> {
                         ),
                       ),
                       title: Text(ext.name),
-                      subtitle: Text('v${ext.version} - ${ext.baseUrl}'),
+                      subtitle: Text('v${ext.version}'),
                       trailing: IconButton(
                         icon: const Icon(Icons.delete_outline),
                         onPressed: () => _removeExtension(ext),
+                        tooltip: 'Remove',
                       ),
                     )),
+
                 const Divider(),
+
+                // Actions
                 ListTile(
-                  leading: const Icon(Icons.add),
-                  title: const Text('Add extension'),
-                  subtitle: const Text('Import from a folder with extension.json'),
-                  onTap: _addExtension,
+                  leading: const Icon(Icons.restore),
+                  title: const Text('Restore built-in extensions'),
+                  subtitle: const Text(
+                      'Re-install Mangakakalot, Chapmanganato, MangaPill'),
+                  onTap: _restoreBundled,
+                ),
+                ListTile(
+                  leading: const Icon(Icons.folder_open),
+                  title: const Text('Import custom extension'),
+                  subtitle: const Text('From a folder with extension.json'),
+                  onTap: _addFromPath,
                 ),
               ],
             ),
