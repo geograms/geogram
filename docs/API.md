@@ -1591,6 +1591,22 @@ curl -X POST http://localhost:3456/api/debug \
   -d '{"action": "map_route", "toLat": 38.75, "toLon": -9.15, "mode": "walking"}'
 ```
 
+#### Debug: Manga Search
+
+Search manga extensions for titles via the debug API:
+
+```bash
+# Search across all installed extensions
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action": "manga_search", "query": "one piece"}'
+
+# Search a specific extension
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action": "manga_search", "query": "naruto", "extension_id": "mangapill"}'
+```
+
 ---
 
 ### Chat
@@ -2698,6 +2714,7 @@ Triggers a debug action.
 | `meshtastic_status` | Get Meshtastic service status (BLE state, nodes, channels, messages, cache) | None |
 | `meshtastic_enable` | Enable Meshtastic service (create config if needed) | None |
 | `meshtastic_log_level` | Set Meshtastic log level (returns current if no level param) | `level` (off\|error\|warn\|info\|debug) |
+| `manga_search` | Search manga extensions for a title | `query` (required), `extension_id` (optional) |
 
 Place feedback actions send signed events to the station and only update local cache files if the place folder can be resolved via `place_path` or `callsign`.
 

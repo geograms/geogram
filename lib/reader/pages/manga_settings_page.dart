@@ -232,7 +232,7 @@ class _MangaSettingsPageState extends State<MangaSettingsPage> {
                   leading: const Icon(Icons.restore),
                   title: const Text('Restore built-in extensions'),
                   subtitle: const Text(
-                      'Re-install Mangakakalot, Chapmanganato, MangaPill'),
+                      'Re-install MangaPill, MangaBuddy'),
                   onTap: _restoreBundled,
                 ),
                 ListTile(

@@ -22,6 +22,8 @@ import '../models/shared_folder.dart';
 import '../teleport/bitchat/bitchat_service.dart';
 import '../teleport/meshtastic/meshtastic_service.dart';
 import '../teleport/meshtastic/models/meshtastic_config.dart';
+import '../reader/services/manga_extension_service.dart';
+import '../reader/utils/reader_path_utils.dart';
 
 /// Debug action types that can be triggered via API
 enum DebugAction {
@@ -246,6 +248,9 @@ enum DebugAction {
 
   /// Route to coordinates on the map
   mapRoute,
+
+  /// Search manga extensions
+  mangaSearch,
 }
 
 /// Toast message to be displayed
@@ -673,6 +678,14 @@ class DebugController {
           'toLat': 'Destination latitude',
           'toLon': 'Destination longitude',
           'mode': '(optional) Travel mode: driving or walking (default: driving)',
+        },
+      },
+      {
+        'action': 'manga_search',
+        'description': 'Search manga extensions for a title',
+        'params': {
+          'query': 'Search query (manga title)',
+          'extension_id': '(optional) Specific extension ID, or searches all',
         },
       },
       {
@@ -1235,6 +1248,43 @@ class DebugController {
         navigateToPanelByName('maps');
         _actionController.add(DebugActionEvent(action: DebugAction.mapRoute, params: params));
         return {'success': true, 'message': 'Map route triggered to: $toLat, $toLon'};
+
+      case 'manga_search':
+        final query = params['query'] as String?;
+        if (query == null || query.isEmpty) {
+          return {'success': false, 'error': 'Missing query parameter'};
+        }
+        try {
+          final extService = MangaExtensionService();
+          if (!extService.isInitialized) {
+            final appsPath = AppService().getDefaultAppsPath();
+            final readerPath = '$appsPath/reader';
+            final extensionsDir = ReaderPathUtils.extensionsDir(readerPath);
+            await extService.initialize(extensionsDir);
+          }
+          final extensionId = params['extension_id'] as String?;
+          List<ExtensionSearchResult> results;
+          if (extensionId != null) {
+            final searchResults = await extService.search(extensionId, query);
+            results = searchResults
+                .map((r) => ExtensionSearchResult(extensionId: extensionId, result: r))
+                .toList();
+          } else {
+            results = await extService.searchAllExtensions(query);
+          }
+          return {
+            'success': true,
+            'extensions': extService.extensions.map((e) => {'id': e.id, 'name': e.name}).toList(),
+            'results': results.map((r) => {
+              'extension': r.extensionId,
+              'id': r.result.id,
+              'title': r.result.title,
+              'thumbnail': r.result.thumbnail,
+            }).toList(),
+          };
+        } catch (e) {
+          return {'success': false, 'error': e.toString()};
+        }
 
       case 'toast':
         final message = params['message'] as String?;

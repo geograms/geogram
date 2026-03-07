@@ -479,7 +479,9 @@ class DevicesService {
         break;
 
       case DebugAction.mapSearch:
-        // Handled by MapsBrowserPage via actionStream listener
+      case DebugAction.mapRoute:
+      case DebugAction.mangaSearch:
+        // Handled elsewhere (MapsBrowserPage / DebugController)
         break;
     }
   }

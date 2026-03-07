@@ -45,17 +45,8 @@ class MangaExtensionService {
       await dir.create(recursive: true);
     }
 
-    // Auto-install bundled extensions if none exist on disk
-    bool hasAny = false;
-    await for (final entity in dir.list()) {
-      if (entity is Directory) {
-        hasAny = true;
-        break;
-      }
-    }
-    if (!hasAny) {
-      await _installBundledExtensions();
-    }
+    // Auto-install or update bundled extensions
+    await _syncBundledExtensions();
 
     // Load all extensions from disk
     await for (final entity in dir.list()) {
@@ -298,7 +289,82 @@ class MangaExtensionService {
 
   // ============ Bundled Extensions ============
 
-  /// Install built-in extensions on first run
+  /// Sync bundled extensions: install missing, update outdated
+  Future<void> _syncBundledExtensions() async {
+    for (final manifest in _bundledExtensions) {
+      try {
+        final json = jsonDecode(manifest) as Map<String, dynamic>;
+        final id = json['id'] as String;
+        final bundledVersion = json['version'] as String;
+        final targetDir = Directory('$_extensionsDir/$id');
+        final manifestFile = File('${targetDir.path}/extension.json');
+
+        bool shouldInstall = !await targetDir.exists();
+        if (!shouldInstall && await manifestFile.exists()) {
+          final existing = jsonDecode(await manifestFile.readAsString())
+              as Map<String, dynamic>;
+          final diskVersion = existing['version'] as String? ?? '0.0.0';
+          shouldInstall = _isNewerVersion(bundledVersion, diskVersion);
+        }
+
+        if (shouldInstall) {
+          await targetDir.create(recursive: true);
+          await manifestFile.writeAsString(
+            const JsonEncoder.withIndent('  ').convert(json),
+          );
+          LogService().log(
+              'MangaExtensionService: Installed/updated bundled extension $id v$bundledVersion');
+        }
+      } catch (e) {
+        LogService().log(
+            'MangaExtensionService: Error syncing bundled extension: $e');
+      }
+    }
+
+    // Remove bundled extensions that are no longer in the bundled list
+    final bundledIds = _bundledExtensions.map((m) {
+      final json = jsonDecode(m) as Map<String, dynamic>;
+      return json['id'] as String;
+    }).toSet();
+
+    final dir = Directory(_extensionsDir!);
+    if (await dir.exists()) {
+      await for (final entity in dir.list()) {
+        if (entity is Directory) {
+          final dirName = entity.path.split('/').last;
+          // Only remove if it looks like an old bundled extension
+          // (has no custom modifications — just extension.json)
+          if (!bundledIds.contains(dirName)) {
+            final files = await entity.list().toList();
+            final isSimple = files.length <= 2 &&
+                files.every((f) =>
+                    f.path.endsWith('extension.json') ||
+                    f.path.endsWith('cookies.json'));
+            if (isSimple) {
+              await entity.delete(recursive: true);
+              LogService().log(
+                  'MangaExtensionService: Removed obsolete bundled extension $dirName');
+            }
+          }
+        }
+      }
+    }
+  }
+
+  /// Compare semver: returns true if a > b
+  bool _isNewerVersion(String a, String b) {
+    final partsA = a.split('.').map((s) => int.tryParse(s) ?? 0).toList();
+    final partsB = b.split('.').map((s) => int.tryParse(s) ?? 0).toList();
+    for (var i = 0; i < 3; i++) {
+      final va = i < partsA.length ? partsA[i] : 0;
+      final vb = i < partsB.length ? partsB[i] : 0;
+      if (va > vb) return true;
+      if (va < vb) return false;
+    }
+    return false;
+  }
+
+  /// Install built-in extensions (used by restore)
   Future<void> _installBundledExtensions() async {
     for (final manifest in _bundledExtensions) {
       try {
@@ -326,111 +392,11 @@ class MangaExtensionService {
   }
 
   static final List<String> _bundledExtensions = [
-    // Mangakakalot
-    '''{
-  "id": "mangakakalot",
-  "name": "Mangakakalot",
-  "version": "1.0.0",
-  "api_version": 1,
-  "language": "en",
-  "base_url": "https://mangakakalot.com",
-  "rate_limit_ms": 1000,
-  "needs_webview": false,
-  "headers": {
-    "Referer": "{base_url}",
-    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-  },
-  "search": {
-    "url": "{base_url}/search/story/{query}",
-    "list_selector": "div.story_item",
-    "fields": {
-      "id": { "selector": "h3 a", "attr": "href" },
-      "title": { "selector": "h3 a", "text": true },
-      "thumbnail": { "selector": "a img", "attr": "src" },
-      "description": { "selector": ".story_item_right span:last-child", "text": true }
-    }
-  },
-  "series": {
-    "url": "{id}",
-    "fields": {
-      "title": { "selector": "h1", "text": true },
-      "description": { "selector": "#noidungm", "text": true },
-      "thumbnail": { "selector": ".manga-info-pic img", "attr": "src" }
-    }
-  },
-  "chapters": {
-    "url": "{id}",
-    "list_selector": "div.chapter-list div.row a",
-    "fields": {
-      "id": { "attr": "href" },
-      "title": { "text": true },
-      "number": { "regex": "Chapter (\\\\d+(?:\\\\.\\\\d+)?)", "type": "number" }
-    },
-    "order": "desc"
-  },
-  "pages": {
-    "url": "{chapter_id}",
-    "list_selector": "div#vungdoc img, div.container-chapter-reader img",
-    "image_attr": "src",
-    "referer": "{base_url}"
-  }
-}''',
-
-    // Chapmanganato (manganato.com)
-    '''{
-  "id": "chapmanganato",
-  "name": "Chapmanganato",
-  "version": "1.0.0",
-  "api_version": 1,
-  "language": "en",
-  "base_url": "https://chapmanganato.to",
-  "rate_limit_ms": 1000,
-  "needs_webview": false,
-  "headers": {
-    "Referer": "{base_url}",
-    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-  },
-  "search": {
-    "url": "{base_url}/search/story/{query}",
-    "list_selector": "div.search-story-item",
-    "fields": {
-      "id": { "selector": "a.item-img", "attr": "href" },
-      "title": { "selector": "a.item-img", "attr": "title" },
-      "thumbnail": { "selector": "a.item-img img", "attr": "src" },
-      "description": { "selector": ".item-right span:last-child", "text": true }
-    }
-  },
-  "series": {
-    "url": "{id}",
-    "fields": {
-      "title": { "selector": "h1", "text": true },
-      "description": { "selector": "#panel-story-info-description", "text": true },
-      "thumbnail": { "selector": ".info-image img", "attr": "src" }
-    }
-  },
-  "chapters": {
-    "url": "{id}",
-    "list_selector": ".row-content-chapter li a",
-    "fields": {
-      "id": { "attr": "href" },
-      "title": { "text": true },
-      "number": { "regex": "Chapter (\\\\d+(?:\\\\.\\\\d+)?)", "type": "number" }
-    },
-    "order": "desc"
-  },
-  "pages": {
-    "url": "{chapter_id}",
-    "list_selector": ".container-chapter-reader img",
-    "image_attr": "src",
-    "referer": "{base_url}"
-  }
-}''',
-
-    // MangaPill
+    // MangaPill (verified working)
     '''{
   "id": "mangapill",
   "name": "MangaPill",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "api_version": 1,
   "language": "en",
   "base_url": "https://mangapill.com",
@@ -442,10 +408,10 @@ class MangaExtensionService {
   },
   "search": {
     "url": "{base_url}/search?q={query}&type=&status=",
-    "list_selector": ".my-3.justify-end",
+    "list_selector": "div.flex.flex-col.justify-end",
     "fields": {
-      "id": { "selector": "a", "attr": "href" },
-      "title": { "selector": "a div", "text": true },
+      "id": { "selector": "a[href*='/manga/']", "attr": "href" },
+      "title": { "selector": "a div.font-black", "text": true },
       "thumbnail": { "selector": "a figure img", "attr": "data-src" }
     }
   },
@@ -453,7 +419,7 @@ class MangaExtensionService {
     "url": "{base_url}{id}",
     "fields": {
       "title": { "selector": "h1", "text": true },
-      "description": { "selector": ".limit-html p", "text": true },
+      "description": { "selector": "p.text-sm.text--secondary", "text": true },
       "thumbnail": { "selector": "figure img", "attr": "data-src" }
     }
   },
@@ -474,12 +440,61 @@ class MangaExtensionService {
     "referer": "{base_url}"
   }
 }''',
+
+    // MangaBuddy (verified working)
+    '''{
+  "id": "mangabuddy",
+  "name": "MangaBuddy",
+  "version": "1.0.0",
+  "api_version": 1,
+  "language": "en",
+  "base_url": "https://mangabuddy.com",
+  "rate_limit_ms": 1000,
+  "needs_webview": true,
+  "headers": {
+    "Referer": "{base_url}",
+    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+  },
+  "search": {
+    "url": "{base_url}/search?q={query}",
+    "list_selector": "div.book-item",
+    "fields": {
+      "id": { "selector": ".thumb a", "attr": "href" },
+      "title": { "selector": ".thumb a", "attr": "title" },
+      "thumbnail": { "selector": ".thumb img", "attr": "data-src" }
+    }
+  },
+  "series": {
+    "url": "{base_url}{id}",
+    "fields": {
+      "title": { "selector": "h1", "text": true },
+      "description": { "selector": "div.description", "text": true },
+      "thumbnail": { "selector": ".thumb img", "attr": "data-src" }
+    }
+  },
+  "chapters": {
+    "url": "{base_url}{id}",
+    "list_selector": "ul.chapter-list li a",
+    "fields": {
+      "id": { "attr": "href" },
+      "title": { "text": true },
+      "number": { "regex": "Chapter (\\\\d+(?:\\\\.\\\\d+)?)", "type": "number" }
+    },
+    "order": "desc"
+  },
+  "pages": {
+    "url": "{base_url}{chapter_id}",
+    "list_selector": "div.chapter-image img",
+    "image_attr": "data-src",
+    "referer": "{base_url}"
+  }
+}''',
   ];
 
   // ============ Helpers ============
 
   String _encodeQuery(String query) {
-    return query.replaceAll(' ', '_').toLowerCase();
+    return Uri.encodeComponent(query.trim());
   }
 }
 

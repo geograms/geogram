@@ -14,6 +14,7 @@ import '../services/manga_extension_service.dart';
 import '../services/reader_service.dart';
 import '../services/reader_storage_service.dart';
 import '../utils/reader_path_utils.dart';
+import 'manga_extension_browse_page.dart';
 import 'manga_folder_browser_page.dart';
 import 'manga_series_page.dart';
 import 'manga_settings_page.dart';
@@ -116,6 +117,19 @@ class _MangaSourcesPageState extends State<MangaSourcesPage> {
       )
           .then((_) => _loadSources());
     }
+  }
+
+  void _browseOnline() {
+    Navigator.of(context)
+        .push(
+      MaterialPageRoute(
+        builder: (_) => MangaExtensionBrowsePage(
+          appPath: widget.appPath,
+          i18n: widget.i18n,
+        ),
+      ),
+    )
+        .then((_) => _loadSources());
   }
 
   void _searchForUpdates() async {
@@ -248,17 +262,34 @@ class _MangaSourcesPageState extends State<MangaSourcesPage> {
       ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
-          : _sources.isEmpty
-              ? _buildEmptyState(theme)
-              : RefreshIndicator(
-                  onRefresh: _loadSources,
-                  child: ListView.builder(
-                    itemCount: _sources.length,
-                    itemBuilder: (context, index) {
-                      return _buildSourceTile(_sources[index]);
-                    },
+          : RefreshIndicator(
+              onRefresh: _loadSources,
+              child: ListView(
+                children: [
+                  // Browse online - always visible
+                  ListTile(
+                    leading: CircleAvatar(
+                      backgroundColor:
+                          Colors.deepPurple.withValues(alpha: 0.2),
+                      child: const Icon(Icons.public,
+                          color: Colors.deepPurple),
+                    ),
+                    title: const Text('Browse online'),
+                    subtitle: const Text(
+                        'Search and download manga from extensions'),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: _browseOnline,
                   ),
-                ),
+                  if (_sources.isNotEmpty) const Divider(height: 1),
+                  // Local sources
+                  ..._sources.map(_buildSourceTile),
+                  if (_sources.isEmpty) ...[
+                    const SizedBox(height: 32),
+                    _buildEmptyHint(theme),
+                  ],
+                ],
+              ),
+            ),
       floatingActionButton: FloatingActionButton(
         onPressed: _addSource,
         tooltip: 'Add source',
@@ -267,28 +298,27 @@ class _MangaSourcesPageState extends State<MangaSourcesPage> {
     );
   }
 
-  Widget _buildEmptyState(ThemeData theme) {
+  Widget _buildEmptyHint(ThemeData theme) {
     return Center(
       child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
         children: [
           Icon(
             Icons.auto_stories_outlined,
-            size: 80,
-            color: theme.colorScheme.onSurface.withValues(alpha: 0.3),
-          ),
-          const SizedBox(height: 16),
-          Text(
-            'No manga sources',
-            style: theme.textTheme.titleLarge?.copyWith(
-              color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
-            ),
+            size: 48,
+            color: theme.colorScheme.onSurface.withValues(alpha: 0.2),
           ),
           const SizedBox(height: 8),
           Text(
-            'Tap + to add your first manga source',
+            'No local manga sources yet',
             style: theme.textTheme.bodyMedium?.copyWith(
-              color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
+              color: theme.colorScheme.onSurface.withValues(alpha: 0.4),
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Browse online or tap + to add a local folder',
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurface.withValues(alpha: 0.4),
             ),
           ),
         ],
