@@ -2,10 +2,10 @@ import 'package:flutter/material.dart';
 
 import '../api/api.dart';
 import '../server/karma/karma_engine.dart';
-import '../server/karma/karma_models.dart';
 import '../services/profile_service.dart';
+
 /// Karma gamification dashboard page.
-/// Shows user's level, streak, daily progress, category cards, and leaderboard.
+/// 3-tab layout: Today (daily missions), Stats, Leaderboard.
 class KarmaPage extends StatefulWidget {
   const KarmaPage({super.key});
 
@@ -13,8 +13,10 @@ class KarmaPage extends StatefulWidget {
   State<KarmaPage> createState() => _KarmaPageState();
 }
 
-class _KarmaPageState extends State<KarmaPage> {
+class _KarmaPageState extends State<KarmaPage>
+    with SingleTickerProviderStateMixin {
   final GeogramApi _api = GeogramApi();
+  late TabController _tabController;
 
   KarmaProfile? _profile;
   List<LeaderboardEntry> _leaderboard = [];
@@ -22,10 +24,62 @@ class _KarmaPageState extends State<KarmaPage> {
   String _leaderboardPeriod = 'weekly';
   int _todayPoints = 0;
 
+  static const _missions = [
+    _MissionInfo(
+      name: 'Chat',
+      verb: 'Send Messages',
+      icon: Icons.chat,
+      actionKeys: ['chat_message', 'chat_reaction'],
+      navigateTo: 'chat',
+    ),
+    _MissionInfo(
+      name: 'Blog',
+      verb: 'Write a Post',
+      icon: Icons.article,
+      actionKeys: ['blog_published'],
+      navigateTo: 'blog',
+    ),
+    _MissionInfo(
+      name: 'Places',
+      verb: 'Share a Place',
+      icon: Icons.place,
+      actionKeys: ['place_created'],
+      navigateTo: 'places',
+    ),
+    _MissionInfo(
+      name: 'Alerts',
+      verb: 'Report an Alert',
+      icon: Icons.campaign,
+      actionKeys: ['alert_created'],
+      navigateTo: 'alerts',
+    ),
+    _MissionInfo(
+      name: 'Social',
+      verb: 'Engage Socially',
+      icon: Icons.favorite,
+      actionKeys: ['like_given', 'comment_given', 'verify_given'],
+      navigateTo: null,
+    ),
+    _MissionInfo(
+      name: 'Events',
+      verb: 'Create an Event',
+      icon: Icons.event,
+      actionKeys: ['event_created'],
+      navigateTo: 'events',
+    ),
+  ];
+
   @override
   void initState() {
     super.initState();
+    _tabController = TabController(length: 3, vsync: this);
     _loadData();
+  }
+
+  @override
+  void dispose() {
+    _tabController.dispose();
+    super.dispose();
   }
 
   String get _callsign => ProfileService().getProfile().callsign;
@@ -70,28 +124,428 @@ class _KarmaPageState extends State<KarmaPage> {
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
               child: Chip(
                 avatar: const Icon(Icons.leaderboard, size: 16),
-                label: Text('#${_profile!.rank > 0 ? _profile!.rank : '—'}'),
+                label: Text('#${_profile!.rank > 0 ? _profile!.rank : '\u2014'}'),
               ),
             ),
         ],
+        bottom: TabBar(
+          controller: _tabController,
+          tabs: const [
+            Tab(text: 'Today'),
+            Tab(text: 'Stats'),
+            Tab(text: 'Leaderboard'),
+          ],
+        ),
       ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
-          : RefreshIndicator(
-              onRefresh: _loadData,
-              child: ListView(
-                padding: const EdgeInsets.all(16),
+          : TabBarView(
+              controller: _tabController,
+              children: [
+                _buildTodayTab(theme),
+                _buildStatsTab(theme),
+                _buildLeaderboardTab(theme),
+              ],
+            ),
+    );
+  }
+
+  // ==================== Tab 1: Today ====================
+
+  Widget _buildTodayTab(ThemeData theme) {
+    final profile = _profile;
+    final counts = profile?.actionCountsToday ?? {};
+
+    // Count active (started) and completed missions
+    int activeMissions = 0;
+    int totalMaxPoints = 0;
+    int totalEarnedPoints = 0;
+    for (final m in _missions) {
+      final earned = m.todayEarned(counts);
+      final max = m.maxDailyPoints;
+      totalMaxPoints += max;
+      totalEarnedPoints += earned;
+      if (earned > 0) activeMissions++;
+    }
+    // Add diversity bonus max
+    final diversityConfig = KarmaEngine.actions['feature_diversity'];
+    final diversityMax = diversityConfig != null ? diversityConfig.points * diversityConfig.dailyCap : 15;
+    totalMaxPoints += diversityMax;
+    final diversityEarned = counts['feature_diversity'] ?? 0;
+    totalEarnedPoints += (diversityEarned > 0 ? diversityMax : 0);
+
+    final overallProgress = totalMaxPoints > 0 ? totalEarnedPoints / totalMaxPoints : 0.0;
+
+    return RefreshIndicator(
+      onRefresh: _loadData,
+      child: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          _buildTodaySummaryBar(theme),
+          const SizedBox(height: 12),
+          _buildDailyCompletionMeter(theme, activeMissions, overallProgress),
+          const SizedBox(height: 16),
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Text('DAILY MISSIONS', style: theme.textTheme.titleSmall?.copyWith(
+              fontWeight: FontWeight.bold,
+              letterSpacing: 1.2,
+              color: theme.colorScheme.onSurfaceVariant,
+            )),
+          ),
+          for (final mission in _missions) ...[
+            _buildMissionCard(theme, mission, counts),
+            const SizedBox(height: 8),
+          ],
+          const SizedBox(height: 4),
+          _buildBonusMissionCard(theme, counts),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTodaySummaryBar(ThemeData theme) {
+    final profile = _profile;
+
+    return Card(
+      color: theme.colorScheme.primaryContainer,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+        child: Row(
+          children: [
+            Text(
+              '$_todayPoints',
+              style: theme.textTheme.headlineLarge?.copyWith(
+                color: theme.colorScheme.onPrimaryContainer,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(width: 6),
+            Text(
+              'pts today',
+              style: theme.textTheme.bodyLarge?.copyWith(
+                color: theme.colorScheme.onPrimaryContainer,
+              ),
+            ),
+            const Spacer(),
+            if (profile != null && profile.currentStreakDays > 0) ...[
+              Icon(Icons.local_fire_department,
+                  color: profile.currentStreakDays >= 7
+                      ? Colors.orange
+                      : theme.colorScheme.onPrimaryContainer,
+                  size: 20),
+              const SizedBox(width: 2),
+              Text(
+                '${profile.currentStreakDays}d',
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: theme.colorScheme.onPrimaryContainer,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(width: 10),
+            ],
+            if (profile != null && profile.currentMultiplier > 1.0)
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                decoration: BoxDecoration(
+                  color: theme.colorScheme.tertiaryContainer,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Text(
+                  '${profile.currentMultiplier}x',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onTertiaryContainer,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDailyCompletionMeter(ThemeData theme, int activeMissions, double progress) {
+    final pct = (progress * 100).round();
+
+    return Column(
+      children: [
+        Row(
+          children: [
+            Text(
+              '$activeMissions/${_missions.length} missions active',
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+            const Spacer(),
+            Text(
+              '$pct%',
+              style: theme.textTheme.bodyMedium?.copyWith(
+                fontWeight: FontWeight.bold,
+                color: theme.colorScheme.primary,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 6),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(6),
+          child: LinearProgressIndicator(
+            value: progress.clamp(0.0, 1.0),
+            minHeight: 10,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildMissionCard(ThemeData theme, _MissionInfo mission, Map<String, int> counts) {
+    final earned = mission.todayEarned(counts);
+    final max = mission.maxDailyPoints;
+    final progress = mission.progress(counts);
+    final complete = mission.isComplete(counts);
+
+    return Card(
+      color: complete
+          ? theme.colorScheme.primaryContainer.withValues(alpha: 0.3)
+          : null,
+      child: InkWell(
+        onTap: mission.navigateTo != null ? () => _navigateToApp(mission.navigateTo!) : null,
+        borderRadius: BorderRadius.circular(12),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          child: Row(
+            children: [
+              // Icon circle
+              Container(
+                width: 42,
+                height: 42,
+                decoration: BoxDecoration(
+                  color: complete
+                      ? Colors.green.withValues(alpha: 0.15)
+                      : theme.colorScheme.surfaceContainerHighest,
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(
+                  complete ? Icons.check : mission.icon,
+                  color: complete ? Colors.green : theme.colorScheme.primary,
+                  size: 22,
+                ),
+              ),
+              const SizedBox(width: 14),
+              // Name + progress bar
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      mission.verb,
+                      style: theme.textTheme.bodyLarge?.copyWith(
+                        fontWeight: FontWeight.w600,
+                        decoration: complete ? TextDecoration.lineThrough : null,
+                        color: complete
+                            ? theme.colorScheme.onSurfaceVariant
+                            : null,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(3),
+                      child: LinearProgressIndicator(
+                        value: progress.clamp(0.0, 1.0),
+                        minHeight: 6,
+                        color: complete ? Colors.green : null,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      '$earned/$max pts',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 12),
+              // Points badge or DONE
+              if (complete)
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: Colors.green.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text(
+                    'DONE',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: Colors.green,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                )
+              else
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: theme.colorScheme.primaryContainer,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text(
+                    '+$max',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onPrimaryContainer,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildBonusMissionCard(ThemeData theme, Map<String, int> counts) {
+    final categoriesUsed = <String>{};
+    for (final entry in counts.entries) {
+      final config = KarmaEngine.actions[entry.key];
+      if (config != null && entry.value > 0 && config.category != 'bonus') {
+        categoriesUsed.add(config.category);
+      }
+    }
+
+    final required = KarmaEngine.diversityCategoriesRequired;
+    final earned = counts['feature_diversity'] ?? 0;
+    final complete = earned > 0;
+    final diversityConfig = KarmaEngine.actions['feature_diversity'];
+    final bonusPoints = diversityConfig?.points ?? 15;
+
+    // Category icons for the visual indicator
+    const categoryIcons = {
+      'connection': Icons.login,
+      'chat': Icons.chat,
+      'content': Icons.create,
+      'social': Icons.people,
+      'passive': Icons.inbox,
+    };
+
+    return Card(
+      color: complete
+          ? theme.colorScheme.tertiaryContainer.withValues(alpha: 0.3)
+          : theme.colorScheme.surfaceContainerHighest,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        child: Row(
+          children: [
+            Container(
+              width: 42,
+              height: 42,
+              decoration: BoxDecoration(
+                color: complete
+                    ? Colors.green.withValues(alpha: 0.15)
+                    : theme.colorScheme.tertiaryContainer,
+                shape: BoxShape.circle,
+              ),
+              child: Icon(
+                complete ? Icons.check : Icons.stars,
+                color: complete ? Colors.green : theme.colorScheme.tertiary,
+                size: 22,
+              ),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  _buildProfileHeader(theme),
-                  const SizedBox(height: 16),
-                  _buildTodayScore(theme),
-                  const SizedBox(height: 16),
-                  _buildCategoryCards(theme),
-                  const SizedBox(height: 24),
-                  _buildLeaderboardSection(theme),
+                  Text(
+                    'Feature Diversity Bonus',
+                    style: theme.textTheme.bodyLarge?.copyWith(
+                      fontWeight: FontWeight.w600,
+                      decoration: complete ? TextDecoration.lineThrough : null,
+                      color: complete
+                          ? theme.colorScheme.onSurfaceVariant
+                          : null,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  // Category icons row
+                  Row(
+                    children: categoryIcons.entries.map((e) {
+                      final lit = categoriesUsed.contains(e.key);
+                      return Padding(
+                        padding: const EdgeInsets.only(right: 8),
+                        child: Icon(
+                          e.value,
+                          size: 18,
+                          color: lit
+                              ? theme.colorScheme.primary
+                              : theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.3),
+                        ),
+                      );
+                    }).toList(),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Use $required+ categories today',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
                 ],
               ),
             ),
+            const SizedBox(width: 12),
+            if (complete)
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(
+                  color: Colors.green.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Text(
+                  'EARNED',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: Colors.green,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              )
+            else
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(
+                  color: theme.colorScheme.tertiaryContainer,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Text(
+                  '+$bonusPoints',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onTertiaryContainer,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ==================== Tab 2: Stats ====================
+
+  Widget _buildStatsTab(ThemeData theme) {
+    return RefreshIndicator(
+      onRefresh: _loadData,
+      child: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          _buildProfileHeader(theme),
+          const SizedBox(height: 16),
+          _buildStreakDetails(theme),
+        ],
+      ),
     );
   }
 
@@ -230,157 +684,104 @@ class _KarmaPageState extends State<KarmaPage> {
     );
   }
 
-  Widget _buildTodayScore(ThemeData theme) {
-    return Card(
-      color: theme.colorScheme.primaryContainer,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-        child: Row(
-          children: [
-            Icon(Icons.today, color: theme.colorScheme.onPrimaryContainer),
-            const SizedBox(width: 12),
-            Text(
-              "Today's Score: $_todayPoints pts",
-              style: theme.textTheme.titleMedium?.copyWith(
-                color: theme.colorScheme.onPrimaryContainer,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
+  Widget _buildStreakDetails(ThemeData theme) {
+    final profile = _profile;
+    if (profile == null) return const SizedBox.shrink();
 
-  Widget _buildCategoryCards(ThemeData theme) {
-    final categories = [
-      _CategoryInfo('Chat', Icons.chat, 'chat_message', 2, 50, 'chat'),
-      _CategoryInfo('Blog', Icons.article, 'blog_published', 50, 3, 'blog'),
-      _CategoryInfo('Places', Icons.place, 'place_created', 30, 5, 'places'),
-      _CategoryInfo('Alerts', Icons.campaign, 'alert_created', 25, 5, 'alerts'),
-      _CategoryInfo('Social', Icons.favorite, 'like_given', 2, 30, null),
-      _CategoryInfo('Events', Icons.event, 'event_created', 30, 3, 'events'),
-    ];
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+    return GridView.count(
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      crossAxisCount: 2,
+      childAspectRatio: 1.8,
+      crossAxisSpacing: 8,
+      mainAxisSpacing: 8,
       children: [
-        Text('EARN POINTS', style: theme.textTheme.titleSmall?.copyWith(
-          fontWeight: FontWeight.bold,
-          letterSpacing: 1.2,
-          color: theme.colorScheme.onSurfaceVariant,
-        )),
-        const SizedBox(height: 8),
-        GridView.builder(
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-            crossAxisCount: 2,
-            childAspectRatio: 1.6,
-            crossAxisSpacing: 8,
-            mainAxisSpacing: 8,
-          ),
-          itemCount: categories.length,
-          itemBuilder: (context, index) {
-            return _buildCategoryCard(theme, categories[index]);
-          },
-        ),
+        _buildStatTile(theme, Icons.local_fire_department, 'Current Streak',
+            '${profile.currentStreakDays} days', Colors.orange),
+        _buildStatTile(theme, Icons.speed, 'Multiplier',
+            '${profile.currentMultiplier}x', theme.colorScheme.tertiary),
+        _buildStatTile(theme, Icons.military_tech, 'Level',
+            'Lv${profile.level} ${profile.levelName}', theme.colorScheme.primary),
+        _buildStatTile(theme, Icons.star, 'Total Points',
+            '${profile.totalPoints}', Colors.amber),
       ],
     );
   }
 
-  Widget _buildCategoryCard(ThemeData theme, _CategoryInfo cat) {
-    final todayCount = _profile?.actionCountsToday[cat.actionKey] ?? 0;
-    final progress = cat.dailyCap > 0 ? (todayCount / cat.dailyCap).clamp(0.0, 1.0) : 0.0;
-
+  Widget _buildStatTile(ThemeData theme, IconData icon, String label, String value, Color iconColor) {
     return Card(
-      child: InkWell(
-        onTap: cat.navigateTo != null ? () => _navigateToApp(cat.navigateTo!) : null,
-        borderRadius: BorderRadius.circular(12),
-        child: Padding(
-          padding: const EdgeInsets.all(12),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Row(
-                children: [
-                  Icon(cat.icon, size: 20, color: theme.colorScheme.primary),
-                  const SizedBox(width: 6),
-                  Expanded(
-                    child: Text(cat.name,
-                        style: theme.textTheme.bodyMedium?.copyWith(
-                          fontWeight: FontWeight.w600,
-                        ),
-                        overflow: TextOverflow.ellipsis),
-                  ),
-                  Text('+${cat.pointsPer}',
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: theme.colorScheme.primary,
-                        fontWeight: FontWeight.bold,
-                      )),
-                ],
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Row(
+              children: [
+                Icon(icon, size: 18, color: iconColor),
+                const SizedBox(width: 6),
+                Text(label, style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                )),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Text(
+              value,
+              style: theme.textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.bold,
               ),
-              const Spacer(),
-              Text('$todayCount/${cat.dailyCap} today',
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: theme.colorScheme.onSurfaceVariant,
-                  )),
-              const SizedBox(height: 4),
-              ClipRRect(
-                borderRadius: BorderRadius.circular(2),
-                child: LinearProgressIndicator(
-                  value: progress,
-                  minHeight: 4,
-                ),
-              ),
-            ],
-          ),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ],
         ),
       ),
     );
   }
 
-  Widget _buildLeaderboardSection(ThemeData theme) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            Text('LEADERBOARD', style: theme.textTheme.titleSmall?.copyWith(
-              fontWeight: FontWeight.bold,
-              letterSpacing: 1.2,
-              color: theme.colorScheme.onSurfaceVariant,
-            )),
-            const Spacer(),
-            _buildPeriodChip('weekly'),
-            const SizedBox(width: 4),
-            _buildPeriodChip('monthly'),
-            const SizedBox(width: 4),
-            _buildPeriodChip('alltime'),
-          ],
-        ),
-        const SizedBox(height: 8),
-        if (_leaderboard.isEmpty)
+  // ==================== Tab 3: Leaderboard ====================
+
+  Widget _buildLeaderboardTab(ThemeData theme) {
+    return RefreshIndicator(
+      onRefresh: _loadData,
+      child: Column(
+        children: [
           Padding(
-            padding: const EdgeInsets.all(24),
-            child: Center(
-              child: Text('No leaderboard data yet',
-                  style: theme.textTheme.bodyMedium?.copyWith(
-                    color: theme.colorScheme.onSurfaceVariant,
-                  )),
-            ),
-          )
-        else
-          Card(
-            child: Column(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+            child: Row(
               children: [
-                for (final entry in _leaderboard)
-                  _buildLeaderboardRow(theme, entry),
+                _buildPeriodChip('weekly'),
+                const SizedBox(width: 4),
+                _buildPeriodChip('monthly'),
+                const SizedBox(width: 4),
+                _buildPeriodChip('alltime'),
               ],
             ),
           ),
-      ],
+          Expanded(
+            child: _leaderboard.isEmpty
+                ? ListView(
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.all(48),
+                        child: Center(
+                          child: Text('No leaderboard data yet',
+                              style: theme.textTheme.bodyMedium?.copyWith(
+                                color: theme.colorScheme.onSurfaceVariant,
+                              )),
+                        ),
+                      ),
+                    ],
+                  )
+                : ListView.builder(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    itemCount: _leaderboard.length,
+                    itemBuilder: (context, index) =>
+                        _buildLeaderboardRow(theme, _leaderboard[index]),
+                  ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -447,18 +848,63 @@ class _KarmaPageState extends State<KarmaPage> {
   }
 
   void _navigateToApp(String appType) {
-    // Pop back to home and the user can navigate to the app from there
     Navigator.of(context).pop();
   }
 }
 
-class _CategoryInfo {
+class _MissionInfo {
   final String name;
+  final String verb;
   final IconData icon;
-  final String actionKey;
-  final int pointsPer;
-  final int dailyCap;
+  final List<String> actionKeys;
   final String? navigateTo;
 
-  const _CategoryInfo(this.name, this.icon, this.actionKey, this.pointsPer, this.dailyCap, this.navigateTo);
+  const _MissionInfo({
+    required this.name,
+    required this.verb,
+    required this.icon,
+    required this.actionKeys,
+    required this.navigateTo,
+  });
+
+  int get maxDailyPoints {
+    int total = 0;
+    for (final key in actionKeys) {
+      final config = KarmaEngine.actions[key];
+      if (config != null) {
+        total += config.points * config.dailyCap;
+      }
+    }
+    return total;
+  }
+
+  int todayEarned(Map<String, int> actionCounts) {
+    int total = 0;
+    for (final key in actionKeys) {
+      final config = KarmaEngine.actions[key];
+      if (config != null) {
+        final count = actionCounts[key] ?? 0;
+        final capped = count.clamp(0, config.dailyCap);
+        total += config.points * capped;
+      }
+    }
+    return total;
+  }
+
+  double progress(Map<String, int> actionCounts) {
+    final max = maxDailyPoints;
+    if (max == 0) return 0.0;
+    return todayEarned(actionCounts) / max;
+  }
+
+  bool isComplete(Map<String, int> actionCounts) {
+    for (final key in actionKeys) {
+      final config = KarmaEngine.actions[key];
+      if (config != null) {
+        final count = actionCounts[key] ?? 0;
+        if (count < config.dailyCap) return false;
+      }
+    }
+    return true;
+  }
 }
