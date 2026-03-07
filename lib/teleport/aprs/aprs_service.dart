@@ -99,6 +99,12 @@ class AprsService {
   final Map<String, DateTime> _geoChatDedup = {};
   static const Duration _geoChatDedupWindow = Duration(hours: 1);
 
+  // Station detection — callsigns that send multiple position beacons are
+  // automated stations.  Their geochat still appears in the Geo Chat tab but
+  // is suppressed from the Now panel to reduce noise.
+  final Map<String, int> _positionBeaconCount = {};
+  static const int _stationThreshold = 2; // ≥2 beacons → station
+
   /// Last known position per callsign — updated from position packets.
   /// Used to show distance for message packets (which don't carry coordinates).
   final Map<String, (double, double)> lastKnownPositions = {};
@@ -452,6 +458,7 @@ class AprsService {
     _client?.disconnect();
     _client = null;
     _recentPacketHashes.clear();
+    _positionBeaconCount.clear();
     _saveConfig();
     _eventController.add(const AprsEvent(AprsEventType.disconnected));
   }
@@ -466,6 +473,7 @@ class AprsService {
     lastKnownPositions.clear();
     _recentPacketHashes.clear();
     _geoChatDedup.clear();
+    _positionBeaconCount.clear();
     _uiDirtyStream = true;
     _uiDirtyMessages = true;
   }
@@ -478,6 +486,7 @@ class AprsService {
     geoChatMessages.clear();
     lastKnownPositions.clear();
     _geoChatDedup.clear();
+    _positionBeaconCount.clear();
     _eventController.add(const AprsEvent(AprsEventType.packetReceived));
     _eventController.add(const AprsEvent(AprsEventType.messageReceived));
   }
@@ -867,6 +876,12 @@ class AprsService {
         streamPackets.removeRange(0, streamPackets.length - _maxStreamPackets);
       }
       _uiDirtyStream = true;
+
+      // Track position beacons per callsign for station detection
+      if (packet.type == AprsPacketType.position) {
+        _positionBeaconCount[packet.fromCallsign] =
+            (_positionBeaconCount[packet.fromCallsign] ?? 0) + 1;
+      }
     }
 
     // Collect human-authored position comments for geo-chat (skip beacons)
@@ -893,8 +908,22 @@ class AprsService {
         }
         _uiDirtyMessages = true;
 
-        // Geo-chat messages are broadcast position comments — don't push
-        // them to the Now panel. They remain visible in the Geo Chat tab.
+        // Only push geochat to the Now panel from non-station callsigns.
+        // Automated stations (≥_stationThreshold position beacons) are
+        // suppressed — their messages remain in the Geo Chat tab.
+        final beaconCount =
+            _positionBeaconCount[packet.fromCallsign] ?? 0;
+        if (!packet.isOutgoing && beaconCount < _stationThreshold) {
+          EventBus().fire(NowItemEvent(
+            id: 'aprs:geo:${packet.fromCallsign}:${packet.timestamp.millisecondsSinceEpoch}',
+            appType: 'aprs',
+            sourceId: 'geochat',
+            sourceName: 'APRS Geo Chat',
+            callsign: packet.fromCallsign,
+            summary: packet.comment ?? '',
+            priority: NowPriority.chat,
+          ));
+        }
       }
     }
   }
