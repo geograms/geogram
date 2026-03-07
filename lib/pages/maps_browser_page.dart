@@ -2066,7 +2066,7 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
     }
 
     // 3. Geocode via Nominatim if we have few local results and query isn't coordinates
-    if (results.length < 3 && coordMatch == null) {
+    if (coordMatch == null) {
       try {
         final encoded = Uri.encodeComponent(query);
         final response = await http.get(
