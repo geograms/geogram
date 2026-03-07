@@ -3,6 +3,7 @@
  * License: Apache-2.0
  */
 
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -22,6 +23,7 @@ class MangaReaderPage extends StatefulWidget {
   final String mangaSlug;
   final MangaChapter chapter;
   final String chapterPath;
+  final String? seriesDir;
   final I18nService i18n;
 
   const MangaReaderPage({
@@ -31,6 +33,7 @@ class MangaReaderPage extends StatefulWidget {
     required this.mangaSlug,
     required this.chapter,
     required this.chapterPath,
+    this.seriesDir,
     required this.i18n,
   });
 
@@ -89,12 +92,21 @@ class _MangaReaderPageState extends State<MangaReaderPage> {
     try {
       final pages = await _mangaService.extractPages(widget.chapterPath);
 
-      // Load saved progress
-      final progress =
-          _readerService.getMangaProgress(widget.sourceId, widget.mangaSlug);
+      // Load saved progress from local manga_meta.json
       int startPage = 0;
-      if (progress != null && progress.currentChapter == widget.chapter.filename) {
-        startPage = progress.currentPage;
+      if (widget.seriesDir != null) {
+        final meta = await _loadSeriesMeta();
+        final state = meta?.chapters[widget.chapter.filename];
+        if (state != null && !state.read && state.currentPage > 0) {
+          startPage = state.currentPage;
+        }
+      } else {
+        final progress =
+            _readerService.getMangaProgress(widget.sourceId, widget.mangaSlug);
+        if (progress != null &&
+            progress.currentChapter == widget.chapter.filename) {
+          startPage = progress.currentPage;
+        }
       }
 
       if (mounted) {
@@ -131,21 +143,56 @@ class _MangaReaderPageState extends State<MangaReaderPage> {
   }
 
   void _saveProgress(int page) {
-    _readerService.updateMangaProgress(
-      widget.sourceId,
-      widget.mangaSlug,
-      widget.chapter.filename,
-      page,
-    );
-
-    // Mark chapter as read if on last page
-    if (page >= _pages.length - 1) {
-      _readerService.markChapterRead(
+    if (widget.seriesDir != null) {
+      _saveLocalProgress(page);
+    } else {
+      _readerService.updateMangaProgress(
         widget.sourceId,
         widget.mangaSlug,
         widget.chapter.filename,
+        page,
       );
+      if (page >= _pages.length - 1) {
+        _readerService.markChapterRead(
+          widget.sourceId,
+          widget.mangaSlug,
+          widget.chapter.filename,
+        );
+      }
     }
+  }
+
+  // ============ Local manga_meta.json I/O ============
+
+  String get _metaPath => '${widget.seriesDir}/${SeriesMeta.filename}';
+
+  Future<SeriesMeta?> _loadSeriesMeta() async {
+    try {
+      final file = File(_metaPath);
+      if (await file.exists()) {
+        final content = await file.readAsString();
+        return SeriesMeta.fromJson(
+            jsonDecode(content) as Map<String, dynamic>);
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  Future<void> _saveLocalProgress(int page) async {
+    try {
+      final meta = await _loadSeriesMeta() ?? SeriesMeta();
+      final state = meta.getOrCreate(widget.chapter.filename);
+      state.currentPage = page;
+      state.totalPages = _pages.length;
+      state.lastReadAt = DateTime.now();
+      if (page >= _pages.length - 1) {
+        state.read = true;
+      }
+      final file = File(_metaPath);
+      await file.writeAsString(
+        const JsonEncoder.withIndent('  ').convert(meta.toJson()),
+      );
+    } catch (_) {}
   }
 
   void _toggleControls() {

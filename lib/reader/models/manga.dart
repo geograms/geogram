@@ -268,6 +268,98 @@ class MangaChapter {
   }
 }
 
+/// Per-chapter reading state stored in manga_meta.json
+class ChapterReadState {
+  bool read;
+  int currentPage;
+  int totalPages;
+  DateTime? lastReadAt;
+
+  ChapterReadState({
+    this.read = false,
+    this.currentPage = 0,
+    this.totalPages = 0,
+    this.lastReadAt,
+  });
+
+  factory ChapterReadState.fromJson(Map<String, dynamic> json) {
+    return ChapterReadState(
+      read: json['read'] as bool? ?? false,
+      currentPage: json['current_page'] as int? ?? 0,
+      totalPages: json['total_pages'] as int? ?? 0,
+      lastReadAt: json['last_read_at'] != null
+          ? DateTime.tryParse(json['last_read_at'] as String)
+          : null,
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'read': read,
+      'current_page': currentPage,
+      'total_pages': totalPages,
+      if (lastReadAt != null) 'last_read_at': lastReadAt!.toIso8601String(),
+    };
+  }
+}
+
+/// Series metadata stored as manga_meta.json alongside CBZ files
+class SeriesMeta {
+  static const String filename = 'manga_meta.json';
+
+  String title;
+  String description;
+  List<String> tags;
+  String? thumbnail;
+  final Map<String, ChapterReadState> chapters;
+
+  SeriesMeta({
+    this.title = '',
+    this.description = '',
+    List<String>? tags,
+    this.thumbnail,
+    Map<String, ChapterReadState>? chapters,
+  })  : tags = tags ?? [],
+        chapters = chapters ?? {};
+
+  factory SeriesMeta.fromJson(Map<String, dynamic> json) {
+    return SeriesMeta(
+      title: json['title'] as String? ?? '',
+      description: json['description'] as String? ?? '',
+      tags: (json['tags'] as List<dynamic>?)
+              ?.map((e) => e as String)
+              .toList() ??
+          [],
+      thumbnail: json['thumbnail'] as String?,
+      chapters: (json['chapters'] as Map<String, dynamic>?)?.map(
+            (k, v) => MapEntry(
+                k, ChapterReadState.fromJson(v as Map<String, dynamic>)),
+          ) ??
+          {},
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'title': title,
+      'description': description,
+      'tags': tags,
+      if (thumbnail != null) 'thumbnail': thumbnail,
+      'chapters': chapters.map((k, v) => MapEntry(k, v.toJson())),
+    };
+  }
+
+  bool isChapterRead(String chapterFilename) {
+    return chapters[chapterFilename]?.read ?? false;
+  }
+
+  ChapterReadState getOrCreate(String chapterFilename) {
+    return chapters.putIfAbsent(chapterFilename, () => ChapterReadState());
+  }
+
+  int get readCount => chapters.values.where((c) => c.read).length;
+}
+
 /// Result from manga search
 class MangaSearchResult {
   final String id;
