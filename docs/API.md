@@ -1579,6 +1579,16 @@ curl -X POST http://localhost:3456/api/debug \
 curl -X POST http://localhost:3456/api/debug \
   -H "Content-Type: application/json" \
   -d '{"action": "map_search", "query": "38.72, -9.14"}'
+
+# Calculate route from current map center to coordinates (auto-downloads road data)
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action": "map_route", "toLat": 38.75, "toLon": -9.15, "mode": "driving"}'
+
+# Walking route
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action": "map_route", "toLat": 38.75, "toLon": -9.15, "mode": "walking"}'
 ```
 
 ---

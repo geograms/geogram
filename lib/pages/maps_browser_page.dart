@@ -84,6 +84,7 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
   // Navigation routing state
   List<LatLng> _routePoints = [];
   bool _isLoadingRoute = false;
+  bool _routeVisible = true;
   TravelMode? _activeRouteMode;
   double? _routeDistanceMeters;
   double? _routeDurationSeconds;
@@ -149,6 +150,25 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
             _searchController.text = query;
           });
           _performSearch(query);
+        }
+      } else if (event.action == DebugAction.mapRoute && mounted) {
+        final toLat = (event.params['toLat'] is num)
+            ? (event.params['toLat'] as num).toDouble()
+            : double.tryParse(event.params['toLat']?.toString() ?? '');
+        final toLon = (event.params['toLon'] is num)
+            ? (event.params['toLon'] as num).toDouble()
+            : double.tryParse(event.params['toLon']?.toString() ?? '');
+        final modeStr = event.params['mode'] as String? ?? 'driving';
+        final mode = modeStr == 'walking' ? TravelMode.walking : TravelMode.driving;
+        if (toLat != null && toLon != null) {
+          final item = MapItem(
+            type: MapItemType.place,
+            id: 'debug_route',
+            title: 'Debug Route Target',
+            latitude: toLat,
+            longitude: toLon,
+          );
+          _navigateTo(item, mode);
         }
       }
     });
@@ -1079,7 +1099,6 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
             onTap: (_, __) {
               setState(() {
                 _selectedItem = null;
-                _clearRoute();
               });
             },
             onPositionChanged: (position, hasGesture) {
@@ -1205,7 +1224,7 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
             ),
 
             // Route polyline overlay
-            if (_routePoints.isNotEmpty)
+            if (_routePoints.isNotEmpty && _routeVisible)
               PolylineLayer(
                 polylines: [
                   Polyline(
@@ -1428,14 +1447,15 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
                             IconButton(
                               icon: const Icon(Icons.clear),
                               onPressed: _clearSearch,
+                            )
+                          else
+                            IconButton(
+                              icon: const Icon(Icons.close),
+                              onPressed: () => setState(() {
+                                _showSearchBar = false;
+                                _searchResults = [];
+                              }),
                             ),
-                          IconButton(
-                            icon: const Icon(Icons.close),
-                            onPressed: () => setState(() {
-                              _showSearchBar = false;
-                              _searchResults = [];
-                            }),
-                          ),
                         ],
                       ),
                       border: OutlineInputBorder(
@@ -1979,6 +1999,17 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
       }
     }
 
+    // Sort results by distance from current position (closest first)
+    if (_centerPosition != null && results.length > 1) {
+      final cLat = _centerPosition!.latitude;
+      final cLon = _centerPosition!.longitude;
+      results.sort((a, b) {
+        final dA = _distanceBetween(cLat, cLon, a.latitude, a.longitude);
+        final dB = _distanceBetween(cLat, cLon, b.latitude, b.longitude);
+        return dA.compareTo(dB);
+      });
+    }
+
     if (mounted) {
       setState(() {
         _searchResults = results;
@@ -2044,28 +2075,11 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
     _routeDistanceMeters = null;
     _routeDurationSeconds = null;
     _isLoadingRoute = false;
+    _routeVisible = true;
   }
 
   Future<void> _navigateTo(MapItem item, TravelMode mode) async {
     if (_centerPosition == null || _isLoadingRoute) return;
-
-    if (!RoutingService().hasRoadData) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(_i18n.t('no_road_data')),
-            action: SnackBarAction(
-              label: _i18n.t('settings'),
-              onPressed: () {
-                Navigator.push(context,
-                    MaterialPageRoute(builder: (_) => const MapCacheSettingsPage()));
-              },
-            ),
-          ),
-        );
-      }
-      return;
-    }
 
     setState(() {
       _isLoadingRoute = true;
@@ -2138,6 +2152,17 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
   String _formatRouteDistance(double meters) {
     if (meters < 1000) return '${meters.round()} m';
     return '${(meters / 1000).toStringAsFixed(1)} km';
+  }
+
+  /// Haversine distance in meters between two points
+  static double _distanceBetween(double lat1, double lon1, double lat2, double lon2) {
+    const r = 6371000.0;
+    final dLat = (lat2 - lat1) * math.pi / 180;
+    final dLon = (lon2 - lon1) * math.pi / 180;
+    final a = math.sin(dLat / 2) * math.sin(dLat / 2) +
+        math.cos(lat1 * math.pi / 180) * math.cos(lat2 * math.pi / 180) *
+        math.sin(dLon / 2) * math.sin(dLon / 2);
+    return r * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a));
   }
 
   Widget _buildDetailPanel() {
@@ -2324,6 +2349,15 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
                   tooltip: _activeRouteMode == TravelMode.driving
                       ? _i18n.t('walking')
                       : _i18n.t('driving'),
+                  visualDensity: VisualDensity.compact,
+                ),
+                IconButton(
+                  icon: Icon(
+                    _routeVisible ? Icons.visibility : Icons.visibility_off,
+                    size: 20,
+                  ),
+                  onPressed: () => setState(() => _routeVisible = !_routeVisible),
+                  tooltip: _routeVisible ? _i18n.t('hide') : _i18n.t('show'),
                   visualDensity: VisualDensity.compact,
                 ),
                 IconButton(

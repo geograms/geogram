@@ -243,6 +243,9 @@ enum DebugAction {
 
   /// Search for a place on the map
   mapSearch,
+
+  /// Route to coordinates on the map
+  mapRoute,
 }
 
 /// Toast message to be displayed
@@ -661,6 +664,15 @@ class DebugController {
         'description': 'Search for a place on the map by name or coordinates',
         'params': {
           'query': 'Search query (place name or coordinates like "38.72, -9.14")',
+        },
+      },
+      {
+        'action': 'map_route',
+        'description': 'Calculate route from current map center to coordinates (auto-downloads road data if needed)',
+        'params': {
+          'toLat': 'Destination latitude',
+          'toLon': 'Destination longitude',
+          'mode': '(optional) Travel mode: driving or walking (default: driving)',
         },
       },
       {
@@ -1213,6 +1225,16 @@ class DebugController {
         // Fire debug action event for the maps page to handle
         _actionController.add(DebugActionEvent(action: DebugAction.mapSearch, params: params));
         return {'success': true, 'message': 'Map search triggered for: $query'};
+
+      case 'map_route':
+        final toLat = params['toLat'];
+        final toLon = params['toLon'];
+        if (toLat == null || toLon == null) {
+          return {'success': false, 'error': 'Missing toLat/toLon parameters'};
+        }
+        navigateToPanelByName('maps');
+        _actionController.add(DebugActionEvent(action: DebugAction.mapRoute, params: params));
+        return {'success': true, 'message': 'Map route triggered to: $toLat, $toLon'};
 
       case 'toast':
         final message = params['message'] as String?;

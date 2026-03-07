@@ -213,7 +213,9 @@ class RoutingService {
     }
   }
 
-  /// Calculate a route between two points
+  /// Calculate a route between two points.
+  /// Auto-downloads road data if none is cached or if the cached data
+  /// doesn't cover the route area.
   Future<RouteResult> getRoute({
     required double fromLat,
     required double fromLon,
@@ -221,24 +223,56 @@ class RoutingService {
     required double toLon,
     TravelMode mode = TravelMode.driving,
   }) async {
-    final graph = await _getGraph();
+    var graph = await _getGraph();
+
+    // Check if we need to download/re-download road data
+    final needsDownload = graph == null || graph.nodes.isEmpty
+        || _findNearestNode(graph, fromLat, fromLon) == null
+        || _findNearestNode(graph, toLat, toLon) == null;
+
+    if (needsDownload) {
+      // Compute center + radius covering both from and to with margin
+      final centerLat = (fromLat + toLat) / 2;
+      final centerLon = (fromLon + toLon) / 2;
+      final dist = _haversineMeters(fromLat, fromLon, toLat, toLon);
+      // Radius must cover half the distance plus 2km margin, max 15km
+      final minRadius = dist / 2000 + 2.0;
+      final radiusKm = minRadius.clamp(2.0, 15.0);
+
+      if (minRadius > 15.0) {
+        throw Exception(
+          'Route too long for auto-download (${(dist / 1000).toStringAsFixed(0)}km). '
+          'Zoom in closer to the route area first.');
+      }
+
+      LogService().log('RoutingService: Auto-downloading road data '
+          '(center: $centerLat,$centerLon, radius: ${radiusKm.toStringAsFixed(1)}km)');
+      await downloadRoadData(lat: centerLat, lon: centerLon, radiusKm: radiusKm);
+      graph = _cachedGraph;
+    }
+
     if (graph == null || graph.nodes.isEmpty) {
-      throw Exception('No road data available. Download road data first.');
+      throw Exception('No road data available and download failed');
     }
 
     // Snap start/end to nearest graph nodes
+    LogService().log('RoutingService: Snapping to graph (${graph.nodes.length} nodes)...');
     final startNode = _findNearestNode(graph, fromLat, fromLon);
     final endNode = _findNearestNode(graph, toLat, toLon);
 
     if (startNode == null || endNode == null) {
+      LogService().log('RoutingService: Snap failed — start=$startNode, end=$endNode');
       throw Exception('Could not find road network near the given coordinates');
     }
 
+    LogService().log('RoutingService: Snapped start=${startNode.id}, end=${endNode.id}. Running A*...');
     // A* pathfinding
     final path = _astar(graph, startNode, endNode, mode);
     if (path == null) {
+      LogService().log('RoutingService: A* found no path');
       throw Exception('No route found between the given points');
     }
+    LogService().log('RoutingService: Route found with ${path.length} nodes');
 
     // Build result
     final points = <LatLng>[];
@@ -484,8 +518,8 @@ class RoutingService {
       }
     }
 
-    // Only snap if within 2km
-    if (minDist > 2000) return null;
+    // Only snap if within 5km (rural areas have sparse road networks)
+    if (minDist > 5000) return null;
     return nearest;
   }
 
