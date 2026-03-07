@@ -5595,7 +5595,56 @@ final dateStr = ReaderPathUtils.formatDateForFolder(DateTime.now());
 | MangaSourcesPage | reader/pages/manga_sources_page.dart | Manga sources list |
 | MangaSeriesPage | reader/pages/manga_series_page.dart | Manga series grid/list |
 | MangaReaderPage | reader/pages/manga_reader_page.dart | Full-screen chapter reader |
+| MangaSettingsPage | reader/pages/manga_settings_page.dart | Extension management (add/remove) |
+| MangaFolderBrowserPage | reader/pages/manga_folder_browser_page.dart | Series folder with update check/download |
 | BookBrowserPage | reader/pages/book_browser_page.dart | Local book file browser |
+
+### Manga Extension System
+
+**Files:**
+- `lib/reader/models/manga_extension.dart` — `MangaExtension`, `ScrapeConfig`, `ExtensionField`, `PageConfig` models
+- `lib/reader/services/manga_scraper.dart` — HTML scraping engine with CSS selector extraction
+- `lib/reader/services/manga_extension_service.dart` — Extension lifecycle and scraping orchestration
+- `lib/reader/services/manga_download_service.dart` — Download chapters into existing series folders
+- `lib/reader/services/manga_cloudflare_service.dart` — Cloudflare challenge handling + cookie caching
+
+JSON-driven extension system for downloading manga from websites. Extensions are JSON manifests with CSS selectors, stored in `{basePath}/manga/extensions/{id}/extension.json`.
+
+**Usage:**
+```dart
+final extService = MangaExtensionService();
+await extService.initialize('path/to/extensions');
+
+// Search for manga
+final results = await extService.search('mangakakalot', 'one piece');
+
+// Get chapters
+final chapters = await extService.listChapters('mangakakalot', mangaUrl);
+
+// Download missing chapters into series folder
+final downloadService = MangaDownloadService();
+final missing = await downloadService.findMissingChapters(
+  seriesDir: '/path/to/series',
+  extensionId: 'mangakakalot',
+  sourceMangaId: mangaUrl,
+);
+for (final chapter in missing.missing) {
+  await downloadService.downloadChapter(
+    seriesDir: '/path/to/series',
+    extensionId: 'mangakakalot',
+    chapter: chapter,
+  );
+}
+```
+
+**Key classes:**
+| Class | Purpose |
+|-------|---------|
+| `MangaExtension` | Parsed extension manifest (id, selectors, headers, rate limit) |
+| `MangaScraper` | HTTP fetch + HTML parse + CSS select + field extraction |
+| `MangaExtensionService` | Load/install/remove extensions, search/chapters/pages |
+| `MangaDownloadService` | Find missing chapters, download as chapter-N.cbz |
+| `ExtensionField` | Field extraction rule (selector, attr, regex, map, type) |
 
 ---
 
