@@ -894,7 +894,20 @@ class AprsService {
         }
         _uiDirtyMessages = true;
 
-        // Geochat lives in the Geo Chat tab only — no Now panel cards.
+        // Push to Now panel with content-based ID so the same comment
+        // from the same callsign never creates duplicate Now cards.
+        if (!packet.isOutgoing) {
+          final commentHash = (packet.comment ?? '').hashCode;
+          EventBus().fire(NowItemEvent(
+            id: 'aprs:geo:${packet.fromCallsign}:$commentHash',
+            appType: 'aprs',
+            sourceId: 'geochat',
+            sourceName: 'APRS Geo Chat',
+            callsign: packet.fromCallsign,
+            summary: packet.comment ?? '',
+            priority: NowPriority.chat,
+          ));
+        }
       }
     }
   }
