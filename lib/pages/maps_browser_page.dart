@@ -1553,32 +1553,15 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
                         ],
                       ),
                     ),
-                    PopupMenuButton<TravelMode>(
-                      icon: const Icon(Icons.directions),
-                      tooltip: _i18n.t('navigate'),
-                      onSelected: _navigateToSearchMarker,
-                      itemBuilder: (context) => [
-                        PopupMenuItem(
-                          value: TravelMode.driving,
-                          child: Row(
-                            children: [
-                              const Icon(Icons.directions_car),
-                              const SizedBox(width: 8),
-                              Text(_i18n.t('driving')),
-                            ],
-                          ),
-                        ),
-                        PopupMenuItem(
-                          value: TravelMode.walking,
-                          child: Row(
-                            children: [
-                              const Icon(Icons.directions_walk),
-                              const SizedBox(width: 8),
-                              Text(_i18n.t('walking')),
-                            ],
-                          ),
-                        ),
-                      ],
+                    IconButton(
+                      icon: const Icon(Icons.directions_car),
+                      tooltip: _i18n.t('driving'),
+                      onPressed: () => _navigateToSearchMarker(TravelMode.driving),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.directions_walk),
+                      tooltip: _i18n.t('walking'),
+                      onPressed: () => _navigateToSearchMarker(TravelMode.walking),
                     ),
                     IconButton(
                       icon: const Icon(Icons.close),
@@ -2397,34 +2380,17 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
             ),
           ),
 
-          // Directions button (route controls are in the floating bar)
-          PopupMenuButton<TravelMode>(
-              icon: const Icon(Icons.directions),
-              tooltip: _i18n.t('navigate'),
-              onSelected: (mode) => _navigateTo(item, mode),
-              itemBuilder: (context) => [
-                PopupMenuItem(
-                  value: TravelMode.driving,
-                  child: Row(
-                    children: [
-                      const Icon(Icons.directions_car),
-                      const SizedBox(width: 8),
-                      Text(_i18n.t('driving')),
-                    ],
-                  ),
-                ),
-                PopupMenuItem(
-                  value: TravelMode.walking,
-                  child: Row(
-                    children: [
-                      const Icon(Icons.directions_walk),
-                      const SizedBox(width: 8),
-                      Text(_i18n.t('walking')),
-                    ],
-                  ),
-                ),
-              ],
-            ),
+          // Directions buttons
+          IconButton(
+            icon: const Icon(Icons.directions_car),
+            tooltip: _i18n.t('driving'),
+            onPressed: () => _navigateTo(item, TravelMode.driving),
+          ),
+          IconButton(
+            icon: const Icon(Icons.directions_walk),
+            tooltip: _i18n.t('walking'),
+            onPressed: () => _navigateTo(item, TravelMode.walking),
+          ),
 
           // Close button
           Padding(
