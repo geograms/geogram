@@ -222,11 +222,11 @@ class _MangaReaderPageState extends State<MangaReaderPage> {
   }
 
   void _zoomIn() {
-    _setZoom((_currentScale * 1.25).clamp(1.0, 5.0));
+    _setZoom((_currentScale * 1.25).clamp(0.25, 5.0));
   }
 
   void _zoomOut() {
-    _setZoom((_currentScale / 1.25).clamp(1.0, 5.0));
+    _setZoom((_currentScale / 1.25).clamp(0.25, 5.0));
   }
 
   void _resetZoom() {
@@ -294,7 +294,7 @@ class _MangaReaderPageState extends State<MangaReaderPage> {
                     actions: [
                       IconButton(
                         icon: const Icon(Icons.zoom_out),
-                        onPressed: _currentScale > 1.0 ? _zoomOut : null,
+                        onPressed: _currentScale > 0.25 ? _zoomOut : null,
                         tooltip: 'Zoom out',
                       ),
                       if (_currentScale != 1.0)
@@ -444,7 +444,7 @@ class _MangaReaderPageState extends State<MangaReaderPage> {
       itemBuilder: (context, index) {
         return InteractiveViewer(
           transformationController: _transformController,
-          minScale: 1.0,
+          minScale: 0.25,
           maxScale: 5.0,
           onInteractionEnd: (_) {
             final scale = _transformController.value.getMaxScaleOnAxis();
