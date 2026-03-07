@@ -47,6 +47,7 @@ import '../services/nip05_resolver_service.dart';
 import '../services/websocket_service.dart';
 import '../services/station_chat_queue_service.dart';
 import '../services/signing_service.dart';
+import '../services/station_server_service.dart';
 import '../models/contact.dart';
 import 'chat_settings_page.dart';
 import 'room_management_page.dart';
@@ -1599,6 +1600,13 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       // Save message
       await _chatService.saveMessage(_selectedChannel!.id, message);
 
+      // Record karma locally for chat message
+      StationServerService().karmaRecord(
+        callsign: currentProfile.callsign,
+        action: 'chat_message',
+        meta: {'room_id': _selectedChannel!.id, 'msg_length': content.length},
+      );
+
       // Add to local list (optimistic update)
       _setStateIfMounted(() {
         _messages.add(message);
@@ -1703,6 +1711,12 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
           _selectedStationRoom!.id,
           signedEvent.id,
           _stationService.stripUnsignedStatusMetadata(pendingMeta),
+        );
+        // Record karma locally for station chat message
+        StationServerService().karmaRecord(
+          callsign: currentProfile.callsign,
+          action: 'chat_message',
+          meta: {'room_id': _selectedStationRoom!.id, 'msg_length': content.length},
         );
       } else {
         final queued = QueuedStationChatMessage(

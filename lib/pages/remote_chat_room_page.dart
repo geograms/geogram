@@ -20,6 +20,7 @@ import '../services/chat_file_download_manager.dart';
 import '../api/endpoints/chat_api.dart' show ChatApi;
 import '../services/contact_service.dart';
 import '../services/websocket_service.dart';
+import '../services/station_server_service.dart';
 import '../util/event_bus.dart';
 import '../util/nostr_crypto.dart';
 import '../util/nostr_event.dart';
@@ -843,6 +844,13 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
 
       if (response != null && (response.statusCode == 200 || response.statusCode == 201)) {
         _clearQuotedMessage();
+
+        // Record karma locally for remote chat message
+        StationServerService().karmaRecord(
+          callsign: profile.callsign,
+          action: 'chat_message',
+          meta: {'room_id': widget.room.id, 'msg_length': content.length},
+        );
 
         // Reload messages to show the new one
         await _fetchFromApi();
