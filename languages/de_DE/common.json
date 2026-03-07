@@ -1426,5 +1426,12 @@
   "now_expiry": "Läuft ab nach",
   "now_expiry_hours": "{0}h",
   "now_show_more": "Mehr anzeigen",
-  "now_group_settings": "Gruppeneinstellungen"
+  "now_group_settings": "Gruppeneinstellungen",
+  "driving": "Fahren",
+  "walking": "Gehen",
+  "route_error": "Routenfehler",
+  "no_road_data": "Keine Straßendaten im Cache. In Karteneinstellungen herunterladen.",
+  "road_data": "Straßendaten",
+  "download_road_data": "Straßendaten herunterladen",
+  "road_data_downloaded": "Straßendaten erfolgreich heruntergeladen"
 }

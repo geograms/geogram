@@ -28,6 +28,7 @@ import '../services/profile_storage.dart';
 import '../api/handlers/alert_handler.dart';
 import '../api/handlers/place_handler.dart';
 import '../api/handlers/feedback_handler.dart';
+import 'handlers/road_handler.dart';
 import '../version.dart';
 import 'mixins/karma_mixin.dart';
 
@@ -451,6 +452,10 @@ abstract class StationServerBase {
     else if (path.startsWith('/tiles/')) {
       _stats.recordTileRequest();
       await _handleTileRequest(request);
+    }
+    // Road data (OSM road network for offline routing)
+    else if (path == '/api/roads') {
+      await _handleRoadDataRequest(request);
     }
     // Updates
     else if (path == '/api/updates/latest') {
@@ -1109,6 +1114,17 @@ abstract class StationServerBase {
 
     request.response.statusCode = 404;
     request.response.write('Tile not found');
+  }
+
+  RoadHandler? _roadHandler;
+
+  Future<void> _handleRoadDataRequest(HttpRequest request) async {
+    _roadHandler ??= RoadHandler(
+      getSettings: () => _settings,
+      tilesDirectory: _tilesDirectory!,
+      log: (level, message) => log(level, message),
+    );
+    await _roadHandler!.handleRoadDataRequest(request);
   }
 
   Future<void> _handleUpdatesLatest(HttpRequest request) async {

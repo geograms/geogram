@@ -1420,5 +1420,12 @@
   "now_expiry": "Expira após",
   "now_expiry_hours": "{0}h",
   "now_show_more": "Ver mais",
-  "now_group_settings": "Definições do grupo"
+  "now_group_settings": "Definições do grupo",
+  "driving": "Conduzir",
+  "walking": "A pé",
+  "route_error": "Erro de rota",
+  "no_road_data": "Sem dados de estradas. Descarregue nas definições de cache do mapa.",
+  "road_data": "Dados de Estradas",
+  "download_road_data": "Descarregar Dados de Estradas",
+  "road_data_downloaded": "Dados de estradas descarregados com sucesso"
 }

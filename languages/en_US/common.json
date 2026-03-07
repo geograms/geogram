@@ -1427,5 +1427,12 @@
   "now_expiry": "Expires after",
   "now_expiry_hours": "{0}h",
   "now_show_more": "Show more",
-  "now_group_settings": "Group settings"
+  "now_group_settings": "Group settings",
+  "driving": "Driving",
+  "walking": "Walking",
+  "route_error": "Route error",
+  "no_road_data": "No road data cached. Download in Map Cache settings.",
+  "road_data": "Road Data",
+  "download_road_data": "Download Road Data",
+  "road_data_downloaded": "Road data downloaded successfully"
 }

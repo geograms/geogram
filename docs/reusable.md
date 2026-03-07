@@ -18,6 +18,13 @@ This document catalogs reusable UI components available in the Geogram codebase.
 - [NostrLoginComponent](#nostrlogincomponent) - Reusable Nostr login with NIP-07 extension + client-side key generation
 - [NostrToolsBundle](#nostrtoolsbundle) - Embedded nostr-tools JS bundle for client-side signing
 
+### Map & Navigation
+- [RoutingService](#routingservice) - Offline A* routing with cached OSM road data
+- [RoadHandler](#roadhandler) - Station endpoint for road data (Overpass API cache)
+- [launchExternalNavigator](#launchexternalnavigator) - Open external maps app (Android/iOS/Desktop)
+- [RouteResult](#routeresult) - Route calculation result (polyline, distance, duration)
+- [MapTileService.getStationBaseUrl](#maptileservicegetstationbaseurl) - Station HTTP base URL (reusable for tiles and road data)
+
 ### Cross-Platform Patterns
 - [Platform-Adaptive WebView](#platform-adaptive-webview) - Render local HTML with JS on all platforms
 - [URL-Linkified SelectableText](#url-linkified-selectabletext) - Make URLs clickable in text widgets
@@ -10498,4 +10505,56 @@ final encrypted = await transport.encrypt(plaintext);
 final filter = BloomFilter(capacity: 10000, errorRate: 0.01);
 filter.addString(messageUuid);
 if (filter.mightContainString(uuid)) { /* probably seen */ }
+```
+
+---
+
+## RoutingService
+
+**File**: `lib/services/routing_service.dart`
+**Pattern**: Offline A* routing engine. Downloads OSM road network via station-first/internet-fallback, caches locally, performs on-device pathfinding.
+
+```dart
+// Download road data for offline use
+await RoutingService().downloadRoadData(lat: 38.7, lon: -9.1, radiusKm: 30);
+
+// Calculate a route
+final result = await RoutingService().getRoute(
+  fromLat: 38.72, fromLon: -9.14,
+  toLat: 38.75, toLon: -9.10,
+  mode: TravelMode.driving,
+);
+// result.points (List<LatLng>), result.distanceMeters, result.durationSeconds
+```
+
+---
+
+## RoadHandler
+
+**File**: `lib/server/handlers/road_handler.dart`
+**Pattern**: Station endpoint for road data. Fetches from Overpass API, caches on disk, serves to clients.
+
+Endpoint: `GET /api/roads?south=X&west=X&north=X&east=X`
+
+---
+
+## launchExternalNavigator
+
+**File**: `lib/util/navigator_launcher.dart`
+**Pattern**: Shared utility for opening external map/navigation apps. Handles Android (geo: intent), iOS (Apple Maps), and desktop/web (OpenStreetMap).
+
+```dart
+await launchExternalNavigator(38.72, -9.14);
+```
+
+---
+
+## MapTileService.getStationBaseUrl
+
+**File**: `lib/services/map_tile_service.dart`
+**Pattern**: Returns station HTTP base URL (no trailing slash, no tile path). Handles ws->http conversion and local-only detection. Reusable for tiles, road data, and other station endpoints.
+
+```dart
+final baseUrl = MapTileService().getStationBaseUrl();
+// e.g. "http://192.168.1.100:8080"
 ```

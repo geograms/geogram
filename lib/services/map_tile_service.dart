@@ -19,6 +19,7 @@ import 'station_service.dart';
 import 'log_service.dart';
 import 'config_service.dart';
 import 'network_monitor_service.dart';
+import 'routing_service.dart';
 
 /// Map layer types
 enum MapLayerType {
@@ -466,6 +467,37 @@ class MapTileService {
     return null;
   }
 
+  /// Get the station's HTTP base URL (no trailing slash, no tile path).
+  /// Reusable for both tiles and road data endpoints.
+  String? getStationBaseUrl() {
+    try {
+      final station = StationService().getPreferredStation();
+      if (station == null || station.url.isEmpty) return null;
+
+      var stationUrl = station.url;
+      if (stationUrl.startsWith('ws://')) {
+        stationUrl = stationUrl.replaceFirst('ws://', 'http://');
+      } else if (stationUrl.startsWith('wss://')) {
+        stationUrl = stationUrl.replaceFirst('wss://', 'https://');
+      }
+      if (stationUrl.endsWith('/')) {
+        stationUrl = stationUrl.substring(0, stationUrl.length - 1);
+      }
+
+      if (!canUseInternet) {
+        final parsed = Uri.tryParse(stationUrl);
+        final host = parsed?.host ?? '';
+        if (host.isEmpty || !_isLikelyLocalHost(host)) {
+          return null;
+        }
+      }
+
+      return stationUrl;
+    } catch (e) {
+      return null;
+    }
+  }
+
   bool _isLikelyLocalHost(String host) {
     final lowerHost = host.toLowerCase();
     if (lowerHost == 'localhost' || lowerHost == '::1') return true;
@@ -869,6 +901,17 @@ class MapTileService {
           lat: lat,
           lng: lng,
         );
+
+        // Download road network data for offline routing
+        try {
+          await RoutingService().downloadRoadData(
+            lat: lat,
+            lon: lng,
+            radiusKm: _offlineCacheRadiusKmStandard.clamp(10, 50),
+          );
+        } catch (e) {
+          LogService().log('MapTileService: Road data download failed: $e');
+        }
 
         ConfigService().set('offlineMapPreDownloaded', true);
         LogService().log('MapTileService: Offline cache updated ($totalDownloaded tiles)');

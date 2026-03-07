@@ -7,6 +7,7 @@ import 'dart:io' show Platform;
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:url_launcher/url_launcher.dart';
+import '../util/navigator_launcher.dart';
 import '../models/news_article.dart';
 import '../models/app.dart';
 import '../services/app_service.dart';
@@ -672,21 +673,7 @@ class _NewsBrowserPageState extends State<NewsBrowserPage> {
 
   Future<void> _openInNavigator(double latitude, double longitude) async {
     try {
-      Uri mapUri;
-
-      if (!kIsWeb && Platform.isAndroid) {
-        // Android: canLaunchUrl often returns false for geo: URIs even when they work
-        mapUri = Uri.parse('geo:$latitude,$longitude?q=$latitude,$longitude');
-        await launchUrl(mapUri);
-      } else if (!kIsWeb && Platform.isIOS) {
-        mapUri = Uri.parse('https://maps.apple.com/?q=$latitude,$longitude');
-        await launchUrl(mapUri);
-      } else {
-        mapUri = Uri.parse('https://www.openstreetmap.org/?mlat=$latitude&mlon=$longitude&zoom=15');
-        if (await canLaunchUrl(mapUri)) {
-          await launchUrl(mapUri, mode: LaunchMode.externalApplication);
-        }
-      }
+      await launchExternalNavigator(latitude, longitude);
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -790,22 +777,7 @@ class _NewsArticleDetailPageState extends State<_NewsArticleDetailPage> {
   }
 
   Future<void> _openInNavigator(double latitude, double longitude) async {
-    Uri mapUri;
-    if (!kIsWeb && Platform.isAndroid) {
-      // Android: canLaunchUrl often returns false for geo: URIs even when they work
-      mapUri = Uri.parse('geo:$latitude,$longitude?q=$latitude,$longitude');
-      await launchUrl(mapUri);
-    } else if (!kIsWeb && Platform.isIOS) {
-      // iOS: Use Apple Maps
-      mapUri = Uri.parse('https://maps.apple.com/?q=$latitude,$longitude');
-      await launchUrl(mapUri);
-    } else {
-      // Desktop/Web: Use OpenStreetMap
-      mapUri = Uri.parse('https://www.openstreetmap.org/?mlat=$latitude&mlon=$longitude&zoom=15');
-      if (await canLaunchUrl(mapUri)) {
-        await launchUrl(mapUri);
-      }
-    }
+    await launchExternalNavigator(latitude, longitude);
   }
 
   @override

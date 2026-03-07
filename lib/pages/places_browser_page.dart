@@ -11,6 +11,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:url_launcher/url_launcher.dart';
 import 'package:path/path.dart' as path;
 import '../models/place.dart';
+import '../util/navigator_launcher.dart';
 import '../services/app_service.dart';
 import '../services/config_service.dart';
 import '../services/place_service.dart';
@@ -1408,25 +1409,8 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
 
   Future<void> _openInNavigator(Place place) async {
     try {
-      Uri mapUri;
-
-      if (!kIsWeb && Platform.isAndroid) {
-        // Android: canLaunchUrl often returns false for geo: URIs even when they work
-        mapUri = Uri.parse('geo:${place.latitude},${place.longitude}?q=${place.latitude},${place.longitude}');
-        await launchUrl(mapUri);
-      } else if (!kIsWeb && Platform.isIOS) {
-        // iOS: Use Apple Maps URL scheme
-        mapUri = Uri.parse('https://maps.apple.com/?q=${place.latitude},${place.longitude}');
-        await launchUrl(mapUri);
-      } else {
-        // Desktop/Web: Use OpenStreetMap
-        mapUri = Uri.parse('https://www.openstreetmap.org/?mlat=${place.latitude}&mlon=${place.longitude}&zoom=15');
-        if (await canLaunchUrl(mapUri)) {
-          await launchUrl(mapUri, mode: LaunchMode.externalApplication);
-        }
-      }
+      await launchExternalNavigator(place.latitude, place.longitude);
     } catch (e) {
-      LogService().log('PlacesBrowserPage: Error opening navigator: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Could not open navigator: $e')),
@@ -1699,26 +1683,8 @@ class _PlaceDetailPageState extends State<_PlaceDetailPage> {
 
   Future<void> _openInNavigator() async {
     try {
-      Uri mapUri;
-      final place = widget.place;
-
-      if (!kIsWeb && Platform.isAndroid) {
-        // Android: canLaunchUrl often returns false for geo: URIs even when they work
-        mapUri = Uri.parse('geo:${place.latitude},${place.longitude}?q=${place.latitude},${place.longitude}');
-        await launchUrl(mapUri);
-      } else if (!kIsWeb && Platform.isIOS) {
-        // iOS: Use Apple Maps URL scheme
-        mapUri = Uri.parse('https://maps.apple.com/?q=${place.latitude},${place.longitude}');
-        await launchUrl(mapUri);
-      } else {
-        // Desktop/Web: Use OpenStreetMap
-        mapUri = Uri.parse('https://www.openstreetmap.org/?mlat=${place.latitude}&mlon=${place.longitude}&zoom=15');
-        if (await canLaunchUrl(mapUri)) {
-          await launchUrl(mapUri, mode: LaunchMode.externalApplication);
-        }
-      }
+      await launchExternalNavigator(widget.place.latitude, widget.place.longitude);
     } catch (e) {
-      LogService().log('PlaceDetailPage: Error opening navigator: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Could not open navigator: $e')),

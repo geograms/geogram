@@ -31,6 +31,7 @@ import '../services/station_service.dart';
 import '../services/station_alert_service.dart';
 import '../services/app_service.dart';
 import '../services/websocket_service.dart';
+import '../services/routing_service.dart';
 import 'report_detail_page.dart';
 import 'place_detail_page.dart';
 import 'event_detail_page.dart';
@@ -77,6 +78,13 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
   double _currentRotation = 0.0;
   bool _awaitingProfileLocation = false;
   bool _hasUserMoved = false;
+
+  // Navigation routing state
+  List<LatLng> _routePoints = [];
+  bool _isLoadingRoute = false;
+  TravelMode? _activeRouteMode;
+  double? _routeDistanceMeters;
+  double? _routeDurationSeconds;
 
   // Auto-refresh timer (every 5 minutes)
   Timer? _autoRefreshTimer;
@@ -1039,7 +1047,10 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
               setState(() => _mapReady = true);
             },
             onTap: (_, __) {
-              setState(() => _selectedItem = null);
+              setState(() {
+                _selectedItem = null;
+                _clearRoute();
+              });
             },
             onPositionChanged: (position, hasGesture) {
               // Update current zoom, position and rotation when user interacts
@@ -1162,6 +1173,22 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
                 ),
               ],
             ),
+
+            // Route polyline overlay
+            if (_routePoints.isNotEmpty)
+              PolylineLayer(
+                polylines: [
+                  Polyline(
+                    points: _routePoints,
+                    strokeWidth: 5,
+                    color: _activeRouteMode == TravelMode.walking
+                        ? Colors.green.withValues(alpha: 0.85)
+                        : Colors.blue.withValues(alpha: 0.85),
+                    borderStrokeWidth: 1,
+                    borderColor: Colors.black38,
+                  ),
+                ],
+              ),
 
             // Item markers with clustering (rendered before user marker so user marker is on top)
             MarkerClusterLayerWidget(
@@ -1635,6 +1662,110 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
     );
   }
 
+  // ============ Navigation Routing ============
+
+  void _clearRoute() {
+    _routePoints = [];
+    _activeRouteMode = null;
+    _routeDistanceMeters = null;
+    _routeDurationSeconds = null;
+    _isLoadingRoute = false;
+  }
+
+  Future<void> _navigateTo(MapItem item, TravelMode mode) async {
+    if (_centerPosition == null || _isLoadingRoute) return;
+
+    if (!RoutingService().hasRoadData) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(_i18n.t('no_road_data')),
+            action: SnackBarAction(
+              label: _i18n.t('settings'),
+              onPressed: () {
+                Navigator.push(context,
+                    MaterialPageRoute(builder: (_) => const MapCacheSettingsPage()));
+              },
+            ),
+          ),
+        );
+      }
+      return;
+    }
+
+    setState(() {
+      _isLoadingRoute = true;
+      _activeRouteMode = mode;
+    });
+
+    try {
+      final result = await RoutingService().getRoute(
+        fromLat: _centerPosition!.latitude,
+        fromLon: _centerPosition!.longitude,
+        toLat: item.latitude,
+        toLon: item.longitude,
+        mode: mode,
+      );
+
+      if (mounted) {
+        setState(() {
+          _routePoints = result.points;
+          _routeDistanceMeters = result.distanceMeters;
+          _routeDurationSeconds = result.durationSeconds;
+          _isLoadingRoute = false;
+        });
+
+        // Fit camera to show entire route
+        if (result.points.length >= 2) {
+          double minLat = double.infinity, maxLat = -double.infinity;
+          double minLon = double.infinity, maxLon = -double.infinity;
+          for (final p in result.points) {
+            if (p.latitude < minLat) minLat = p.latitude;
+            if (p.latitude > maxLat) maxLat = p.latitude;
+            if (p.longitude < minLon) minLon = p.longitude;
+            if (p.longitude > maxLon) maxLon = p.longitude;
+          }
+          final bounds = LatLngBounds(
+            LatLng(minLat, minLon),
+            LatLng(maxLat, maxLon),
+          );
+          _mapController.fitCamera(
+            CameraFit.bounds(
+              bounds: bounds,
+              padding: const EdgeInsets.all(60),
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _isLoadingRoute = false;
+          _clearRoute();
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('${_i18n.t('route_error')}: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  String _formatDuration(double seconds) {
+    final totalMinutes = (seconds / 60).round();
+    if (totalMinutes < 60) return '$totalMinutes min';
+    final hours = totalMinutes ~/ 60;
+    final minutes = totalMinutes % 60;
+    return '${hours}h ${minutes}m';
+  }
+
+  String _formatRouteDistance(double meters) {
+    if (meters < 1000) return '${meters.round()} m';
+    return '${(meters / 1000).toStringAsFixed(1)} km';
+  }
+
   Widget _buildDetailPanel() {
     final item = _selectedItem!;
 
@@ -1757,12 +1888,117 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
             ),
           ),
 
+          // Navigation controls
+          if (_isLoadingRoute)
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 8),
+              child: SizedBox(
+                width: 24,
+                height: 24,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            )
+          else if (_routePoints.isNotEmpty && _routeDistanceMeters != null)
+            // Active route: show info + toggle + clear
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: (_activeRouteMode == TravelMode.walking
+                            ? Colors.green
+                            : Colors.blue)
+                        .withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        _activeRouteMode == TravelMode.walking
+                            ? Icons.directions_walk
+                            : Icons.directions_car,
+                        size: 16,
+                        color: _activeRouteMode == TravelMode.walking
+                            ? Colors.green
+                            : Colors.blue,
+                      ),
+                      const SizedBox(width: 4),
+                      Text(
+                        '${_formatRouteDistance(_routeDistanceMeters!)} - ${_formatDuration(_routeDurationSeconds!)}',
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                              fontWeight: FontWeight.bold,
+                            ),
+                      ),
+                    ],
+                  ),
+                ),
+                IconButton(
+                  icon: Icon(
+                    _activeRouteMode == TravelMode.driving
+                        ? Icons.directions_walk
+                        : Icons.directions_car,
+                    size: 20,
+                  ),
+                  onPressed: () => _navigateTo(
+                    item,
+                    _activeRouteMode == TravelMode.driving
+                        ? TravelMode.walking
+                        : TravelMode.driving,
+                  ),
+                  tooltip: _activeRouteMode == TravelMode.driving
+                      ? _i18n.t('walking')
+                      : _i18n.t('driving'),
+                  visualDensity: VisualDensity.compact,
+                ),
+                IconButton(
+                  icon: const Icon(Icons.close, size: 20),
+                  onPressed: () => setState(() => _clearRoute()),
+                  tooltip: _i18n.t('close'),
+                  visualDensity: VisualDensity.compact,
+                ),
+              ],
+            )
+          else
+            // No route: show directions button
+            PopupMenuButton<TravelMode>(
+              icon: const Icon(Icons.directions),
+              tooltip: _i18n.t('navigate'),
+              onSelected: (mode) => _navigateTo(item, mode),
+              itemBuilder: (context) => [
+                PopupMenuItem(
+                  value: TravelMode.driving,
+                  child: Row(
+                    children: [
+                      const Icon(Icons.directions_car),
+                      const SizedBox(width: 8),
+                      Text(_i18n.t('driving')),
+                    ],
+                  ),
+                ),
+                PopupMenuItem(
+                  value: TravelMode.walking,
+                  child: Row(
+                    children: [
+                      const Icon(Icons.directions_walk),
+                      const SizedBox(width: 8),
+                      Text(_i18n.t('walking')),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+
           // Close button
           Padding(
             padding: const EdgeInsets.only(right: 8),
             child: IconButton(
               icon: const Icon(Icons.close),
-              onPressed: () => setState(() => _selectedItem = null),
+              onPressed: () => setState(() {
+                _selectedItem = null;
+                _clearRoute();
+              }),
               tooltip: _i18n.t('close'),
             ),
           ),

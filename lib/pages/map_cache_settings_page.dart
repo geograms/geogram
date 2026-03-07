@@ -11,6 +11,7 @@ import 'package:geolocator/geolocator.dart';
 import '../services/config_service.dart';
 import '../services/i18n_service.dart';
 import '../services/map_tile_service.dart';
+import '../services/routing_service.dart';
 import '../util/geolocation_utils.dart';
 
 /// Settings page for map tile cache configuration
@@ -25,6 +26,7 @@ class _MapCacheSettingsPageState extends State<MapCacheSettingsPage> {
   final I18nService _i18n = I18nService();
   final ConfigService _configService = ConfigService();
   final MapTileService _mapTileService = MapTileService();
+  final RoutingService _routingService = RoutingService();
 
   // Satellite settings
   double _satelliteRadiusKm = 100;
@@ -41,11 +43,17 @@ class _MapCacheSettingsPageState extends State<MapCacheSettingsPage> {
   int _cacheSize = 0;
   int _tileCount = 0;
 
+  // Road data info
+  int _roadDataSize = 0;
+  bool _hasRoadData = false;
+  bool _isDownloadingRoads = false;
+
   @override
   void initState() {
     super.initState();
     _loadSettings();
     _loadCachedInfoThenRefresh();
+    _loadRoadDataInfo();
     // Listen to download progress from the service
     _mapTileService.downloadProgressNotifier.addListener(_onDownloadProgress);
   }
@@ -174,6 +182,66 @@ class _MapCacheSettingsPageState extends State<MapCacheSettingsPage> {
       // Fall through to return null
     }
     return null;
+  }
+
+  Future<void> _loadRoadDataInfo() async {
+    final hasData = _routingService.hasRoadData;
+    final size = await _routingService.getRoadDataSizeBytes();
+    if (mounted) {
+      setState(() {
+        _hasRoadData = hasData;
+        _roadDataSize = size;
+      });
+    }
+  }
+
+  Future<void> _downloadRoadData() async {
+    if (_isDownloadingRoads) return;
+
+    final position = await _getCurrentPosition();
+    if (position == null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(_i18n.t('location_required')),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+      return;
+    }
+
+    setState(() => _isDownloadingRoads = true);
+
+    try {
+      await _routingService.downloadRoadData(
+        lat: position.latitude,
+        lon: position.longitude,
+        radiusKm: 30,
+      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(_i18n.t('road_data_downloaded')),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('${_i18n.t('route_error')}: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isDownloadingRoads = false);
+        _loadRoadDataInfo();
+      }
+    }
   }
 
   Future<void> _startDownload() async {
@@ -331,6 +399,17 @@ class _MapCacheSettingsPageState extends State<MapCacheSettingsPage> {
 
           const SizedBox(height: 24),
 
+          // Road Data Section
+          _buildSectionHeader(
+            theme,
+            _i18n.t('road_data'),
+            Icons.route,
+          ),
+          const SizedBox(height: 12),
+          _buildRoadDataCard(theme),
+
+          const SizedBox(height: 24),
+
           // Cache Info Card
           _buildCacheInfoCard(theme),
 
@@ -367,6 +446,75 @@ class _MapCacheSettingsPageState extends State<MapCacheSettingsPage> {
             },
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildRoadDataCard(ThemeData theme) {
+    final info = _routingService.getRoadDataInfo();
+    final lastDownloaded = info['lastDownloaded'] as String?;
+    final radiusKm = info['radiusKm'] as double?;
+
+    String statusText;
+    if (_hasRoadData && lastDownloaded != null) {
+      final dt = DateTime.tryParse(lastDownloaded);
+      final dateStr = dt != null
+          ? '${dt.day}/${dt.month}/${dt.year}'
+          : lastDownloaded;
+      statusText = '${radiusKm?.round() ?? '?'} km - $dateStr';
+    } else {
+      statusText = _i18n.t('no_road_data');
+    }
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        statusText,
+                        style: theme.textTheme.bodyLarge,
+                      ),
+                      if (_hasRoadData) ...[
+                        const SizedBox(height: 4),
+                        Text(
+                          _formatBytes(_roadDataSize),
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+                if (_hasRoadData)
+                  Icon(Icons.check_circle, color: Colors.green, size: 24),
+              ],
+            ),
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: _isDownloadingRoads ? null : _downloadRoadData,
+                icon: _isDownloadingRoads
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.download),
+                label: Text(_i18n.t('download_road_data')),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

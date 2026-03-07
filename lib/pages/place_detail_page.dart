@@ -16,6 +16,7 @@ import '../services/profile_service.dart';
 import '../services/i18n_service.dart';
 import '../services/log_service.dart';
 import '../platform/file_image_helper.dart' as file_helper;
+import '../util/navigator_launcher.dart';
 import 'add_edit_place_page.dart';
 import 'location_picker_page.dart';
 import 'photo_viewer_page.dart';
@@ -268,22 +269,8 @@ class _PlaceDetailPageState extends State<PlaceDetailPage> {
 
   Future<void> _openInNavigator() async {
     try {
-      Uri mapUri;
-
-      if (!kIsWeb && Platform.isAndroid) {
-        mapUri = Uri.parse('geo:${_place.latitude},${_place.longitude}?q=${_place.latitude},${_place.longitude}');
-        await launchUrl(mapUri);
-      } else if (!kIsWeb && Platform.isIOS) {
-        mapUri = Uri.parse('https://maps.apple.com/?q=${_place.latitude},${_place.longitude}');
-        await launchUrl(mapUri);
-      } else {
-        mapUri = Uri.parse('https://www.openstreetmap.org/?mlat=${_place.latitude}&mlon=${_place.longitude}&zoom=15');
-        if (await canLaunchUrl(mapUri)) {
-          await launchUrl(mapUri, mode: LaunchMode.externalApplication);
-        }
-      }
+      await launchExternalNavigator(_place.latitude, _place.longitude);
     } catch (e) {
-      LogService().log('PlaceDetailPage: Error opening navigator: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Could not open navigator: $e')),

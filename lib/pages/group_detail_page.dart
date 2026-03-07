@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:latlong2/latlong.dart';
 import 'package:url_launcher/url_launcher.dart';
+import '../util/navigator_launcher.dart';
 import '../models/group.dart';
 import '../models/group_member.dart';
 import '../models/group_area.dart';
@@ -234,22 +235,7 @@ class _GroupDetailPageState extends State<GroupDetailPage> with SingleTickerProv
   }
 
   Future<void> _openInNavigator(double latitude, double longitude) async {
-    Uri mapUri;
-    if (!kIsWeb && Platform.isAndroid) {
-      // Android: canLaunchUrl often returns false for geo: URIs even when they work
-      mapUri = Uri.parse('geo:$latitude,$longitude?q=$latitude,$longitude');
-      await launchUrl(mapUri);
-    } else if (!kIsWeb && Platform.isIOS) {
-      // iOS: Use Apple Maps
-      mapUri = Uri.parse('https://maps.apple.com/?q=$latitude,$longitude');
-      await launchUrl(mapUri);
-    } else {
-      // Desktop/Web: Use OpenStreetMap
-      mapUri = Uri.parse('https://www.openstreetmap.org/?mlat=$latitude&mlon=$longitude&zoom=15');
-      if (await canLaunchUrl(mapUri)) {
-        await launchUrl(mapUri);
-      }
-    }
+    await launchExternalNavigator(latitude, longitude);
   }
 
   Future<void> _reviewApplication(GroupApplication application, bool approve) async {
