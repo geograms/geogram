@@ -166,22 +166,60 @@ class MangaChapter {
   /// - chapter-001.cbz -> 1.0
   /// - ch-1.5.cbz -> 1.5
   /// - vol-01-ch-010.cbz -> 10.0
+  /// - chapmanganato.to_Vol.1 Chapter 1_ To You, 2,000 Years From Now.cbz
   factory MangaChapter.fromFilename(String filename) {
     double? number;
     String? title;
     int? volume;
 
-    // Try to extract chapter number
+    // Strip .cbz extension for parsing
+    final baseName = filename.replaceAll(RegExp(r'\.cbz$', caseSensitive: false), '');
+
+    // Try Mangakakalot-style: site_Vol.N Chapter N_ Title
+    // Also handles: site_Chapter N_ Title (no volume)
+    final mangakakalotMatch = RegExp(
+      r'(?:.*?_)?Vol\.?\s*(\d+)\s+Chapter\s+(\d+(?:\.\d+)?)(?:[_:]\s*(.+))?',
+      caseSensitive: false,
+    ).firstMatch(baseName);
+    if (mangakakalotMatch != null) {
+      volume = int.tryParse(mangakakalotMatch.group(1)!);
+      number = double.tryParse(mangakakalotMatch.group(2)!);
+      title = mangakakalotMatch.group(3)?.trim();
+      return MangaChapter(
+        filename: filename,
+        number: number,
+        title: title,
+        volume: volume,
+      );
+    }
+
+    // Try: site_Chapter N_ Title (no volume)
+    final chapterTitleMatch = RegExp(
+      r'(?:.*?_)?Chapter\s+(\d+(?:\.\d+)?)(?:[_:]\s*(.+))?',
+      caseSensitive: false,
+    ).firstMatch(baseName);
+    if (chapterTitleMatch != null) {
+      number = double.tryParse(chapterTitleMatch.group(1)!);
+      title = chapterTitleMatch.group(2)?.trim();
+      return MangaChapter(
+        filename: filename,
+        number: number,
+        title: title,
+        volume: volume,
+      );
+    }
+
+    // Try to extract chapter number (original patterns)
     final chapterMatch = RegExp(r'(?:ch(?:apter)?[-_]?)(\d+(?:\.\d+)?)',
             caseSensitive: false)
-        .firstMatch(filename);
+        .firstMatch(baseName);
     if (chapterMatch != null) {
       number = double.tryParse(chapterMatch.group(1)!);
     }
 
     // Try to extract volume
     final volumeMatch =
-        RegExp(r'vol(?:ume)?[-_]?(\d+)', caseSensitive: false).firstMatch(filename);
+        RegExp(r'vol(?:ume)?[-_.]?(\d+)', caseSensitive: false).firstMatch(baseName);
     if (volumeMatch != null) {
       volume = int.tryParse(volumeMatch.group(1)!);
     }
