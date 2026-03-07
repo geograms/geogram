@@ -840,8 +840,8 @@ class AprsService {
       }
       _uiDirtyMessages = true;
 
-      // Fire NowItemEvent for incoming APRS messages (not outgoing, not ACK/REJ)
-      if (!packet.isOutgoing) {
+      // Fire NowItemEvent only for messages addressed directly to us
+      if (!packet.isOutgoing && isAddressedToUs) {
         final sourceId = packet.isTagMessage
             ? packet.messageTag!
             : packet.fromCallsign;
@@ -893,18 +893,8 @@ class AprsService {
         }
         _uiDirtyMessages = true;
 
-        // Fire NowItemEvent for incoming geo-chat
-        if (!packet.isOutgoing) {
-          EventBus().fire(NowItemEvent(
-            id: 'aprs:geo:${packet.fromCallsign}:${packet.timestamp.millisecondsSinceEpoch}',
-            appType: 'aprs',
-            sourceId: 'geochat',
-            sourceName: 'APRS Geo Chat',
-            callsign: packet.fromCallsign,
-            summary: packet.comment ?? '',
-            priority: NowPriority.chat,
-          ));
-        }
+        // Geo-chat messages are broadcast position comments — don't push
+        // them to the Now panel. They remain visible in the Geo Chat tab.
       }
     }
   }
