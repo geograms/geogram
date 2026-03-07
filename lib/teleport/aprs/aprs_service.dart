@@ -894,19 +894,7 @@ class AprsService {
         }
         _uiDirtyMessages = true;
 
-        // Push human geochat to the Now panel (beacons already filtered
-        // by isHumanGeoChat, duplicates filtered by dedup above).
-        if (!packet.isOutgoing) {
-          EventBus().fire(NowItemEvent(
-            id: 'aprs:geo:${packet.fromCallsign}:${packet.timestamp.millisecondsSinceEpoch}',
-            appType: 'aprs',
-            sourceId: 'geochat',
-            sourceName: 'APRS Geo Chat',
-            callsign: packet.fromCallsign,
-            summary: packet.comment ?? '',
-            priority: NowPriority.chat,
-          ));
-        }
+        // Geochat lives in the Geo Chat tab only — no Now panel cards.
       }
     }
   }
