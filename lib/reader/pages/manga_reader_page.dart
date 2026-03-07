@@ -42,7 +42,7 @@ class _MangaReaderPageState extends State<MangaReaderPage> {
   int _currentPage = 0;
   bool _loading = true;
   bool _showControls = true;
-  bool _isWebtoonMode = false;
+  bool _isWebtoonMode = true;
 
   final PageController _pageController = PageController();
   final ScrollController _scrollController = ScrollController();
