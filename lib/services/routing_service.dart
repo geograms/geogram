@@ -116,6 +116,22 @@ class RoutingService {
   _RoadGraph? _cachedGraph;
   bool _isDownloading = false;
 
+  /// Active route state — persists across tab changes
+  RouteResult? activeRoute;
+  TravelMode? activeRouteMode;
+  LatLng? activeRouteFrom;
+  LatLng? activeRouteTo;
+  bool routeVisible = true;
+
+  /// Clear the active route
+  void clearActiveRoute() {
+    activeRoute = null;
+    activeRouteMode = null;
+    activeRouteFrom = null;
+    activeRouteTo = null;
+    routeVisible = true;
+  }
+
   static const String _configRoot = 'roadDataCache';
 
   /// Whether road data is available locally
