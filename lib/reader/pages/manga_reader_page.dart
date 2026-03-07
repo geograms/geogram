@@ -55,6 +55,7 @@ class _MangaReaderPageState extends State<MangaReaderPage> {
   final PageController _pageController = PageController();
   final ScrollController _scrollController = ScrollController();
   final TransformationController _transformController = TransformationController();
+  final FocusNode _focusNode = FocusNode();
 
   @override
   void initState() {
@@ -68,6 +69,7 @@ class _MangaReaderPageState extends State<MangaReaderPage> {
     _pageController.dispose();
     _scrollController.dispose();
     _transformController.dispose();
+    _focusNode.dispose();
     _exitFullScreen();
     super.dispose();
   }
@@ -248,7 +250,16 @@ class _MangaReaderPageState extends State<MangaReaderPage> {
       );
     }
 
-    return Scaffold(
+    return KeyboardListener(
+      focusNode: _focusNode,
+      autofocus: true,
+      onKeyEvent: (event) {
+        if (event is KeyDownEvent &&
+            event.logicalKey == LogicalKeyboardKey.escape) {
+          Navigator.of(context).pop();
+        }
+      },
+      child: Scaffold(
       backgroundColor: Colors.black,
       body: Stack(
         children: [
@@ -433,6 +444,7 @@ class _MangaReaderPageState extends State<MangaReaderPage> {
           ],
         ],
       ),
+    ),
     );
   }
 
