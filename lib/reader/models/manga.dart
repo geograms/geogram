@@ -313,12 +313,24 @@ class SeriesMeta {
   String? thumbnail;
   final Map<String, ChapterReadState> chapters;
 
+  // Extension-related fields (auto-detected, cached)
+  String? extensionId;
+  String? sourceMangaId;
+  DateTime? lastChecked;
+  int? cachedRemoteChapters;
+  List<String>? cachedMissingChapterIds;
+
   SeriesMeta({
     this.title = '',
     this.description = '',
     List<String>? tags,
     this.thumbnail,
     Map<String, ChapterReadState>? chapters,
+    this.extensionId,
+    this.sourceMangaId,
+    this.lastChecked,
+    this.cachedRemoteChapters,
+    this.cachedMissingChapterIds,
   })  : tags = tags ?? [],
         chapters = chapters ?? {};
 
@@ -336,6 +348,16 @@ class SeriesMeta {
                 k, ChapterReadState.fromJson(v as Map<String, dynamic>)),
           ) ??
           {},
+      extensionId: json['extension_id'] as String?,
+      sourceMangaId: json['source_manga_id'] as String?,
+      lastChecked: json['last_checked'] != null
+          ? DateTime.tryParse(json['last_checked'] as String)
+          : null,
+      cachedRemoteChapters: json['cached_remote_chapters'] as int?,
+      cachedMissingChapterIds:
+          (json['cached_missing_chapter_ids'] as List<dynamic>?)
+              ?.map((e) => e as String)
+              .toList(),
     );
   }
 
@@ -346,6 +368,13 @@ class SeriesMeta {
       'tags': tags,
       if (thumbnail != null) 'thumbnail': thumbnail,
       'chapters': chapters.map((k, v) => MapEntry(k, v.toJson())),
+      if (extensionId != null) 'extension_id': extensionId,
+      if (sourceMangaId != null) 'source_manga_id': sourceMangaId,
+      if (lastChecked != null) 'last_checked': lastChecked!.toIso8601String(),
+      if (cachedRemoteChapters != null)
+        'cached_remote_chapters': cachedRemoteChapters,
+      if (cachedMissingChapterIds != null)
+        'cached_missing_chapter_ids': cachedMissingChapterIds,
     };
   }
 

@@ -81,6 +81,16 @@ class ReaderPathUtils {
           String basePath, String sourceId, String mangaSlug) =>
       '${mangaSeriesDir(basePath, sourceId, mangaSlug)}/thumbnail.jpg';
 
+  // ============ Extensions Paths ============
+
+  /// Get the manga extensions directory (global, not per-series)
+  static String extensionsDir(String basePath) =>
+      '$basePath/manga/extensions';
+
+  /// Get a specific extension directory
+  static String extensionDir(String basePath, String extensionId) =>
+      '${extensionsDir(basePath)}/$extensionId';
+
   // ============ Books Paths ============
 
   /// Get the books category directory

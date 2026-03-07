@@ -3,16 +3,20 @@
  * License: Apache-2.0
  */
 
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
 
 import '../models/reader_models.dart';
+import '../services/manga_download_service.dart';
+import '../services/manga_extension_service.dart';
 import '../services/reader_service.dart';
 import '../services/reader_storage_service.dart';
 import '../utils/reader_path_utils.dart';
 import 'manga_folder_browser_page.dart';
 import 'manga_series_page.dart';
+import 'manga_settings_page.dart';
 import '../../services/i18n_service.dart';
 
 /// Page showing list of manga sources
@@ -114,6 +118,36 @@ class _MangaSourcesPageState extends State<MangaSourcesPage> {
     }
   }
 
+  void _searchForUpdates() async {
+    final extService = MangaExtensionService();
+    if (!extService.isInitialized) {
+      final extensionsDir =
+          ReaderPathUtils.extensionsDir(widget.appPath);
+      await extService.initialize(extensionsDir);
+    }
+
+    if (extService.extensions.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+              content:
+                  Text('No extensions installed. Add one in Settings.')),
+        );
+      }
+      return;
+    }
+
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => _UpdateCheckDialog(
+        sources: _sources,
+        extensionService: extService,
+      ),
+    );
+  }
+
   void _addSource() {
     showDialog(
       context: context,
@@ -188,6 +222,29 @@ class _MangaSourcesPageState extends State<MangaSourcesPage> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Manga'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.update),
+            tooltip: 'Search for updates',
+            onPressed: _searchForUpdates,
+          ),
+          IconButton(
+            icon: const Icon(Icons.settings),
+            tooltip: 'Manga settings',
+            onPressed: () {
+              Navigator.of(context)
+                  .push(
+                MaterialPageRoute(
+                  builder: (_) => MangaSettingsPage(
+                    appPath: widget.appPath,
+                    i18n: widget.i18n,
+                  ),
+                ),
+              )
+                  .then((_) => _loadSources());
+            },
+          ),
+        ],
       ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
@@ -351,4 +408,218 @@ class _AddLocalSourceDialogState extends State<_AddLocalSourceDialog> {
       ],
     );
   }
+}
+
+/// Dialog that scans all series for updates
+class _UpdateCheckDialog extends StatefulWidget {
+  final List<Source> sources;
+  final MangaExtensionService extensionService;
+
+  const _UpdateCheckDialog({
+    required this.sources,
+    required this.extensionService,
+  });
+
+  @override
+  State<_UpdateCheckDialog> createState() => _UpdateCheckDialogState();
+}
+
+class _UpdateCheckDialogState extends State<_UpdateCheckDialog> {
+  String _status = 'Scanning series folders...';
+  final _results = <_UpdateResult>[];
+  bool _scanning = true;
+  bool _downloading = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _scan();
+  }
+
+  Future<void> _scan() async {
+    final downloadService = MangaDownloadService();
+
+    for (final source in widget.sources) {
+      if (!source.isLocal || source.url == null) continue;
+
+      final dir = Directory(source.url!);
+      if (!await dir.exists()) continue;
+
+      // Scan series subdirectories
+      await for (final entity in dir.list()) {
+        if (entity is! Directory) continue;
+        final seriesDir = entity.path;
+        final folderName = seriesDir.split('/').last;
+        if (folderName.startsWith('.')) continue;
+
+        // Check if this series has a cached extension match
+        final metaFile = File('$seriesDir/manga_meta.json');
+        String? extensionId;
+        String? sourceMangaId;
+
+        if (await metaFile.exists()) {
+          try {
+            final json = await metaFile.readAsString();
+            final meta =
+                Map<String, dynamic>.from(
+                    await Future.value(_parseJson(json)));
+            extensionId = meta['extension_id'] as String?;
+            sourceMangaId = meta['source_manga_id'] as String?;
+          } catch (_) {}
+        }
+
+        if (extensionId == null || sourceMangaId == null) {
+          // Try auto-matching
+          if (mounted) {
+            setState(() => _status = 'Searching: $folderName...');
+          }
+          final match = await downloadService.autoMatch(seriesDir);
+          if (match != null) {
+            extensionId = match.extensionId;
+            sourceMangaId = match.result.id;
+          }
+        }
+
+        if (extensionId == null || sourceMangaId == null) continue;
+
+        // Check for missing chapters
+        if (mounted) {
+          setState(() => _status = 'Checking: $folderName...');
+        }
+
+        try {
+          final result = await downloadService.findMissingChapters(
+            seriesDir: seriesDir,
+            extensionId: extensionId,
+            sourceMangaId: sourceMangaId,
+          );
+
+          if (result.missing.isNotEmpty) {
+            _results.add(_UpdateResult(
+              seriesDir: seriesDir,
+              folderName: folderName,
+              extensionId: extensionId,
+              sourceMangaId: sourceMangaId,
+              missingCount: result.missing.length,
+              chapters: result.missing,
+            ));
+            if (mounted) setState(() {});
+          }
+        } catch (e) {
+          // Skip series that fail
+        }
+      }
+    }
+
+    if (mounted) {
+      setState(() {
+        _scanning = false;
+        _status = _results.isEmpty
+            ? 'All series are up to date'
+            : '${_results.length} series have new chapters';
+      });
+    }
+  }
+
+  Map<String, dynamic> _parseJson(String json) {
+    return Map<String, dynamic>.from(
+      const JsonDecoder().convert(json) as Map,
+    );
+  }
+
+  void _downloadAll() async {
+    setState(() => _downloading = true);
+    final downloadService = MangaDownloadService();
+
+    for (final result in _results) {
+      setState(() =>
+          _status = 'Downloading: ${result.folderName}...');
+      try {
+        for (final chapter in result.chapters) {
+          await downloadService.downloadChapter(
+            seriesDir: result.seriesDir,
+            extensionId: result.extensionId,
+            chapter: chapter,
+          );
+        }
+      } catch (e) {
+        // Continue with next series
+      }
+    }
+
+    if (mounted) {
+      setState(() {
+        _downloading = false;
+        _status = 'Downloads complete';
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Update Check'),
+      content: SizedBox(
+        width: 400,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (_scanning)
+              const LinearProgressIndicator()
+            else if (_downloading)
+              const LinearProgressIndicator(),
+            const SizedBox(height: 8),
+            Text(_status),
+            if (_results.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              ...(_results.length > 10 ? _results.take(10) : _results)
+                  .map((r) => Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 2),
+                        child: Text(
+                          '${r.folderName}: ${r.missingCount} new chapters',
+                          style: const TextStyle(fontSize: 13),
+                        ),
+                      )),
+              if (_results.length > 10)
+                Text('...and ${_results.length - 10} more',
+                    style: const TextStyle(
+                        fontSize: 13, fontStyle: FontStyle.italic)),
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: (_scanning || _downloading)
+              ? null
+              : () => Navigator.pop(context),
+          child: const Text('Close'),
+        ),
+        if (_results.isNotEmpty && !_scanning && !_downloading)
+          ElevatedButton(
+            onPressed: _downloadAll,
+            child: Text('Download all (${_results.fold<int>(0, (sum, r) => sum + r.missingCount)} chapters)'),
+          ),
+      ],
+    );
+  }
+}
+
+class _UpdateResult {
+  final String seriesDir;
+  final String folderName;
+  final String extensionId;
+  final String sourceMangaId;
+  final int missingCount;
+  final List<ChapterInfo> chapters;
+
+  _UpdateResult({
+    required this.seriesDir,
+    required this.folderName,
+    required this.extensionId,
+    required this.sourceMangaId,
+    required this.missingCount,
+    required this.chapters,
+  });
 }

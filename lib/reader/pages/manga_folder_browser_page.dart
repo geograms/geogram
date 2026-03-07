@@ -9,6 +9,8 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 
 import '../models/reader_models.dart';
+import '../services/manga_download_service.dart';
+import '../services/manga_extension_service.dart';
 import '../utils/reader_path_utils.dart';
 import 'manga_reader_page.dart';
 import '../../services/i18n_service.dart';
@@ -41,6 +43,11 @@ class _MangaFolderBrowserPageState extends State<MangaFolderBrowserPage> {
   SeriesMeta? _meta;
   bool _loading = true;
   bool _gridView = false;
+  int _missingChapters = 0;
+  bool _checkingUpdates = false;
+  bool _downloadingChapters = false;
+  String _downloadStatus = '';
+  List<ChapterInfo> _missingChapterList = [];
 
   @override
   void initState() {
@@ -244,6 +251,160 @@ class _MangaFolderBrowserPageState extends State<MangaFolderBrowserPage> {
     setState(() {});
   }
 
+  // ============ Extension Updates ============
+
+  void _searchForUpdates() async {
+    if (_checkingUpdates) return;
+    setState(() => _checkingUpdates = true);
+
+    try {
+      final extService = MangaExtensionService();
+      if (!extService.isInitialized) {
+        final extensionsDir =
+            ReaderPathUtils.extensionsDir(widget.appPath);
+        await extService.initialize(extensionsDir);
+      }
+
+      if (extService.extensions.isEmpty) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+                content:
+                    Text('No extensions installed. Add one in Settings.')),
+          );
+        }
+        setState(() => _checkingUpdates = false);
+        return;
+      }
+
+      final downloadService = MangaDownloadService();
+
+      // Check if we have a cached extension match
+      String? extensionId;
+      String? sourceMangaId;
+
+      final metaFile = File(_metaPath);
+      if (await metaFile.exists()) {
+        try {
+          final content = await metaFile.readAsString();
+          final json = jsonDecode(content) as Map<String, dynamic>;
+          extensionId = json['extension_id'] as String?;
+          sourceMangaId = json['source_manga_id'] as String?;
+        } catch (_) {}
+      }
+
+      // Auto-match if no cached match
+      if (extensionId == null || sourceMangaId == null) {
+        final match = await downloadService.autoMatch(_currentDir);
+        if (match != null) {
+          extensionId = match.extensionId;
+          sourceMangaId = match.result.id;
+        }
+      }
+
+      if (extensionId == null || sourceMangaId == null) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+                content: Text('No matching series found online')),
+          );
+        }
+        setState(() => _checkingUpdates = false);
+        return;
+      }
+
+      final result = await downloadService.findMissingChapters(
+        seriesDir: _currentDir,
+        extensionId: extensionId,
+        sourceMangaId: sourceMangaId,
+      );
+
+      if (mounted) {
+        setState(() {
+          _missingChapters = result.missing.length;
+          _missingChapterList = result.missing;
+          _checkingUpdates = false;
+        });
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(result.missing.isEmpty
+                ? 'All chapters up to date (${result.localCount}/${result.remoteCount})'
+                : '${result.missing.length} new chapters available'),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _checkingUpdates = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error checking updates: $e')),
+        );
+      }
+    }
+  }
+
+  void _downloadMissing() async {
+    if (_downloadingChapters || _missingChapterList.isEmpty) return;
+    setState(() {
+      _downloadingChapters = true;
+      _downloadStatus = 'Starting download...';
+    });
+
+    try {
+      // Read extension info from meta
+      final metaFile = File(_metaPath);
+      final content = await metaFile.readAsString();
+      final json = jsonDecode(content) as Map<String, dynamic>;
+      final extensionId = json['extension_id'] as String;
+
+      final downloadService = MangaDownloadService();
+
+      for (int i = 0; i < _missingChapterList.length; i++) {
+        final chapter = _missingChapterList[i];
+        if (mounted) {
+          setState(() {
+            _downloadStatus =
+                'Downloading ${i + 1}/${_missingChapterList.length}: '
+                '${chapter.title ?? "Chapter ${chapter.number}"}';
+          });
+        }
+
+        await downloadService.downloadChapter(
+          seriesDir: _currentDir,
+          extensionId: extensionId,
+          chapter: chapter,
+        );
+      }
+
+      if (mounted) {
+        setState(() {
+          _downloadingChapters = false;
+          _missingChapters = 0;
+          _missingChapterList = [];
+          _downloadStatus = '';
+        });
+        // Reload to show new files
+        await _loadContent();
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Downloads complete')),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _downloadingChapters = false;
+          _downloadStatus = '';
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Download error: $e')),
+        );
+      }
+    }
+  }
+
   // ============ Edit Metadata ============
 
   void _editSeriesInfo() {
@@ -289,8 +450,45 @@ class _MangaFolderBrowserPageState extends State<MangaFolderBrowserPage> {
               onSelected: (value) {
                 if (value == 'mark_all_read') _markAllRead();
                 if (value == 'mark_all_unread') _markAllUnread();
+                if (value == 'search_updates') _searchForUpdates();
+                if (value == 'download_missing') _downloadMissing();
               },
               itemBuilder: (context) => [
+                PopupMenuItem(
+                  value: 'search_updates',
+                  child: ListTile(
+                    leading: _checkingUpdates
+                        ? const SizedBox(
+                            width: 24,
+                            height: 24,
+                            child:
+                                CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.update),
+                    title: Text(_missingChapters > 0
+                        ? 'Search for updates ($_missingChapters new)'
+                        : 'Search for updates'),
+                    contentPadding: EdgeInsets.zero,
+                  ),
+                ),
+                if (_missingChapters > 0)
+                  PopupMenuItem(
+                    value: 'download_missing',
+                    child: ListTile(
+                      leading: _downloadingChapters
+                          ? const SizedBox(
+                              width: 24,
+                              height: 24,
+                              child: CircularProgressIndicator(
+                                  strokeWidth: 2),
+                            )
+                          : const Icon(Icons.download),
+                      title:
+                          Text('Download $_missingChapters chapters'),
+                      contentPadding: EdgeInsets.zero,
+                    ),
+                  ),
+                const PopupMenuDivider(),
                 const PopupMenuItem(
                   value: 'mark_all_read',
                   child: ListTile(
@@ -320,6 +518,19 @@ class _MangaFolderBrowserPageState extends State<MangaFolderBrowserPage> {
                   child: Column(
                     children: [
                       if (hasCbz && _meta != null) _buildSeriesHeader(theme),
+                      if (_downloadingChapters)
+                        Padding(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 16, vertical: 4),
+                          child: Column(
+                            children: [
+                              const LinearProgressIndicator(),
+                              const SizedBox(height: 4),
+                              Text(_downloadStatus,
+                                  style: theme.textTheme.bodySmall),
+                            ],
+                          ),
+                        ),
                       Expanded(
                         child:
                             _gridView ? _buildGridView() : _buildListView(),
