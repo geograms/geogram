@@ -1541,6 +1541,48 @@ curl -o tile.png "http://192.168.1.100:8080/tiles/STATION-42/10/512/384.png?laye
 
 ---
 
+### Road Data (Offline Navigation)
+
+#### GET /api/roads
+
+Returns cached OSM road network data for offline routing. The station fetches from Overpass API if not cached.
+
+**Query Parameters:**
+| Parameter | Description |
+|-----------|-------------|
+| `south` | Southern latitude of bounding box |
+| `west` | Western longitude of bounding box |
+| `north` | Northern latitude of bounding box |
+| `east` | Eastern longitude of bounding box |
+
+**Response (200 OK):** Overpass API JSON with nodes and ways.
+
+**Response (503):** OSM fallback disabled.
+
+**Example:**
+```bash
+# Get road data for Lisbon area
+curl "http://192.168.1.100:8080/api/roads?south=38.6&west=-9.3&north=38.8&east=-9.0"
+```
+
+#### Debug: Map Search
+
+Test the map search bar via the debug API:
+
+```bash
+# Search by place name
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action": "map_search", "query": "Lisbon"}'
+
+# Search by coordinates
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action": "map_search", "query": "38.72, -9.14"}'
+```
+
+---
+
 ### Chat
 
 #### GET /api/chat/rooms
