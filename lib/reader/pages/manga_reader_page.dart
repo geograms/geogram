@@ -47,9 +47,11 @@ class _MangaReaderPageState extends State<MangaReaderPage> {
   bool _loading = true;
   bool _showControls = true;
   bool _isWebtoonMode = true;
+  double _currentScale = 1.0;
 
   final PageController _pageController = PageController();
   final ScrollController _scrollController = ScrollController();
+  final TransformationController _transformController = TransformationController();
 
   @override
   void initState() {
@@ -62,6 +64,7 @@ class _MangaReaderPageState extends State<MangaReaderPage> {
   void dispose() {
     _pageController.dispose();
     _scrollController.dispose();
+    _transformController.dispose();
     _exitFullScreen();
     super.dispose();
   }
@@ -171,6 +174,24 @@ class _MangaReaderPageState extends State<MangaReaderPage> {
     _goToPage(_currentPage - 1);
   }
 
+  void _zoomIn() {
+    _setZoom((_currentScale * 1.25).clamp(1.0, 5.0));
+  }
+
+  void _zoomOut() {
+    _setZoom((_currentScale / 1.25).clamp(1.0, 5.0));
+  }
+
+  void _resetZoom() {
+    _setZoom(1.0);
+  }
+
+  void _setZoom(double scale) {
+    setState(() => _currentScale = scale);
+    final matrix = Matrix4.diagonal3Values(scale, scale, 1.0);
+    _transformController.value = matrix;
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_loading) {
@@ -224,6 +245,30 @@ class _MangaReaderPageState extends State<MangaReaderPage> {
                     elevation: 0,
                     title: Text(widget.chapter.displayName),
                     actions: [
+                      IconButton(
+                        icon: const Icon(Icons.zoom_out),
+                        onPressed: _currentScale > 1.0 ? _zoomOut : null,
+                        tooltip: 'Zoom out',
+                      ),
+                      if (_currentScale != 1.0)
+                        GestureDetector(
+                          onTap: _resetZoom,
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 4),
+                            child: Text(
+                              '${(_currentScale * 100).round()}%',
+                              style: const TextStyle(
+                                color: Colors.white70,
+                                fontSize: 12,
+                              ),
+                            ),
+                          ),
+                        ),
+                      IconButton(
+                        icon: const Icon(Icons.zoom_in),
+                        onPressed: _currentScale < 5.0 ? _zoomIn : null,
+                        tooltip: 'Zoom in',
+                      ),
                       IconButton(
                         icon: Icon(_isWebtoonMode
                             ? Icons.view_carousel
@@ -351,8 +396,13 @@ class _MangaReaderPageState extends State<MangaReaderPage> {
       onPageChanged: _onPageChanged,
       itemBuilder: (context, index) {
         return InteractiveViewer(
+          transformationController: _transformController,
           minScale: 1.0,
-          maxScale: 4.0,
+          maxScale: 5.0,
+          onInteractionEnd: (_) {
+            final scale = _transformController.value.getMaxScaleOnAxis();
+            setState(() => _currentScale = scale);
+          },
           child: Center(
             child: Image.memory(
               _pages[index].data,
@@ -368,21 +418,30 @@ class _MangaReaderPageState extends State<MangaReaderPage> {
   }
 
   Widget _buildWebtoonView() {
-    return ListView.builder(
-      controller: _scrollController,
-      itemCount: _pages.length,
-      itemBuilder: (context, index) {
-        return Image.memory(
-          _pages[index].data,
-          fit: BoxFit.fitWidth,
-          errorBuilder: (context, error, stackTrace) {
-            return const SizedBox(
-              height: 200,
-              child: Center(child: Icon(Icons.broken_image, size: 48, color: Colors.grey)),
-            );
-          },
-        );
+    return InteractiveViewer(
+      transformationController: _transformController,
+      minScale: 1.0,
+      maxScale: 5.0,
+      onInteractionEnd: (_) {
+        final scale = _transformController.value.getMaxScaleOnAxis();
+        setState(() => _currentScale = scale);
       },
+      child: ListView.builder(
+        controller: _scrollController,
+        itemCount: _pages.length,
+        itemBuilder: (context, index) {
+          return Image.memory(
+            _pages[index].data,
+            fit: BoxFit.fitWidth,
+            errorBuilder: (context, error, stackTrace) {
+              return const SizedBox(
+                height: 200,
+                child: Center(child: Icon(Icons.broken_image, size: 48, color: Colors.grey)),
+              );
+            },
+          );
+        },
+      ),
     );
   }
 }

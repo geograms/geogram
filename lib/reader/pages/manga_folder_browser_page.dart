@@ -80,7 +80,10 @@ class _MangaFolderBrowserPageState extends State<MangaFolderBrowserPage> {
 
       await for (final entity in dir.list()) {
         final name = entity.path.split('/').last;
-        if (name.startsWith('.')) continue; // Skip hidden files
+        // Skip hidden files and temp files
+        if (name.startsWith('.') || name.endsWith('.tmp') || name.endsWith('.part')) {
+          continue;
+        }
 
         if (entity is Directory) {
           folders.add(entity);
