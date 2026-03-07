@@ -136,6 +136,7 @@ import 'pages/conference_home_page.dart';
 import 'pages/karma_page.dart';
 import 'api/api.dart' hide ChatRoom;
 import 'server/karma/karma_engine.dart';
+import 'services/signing_service.dart';
 import 'pages/website_browser_page.dart';
 import 'pages/profile_management_page.dart';
 import 'pages/create_app_page.dart';
@@ -2546,7 +2547,6 @@ class _AppsPageState extends State<AppsPage> {
     LogService().log('AppsPage: initState - setting up listeners');
     _loadApps();
     _subscribeToUnreadCounts();
-    _loadKarmaMissions();
   }
 
   void _onProfileChanged() {
@@ -2578,9 +2578,34 @@ class _AppsPageState extends State<AppsPage> {
 
   Future<void> _loadKarmaMissions() async {
     try {
-      final callsign = _profileService.getProfile().callsign;
-      final resp = await GeogramApi().karma.profile(callsign);
-      if (!mounted || resp.data == null) return;
+      final profile = _profileService.getProfile();
+      final callsign = profile.callsign;
+      LogService().log('KARMA_BADGE: fetching profile for $callsign');
+
+      // Generate NOSTR auth header
+      final signingService = SigningService();
+      await signingService.initialize();
+      final authToken = await signingService.generateAuthHeader(
+        profile,
+        action: 'karma-profile',
+        tags: [['resource', 'karma']],
+      );
+      final authHeaders = <String, String>{};
+      if (authToken != null) {
+        authHeaders['Authorization'] = 'Nostr $authToken';
+      }
+
+      final resp = await GeogramApi().karma.profile(
+        callsign,
+        authHeaders: authHeaders.isNotEmpty ? authHeaders : null,
+      );
+      if (!mounted) return;
+      if (resp.data == null) {
+        // No karma profile yet — all 6 missions are pending
+        LogService().log('KARMA_BADGE: no profile data, showing 6');
+        setState(() => _karmaMissionsLeft = 6);
+        return;
+      }
       final counts = resp.data!.actionCountsToday;
       // Count missions where not all action keys have hit their daily cap
       const missionActionKeys = [
@@ -2603,8 +2628,13 @@ class _AppsPageState extends State<AppsPage> {
         }
         if (!complete) left++;
       }
+      LogService().log('KARMA_BADGE: $left missions left');
       if (mounted) setState(() => _karmaMissionsLeft = left);
-    } catch (_) {}
+    } catch (e) {
+      // API not reachable — show all missions as pending
+      LogService().log('KARMA_BADGE: API error: $e');
+      if (mounted) setState(() => _karmaMissionsLeft = 6);
+    }
   }
 
   void _onLanguageChanged() {
@@ -2668,6 +2698,7 @@ class _AppsPageState extends State<AppsPage> {
 
       final types = apps.map((c) => c.type).toList();
       LogService().log('AppsPage: Loaded ${apps.length} apps: $types');
+      _loadKarmaMissions();
     } catch (e) {
       LogService().log('Error loading apps: $e');
       if (mounted) setState(() => _isLoading = false);

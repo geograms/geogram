@@ -9,6 +9,7 @@ import '../pages/report_browser_page.dart';
 import '../server/karma/karma_engine.dart';
 import '../services/app_service.dart';
 import '../services/profile_service.dart';
+import '../services/signing_service.dart';
 
 /// Karma gamification dashboard page.
 /// 3-tab layout: Today (daily missions), Stats, Leaderboard.
@@ -93,7 +94,24 @@ class _KarmaPageState extends State<KarmaPage>
   Future<void> _loadData() async {
     setState(() => _loading = true);
     try {
-      final profileResp = await _api.karma.profile(_callsign);
+      // Generate NOSTR auth header
+      final profile = ProfileService().getProfile();
+      final signingService = SigningService();
+      await signingService.initialize();
+      final authToken = await signingService.generateAuthHeader(
+        profile,
+        action: 'karma-profile',
+        tags: [['resource', 'karma']],
+      );
+      final authHeaders = <String, String>{};
+      if (authToken != null) {
+        authHeaders['Authorization'] = 'Nostr $authToken';
+      }
+
+      final profileResp = await _api.karma.profile(
+        _callsign,
+        authHeaders: authHeaders.isNotEmpty ? authHeaders : null,
+      );
       final leaderboardResp = await _api.karma.leaderboard(
         _callsign, period: _leaderboardPeriod, limit: 20,
       );
