@@ -477,6 +477,10 @@ class DevicesService {
       case DebugAction.meshtasticLogLevel:
         // Meshtastic actions are handled directly by LogApiService
         break;
+
+      case DebugAction.mapSearch:
+        // Handled by MapsBrowserPage via actionStream listener
+        break;
     }
   }
 

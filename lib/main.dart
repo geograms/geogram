@@ -134,7 +134,7 @@ import 'pages/shared_browser_page.dart';
 import 'pages/teleport_browser_page.dart';
 import 'pages/conference_home_page.dart';
 import 'pages/karma_page.dart';
-import 'api/api.dart';
+import 'api/api.dart' hide ChatRoom;
 import 'server/karma/karma_engine.dart';
 import 'pages/website_browser_page.dart';
 import 'pages/profile_management_page.dart';

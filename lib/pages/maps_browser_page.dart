@@ -32,6 +32,7 @@ import '../services/station_alert_service.dart';
 import '../services/app_service.dart';
 import '../services/websocket_service.dart';
 import '../services/routing_service.dart';
+import '../services/debug_controller.dart';
 import '../version.dart' show appVersion;
 import 'report_detail_page.dart';
 import 'place_detail_page.dart';
@@ -96,6 +97,9 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
   _SearchResult? _searchMarker; // Pinned search result on map
   Timer? _searchDebounce;
 
+  // Debug action subscription
+  StreamSubscription? _debugSubscription;
+
   // Auto-refresh timer (every 5 minutes)
   Timer? _autoRefreshTimer;
   static const Duration _autoRefreshInterval = Duration(minutes: 5);
@@ -136,10 +140,23 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
     _profileService.profileNotifier.addListener(_profileListener);
     _initialize();
     _startAutoRefresh();
+    _debugSubscription = DebugController().actionStream.listen((event) {
+      if (event.action == DebugAction.mapSearch && mounted) {
+        final query = event.params['query'] as String?;
+        if (query != null && query.isNotEmpty) {
+          setState(() {
+            _showSearchBar = true;
+            _searchController.text = query;
+          });
+          _performSearch(query);
+        }
+      }
+    });
   }
 
   @override
   void dispose() {
+    _debugSubscription?.cancel();
     _appService.appsNotifier.removeListener(_appsListener);
     _profileService.profileNotifier.removeListener(_profileListener);
     _moveReloadTimer?.cancel();

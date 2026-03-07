@@ -122,7 +122,9 @@ class RoutingService {
   bool get hasRoadData {
     if (_cachedGraph != null) return true;
     final cachePath = _getRoadCachePath();
-    return cachePath != null && File(cachePath).existsSync();
+    if (cachePath == null) return false;
+    final file = File(cachePath);
+    return file.existsSync() && file.lengthSync() > 0;
   }
 
   /// Whether a download is in progress
@@ -302,6 +304,7 @@ class RoutingService {
 
     try {
       final jsonData = await file.readAsString();
+      if (jsonData.trim().isEmpty) return null;
       _cachedGraph = _parseOverpassResponse(jsonData);
       return _cachedGraph;
     } catch (e) {

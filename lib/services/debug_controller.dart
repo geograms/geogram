@@ -240,6 +240,9 @@ enum DebugAction {
 
   /// Set Meshtastic log level
   meshtasticLogLevel,
+
+  /// Search for a place on the map
+  mapSearch,
 }
 
 /// Toast message to be displayed
@@ -651,6 +654,13 @@ class DebugController {
         'description': 'Navigate to a panel',
         'params': {
           'panel': 'Panel name: apps, maps, devices, settings, logs',
+        },
+      },
+      {
+        'action': 'map_search',
+        'description': 'Search for a place on the map by name or coordinates',
+        'params': {
+          'query': 'Search query (place name or coordinates like "38.72, -9.14")',
         },
       },
       {
@@ -1192,6 +1202,17 @@ class DebugController {
           'error': 'Unknown panel: $panel',
           'available': ['apps', 'maps', 'devices', 'settings', 'logs'],
         };
+
+      case 'map_search':
+        final query = params['query'] as String?;
+        if (query == null || query.isEmpty) {
+          return {'success': false, 'error': 'Missing query parameter'};
+        }
+        // Navigate to maps panel first
+        navigateToPanelByName('maps');
+        // Fire debug action event for the maps page to handle
+        _actionController.add(DebugActionEvent(action: DebugAction.mapSearch, params: params));
+        return {'success': true, 'message': 'Map search triggered for: $query'};
 
       case 'toast':
         final message = params['message'] as String?;
