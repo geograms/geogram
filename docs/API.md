@@ -1610,6 +1610,11 @@ curl -X POST http://localhost:3456/api/debug \
 curl -X POST http://localhost:3456/api/debug \
   -H "Content-Type: application/json" \
   -d '{"action": "manga_search", "query": "naruto", "extension_id": "mangapill"}'
+
+# Browse catalog page (latest updates, new, etc.)
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action": "manga_browse", "extension_id": "mangapill", "tab": "0"}'
 ```
 
 ---
@@ -2720,6 +2725,7 @@ Triggers a debug action.
 | `meshtastic_enable` | Enable Meshtastic service (create config if needed) | None |
 | `meshtastic_log_level` | Set Meshtastic log level (returns current if no level param) | `level` (off\|error\|warn\|info\|debug) |
 | `manga_search` | Search manga extensions for a title | `query` (required), `extension_id` (optional) |
+| `manga_browse` | Browse a catalog page (popular, latest) from an extension | `extension_id` (required), `tab` (optional, default: 0) |
 
 Place feedback actions send signed events to the station and only update local cache files if the place folder can be resolved via `place_path` or `callsign`.
 

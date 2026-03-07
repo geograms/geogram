@@ -106,6 +106,39 @@ class MangaExtensionService {
     }).where((r) => r.id.isNotEmpty && r.title.isNotEmpty).toList();
   }
 
+  /// Browse a catalog page (popular, latest, etc.) for an extension
+  Future<List<MangaSearchResult>> browse(
+      String extensionId, int browseIndex) async {
+    final ext = _extensions[extensionId];
+    if (ext == null) throw Exception('Extension not found: $extensionId');
+    if (browseIndex < 0 || browseIndex >= ext.browse.length) {
+      throw Exception('Browse index out of range: $browseIndex');
+    }
+
+    final browseConfig = ext.browse[browseIndex];
+    final vars = {'base_url': ext.baseUrl};
+
+    final results = await _scraper.scrape(
+      config: browseConfig.config,
+      vars: vars,
+      headers: _scraper.resolveHeaders(ext.headers, vars),
+      cookies: _cookies[extensionId] ?? {},
+      extensionId: extensionId,
+      rateLimitMs: ext.rateLimitMs,
+    );
+
+    // Deduplicate by ID (some pages have repeated entries)
+    final seen = <String>{};
+    return results.map((r) {
+      return MangaSearchResult(
+        id: r['id'] as String? ?? '',
+        title: r['title'] as String? ?? '',
+        thumbnail: r['thumbnail'] as String?,
+        description: r['description'] as String?,
+      );
+    }).where((r) => r.id.isNotEmpty && r.title.isNotEmpty && seen.add(r.id)).toList();
+  }
+
   /// Search across all extensions for a manga by name
   Future<List<ExtensionSearchResult>> searchAllExtensions(String query) async {
     final results = <ExtensionSearchResult>[];
@@ -396,7 +429,7 @@ class MangaExtensionService {
     '''{
   "id": "mangapill",
   "name": "MangaPill",
-  "version": "1.1.0",
+  "version": "1.3.0",
   "api_version": 1,
   "language": "en",
   "base_url": "https://mangapill.com",
@@ -408,13 +441,35 @@ class MangaExtensionService {
   },
   "search": {
     "url": "{base_url}/search?q={query}&type=&status=",
-    "list_selector": "div.flex.flex-col.justify-end",
+    "list_selector": "div.grid > div",
     "fields": {
       "id": { "selector": "a[href*='/manga/']", "attr": "href" },
-      "title": { "selector": "a div.font-black", "text": true },
-      "thumbnail": { "selector": "a figure img", "attr": "data-src" }
+      "title": { "selector": "div.font-black", "text": true },
+      "thumbnail": { "selector": "img[data-src]", "attr": "data-src" }
     }
   },
+  "browse": [
+    {
+      "name": "Latest Updates",
+      "url": "{base_url}",
+      "list_selector": "div.grid > div",
+      "fields": {
+        "id": { "selector": "a[href*='/manga/']", "attr": "href" },
+        "title": { "selector": "a[href*='/manga/'] div.font-bold", "text": true },
+        "thumbnail": { "selector": "img[data-src]", "attr": "data-src" }
+      }
+    },
+    {
+      "name": "New",
+      "url": "{base_url}/mangas/new",
+      "list_selector": "div.grid > div",
+      "fields": {
+        "id": { "selector": "a[href*='/manga/']", "attr": "href" },
+        "title": { "selector": "div.font-black", "text": true },
+        "thumbnail": { "selector": "img[data-src]", "attr": "data-src" }
+      }
+    }
+  ],
   "series": {
     "url": "{base_url}{id}",
     "fields": {
@@ -445,7 +500,7 @@ class MangaExtensionService {
     '''{
   "id": "mangabuddy",
   "name": "MangaBuddy",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "api_version": 1,
   "language": "en",
   "base_url": "https://mangabuddy.com",
@@ -464,6 +519,18 @@ class MangaExtensionService {
       "thumbnail": { "selector": ".thumb img", "attr": "data-src" }
     }
   },
+  "browse": [
+    {
+      "name": "Latest",
+      "url": "{base_url}/latest",
+      "list_selector": "div.book-item",
+      "fields": {
+        "id": { "selector": ".thumb a", "attr": "href" },
+        "title": { "selector": ".thumb a", "attr": "title" },
+        "thumbnail": { "selector": ".thumb img", "attr": "data-src" }
+      }
+    }
+  ],
   "series": {
     "url": "{base_url}{id}",
     "fields": {

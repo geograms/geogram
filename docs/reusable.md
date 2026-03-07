@@ -5602,7 +5602,7 @@ final dateStr = ReaderPathUtils.formatDateForFolder(DateTime.now());
 ### Manga Extension System
 
 **Files:**
-- `lib/reader/models/manga_extension.dart` — `MangaExtension`, `ScrapeConfig`, `ExtensionField`, `PageConfig` models
+- `lib/reader/models/manga_extension.dart` — `MangaExtension`, `ScrapeConfig`, `ExtensionField`, `PageConfig`, `BrowseConfig` models
 - `lib/reader/services/manga_scraper.dart` — HTML scraping engine with CSS selector extraction
 - `lib/reader/services/manga_extension_service.dart` — Extension lifecycle and scraping orchestration
 - `lib/reader/services/manga_download_service.dart` — Download chapters into existing series folders
@@ -5616,10 +5616,16 @@ final extService = MangaExtensionService();
 await extService.initialize('path/to/extensions');
 
 // Search for manga
-final results = await extService.search('mangakakalot', 'one piece');
+final results = await extService.search('mangapill', 'one piece');
+
+// Browse catalog (popular, latest, new)
+final catalog = await extService.browse('mangapill', 0); // first browse tab
+
+// Search all extensions at once
+final allResults = await extService.searchAllExtensions('naruto');
 
 // Get chapters
-final chapters = await extService.listChapters('mangakakalot', mangaUrl);
+final chapters = await extService.listChapters('mangapill', mangaUrl);
 
 // Download missing chapters into series folder
 final downloadService = MangaDownloadService();
@@ -5642,8 +5648,9 @@ for (final chapter in missing.missing) {
 |-------|---------|
 | `MangaExtension` | Parsed extension manifest (id, selectors, headers, rate limit) |
 | `MangaScraper` | HTTP fetch + HTML parse + CSS select + field extraction |
-| `MangaExtensionService` | Load/install/remove extensions, search/chapters/pages |
+| `MangaExtensionService` | Load/install/remove extensions, search/browse/chapters/pages |
 | `MangaDownloadService` | Find missing chapters, download as chapter-N.cbz |
+| `BrowseConfig` | Named catalog page (popular, latest, new) with ScrapeConfig |
 | `ExtensionField` | Field extraction rule (selector, attr, regex, map, type) |
 
 ---

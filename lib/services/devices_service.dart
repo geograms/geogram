@@ -481,6 +481,7 @@ class DevicesService {
       case DebugAction.mapSearch:
       case DebugAction.mapRoute:
       case DebugAction.mangaSearch:
+      case DebugAction.mapPinLocation:
         // Handled elsewhere (MapsBrowserPage / DebugController)
         break;
     }

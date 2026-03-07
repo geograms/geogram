@@ -18,6 +18,7 @@ class MangaExtension {
   final ScrapeConfig series;
   final ScrapeConfig chapters;
   final PageConfig pages;
+  final List<BrowseConfig> browse;
 
   MangaExtension({
     required this.id,
@@ -33,6 +34,7 @@ class MangaExtension {
     required this.series,
     required this.chapters,
     required this.pages,
+    this.browse = const [],
   });
 
   factory MangaExtension.fromJson(Map<String, dynamic> json) {
@@ -53,6 +55,11 @@ class MangaExtension {
       chapters:
           ScrapeConfig.fromJson(json['chapters'] as Map<String, dynamic>),
       pages: PageConfig.fromJson(json['pages'] as Map<String, dynamic>),
+      browse: (json['browse'] as List<dynamic>?)
+              ?.map((b) =>
+                  BrowseConfig.fromJson(b as Map<String, dynamic>))
+              .toList() ??
+          [],
     );
   }
 
@@ -70,6 +77,28 @@ class MangaExtension {
         'series': series.toJson(),
         'chapters': chapters.toJson(),
         'pages': pages.toJson(),
+        if (browse.isNotEmpty)
+          'browse': browse.map((b) => b.toJson()).toList(),
+      };
+}
+
+/// A browseable catalog page (popular, latest, etc.)
+class BrowseConfig {
+  final String name;
+  final ScrapeConfig config;
+
+  BrowseConfig({required this.name, required this.config});
+
+  factory BrowseConfig.fromJson(Map<String, dynamic> json) {
+    return BrowseConfig(
+      name: json['name'] as String,
+      config: ScrapeConfig.fromJson(json),
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+        'name': name,
+        ...config.toJson(),
       };
 }
 
