@@ -134,6 +134,8 @@ import 'pages/shared_browser_page.dart';
 import 'pages/teleport_browser_page.dart';
 import 'pages/conference_home_page.dart';
 import 'pages/karma_page.dart';
+import 'api/api.dart';
+import 'server/karma/karma_engine.dart';
 import 'pages/website_browser_page.dart';
 import 'pages/profile_management_page.dart';
 import 'pages/create_app_page.dart';
@@ -2488,6 +2490,7 @@ class _AppsPageState extends State<AppsPage> {
 
   List<App> _allApps = [];
   bool _isLoading = true;
+  int _karmaMissionsLeft = 0;
 
   /// Get filtered apps based on search query from parent
   List<App> get _filteredApps {
@@ -2543,6 +2546,7 @@ class _AppsPageState extends State<AppsPage> {
     LogService().log('AppsPage: initState - setting up listeners');
     _loadApps();
     _subscribeToUnreadCounts();
+    _loadKarmaMissions();
   }
 
   void _onProfileChanged() {
@@ -2570,6 +2574,37 @@ class _AppsPageState extends State<AppsPage> {
         });
       }
     });
+  }
+
+  Future<void> _loadKarmaMissions() async {
+    try {
+      final callsign = _profileService.getProfile().callsign;
+      final resp = await GeogramApi().karma.profile(callsign);
+      if (!mounted || resp.data == null) return;
+      final counts = resp.data!.actionCountsToday;
+      // Count missions where not all action keys have hit their daily cap
+      const missionActionKeys = [
+        ['chat_message', 'chat_reaction'],
+        ['blog_published'],
+        ['place_created'],
+        ['alert_created'],
+        ['like_given', 'comment_given', 'verify_given'],
+        ['event_created'],
+      ];
+      int left = 0;
+      for (final keys in missionActionKeys) {
+        bool complete = true;
+        for (final key in keys) {
+          final config = KarmaEngine.actions[key];
+          if (config != null && (counts[key] ?? 0) < config.dailyCap) {
+            complete = false;
+            break;
+          }
+        }
+        if (!complete) left++;
+      }
+      if (mounted) setState(() => _karmaMissionsLeft = left);
+    } catch (_) {}
   }
 
   void _onLanguageChanged() {
@@ -3059,13 +3094,18 @@ class _AppsPageState extends State<AppsPage> {
                                     MaterialPageRoute(
                                       builder: (context) => targetPage,
                                     ),
-                                  ).then((_) => _loadApps());
+                                  ).then((_) {
+                                    _loadApps();
+                                    _loadKarmaMissions();
+                                  });
                                 },
                                 onFavoriteToggle: () =>
                                     _toggleFavorite(appEntry),
                                 onDelete: () => _deleteApp(appEntry),
                                 unreadCount: appEntry.type == 'chat'
                                     ? _chatNotificationService.totalUnreadCount
+                                    : appEntry.type == 'karma'
+                                    ? _karmaMissionsLeft
                                     : 0,
                               );
                             }, childCount: filteredApps.length),

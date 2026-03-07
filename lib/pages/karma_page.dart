@@ -1,7 +1,13 @@
 import 'package:flutter/material.dart';
 
 import '../api/api.dart';
+import '../pages/blog_browser_page.dart';
+import '../pages/chat_browser_page.dart';
+import '../pages/events_browser_page.dart';
+import '../pages/places_browser_page.dart';
+import '../pages/report_browser_page.dart';
 import '../server/karma/karma_engine.dart';
+import '../services/app_service.dart';
 import '../services/profile_service.dart';
 
 /// Karma gamification dashboard page.
@@ -222,7 +228,7 @@ class _KarmaPageState extends State<KarmaPage>
             ),
             const SizedBox(width: 6),
             Text(
-              'pts today',
+              'points today',
               style: theme.textTheme.bodyLarge?.copyWith(
                 color: theme.colorScheme.onPrimaryContainer,
               ),
@@ -360,7 +366,7 @@ class _KarmaPageState extends State<KarmaPage>
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      '$earned/$max pts',
+                      '$earned/$max points',
                       style: theme.textTheme.bodySmall?.copyWith(
                         color: theme.colorScheme.onSurfaceVariant,
                       ),
@@ -838,7 +844,7 @@ class _KarmaPageState extends State<KarmaPage>
         subtitle: Text(entry.levelName,
             style: theme.textTheme.bodySmall),
         trailing: Text(
-          '${entry.points} pts',
+          '${entry.points} points',
           style: theme.textTheme.bodyMedium?.copyWith(
             fontWeight: FontWeight.w600,
           ),
@@ -848,7 +854,31 @@ class _KarmaPageState extends State<KarmaPage>
   }
 
   void _navigateToApp(String appType) {
-    Navigator.of(context).pop();
+    final app = AppService().getAppByType(appType);
+    if (app == null) return;
+    final path = app.storagePath ?? '';
+
+    final Widget? page;
+    switch (appType) {
+      case 'chat':
+        page = ChatBrowserPage(app: app);
+      case 'blog':
+        page = BlogBrowserPage(appPath: path, appTitle: app.title);
+      case 'places':
+        page = PlacesBrowserPage(appPath: path, appTitle: app.title);
+      case 'alerts':
+        page = ReportBrowserPage(appPath: path, appTitle: app.title);
+      case 'events':
+        page = EventsBrowserPage(appPath: path, appTitle: app.title);
+      default:
+        page = null;
+    }
+
+    if (page != null) {
+      Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => page!),
+      );
+    }
   }
 }
 
