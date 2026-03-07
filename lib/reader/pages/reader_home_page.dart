@@ -3,10 +3,13 @@
  * License: Apache-2.0
  */
 
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 
 import '../models/reader_models.dart';
 import '../services/reader_service.dart';
+import '../utils/reader_path_utils.dart';
 import 'rss_sources_page.dart';
 import 'manga_sources_page.dart';
 import 'book_browser_page.dart';
@@ -75,8 +78,13 @@ class _ReaderHomePageState extends State<ReaderHomePage> {
     _mangaSourceCount = mangaSources.length;
     int seriesCount = 0;
     for (final source in mangaSources) {
-      final series = await _service.getMangaSeries(source.id);
-      seriesCount += series.length;
+      if (source.isLocal && source.url != null) {
+        // Count subdirectories and CBZ files in the local folder
+        seriesCount += await _countLocalEntries(source.url!);
+      } else {
+        final series = await _service.getMangaSeries(source.id);
+        seriesCount += series.length;
+      }
     }
     _mangaSeriesCount = seriesCount;
 
@@ -90,6 +98,25 @@ class _ReaderHomePageState extends State<ReaderHomePage> {
     for (final folder in bookFolders) {
       final subBooks = await _service.getBooks([folder.id]);
       _bookCount += subBooks.length;
+    }
+  }
+
+  Future<int> _countLocalEntries(String path) async {
+    try {
+      final dir = Directory(path);
+      if (!await dir.exists()) return 0;
+      int count = 0;
+      await for (final entity in dir.list()) {
+        final name = entity.path.split('/').last;
+        if (name.startsWith('.')) continue;
+        if (entity is Directory ||
+            (entity is File && ReaderPathUtils.isCbzFile(name))) {
+          count++;
+        }
+      }
+      return count;
+    } catch (_) {
+      return 0;
     }
   }
 
