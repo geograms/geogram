@@ -33,6 +33,7 @@ import '../services/app_service.dart';
 import '../services/websocket_service.dart';
 import '../services/routing_service.dart';
 import '../services/debug_controller.dart';
+import '../services/location_provider_service.dart';
 import '../version.dart' show appVersion;
 import 'report_detail_page.dart';
 import 'place_detail_page.dart';
@@ -68,6 +69,9 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
   double _radiusKm = 30.0;
   double _currentZoom = 10.0;
   LatLng? _centerPosition;
+  LatLng? _userLocation;        // Pinned user location (marker, items, distances)
+  bool _autoFollow = false;     // Auto-follow GPS mode (mobile only)
+  VoidCallback? _locationConsumerDispose; // LocationProviderService consumer cleanup
   bool _isLoading = true;
   final Set<MapItemType> _expandedGroups = Set.from(MapItemType.values);
 
@@ -109,7 +113,6 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
   Timer? _autoRefreshTimer;
   static const Duration _autoRefreshInterval = Duration(minutes: 5);
   late final VoidCallback _profileListener;
-  Timer? _moveReloadTimer;
 
   // Radius slider range (logarithmic scale for fine control at lower values)
   static const double _minRadius = 1.0;
@@ -155,6 +158,16 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
           });
           _performSearch(query);
         }
+      } else if (event.action == DebugAction.mapPinLocation && mounted) {
+        final lat = (event.params['lat'] is num)
+            ? (event.params['lat'] as num).toDouble()
+            : double.tryParse(event.params['lat']?.toString() ?? '');
+        final lon = (event.params['lon'] is num)
+            ? (event.params['lon'] as num).toDouble()
+            : double.tryParse(event.params['lon']?.toString() ?? '');
+        if (lat != null && lon != null) {
+          _setPinnedLocation(LatLng(lat, lon));
+        }
       } else if (event.action == DebugAction.mapRoute && mounted) {
         final toLat = (event.params['toLat'] is num)
             ? (event.params['toLat'] as num).toDouble()
@@ -183,7 +196,7 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
     _debugSubscription?.cancel();
     _appService.appsNotifier.removeListener(_appsListener);
     _profileService.profileNotifier.removeListener(_profileListener);
-    _moveReloadTimer?.cancel();
+    _locationConsumerDispose?.call();
     _autoRefreshTimer?.cancel();
     _searchDebounce?.cancel();
     _searchController.dispose();
@@ -230,6 +243,10 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
       LogService().log('MapsBrowserPage: Restored ${_visibleLayers.length} saved filters');
     }
 
+    // Restore pinned user location if saved
+    final savedUserLat = _configService.getNestedValue('mapState.userLatitude') as double?;
+    final savedUserLon = _configService.getNestedValue('mapState.userLongitude') as double?;
+
     if (savedLat != null && savedLon != null) {
       // Restore saved position as initial view
       if (!mounted) return;
@@ -237,6 +254,10 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
         _centerPosition = LatLng(savedLat, savedLon);
         _currentZoom = savedZoom ?? _getZoomForRadius(_radiusKm);
         _radiusKm = savedRadius ?? 30.0;
+        // Restore pinned location, fall back to viewport center
+        _userLocation = (savedUserLat != null && savedUserLon != null)
+            ? LatLng(savedUserLat, savedUserLon)
+            : _centerPosition;
       });
       _awaitingProfileLocation = false;
       LogService().log('MapsBrowserPage: Restored saved map state');
@@ -252,6 +273,7 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
         if (!mounted) return;
         setState(() {
           _centerPosition = LatLng(userLocation.$1, userLocation.$2);
+          _userLocation = _centerPosition;
           _currentZoom = _getZoomForRadius(_radiusKm);
         });
         _awaitingProfileLocation = false;
@@ -276,10 +298,11 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
   }
 
   void _ensureOfflineTiles() {
-    if (_centerPosition == null || _awaitingProfileLocation) return;
+    final tileCenter = _userLocation ?? _centerPosition;
+    if (tileCenter == null || _awaitingProfileLocation) return;
     unawaited(_mapTileService.ensureOfflineTiles(
-      lat: _centerPosition!.latitude,
-      lng: _centerPosition!.longitude,
+      lat: tileCenter.latitude,
+      lng: tileCenter.longitude,
     ));
   }
 
@@ -291,6 +314,10 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
     _configService.setNestedValue('mapState.longitude', _centerPosition!.longitude);
     _configService.setNestedValue('mapState.zoom', _currentZoom);
     _configService.setNestedValue('mapState.radius', _radiusKm);
+    if (_userLocation != null) {
+      _configService.setNestedValue('mapState.userLatitude', _userLocation!.latitude);
+      _configService.setNestedValue('mapState.userLongitude', _userLocation!.longitude);
+    }
   }
 
   /// Save filter settings to config (debounced in ConfigService)
@@ -300,7 +327,8 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
   }
 
   Future<void> _loadItems({bool forceRefresh = false}) async {
-    if (_centerPosition == null) return;
+    final loadCenter = _userLocation ?? _centerPosition;
+    if (loadCenter == null) return;
 
     // Only show loading indicator on first load, not auto-refresh
     final isFirstLoad = _allItems.isEmpty;
@@ -313,16 +341,16 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
       final shouldFetchStationAlerts = isFirstLoad || forceRefresh;
       if (shouldFetchStationAlerts) {
         await StationAlertService().fetchAlerts(
-          lat: _centerPosition!.latitude,
-          lon: _centerPosition!.longitude,
+          lat: loadCenter.latitude,
+          lon: loadCenter.longitude,
           radiusKm: null,
         );
       }
 
       // Always load all item types - filtering happens at display time
       final items = await _mapsService.loadAllMapItems(
-        centerLat: _centerPosition!.latitude,
-        centerLon: _centerPosition!.longitude,
+        centerLat: loadCenter.latitude,
+        centerLon: loadCenter.longitude,
         radiusKm: _radiusKm,
         visibleTypes: Set.from(MapItemType.values),
         forceRefresh: forceRefresh,
@@ -431,9 +459,11 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
       _currentZoom = zoom;
     });
 
-    // Zoom map to fit the new radius
-    if (_centerPosition != null && _mapReady) {
-      _mapController.move(_centerPosition!, zoom);
+    // Zoom map and re-center on pinned user location so radius circle is visible
+    final center = _userLocation ?? _centerPosition;
+    if (center != null && _mapReady) {
+      _mapController.move(center, zoom);
+      _centerPosition = center;
     }
   }
 
@@ -454,7 +484,7 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
     final radiusMeters = radiusKm * 1000;
 
     // Account for latitude (meters per pixel varies with latitude)
-    final lat = _centerPosition?.latitude ?? 0;
+    final lat = _userLocation?.latitude ?? _centerPosition?.latitude ?? 0;
     final latRadians = lat * math.pi / 180;
     final metersPerPixelAtZoom0 = 156543.03 * math.cos(latRadians);
 
@@ -475,7 +505,7 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
     const targetRadiusPixels = 280.0;
 
     // Account for latitude
-    final lat = _centerPosition?.latitude ?? 0;
+    final lat = _userLocation?.latitude ?? _centerPosition?.latitude ?? 0;
     final latRadians = lat * math.pi / 180;
     final metersPerPixelAtZoom0 = 156543.03 * math.cos(latRadians);
 
@@ -828,7 +858,8 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
   void _updateLocationAndReload(double lat, double lon, String successMessageKey) {
     if (!mounted) return;
     setState(() {
-      _centerPosition = LatLng(lat, lon);
+      _userLocation = LatLng(lat, lon);
+      _centerPosition = _userLocation;
       _currentZoom = _getZoomForRadius(_radiusKm);
       _awaitingProfileLocation = false;
     });
@@ -847,12 +878,65 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
     LogService().log('Location detected: $lat, $lon (${_i18n.t(successMessageKey)})');
   }
 
-  void _scheduleMapMoveReload() {
-    _moveReloadTimer?.cancel();
-    _moveReloadTimer = Timer(const Duration(milliseconds: 500), () {
-      if (!mounted) return;
-      _loadItems(forceRefresh: true);
+  /// Pin user location at a specific point (long-press, search pin, debug API)
+  void _setPinnedLocation(LatLng location) {
+    if (!mounted) return;
+    // Disable auto-follow on manual pin
+    if (_autoFollow) {
+      _autoFollow = false;
+      _locationConsumerDispose?.call();
+      _locationConsumerDispose = null;
+    }
+    setState(() {
+      _userLocation = location;
     });
+    _saveMapState();
+    _loadItems(forceRefresh: true);
+    _ensureOfflineTiles();
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(_i18n.t('location_pinned')),
+        duration: const Duration(seconds: 2),
+      ),
+    );
+    LogService().log('MapsBrowserPage: Location pinned at ${location.latitude}, ${location.longitude}');
+  }
+
+  /// Toggle auto-follow GPS mode (mobile only)
+  Future<void> _toggleAutoFollow() async {
+    if (_autoFollow) {
+      // Turn off
+      _locationConsumerDispose?.call();
+      _locationConsumerDispose = null;
+      setState(() => _autoFollow = false);
+      LogService().log('MapsBrowserPage: Auto-follow GPS disabled');
+    } else {
+      // Turn on
+      setState(() => _autoFollow = true);
+      try {
+        final dispose = await LocationProviderService().registerConsumer(
+          intervalSeconds: 5,
+          onPosition: (position) {
+            if (!mounted || !_autoFollow) return;
+            final newLoc = LatLng(position.latitude, position.longitude);
+            setState(() {
+              _userLocation = newLoc;
+              _centerPosition = newLoc;
+            });
+            if (_mapReady) {
+              _mapController.move(newLoc, _currentZoom);
+            }
+            _saveMapState();
+          },
+        );
+        _locationConsumerDispose = dispose;
+        LogService().log('MapsBrowserPage: Auto-follow GPS enabled');
+      } catch (e) {
+        setState(() => _autoFollow = false);
+        LogService().log('MapsBrowserPage: Failed to enable auto-follow: $e');
+      }
+    }
   }
 
   Color _getTypeColor(MapItemType type) {
@@ -1108,21 +1192,16 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
             onPositionChanged: (position, hasGesture) {
               // Update current zoom, position and rotation when user interacts
               if (hasGesture && position.center != null) {
-                final newZoom = position.zoom;
-                final newRadius = _getRadiusForZoom(newZoom);
-                // Update state and rebuild UI so slider syncs with zoom
                 setState(() {
                   _centerPosition = position.center;
-                  _currentZoom = newZoom;
-                  _radiusKm = newRadius;
+                  _currentZoom = position.zoom;
                   _currentRotation = position.rotation;
                   _hasUserMoved = true;
                 });
-                // Save state (debounced by the config service)
                 _saveMapState();
-                _scheduleMapMoveReload();
               }
             },
+            onLongPress: (tapPosition, latLng) => _setPinnedLocation(latLng),
           ),
           children: [
             // TileLayer wrapped to react to layer type changes
@@ -1213,19 +1292,20 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
               },
             ),
 
-            // Radius circle
-            CircleLayer(
-              circles: [
-                CircleMarker(
-                  point: _centerPosition!,
-                  radius: _radiusKm * 1000, // Convert km to meters
-                  useRadiusInMeter: true,
-                  color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.1),
-                  borderColor: Theme.of(context).colorScheme.primary.withValues(alpha: 0.5),
-                  borderStrokeWidth: 2,
-                ),
-              ],
-            ),
+            // Radius circle (around pinned user location)
+            if (_userLocation != null)
+              CircleLayer(
+                circles: [
+                  CircleMarker(
+                    point: _userLocation!,
+                    radius: _radiusKm * 1000, // Convert km to meters
+                    useRadiusInMeter: true,
+                    color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.1),
+                    borderColor: Theme.of(context).colorScheme.primary.withValues(alpha: 0.5),
+                    borderStrokeWidth: 2,
+                  ),
+                ],
+              ),
 
             // Route polyline overlay
             if (_routePoints.isNotEmpty && _routeVisible)
@@ -1316,10 +1396,11 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
             ),
 
             // User location marker - more prominent with pulsing effect
+            if (_userLocation != null)
             MarkerLayer(
               markers: [
                 Marker(
-                  point: _centerPosition!,
+                  point: _userLocation!,
                   width: 80,
                   height: 80,
                   child: Stack(
@@ -1554,6 +1635,15 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
                       ),
                     ),
                     IconButton(
+                      icon: const Icon(Icons.push_pin),
+                      tooltip: _i18n.t('pin_location_here'),
+                      onPressed: () {
+                        final marker = _searchMarker!;
+                        setState(() => _searchMarker = null);
+                        _setPinnedLocation(LatLng(marker.latitude, marker.longitude));
+                      },
+                    ),
+                    IconButton(
                       icon: const Icon(Icons.directions_car),
                       tooltip: _i18n.t('driving'),
                       onPressed: () => _navigateToSearchMarker(TravelMode.driving),
@@ -1603,10 +1693,8 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
                 heroTag: 'zoom_in',
                 onPressed: () {
                   final newZoom = (_currentZoom + 1).clamp(1.0, 18.0);
-                  final newRadius = _getRadiusForZoom(newZoom);
                   setState(() {
                     _currentZoom = newZoom;
-                    _radiusKm = newRadius;
                   });
                   if (_mapReady && _centerPosition != null) {
                     _mapController.move(_centerPosition!, newZoom);
@@ -1622,10 +1710,8 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
                 heroTag: 'zoom_out',
                 onPressed: () {
                   final newZoom = (_currentZoom - 1).clamp(1.0, 18.0);
-                  final newRadius = _getRadiusForZoom(newZoom);
                   setState(() {
                     _currentZoom = newZoom;
-                    _radiusKm = newRadius;
                   });
                   if (_mapReady && _centerPosition != null) {
                     _mapController.move(_centerPosition!, newZoom);
@@ -1693,7 +1779,22 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
               // Find my location button
               FloatingActionButton.small(
                 heroTag: 'find_location',
-                onPressed: _isDetectingLocation ? null : _autoDetectLocation,
+                onPressed: _isDetectingLocation ? null : () {
+                  // If pinned location exists and viewport is far away, snap back first
+                  if (_userLocation != null && _centerPosition != null) {
+                    final dist = _distanceBetween(
+                      _centerPosition!.latitude, _centerPosition!.longitude,
+                      _userLocation!.latitude, _userLocation!.longitude,
+                    );
+                    if (dist > 500 && _mapReady) {
+                      _mapController.move(_userLocation!, _currentZoom);
+                      setState(() => _centerPosition = _userLocation);
+                      _saveMapState();
+                      return;
+                    }
+                  }
+                  _autoDetectLocation();
+                },
                 tooltip: _i18n.t('auto_detect_location'),
                 child: _isDetectingLocation
                     ? SizedBox(
@@ -1706,6 +1807,22 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
                       )
                     : const Icon(Icons.my_location),
               ),
+              // Auto-follow GPS toggle (mobile only)
+              if (!kIsWeb && (Platform.isAndroid || Platform.isIOS))
+                Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: FloatingActionButton.small(
+                    heroTag: 'auto_follow',
+                    onPressed: _toggleAutoFollow,
+                    tooltip: _i18n.t('auto_follow'),
+                    backgroundColor: _autoFollow
+                        ? Theme.of(context).colorScheme.primaryContainer
+                        : null,
+                    child: Icon(
+                      _autoFollow ? Icons.gps_fixed : Icons.gps_not_fixed,
+                    ),
+                  ),
+                ),
             ],
           ),
         ),
@@ -2095,10 +2212,11 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
       }
     }
 
-    // Sort results by distance from current position (closest first)
-    if (_centerPosition != null && results.length > 1) {
-      final cLat = _centerPosition!.latitude;
-      final cLon = _centerPosition!.longitude;
+    // Sort results by distance from pinned user location (closest first)
+    final sortRef = _userLocation ?? _centerPosition;
+    if (sortRef != null && results.length > 1) {
+      final cLat = sortRef.latitude;
+      final cLon = sortRef.longitude;
       results.sort((a, b) {
         final dA = _distanceBetween(cLat, cLon, a.latitude, a.longitude);
         final dB = _distanceBetween(cLat, cLon, b.latitude, b.longitude);
@@ -2171,9 +2289,10 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
   }
 
   Future<void> _navigateTo(MapItem item, TravelMode mode) async {
-    if (_centerPosition == null || _isLoadingRoute) return;
+    final origin = _userLocation ?? _centerPosition;
+    if (origin == null || _isLoadingRoute) return;
 
-    final from = _centerPosition!;
+    final from = origin;
     setState(() {
       _isLoadingRoute = true;
       _routing.activeRouteMode = mode;

@@ -1589,6 +1589,11 @@ curl -X POST http://localhost:3456/api/debug \
 curl -X POST http://localhost:3456/api/debug \
   -H "Content-Type: application/json" \
   -d '{"action": "map_route", "toLat": 38.75, "toLon": -9.15, "mode": "walking"}'
+
+# Pin user location on the map (items load around this point, not viewport center)
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action": "map_pin_location", "lat": 38.72, "lon": -9.14}'
 ```
 
 #### Debug: Manga Search

@@ -1435,5 +1435,8 @@
   "road_data": "Road Data",
   "download_road_data": "Download Road Data",
   "road_data_downloaded": "Road data downloaded successfully",
-  "search_place": "Search place or coordinates..."
+  "search_place": "Search place or coordinates...",
+  "location_pinned": "Location pinned",
+  "pin_location_here": "Pin location here",
+  "auto_follow": "Auto-follow GPS"
 }

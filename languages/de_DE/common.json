@@ -1434,5 +1434,8 @@
   "road_data": "Straßendaten",
   "download_road_data": "Straßendaten herunterladen",
   "road_data_downloaded": "Straßendaten erfolgreich heruntergeladen",
-  "search_place": "Ort oder Koordinaten suchen..."
+  "search_place": "Ort oder Koordinaten suchen...",
+  "location_pinned": "Standort fixiert",
+  "pin_location_here": "Standort hier fixieren",
+  "auto_follow": "GPS folgen"
 }

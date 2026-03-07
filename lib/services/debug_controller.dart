@@ -251,6 +251,9 @@ enum DebugAction {
 
   /// Search manga extensions
   mangaSearch,
+
+  /// Pin user location on the map
+  mapPinLocation,
 }
 
 /// Toast message to be displayed
@@ -681,11 +684,27 @@ class DebugController {
         },
       },
       {
+        'action': 'map_pin_location',
+        'description': 'Pin user location on the map at specific coordinates',
+        'params': {
+          'lat': 'Latitude',
+          'lon': 'Longitude',
+        },
+      },
+      {
         'action': 'manga_search',
         'description': 'Search manga extensions for a title',
         'params': {
           'query': 'Search query (manga title)',
           'extension_id': '(optional) Specific extension ID, or searches all',
+        },
+      },
+      {
+        'action': 'manga_browse',
+        'description': 'Browse a catalog page (popular, latest) from an extension',
+        'params': {
+          'extension_id': 'Extension ID (e.g. mangapill)',
+          'tab': '(optional) Browse tab index (default: 0)',
         },
       },
       {
@@ -1249,6 +1268,16 @@ class DebugController {
         _actionController.add(DebugActionEvent(action: DebugAction.mapRoute, params: params));
         return {'success': true, 'message': 'Map route triggered to: $toLat, $toLon'};
 
+      case 'map_pin_location':
+        final lat = params['lat'];
+        final lon = params['lon'];
+        if (lat == null || lon == null) {
+          return {'success': false, 'error': 'Missing lat/lon parameters'};
+        }
+        navigateToPanelByName('maps');
+        _actionController.add(DebugActionEvent(action: DebugAction.mapPinLocation, params: params));
+        return {'success': true, 'message': 'Map pin location set to: $lat, $lon'};
+
       case 'manga_search':
         final query = params['query'] as String?;
         if (query == null || query.isEmpty) {
@@ -1280,6 +1309,41 @@ class DebugController {
               'id': r.result.id,
               'title': r.result.title,
               'thumbnail': r.result.thumbnail,
+            }).toList(),
+          };
+        } catch (e) {
+          return {'success': false, 'error': e.toString()};
+        }
+
+      case 'manga_browse':
+        try {
+          final extService = MangaExtensionService();
+          if (!extService.isInitialized) {
+            final appsPath = AppService().getDefaultAppsPath();
+            final readerPath = '$appsPath/reader';
+            final extensionsDir = ReaderPathUtils.extensionsDir(readerPath);
+            await extService.initialize(extensionsDir);
+          }
+          final extensionId = params['extension_id'] as String?;
+          if (extensionId == null || extensionId.isEmpty) {
+            return {'success': false, 'error': 'Missing extension_id parameter'};
+          }
+          final tabIndex = int.tryParse(params['tab']?.toString() ?? '0') ?? 0;
+          final ext = extService.getExtension(extensionId);
+          if (ext == null) {
+            return {'success': false, 'error': 'Extension not found: $extensionId'};
+          }
+          final results = await extService.browse(extensionId, tabIndex);
+          return {
+            'success': true,
+            'extension': extensionId,
+            'tab': tabIndex,
+            'tab_name': tabIndex < ext.browse.length ? ext.browse[tabIndex].name : 'unknown',
+            'count': results.length,
+            'results': results.take(10).map((r) => {
+              'id': r.id,
+              'title': r.title,
+              'thumbnail': r.thumbnail,
             }).toList(),
           };
         } catch (e) {

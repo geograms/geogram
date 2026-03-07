@@ -1428,5 +1428,8 @@
   "road_data": "Dados de Estradas",
   "download_road_data": "Descarregar Dados de Estradas",
   "road_data_downloaded": "Dados de estradas descarregados com sucesso",
-  "search_place": "Pesquisar local ou coordenadas..."
+  "search_place": "Pesquisar local ou coordenadas...",
+  "location_pinned": "Localização fixada",
+  "pin_location_here": "Fixar localização aqui",
+  "auto_follow": "Seguir GPS"
 }
