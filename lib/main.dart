@@ -2487,6 +2487,7 @@ class _AppsPageState extends State<AppsPage> {
       ChatNotificationService();
   StreamSubscription<Map<String, int>>? _unreadSubscription;
   StreamSubscription<DebugActionEvent>? _debugActionSubscription;
+  EventSubscription<KarmaUpdatedEvent>? _karmaUpdateSubscription;
   Map<String, int> _unreadCounts = {};
 
   List<App> _allApps = [];
@@ -2544,6 +2545,9 @@ class _AppsPageState extends State<AppsPage> {
     _debugActionSubscription = DebugController().actionStream.listen(
       _handleDebugAction,
     );
+    _karmaUpdateSubscription = EventBus().on<KarmaUpdatedEvent>((event) {
+      _loadKarmaMissions();
+    });
     LogService().log('AppsPage: initState - setting up listeners');
     _loadApps();
     _subscribeToUnreadCounts();
@@ -2648,6 +2652,7 @@ class _AppsPageState extends State<AppsPage> {
     _appService.appsNotifier.removeListener(_onAppsChanged);
     _unreadSubscription?.cancel();
     _debugActionSubscription?.cancel();
+    _karmaUpdateSubscription?.cancel();
     super.dispose();
   }
 

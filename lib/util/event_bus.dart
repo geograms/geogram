@@ -969,6 +969,25 @@ class PlaceCreatedEvent extends AppEvent {
       'PlaceCreatedEvent(placeId: $placeId, author: $author, name: $name)';
 }
 
+/// Fired when karma points are recorded locally
+class KarmaUpdatedEvent extends AppEvent {
+  final String callsign;
+  final String action;
+  final int points;
+  final int totalPoints;
+
+  KarmaUpdatedEvent({
+    required this.callsign,
+    required this.action,
+    required this.points,
+    required this.totalPoints,
+  });
+
+  @override
+  String toString() =>
+      'KarmaUpdatedEvent(callsign: $callsign, action: $action, points: $points, total: $totalPoints)';
+}
+
 /// Fired when an alert is created locally
 class AlertCreatedEvent extends AppEvent {
   final String alertId;

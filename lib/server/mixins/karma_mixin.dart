@@ -11,6 +11,7 @@ import 'dart:io';
 import '../../services/nip05_registry_service.dart';
 import '../../util/nostr_crypto.dart';
 import '../../util/nostr_event.dart';
+import '../../util/event_bus.dart';
 import '../karma/karma_engine.dart';
 import '../karma/karma_leaderboard.dart';
 import '../karma/karma_models.dart';
@@ -157,6 +158,14 @@ mixin KarmaMixin {
 
       // Push real-time update to connected client
       _pushKarmaUpdate(cs, event, profile);
+
+      // Fire EventBus event for in-process UI updates
+      EventBus().fire(KarmaUpdatedEvent(
+        callsign: cs,
+        action: action,
+        points: event.pointsFinal,
+        totalPoints: totalPoints,
+      ));
 
       return event.pointsFinal;
     } catch (e) {

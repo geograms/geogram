@@ -10,6 +10,7 @@ import '../server/karma/karma_engine.dart';
 import '../services/app_service.dart';
 import '../services/profile_service.dart';
 import '../services/signing_service.dart';
+import '../util/event_bus.dart';
 
 /// Karma gamification dashboard page.
 /// 3-tab layout: Today (daily missions), Stats, Leaderboard.
@@ -76,15 +77,23 @@ class _KarmaPageState extends State<KarmaPage>
     ),
   ];
 
+  EventSubscription<KarmaUpdatedEvent>? _karmaSubscription;
+
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 3, vsync: this);
     _loadData();
+    _karmaSubscription = EventBus().on<KarmaUpdatedEvent>((event) {
+      if (event.callsign.toUpperCase() == _callsign.toUpperCase()) {
+        _loadData();
+      }
+    });
   }
 
   @override
   void dispose() {
+    _karmaSubscription?.cancel();
     _tabController.dispose();
     super.dispose();
   }
