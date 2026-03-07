@@ -15,6 +15,7 @@ import '../util/feedback_folder_utils.dart';
 import 'log_service.dart';
 import 'profile_service.dart';
 import 'signing_service.dart';
+import 'station_server_service.dart';
 import 'station_service.dart';
 
 class FeedbackToggleResult {
@@ -69,7 +70,15 @@ class PlaceFeedbackService {
 
   Future<FeedbackToggleResult> toggleLikeOnStation(String placeId, NostrEvent event) async {
     try {
-      return await _postFeedbackEvent(placeId, 'like', event);
+      final result = await _postFeedbackEvent(placeId, 'like', event);
+      if (result.success && result.isActive == true) {
+        StationServerService().karmaRecord(
+          callsign: _profileService.getProfile().callsign,
+          action: 'like_given',
+          meta: {'content_type': 'place', 'content_id': placeId},
+        );
+      }
+      return result;
     } catch (e) {
       LogService().log('PlaceFeedbackService: Error liking place on station: $e');
       return FeedbackToggleResult(
@@ -89,13 +98,21 @@ class PlaceFeedbackService {
     try {
       final commentSignature = signature ?? await _signComment(placeId, content);
       final profile = _profileService.getProfile();
-      return await _postFeedbackComment(
+      final success = await _postFeedbackComment(
         placeId,
         author,
         content,
         npub ?? profile.npub,
         commentSignature,
       );
+      if (success) {
+        StationServerService().karmaRecord(
+          callsign: profile.callsign,
+          action: 'comment_given',
+          meta: {'content_type': 'place', 'content_id': placeId},
+        );
+      }
+      return success;
     } catch (e) {
       LogService().log('PlaceFeedbackService: Error commenting on place: $e');
       return false;

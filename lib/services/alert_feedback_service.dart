@@ -14,6 +14,7 @@ import 'package:http/http.dart' as http;
 import 'log_service.dart';
 import 'profile_service.dart';
 import 'signing_service.dart';
+import 'station_server_service.dart';
 import 'station_service.dart';
 import '../util/feedback_folder_utils.dart';
 
@@ -53,7 +54,15 @@ class AlertFeedbackService {
   /// Failures are logged but do not throw.
   Future<bool> pointAlertOnStation(String alertId) async {
     try {
-      return await _sendPointFeedback(alertId, 'point');
+      final success = await _sendPointFeedback(alertId, 'point');
+      if (success) {
+        StationServerService().karmaRecord(
+          callsign: _profileService.getProfile().callsign,
+          action: 'like_given',
+          meta: {'content_type': 'alert', 'content_id': alertId},
+        );
+      }
+      return success;
     } catch (e) {
       LogService().log('AlertFeedbackService: Error pointing alert on station: $e');
       return false;
@@ -73,7 +82,15 @@ class AlertFeedbackService {
   /// Verify an alert on the station (best-effort)
   Future<bool> verifyAlertOnStation(String alertId) async {
     try {
-      return await _sendVerification(alertId);
+      final success = await _sendVerification(alertId);
+      if (success) {
+        StationServerService().karmaRecord(
+          callsign: _profileService.getProfile().callsign,
+          action: 'verify_given',
+          meta: {'content_type': 'alert', 'content_id': alertId},
+        );
+      }
+      return success;
     } catch (e) {
       LogService().log('AlertFeedbackService: Error verifying alert on station: $e');
       return false;
@@ -91,13 +108,21 @@ class AlertFeedbackService {
     try {
       final commentSignature = await _signComment(alertId, content);
       final profile = _profileService.getProfile();
-      return await _postFeedbackComment(
+      final success = await _postFeedbackComment(
         alertId,
         author,
         content,
         npub ?? profile.npub,
         signature ?? commentSignature,
       );
+      if (success) {
+        StationServerService().karmaRecord(
+          callsign: profile.callsign,
+          action: 'comment_given',
+          meta: {'content_type': 'alert', 'content_id': alertId},
+        );
+      }
+      return success;
     } catch (e) {
       LogService().log('AlertFeedbackService: Error adding comment on station: $e');
       return false;

@@ -2270,6 +2270,11 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
           _messages[index] = updated;
         }
       });
+      StationServerService().karmaRecord(
+        callsign: currentProfile.callsign,
+        action: 'chat_reaction',
+        meta: {'room_id': _selectedChannel!.id},
+      );
     } catch (e) {
       _showError('Failed to react: $e');
     }
@@ -2397,6 +2402,11 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
         if (cacheKey.isNotEmpty) {
           await _cacheService.mergeMessages(cacheKey, roomId, [serverMessage]);
         }
+        StationServerService().karmaRecord(
+          callsign: currentProfile.callsign,
+          action: 'chat_reaction',
+          meta: {'room_id': roomId},
+        );
       }
     } catch (e) {
       // Server call failed, revert to original

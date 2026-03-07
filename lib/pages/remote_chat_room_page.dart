@@ -737,6 +737,11 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
               _messages[index] = message.copyWith(reactions: normalized);
             }
           });
+          StationServerService().karmaRecord(
+            callsign: profile.callsign,
+            action: 'chat_reaction',
+            meta: {'room_id': widget.room.id},
+          );
         }
       } else {
         throw Exception('HTTP ${response?.statusCode ?? "null"}');

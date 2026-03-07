@@ -15,6 +15,7 @@ import '../util/feedback_comment_utils.dart';
 import '../util/feedback_folder_utils.dart';
 import '../util/nostr_crypto.dart';
 import '../util/nostr_event.dart';
+import '../util/event_bus.dart';
 import 'log_service.dart';
 import 'profile_service.dart';
 import 'signing_service.dart';
@@ -409,6 +410,12 @@ class ReportService {
     } catch (e) {
       LogService().log('ReportService: Error sharing alert to stations: $e');
     }
+
+    EventBus().fire(AlertCreatedEvent(
+      alertId: report.folderName,
+      author: author,
+      title: title,
+    ));
 
     return report;
   }

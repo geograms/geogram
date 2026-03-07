@@ -969,6 +969,23 @@ class PlaceCreatedEvent extends AppEvent {
       'PlaceCreatedEvent(placeId: $placeId, author: $author, name: $name)';
 }
 
+/// Fired when an alert is created locally
+class AlertCreatedEvent extends AppEvent {
+  final String alertId;
+  final String author;
+  final String title;
+
+  AlertCreatedEvent({
+    required this.alertId,
+    required this.author,
+    required this.title,
+  });
+
+  @override
+  String toString() =>
+      'AlertCreatedEvent(alertId: $alertId, author: $author, title: $title)';
+}
+
 /// Notification tapped for a Now item (generic handler for types without dedicated events)
 class NowNotificationTappedEvent extends AppEvent {
   final String appType;

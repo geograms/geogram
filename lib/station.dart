@@ -1859,6 +1859,11 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, EmailHandlerMixin,
         karmaRecord(callsign: event.author, action: 'place_created',
             meta: {'place_id': event.placeId});
       });
+      EventBus().on<AlertCreatedEvent>((event) {
+        _broadcastUpdate('UPDATE:${event.author}/alerts/${event.alertId}');
+        karmaRecord(callsign: event.author, action: 'alert_created',
+            meta: {'alert_id': event.alertId});
+      });
 
       // Start karma service
       await startKarmaService();
