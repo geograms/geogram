@@ -19,6 +19,8 @@ Always commit your changes with a proper change log
 
 Write code that is based on DART and can run from the command line for libraries, so we can reuse it in other platforms
 
+Another claude instance might be running on the same code base, be carefull. When you find code that is breaking your compilation to unrelated changes then ask the human  
+
 ## Release Process
 
 1. Bump version in `pubspec.yaml`
