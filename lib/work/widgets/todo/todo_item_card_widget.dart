@@ -7,6 +7,7 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 
+import '../../../pages/photo_viewer_page.dart';
 import '../../../services/i18n_service.dart';
 import '../../models/todo_content.dart';
 import '../../services/ndf_service.dart';
@@ -384,31 +385,34 @@ class TodoItemCardWidget extends StatelessWidget {
               builder: (context, snapshot) {
                 return Stack(
                   children: [
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(8),
-                      child: snapshot.hasData && snapshot.data != null
-                          ? Image.memory(
-                              snapshot.data!,
-                              width: 80,
-                              height: 80,
-                              fit: BoxFit.cover,
-                              errorBuilder: (context, error, stackTrace) {
-                                return Container(
-                                  width: 80,
-                                  height: 80,
-                                  color: theme.colorScheme.surfaceContainerHighest,
-                                  child: const Icon(Icons.broken_image, color: Colors.grey),
-                                );
-                              },
-                            )
-                          : Container(
-                              width: 80,
-                              height: 80,
-                              color: theme.colorScheme.surfaceContainerHighest,
-                              child: const Center(
-                                child: CircularProgressIndicator(strokeWidth: 2),
+                    GestureDetector(
+                      onTap: () => _openImageViewer(context, index),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(8),
+                        child: snapshot.hasData && snapshot.data != null
+                            ? Image.memory(
+                                snapshot.data!,
+                                width: 80,
+                                height: 80,
+                                fit: BoxFit.cover,
+                                errorBuilder: (context, error, stackTrace) {
+                                  return Container(
+                                    width: 80,
+                                    height: 80,
+                                    color: theme.colorScheme.surfaceContainerHighest,
+                                    child: const Icon(Icons.broken_image, color: Colors.grey),
+                                  );
+                                },
+                              )
+                            : Container(
+                                width: 80,
+                                height: 80,
+                                color: theme.colorScheme.surfaceContainerHighest,
+                                child: const Center(
+                                  child: CircularProgressIndicator(strokeWidth: 2),
+                                ),
                               ),
-                            ),
+                      ),
                     ),
                     Positioned(
                       top: 4,
@@ -438,6 +442,32 @@ class TodoItemCardWidget extends StatelessWidget {
             ),
           );
         },
+      ),
+    );
+  }
+
+  Future<void> _openImageViewer(BuildContext context, int tappedIndex) async {
+    final ndfService = NdfService();
+    final tempPaths = <String>[];
+
+    for (final picPath in item.pictures) {
+      final tempPath = await ndfService.extractAssetToTemp(ndfFilePath, picPath);
+      if (tempPath != null) {
+        tempPaths.add(tempPath);
+      }
+    }
+
+    if (tempPaths.isEmpty || !context.mounted) return;
+
+    // Clamp index in case some extractions failed
+    final safeIndex = tappedIndex.clamp(0, tempPaths.length - 1);
+
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => PhotoViewerPage(
+          imagePaths: tempPaths,
+          initialIndex: safeIndex,
+        ),
       ),
     );
   }
