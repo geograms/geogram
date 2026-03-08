@@ -2726,6 +2726,8 @@ Triggers a debug action.
 | `meshtastic_log_level` | Set Meshtastic log level (returns current if no level param) | `level` (off\|error\|warn\|info\|debug) |
 | `manga_search` | Search manga extensions for a title | `query` (required), `extension_id` (optional) |
 | `manga_browse` | Browse a catalog page (popular, latest) from an extension | `extension_id` (required), `tab` (optional, default: 0) |
+| `manga_download` | Download manga chapters via background coordinator | `extension_id`, `manga_id`, `manga_title` (required), `max_chapters` (optional, default: 1) |
+| `manga_download_status` | Get manga download coordinator status | (none) |
 
 Place feedback actions send signed events to the station and only update local cache files if the place folder can be resolved via `place_path` or `callsign`.
 

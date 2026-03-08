@@ -5,6 +5,7 @@
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import '../models/app.dart';
@@ -22,6 +23,7 @@ import '../models/shared_folder.dart';
 import '../teleport/bitchat/bitchat_service.dart';
 import '../teleport/meshtastic/meshtastic_service.dart';
 import '../teleport/meshtastic/models/meshtastic_config.dart';
+import '../reader/services/manga_download_coordinator.dart';
 import '../reader/services/manga_extension_service.dart';
 import '../reader/utils/reader_path_utils.dart';
 
@@ -708,6 +710,21 @@ class DebugController {
         },
       },
       {
+        'action': 'manga_download',
+        'description': 'Download manga chapters via background coordinator',
+        'params': {
+          'extension_id': 'Extension ID (e.g. mangapill)',
+          'manga_id': 'Manga ID/URL from extension',
+          'manga_title': 'Manga title (used for folder name)',
+          'max_chapters': '(optional) Max chapters to download (default: 1)',
+        },
+      },
+      {
+        'action': 'manga_download_status',
+        'description': 'Get manga download coordinator status',
+        'params': {},
+      },
+      {
         'action': 'toast',
         'description': 'Show a toast/snackbar message on the UI',
         'params': {
@@ -1382,6 +1399,82 @@ class DebugController {
                     'title': c.title,
                   }).toList()
                 : [],
+          };
+        } catch (e) {
+          return {'success': false, 'error': e.toString()};
+        }
+
+      case 'manga_download':
+        try {
+          final extService = MangaExtensionService();
+          if (!extService.isInitialized) {
+            final appsPath = AppService().getDefaultAppsPath();
+            final readerPath = '$appsPath/reader';
+            final extensionsDir = ReaderPathUtils.extensionsDir(readerPath);
+            await extService.initialize(extensionsDir);
+          }
+          final extensionId = params['extension_id'] as String?;
+          final mangaId = params['manga_id'] as String?;
+          final mangaTitle = params['manga_title'] as String?;
+          final maxChapters = params['max_chapters'] as int? ?? 1;
+          if (extensionId == null || mangaId == null || mangaTitle == null) {
+            return {'success': false, 'error': 'Missing extension_id, manga_id, or manga_title'};
+          }
+          final chapters = await extService.listChapters(extensionId, mangaId);
+          if (chapters.isEmpty) {
+            return {'success': false, 'error': 'No chapters found'};
+          }
+          final appsPath = AppService().getDefaultAppsPath();
+          final readerPath = '$appsPath/reader';
+          final slug = ReaderPathUtils.slugify(mangaTitle);
+          final seriesDir = '$readerPath/manga/library/series/$slug';
+          // Ensure directory exists
+          final dir = Directory(seriesDir);
+          if (!await dir.exists()) await dir.create(recursive: true);
+          // Ensure library source exists
+          final dataFile = File('$readerPath/manga/library/data.json');
+          if (!await dataFile.exists()) {
+            await dataFile.parent.create(recursive: true);
+            await dataFile.writeAsString(const JsonEncoder.withIndent('  ').convert({
+              'id': 'library', 'name': 'Library', 'type': 'manga',
+              'is_local': true, 'url': '$readerPath/manga/library/series',
+              'created_at': DateTime.now().toIso8601String(),
+              'modified_at': DateTime.now().toIso8601String(),
+            }));
+          }
+          final toDownload = chapters.take(maxChapters).toList();
+          final coordinator = MangaDownloadCoordinator();
+          coordinator.enqueue(
+            seriesDir: seriesDir,
+            extensionId: extensionId,
+            seriesTitle: mangaTitle,
+            chapters: toDownload,
+          );
+          return {
+            'success': true,
+            'queued': toDownload.length,
+            'series_dir': seriesDir,
+            'chapters': toDownload.map((c) => {'id': c.id, 'number': c.number}).toList(),
+          };
+        } catch (e) {
+          return {'success': false, 'error': e.toString()};
+        }
+
+      case 'manga_download_status':
+        try {
+          final coordinator = MangaDownloadCoordinator();
+          final downloads = coordinator.downloads;
+          return {
+            'success': true,
+            'active': coordinator.isActive,
+            'paused': coordinator.isPaused,
+            'queue_length': coordinator.queueLength,
+            'downloads': downloads.map((d) => {
+              'series': d.seriesTitle,
+              'chapter': d.chapterName,
+              'is_active': d.isActive,
+              'error': d.error,
+            }).toList(),
           };
         } catch (e) {
           return {'success': false, 'error': e.toString()};

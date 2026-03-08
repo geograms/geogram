@@ -144,6 +144,14 @@ class TransferWorker {
         final client = http.Client();
         try {
           final request = http.Request('GET', uri);
+          // Apply custom headers from metadata (used by manga downloads, etc.)
+          final customHeaders =
+              transfer.metadata?['headers'] as Map<String, dynamic>?;
+          if (customHeaders != null) {
+            for (final entry in customHeaders.entries) {
+              request.headers[entry.key] = entry.value.toString();
+            }
+          }
           final response = await client.send(request).timeout(timeout);
 
           if (_cancelled) throw Exception('Transfer cancelled');

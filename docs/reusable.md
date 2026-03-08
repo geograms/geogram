@@ -5606,6 +5606,7 @@ final dateStr = ReaderPathUtils.formatDateForFolder(DateTime.now());
 - `lib/reader/services/manga_scraper.dart` — HTML scraping engine with CSS selector extraction
 - `lib/reader/services/manga_extension_service.dart` — Extension lifecycle and scraping orchestration
 - `lib/reader/services/manga_download_service.dart` — Download chapters into existing series folders
+- `lib/reader/services/manga_download_coordinator.dart` — Singleton background download coordinator (survives page navigation, registers with TransferService)
 - `lib/reader/services/manga_cloudflare_service.dart` — Cloudflare challenge handling + cookie caching
 
 JSON-driven extension system for downloading manga from websites. Extensions are JSON manifests with CSS selectors, stored in `{basePath}/manga/extensions/{id}/extension.json`.
@@ -5627,20 +5628,23 @@ final allResults = await extService.searchAllExtensions('naruto');
 // Get chapters
 final chapters = await extService.listChapters('mangapill', mangaUrl);
 
-// Download missing chapters into series folder
-final downloadService = MangaDownloadService();
-final missing = await downloadService.findMissingChapters(
+// Background download via coordinator (survives page navigation)
+final coordinator = MangaDownloadCoordinator();
+coordinator.enqueue(
   seriesDir: '/path/to/series',
-  extensionId: 'mangakakalot',
-  sourceMangaId: mangaUrl,
+  extensionId: 'mangapill',
+  seriesTitle: 'One Piece',
+  chapters: missingChapters,
 );
-for (final chapter in missing.missing) {
-  await downloadService.downloadChapter(
-    seriesDir: '/path/to/series',
-    extensionId: 'mangakakalot',
-    chapter: chapter,
-  );
-}
+// Downloads run in background, registered with TransferService
+
+// Direct download (for immediate reading)
+final downloadService = MangaDownloadService();
+await downloadService.downloadChapter(
+  seriesDir: '/path/to/series',
+  extensionId: 'mangapill',
+  chapter: chapter,
+);
 ```
 
 **Key classes:**
@@ -5650,6 +5654,7 @@ for (final chapter in missing.missing) {
 | `MangaScraper` | HTTP fetch + HTML parse + CSS select + field extraction |
 | `MangaExtensionService` | Load/install/remove extensions, search/browse/chapters/pages |
 | `MangaDownloadService` | Find missing chapters, download as chapter-N.cbz |
+| `MangaDownloadCoordinator` | Singleton background queue, registers with TransferService |
 | `BrowseConfig` | Named catalog page (popular, latest, new) with ScrapeConfig |
 | `ExtensionField` | Field extraction rule (selector, attr, regex, map, type) |
 

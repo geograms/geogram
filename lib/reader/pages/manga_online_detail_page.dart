@@ -9,6 +9,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 
 import '../models/manga.dart';
+import '../services/manga_download_coordinator.dart';
 import '../services/manga_download_service.dart';
 import '../services/manga_extension_service.dart';
 import '../services/manga_scraper.dart';
@@ -44,6 +45,7 @@ class MangaOnlineDetailPage extends StatefulWidget {
 class _MangaOnlineDetailPageState extends State<MangaOnlineDetailPage> {
   final _extensionService = MangaExtensionService();
   final _downloadService = MangaDownloadService();
+  final _coordinator = MangaDownloadCoordinator();
 
   List<ChapterInfo> _chapters = [];
   Set<double> _localChapterNumbers = {};
@@ -59,22 +61,30 @@ class _MangaOnlineDetailPageState extends State<MangaOnlineDetailPage> {
   List<String> _genres = [];
   String? _coverUrl;
 
-  // Download state
-  bool _downloading = false;
-  String _downloadStatus = '';
-  int _downloadCurrent = 0;
-  int _downloadTotal = 0;
-  final Set<String> _downloadingChapterIds = {};
-
   @override
   void initState() {
     super.initState();
+    _coordinator.addListener(_onCoordinatorUpdate);
     _load();
+  }
+
+  @override
+  void dispose() {
+    _coordinator.removeListener(_onCoordinatorUpdate);
+    super.dispose();
+  }
+
+  void _onCoordinatorUpdate() {
+    if (mounted) {
+      // Refresh local chapters when coordinator state changes
+      // (a chapter may have finished downloading)
+      _refreshLocalChapters();
+      setState(() {});
+    }
   }
 
   String get _mangaSlug => ReaderPathUtils.slugify(widget.mangaTitle);
 
-  /// Manga folder inside the reader's manga directory
   String get _libraryDir =>
       '${widget.appPath}/manga/library/series/$_mangaSlug';
 
@@ -85,12 +95,10 @@ class _MangaOnlineDetailPageState extends State<MangaOnlineDetailPage> {
     });
 
     try {
-      // Check if already in library
       _seriesDir = _libraryDir;
       final dir = Directory(_seriesDir!);
       _inLibrary = await dir.exists();
 
-      // Load local chapters if in library
       if (_inLibrary) {
         _localChapterNumbers = await _getLocalChapterNumbers(_seriesDir!);
       }
@@ -113,6 +121,11 @@ class _MangaOnlineDetailPageState extends State<MangaOnlineDetailPage> {
         _genres = genres.map((g) => g.toString()).toList();
       }
 
+      // If already in library, update manga_meta.json with fetched info
+      if (_inLibrary) {
+        _saveSeriesInfo();
+      }
+
       if (mounted) {
         setState(() => _loading = false);
       }
@@ -123,6 +136,14 @@ class _MangaOnlineDetailPageState extends State<MangaOnlineDetailPage> {
           _error = e.toString();
         });
       }
+    }
+  }
+
+  Future<void> _refreshLocalChapters() async {
+    if (_seriesDir == null) return;
+    final nums = await _getLocalChapterNumbers(_seriesDir!);
+    if (mounted) {
+      setState(() => _localChapterNumbers = nums);
     }
   }
 
@@ -142,24 +163,65 @@ class _MangaOnlineDetailPageState extends State<MangaOnlineDetailPage> {
     return numbers;
   }
 
-  /// Add manga to local library (create folder + metadata)
+  /// Save fetched series info to manga_meta.json
+  Future<void> _saveSeriesInfo() async {
+    if (_seriesDir == null) return;
+    try {
+      final metaFile = File('$_seriesDir/${SeriesMeta.filename}');
+      Map<String, dynamic> json = {};
+      if (await metaFile.exists()) {
+        json =
+            jsonDecode(await metaFile.readAsString()) as Map<String, dynamic>;
+      }
+
+      json['title'] = widget.mangaTitle;
+      if (_description != null && _description!.isNotEmpty) {
+        json['description'] = _description;
+      }
+      if (_author != null && _author!.isNotEmpty) {
+        json['author'] = _author;
+      }
+      if (_status != null && _status!.isNotEmpty) {
+        json['status'] = _status;
+      }
+      if (_genres.isNotEmpty) {
+        json['tags'] = _genres;
+      }
+      json['extension_id'] = widget.extensionId;
+      json['source_manga_id'] = widget.mangaId;
+
+      await metaFile.writeAsString(
+        const JsonEncoder.withIndent('  ').convert(json),
+      );
+    } catch (_) {}
+  }
+
+  /// Add manga to local library
   Future<void> _addToLibrary() async {
     try {
       final dir = Directory(_seriesDir!);
       await dir.create(recursive: true);
 
-      // Create manga_meta.json with extension link
+      // Create manga_meta.json with series info
       final meta = SeriesMeta(
         title: widget.mangaTitle,
+        description: _description ?? '',
+        tags: _genres,
         extensionId: widget.extensionId,
         sourceMangaId: widget.mangaId,
       );
+
+      // Add author/status if available
+      final json = meta.toJson();
+      if (_author != null) json['author'] = _author;
+      if (_status != null) json['status'] = _status;
+
       final metaFile = File('${_seriesDir!}/${SeriesMeta.filename}');
       await metaFile.writeAsString(
-        const JsonEncoder.withIndent('  ').convert(meta.toJson()),
+        const JsonEncoder.withIndent('  ').convert(json),
       );
 
-      // Download thumbnail if available
+      // Download thumbnail
       final thumbUrl = _coverUrl ?? widget.thumbnailUrl;
       if (thumbUrl != null) {
         try {
@@ -176,17 +238,14 @@ class _MangaOnlineDetailPageState extends State<MangaOnlineDetailPage> {
           final thumbFile = File('${_seriesDir!}/cover.jpg');
           await thumbFile.writeAsBytes(response.bodyBytes);
 
-          // Update meta with thumbnail
-          meta.thumbnail = 'cover.jpg';
+          // Update meta with thumbnail path
+          json['thumbnail'] = 'cover.jpg';
           await metaFile.writeAsString(
-            const JsonEncoder.withIndent('  ').convert(meta.toJson()),
+            const JsonEncoder.withIndent('  ').convert(json),
           );
-        } catch (_) {
-          // Thumbnail download is best-effort
-        }
+        } catch (_) {}
       }
 
-      // Ensure the "library" source exists in reader storage
       await _ensureLibrarySource();
 
       if (mounted) {
@@ -204,7 +263,6 @@ class _MangaOnlineDetailPageState extends State<MangaOnlineDetailPage> {
     }
   }
 
-  /// Ensure the "library" manga source exists
   Future<void> _ensureLibrarySource() async {
     final sourceDataPath = '${widget.appPath}/manga/library/data.json';
     final file = File(sourceDataPath);
@@ -224,48 +282,34 @@ class _MangaOnlineDetailPageState extends State<MangaOnlineDetailPage> {
       const JsonEncoder.withIndent('  ').convert(sourceData),
     );
 
-    // Create series directory
     await Directory('${widget.appPath}/manga/library/series')
         .create(recursive: true);
   }
 
-  /// Download a single chapter
+  /// Download a single chapter via background coordinator
   Future<void> _downloadSingleChapter(ChapterInfo chapter) async {
-    if (_downloadingChapterIds.contains(chapter.id)) return;
-
     if (!_inLibrary) await _addToLibrary();
 
-    setState(() {
-      _downloadingChapterIds.add(chapter.id);
-    });
+    _coordinator.enqueue(
+      seriesDir: _seriesDir!,
+      extensionId: widget.extensionId,
+      seriesTitle: widget.mangaTitle,
+      chapters: [chapter],
+    );
 
-    try {
-      await _downloadService.downloadChapter(
-        seriesDir: _seriesDir!,
-        extensionId: widget.extensionId,
-        chapter: chapter,
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+              'Queued: ${chapter.title ?? "Chapter ${chapter.number}"}'),
+          duration: const Duration(seconds: 1),
+        ),
       );
-
-      _localChapterNumbers.add(chapter.number);
-      if (mounted) {
-        setState(() {
-          _downloadingChapterIds.remove(chapter.id);
-        });
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() => _downloadingChapterIds.remove(chapter.id));
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Download error: $e')),
-        );
-      }
     }
   }
 
-  /// Download all missing chapters
+  /// Download all missing chapters via background coordinator
   Future<void> _downloadAll() async {
-    if (_downloading) return;
-
     if (!_inLibrary) await _addToLibrary();
 
     final missing = _chapters
@@ -281,46 +325,19 @@ class _MangaOnlineDetailPageState extends State<MangaOnlineDetailPage> {
       return;
     }
 
-    setState(() {
-      _downloading = true;
-      _downloadTotal = missing.length;
-      _downloadCurrent = 0;
-    });
-
-    for (final chapter in missing) {
-      if (!_downloading) break; // cancelled
-
-      final chapterName = chapter.title ?? 'Chapter ${chapter.number}';
-      setState(() {
-        _downloadCurrent++;
-        _downloadStatus =
-            'Downloading $_downloadCurrent/$_downloadTotal: $chapterName';
-        _downloadingChapterIds.add(chapter.id);
-      });
-
-      try {
-        await _downloadService.downloadChapter(
-          seriesDir: _seriesDir!,
-          extensionId: widget.extensionId,
-          chapter: chapter,
-        );
-        _localChapterNumbers.add(chapter.number);
-      } catch (e) {
-        // Continue with next
-      }
-
-      if (mounted) {
-        setState(() => _downloadingChapterIds.remove(chapter.id));
-      }
-    }
+    _coordinator.enqueue(
+      seriesDir: _seriesDir!,
+      extensionId: widget.extensionId,
+      seriesTitle: widget.mangaTitle,
+      chapters: missing,
+    );
 
     if (mounted) {
-      setState(() {
-        _downloading = false;
-        _downloadStatus = '';
-      });
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Downloads complete')),
+        SnackBar(
+          content: Text('Queued ${missing.length} chapters for download'),
+          duration: const Duration(seconds: 2),
+        ),
       );
     }
   }
@@ -334,7 +351,7 @@ class _MangaOnlineDetailPageState extends State<MangaOnlineDetailPage> {
 
     // Download if not available locally
     if (!await File(cbzPath).exists()) {
-      setState(() => _downloadingChapterIds.add(chapter.id));
+      // Download synchronously for immediate reading
       try {
         await _downloadService.downloadChapter(
           seriesDir: _seriesDir!,
@@ -344,21 +361,16 @@ class _MangaOnlineDetailPageState extends State<MangaOnlineDetailPage> {
         _localChapterNumbers.add(chapter.number);
       } catch (e) {
         if (mounted) {
-          setState(() => _downloadingChapterIds.remove(chapter.id));
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(content: Text('Download error: $e')),
           );
         }
         return;
       }
-      if (mounted) {
-        setState(() => _downloadingChapterIds.remove(chapter.id));
-      }
     }
 
     if (!mounted) return;
 
-    // Open reader
     final mangaChapter = MangaChapter(
       filename: 'chapter-$chapterName.cbz',
       number: chapter.number,
@@ -377,14 +389,7 @@ class _MangaOnlineDetailPageState extends State<MangaOnlineDetailPage> {
           i18n: widget.i18n,
         ),
       ),
-    ).then((_) {
-      // Refresh local chapters after reading
-      if (_seriesDir != null) {
-        _getLocalChapterNumbers(_seriesDir!).then((nums) {
-          if (mounted) setState(() => _localChapterNumbers = nums);
-        });
-      }
-    });
+    ).then((_) => _refreshLocalChapters());
   }
 
   String _formatChapterNumber(double number) {
@@ -400,11 +405,15 @@ class _MangaOnlineDetailPageState extends State<MangaOnlineDetailPage> {
     final missingCount =
         _chapters.where((c) => !_localChapterNumbers.contains(c.number)).length;
     final displayThumb = _coverUrl ?? widget.thumbnailUrl;
+    final isSeriesDownloading =
+        _seriesDir != null && _coordinator.isDownloading(_seriesDir!);
+    final seriesQueueCount = _seriesDir != null
+        ? _coordinator.queuedCountForSeries(_seriesDir!)
+        : 0;
 
     return Scaffold(
       body: CustomScrollView(
         slivers: [
-          // Header with cover image
           SliverAppBar(
             expandedHeight: 200,
             pinned: true,
@@ -415,11 +424,17 @@ class _MangaOnlineDetailPageState extends State<MangaOnlineDetailPage> {
                   tooltip: 'Add to library',
                   onPressed: _addToLibrary,
                 ),
-              if (_inLibrary && missingCount > 0)
+              if (_inLibrary && missingCount > 0 && !isSeriesDownloading)
                 IconButton(
                   icon: const Icon(Icons.download),
                   tooltip: 'Download all ($missingCount)',
-                  onPressed: _downloading ? null : _downloadAll,
+                  onPressed: _downloadAll,
+                ),
+              if (isSeriesDownloading)
+                IconButton(
+                  icon: const Icon(Icons.cancel),
+                  tooltip: 'Cancel downloads',
+                  onPressed: () => _coordinator.cancelSeries(_seriesDir!),
                 ),
             ],
             flexibleSpace: FlexibleSpaceBar(
@@ -459,18 +474,16 @@ class _MangaOnlineDetailPageState extends State<MangaOnlineDetailPage> {
             ),
           ),
 
-          // Series info section
+          // Series info
           SliverToBoxAdapter(
             child: Padding(
               padding: const EdgeInsets.all(16),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // Cover + metadata row
                   Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      // Small cover thumbnail
                       if (displayThumb != null)
                         ClipRRect(
                           borderRadius: BorderRadius.circular(8),
@@ -489,23 +502,22 @@ class _MangaOnlineDetailPageState extends State<MangaOnlineDetailPage> {
                           ),
                         ),
                       if (displayThumb != null) const SizedBox(width: 16),
-
-                      // Metadata
                       Expanded(
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            // Source
                             Chip(
                               avatar: const Icon(Icons.extension, size: 16),
                               label: Text(widget.extensionName),
                               visualDensity: VisualDensity.compact,
                             ),
-                            if (_author != null && _author!.isNotEmpty) ...[
+                            if (_author != null &&
+                                _author!.isNotEmpty) ...[
                               const SizedBox(height: 4),
                               Row(
                                 children: [
-                                  Icon(Icons.person, size: 16,
+                                  Icon(Icons.person,
+                                      size: 16,
                                       color: theme.colorScheme.onSurface
                                           .withValues(alpha: 0.6)),
                                   const SizedBox(width: 6),
@@ -520,24 +532,32 @@ class _MangaOnlineDetailPageState extends State<MangaOnlineDetailPage> {
                                 ],
                               ),
                             ],
-                            if (_status != null && _status!.isNotEmpty) ...[
+                            if (_status != null &&
+                                _status!.isNotEmpty) ...[
                               const SizedBox(height: 4),
                               Row(
                                 children: [
                                   Icon(
-                                    _status!.toLowerCase().contains('ongoing')
+                                    _status!
+                                            .toLowerCase()
+                                            .contains('ongoing')
                                         ? Icons.autorenew
                                         : Icons.check_circle_outline,
                                     size: 16,
-                                    color: _status!.toLowerCase().contains('ongoing')
+                                    color: _status!
+                                            .toLowerCase()
+                                            .contains('ongoing')
                                         ? Colors.blue
                                         : Colors.green,
                                   ),
                                   const SizedBox(width: 6),
                                   Text(
                                     _status!,
-                                    style: theme.textTheme.bodyMedium?.copyWith(
-                                      color: _status!.toLowerCase().contains('ongoing')
+                                    style: theme.textTheme.bodyMedium
+                                        ?.copyWith(
+                                      color: _status!
+                                              .toLowerCase()
+                                              .contains('ongoing')
                                           ? Colors.blue
                                           : Colors.green,
                                     ),
@@ -549,7 +569,8 @@ class _MangaOnlineDetailPageState extends State<MangaOnlineDetailPage> {
                               const SizedBox(height: 4),
                               Text(
                                 '${_chapters.length} chapters',
-                                style: theme.textTheme.bodyMedium?.copyWith(
+                                style:
+                                    theme.textTheme.bodyMedium?.copyWith(
                                   color: theme.colorScheme.onSurface
                                       .withValues(alpha: 0.6),
                                 ),
@@ -567,22 +588,28 @@ class _MangaOnlineDetailPageState extends State<MangaOnlineDetailPage> {
                     Wrap(
                       spacing: 6,
                       runSpacing: 4,
-                      children: _genres.map((g) => Chip(
-                        label: Text(g, style: const TextStyle(fontSize: 11)),
-                        visualDensity: VisualDensity.compact,
-                        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                        padding: EdgeInsets.zero,
-                      )).toList(),
+                      children: _genres
+                          .map((g) => Chip(
+                                label: Text(g,
+                                    style: const TextStyle(fontSize: 11)),
+                                visualDensity: VisualDensity.compact,
+                                materialTapTargetSize:
+                                    MaterialTapTargetSize.shrinkWrap,
+                                padding: EdgeInsets.zero,
+                              ))
+                          .toList(),
                     ),
                   ],
 
                   // Description
-                  if (_description != null && _description!.trim().isNotEmpty) ...[
+                  if (_description != null &&
+                      _description!.trim().isNotEmpty) ...[
                     const SizedBox(height: 12),
                     Text(
                       _description!.trim(),
                       style: theme.textTheme.bodyMedium?.copyWith(
-                        color: theme.colorScheme.onSurface.withValues(alpha: 0.7),
+                        color: theme.colorScheme.onSurface
+                            .withValues(alpha: 0.7),
                       ),
                       maxLines: 6,
                       overflow: TextOverflow.ellipsis,
@@ -617,27 +644,38 @@ class _MangaOnlineDetailPageState extends State<MangaOnlineDetailPage> {
                       ],
                     ),
 
-                  // Download progress
-                  if (_downloading) ...[
+                  // Background download indicator
+                  if (isSeriesDownloading) ...[
                     const SizedBox(height: 12),
-                    LinearProgressIndicator(
-                      value: _downloadTotal > 0
-                          ? _downloadCurrent / _downloadTotal
-                          : null,
-                    ),
-                    const SizedBox(height: 4),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Text(_downloadStatus,
-                              style: theme.textTheme.bodySmall),
-                        ),
-                        TextButton(
-                          onPressed: () =>
-                              setState(() => _downloading = false),
-                          child: const Text('Stop'),
-                        ),
-                      ],
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: theme.colorScheme.primaryContainer
+                            .withValues(alpha: 0.3),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Row(
+                        children: [
+                          const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child:
+                                CircularProgressIndicator(strokeWidth: 2),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Text(
+                              'Downloading $seriesQueueCount chapter${seriesQueueCount != 1 ? 's' : ''} in background...',
+                              style: theme.textTheme.bodySmall,
+                            ),
+                          ),
+                          TextButton(
+                            onPressed: () =>
+                                _coordinator.cancelSeries(_seriesDir!),
+                            child: const Text('Cancel'),
+                          ),
+                        ],
+                      ),
                     ),
                   ],
 
@@ -654,7 +692,7 @@ class _MangaOnlineDetailPageState extends State<MangaOnlineDetailPage> {
                           fontWeight: FontWeight.bold,
                         ),
                       ),
-                      if (missingCount > 0 && !_downloading)
+                      if (missingCount > 0 && !isSeriesDownloading)
                         TextButton.icon(
                           onPressed: _downloadAll,
                           icon: const Icon(Icons.download, size: 18),
@@ -667,7 +705,7 @@ class _MangaOnlineDetailPageState extends State<MangaOnlineDetailPage> {
             ),
           ),
 
-          // Loading / error
+          // Loading/error
           if (_loading)
             const SliverToBoxAdapter(
               child: Center(
@@ -685,7 +723,8 @@ class _MangaOnlineDetailPageState extends State<MangaOnlineDetailPage> {
                   child: Column(
                     children: [
                       Text(_error!,
-                          style: TextStyle(color: theme.colorScheme.error)),
+                          style:
+                              TextStyle(color: theme.colorScheme.error)),
                       const SizedBox(height: 16),
                       ElevatedButton(
                         onPressed: _load,
@@ -704,18 +743,20 @@ class _MangaOnlineDetailPageState extends State<MangaOnlineDetailPage> {
                   final chapter = _chapters[index];
                   final isLocal =
                       _localChapterNumbers.contains(chapter.number);
-                  final isDownloading =
-                      _downloadingChapterIds.contains(chapter.id);
+                  final isQueued = _seriesDir != null &&
+                      _coordinator.downloads.any((d) =>
+                          d.seriesDir == _seriesDir &&
+                          d.chapter.id == chapter.id);
                   final chapterName =
                       chapter.title ?? 'Chapter ${chapter.number}';
 
                   return ListTile(
-                    leading: isDownloading
+                    leading: isQueued
                         ? const SizedBox(
                             width: 24,
                             height: 24,
-                            child:
-                                CircularProgressIndicator(strokeWidth: 2),
+                            child: CircularProgressIndicator(
+                                strokeWidth: 2),
                           )
                         : Icon(
                             isLocal
@@ -734,13 +775,15 @@ class _MangaOnlineDetailPageState extends State<MangaOnlineDetailPage> {
                     ),
                     trailing: isLocal
                         ? const Icon(Icons.chevron_right)
-                        : IconButton(
-                            icon: const Icon(Icons.download_outlined),
-                            tooltip: 'Download',
-                            onPressed: isDownloading
-                                ? null
-                                : () => _downloadSingleChapter(chapter),
-                          ),
+                        : isQueued
+                            ? const Icon(Icons.hourglass_top, size: 20)
+                            : IconButton(
+                                icon:
+                                    const Icon(Icons.download_outlined),
+                                tooltip: 'Download',
+                                onPressed: () =>
+                                    _downloadSingleChapter(chapter),
+                              ),
                     onTap: () => _readChapter(chapter),
                   );
                 },
