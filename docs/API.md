@@ -3327,6 +3327,35 @@ Returns:
 
 ---
 
+### Power Mode (Battery Saving)
+
+**POST /api/debug** with `{"action": "power_mode"}` — Get current power mode status
+- Returns: `{ mode: "foreground|background|doze", isMobile: bool, exemptions: [...], dozeTimerActive: bool }`
+
+**POST /api/debug** with `{"action": "power_mode", "mode": "background"}` — Force power mode transition
+- Valid modes: `foreground`, `background`, `doze`
+- Useful for testing battery-saving behavior on desktop
+
+```bash
+# Check current power mode
+curl -X POST http://localhost:3456/api/debug \
+  -d '{"action": "power_mode"}'
+
+# Simulate background mode
+curl -X POST http://localhost:3456/api/debug \
+  -d '{"action": "power_mode", "mode": "background"}'
+
+# Simulate doze mode (2min+ background)
+curl -X POST http://localhost:3456/api/debug \
+  -d '{"action": "power_mode", "mode": "doze"}'
+
+# Return to foreground
+curl -X POST http://localhost:3456/api/debug \
+  -d '{"action": "power_mode", "mode": "foreground"}'
+```
+
+---
+
 ### Now Feed
 
 **GET /api/debug/now** — List current feed items

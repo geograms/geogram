@@ -18,6 +18,7 @@ import 'debug_controller.dart';
 import 'now_service.dart';
 import '../models/now_item.dart';
 import 'task_monitor_service.dart';
+import 'power_aware_service.dart';
 import 'security_service.dart';
 import 'storage_config.dart';
 import 'user_location_service.dart';
@@ -2093,6 +2094,11 @@ function cleanup() {
         return await _handleBotAction(action.toLowerCase(), params, headers);
       }
 
+      // Handle power mode simulation (for testing battery saving on desktop)
+      if (action.toLowerCase() == 'power_mode') {
+        return _handlePowerModeAction(params, headers);
+      }
+
       // Handle device actions separately (they are async)
       if (action.toLowerCase().startsWith('device_')) {
         return await _handleDeviceAction(action.toLowerCase(), params, headers);
@@ -2546,6 +2552,49 @@ function cleanup() {
         headers: headers,
       );
     }
+  }
+
+  // ============================================================
+  // Debug API - Power Mode Actions
+  // ============================================================
+
+  /// Handle power mode simulation for testing battery saving on desktop.
+  ///
+  /// POST /api/debug {"action": "power_mode", "mode": "background|doze|foreground"}
+  /// GET  /api/debug {"action": "power_mode"} — returns current state
+  shelf.Response _handlePowerModeAction(
+    Map<String, dynamic> params,
+    Map<String, String> headers,
+  ) {
+    final modeStr = params['mode'] as String?;
+    if (modeStr == null) {
+      // Return current status
+      return shelf.Response.ok(
+        jsonEncode(PowerAwareService().toJson()),
+        headers: headers,
+      );
+    }
+
+    final mode = PowerMode.values.where((m) => m.name == modeStr).firstOrNull;
+    if (mode == null) {
+      return shelf.Response.badRequest(
+        body: jsonEncode({
+          'error': 'Invalid mode: $modeStr',
+          'valid_modes': PowerMode.values.map((m) => m.name).toList(),
+        }),
+        headers: headers,
+      );
+    }
+
+    PowerAwareService().forceMode(mode);
+    return shelf.Response.ok(
+      jsonEncode({
+        'success': true,
+        'mode': mode.name,
+        ...PowerAwareService().toJson(),
+      }),
+      headers: headers,
+    );
   }
 
   // ============================================================

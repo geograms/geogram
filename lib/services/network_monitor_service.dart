@@ -15,6 +15,7 @@ import 'dart:async';
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'log_service.dart';
+import 'power_aware_service.dart';
 import '../util/event_bus.dart';
 
 /// Service that monitors network connectivity and fires events on changes
@@ -30,6 +31,9 @@ class NetworkMonitorService {
 
   /// Timer for periodic checks
   Timer? _checkTimer;
+
+  /// Power-aware subscription
+  StreamSubscription<PowerMode>? _powerSubscription;
 
   /// Last known states (to avoid duplicate events)
   bool _lastLanAvailable = false;
@@ -58,13 +62,42 @@ class NetworkMonitorService {
 
     // Start periodic checks
     _checkTimer = Timer.periodic(_checkInterval, (_) => _checkNetworkState());
+
+    // Listen for power mode changes (mobile battery saving)
+    _powerSubscription = PowerAwareService().onModeChanged.listen(_onPowerModeChanged);
   }
 
   /// Stop monitoring and clean up
   void dispose() {
     _checkTimer?.cancel();
     _checkTimer = null;
+    _powerSubscription?.cancel();
+    _powerSubscription = null;
     _initialized = false;
+  }
+
+  /// Adjust polling interval based on power mode.
+  void _onPowerModeChanged(PowerMode mode) {
+    _checkTimer?.cancel();
+    _checkTimer = null;
+
+    switch (mode) {
+      case PowerMode.foreground:
+        _checkTimer = Timer.periodic(_checkInterval, (_) => _checkNetworkState());
+        LogService().log('NetworkMonitor: foreground — polling every 10s');
+        break;
+      case PowerMode.background:
+        _checkTimer = Timer.periodic(
+          const Duration(seconds: 60),
+          (_) => _checkNetworkState(),
+        );
+        LogService().log('NetworkMonitor: background — polling every 60s');
+        break;
+      case PowerMode.doze:
+        // Stop polling entirely in doze
+        LogService().log('NetworkMonitor: doze — polling paused');
+        break;
+    }
   }
 
   /// Force a network state check (can be called after network changes)

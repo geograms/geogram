@@ -12,6 +12,7 @@ import '../../services/location_provider_service.dart';
 import '../../services/devices_service.dart';
 import '../../services/place_service.dart';
 import '../../services/ble_foreground_service.dart';
+import '../../services/power_aware_service.dart';
 
 /// Service for detecting nearby devices (via Bluetooth) and places (via GPS).
 /// Registers as a consumer of LocationProviderService to get GPS updates.
@@ -28,6 +29,8 @@ class ProximityDetectionService {
   LockedPosition? _lastPosition;
   bool _scanInProgress = false;
   DateTime? _lastScanStartedAt;
+  StreamSubscription<PowerMode>? _powerSubscription;
+  bool _wasRunningBeforeDoze = false;
 
   /// Minimum interval between external trigger scans to avoid scan storms.
   static const _externalScanThrottle = Duration(seconds: 8);
@@ -93,10 +96,46 @@ class ProximityDetectionService {
           'ProximityDetectionService: Started with 60-second timer and GPS consumer',
         );
       }
+      // Listen for power mode changes (mobile battery saving)
+      _powerSubscription?.cancel();
+      _powerSubscription = PowerAwareService().onModeChanged.listen(_onPowerModeChanged);
     } catch (e, stack) {
       LogService().log('ProximityDetectionService: Failed to start: $e');
       LogService().log('ProximityDetectionService: Stack: $stack');
       _isRunning = false;
+    }
+  }
+
+  /// Adjust behavior based on power mode.
+  void _onPowerModeChanged(PowerMode mode) {
+    if (!_isRunning && mode != PowerMode.foreground) return;
+
+    switch (mode) {
+      case PowerMode.foreground:
+        // Resume if we were stopped by doze
+        if (_wasRunningBeforeDoze && !_isRunning && _trackerService != null) {
+          _wasRunningBeforeDoze = false;
+          start(_trackerService!);
+          LogService().log('ProximityDetectionService: foreground — resumed');
+        }
+        break;
+      case PowerMode.background:
+        // Reduce scan frequency to 120s on non-Android (Android uses native handler)
+        if (_isRunning && _scanTimer != null) {
+          _scanTimer?.cancel();
+          _scanTimer = Timer.periodic(const Duration(seconds: 120), (_) {
+            unawaited(_requestScan(source: 'timer-bg'));
+          });
+          LogService().log('ProximityDetectionService: background — scan interval 120s');
+        }
+        break;
+      case PowerMode.doze:
+        if (_isRunning) {
+          _wasRunningBeforeDoze = true;
+          stop();
+          LogService().log('ProximityDetectionService: doze — stopped');
+        }
+        break;
     }
   }
 
@@ -116,6 +155,8 @@ class ProximityDetectionService {
     _locationConsumerDispose = null;
     _scanTimer?.cancel();
     _scanTimer = null;
+    _powerSubscription?.cancel();
+    _powerSubscription = null;
     _isRunning = false;
     _activeSessions.clear();
     _lastPosition = null;

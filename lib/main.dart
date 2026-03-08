@@ -47,6 +47,7 @@ import 'services/app_theme_service.dart';
 import 'services/app_args.dart';
 import 'services/security_service.dart';
 import 'services/network_monitor_service.dart';
+import 'services/power_aware_service.dart';
 import 'services/user_location_service.dart';
 import 'services/direct_message_service.dart';
 import 'services/dm_queue_service.dart';
@@ -937,6 +938,10 @@ class _GeogramAppState extends State<GeogramApp> with WidgetsBindingObserver {
     print(
       'NOTIFICATION_DEBUG: ${DateTime.now()} didChangeAppLifecycleState: $state',
     );
+    // Notify power-aware service for battery management (mobile only)
+    if (!kIsWeb && (Platform.isAndroid || Platform.isIOS)) {
+      PowerAwareService().onLifecycleChanged(state);
+    }
     // Flush IRC/XMPP message queues on app suspend/close to avoid data loss
     if (state == AppLifecycleState.inactive ||
         state == AppLifecycleState.paused ||

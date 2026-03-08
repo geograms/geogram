@@ -8,6 +8,7 @@ import 'package:async/async.dart';
 import 'package:http/http.dart' as http;
 import '../services/log_service.dart';
 import '../services/log_api_service.dart';
+import '../services/power_aware_service.dart';
 import '../transfer/services/p2p_transfer_service.dart';
 import 'transport.dart';
 import 'transport_message.dart';
@@ -63,6 +64,9 @@ class ConnectionManager {
   /// Timer for processing queued messages
   Timer? _queueProcessTimer;
 
+  /// Power-aware subscription
+  StreamSubscription<PowerMode>? _powerSubscription;
+
   // ============================================================
   // Initialization
   // ============================================================
@@ -92,6 +96,9 @@ class ConnectionManager {
     // Start queue processor
     _startQueueProcessor();
 
+    // Listen for power mode changes (mobile battery saving)
+    _powerSubscription = PowerAwareService().onModeChanged.listen(_onPowerModeChanged);
+
     _initialized = true;
     LogService().log('ConnectionManager: Initialized with ${_transports.length} transports');
   }
@@ -100,6 +107,8 @@ class ConnectionManager {
   Future<void> dispose() async {
     _queueProcessTimer?.cancel();
     _queueProcessTimer = null;
+    _powerSubscription?.cancel();
+    _powerSubscription = null;
 
     for (final transport in _transports.values) {
       try {
@@ -738,6 +747,28 @@ class ConnectionManager {
       const Duration(seconds: 30),
       (_) => _processQueue(),
     );
+  }
+
+  /// Adjust queue processing interval based on power mode.
+  void _onPowerModeChanged(PowerMode mode) {
+    _queueProcessTimer?.cancel();
+    _queueProcessTimer = null;
+
+    final Duration interval;
+    switch (mode) {
+      case PowerMode.foreground:
+        interval = const Duration(seconds: 30);
+        break;
+      case PowerMode.background:
+        interval = const Duration(seconds: 60);
+        break;
+      case PowerMode.doze:
+        interval = const Duration(seconds: 120);
+        break;
+    }
+
+    _queueProcessTimer = Timer.periodic(interval, (_) => _processQueue());
+    LogService().log('ConnectionManager: ${mode.name} — queue interval ${interval.inSeconds}s');
   }
 
   Future<void> _processQueue() async {

@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:geolocator/geolocator.dart';
 
 import 'log_service.dart';
+import 'power_aware_service.dart';
 import '../util/geolocation_utils.dart';
 import '../util/event_bus.dart';
 
@@ -125,7 +126,11 @@ class LocationProviderService extends ChangeNotifier {
   DateTime? _lastUpdateTime;
   bool _isRunning = false;
   int _consumerCount = 0;
+  int _highFidelityCount = 0;
   String? _sharedFilePath;
+  int _currentIntervalSeconds = 60;
+  StreamSubscription<PowerMode>? _powerSubscription;
+  PowerMode _currentPowerMode = PowerMode.foreground;
 
   final _positionController = StreamController<LockedPosition>.broadcast();
 
@@ -153,6 +158,7 @@ class LocationProviderService extends ChangeNotifier {
   /// The service stays running as long as there's at least one consumer.
   /// Returns a dispose function to call when done.
   ///
+  /// [highFidelity] keeps distanceFilter=0 for this consumer (e.g., path recording).
   /// [notificationTitle] and [notificationText] are used for the Android
   /// foreground service notification.
   Future<VoidCallback> registerConsumer({
@@ -160,10 +166,12 @@ class LocationProviderService extends ChangeNotifier {
     void Function(LockedPosition)? onPosition,
     String? notificationTitle,
     String? notificationText,
+    bool highFidelity = false,
   }) async {
     _consumerCount++;
+    if (highFidelity) _highFidelityCount++;
     LogService().log(
-        'LocationProviderService: Consumer registered (count: $_consumerCount)');
+        'LocationProviderService: Consumer registered (count: $_consumerCount, highFidelity: $_highFidelityCount)');
 
     StreamSubscription<LockedPosition>? subscription;
     if (onPosition != null) {
@@ -189,12 +197,14 @@ class LocationProviderService extends ChangeNotifier {
     return () {
       subscription?.cancel();
       _consumerCount--;
+      if (highFidelity) _highFidelityCount--;
       LogService().log(
-          'LocationProviderService: Consumer unregistered (count: $_consumerCount)');
+          'LocationProviderService: Consumer unregistered (count: $_consumerCount, highFidelity: $_highFidelityCount)');
 
       // Stop if no more consumers
       if (_consumerCount <= 0) {
         _consumerCount = 0;
+        _highFidelityCount = 0;
         stop();
       }
     };
@@ -256,9 +266,13 @@ class LocationProviderService extends ChangeNotifier {
     _sharedFilePath = sharedFilePath;
     _notificationTitle = notificationTitle;
     _notificationText = notificationText;
+    _currentIntervalSeconds = intervalSeconds;
     _isRunning = true;
 
     await _startPositionUpdates(intervalSeconds);
+
+    // Listen for power mode changes (mobile battery saving)
+    _powerSubscription ??= PowerAwareService().onModeChanged.listen(_onPowerModeChanged);
 
     LogService().log(
         'LocationProviderService: Started with ${intervalSeconds}s interval');
@@ -271,7 +285,10 @@ class LocationProviderService extends ChangeNotifier {
     if (!_isRunning) return;
 
     _stopPositionUpdates();
+    _powerSubscription?.cancel();
+    _powerSubscription = null;
     _isRunning = false;
+    _currentPowerMode = PowerMode.foreground;
     LogService().log('LocationProviderService: Stopped');
     notifyListeners();
   }
@@ -376,21 +393,41 @@ class LocationProviderService extends ChangeNotifier {
       // Mobile: Position stream with foreground service
       late LocationSettings locationSettings;
 
+      // Use distanceFilter=0 only for high-fidelity consumers (path recording),
+      // otherwise 10m to avoid unnecessary wakeups when stationary.
+      // Power-aware: background uses 50m + medium accuracy, doze stops entirely.
+      final int distanceFilter;
+      final LocationAccuracy accuracy;
+      final bool wakeLock;
+      if (_highFidelityCount > 0) {
+        distanceFilter = 0;
+        accuracy = LocationAccuracy.high;
+        wakeLock = true;
+      } else if (_currentPowerMode == PowerMode.background) {
+        distanceFilter = 50;
+        accuracy = LocationAccuracy.medium;
+        wakeLock = false;
+      } else {
+        distanceFilter = 10;
+        accuracy = LocationAccuracy.high;
+        wakeLock = true;
+      }
+
       if (Platform.isAndroid) {
         locationSettings = AndroidSettings(
-          accuracy: LocationAccuracy.high,
-          distanceFilter: 0,
+          accuracy: accuracy,
+          distanceFilter: distanceFilter,
           intervalDuration: Duration(seconds: intervalSeconds),
           foregroundNotificationConfig: ForegroundNotificationConfig(
             notificationTitle: _notificationTitle ?? 'Location Active',
             notificationText: _notificationText ?? 'Providing GPS position',
-            enableWakeLock: true,
+            enableWakeLock: wakeLock,
           ),
         );
       } else {
         locationSettings = AppleSettings(
-          accuracy: LocationAccuracy.high,
-          distanceFilter: 0,
+          accuracy: accuracy,
+          distanceFilter: distanceFilter,
           activityType: ActivityType.other,
           pauseLocationUpdatesAutomatically: false,
           allowBackgroundLocationUpdates: true,
@@ -422,6 +459,43 @@ class LocationProviderService extends ChangeNotifier {
     _positionSubscription = null;
     _periodicTimer?.cancel();
     _periodicTimer = null;
+  }
+
+  /// Adjust GPS settings based on power mode.
+  void _onPowerModeChanged(PowerMode mode) {
+    _currentPowerMode = mode;
+    if (!_isRunning) return;
+
+    final isMobile = !kIsWeb && (Platform.isAndroid || Platform.isIOS);
+    if (!isMobile) return;
+
+    switch (mode) {
+      case PowerMode.foreground:
+        // Restart stream with normal settings
+        _startPositionUpdates(_currentIntervalSeconds);
+        LogService().log('LocationProviderService: foreground — normal GPS settings');
+        break;
+      case PowerMode.background:
+        if (_highFidelityCount > 0) {
+          // High-fidelity consumer active — keep full GPS
+          LogService().log('LocationProviderService: background — high-fidelity active, no change');
+        } else {
+          // Restart with reduced settings (distanceFilter=50, medium accuracy)
+          _startPositionUpdates(_currentIntervalSeconds);
+          LogService().log('LocationProviderService: background — reduced GPS (distanceFilter=50, medium)');
+        }
+        break;
+      case PowerMode.doze:
+        if (_highFidelityCount > 0 || PowerAwareService().hasExemptions) {
+          // Exempted — keep GPS alive
+          LogService().log('LocationProviderService: doze — exempted, GPS stays active');
+        } else {
+          // Stop GPS entirely
+          _stopPositionUpdates();
+          LogService().log('LocationProviderService: doze — GPS stopped');
+        }
+        break;
+    }
   }
 
   void _onPositionUpdate(Position position) {

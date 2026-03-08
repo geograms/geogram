@@ -9,6 +9,7 @@ import 'tracker_service.dart';
 import '../../models/monitored_task.dart';
 import '../../services/log_service.dart';
 import '../../services/location_provider_service.dart';
+import '../../services/power_aware_service.dart';
 import '../../util/task_monitor_helpers.dart';
 
 /// Service for managing GPS path recording.
@@ -125,6 +126,7 @@ class PathRecordingService extends ChangeNotifier {
 
         if (state.isRecording) {
           _taskHandle?.markRunning();
+          PowerAwareService().addExemption('path_recording');
           await _startGPSUpdates(state.intervalSeconds);
         }
 
@@ -226,11 +228,15 @@ class PathRecordingService extends ChangeNotifier {
       _registerTaskMonitor();
       _taskHandle?.markRunning();
 
+      // Exempt from power doze — GPS must stay at full fidelity
+      PowerAwareService().addExemption('path_recording');
+
       // GPS already started above
       notifyListeners();
       return path;
     } catch (e) {
       _stopGPSUpdates();
+      PowerAwareService().removeExemption('path_recording');
       LogService().log('PathRecordingService: Error starting recording: $e');
       return null;
     }
@@ -402,6 +408,9 @@ class PathRecordingService extends ChangeNotifier {
       _taskHandle?.dispose();
       _taskHandle = null;
 
+      // Remove power exemption
+      PowerAwareService().removeExemption('path_recording');
+
       _recordingState = null;
       _startTime = null;
       _pointCount = 0;
@@ -441,6 +450,9 @@ class PathRecordingService extends ChangeNotifier {
 
       _taskHandle?.dispose();
       _taskHandle = null;
+
+      // Remove power exemption
+      PowerAwareService().removeExemption('path_recording');
 
       _recordingState = null;
       _startTime = null;
@@ -482,6 +494,7 @@ class PathRecordingService extends ChangeNotifier {
         onPosition: _onPositionUpdate,
         notificationTitle: _notificationTitle,
         notificationText: _notificationText,
+        highFidelity: true,
       );
       _startGpsWatchdog(intervalSeconds);
       return true;
@@ -573,6 +586,7 @@ class PathRecordingService extends ChangeNotifier {
       _taskHandle?.markIdle();
       _taskHandle?.dispose();
       _taskHandle = null;
+      PowerAwareService().removeExemption('path_recording');
       _recordingState = null;
       _startTime = null;
       _pointCount = 0;

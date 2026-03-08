@@ -15,6 +15,7 @@ import 'app_args.dart';
 import 'ble_identity_service.dart';
 import 'ble_permission_service.dart';
 import 'log_service.dart';
+import 'power_aware_service.dart';
 import '../util/event_bus.dart';
 
 /// Represents a device discovered via BLE
@@ -115,6 +116,12 @@ class BLEDiscoveryService {
   static const Duration _periodicScanInterval = Duration(seconds: 45);
   static const Duration _periodicScanDuration = Duration(seconds: 8);
 
+  /// Power-aware subscription
+  StreamSubscription<PowerMode>? _powerSubscription;
+
+  /// Whether periodic scanning was active before doze paused it
+  bool _wasPeriodicScanningBeforeDoze = false;
+
   /// Scan results subscription
   StreamSubscription<List<ScanResult>>? _scanSubscription;
 
@@ -152,6 +159,9 @@ class BLEDiscoveryService {
       final state = await FlutterBluePlus.adapterState.first;
       final isAvailable = state == BluetoothAdapterState.on;
       _fireBluetoothStateChanged(isAvailable);
+
+      // Listen for power mode changes (mobile battery saving)
+      _powerSubscription = PowerAwareService().onModeChanged.listen(_onPowerModeChanged);
     } catch (e) {
       LogService().log('BLEDiscovery: Error initializing: $e');
     }
@@ -362,6 +372,43 @@ class BLEDiscoveryService {
     }
 
     LogService().log('BLEDiscovery: Stopped periodic scanning');
+  }
+
+  /// Adjust periodic scan interval based on power mode.
+  void _onPowerModeChanged(PowerMode mode) {
+    switch (mode) {
+      case PowerMode.foreground:
+        // Restore periodic scanning if it was active before doze
+        if (_wasPeriodicScanningBeforeDoze && !_isPeriodicScanningActive) {
+          _wasPeriodicScanningBeforeDoze = false;
+          startPeriodicScanning();
+        } else if (_isPeriodicScanningActive) {
+          // Reset to default interval
+          _periodicScanTimer?.cancel();
+          _periodicScanTimer = Timer.periodic(_periodicScanInterval, (_) {
+            _runPeriodicScan();
+          });
+          LogService().log('BLEDiscovery: foreground — scan interval 45s');
+        }
+        break;
+      case PowerMode.background:
+        if (_isPeriodicScanningActive) {
+          _periodicScanTimer?.cancel();
+          _periodicScanTimer = Timer.periodic(
+            const Duration(seconds: 120),
+            (_) => _runPeriodicScan(),
+          );
+          LogService().log('BLEDiscovery: background — scan interval 120s');
+        }
+        break;
+      case PowerMode.doze:
+        if (_isPeriodicScanningActive) {
+          _wasPeriodicScanningBeforeDoze = true;
+          stopPeriodicScanning();
+          LogService().log('BLEDiscovery: doze — periodic scanning stopped');
+        }
+        break;
+    }
   }
 
   /// Run a single periodic scan cycle

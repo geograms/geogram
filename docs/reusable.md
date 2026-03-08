@@ -52,6 +52,9 @@ This document catalogs reusable UI components available in the Geogram codebase.
 - [KarmaPage](#karmapage) - Client-side dashboard: level, streak, daily progress, category cards, leaderboard
 - [KarmaApi](#karmaapi) - Client-side API wrapper for karma endpoints
 
+### Power Management
+- [PowerAwareService](#powerawareservice) - Singleton coordinator for mobile battery saving (foreground/background/doze modes)
+
 ### API Handlers (Shared between CLI and Desktop stations)
 - [AppsHandler](#appshandler) - Aggregated app discovery (`GET /api/apps`) — returns availability + counts for blog, chat, events, alerts, shared in a single call
 
@@ -10619,3 +10622,38 @@ await launchExternalNavigator(38.72, -9.14);
 final baseUrl = MapTileService().getStationBaseUrl();
 // e.g. "http://192.168.1.100:8080"
 ```
+
+---
+
+## PowerAwareService
+
+**File**: `lib/services/power_aware_service.dart`
+**Pattern**: Singleton coordinator for mobile battery management. Three power modes: `foreground` (full operation), `background` (reduce timers), `doze` (suspend non-essential services). On desktop, permanently stays in `foreground`.
+
+Services listen to `onModeChanged` to adjust behavior. Use `addExemption(id)` / `removeExemption(id)` to keep services alive during specific operations (e.g., path recording).
+
+Automatically bridges with `TaskMonitorService` — calls `pauseAllNonCritical()` on doze and `resumeAll()` on foreground, giving free wins for any service using `MonitoredPeriodicTimer`.
+
+```dart
+// Listen for power mode changes
+PowerAwareService().onModeChanged.listen((mode) {
+  switch (mode) {
+    case PowerMode.foreground:
+      // Full operation
+      break;
+    case PowerMode.background:
+      // Reduce timer intervals
+      break;
+    case PowerMode.doze:
+      // Suspend non-essential work
+      break;
+  }
+});
+
+// Add exemption during critical operations
+PowerAwareService().addExemption('my_feature');
+// ... later ...
+PowerAwareService().removeExemption('my_feature');
+```
+
+**Debug API**: `POST /api/debug {"action": "power_mode", "mode": "background"}` to simulate mode changes on desktop for testing.
