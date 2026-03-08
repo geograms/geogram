@@ -518,7 +518,14 @@ class StationServerService with KarmaMixin {
       LogService().log('Karma: [$level] $message');
 
   @override
-  String? get dataDir => _appDir;
+  String? get dataDir {
+    if (_appDir == null) {
+      try {
+        _appDir = StorageConfig().baseDir;
+      } catch (_) {}
+    }
+    return _appDir;
+  }
 
   @override
   void karmaBroadcastToCallsign(String callsign, String payload) {
