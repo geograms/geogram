@@ -1,15 +1,15 @@
 import 'package:flutter/material.dart';
 
-import '../api/api.dart';
 import '../pages/blog_browser_page.dart';
 import '../pages/chat_browser_page.dart';
 import '../pages/events_browser_page.dart';
 import '../pages/places_browser_page.dart';
 import '../pages/report_browser_page.dart';
 import '../server/karma/karma_engine.dart';
+import '../server/karma/karma_models.dart';
 import '../services/app_service.dart';
 import '../services/profile_service.dart';
-import '../services/signing_service.dart';
+import '../services/station_server_service.dart';
 import '../util/event_bus.dart';
 
 /// Karma gamification dashboard page.
@@ -23,7 +23,6 @@ class KarmaPage extends StatefulWidget {
 
 class _KarmaPageState extends State<KarmaPage>
     with SingleTickerProviderStateMixin {
-  final GeogramApi _api = GeogramApi();
   late TabController _tabController;
 
   KarmaProfile? _profile;
@@ -103,37 +102,35 @@ class _KarmaPageState extends State<KarmaPage>
   Future<void> _loadData() async {
     setState(() => _loading = true);
     try {
-      // Generate NOSTR auth header
-      final profile = ProfileService().getProfile();
-      final signingService = SigningService();
-      await signingService.initialize();
-      final authToken = await signingService.generateAuthHeader(
-        profile,
-        action: 'karma-profile',
-        tags: [['resource', 'karma']],
-      );
-      final authHeaders = <String, String>{};
-      if (authToken != null) {
-        authHeaders['Authorization'] = 'Nostr $authToken';
+      final cs = _callsign.toUpperCase();
+      final store = StationServerService().karmaStore;
+
+      // Read profile directly from local karma store
+      var profile = await store.readProfile(cs);
+      if (profile == null) {
+        // Build fresh profile from local data
+        final streak = await store.readStreak(cs);
+        final todayCounts = await store.getTodayActionCounts(cs);
+        final events = await store.readEvents(cs, limit: 10000);
+        final totalPoints = events.fold<int>(0, (sum, e) => sum + e.pointsFinal);
+        profile = KarmaEngine.buildProfile(
+          callsign: cs,
+          totalPoints: totalPoints,
+          streak: streak,
+          actionCountsToday: todayCounts,
+        );
       }
 
-      final profileResp = await _api.karma.profile(
-        _callsign,
-        authHeaders: authHeaders.isNotEmpty ? authHeaders : null,
-      );
-      final leaderboardResp = await _api.karma.leaderboard(
-        _callsign, period: _leaderboardPeriod, limit: 20,
-      );
+      final todayPoints = await store.getTodayPoints(cs);
+
+      // Read leaderboard
+      final leaderboardEntries = await store.readLeaderboard(_leaderboardPeriod);
 
       if (mounted) {
         setState(() {
-          if (profileResp.data != null) {
-            _profile = profileResp.data;
-            _todayPoints = (profileResp.rawData as Map<String, dynamic>?)?['today_points'] as int? ?? 0;
-          }
-          if (leaderboardResp.data != null) {
-            _leaderboard = leaderboardResp.data!;
-          }
+          _profile = profile;
+          _todayPoints = todayPoints;
+          _leaderboard = leaderboardEntries;
           _loading = false;
         });
       }
