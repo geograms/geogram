@@ -4,14 +4,18 @@
  */
 
 import 'dart:async';
+import 'dart:io';
 import 'dart:isolate';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:path/path.dart' as path;
 
 import '../services/config_service.dart';
 import '../services/profile_service.dart';
 import '../services/i18n_service.dart';
 import '../services/log_service.dart';
+import '../services/storage_config.dart';
 import '../util/nostr_key_generator.dart';
 import '../util/nostr_crypto.dart';
 import '../dialogs/import_nsec_dialog.dart';
@@ -340,6 +344,8 @@ class _WelcomePageState extends State<WelcomePage> {
 
     try {
       final profile = _profileService.getProfile();
+      final oldCallsign = profile.callsign;
+
       profile.npub = result['npub'] as String;
       profile.nsec = result['nsec'] as String;
       profile.callsign = result['callsign'] as String;
@@ -350,6 +356,11 @@ class _WelcomePageState extends State<WelcomePage> {
 
       await _profileService.saveProfile(profile);
       await _profileService.finalizeProfileIdentity(profile);
+
+      // Clean up orphaned folder from initial random callsign
+      if (oldCallsign != profile.callsign && oldCallsign.isNotEmpty && !kIsWeb) {
+        _cleanupOldCallsignFolder(oldCallsign);
+      }
 
       final firstLaunchComplete = ConfigService().getNestedValue('firstLaunchComplete', false);
       if (firstLaunchComplete != true) {
@@ -363,6 +374,20 @@ class _WelcomePageState extends State<WelcomePage> {
       if (mounted) {
         setState(() => _isFinalizing = false);
       }
+    }
+  }
+
+  /// Remove the orphaned folder created for the initial random callsign
+  void _cleanupOldCallsignFolder(String oldCallsign) {
+    try {
+      final devicesDir = StorageConfig().devicesDir;
+      final oldDir = Directory(path.join(devicesDir, oldCallsign));
+      if (oldDir.existsSync()) {
+        oldDir.deleteSync(recursive: true);
+        LogService().log('WelcomePage: Cleaned up old callsign folder: $oldCallsign');
+      }
+    } catch (e) {
+      LogService().log('WelcomePage: Failed to clean up old folder: $e');
     }
   }
 
@@ -386,8 +411,11 @@ class _WelcomePageState extends State<WelcomePage> {
       // Get the active keys (from vanity match or preview)
       final (npub, nsec, callsign) = _getActiveKeys();
 
-      // Update the profile with the chosen keys
+      // Capture old callsign before updating (for orphaned folder cleanup)
       final profile = _profileService.getProfile();
+      final oldCallsign = profile.callsign;
+
+      // Update the profile with the chosen keys
       profile.npub = npub;
       profile.nsec = nsec;
       profile.callsign = callsign;
@@ -395,6 +423,11 @@ class _WelcomePageState extends State<WelcomePage> {
       // Save profile and create default collections/folders
       await _profileService.saveProfile(profile);
       await _profileService.finalizeProfileIdentity(profile);
+
+      // Clean up orphaned folder from initial random callsign
+      if (oldCallsign != callsign && oldCallsign.isNotEmpty && !kIsWeb) {
+        _cleanupOldCallsignFolder(oldCallsign);
+      }
 
       // Mark first launch as complete (if not already set by onboarding)
       final firstLaunchComplete = ConfigService().getNestedValue('firstLaunchComplete', false);

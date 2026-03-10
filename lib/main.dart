@@ -384,9 +384,14 @@ void main() async {
     await LogService().switchToProfile(profile.callsign);
     LogService().log('AppService callsign set: ${profile.callsign}');
 
-    // Ensure default apps exist for this profile (non-blocking)
-    AppService().ensureDefaultApps();
-    LogService().log('Default apps creation started');
+    // Only create default apps if first launch is complete.
+    // On first launch, WelcomePage.finalizeProfileIdentity() will create them
+    // after the user confirms their callsign (avoids orphaned random-callsign folder).
+    final isFirstLaunch = !(ConfigService().getNestedValue('firstLaunchComplete', false) as bool);
+    if (!isFirstLaunch) {
+      AppService().ensureDefaultApps();
+    }
+    LogService().log('Default apps creation ${isFirstLaunch ? "deferred (first launch)" : "started"}');
 
     // Initialize notification service (needed for UI badges)
     await NotificationService().initialize();
