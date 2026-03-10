@@ -3,22 +3,34 @@
  * License: Apache-2.0
  */
 
-import 'dart:convert';
 import 'dart:io';
-import '../models/station_chat_room.dart';
 import '../models/chat_message.dart';
-import 'pure_storage_config.dart';
 import '../util/reaction_utils.dart';
+import '../services/cache_service_base.dart';
+import 'pure_storage_config.dart';
 
-/// Pure Dart service for caching station device data locally (CLI version)
-/// Creates folders with device callsign for storing collections from each node
-class CliRelayCacheService {
+/// Pure Dart CLI relay cache service.
+/// Extends CacheServiceBase with CLI-specific initialization and message parsing.
+class CliRelayCacheService extends CacheServiceBase {
   static final CliRelayCacheService _instance = CliRelayCacheService._internal();
   factory CliRelayCacheService() => _instance;
   CliRelayCacheService._internal();
 
   String? _basePath;
   bool _initialized = false;
+
+  @override
+  String? get basePath => _basePath;
+
+  @override
+  bool get isWeb => false;
+
+  @override
+  void log(String message) => stderr.writeln(message);
+
+  @override
+  List<ChatMessage> parseMessageText(String content) =>
+      _parseMessageText(content);
 
   /// Initialize the cache service
   Future<void> initialize() async {
@@ -45,357 +57,41 @@ class CliRelayCacheService {
     }
   }
 
-  /// Get the cache directory for a device
-  Future<Directory?> getDeviceCacheDir(String deviceCallsign) async {
-    if (_basePath == null) return null;
+  // ==========================================================================
+  // CLI-only: Pure Dart message parser (no Flutter dependency)
+  // ==========================================================================
 
-    // Sanitize callsign for use as folder name
-    final safeName = deviceCallsign.replaceAll(RegExp(r'[^a-zA-Z0-9_-]'), '_');
-    final path = '$_basePath/$safeName';
-
-    final dir = Directory(path);
-    if (!await dir.exists()) {
-      await dir.create(recursive: true);
-    }
-
-    return dir;
-  }
-
-  /// Save chat rooms for a device
-  /// [stationUrl] is stored for offline retrieval when the device is unreachable
-  Future<void> saveChatRooms(String deviceCallsign, List<StationChatRoom> rooms, {String? stationUrl}) async {
-    if (_basePath == null) return;
-
-    try {
-      final cacheDir = await getDeviceCacheDir(deviceCallsign);
-      if (cacheDir == null) return;
-
-      final chatDir = Directory('${cacheDir.path}/chat');
-      if (!await chatDir.exists()) {
-        await chatDir.create(recursive: true);
-      }
-
-      // Save rooms list with station URL for offline use
-      final roomsFile = File('${chatDir.path}/rooms.json');
-      final data = {
-        'updated': DateTime.now().toIso8601String(),
-        'device': deviceCallsign,
-        'stationUrl': stationUrl ?? (rooms.isNotEmpty ? rooms.first.stationUrl : null),
-        'rooms': rooms.map((r) => r.toJson()).toList(),
-      };
-
-      await roomsFile.writeAsString(
-        const JsonEncoder.withIndent('  ').convert(data),
-      );
-
-      stderr.writeln('Cached ${rooms.length} chat rooms for $deviceCallsign');
-    } catch (e) {
-      stderr.writeln('Error saving chat rooms cache: $e');
-    }
-  }
-
-  /// Load cached chat rooms for a device
-  /// If [stationUrl] is empty, uses the stored stationUrl from the cache
-  Future<List<StationChatRoom>> loadChatRooms(String deviceCallsign, String stationUrl) async {
-    if (_basePath == null) return [];
-
-    try {
-      final cacheDir = await getDeviceCacheDir(deviceCallsign);
-      if (cacheDir == null) return [];
-
-      final roomsFile = File('${cacheDir.path}/chat/rooms.json');
-      if (!await roomsFile.exists()) return [];
-
-      final content = await roomsFile.readAsString();
-      final data = jsonDecode(content) as Map<String, dynamic>;
-      final roomsData = data['rooms'] as List<dynamic>? ?? [];
-
-      // Use stored stationUrl if provided stationUrl is empty
-      final effectiveRelayUrl = stationUrl.isNotEmpty
-          ? stationUrl
-          : (data['stationUrl'] as String? ?? '');
-
-      return roomsData.map((r) {
-        return StationChatRoom.fromJson(
-          r as Map<String, dynamic>,
-          effectiveRelayUrl,
-          deviceCallsign,
-        );
-      }).toList();
-    } catch (e) {
-      stderr.writeln('Error loading cached chat rooms: $e');
-      return [];
-    }
-  }
-
-  /// Save messages for a chat room using year folders and daily files
-  /// Structure: chat/roomId/2025/2025-11-29_chat.txt
-  Future<void> saveMessages(
-    String deviceCallsign,
-    String roomId,
-    List<StationChatMessage> messages,
-  ) async {
-    if (_basePath == null) return;
-
-    try {
-      final cacheDir = await getDeviceCacheDir(deviceCallsign);
-      if (cacheDir == null) return;
-
-      final roomDir = Directory('${cacheDir.path}/chat/$roomId');
-      if (!await roomDir.exists()) {
-        await roomDir.create(recursive: true);
-      }
-
-      // Group messages by date
-      final messagesByDate = <String, List<StationChatMessage>>{};
-      for (final msg in messages) {
-        final dt = msg.dateTime;
-        if (dt == null) continue;
-
-        final dateKey = '${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')}';
-        messagesByDate.putIfAbsent(dateKey, () => []).add(msg);
-      }
-
-      // Save each day's messages to separate file
-      int totalSaved = 0;
-      for (final entry in messagesByDate.entries) {
-        final dateStr = entry.key;
-        final dayMessages = entry.value;
-        final year = dateStr.substring(0, 4);
-
-        // Create year directory with files subfolder
-        final yearDir = Directory('${roomDir.path}/$year');
-        if (!await yearDir.exists()) {
-          await yearDir.create(recursive: true);
-          await Directory('${yearDir.path}/files').create();
-        }
-
-        // Write daily file
-        final dailyFile = File('${yearDir.path}/${dateStr}_chat.txt');
-        final buffer = StringBuffer();
-
-        // Header
-        buffer.writeln('# ${roomId.toUpperCase()}: $roomId from $dateStr');
-
-        // Messages
-        for (final msg in dayMessages) {
-          final chatMsg = _stationChatToChatMessage(msg);
-          buffer.writeln();
-          buffer.write(chatMsg.exportAsText());
-        }
-        buffer.writeln();
-
-        await dailyFile.writeAsString(buffer.toString());
-        totalSaved += dayMessages.length;
-      }
-
-      stderr.writeln('Cached $totalSaved messages for room $roomId (${messagesByDate.length} daily files)');
-    } catch (e) {
-      stderr.writeln('Error saving messages cache: $e');
-    }
-  }
-
-  /// Save a raw chat file directly (preserves original format with all metadata)
-  Future<void> saveRawChatFile(
-    String deviceCallsign,
-    String roomId,
-    String year,
-    String filename,
-    String content,
-  ) async {
-    if (_basePath == null) return;
-
-    try {
-      final cacheDir = await getDeviceCacheDir(deviceCallsign);
-      if (cacheDir == null) return;
-
-      final yearDir = Directory('${cacheDir.path}/chat/$roomId/$year');
-      if (!await yearDir.exists()) {
-        await yearDir.create(recursive: true);
-        // Also create files directory for attachments
-        await Directory('${yearDir.path}/files').create();
-      }
-
-      final file = File('${yearDir.path}/$filename');
-      await file.writeAsString(content);
-
-      stderr.writeln('Cached raw chat file: $deviceCallsign/$roomId/$year/$filename');
-    } catch (e) {
-      stderr.writeln('Error saving raw chat file: $e');
-    }
-  }
-
-  /// Check if a chat file exists in cache
-  /// If [expectedSize] is provided, returns false if file size doesn't match
-  Future<bool> hasCachedChatFile(
-    String deviceCallsign,
-    String roomId,
-    String year,
-    String filename, {
-    int? expectedSize,
-  }) async {
-    if (_basePath == null) return false;
-
-    try {
-      final cacheDir = await getDeviceCacheDir(deviceCallsign);
-      if (cacheDir == null) return false;
-
-      final file = File('${cacheDir.path}/chat/$roomId/$year/$filename');
-      if (!await file.exists()) return false;
-
-      // If expected size provided, compare with actual file size
-      if (expectedSize != null) {
-        final stat = await file.stat();
-        if (stat.size != expectedSize) {
-          stderr.writeln('Cache size mismatch for $filename: cached=${stat.size}, expected=$expectedSize');
-          return false;
-        }
-      }
-
-      return true;
-    } catch (e) {
-      return false;
-    }
-  }
-
-  /// Get list of cached chat files for a room
-  Future<List<Map<String, dynamic>>> getCachedChatFiles(
-    String deviceCallsign,
-    String roomId,
-  ) async {
-    if (_basePath == null) return [];
-
-    try {
-      final cacheDir = await getDeviceCacheDir(deviceCallsign);
-      if (cacheDir == null) return [];
-
-      final roomDir = Directory('${cacheDir.path}/chat/$roomId');
-      if (!await roomDir.exists()) return [];
-
-      final List<Map<String, dynamic>> files = [];
-
-      await for (final yearEntity in roomDir.list()) {
-        if (yearEntity is Directory) {
-          final year = yearEntity.path.split('/').last;
-          if (RegExp(r'^\d{4}$').hasMatch(year)) {
-            await for (final fileEntity in yearEntity.list()) {
-              if (fileEntity is File && fileEntity.path.endsWith('_chat.txt')) {
-                final filename = fileEntity.path.split('/').last;
-                final stat = await fileEntity.stat();
-                files.add({
-                  'year': year,
-                  'filename': filename,
-                  'size': stat.size,
-                  'modified': stat.modified.millisecondsSinceEpoch,
-                });
-              }
-            }
-          }
-        }
-      }
-
-      // Sort by year and filename
-      files.sort((a, b) {
-        final yearCompare = (a['year'] as String).compareTo(b['year'] as String);
-        if (yearCompare != 0) return yearCompare;
-        return (a['filename'] as String).compareTo(b['filename'] as String);
-      });
-
-      return files;
-    } catch (e) {
-      stderr.writeln('Error getting cached chat files: $e');
-      return [];
-    }
-  }
-
-  /// Load cached messages for a chat room from year folders and daily files
-  Future<List<StationChatMessage>> loadMessages(
-    String deviceCallsign,
-    String roomId,
-  ) async {
-    if (_basePath == null) return [];
-
-    try {
-      final cacheDir = await getDeviceCacheDir(deviceCallsign);
-      if (cacheDir == null) return [];
-
-      final roomDir = Directory('${cacheDir.path}/chat/$roomId');
-      if (!await roomDir.exists()) return [];
-
-      List<StationChatMessage> allMessages = [];
-
-      // Find all year folders
-      final entities = await roomDir.list().toList();
-      for (final entity in entities) {
-        if (entity is Directory && _isYearFolder(entity.path)) {
-          // Find all daily chat files in year folder
-          final yearEntities = await entity.list().toList();
-          for (final yearEntity in yearEntities) {
-            if (yearEntity is File && yearEntity.path.endsWith('_chat.txt')) {
-              // Parse messages from daily file
-              final content = await yearEntity.readAsString();
-              final chatMessages = _parseMessageText(content);
-              allMessages.addAll(
-                chatMessages.map((msg) => _chatMessageToRelayChat(msg, roomId)),
-              );
-            }
-          }
-        }
-      }
-
-      // Sort by timestamp
-      allMessages.sort((a, b) => a.timestamp.compareTo(b.timestamp));
-
-      return allMessages;
-    } catch (e) {
-      stderr.writeln('Error loading cached messages: $e');
-      return [];
-    }
-  }
-
-  /// Check if path is a year folder (4 digits)
-  bool _isYearFolder(String folderPath) {
-    final name = folderPath.split('/').last;
-    return RegExp(r'^\d{4}$').hasMatch(name);
-  }
-
-  /// Parse message text content (pure Dart, no Flutter dependencies)
   List<ChatMessage> _parseMessageText(String content) {
-    // Split by message start pattern: "> 2" (messages start with year 2xxx)
     final sections = content.split('> 2');
     List<ChatMessage> messages = [];
 
-    // Skip first section (header)
     for (int i = 1; i < sections.length; i++) {
       try {
-        final section = '2${sections[i]}'; // Restore the "2" prefix
+        final section = '2${sections[i]}';
         final message = _parseMessageSection(section);
         if (message != null) {
           messages.add(message);
         }
       } catch (e) {
-        continue; // Skip malformed messages
+        continue;
       }
     }
 
     return messages;
   }
 
-  /// Parse a single message section
   ChatMessage? _parseMessageSection(String section) {
     final lines = section.split('\n');
     if (lines.isEmpty) return null;
 
-    // Parse header: "2025-11-20 19:10_12 -- CR7BBQ"
     final header = lines[0].trim();
-    if (header.length < 23) return null; // Min length check
+    if (header.length < 23) return null;
 
-    final timestamp = header.substring(0, 19).trim(); // YYYY-MM-DD HH:MM_ss
-    final author = header.substring(23).trim(); // After " -- "
+    final timestamp = header.substring(0, 19).trim();
+    final author = header.substring(23).trim();
 
     if (timestamp.isEmpty || author.isEmpty) return null;
 
-    // Parse content and metadata
     StringBuffer contentBuffer = StringBuffer();
     Map<String, String> metadata = {};
     final Map<String, List<String>> reactions = {};
@@ -434,8 +130,7 @@ class CliRelayCacheService {
 
       if (line.trim().startsWith('--> ')) {
         inContent = false;
-        // Parse metadata: "--> key: value"
-        final metaLine = line.trim().substring(4); // Remove "--> "
+        final metaLine = line.trim().substring(4);
         final colonIndex = metaLine.indexOf(': ');
         if (colonIndex > 0) {
           final key = metaLine.substring(0, colonIndex);
@@ -443,7 +138,6 @@ class CliRelayCacheService {
           metadata[key] = value;
         }
       } else if (inContent && line.trim().isNotEmpty) {
-        // Content line
         if (contentBuffer.isNotEmpty) {
           contentBuffer.writeln();
         }
@@ -458,173 +152,5 @@ class CliRelayCacheService {
       metadata: metadata,
       reactions: reactions,
     );
-  }
-
-  /// Convert StationChatMessage to ChatMessage for export
-  ChatMessage _stationChatToChatMessage(StationChatMessage msg) {
-    final metadata = <String, String>{};
-    if (msg.metadata.isNotEmpty) {
-      metadata.addAll(msg.metadata);
-    }
-    if (msg.createdAt != null) {
-      metadata['created_at'] = msg.createdAt.toString();
-    }
-    if (msg.npub != null && msg.npub!.isNotEmpty) {
-      metadata['npub'] = msg.npub!;
-    }
-    if (msg.signature != null && msg.signature!.isNotEmpty) {
-      metadata['signature'] = msg.signature!;
-      metadata['has_signature'] = 'true';
-    }
-    if (msg.verified) {
-      metadata['verified'] = 'true';
-    }
-
-    return ChatMessage(
-      author: msg.callsign,
-      timestamp: msg.timestamp,
-      content: msg.content,
-      metadata: metadata,
-      reactions: msg.reactions,
-    );
-  }
-
-  /// Convert ChatMessage to StationChatMessage for loading
-  /// Extracts NOSTR metadata (npub, signature, created_at) from ChatMessage.metadata
-  StationChatMessage _chatMessageToRelayChat(ChatMessage msg, String roomId) {
-    final metadata = msg.metadata;
-
-    // Extract NOSTR fields from metadata
-    final npub = metadata['npub'];
-    final signature = metadata['signature'];
-    final createdAtStr = metadata['created_at'];
-    final createdAt = createdAtStr != null ? int.tryParse(createdAtStr) : null;
-
-    // Determine if message has signature and is verified
-    final hasSignature = signature != null && signature.isNotEmpty;
-    // Messages with valid signature+npub are considered verified when loaded from trusted cache
-    final verified = metadata['verified'] == 'true' || (hasSignature && npub != null && npub.isNotEmpty);
-
-    return StationChatMessage(
-      roomId: roomId,
-      callsign: msg.author,
-      content: msg.content,
-      timestamp: msg.timestamp,
-      metadata: metadata,
-      reactions: msg.reactions,
-      npub: npub,
-      signature: signature,
-      createdAt: createdAt,
-      hasSignature: hasSignature,
-      verified: verified,
-    );
-  }
-
-  /// Get list of cached device callsigns
-  Future<List<String>> getCachedDevices() async {
-    if (_basePath == null) return [];
-
-    try {
-      final devicesDir = Directory(_basePath!);
-      if (!await devicesDir.exists()) return [];
-
-      final entities = await devicesDir.list().toList();
-      return entities
-          .whereType<Directory>()
-          .map((d) => d.path.split('/').last)
-          .toList();
-    } catch (e) {
-      stderr.writeln('Error listing cached devices: $e');
-      return [];
-    }
-  }
-
-  /// Check if a device has cached data
-  Future<bool> hasCache(String deviceCallsign) async {
-    if (_basePath == null) return false;
-
-    try {
-      final cacheDir = await getDeviceCacheDir(deviceCallsign);
-      if (cacheDir == null) return false;
-
-      final roomsFile = File('${cacheDir.path}/chat/rooms.json');
-      return await roomsFile.exists();
-    } catch (e) {
-      return false;
-    }
-  }
-
-  /// Get cache timestamp for a device
-  Future<DateTime?> getCacheTime(String deviceCallsign) async {
-    if (_basePath == null) return null;
-
-    try {
-      final cacheDir = await getDeviceCacheDir(deviceCallsign);
-      if (cacheDir == null) return null;
-
-      final roomsFile = File('${cacheDir.path}/chat/rooms.json');
-      if (!await roomsFile.exists()) return null;
-
-      final content = await roomsFile.readAsString();
-      final data = jsonDecode(content) as Map<String, dynamic>;
-      final updated = data['updated'] as String?;
-
-      if (updated != null) {
-        return DateTime.parse(updated);
-      }
-      return null;
-    } catch (e) {
-      return null;
-    }
-  }
-
-  /// Get cached station URL for a device
-  Future<String?> getCachedRelayUrl(String deviceCallsign) async {
-    if (_basePath == null) return null;
-
-    try {
-      final cacheDir = await getDeviceCacheDir(deviceCallsign);
-      if (cacheDir == null) return null;
-
-      final roomsFile = File('${cacheDir.path}/chat/rooms.json');
-      if (!await roomsFile.exists()) return null;
-
-      final content = await roomsFile.readAsString();
-      final data = jsonDecode(content) as Map<String, dynamic>;
-      return data['stationUrl'] as String?;
-    } catch (e) {
-      return null;
-    }
-  }
-
-  /// Clear cache for a device
-  Future<void> clearCache(String deviceCallsign) async {
-    if (_basePath == null) return;
-
-    try {
-      final cacheDir = await getDeviceCacheDir(deviceCallsign);
-      if (cacheDir != null && await cacheDir.exists()) {
-        await cacheDir.delete(recursive: true);
-        stderr.writeln('Cleared cache for $deviceCallsign');
-      }
-    } catch (e) {
-      stderr.writeln('Error clearing cache: $e');
-    }
-  }
-
-  /// Clear all device caches
-  Future<void> clearAllCaches() async {
-    if (_basePath == null) return;
-
-    try {
-      final devicesDir = Directory(_basePath!);
-      if (await devicesDir.exists()) {
-        await devicesDir.delete(recursive: true);
-        await devicesDir.create(recursive: true);
-        stderr.writeln('Cleared all device caches');
-      }
-    } catch (e) {
-      stderr.writeln('Error clearing all caches: $e');
-    }
   }
 }

@@ -7,6 +7,7 @@
  */
 
 import 'dart:io';
+import 'package:path/path.dart' as p;
 import 'file_system_service.dart';
 
 /// Factory function called by conditional import.
@@ -160,31 +161,14 @@ class NativeFileSystem implements FileSystemService {
   }
 
   @override
-  String parentPath(String path) {
-    final normalized = path.endsWith('/') ? path.substring(0, path.length - 1) : path;
-    final lastSlash = normalized.lastIndexOf('/');
-    if (lastSlash <= 0) return '/';
-    return normalized.substring(0, lastSlash);
-  }
+  String parentPath(String path) => p.dirname(path);
 
   @override
-  String joinPath(List<String> segments) {
-    return segments
-        .map((s) => s.replaceAll(RegExp(r'^/+|/+$'), ''))
-        .where((s) => s.isNotEmpty)
-        .join('/');
-  }
+  String joinPath(List<String> segments) => p.joinAll(segments);
 
   @override
-  String fileName(String path) {
-    return path.split('/').last;
-  }
+  String fileName(String path) => p.basename(path);
 
   @override
-  String extension(String path) {
-    final name = fileName(path);
-    final lastDot = name.lastIndexOf('.');
-    if (lastDot == -1 || lastDot == 0) return '';
-    return name.substring(lastDot);
-  }
+  String extension(String path) => p.extension(path);
 }

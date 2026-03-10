@@ -25,6 +25,10 @@ This document catalogs reusable UI components available in the Geogram codebase.
 - [RouteResult](#routeresult) - Route calculation result (polyline, distance, duration)
 - [MapTileService.getStationBaseUrl](#maptileservicegetstationbaseurl) - Station HTTP base URL (reusable for tiles and road data)
 
+### Cache & File System
+- [CacheServiceBase](#cacheservicebase) - Shared relay cache logic for Desktop and CLI stations
+- [FileSystemService path utilities](#filesystemservice-path-utilities) - Cross-platform path handling (Windows `\` + Unix `/`)
+
 ### Cross-Platform Patterns
 - [Platform-Adaptive WebView](#platform-adaptive-webview) - Render local HTML with JS on all platforms
 - [URL-Linkified SelectableText](#url-linkified-selectabletext) - Make URLs clickable in text widgets
@@ -10688,3 +10692,73 @@ existingFlyers.add(name);
 ```
 
 **Used in**: `events_browser_page.dart`, `event_detail_page.dart`, `new_event_page.dart`
+
+---
+
+## CacheServiceBase
+
+**File**: `lib/services/cache_service_base.dart`
+
+Abstract base class containing all shared caching logic for both Desktop (`RelayCacheService`) and CLI (`CliRelayCacheService`) stations. Eliminates ~40% code duplication between the two implementations.
+
+### Abstract members subclasses implement:
+- `basePath` — root cache directory path
+- `isWeb` — whether running on web platform
+- `log(message)` — platform-appropriate logging
+- `parseMessageText(content)` — message text parsing (Desktop uses `ChatService`, CLI uses pure Dart parser)
+
+### Shared methods:
+- `getDeviceCacheDir()`, `saveChatRooms()`, `loadChatRooms()`
+- `saveMessages()`, `saveRawChatFile()`, `hasCachedChatFile()`
+- `getCachedChatFiles()`, `loadMessages()` (parameterized for parsing differences)
+- `getCachedDevices()` — uses cross-platform `_extractName()` (fixes Windows path bug)
+- `hasCache()`, `getCacheTime()`, `getCachedRelayUrl()`
+- `clearCache()`, `clearAllCaches()`
+- `stationChatToChatMessage()`, `chatMessageToRelayChat()`
+- `isYearFolder()`, `extractDateFromFilename()`
+
+```dart
+// Desktop usage:
+class RelayCacheService extends CacheServiceBase {
+  @override bool get isWeb => kIsWeb;
+  @override void log(String message) => LogService().log(message);
+  @override List<ChatMessage> parseMessageText(String content) =>
+      ChatService.parseMessageText(content);
+  // ... Desktop-only: dedup, merge, remove, update, file attachments
+}
+
+// CLI usage:
+class CliRelayCacheService extends CacheServiceBase {
+  @override bool get isWeb => false;
+  @override void log(String message) => stderr.writeln(message);
+  @override List<ChatMessage> parseMessageText(String content) =>
+      _parseMessageText(content); // pure Dart parser
+}
+```
+
+**Used in**: `station_cache_service.dart`, `cli_station_cache_service.dart`
+
+---
+
+## FileSystemService path utilities
+
+**File**: `lib/platform/file_system_service.dart`, `lib/platform/file_system_native.dart`
+
+Cross-platform path utilities that handle both Unix `/` and Windows `\` separators.
+
+- `fileName(path)` — extracts filename from path (handles `\` and `/`)
+- `parentPath(path)` — gets parent directory (handles `\` and `/`)
+- `joinPath(segments)` — joins path segments
+- `FsEntity.name` — auto-extracts name from entity path
+
+The native implementation (`file_system_native.dart`) overrides these with `package:path` (`p.basename`, `p.dirname`, `p.joinAll`) for OS-native behavior. The abstract base class provides a fallback that handles both separators.
+
+```dart
+// Before (broken on Windows):
+final name = path.split('/').last;  // Returns full path on Windows!
+
+// After:
+final name = FileSystemService.instance.fileName(path);  // Works everywhere
+```
+
+**Used in**: All code that extracts names from filesystem paths

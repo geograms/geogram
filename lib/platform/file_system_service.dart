@@ -47,7 +47,9 @@ class FsEntity {
   FsEntity({
     required this.path,
     required this.type,
-  }) : name = path.split('/').last;
+  }) : name = path.contains('\\')
+            ? path.split('\\').last
+            : path.split('/').last;
 
   bool get isFile => type == FsEntityType.file;
   bool get isDirectory => type == FsEntityType.directory;
@@ -133,24 +135,34 @@ abstract class FileSystemService {
   Future<void> move(String source, String destination);
 
   /// Get the parent directory path.
+  /// Handles both `/` and `\` separators (Windows compatibility).
   String parentPath(String path) {
-    final normalized = path.endsWith('/') ? path.substring(0, path.length - 1) : path;
-    final lastSlash = normalized.lastIndexOf('/');
-    if (lastSlash <= 0) return '/';
-    return normalized.substring(0, lastSlash);
+    var normalized = path;
+    if (normalized.endsWith('/') || normalized.endsWith('\\')) {
+      normalized = normalized.substring(0, normalized.length - 1);
+    }
+    final lastFwd = normalized.lastIndexOf('/');
+    final lastBack = normalized.lastIndexOf('\\');
+    final lastSep = lastFwd > lastBack ? lastFwd : lastBack;
+    if (lastSep <= 0) return '/';
+    return normalized.substring(0, lastSep);
   }
 
   /// Join path segments.
   String joinPath(List<String> segments) {
     return segments
-        .map((s) => s.replaceAll(RegExp(r'^/+|/+$'), ''))
+        .map((s) => s.replaceAll(RegExp(r'^[/\\]+|[/\\]+$'), ''))
         .where((s) => s.isNotEmpty)
         .join('/');
   }
 
   /// Get the file name from a path.
+  /// Handles both `/` and `\` separators (Windows compatibility).
   String fileName(String path) {
-    return path.split('/').last;
+    final lastFwd = path.lastIndexOf('/');
+    final lastBack = path.lastIndexOf('\\');
+    final idx = lastFwd > lastBack ? lastFwd : lastBack;
+    return idx < 0 ? path : path.substring(idx + 1);
   }
 
   /// Get the file extension from a path.
