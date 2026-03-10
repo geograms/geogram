@@ -52,6 +52,9 @@ This document catalogs reusable UI components available in the Geogram codebase.
 - [KarmaPage](#karmapage) - Client-side dashboard: level, streak, daily progress, category cards, leaderboard
 - [KarmaApi](#karmaapi) - Client-side API wrapper for karma endpoints
 
+### Event Utilities
+- [EventService.nextFlyerName](#eventservicenextflyername) - Generate next available flyer filename for image uploads
+
 ### Power Management
 - [PowerAwareService](#powerawareservice) - Singleton coordinator for mobile battery saving (foreground/background/doze modes)
 
@@ -10657,3 +10660,31 @@ PowerAwareService().removeExemption('my_feature');
 ```
 
 **Debug API**: `POST /api/debug {"action": "power_mode", "mode": "background"}` to simulate mode changes on desktop for testing.
+
+---
+
+## EventService.nextFlyerName
+
+**File**: `lib/services/event_service.dart`
+
+Static utility to generate the next available flyer filename when uploading images to an event.
+
+**Convention**: The first image is `flyer.ext`, subsequent ones are `flyer-N.ext` (e.g., `flyer-1.jpg`, `flyer-2.png`). The method checks for collisions with existing filenames.
+
+**Note**: `_loadFlyersStorage()` matches ALL image files at the event root (not just `flyer.*`), with flyer-named files sorted first as primary images.
+
+### Usage
+
+```dart
+// Get existing flyer names from the event
+final existingFlyers = List<String>.from(event.flyers);
+
+// Generate next name for a .jpg upload
+final name = EventService.nextFlyerName(existingFlyers, 'jpg');
+// Returns 'flyer.jpg' if empty, or 'flyer-N.jpg' for the next available N
+
+// Track it for subsequent uploads in the same batch
+existingFlyers.add(name);
+```
+
+**Used in**: `events_browser_page.dart`, `event_detail_page.dart`, `new_event_page.dart`

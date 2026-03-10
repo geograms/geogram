@@ -565,25 +565,50 @@ class EventService {
   // ==================== v1.2 Feature Methods (Storage-based) ====================
 
   /// Load flyers from event directory (storage-based)
+  /// Matches ALL image files at the event root, not just flyer-named ones.
+  /// Files named flyer.* sort first (primary), then others alphabetically.
   Future<List<String>> _loadFlyersStorage(String eventRelativePath) async {
     try {
       final entries = await _storage.listDirectory(eventRelativePath);
       final flyers = <String>[];
-      final flyerPattern = RegExp(r'^flyer.*\.(jpg|jpeg|png|gif|webp)$', caseSensitive: false);
+      final imagePattern = RegExp(r'\.(jpg|jpeg|png|gif|webp)$', caseSensitive: false);
 
       for (var entry in entries) {
-        if (!entry.isDirectory && flyerPattern.hasMatch(entry.name)) {
+        if (!entry.isDirectory && imagePattern.hasMatch(entry.name)) {
           flyers.add(entry.name);
         }
       }
 
-      // Sort alphabetically (flyer.jpg comes before flyer-alt.png)
-      flyers.sort();
+      // Sort: flyer-named files first (primary), then others alphabetically
+      flyers.sort((a, b) {
+        final aIsFlyer = a.toLowerCase().startsWith('flyer');
+        final bIsFlyer = b.toLowerCase().startsWith('flyer');
+        if (aIsFlyer && !bIsFlyer) return -1;
+        if (!aIsFlyer && bIsFlyer) return 1;
+        return a.compareTo(b);
+      });
       return flyers;
     } catch (e) {
       print('EventService: Error loading flyers: $e');
       return [];
     }
+  }
+
+  /// Generate the next flyer filename for an uploaded image.
+  /// [existingFlyers] is the list of current flyer filenames in the event dir.
+  /// [extension] is the file extension without dot (e.g. 'jpg', 'png').
+  static String nextFlyerName(List<String> existingFlyers, String extension) {
+    final ext = extension.isNotEmpty ? extension : 'jpg';
+    if (existingFlyers.isEmpty) {
+      return 'flyer.$ext';
+    }
+    int altNum = existingFlyers.length;
+    String candidate = 'flyer-$altNum.$ext';
+    while (existingFlyers.contains(candidate)) {
+      altNum++;
+      candidate = 'flyer-$altNum.$ext';
+    }
+    return candidate;
   }
 
   /// Load trailer filename if it exists (storage-based)

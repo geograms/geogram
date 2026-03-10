@@ -17,6 +17,7 @@ import '../models/event_link.dart';
 import '../models/group.dart';
 import '../models/place.dart';
 import '../services/app_service.dart';
+import '../services/event_service.dart';
 import '../services/groups_service.dart';
 import '../services/profile_service.dart';
 import '../services/profile_storage.dart';
@@ -1270,21 +1271,8 @@ class _NewEventPageState extends State<NewEventPage>
         final originalFileName = file.name;
         final extension = path.extension(originalFileName).replaceFirst('.', '').toLowerCase();
 
-        String flyerFileName;
-        if (_flyers.isEmpty) {
-          flyerFileName = extension.isNotEmpty ? 'flyer.$extension' : 'flyer.jpg';
-        } else {
-          int altNum = _flyers.length;
-          flyerFileName = extension.isNotEmpty
-              ? 'flyer-$altNum.$extension'
-              : 'flyer-$altNum.jpg';
-          while (_flyers.any((flyer) => flyer.targetName == flyerFileName)) {
-            altNum++;
-            flyerFileName = extension.isNotEmpty
-                ? 'flyer-$altNum.$extension'
-                : 'flyer-$altNum.jpg';
-          }
-        }
+        final existingNames = _flyers.map((f) => f.targetName).toList();
+        final flyerFileName = EventService.nextFlyerName(existingNames, extension);
 
         _flyers.add(
           _PendingFile(

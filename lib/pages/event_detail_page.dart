@@ -165,11 +165,26 @@ class _EventDetailPageState extends State<EventDetailPage> {
         final year = _event.id.substring(0, 4);
         final eventPath = '${widget.appPath}/$year/${_event.id}';
 
+        // Collect existing flyer names for renaming
+        final existingFlyers = List<String>.from(_event.flyers);
+
         int copiedCount = 0;
         for (var file in result.files) {
           if (file.path != null) {
             final sourceFile = File(file.path!);
-            final targetPath = '$eventPath/${file.name}';
+            final ext = path.extension(file.name).replaceFirst('.', '').toLowerCase();
+            final isImage = const ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg']
+                .contains(ext);
+
+            String targetName;
+            if (isImage) {
+              targetName = EventService.nextFlyerName(existingFlyers, ext);
+              existingFlyers.add(targetName);
+            } else {
+              targetName = file.name;
+            }
+
+            final targetPath = '$eventPath/$targetName';
 
             try {
               await sourceFile.copy(targetPath);
