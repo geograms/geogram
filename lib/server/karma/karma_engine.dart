@@ -52,18 +52,18 @@ class KarmaEngine {
   // ============ Level System ============
 
   static const List<KarmaLevel> levels = [
-    KarmaLevel(1,  0,     'Newcomer'),
-    KarmaLevel(2,  50,    'Explorer'),
-    KarmaLevel(3,  150,   'Scout'),
-    KarmaLevel(4,  400,   'Pathfinder'),
-    KarmaLevel(5,  800,   'Navigator'),
-    KarmaLevel(6,  1500,  'Surveyor'),
-    KarmaLevel(7,  3000,  'Trailblazer'),
-    KarmaLevel(8,  5000,  'Cartographer'),
-    KarmaLevel(9,  8000,  'Ranger'),
-    KarmaLevel(10, 12000, 'Pioneer'),
-    KarmaLevel(11, 18000, 'Legend'),
-    KarmaLevel(12, 25000, 'Grandmaster'),
+    KarmaLevel(1,  0,     'Drifter'),
+    KarmaLevel(2,  50,    'Scavenger'),
+    KarmaLevel(3,  150,   'Survivalist'),
+    KarmaLevel(4,  400,   'Prepper'),
+    KarmaLevel(5,  800,   'Tracker'),
+    KarmaLevel(6,  1500,  'Cypherpunk'),
+    KarmaLevel(7,  3000,  'Outlaw'),
+    KarmaLevel(8,  5000,  'Warden'),
+    KarmaLevel(9,  8000,  'Offgrid'),
+    KarmaLevel(10, 12000, 'Cipher'),
+    KarmaLevel(11, 18000, 'Ghost'),
+    KarmaLevel(12, 25000, 'Sovereign'),
   ];
 
   // ============ Streak Multipliers ============

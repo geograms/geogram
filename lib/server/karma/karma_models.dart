@@ -59,7 +59,7 @@ class KarmaProfile {
     required this.callsign,
     this.totalPoints = 0,
     this.level = 1,
-    this.levelName = 'Newcomer',
+    this.levelName = 'Drifter',
     this.nextLevelPoints = 50,
     this.currentStreakDays = 0,
     this.currentMultiplier = 1.0,
@@ -73,7 +73,7 @@ class KarmaProfile {
       callsign: json['callsign'] as String,
       totalPoints: json['total_points'] as int? ?? 0,
       level: json['level'] as int? ?? 1,
-      levelName: json['level_name'] as String? ?? 'Newcomer',
+      levelName: json['level_name'] as String? ?? 'Drifter',
       nextLevelPoints: json['next_level_points'] as int? ?? 50,
       currentStreakDays: json['current_streak_days'] as int? ?? 0,
       currentMultiplier: (json['current_multiplier'] as num?)?.toDouble() ?? 1.0,
@@ -157,7 +157,7 @@ class LeaderboardEntry {
       callsign: json['callsign'] as String,
       points: json['points'] as int? ?? 0,
       level: json['level'] as int? ?? 1,
-      levelName: json['level_name'] as String? ?? 'Newcomer',
+      levelName: json['level_name'] as String? ?? 'Drifter',
       streakDays: json['streak_days'] as int? ?? 0,
     );
   }
