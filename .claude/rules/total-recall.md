@@ -3,14 +3,16 @@
 > Auto-loaded every session. Defines memory system behavior.
 
 ## On Session Start
-1. CLAUDE.local.md is auto-loaded (working memory).
-2. Check `memory/registers/open-loops.md` for active follow-ups.
-3. Check today's daily log exists; create if missing.
+1. Read `AGENTS.md` for canonical repository instructions.
+2. CLAUDE.local.md is auto-loaded (working memory).
+3. Check `memory/registers/open-loops.md` for active follow-ups.
+4. Check today's daily log exists; create if missing.
 
 ## During Session
 - Capture noteworthy items to `memory/daily/[today].md`.
 - Apply the **write gate**: "Does this change future behavior?" If no, skip.
 - Route writes using the routing table in `memory/SCHEMA.md`.
+- Keep repo-global workflow and architecture rules in `AGENTS.md`; use memory files for session continuity, preferences, and durable facts that are not already codified there.
 - Never silently overwrite — use the contradiction protocol.
 
 ## On Session End
