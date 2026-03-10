@@ -29,7 +29,6 @@ class _KarmaPageState extends State<KarmaPage>
   List<LeaderboardEntry> _leaderboard = [];
   bool _loading = true;
   String _leaderboardPeriod = 'weekly';
-  int _todayPoints = 0;
 
   static const _missions = KarmaEngine.missions;
 
@@ -87,15 +86,12 @@ class _KarmaPageState extends State<KarmaPage>
         );
       }
 
-      final todayPoints = await store.getTodayPoints(cs);
-
       // Read leaderboard
       final leaderboardEntries = await store.readLeaderboard(_leaderboardPeriod);
 
       if (mounted) {
         setState(() {
           _profile = profile;
-          _todayPoints = todayPoints;
           _leaderboard = leaderboardEntries;
           _loading = false;
         });
@@ -177,7 +173,7 @@ class _KarmaPageState extends State<KarmaPage>
       child: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          _buildTodaySummaryBar(theme),
+          _buildTodaySummaryBar(theme, totalEarnedPoints, totalMaxPoints),
           const SizedBox(height: 12),
           _buildDailyCompletionMeter(theme, activeMissions, overallProgress),
           const SizedBox(height: 16),
@@ -200,7 +196,7 @@ class _KarmaPageState extends State<KarmaPage>
     );
   }
 
-  Widget _buildTodaySummaryBar(ThemeData theme) {
+  Widget _buildTodaySummaryBar(ThemeData theme, int earnedPoints, int maxPoints) {
     final profile = _profile;
 
     return Card(
@@ -210,7 +206,7 @@ class _KarmaPageState extends State<KarmaPage>
         child: Row(
           children: [
             Text(
-              '$_todayPoints',
+              '$earnedPoints',
               style: theme.textTheme.headlineLarge?.copyWith(
                 color: theme.colorScheme.onPrimaryContainer,
                 fontWeight: FontWeight.bold,
@@ -218,7 +214,7 @@ class _KarmaPageState extends State<KarmaPage>
             ),
             const SizedBox(width: 6),
             Text(
-              'points today',
+              'points today out of $maxPoints',
               style: theme.textTheme.bodyLarge?.copyWith(
                 color: theme.colorScheme.onPrimaryContainer,
               ),
