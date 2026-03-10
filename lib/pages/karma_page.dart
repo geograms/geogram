@@ -29,6 +29,7 @@ class _KarmaPageState extends State<KarmaPage>
   List<LeaderboardEntry> _leaderboard = [];
   bool _loading = true;
   String _leaderboardPeriod = 'weekly';
+  int _myRank = 0;
 
   static const _missions = KarmaEngine.missions;
 
@@ -89,10 +90,23 @@ class _KarmaPageState extends State<KarmaPage>
       // Read leaderboard
       final leaderboardEntries = await store.readLeaderboard(_leaderboardPeriod);
 
+      // Find user's rank from alltime leaderboard
+      final alltimeEntries = _leaderboardPeriod == 'alltime'
+          ? leaderboardEntries
+          : await store.readLeaderboard('alltime');
+      int rank = 0;
+      for (final entry in alltimeEntries) {
+        if (entry.callsign.toUpperCase() == cs) {
+          rank = entry.rank;
+          break;
+        }
+      }
+
       if (mounted) {
         setState(() {
           _profile = profile;
           _leaderboard = leaderboardEntries;
+          _myRank = rank;
           _loading = false;
         });
       }
@@ -236,7 +250,7 @@ class _KarmaPageState extends State<KarmaPage>
               ),
               const SizedBox(width: 10),
             ],
-            if (profile != null && profile.currentMultiplier > 1.0)
+            if (profile != null && profile.currentMultiplier > 1.0) ...[
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                 decoration: BoxDecoration(
@@ -249,6 +263,31 @@ class _KarmaPageState extends State<KarmaPage>
                     color: theme.colorScheme.onTertiaryContainer,
                     fontWeight: FontWeight.bold,
                   ),
+                ),
+              ),
+              const SizedBox(width: 10),
+            ],
+            if (_myRank > 0)
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                decoration: BoxDecoration(
+                  color: theme.colorScheme.secondaryContainer,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.leaderboard, size: 14,
+                        color: theme.colorScheme.onSecondaryContainer),
+                    const SizedBox(width: 4),
+                    Text(
+                      '#$_myRank',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSecondaryContainer,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
                 ),
               ),
           ],
