@@ -97,6 +97,7 @@ import 'models/device_source.dart';
 import 'teleport/irc/pages/irc_chat_page.dart';
 import 'teleport/telegram/pages/telegram_chat_page.dart';
 import 'teleport/aprs/pages/aprs_conversation_page.dart';
+import 'teleport/aprs/pages/aprs_main_page.dart';
 import 'teleport/aprs/models/aprs_conversation.dart';
 import 'pages/log_browser_page.dart';
 import 'pages/events_browser_page.dart';
@@ -1172,14 +1173,27 @@ class _GeogramAppState extends State<GeogramApp> with WidgetsBindingObserver {
         }
         break;
       case 'aprs':
-        final isTag = sourceId.startsWith('#');
-        _navigatorKey.currentState!.push(MaterialPageRoute(
-          builder: (_) => AprsConversationPage(
-            conversationId: sourceId,
-            conversationType: isTag ? AprsConversationType.tag : AprsConversationType.direct,
-            partnerPosition: AprsService().lastKnownPositions[sourceId],
-          ),
-        ));
+        if (sourceId == 'geochat') {
+          final teleportApp = AppService().getAppByType('teleport');
+          if (teleportApp != null) {
+            _navigatorKey.currentState!.push(MaterialPageRoute(
+              builder: (_) => AprsMainPage(
+                appPath: teleportApp.storagePath ?? '',
+                initialTab: 0,
+                showGeoChat: true,
+              ),
+            ));
+          }
+        } else {
+          final isTag = sourceId.startsWith('#');
+          _navigatorKey.currentState!.push(MaterialPageRoute(
+            builder: (_) => AprsConversationPage(
+              conversationId: sourceId,
+              conversationType: isTag ? AprsConversationType.tag : AprsConversationType.direct,
+              partnerPosition: AprsService().lastKnownPositions[sourceId],
+            ),
+          ));
+        }
         break;
       case 'alert':
         _navigatorKey.currentState!.pushNamed('/alerts', arguments: sourceId);

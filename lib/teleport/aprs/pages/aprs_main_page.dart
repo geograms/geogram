@@ -34,8 +34,15 @@ import 'aprs_settings_page.dart';
 
 class AprsMainPage extends StatefulWidget {
   final String appPath;
+  final int initialTab;
+  final bool showGeoChat;
 
-  const AprsMainPage({super.key, required this.appPath});
+  const AprsMainPage({
+    super.key,
+    required this.appPath,
+    this.initialTab = 0,
+    this.showGeoChat = false,
+  });
 
   @override
   State<AprsMainPage> createState() => _AprsMainPageState();
@@ -90,6 +97,7 @@ class _AprsMainPageState extends State<AprsMainPage> {
 
     return DefaultTabController(
       length: 3,
+      initialIndex: widget.initialTab,
       child: Scaffold(
         appBar: AppBar(
           title: Text(I18nService().t('aprs_title')),
@@ -179,6 +187,7 @@ class _AprsMainPageState extends State<AprsMainPage> {
                     streamPackets: aprs.streamPackets,
                     geoChatMessages: aprs.geoChatMessages,
                     radiusKm: effectiveRadius,
+                    initialShowGeoChat: widget.showGeoChat,
                   ),
                   _StreamTab(
                     packets: aprs.streamPackets,
@@ -544,6 +553,7 @@ class _MapTab extends StatefulWidget {
   final List<AprsPacket> streamPackets;
   final List<AprsPacket> geoChatMessages;
   final double radiusKm;
+  final bool initialShowGeoChat;
 
   const _MapTab({
     this.myLocation,
@@ -551,6 +561,7 @@ class _MapTab extends StatefulWidget {
     required this.streamPackets,
     required this.geoChatMessages,
     required this.radiusKm,
+    this.initialShowGeoChat = false,
   });
 
   @override
@@ -561,7 +572,7 @@ class _MapTabState extends State<_MapTab> with AutomaticKeepAliveClientMixin {
   final MapController _mapController = MapController();
   final MapTileService _mapTileService = MapTileService();
   bool _mapReady = false;
-  bool _showGeoChat = false;
+  late bool _showGeoChat = widget.initialShowGeoChat;
 
   @override
   bool get wantKeepAlive => true;

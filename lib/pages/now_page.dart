@@ -20,9 +20,11 @@ import 'remote_blog_browser_page.dart';
 import 'remote_chat_browser_page.dart';
 import 'remote_chat_room_page.dart';
 import 'report_browser_page.dart';
+import '../services/app_service.dart';
 import '../teleport/aprs/aprs_service.dart';
 import '../teleport/aprs/models/aprs_conversation.dart';
 import '../teleport/aprs/pages/aprs_conversation_page.dart';
+import '../teleport/aprs/pages/aprs_main_page.dart';
 import '../teleport/irc/pages/irc_chat_page.dart';
 import '../teleport/telegram/pages/telegram_chat_page.dart';
 import '../util/app_type_theme.dart';
@@ -561,21 +563,32 @@ class _NowPageState extends State<NowPage> {
         }
         break;
       case 'aprs':
-        final isTag = item.sourceId.startsWith('#');
-        Navigator.of(context).push(
-          MaterialPageRoute(
-            builder: (_) => AprsConversationPage(
-              conversationId: item.sourceId,
-              conversationType: isTag
-                  ? AprsConversationType.tag
-                  : item.sourceId == 'geochat'
-                      ? AprsConversationType.direct
-                      : AprsConversationType.direct,
-              partnerPosition:
-                  AprsService().lastKnownPositions[item.sourceId],
+        if (item.sourceId == 'geochat') {
+          final teleportApp = AppService().getAppByType('teleport');
+          if (teleportApp != null) {
+            Navigator.of(context).push(MaterialPageRoute(
+              builder: (_) => AprsMainPage(
+                appPath: teleportApp.storagePath ?? '',
+                initialTab: 0,
+                showGeoChat: true,
+              ),
+            ));
+          }
+        } else {
+          final isTag = item.sourceId.startsWith('#');
+          Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (_) => AprsConversationPage(
+                conversationId: item.sourceId,
+                conversationType: isTag
+                    ? AprsConversationType.tag
+                    : AprsConversationType.direct,
+                partnerPosition:
+                    AprsService().lastKnownPositions[item.sourceId],
+              ),
             ),
-          ),
-        );
+          );
+        }
         break;
       case 'blog':
         final station = StationService().getPreferredStation();
