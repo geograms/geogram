@@ -265,12 +265,54 @@ class KarmaEngine {
 
   /// The canonical list of daily missions and their action keys.
   static const List<KarmaMission> missions = [
-    KarmaMission(name: 'Chat',    verb: 'Send Messages',   actionKeys: ['chat_message', 'chat_reaction'],              navigateTo: 'chat'),
-    KarmaMission(name: 'Blog',    verb: 'Write a Post',    actionKeys: ['blog_published'],                             navigateTo: 'blog'),
-    KarmaMission(name: 'Places',  verb: 'Share a Place',   actionKeys: ['place_created'],                              navigateTo: 'places'),
-    KarmaMission(name: 'Alerts',  verb: 'Report an Alert', actionKeys: ['alert_created'],                              navigateTo: 'alerts'),
-    KarmaMission(name: 'Social',  verb: 'Engage Socially', actionKeys: ['like_given', 'comment_given', 'verify_given'], navigateTo: null),
-    KarmaMission(name: 'Events',  verb: 'Create an Event', actionKeys: ['event_created'],                              navigateTo: 'events'),
+    KarmaMission(
+      name: 'Chat',
+      verb: 'Send Messages',
+      description: 'Join a chat room and send messages or react to others\' messages. '
+          'Earn 2 points per message (up to 50) and 1 point per reaction (up to 20).',
+      actionKeys: ['chat_message', 'chat_reaction'],
+      navigateTo: 'chat',
+    ),
+    KarmaMission(
+      name: 'Blog',
+      verb: 'Write a Post',
+      description: 'Publish a blog post to share your thoughts or experiences. '
+          'Earn 50 points per post (up to 3 per day).',
+      actionKeys: ['blog_published'],
+      navigateTo: 'blog',
+    ),
+    KarmaMission(
+      name: 'Places',
+      verb: 'Share a Place',
+      description: 'Pin a place on the map to share a location with the community. '
+          'Earn 30 points per place (up to 5 per day).',
+      actionKeys: ['place_created'],
+      navigateTo: 'places',
+    ),
+    KarmaMission(
+      name: 'Alerts',
+      verb: 'Report an Alert',
+      description: 'Report a local alert (weather, traffic, safety, etc.) to help others nearby. '
+          'Earn 25 points per alert (up to 5 per day).',
+      actionKeys: ['alert_created'],
+      navigateTo: 'alerts',
+    ),
+    KarmaMission(
+      name: 'Social',
+      verb: 'Engage Socially',
+      description: 'Interact with others\' content: like posts (2 points, up to 30), '
+          'leave comments (5 points, up to 20), or verify alerts (5 points, up to 10).',
+      actionKeys: ['like_given', 'comment_given', 'verify_given'],
+      navigateTo: null,
+    ),
+    KarmaMission(
+      name: 'Events',
+      verb: 'Create an Event',
+      description: 'Organize a local event for the community to join. '
+          'Earn 30 points per event (up to 3 per day).',
+      actionKeys: ['event_created'],
+      navigateTo: 'events',
+    ),
   ];
 
   /// Count how many missions have been started (at least 1 action performed).
@@ -319,12 +361,14 @@ class KarmaEngine {
 class KarmaMission {
   final String name;
   final String verb;
+  final String description;
   final List<String> actionKeys;
   final String? navigateTo;
 
   const KarmaMission({
     required this.name,
     required this.verb,
+    required this.description,
     required this.actionKeys,
     required this.navigateTo,
   });
