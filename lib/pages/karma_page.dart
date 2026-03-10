@@ -29,6 +29,7 @@ class _KarmaPageState extends State<KarmaPage>
   List<LeaderboardEntry> _leaderboard = [];
   bool _loading = true;
   String _leaderboardPeriod = 'weekly';
+  int _myRank = 0;
 
   static const _missions = KarmaEngine.missions;
 
@@ -101,6 +102,18 @@ class _KarmaPageState extends State<KarmaPage>
         setState(() => _loading = false);
       }
     }
+    // Load rank independently so profile errors can't prevent it
+    try {
+      final store = StationServerService().karmaStore;
+      final cs = _callsign.toUpperCase();
+      final alltime = await store.readLeaderboard('alltime');
+      for (final entry in alltime) {
+        if (entry.callsign.toUpperCase() == cs) {
+          if (mounted) setState(() => _myRank = entry.rank);
+          break;
+        }
+      }
+    } catch (_) {}
   }
 
   @override
@@ -111,12 +124,12 @@ class _KarmaPageState extends State<KarmaPage>
       appBar: AppBar(
         title: const Text('Karma'),
         actions: [
-          if (_profile != null)
+          if (_myRank > 0)
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
               child: Chip(
                 avatar: const Icon(Icons.leaderboard, size: 16),
-                label: Text('#${_profile!.rank > 0 ? _profile!.rank : '\u2014'}'),
+                label: Text('#$_myRank'),
               ),
             ),
         ],
@@ -253,13 +266,8 @@ class _KarmaPageState extends State<KarmaPage>
               ),
               const SizedBox(width: 10),
             ],
-            Builder(builder: (_) {
-              final myEntry = _leaderboard.cast<LeaderboardEntry?>().firstWhere(
-                (e) => e!.callsign.toUpperCase() == _callsign.toUpperCase(),
-                orElse: () => null,
-              );
-              if (myEntry == null) return const SizedBox.shrink();
-              return Container(
+            if (_myRank > 0)
+              Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                 decoration: BoxDecoration(
                   color: theme.colorScheme.secondaryContainer,
@@ -272,7 +280,7 @@ class _KarmaPageState extends State<KarmaPage>
                         color: theme.colorScheme.onSecondaryContainer),
                     const SizedBox(width: 4),
                     Text(
-                      '#${myEntry.rank}',
+                      '#$_myRank',
                       style: theme.textTheme.bodySmall?.copyWith(
                         color: theme.colorScheme.onSecondaryContainer,
                         fontWeight: FontWeight.bold,
@@ -280,8 +288,7 @@ class _KarmaPageState extends State<KarmaPage>
                     ),
                   ],
                 ),
-              );
-            }),
+              ),
           ],
         ),
       ),
