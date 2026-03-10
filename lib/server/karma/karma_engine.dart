@@ -33,20 +33,20 @@ class KarmaEngine {
   // ============ Action Configuration ============
 
   static const Map<String, KarmaActionConfig> actions = {
-    'daily_login':       KarmaActionConfig(points: 10, dailyCap: 1,   category: 'connection'),
-    'chat_message':      KarmaActionConfig(points: 2,  dailyCap: 50,  category: 'chat'),
-    'chat_reaction':     KarmaActionConfig(points: 1,  dailyCap: 20,  category: 'chat'),
-    'blog_published':    KarmaActionConfig(points: 50, dailyCap: 3,   category: 'content'),
-    'place_created':     KarmaActionConfig(points: 30, dailyCap: 5,   category: 'content'),
-    'alert_created':     KarmaActionConfig(points: 25, dailyCap: 5,   category: 'content'),
-    'event_created':     KarmaActionConfig(points: 30, dailyCap: 3,   category: 'content'),
-    'like_given':        KarmaActionConfig(points: 2,  dailyCap: 30,  category: 'social'),
-    'like_received':     KarmaActionConfig(points: 3,  dailyCap: 50,  category: 'passive'),
-    'comment_given':     KarmaActionConfig(points: 5,  dailyCap: 20,  category: 'social'),
-    'comment_received':  KarmaActionConfig(points: 3,  dailyCap: 30,  category: 'passive'),
-    'verify_given':      KarmaActionConfig(points: 5,  dailyCap: 10,  category: 'social'),
-    'alert_verified':    KarmaActionConfig(points: 10, dailyCap: 999, category: 'passive'),
-    'feature_diversity': KarmaActionConfig(points: 15, dailyCap: 1,   category: 'bonus'),
+    'daily_login':       KarmaActionConfig(points: 3,  dailyCap: 1,   category: 'connection'),
+    'chat_message':      KarmaActionConfig(points: 1,  dailyCap: 10,  category: 'chat'),
+    'chat_reaction':     KarmaActionConfig(points: 1,  dailyCap: 5,   category: 'chat'),
+    'blog_published':    KarmaActionConfig(points: 5,  dailyCap: 3,   category: 'content'),
+    'place_created':     KarmaActionConfig(points: 5,  dailyCap: 3,   category: 'content'),
+    'alert_created':     KarmaActionConfig(points: 5,  dailyCap: 3,   category: 'content'),
+    'event_created':     KarmaActionConfig(points: 5,  dailyCap: 2,   category: 'content'),
+    'like_given':        KarmaActionConfig(points: 1,  dailyCap: 10,  category: 'social'),
+    'like_received':     KarmaActionConfig(points: 1,  dailyCap: 15,  category: 'passive'),
+    'comment_given':     KarmaActionConfig(points: 1,  dailyCap: 5,   category: 'social'),
+    'comment_received':  KarmaActionConfig(points: 1,  dailyCap: 10,  category: 'passive'),
+    'verify_given':      KarmaActionConfig(points: 1,  dailyCap: 5,   category: 'social'),
+    'alert_verified':    KarmaActionConfig(points: 2,  dailyCap: 10,  category: 'passive'),
+    'feature_diversity': KarmaActionConfig(points: 10, dailyCap: 1,   category: 'bonus'),
   };
 
   // ============ Level System ============
@@ -269,7 +269,7 @@ class KarmaEngine {
       name: 'Chat',
       verb: 'Send Messages',
       description: 'Join a chat room and send messages or react to others\' messages. '
-          'Earn 2 points per message (up to 50) and 1 point per reaction (up to 20).',
+          'Earn 1 point per message (up to 10) and 1 point per reaction (up to 5).',
       actionKeys: ['chat_message', 'chat_reaction'],
       navigateTo: 'chat',
     ),
@@ -277,7 +277,7 @@ class KarmaEngine {
       name: 'Blog',
       verb: 'Write a Post',
       description: 'Publish a blog post to share your thoughts or experiences. '
-          'Earn 50 points per post (up to 3 per day).',
+          'Earn 5 points per post (up to 3 per day).',
       actionKeys: ['blog_published'],
       navigateTo: 'blog',
     ),
@@ -285,7 +285,7 @@ class KarmaEngine {
       name: 'Places',
       verb: 'Share a Place',
       description: 'Pin a place on the map to share a location with the community. '
-          'Earn 30 points per place (up to 5 per day).',
+          'Earn 5 points per place (up to 3 per day).',
       actionKeys: ['place_created'],
       navigateTo: 'places',
     ),
@@ -293,15 +293,15 @@ class KarmaEngine {
       name: 'Alerts',
       verb: 'Report an Alert',
       description: 'Report a local alert (weather, traffic, safety, etc.) to help others nearby. '
-          'Earn 25 points per alert (up to 5 per day).',
+          'Earn 5 points per alert (up to 3 per day).',
       actionKeys: ['alert_created'],
       navigateTo: 'alerts',
     ),
     KarmaMission(
       name: 'Social',
       verb: 'Engage Socially',
-      description: 'Interact with others\' content: like posts (2 points, up to 30), '
-          'leave comments (5 points, up to 20), or verify alerts (5 points, up to 10).',
+      description: 'Interact with others\' content: like posts (1 point, up to 10), '
+          'leave comments (1 point, up to 5), or verify alerts (1 point, up to 5).',
       actionKeys: ['like_given', 'comment_given', 'verify_given'],
       navigateTo: null,
     ),
@@ -309,7 +309,7 @@ class KarmaEngine {
       name: 'Events',
       verb: 'Create an Event',
       description: 'Organize a local event for the community to join. '
-          'Earn 30 points per event (up to 3 per day).',
+          'Earn 5 points per event (up to 2 per day).',
       actionKeys: ['event_created'],
       navigateTo: 'events',
     ),
