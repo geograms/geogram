@@ -11,8 +11,13 @@ import 'package:http/http.dart' as http;
 import '../models/app.dart';
 import '../connection/connection_manager.dart';
 import '../connection/transports/usb_aoa_transport.dart';
+import 'package:path/path.dart' as path;
 import 'chat_service.dart';
 import 'app_service.dart';
+import 'config_service.dart';
+import 'profile_service.dart';
+import 'storage_config.dart';
+import '../util/nostr_key_generator.dart';
 import 'conference_service.dart';
 import 'devices_service.dart';
 import 'log_service.dart';
@@ -524,6 +529,50 @@ class DebugController {
     triggerAction(DebugAction.openWelcomePage);
   }
 
+  /// Simulate the WelcomePage finalize flow: generate new identity, update profile,
+  /// finalize, and clean up orphaned folders. For testing first-launch callsign bug fix.
+  Future<Map<String, dynamic>> _handleWelcomeFinalize() async {
+    try {
+      final profileService = ProfileService();
+      final profile = profileService.getProfile();
+      final oldCallsign = profile.callsign;
+
+      // Generate a new identity (simulating user choosing a different callsign)
+      final keys = NostrKeyGenerator.generateKeyPair();
+      profile.npub = keys.npub;
+      profile.nsec = keys.nsec;
+      profile.callsign = keys.callsign;
+
+      await profileService.saveProfile(profile);
+      await profileService.finalizeProfileIdentity(profile);
+
+      // Clean up orphaned folder (same as WelcomePage._cleanupOldCallsignFolder)
+      String? cleanedUp;
+      if (oldCallsign != keys.callsign && oldCallsign.isNotEmpty) {
+        final devicesDir = StorageConfig().devicesDir;
+        final oldDir = Directory(path.join(devicesDir, oldCallsign));
+        if (oldDir.existsSync()) {
+          oldDir.deleteSync(recursive: true);
+          cleanedUp = oldCallsign;
+          LogService().log('Debug: Cleaned up old callsign folder: $oldCallsign');
+        }
+      }
+
+      // Mark first launch complete
+      ConfigService().set('firstLaunchComplete', true);
+
+      return {
+        'success': true,
+        'old_callsign': oldCallsign,
+        'new_callsign': keys.callsign,
+        'cleaned_up': cleanedUp,
+        'message': 'Profile finalized with new callsign',
+      };
+    } catch (e) {
+      return {'success': false, 'error': e.toString()};
+    }
+  }
+
   /// Trigger selecting a chat room by ID
   void triggerSelectChatRoom(String roomId) {
     triggerAction(DebugAction.selectChatRoom, params: {'room_id': roomId});
@@ -946,6 +995,12 @@ class DebugController {
       {
         'action': 'welcome_open',
         'description': 'Open the Welcome page (first-launch screen)',
+        'params': {},
+      },
+      {
+        'action': 'welcome_finalize',
+        'description':
+            'Simulate finalizing the Welcome page with a new identity (for testing first-launch flow)',
         'params': {},
       },
       {
@@ -1771,6 +1826,9 @@ class DebugController {
           'success': true,
           'message': 'Opening welcome page',
         };
+
+      case 'welcome_finalize':
+        return await _handleWelcomeFinalize();
 
       case 'select_chat_room':
         final roomId = params['room_id'] as String?;

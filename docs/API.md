@@ -1617,6 +1617,27 @@ curl -X POST http://localhost:3456/api/debug \
   -d '{"action": "manga_browse", "extension_id": "mangapill", "tab": "0"}'
 ```
 
+#### Debug: Welcome Finalize
+
+Simulate the WelcomePage finalize flow for testing the first-launch callsign bug fix. Generates a new identity, updates the profile, calls `finalizeProfileIdentity()`, cleans up the orphaned initial-callsign folder, and sets `firstLaunchComplete`.
+
+```bash
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action": "welcome_finalize"}'
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "old_callsign": "X1ABCD",
+  "new_callsign": "X1EFGH",
+  "cleaned_up": "X1ABCD",
+  "message": "Profile finalized with new callsign"
+}
+```
+
 ---
 
 ### Chat
