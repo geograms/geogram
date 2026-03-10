@@ -5,6 +5,7 @@
 
 import 'dart:math';
 import 'karma_models.dart';
+import 'karma_store.dart';
 
 /// Point values and daily caps for each karma action.
 class KarmaActionConfig {
@@ -260,6 +261,42 @@ class KarmaEngine {
     );
   }
 
+  // ============ Daily Missions ============
+
+  /// The canonical list of daily missions and their action keys.
+  static const List<KarmaMission> missions = [
+    KarmaMission(name: 'Chat',    verb: 'Send Messages',   actionKeys: ['chat_message', 'chat_reaction'],              navigateTo: 'chat'),
+    KarmaMission(name: 'Blog',    verb: 'Write a Post',    actionKeys: ['blog_published'],                             navigateTo: 'blog'),
+    KarmaMission(name: 'Places',  verb: 'Share a Place',   actionKeys: ['place_created'],                              navigateTo: 'places'),
+    KarmaMission(name: 'Alerts',  verb: 'Report an Alert', actionKeys: ['alert_created'],                              navigateTo: 'alerts'),
+    KarmaMission(name: 'Social',  verb: 'Engage Socially', actionKeys: ['like_given', 'comment_given', 'verify_given'], navigateTo: null),
+    KarmaMission(name: 'Events',  verb: 'Create an Event', actionKeys: ['event_created'],                              navigateTo: 'events'),
+  ];
+
+  /// Count how many missions have been started (at least 1 action performed).
+  static int countStartedMissions(Map<String, int> actionCounts) {
+    int started = 0;
+    for (final m in missions) {
+      if (m.isStarted(actionCounts)) started++;
+    }
+    return started;
+  }
+
+  /// Count how many missions have NOT been started yet.
+  static int countUnstartedMissions(Map<String, int> actionCounts) {
+    return missions.length - countStartedMissions(actionCounts);
+  }
+
+  /// Get today's action counts from the store, preferring the cached profile.
+  static Future<Map<String, int>> getTodayActionCountsWithFallback(
+    KarmaStore store,
+    String callsign,
+  ) async {
+    final profile = await store.readProfile(callsign.toUpperCase());
+    if (profile != null) return profile.actionCountsToday;
+    return store.getTodayActionCounts(callsign.toUpperCase());
+  }
+
   /// Map a feedback action name to the corresponding karma action.
   static String? feedbackToKarmaAction(String feedbackAction, {required bool isGiver}) {
     switch (feedbackAction) {
@@ -275,5 +312,73 @@ class KarmaEngine {
       default:
         return null;
     }
+  }
+}
+
+/// A daily mission definition with helper methods for progress tracking.
+class KarmaMission {
+  final String name;
+  final String verb;
+  final List<String> actionKeys;
+  final String? navigateTo;
+
+  const KarmaMission({
+    required this.name,
+    required this.verb,
+    required this.actionKeys,
+    required this.navigateTo,
+  });
+
+  /// Maximum points earnable per day for this mission.
+  int get maxDailyPoints {
+    int total = 0;
+    for (final key in actionKeys) {
+      final config = KarmaEngine.actions[key];
+      if (config != null) {
+        total += config.points * config.dailyCap;
+      }
+    }
+    return total;
+  }
+
+  /// Points earned today for this mission.
+  int todayEarned(Map<String, int> actionCounts) {
+    int total = 0;
+    for (final key in actionKeys) {
+      final config = KarmaEngine.actions[key];
+      if (config != null) {
+        final count = actionCounts[key] ?? 0;
+        final capped = count.clamp(0, config.dailyCap);
+        total += config.points * capped;
+      }
+    }
+    return total;
+  }
+
+  /// Progress fraction (0.0 to 1.0) for this mission today.
+  double progress(Map<String, int> actionCounts) {
+    final max = maxDailyPoints;
+    if (max == 0) return 0.0;
+    return todayEarned(actionCounts) / max;
+  }
+
+  /// Whether all action keys have hit their daily cap.
+  bool isComplete(Map<String, int> actionCounts) {
+    for (final key in actionKeys) {
+      final config = KarmaEngine.actions[key];
+      if (config != null) {
+        final count = actionCounts[key] ?? 0;
+        if (count < config.dailyCap) return false;
+      }
+    }
+    return true;
+  }
+
+  /// Whether any action in this mission has been performed at least once.
+  bool isStarted(Map<String, int> actionCounts) {
+    for (final key in actionKeys) {
+      if ((actionCounts[key] ?? 0) > 0) return true;
+    }
+    return false;
   }
 }

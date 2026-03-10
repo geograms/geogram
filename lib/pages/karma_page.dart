@@ -31,50 +31,16 @@ class _KarmaPageState extends State<KarmaPage>
   String _leaderboardPeriod = 'weekly';
   int _todayPoints = 0;
 
-  static const _missions = [
-    _MissionInfo(
-      name: 'Chat',
-      verb: 'Send Messages',
-      icon: Icons.chat,
-      actionKeys: ['chat_message', 'chat_reaction'],
-      navigateTo: 'chat',
-    ),
-    _MissionInfo(
-      name: 'Blog',
-      verb: 'Write a Post',
-      icon: Icons.article,
-      actionKeys: ['blog_published'],
-      navigateTo: 'blog',
-    ),
-    _MissionInfo(
-      name: 'Places',
-      verb: 'Share a Place',
-      icon: Icons.place,
-      actionKeys: ['place_created'],
-      navigateTo: 'places',
-    ),
-    _MissionInfo(
-      name: 'Alerts',
-      verb: 'Report an Alert',
-      icon: Icons.campaign,
-      actionKeys: ['alert_created'],
-      navigateTo: 'alerts',
-    ),
-    _MissionInfo(
-      name: 'Social',
-      verb: 'Engage Socially',
-      icon: Icons.favorite,
-      actionKeys: ['like_given', 'comment_given', 'verify_given'],
-      navigateTo: null,
-    ),
-    _MissionInfo(
-      name: 'Events',
-      verb: 'Create an Event',
-      icon: Icons.event,
-      actionKeys: ['event_created'],
-      navigateTo: 'events',
-    ),
-  ];
+  static const _missions = KarmaEngine.missions;
+
+  static const _missionIcons = <String, IconData>{
+    'Chat': Icons.chat,
+    'Blog': Icons.article,
+    'Places': Icons.place,
+    'Alerts': Icons.campaign,
+    'Social': Icons.favorite,
+    'Events': Icons.event,
+  };
 
   EventSubscription<KarmaUpdatedEvent>? _karmaSubscription;
 
@@ -330,7 +296,7 @@ class _KarmaPageState extends State<KarmaPage>
     );
   }
 
-  Widget _buildMissionCard(ThemeData theme, _MissionInfo mission, Map<String, int> counts) {
+  Widget _buildMissionCard(ThemeData theme, KarmaMission mission, Map<String, int> counts) {
     final earned = mission.todayEarned(counts);
     final max = mission.maxDailyPoints;
     final progress = mission.progress(counts);
@@ -358,7 +324,7 @@ class _KarmaPageState extends State<KarmaPage>
                   shape: BoxShape.circle,
                 ),
                 child: Icon(
-                  complete ? Icons.check : mission.icon,
+                  complete ? Icons.check : (_missionIcons[mission.name] ?? Icons.star),
                   color: complete ? Colors.green : theme.colorScheme.primary,
                   size: 22,
                 ),
@@ -906,59 +872,3 @@ class _KarmaPageState extends State<KarmaPage>
   }
 }
 
-class _MissionInfo {
-  final String name;
-  final String verb;
-  final IconData icon;
-  final List<String> actionKeys;
-  final String? navigateTo;
-
-  const _MissionInfo({
-    required this.name,
-    required this.verb,
-    required this.icon,
-    required this.actionKeys,
-    required this.navigateTo,
-  });
-
-  int get maxDailyPoints {
-    int total = 0;
-    for (final key in actionKeys) {
-      final config = KarmaEngine.actions[key];
-      if (config != null) {
-        total += config.points * config.dailyCap;
-      }
-    }
-    return total;
-  }
-
-  int todayEarned(Map<String, int> actionCounts) {
-    int total = 0;
-    for (final key in actionKeys) {
-      final config = KarmaEngine.actions[key];
-      if (config != null) {
-        final count = actionCounts[key] ?? 0;
-        final capped = count.clamp(0, config.dailyCap);
-        total += config.points * capped;
-      }
-    }
-    return total;
-  }
-
-  double progress(Map<String, int> actionCounts) {
-    final max = maxDailyPoints;
-    if (max == 0) return 0.0;
-    return todayEarned(actionCounts) / max;
-  }
-
-  bool isComplete(Map<String, int> actionCounts) {
-    for (final key in actionKeys) {
-      final config = KarmaEngine.actions[key];
-      if (config != null) {
-        final count = actionCounts[key] ?? 0;
-        if (count < config.dailyCap) return false;
-      }
-    }
-    return true;
-  }
-}

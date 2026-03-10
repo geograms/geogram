@@ -2608,31 +2608,11 @@ class _AppsPageState extends State<AppsPage> {
     try {
       final callsign = _profileService.getProfile().callsign.toUpperCase();
       final store = StationServerService().karmaStore;
-      final counts = await store.getTodayActionCounts(callsign);
-
-      // Count missions where not all action keys have hit their daily cap
-      const missionActionKeys = [
-        ['chat_message', 'chat_reaction'],
-        ['blog_published'],
-        ['place_created'],
-        ['alert_created'],
-        ['like_given', 'comment_given', 'verify_given'],
-        ['event_created'],
-      ];
-      int left = 0;
-      for (final keys in missionActionKeys) {
-        bool started = false;
-        for (final key in keys) {
-          if ((counts[key] ?? 0) > 0) {
-            started = true;
-            break;
-          }
-        }
-        if (!started) left++;
-      }
+      final counts = await KarmaEngine.getTodayActionCountsWithFallback(store, callsign);
+      final left = KarmaEngine.countUnstartedMissions(counts);
       if (mounted) setState(() => _karmaMissionsLeft = left);
     } catch (e) {
-      if (mounted) setState(() => _karmaMissionsLeft = 6);
+      if (mounted) setState(() => _karmaMissionsLeft = KarmaEngine.missions.length);
     }
   }
 
