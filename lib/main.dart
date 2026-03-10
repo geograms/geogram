@@ -2607,15 +2607,14 @@ class _AppsPageState extends State<AppsPage> {
       ];
       int left = 0;
       for (final keys in missionActionKeys) {
-        bool complete = true;
+        bool started = false;
         for (final key in keys) {
-          final config = KarmaEngine.actions[key];
-          if (config != null && (counts[key] ?? 0) < config.dailyCap) {
-            complete = false;
+          if ((counts[key] ?? 0) > 0) {
+            started = true;
             break;
           }
         }
-        if (!complete) left++;
+        if (!started) left++;
       }
       if (mounted) setState(() => _karmaMissionsLeft = left);
     } catch (e) {
