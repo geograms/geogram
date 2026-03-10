@@ -71,14 +71,17 @@ class NowService {
   Map<String, NowGroupSettings> _groupSettings = {};
 
   void _loadGroupSettings() {
-    final raw = ConfigService()
-        .getNestedValue('now.groupSettings', <String, dynamic>{});
+    final raw = ConfigService().getNestedValue(
+      'now.groupSettings',
+      <String, dynamic>{},
+    );
     if (raw is Map) {
       _groupSettings = {};
       for (final entry in raw.entries) {
         try {
-          _groupSettings[entry.key as String] =
-              NowGroupSettings.fromJson(Map<String, dynamic>.from(entry.value as Map));
+          _groupSettings[entry.key as String] = NowGroupSettings.fromJson(
+            Map<String, dynamic>.from(entry.value as Map),
+          );
         } catch (_) {}
       }
     }
@@ -191,68 +194,78 @@ class NowService {
       final priority = (severity == 'emergency' || severity == 'urgent')
           ? NowPriority.alertUrgent
           : NowPriority.alertAttention;
-      _handleEvent(NowItemEvent(
-        id: 'alert:${event.eventId}',
-        appType: 'alert',
-        sourceId: event.folderName,
-        sourceName: event.folderName,
-        callsign: event.senderCallsign,
-        summary: event.content.length > 100
-            ? '${event.content.substring(0, 100)}...'
-            : event.content,
-        priority: priority,
-      ));
+      _handleEvent(
+        NowItemEvent(
+          id: 'alert:${event.eventId}',
+          appType: 'alert',
+          sourceId: event.folderName,
+          sourceName: event.folderName,
+          callsign: event.senderCallsign,
+          summary: event.content.length > 100
+              ? '${event.content.substring(0, 100)}...'
+              : event.content,
+          priority: priority,
+        ),
+      );
     });
 
     _emailSubscription = EventBus().on<EmailNotificationEvent>((event) {
-      _handleEvent(NowItemEvent(
-        id: 'email:${event.threadId ?? DateTime.now().toIso8601String()}',
-        appType: 'email',
-        sourceId: event.threadId ?? '',
-        sourceName: event.recipient ?? 'Email',
-        callsign: event.recipient ?? '',
-        summary: event.message,
-        priority: NowPriority.email,
-      ));
+      _handleEvent(
+        NowItemEvent(
+          id: 'email:${event.threadId ?? DateTime.now().toIso8601String()}',
+          appType: 'email',
+          sourceId: event.threadId ?? '',
+          sourceName: event.recipient ?? 'Email',
+          callsign: event.recipient ?? '',
+          summary: event.message,
+          priority: NowPriority.email,
+        ),
+      );
     });
 
     // Subscribe to blog post events
     _blogSubscription = EventBus().on<BlogPostPublishedEvent>((event) {
-      _handleEvent(NowItemEvent(
-        id: 'blog:${event.postId}',
-        appType: 'blog',
-        sourceId: event.postId,
-        sourceName: event.author,
-        callsign: event.author,
-        summary: event.title,
-        priority: NowPriority.blog,
-      ));
+      _handleEvent(
+        NowItemEvent(
+          id: 'blog:${event.postId}',
+          appType: 'blog',
+          sourceId: event.postId,
+          sourceName: event.author,
+          callsign: event.author,
+          summary: event.title,
+          priority: NowPriority.blog,
+        ),
+      );
     });
 
     // Subscribe to event creation events
     _eventSubscription = EventBus().on<EventCreatedEvent>((event) {
-      _handleEvent(NowItemEvent(
-        id: 'event:${event.eventId}',
-        appType: 'events',
-        sourceId: event.eventId,
-        sourceName: event.title,
-        callsign: event.author,
-        summary: event.title,
-        priority: NowPriority.event,
-      ));
+      _handleEvent(
+        NowItemEvent(
+          id: 'event:${event.eventId}',
+          appType: 'events',
+          sourceId: event.eventId,
+          sourceName: event.title,
+          callsign: event.author,
+          summary: event.title,
+          priority: NowPriority.event,
+        ),
+      );
     });
 
     // Subscribe to place creation events
     _placeSubscription = EventBus().on<PlaceCreatedEvent>((event) {
-      _handleEvent(NowItemEvent(
-        id: 'place:${event.placeId}',
-        appType: 'places',
-        sourceId: event.placeId,
-        sourceName: event.name,
-        callsign: event.author,
-        summary: event.name,
-        priority: NowPriority.routine,
-      ));
+      _handleEvent(
+        NowItemEvent(
+          id: 'place:${event.placeId}',
+          appType: 'places',
+          sourceId: event.placeId,
+          sourceName: event.name,
+          callsign: event.author,
+          summary: event.name,
+          priority: NowPriority.routine,
+        ),
+      );
     });
 
     // Subscribe to group removal events (e.g. leaving an IRC channel)
@@ -276,6 +289,16 @@ class NowService {
     if (_items.length != before) {
       _broadcast();
       LogService().log('NowService: Removed group $appType:$sourceId');
+    }
+  }
+
+  /// Remove a single item by ID.
+  void removeItem(String itemId) {
+    final before = _items.length;
+    _items.removeWhere((i) => i.id == itemId);
+    if (_items.length != before) {
+      _broadcast();
+      LogService().log('NowService: Removed item $itemId');
     }
   }
 
@@ -323,10 +346,11 @@ class NowService {
   /// Enforce maxItems for a specific appType:sourceId group
   void _enforceGroupLimit(String appType, String sourceId) {
     final settings = getGroupSettings(appType, sourceId);
-    final groupItems = _items
-        .where((i) => i.appType == appType && i.sourceId == sourceId)
-        .toList()
-      ..sort((a, b) => b.timestamp.compareTo(a.timestamp));
+    final groupItems =
+        _items
+            .where((i) => i.appType == appType && i.sourceId == sourceId)
+            .toList()
+          ..sort((a, b) => b.timestamp.compareTo(a.timestamp));
 
     if (groupItems.length > settings.maxItems) {
       final toRemove = groupItems.sublist(settings.maxItems);
@@ -379,8 +403,7 @@ class NowService {
   }
 
   void _saveMutedSources() {
-    ConfigService()
-        .setNestedValue('now.mutedSources', _mutedSources.toList());
+    ConfigService().setNestedValue('now.mutedSources', _mutedSources.toList());
   }
 
   bool isSourceMuted(String appType, String sourceId) {

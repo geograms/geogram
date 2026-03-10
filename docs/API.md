@@ -4117,6 +4117,35 @@ curl -X POST http://localhost:3456/api/debug \
   -d '{"action": "profile_delete", "callsign": "X1FART"}'
 ```
 
+### APRS Debug Actions
+
+Use these to inspect and simulate APRS geo-chat without a live APRS-IS session.
+
+```bash
+# List current APRS geo-chat messages
+curl -s localhost:3456/api/debug -d '{"action":"aprs_geochat"}'
+
+# Clear the Geo Chat panel state
+curl -s localhost:3456/api/debug -d '{"action":"aprs_clear_geochat"}'
+
+# Inject an incoming APRS geo-chat position comment
+curl -s localhost:3456/api/debug -d '{
+  "action": "aprs_inject_geochat",
+  "from": "W5XYZ-9",
+  "comment": "Hello from the hill",
+  "lat": 38.72,
+  "lon": -9.14
+}'
+
+# Optional: backdate the injected packet to test the 1-hour repeat filter
+curl -s localhost:3456/api/debug -d '{
+  "action": "aprs_inject_geochat",
+  "from": "W5XYZ-9",
+  "comment": "Hello from the hill",
+  "minutesAgo": 30
+}'
+```
+
 ### BlueAPRS Debug Actions
 
 BlueAPRS provides APRS over Bluetooth Low Energy. These debug actions test the iGate (BLE ↔ APRS-IS) and repeater (BLE ↔ BLE) bridge using simulated BLE clients.

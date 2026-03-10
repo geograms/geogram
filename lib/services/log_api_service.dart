@@ -35,6 +35,7 @@ import '../connection/connection_manager.dart';
 import '../teleport/aprs/aprs_is_client.dart';
 import '../teleport/aprs/aprs_message_utils.dart';
 import '../teleport/aprs/aprs_service.dart';
+import '../teleport/aprs/models/aprs_packet.dart';
 import '../teleport/aprs/blue_aprs_service.dart';
 import '../models/ble_message.dart';
 import 'location_provider_service.dart';
@@ -17570,6 +17571,77 @@ function cleanup() {
               'success': true,
               'count': chatMsgs.length,
               'messages': chatMsgs,
+            }),
+            headers: headers,
+          );
+
+        case 'aprs_clear_geochat':
+          aprs.clearGeoChat();
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'count': aprs.geoChatMessages.length,
+            }),
+            headers: headers,
+          );
+
+        case 'aprs_inject_geochat':
+          final from = params['from'] as String?;
+          final comment = params['comment'] as String?;
+          if (from == null || comment == null || comment.isEmpty) {
+            return shelf.Response.ok(
+              jsonEncode({
+                'success': false,
+                'error': 'from and comment required',
+              }),
+              headers: headers,
+            );
+          }
+          final lat =
+              (params['lat'] as num?)?.toDouble() ?? aprs.savedLatitude ?? 0.0;
+          final lon =
+              (params['lon'] as num?)?.toDouble() ?? aprs.savedLongitude ?? 0.0;
+          final minutesAgo = (params['minutesAgo'] as num?)?.toDouble() ?? 0.0;
+          final timestamp = DateTime.now().toUtc().subtract(
+            Duration(milliseconds: (minutesAgo * 60000).round()),
+          );
+          final infoField =
+              '!${lat.toStringAsFixed(5)}/${lon.toStringAsFixed(5)}\$$comment';
+          final packet = AprsPacket(
+            fromCallsign: from,
+            toCallsign: 'APRS',
+            infoField: infoField,
+            rawTnc2: '$from>APRS:$infoField',
+            timestamp: timestamp,
+            type: AprsPacketType.position,
+            latitude: lat,
+            longitude: lon,
+            comment: comment,
+          );
+
+          aprs.addPacket(packet);
+
+          final matchingVisible = aprs.geoChatMessages.any((msg) =>
+              !msg.isOutgoing &&
+              msg.fromCallsign == from &&
+              msg.comment == comment);
+          final nowItems = NowService().items
+              .where((item) =>
+                  item.appType == 'aprs' &&
+                  item.sourceId == 'geochat' &&
+                  item.callsign == from &&
+                  item.summary == comment)
+              .length;
+
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'from': from,
+              'comment': comment,
+              'timestamp': timestamp.toIso8601String(),
+              'visibleInGeoChat': matchingVisible,
+              'geoChatCount': aprs.geoChatMessages.length,
+              'nowItems': nowItems,
             }),
             headers: headers,
           );

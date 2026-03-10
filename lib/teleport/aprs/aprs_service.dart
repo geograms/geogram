@@ -19,6 +19,7 @@ import 'package:flutter/foundation.dart';
 import '../../services/ble_message_service.dart';
 import '../../services/location_provider_service.dart';
 import '../../services/log_service.dart';
+import '../../services/now_service.dart';
 import '../../services/profile_storage.dart';
 import '../../util/event_bus.dart';
 import 'aprs_cache_service.dart';
@@ -98,6 +99,8 @@ class AprsService {
   // but the same comment text).
   final Map<String, DateTime> _geoChatDedup = {};
   static const Duration _geoChatDedupWindow = Duration(hours: 1);
+  final Map<String, DateTime> _geoChatLastSeen = {};
+  final Map<String, DateTime> _geoChatSuppressed = {};
 
   /// Last known position per callsign — updated from position packets.
   /// Used to show distance for message packets (which don't carry coordinates).
@@ -144,7 +147,9 @@ class AprsService {
   double get radiusKm => _radiusKm;
   set radiusKm(double value) {
     _radiusKm = value.clamp(1, 1000);
-    LogService().log('AprsService: radiusKm set to $_radiusKm, client=${_client != null}');
+    LogService().log(
+      'AprsService: radiusKm set to $_radiusKm, client=${_client != null}',
+    );
     _client?.updateFilter(radiusKm: _radiusKm);
     _clearPackets();
   }
@@ -213,7 +218,9 @@ class AprsService {
 
   /// Subscribe to a hashtag channel.
   void addTag(String tag) {
-    final normalized = tag.toLowerCase().startsWith('#') ? tag.toLowerCase() : '#${tag.toLowerCase()}';
+    final normalized = tag.toLowerCase().startsWith('#')
+        ? tag.toLowerCase()
+        : '#${tag.toLowerCase()}';
     if (_subscribedTags.add(normalized)) {
       _saveConfig();
       _uiDirtyMessages = true;
@@ -222,7 +229,9 @@ class AprsService {
 
   /// Unsubscribe from a hashtag channel.
   void removeTag(String tag) {
-    final normalized = tag.toLowerCase().startsWith('#') ? tag.toLowerCase() : '#${tag.toLowerCase()}';
+    final normalized = tag.toLowerCase().startsWith('#')
+        ? tag.toLowerCase()
+        : '#${tag.toLowerCase()}';
     if (_subscribedTags.remove(normalized)) {
       _saveConfig();
       _uiDirtyMessages = true;
@@ -241,7 +250,10 @@ class AprsService {
 
   /// Restore saved config (position, radius) and optionally auto-start.
   /// Call from main.dart post-frame callback.
-  Future<void> autoStart(ProfileStorage storage, {required String callsign}) async {
+  Future<void> autoStart(
+    ProfileStorage storage, {
+    required String callsign,
+  }) async {
     if (_enabled) return;
     setStorage(storage);
     final config = await _cacheService!.loadConfig();
@@ -253,7 +265,9 @@ class AprsService {
     // Restore tag subscriptions
     final savedTags = config['subscribedTags'] as List?;
     if (savedTags != null && savedTags.isNotEmpty) {
-      _subscribedTags = savedTags.map((t) => t.toString().toLowerCase()).toSet();
+      _subscribedTags = savedTags
+          .map((t) => t.toString().toLowerCase())
+          .toSet();
     }
     // Restore BlueAPRS settings
     _blueAprsEnabled = config['blueAprsEnabled'] == true;
@@ -269,7 +283,9 @@ class AprsService {
       }
       return;
     }
-    LogService().log('AprsService: auto-starting for $callsign at $_savedLat, $_savedLon');
+    LogService().log(
+      'AprsService: auto-starting for $callsign at $_savedLat, $_savedLon',
+    );
     enable(callsign: callsign);
   }
 
@@ -322,7 +338,10 @@ class AprsService {
         // First pass: build position map from all cached position packets
         for (final pkt in cached) {
           if (pkt.hasPosition) {
-            lastKnownPositions[pkt.fromCallsign] = (pkt.latitude!, pkt.longitude!);
+            lastKnownPositions[pkt.fromCallsign] = (
+              pkt.latitude!,
+              pkt.longitude!,
+            );
           }
         }
         // Second pass: only load packets with known coordinates within radius
@@ -347,12 +366,11 @@ class AprsService {
             streamPackets.add(pkt);
             _uiDirtyStream = true;
           }
-          // Restore human geo-chat messages from cache (skip beacons)
-          if (pkt.isHumanGeoChat) {
-            geoChatMessages.add(pkt);
-          }
+          _processGeoChatPacket(pkt, emitNowItem: false);
         }
-        LogService().log('AprsService: loaded ${streamPackets.length} stream + ${messages.length} messages from cache');
+        LogService().log(
+          'AprsService: loaded ${streamPackets.length} stream + ${messages.length} messages from cache',
+        );
       } catch (e) {
         LogService().log('AprsService: cache load error: $e');
       }
@@ -424,9 +442,7 @@ class AprsService {
       if (elapsed >= _filterTimeThreshold) {
         shouldUpdate = true;
       } else if (_lastFilterLat != null && _lastFilterLon != null) {
-        final dist = _haversineKm(
-          _lastFilterLat!, _lastFilterLon!, lat, lon,
-        );
+        final dist = _haversineKm(_lastFilterLat!, _lastFilterLon!, lat, lon);
         if (dist >= _filterDistanceThresholdKm) {
           shouldUpdate = true;
         }
@@ -452,6 +468,9 @@ class AprsService {
     _client?.disconnect();
     _client = null;
     _recentPacketHashes.clear();
+    _geoChatLastSeen.clear();
+    _geoChatSuppressed.clear();
+    _geoChatDedup.clear();
     _saveConfig();
     _eventController.add(const AprsEvent(AprsEventType.disconnected));
   }
@@ -465,6 +484,8 @@ class AprsService {
     geoChatMessages.clear();
     lastKnownPositions.clear();
     _recentPacketHashes.clear();
+    _geoChatLastSeen.clear();
+    _geoChatSuppressed.clear();
     _geoChatDedup.clear();
     _uiDirtyStream = true;
     _uiDirtyMessages = true;
@@ -477,6 +498,8 @@ class AprsService {
     messages.clear();
     geoChatMessages.clear();
     lastKnownPositions.clear();
+    _geoChatLastSeen.clear();
+    _geoChatSuppressed.clear();
     _geoChatDedup.clear();
 
     _eventController.add(const AprsEvent(AprsEventType.packetReceived));
@@ -486,6 +509,8 @@ class AprsService {
   /// Clear geo-chat messages from the display list.
   void clearGeoChat() {
     geoChatMessages.clear();
+    _geoChatLastSeen.clear();
+    _geoChatSuppressed.clear();
     _geoChatDedup.clear();
     _eventController.add(const AprsEvent(AprsEventType.packetReceived));
   }
@@ -541,7 +566,8 @@ class AprsService {
 
       // Check if this is a message addressed to us (incoming) or sent by us (outgoing)
       final isToUs = addressee == myCall;
-      final isFromUs = msg.fromCallsign.toUpperCase() == myCall || msg.isOutgoing;
+      final isFromUs =
+          msg.fromCallsign.toUpperCase() == myCall || msg.isOutgoing;
 
       if (isToUs || isFromUs) {
         // Direct 1:1 conversation — key by the other party
@@ -563,26 +589,31 @@ class AprsService {
 
     // Build direct conversations
     for (final entry in directMap.entries) {
-      final sorted = entry.value..sort((a, b) => a.timestamp.compareTo(b.timestamp));
-      conversations.add(AprsConversation(
-        id: entry.key,
-        type: AprsConversationType.direct,
-        lastMessage: sorted.last,
-        messageCount: sorted.length,
-        partnerPosition: lastKnownPositions[entry.key],
-      ));
+      final sorted = entry.value
+        ..sort((a, b) => a.timestamp.compareTo(b.timestamp));
+      conversations.add(
+        AprsConversation(
+          id: entry.key,
+          type: AprsConversationType.direct,
+          lastMessage: sorted.last,
+          messageCount: sorted.length,
+          partnerPosition: lastKnownPositions[entry.key],
+        ),
+      );
     }
 
     // Build tag conversations (include subscribed tags even if empty)
     for (final tag in _subscribedTags) {
       final msgs = tagMap[tag] ?? [];
       final sorted = msgs..sort((a, b) => a.timestamp.compareTo(b.timestamp));
-      conversations.add(AprsConversation(
-        id: tag,
-        type: AprsConversationType.tag,
-        lastMessage: sorted.isNotEmpty ? sorted.last : null,
-        messageCount: sorted.length,
-      ));
+      conversations.add(
+        AprsConversation(
+          id: tag,
+          type: AprsConversationType.tag,
+          lastMessage: sorted.isNotEmpty ? sorted.last : null,
+          messageCount: sorted.length,
+        ),
+      );
     }
 
     // Sort by most recent message timestamp (conversations with messages first)
@@ -617,7 +648,8 @@ class AprsService {
         final otherUpper = conversationId.toUpperCase();
 
         final isToUs = addressee == myCall && from == otherUpper;
-        final isFromUs = (from == myCall || msg.isOutgoing) && addressee == otherUpper;
+        final isFromUs =
+            (from == myCall || msg.isOutgoing) && addressee == otherUpper;
 
         if (isToUs || isFromUs) {
           result.add(msg);
@@ -772,25 +804,33 @@ class AprsService {
   void addPacket(AprsPacket packet) {
     // Track last known position per callsign (before any filtering)
     if (packet.hasPosition) {
-      lastKnownPositions[packet.fromCallsign] = (packet.latitude!, packet.longitude!);
+      lastKnownPositions[packet.fromCallsign] = (
+        packet.latitude!,
+        packet.longitude!,
+      );
     }
 
-    final isMessage = packet.type == AprsPacketType.message && packet.messageText != null;
+    final isMessage =
+        packet.type == AprsPacketType.message && packet.messageText != null;
     final myCall = _callsign?.toUpperCase();
-    final isAddressedToUs = isMessage &&
-        packet.messageAddressee?.toUpperCase() == myCall;
+    final isAddressedToUs =
+        isMessage && packet.messageAddressee?.toUpperCase() == myCall;
 
     // Handle incoming ACKs — update matching sent message, don't display
-    if (isMessage && packet.messageText != null &&
-        packet.messageText!.startsWith('ack') && isAddressedToUs) {
+    if (isMessage &&
+        packet.messageText != null &&
+        packet.messageText!.startsWith('ack') &&
+        isAddressedToUs) {
       final ackedId = packet.messageText!.substring(3).trim();
       _handleIncomingAck(ackedId);
       return;
     }
 
     // Handle incoming rejection — same as ACK for display purposes
-    if (isMessage && packet.messageText != null &&
-        packet.messageText!.startsWith('rej') && isAddressedToUs) {
+    if (isMessage &&
+        packet.messageText != null &&
+        packet.messageText!.startsWith('rej') &&
+        isAddressedToUs) {
       return; // Just suppress from display
     }
 
@@ -822,7 +862,10 @@ class AprsService {
     // Dedup by callsign + info field — catches the same packet relayed
     // via different digipeater paths (different rawTnc2, same content).
     final dedupKey = '${packet.fromCallsign}\x00${packet.infoField}';
-    if (_recentPacketHashes.contains(dedupKey)) return;
+    if (_recentPacketHashes.contains(dedupKey)) {
+      _processGeoChatPacket(packet);
+      return;
+    }
     _recentPacketHashes.add(dedupKey);
     if (_recentPacketHashes.length > _maxRecentHashes) {
       _recentPacketHashes.remove(_recentPacketHashes.first);
@@ -852,15 +895,17 @@ class AprsService {
         final summary = packet.isTagMessage
             ? packet.messageBody ?? ''
             : packet.messageText ?? '';
-        EventBus().fire(NowItemEvent(
-          id: 'aprs:msg:${packet.fromCallsign}:${packet.timestamp.millisecondsSinceEpoch}',
-          appType: 'aprs',
-          sourceId: sourceId,
-          sourceName: sourceName,
-          callsign: packet.fromCallsign,
-          summary: summary,
-          priority: NowPriority.chat,
-        ));
+        EventBus().fire(
+          NowItemEvent(
+            id: 'aprs:msg:${packet.fromCallsign}:${packet.timestamp.millisecondsSinceEpoch}',
+            appType: 'aprs',
+            sourceId: sourceId,
+            sourceName: sourceName,
+            callsign: packet.fromCallsign,
+            summary: summary,
+            priority: NowPriority.chat,
+          ),
+        );
       }
     } else {
       streamPackets.add(packet);
@@ -870,46 +915,134 @@ class AprsService {
       _uiDirtyStream = true;
     }
 
-    // Collect human-authored position comments for geo-chat (skip beacons)
-    if (packet.isHumanGeoChat) {
-      // Comment-based dedup: suppress identical comments from the same callsign
-      // within a 1-hour window (GPS drift causes different coords but same text).
-      final dedupKey = '${packet.fromCallsign}\x00${packet.comment ?? ''}';
-      final now = DateTime.now();
-      final prev = _geoChatDedup[dedupKey];
-      if (prev != null && now.difference(prev) < _geoChatDedupWindow) {
-        // Duplicate within window — skip
-      } else {
-        _geoChatDedup[dedupKey] = now;
-        // Prune stale entries when map gets large
-        if (_geoChatDedup.length > 500) {
-          _geoChatDedup.removeWhere(
-            (_, ts) => now.difference(ts) >= _geoChatDedupWindow,
-          );
-        }
+    _processGeoChatPacket(packet);
+  }
 
-        geoChatMessages.add(packet);
-        if (geoChatMessages.length > _maxMessages) {
-          geoChatMessages.removeRange(0, geoChatMessages.length - _maxMessages);
-        }
+  void _processGeoChatPacket(AprsPacket packet, {bool emitNowItem = true}) {
+    if (!packet.isHumanGeoChat) return;
+
+    if (packet.isOutgoing) {
+      _appendGeoChatMessage(packet, dedup: false);
+      return;
+    }
+
+    final key = _geoChatAutomationKey(packet);
+    if (key == null) return;
+    final timestamp = packet.timestamp.toUtc();
+    _pruneGeoChatState(timestamp);
+
+    final suppressedAt = _geoChatSuppressed[key];
+    final suppressedAge = suppressedAt == null
+        ? null
+        : timestamp.difference(suppressedAt);
+    if (suppressedAge != null &&
+        !suppressedAge.isNegative &&
+        suppressedAge < _geoChatDedupWindow) {
+      _geoChatSuppressed[key] = timestamp;
+      LogService().log(
+        'AprsService: ignored suppressed geo-chat from ${packet.fromCallsign}: ${packet.comment}',
+      );
+      return;
+    }
+
+    final prev = _geoChatLastSeen[key];
+    _geoChatLastSeen[key] = timestamp;
+    final repeatAge = prev == null ? null : timestamp.difference(prev);
+
+    if (repeatAge != null &&
+        !repeatAge.isNegative &&
+        repeatAge < _geoChatDedupWindow) {
+      _geoChatSuppressed[key] = timestamp;
+      final removed = _removeRecentGeoChatMatches(key, timestamp);
+      if (removed > 0) {
         _uiDirtyMessages = true;
+      }
+      if (emitNowItem) {
+        NowService().removeItem(_geoChatNowItemId(packet));
+      }
+      LogService().log(
+        'AprsService: suppressed repeated geo-chat from ${packet.fromCallsign}: ${packet.comment}',
+      );
+      return;
+    }
 
-        // Push to Now panel with content-based ID so the same comment
-        // from the same callsign never creates duplicate Now cards.
-        if (!packet.isOutgoing) {
-          final commentHash = (packet.comment ?? '').hashCode;
-          EventBus().fire(NowItemEvent(
-            id: 'aprs:geo:${packet.fromCallsign}:$commentHash',
-            appType: 'aprs',
-            sourceId: 'geochat',
-            sourceName: 'APRS Geo Chat',
-            callsign: packet.fromCallsign,
-            summary: packet.comment ?? '',
-            priority: NowPriority.chat,
-          ));
-        }
+    _appendGeoChatMessage(packet);
+
+    if (emitNowItem) {
+      EventBus().fire(
+        NowItemEvent(
+          id: _geoChatNowItemId(packet),
+          appType: 'aprs',
+          sourceId: 'geochat',
+          sourceName: 'APRS Geo Chat',
+          callsign: packet.fromCallsign,
+          summary: packet.comment ?? '',
+          priority: NowPriority.chat,
+        ),
+      );
+    }
+  }
+
+  void _appendGeoChatMessage(AprsPacket packet, {bool dedup = true}) {
+    if (dedup) {
+      final dedupKey =
+          '${packet.fromCallsign}\x00${_normalizeGeoChatText(packet.comment)}';
+      final now = packet.timestamp.toUtc();
+      final prev = _geoChatDedup[dedupKey];
+      final age = prev == null ? null : now.difference(prev);
+      if (age != null && !age.isNegative && age < _geoChatDedupWindow) {
+        return;
+      }
+
+      _geoChatDedup[dedupKey] = now;
+      if (_geoChatDedup.length > 500) {
+        _geoChatDedup.removeWhere(
+          (_, ts) => now.difference(ts) >= _geoChatDedupWindow,
+        );
       }
     }
+
+    geoChatMessages.add(packet);
+    if (geoChatMessages.length > _maxMessages) {
+      geoChatMessages.removeRange(0, geoChatMessages.length - _maxMessages);
+    }
+    _uiDirtyMessages = true;
+  }
+
+  String? _geoChatAutomationKey(AprsPacket packet) {
+    final normalized = _normalizeGeoChatText(packet.comment);
+    if (normalized.isEmpty) return null;
+    return '${packet.fromCallsign.toUpperCase()}\x00$normalized';
+  }
+
+  String _geoChatNowItemId(AprsPacket packet) {
+    final normalized = _normalizeGeoChatText(packet.comment);
+    return 'aprs:geo:${packet.fromCallsign}:${normalized.hashCode}';
+  }
+
+  static String _normalizeGeoChatText(String? text) {
+    if (text == null) return '';
+    return text.trim().replaceAll(RegExp(r'\s+'), ' ').toLowerCase();
+  }
+
+  void _pruneGeoChatState(DateTime now) {
+    _geoChatLastSeen.removeWhere(
+      (_, ts) => now.difference(ts) >= _geoChatDedupWindow,
+    );
+    _geoChatSuppressed.removeWhere(
+      (_, ts) => now.difference(ts) >= _geoChatDedupWindow,
+    );
+  }
+
+  int _removeRecentGeoChatMatches(String key, DateTime currentTimestamp) {
+    final before = geoChatMessages.length;
+    geoChatMessages.removeWhere((msg) {
+      if (msg.isOutgoing) return false;
+      if (_geoChatAutomationKey(msg) != key) return false;
+      final age = currentTimestamp.difference(msg.timestamp.toUtc());
+      return !age.isNegative && age < _geoChatDedupWindow;
+    });
+    return before - geoChatMessages.length;
   }
 
   /// Mark a sent message as acknowledged.
@@ -986,14 +1119,20 @@ class AprsService {
   // ---------------------------------------------------------------------------
 
   static double _haversineKm(
-    double lat1, double lon1, double lat2, double lon2,
+    double lat1,
+    double lon1,
+    double lat2,
+    double lon2,
   ) {
     const earthRadius = 6371.0;
     final dLat = _deg2rad(lat2 - lat1);
     final dLon = _deg2rad(lon2 - lon1);
-    final a = sin(dLat / 2) * sin(dLat / 2) +
-        cos(_deg2rad(lat1)) * cos(_deg2rad(lat2)) *
-        sin(dLon / 2) * sin(dLon / 2);
+    final a =
+        sin(dLat / 2) * sin(dLat / 2) +
+        cos(_deg2rad(lat1)) *
+            cos(_deg2rad(lat2)) *
+            sin(dLon / 2) *
+            sin(dLon / 2);
     final c = 2 * atan2(sqrt(a), sqrt(1 - a));
     return earthRadius * c;
   }

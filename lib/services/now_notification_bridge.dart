@@ -35,9 +35,8 @@ class NowNotificationBridge {
   /// Map of currently-shown notification IDs → NowItem id
   final Map<int, String> _activeNotifications = {};
 
-  /// Recent message lines for summary notification
-  final List<String> _recentLines = [];
-  int _totalCount = 0;
+  /// Summary lines keyed by notification ID so removals stay in sync.
+  final Map<int, String> _summaryLines = {};
 
   void initialize() {
     if (_initialized) return;
@@ -77,6 +76,7 @@ class NowNotificationBridge {
     for (final nid in toCancel) {
       DMNotificationService().cancelNotification(nid);
       _activeNotifications.remove(nid);
+      _summaryLines.remove(nid);
     }
 
     // --- Show notifications for new unread items (priority <= 2 only) ---
@@ -96,6 +96,8 @@ class NowNotificationBridge {
     // Update summary
     if (_activeNotifications.isNotEmpty) {
       _showSummaryNotification();
+    } else {
+      DMNotificationService().cancelNotification(_summaryNotificationId);
     }
   }
 
@@ -129,10 +131,14 @@ class NowNotificationBridge {
     );
 
     await DMNotificationService().showNotification(
-      nid, title, body, notificationDetails, payload: payload,
+      nid,
+      title,
+      body,
+      notificationDetails,
+      payload: payload,
     );
 
-    _recordLine('$title: $body');
+    _summaryLines[nid] = '$title: $body';
 
     LogService().log(
       'NowNotificationBridge: Showed notification for ${item.appType}:${item.sourceId}',
@@ -231,28 +237,23 @@ class NowNotificationBridge {
 
   // ---- Notification ID ----
 
-  int _notificationId(String itemId) =>
-      10000 + itemId.hashCode.abs() % 80000;
+  int _notificationId(String itemId) => 10000 + itemId.hashCode.abs() % 80000;
 
   // ---- Summary notification ----
 
-  void _recordLine(String line) {
-    _totalCount += 1;
-    _recentLines.insert(0, line);
-    if (_recentLines.length > _maxSummaryLines) {
-      _recentLines.removeRange(_maxSummaryLines, _recentLines.length);
-    }
-  }
-
   Future<void> _showSummaryNotification() async {
     if (defaultTargetPlatform != TargetPlatform.android) return;
-    if (_recentLines.isEmpty) return;
+    if (_summaryLines.isEmpty) return;
 
-    final lines = _recentLines.reversed.toList();
+    final lines = _summaryLines.values.toList();
+    final visibleLines = lines.length > _maxSummaryLines
+        ? lines.sublist(lines.length - _maxSummaryLines)
+        : lines;
+    final totalCount = _summaryLines.length;
     final inboxStyle = InboxStyleInformation(
-      lines,
-      contentTitle: 'Messages ($_totalCount)',
-      summaryText: '$_totalCount total',
+      visibleLines,
+      contentTitle: 'Messages ($totalCount)',
+      summaryText: '$totalCount total',
     );
 
     final androidDetails = AndroidNotificationDetails(
@@ -274,7 +275,7 @@ class NowNotificationBridge {
     await DMNotificationService().showNotification(
       _summaryNotificationId,
       'Geogram',
-      '$_totalCount new messages',
+      '$totalCount new messages',
       notificationDetails,
       payload: 'nav:devices',
     );
@@ -284,7 +285,9 @@ class NowNotificationBridge {
     for (final nid in _activeNotifications.keys) {
       DMNotificationService().cancelNotification(nid);
     }
+    DMNotificationService().cancelNotification(_summaryNotificationId);
     _activeNotifications.clear();
+    _summaryLines.clear();
   }
 
   void dispose() {
