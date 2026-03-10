@@ -43,6 +43,7 @@ class _TodoEditorPageState extends State<TodoEditorPage> {
   List<TodoItem> _items = [];
   bool _isLoading = true;
   bool _hasChanges = false;
+  bool _isSaving = false;
   String? _error;
   Set<String> _expandedItems = {};
 
@@ -101,18 +102,16 @@ class _TodoEditorPageState extends State<TodoEditorPage> {
 
   Future<void> _save() async {
     if (_content == null || _metadata == null) return;
+    if (_isSaving) return;
+
+    _isSaving = true;
+    setState(() { _hasChanges = false; });  // Optimistic: clear immediately
 
     try {
       _metadata!.touch();
       _content!.touch();
-
       await _ndfService.saveTodo(widget.filePath, _content!, _items);
       await _ndfService.updateMetadata(widget.filePath, _metadata!);
-
-      setState(() {
-        _hasChanges = false;
-      });
-
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(_i18n.t('document_saved'))),
@@ -121,10 +120,13 @@ class _TodoEditorPageState extends State<TodoEditorPage> {
     } catch (e) {
       LogService().log('TodoEditorPage: Error saving document: $e');
       if (mounted) {
+        setState(() { _hasChanges = true; });  // Rollback on failure
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Error saving: $e')),
         );
       }
+    } finally {
+      _isSaving = false;
     }
   }
 
