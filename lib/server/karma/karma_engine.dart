@@ -275,7 +275,7 @@ class KarmaEngine {
     ),
     KarmaMission(
       name: 'Blog',
-      verb: 'Write a Post',
+      verb: 'Write a blog post',
       description: 'Publish a blog post to share your thoughts or experiences. '
           'Earn 5 points per post (up to 3 per day).',
       actionKeys: ['blog_published'],
