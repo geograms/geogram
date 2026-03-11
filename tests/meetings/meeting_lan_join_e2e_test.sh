@@ -33,8 +33,19 @@ VISITOR_TMPDIR=""
 HOST_CALLSIGN=""
 ATTENDEE_CALLSIGN=""
 ROOM_ID=""
+ROOM_NAME="Regression Meeting"
 SIGNALING_PORT=""
 CRASH_BASELINE_LINES=0
+HOST_ARCHIVE_PATH=""
+HOST_TRANSCRIPT_PATH=""
+HOST_ARCHIVE_DIR=""
+HOST_METADATA_PATH=""
+HOST_RECORDINGS_DIR=""
+HOST_RECORDING_FILE=""
+ATTENDEE_ARCHIVE_PATH=""
+ATTENDEE_TRANSCRIPT_PATH=""
+ATTENDEE_ARCHIVE_DIR=""
+ATTENDEE_METADATA_PATH=""
 
 ok()   { PASS=$((PASS+1)); TOTAL=$((TOTAL+1)); echo "  PASS: $1"; }
 fail() { FAIL=$((FAIL+1)); TOTAL=$((TOTAL+1)); echo "  FAIL: $1"; }
@@ -107,6 +118,10 @@ trap cleanup EXIT
 json_field() {
   local expression="$1"
   python3 -c "import json, sys; data=json.load(sys.stdin); print($expression)"
+}
+
+archive_dir_from_transcript() {
+  dirname "$(dirname "$1")"
 }
 
 echo "=== Meetings LAN Join E2E Test ==="
@@ -192,7 +207,7 @@ echo "  attendee_callsign=$ATTENDEE_CALLSIGN"
 
 echo ""
 echo "[3] Hosting a LAN meeting from the isolated visitor instance..."
-HOST_RESPONSE="$(post "$VISITOR_API" '{"action":"conference_host","room_name":"Regression Meeting","max_speakers":4}')"
+HOST_RESPONSE="$(post "$VISITOR_API" "{\"action\":\"conference_host\",\"room_name\":\"${ROOM_NAME}\",\"max_speakers\":4}")"
 ROOM_ID="$(echo "$HOST_RESPONSE" | json_field "data['room']['room_id']")"
 HOST_MODE="$(echo "$HOST_RESPONSE" | json_field "data['room']['signaling_mode']")"
 if [ "$HOST_MODE" = "lan" ]; then
@@ -509,6 +524,138 @@ else
 fi
 
 echo ""
+echo "[13b] Capturing active archive and transcript locations for both sides..."
+ARCHIVES_READY=0
+for _ in $(seq 1 20); do
+  HOST_STATUS="$(post "$VISITOR_API" '{"action":"conference_status"}')"
+  ATTENDEE_STATUS="$(post "$MAIN_API" '{"action":"conference_status"}')"
+  HOST_ARCHIVE_PATH="$(echo "$HOST_STATUS" | json_field "data.get('archive_path')")"
+  HOST_TRANSCRIPT_PATH="$(echo "$HOST_STATUS" | json_field "data.get('chat_transcript_path')")"
+  ATTENDEE_ARCHIVE_PATH="$(echo "$ATTENDEE_STATUS" | json_field "data.get('archive_path')")"
+  ATTENDEE_TRANSCRIPT_PATH="$(echo "$ATTENDEE_STATUS" | json_field "data.get('chat_transcript_path')")"
+  if [ -n "$HOST_ARCHIVE_PATH" ] && [ "$HOST_ARCHIVE_PATH" != "None" ] && \
+     [ -n "$HOST_TRANSCRIPT_PATH" ] && [ "$HOST_TRANSCRIPT_PATH" != "None" ] && [ -f "$HOST_TRANSCRIPT_PATH" ] && \
+     [ -n "$ATTENDEE_ARCHIVE_PATH" ] && [ "$ATTENDEE_ARCHIVE_PATH" != "None" ] && \
+     [ -n "$ATTENDEE_TRANSCRIPT_PATH" ] && [ "$ATTENDEE_TRANSCRIPT_PATH" != "None" ] && [ -f "$ATTENDEE_TRANSCRIPT_PATH" ]; then
+    HOST_ARCHIVE_DIR="$(archive_dir_from_transcript "$HOST_TRANSCRIPT_PATH")"
+    ATTENDEE_ARCHIVE_DIR="$(archive_dir_from_transcript "$ATTENDEE_TRANSCRIPT_PATH")"
+    HOST_METADATA_PATH="${HOST_ARCHIVE_DIR}/meeting.json"
+    ATTENDEE_METADATA_PATH="${ATTENDEE_ARCHIVE_DIR}/meeting.json"
+    HOST_RECORDINGS_DIR="${HOST_ARCHIVE_DIR}/recordings"
+    if [ -f "$HOST_METADATA_PATH" ] && [ -f "$ATTENDEE_METADATA_PATH" ]; then
+      ARCHIVES_READY=1
+      break
+    fi
+  fi
+  sleep 1
+done
+
+if [ "$ARCHIVES_READY" -eq 1 ]; then
+  ok "host and attendee expose active archive and transcript paths"
+else
+  fail "active archive paths never became available for both sides"
+  echo "Host status: $HOST_STATUS"
+  echo "Attendee status: $ATTENDEE_STATUS"
+fi
+
+echo ""
+echo "[13c] Starting and stopping host meeting recording..."
+RECORDING_START_RESPONSE="$(post "$VISITOR_API" '{"action":"conference_start_recording"}')"
+if echo "$RECORDING_START_RESPONSE" | json_field "data['success']" | grep -qx "True"; then
+  ok "host started meeting recording"
+else
+  fail "host could not start meeting recording"
+  echo "$RECORDING_START_RESPONSE"
+fi
+
+RECORDING_ACTIVE=0
+for _ in $(seq 1 20); do
+  HOST_STATUS="$(post "$VISITOR_API" '{"action":"conference_status"}')"
+  if HOST_STATUS="$HOST_STATUS" python3 - <<'PY'
+import json
+import os
+import sys
+
+host = json.loads(os.environ['HOST_STATUS'])
+recording = host.get('recording') or {}
+if recording.get('state') != 'recording':
+    sys.exit(1)
+if not recording.get('is_recording'):
+    sys.exit(1)
+if not recording.get('temp_output_path'):
+    sys.exit(1)
+PY
+  then
+    RECORDING_ACTIVE=1
+    break
+  fi
+  sleep 1
+done
+
+if [ "$RECORDING_ACTIVE" -eq 1 ]; then
+  ok "host recording status became active"
+else
+  fail "host recording status never became active"
+  echo "$HOST_STATUS"
+fi
+
+sleep 3
+
+RECORDING_STOP_RESPONSE="$(post "$VISITOR_API" '{"action":"conference_stop_recording"}')"
+if echo "$RECORDING_STOP_RESPONSE" | json_field "data['success']" | grep -qx "True"; then
+  ok "host stopped meeting recording"
+else
+  fail "host could not stop meeting recording"
+  echo "$RECORDING_STOP_RESPONSE"
+fi
+
+HOST_RECORDING_IMPORTED=0
+for _ in $(seq 1 20); do
+  HOST_STATUS="$(post "$VISITOR_API" '{"action":"conference_status"}')"
+  if [ -d "$HOST_RECORDINGS_DIR" ]; then
+    HOST_RECORDING_FILE="$(find "$HOST_RECORDINGS_DIR" -maxdepth 1 -type f | head -n 1 || true)"
+  fi
+  if HOST_STATUS="$HOST_STATUS" HOST_RECORDING_FILE="$HOST_RECORDING_FILE" RECORDING_STOP_RESPONSE="$RECORDING_STOP_RESPONSE" python3 - <<'PY'
+import json
+import os
+import pathlib
+import sys
+
+host = json.loads(os.environ['HOST_STATUS'])
+recording = host.get('recording') or {}
+stop_response = json.loads(os.environ['RECORDING_STOP_RESPONSE'])
+archive = stop_response.get('archive') or {}
+recordings = archive.get('recordings') or []
+path = os.environ.get('HOST_RECORDING_FILE') or ''
+if recording.get('state') != 'idle':
+    sys.exit(1)
+if recording.get('is_recording'):
+    sys.exit(1)
+if not recordings:
+    sys.exit(1)
+if not path:
+    sys.exit(1)
+file_path = pathlib.Path(path)
+if not file_path.is_file() or file_path.stat().st_size <= 0:
+    sys.exit(1)
+PY
+  then
+    HOST_RECORDING_IMPORTED=1
+    break
+  fi
+  sleep 1
+done
+
+if [ "$HOST_RECORDING_IMPORTED" -eq 1 ]; then
+  ok "host recording was imported into the meeting archive"
+else
+  fail "host recording never appeared in the meeting archive"
+  echo "Host status: $HOST_STATUS"
+  echo "Recording stop response: $RECORDING_STOP_RESPONSE"
+  echo "Recordings dir: $HOST_RECORDINGS_DIR"
+fi
+
+echo ""
 echo "[14] Starting direct screen sharing from the host..."
 HOST_SCREEN_RESPONSE="$(post "$VISITOR_API" '{"action":"conference_start_screen_share"}')"
 if echo "$HOST_SCREEN_RESPONSE" | json_field "data['success']" | grep -qx "True"; then
@@ -741,6 +888,85 @@ else
   fail "conference services did not return to idle"
   echo "Host status: $HOST_STATUS"
   echo "Attendee status: $ATTENDEE_STATUS"
+fi
+
+echo ""
+echo "[20b] Verifying persisted archive/history metadata..."
+if HOST_METADATA_PATH="$HOST_METADATA_PATH" \
+   ATTENDEE_METADATA_PATH="$ATTENDEE_METADATA_PATH" \
+   HOST_TRANSCRIPT_PATH="$HOST_TRANSCRIPT_PATH" \
+   ATTENDEE_TRANSCRIPT_PATH="$ATTENDEE_TRANSCRIPT_PATH" \
+   HOST_RECORDING_FILE="$HOST_RECORDING_FILE" \
+   HOST_CALLSIGN="$HOST_CALLSIGN" \
+   ATTENDEE_CALLSIGN="$ATTENDEE_CALLSIGN" \
+   ROOM_ID="$ROOM_ID" \
+   ROOM_NAME="$ROOM_NAME" \
+   python3 - <<'PY'
+import json
+import os
+import pathlib
+import sys
+
+host_meta_path = pathlib.Path(os.environ['HOST_METADATA_PATH'])
+attendee_meta_path = pathlib.Path(os.environ['ATTENDEE_METADATA_PATH'])
+host_transcript = pathlib.Path(os.environ['HOST_TRANSCRIPT_PATH'])
+attendee_transcript = pathlib.Path(os.environ['ATTENDEE_TRANSCRIPT_PATH'])
+recording_file = pathlib.Path(os.environ['HOST_RECORDING_FILE'])
+room_id = os.environ['ROOM_ID']
+room_name = os.environ['ROOM_NAME']
+host_callsign = os.environ['HOST_CALLSIGN']
+attendee_callsign = os.environ['ATTENDEE_CALLSIGN']
+
+if not host_meta_path.is_file() or not attendee_meta_path.is_file():
+    sys.exit(1)
+if not host_transcript.is_file() or not attendee_transcript.is_file():
+    sys.exit(1)
+if not recording_file.is_file() or recording_file.stat().st_size <= 0:
+    sys.exit(1)
+
+host = json.loads(host_meta_path.read_text())
+attendee = json.loads(attendee_meta_path.read_text())
+expected_participants = sorted([host_callsign, attendee_callsign])
+
+def verify_entry(entry, local_callsign, hosted_by_me, signaling_mode, expect_recording):
+    if entry.get('room_id') != room_id:
+        return False
+    if entry.get('room_name') != room_name:
+        return False
+    if entry.get('host_callsign') != host_callsign:
+        return False
+    if entry.get('local_callsign') != local_callsign:
+        return False
+    if bool(entry.get('hosted_by_me')) != hosted_by_me:
+        return False
+    if entry.get('signaling_mode') != signaling_mode:
+        return False
+    if sorted(entry.get('participants') or []) != expected_participants:
+        return False
+    if not entry.get('ended_at'):
+        return False
+    if (entry.get('message_count') or 0) < 1:
+        return False
+    recordings = entry.get('recordings') or []
+    if expect_recording and not recordings:
+        return False
+    if not expect_recording and recordings:
+        return False
+    return True
+
+if not verify_entry(host, host_callsign, True, 'lan', True):
+    sys.exit(1)
+if not verify_entry(attendee, attendee_callsign, False, 'lan', False):
+    sys.exit(1)
+PY
+then
+  ok "meeting archives persisted host/joiner history metadata and recording state"
+else
+  fail "meeting archive metadata did not persist as expected"
+  echo "Host metadata: $HOST_METADATA_PATH"
+  echo "Attendee metadata: $ATTENDEE_METADATA_PATH"
+  [ -f "$HOST_METADATA_PATH" ] && cat "$HOST_METADATA_PATH" || true
+  [ -f "$ATTENDEE_METADATA_PATH" ] && cat "$ATTENDEE_METADATA_PATH" || true
 fi
 
 echo ""
