@@ -414,6 +414,10 @@ class ConferenceParticipantPeerManager {
     });
   }
 
+  Future<void> refreshRemoteSubscriptions() async {
+    await _renegotiateWithHost();
+  }
+
   Future<void> _removeLocalVideoSenders(RTCPeerConnection pc) async {
     final senders = await pc.getSenders();
     for (final sender in senders) {

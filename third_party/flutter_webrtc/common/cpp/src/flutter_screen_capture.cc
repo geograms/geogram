@@ -205,6 +205,15 @@ void FlutterScreenCapture::GetDisplayMedia(
     }
   }
 
+  if (sources_.empty()) {
+    EncodableList types;
+    types.push_back(EncodableValue("screen"));
+    if (!BuildDesktopSourcesList(types, true) || sources_.empty()) {
+      result->Error("Bad Arguments", "Failed to get desktop sources");
+      return;
+    }
+  }
+
   std::string uuid = base_->GenerateUUID();
 
   scoped_refptr<RTCMediaStream> stream =
@@ -230,6 +239,10 @@ void FlutterScreenCapture::GetDisplayMedia(
     if (src->id().std_string() == source_id) {
       source = src;
     }
+  }
+
+  if (!source.get() && source_id == "0" && !sources_.empty()) {
+    source = sources_.front();
   }
 
   if (!source.get()) {

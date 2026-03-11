@@ -145,6 +145,7 @@ class ConferenceService {
   final List<ChatMessage> _chatMessages = [];
   final Set<String> _chatMessageIds = {};
   Future<void> _messageQueue = Future<void>.value();
+  Timer? _remoteScreenRecoveryTimer;
   Future<void>? _screenShareStartOperation;
   bool _screenShareApproved = false;
 
@@ -905,6 +906,7 @@ class ConferenceService {
         }
       }
     } finally {
+      _cancelRemoteScreenRecovery();
       await _lanSocketSubscription?.cancel();
       _lanSocketSubscription = null;
       try {
@@ -1173,6 +1175,7 @@ class ConferenceService {
     // In star topology, participant only connects to host
     if (_role == ConferenceRole.joiner && _participantPeerManager != null) {
       await _participantPeerManager!.connectToHost(hostCallsign);
+      _scheduleRemoteScreenRecovery();
     }
 
     _setState(ConferenceState.active);
@@ -1398,6 +1401,7 @@ class ConferenceService {
     }
 
     if (!active) {
+      _cancelRemoteScreenRecovery();
       if (_room?.activeScreenSharerCallsign?.toUpperCase() !=
           callsign.toUpperCase()) {
         return;
@@ -1411,6 +1415,7 @@ class ConferenceService {
     }
 
     _setActiveScreenSharer(callsign);
+    _scheduleRemoteScreenRecovery();
     _eventController.add(ConferenceEvent('screen_share_started', callsign));
   }
 
@@ -1498,10 +1503,20 @@ class ConferenceService {
         final p = _room?.participants[event.callsign];
         if (p != null) p.isConnected = false;
       }
+
+      if (event.type == 'remote_screen_stream') {
+        _cancelRemoteScreenRecovery();
+      } else if (event.type == 'peer_connected' ||
+          event.type == 'remote_stream') {
+        _scheduleRemoteScreenRecovery();
+      } else if (event.type == 'peer_disconnected') {
+        _cancelRemoteScreenRecovery();
+      }
     });
   }
 
   void _resetMeetingState() {
+    _cancelRemoteScreenRecovery();
     _chatMessages.clear();
     _chatMessageIds.clear();
     _messageQueue = Future<void>.value();
@@ -1566,6 +1581,13 @@ class ConferenceService {
   }
 
   Future<MediaStream> _captureDisplayStream() async {
+    if (!kIsWeb && Platform.isLinux) {
+      return navigator.mediaDevices.getDisplayMedia({
+        'audio': false,
+        'video': true,
+      });
+    }
+
     const targetScreenShareWidth = 1280;
     const targetScreenShareHeight = 720;
     const targetScreenShareFrameRate = 8;
@@ -1597,6 +1619,72 @@ class ConferenceService {
         'height': targetScreenShareHeight,
         'frameRate': targetScreenShareFrameRate,
       },
+    });
+  }
+
+  void _cancelRemoteScreenRecovery() {
+    _remoteScreenRecoveryTimer?.cancel();
+    _remoteScreenRecoveryTimer = null;
+  }
+
+  void _scheduleRemoteScreenRecovery({
+    Duration delay = const Duration(seconds: 2),
+  }) {
+    final room = _room;
+    final participantPeerManager = _participantPeerManager;
+    if (_role != ConferenceRole.joiner ||
+        room == null ||
+        participantPeerManager == null) {
+      _cancelRemoteScreenRecovery();
+      return;
+    }
+
+    final activeSharer = room.activeScreenSharerCallsign;
+    if (activeSharer == null ||
+        activeSharer.toUpperCase() == _myCallsign.toUpperCase() ||
+        participantPeerManager.remoteScreenStream != null) {
+      _cancelRemoteScreenRecovery();
+      return;
+    }
+
+    if (_remoteScreenRecoveryTimer?.isActive ?? false) {
+      return;
+    }
+
+    _remoteScreenRecoveryTimer = Timer(delay, () async {
+      _remoteScreenRecoveryTimer = null;
+
+      final latestRoom = _room;
+      final latestParticipantPeerManager = _participantPeerManager;
+      if (_role != ConferenceRole.joiner ||
+          latestRoom == null ||
+          latestParticipantPeerManager == null) {
+        return;
+      }
+
+      final latestSharer = latestRoom.activeScreenSharerCallsign;
+      if (latestSharer == null ||
+          latestSharer.toUpperCase() == _myCallsign.toUpperCase() ||
+          latestParticipantPeerManager.remoteScreenStream != null) {
+        return;
+      }
+
+      if (latestParticipantPeerManager.connectedPeers.isEmpty) {
+        _scheduleRemoteScreenRecovery(delay: const Duration(seconds: 1));
+        return;
+      }
+
+      try {
+        LogService().log(
+          'ConferenceService: Retrying remote screen subscription for '
+          '$latestSharer',
+        );
+        await latestParticipantPeerManager.refreshRemoteSubscriptions();
+      } catch (e) {
+        LogService().log(
+          'ConferenceService: Failed to refresh remote screen subscription: $e',
+        );
+      }
     });
   }
 

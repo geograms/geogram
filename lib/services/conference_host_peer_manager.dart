@@ -518,6 +518,49 @@ class ConferenceHostPeerManager {
     }
   }
 
+  Future<void> _refreshForwardedScreenTrackForPeer(String callsign) async {
+    final key = callsign.toUpperCase();
+    final peer = _peers[key];
+    final pc = peer?.peerConnection;
+    if (peer == null || pc == null) {
+      return;
+    }
+
+    final localScreenTracks = _localScreenStream?.getVideoTracks() ?? const [];
+    final screenTrack = localScreenTracks.isNotEmpty
+        ? localScreenTracks.first
+        : (_remoteScreenSharer == key ? null : _remoteScreenTrack);
+    final screenStream = _localScreenStream ?? _remoteScreenStream;
+    if (screenTrack == null || screenStream == null) {
+      return;
+    }
+
+    final existingSender = _screenSenders.remove(key);
+    if (existingSender != null) {
+      try {
+        await pc.removeTrack(existingSender);
+      } catch (e) {
+        LogService().log(
+          'ConferenceHostPeerManager: Failed to remove stale screen sender from $key: $e',
+        );
+      }
+    }
+
+    try {
+      final sender = await pc.addTrack(screenTrack, screenStream);
+      await configureConferenceScreenSender(
+        sender,
+        logLabel: 'refreshed screen -> ${peer.callsign}',
+      );
+      _screenSenders[key] = sender;
+      await _renegotiate(key);
+    } catch (e) {
+      LogService().log(
+        'ConferenceHostPeerManager: Failed to refresh forwarded screen track for $key: $e',
+      );
+    }
+  }
+
   /// Called when a speaker track is received. Stores it and adds
   /// to all other connections, triggering renegotiation for each.
   Future<void> _onSpeakerTrackReceived(
@@ -710,6 +753,11 @@ class ConferenceHostPeerManager {
     peer.state = ConferencePeerState.connected;
     if (!(peer.connectionCompleter?.isCompleted ?? true)) {
       peer.connectionCompleter!.complete(true);
+    }
+    if (_localScreenStream != null ||
+        (_remoteScreenTrack != null &&
+            _remoteScreenSharer != peer.callsign.toUpperCase())) {
+      unawaited(_refreshForwardedScreenTrackForPeer(peer.callsign));
     }
     _emitEvent(ConferenceEvent('peer_connected', peer.callsign));
   }
