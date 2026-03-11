@@ -26,6 +26,7 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
   StreamSubscription? _eventSubscription;
   List<String> _meetUrls = [];
   final Map<String, RTCVideoRenderer> _audioRenderers = {};
+  RTCVideoRenderer? _screenRenderer;
 
   @override
   void initState() {
@@ -42,10 +43,12 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
 
     _eventSubscription = _conferenceService.events.listen((_) {
       unawaited(_syncRemoteAudio());
+      unawaited(_syncScreenShare());
       if (mounted) setState(() {});
     });
 
     unawaited(_syncRemoteAudio());
+    unawaited(_syncScreenShare());
     _loadMeetUrls();
   }
 
@@ -62,6 +65,7 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
     _stateSubscription?.cancel();
     _eventSubscription?.cancel();
     unawaited(_disposeAudioRenderers());
+    unawaited(_disposeScreenRenderer());
     super.dispose();
   }
 
@@ -125,6 +129,46 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
     }
   }
 
+  Future<void> _requestScreenShare() async {
+    try {
+      await _conferenceService.requestToShareScreen();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('$e')));
+      }
+    }
+  }
+
+  Future<void> _approveScreenShare(String callsign) async {
+    try {
+      await _conferenceService.approveScreenShare(callsign);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('$e')));
+      }
+    }
+  }
+
+  Future<void> _toggleScreenShare() async {
+    try {
+      if (_conferenceService.isLocalScreenSharing) {
+        await _conferenceService.stopScreenShare();
+      } else {
+        await _conferenceService.startScreenShare();
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('$e')));
+      }
+    }
+  }
+
   Future<void> _sendChatMessage(String content, String? filePath) async {
     await _conferenceService.sendChatMessage(content);
     if (!mounted) return;
@@ -166,6 +210,28 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
       await renderer.dispose();
     }
     _audioRenderers.clear();
+  }
+
+  Future<void> _syncScreenShare() async {
+    final stream = _conferenceService.activeScreenStream;
+    if (stream == null) {
+      await _disposeScreenRenderer();
+      return;
+    }
+
+    _screenRenderer ??= RTCVideoRenderer();
+    await _screenRenderer!.initialize();
+    _screenRenderer!.srcObject = stream;
+  }
+
+  Future<void> _disposeScreenRenderer() async {
+    final renderer = _screenRenderer;
+    _screenRenderer = null;
+    if (renderer == null) {
+      return;
+    }
+    renderer.srcObject = null;
+    await renderer.dispose();
   }
 
   void _showShareSheet() {
@@ -390,6 +456,9 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
     final me = room?.participants[myCallsign];
     final canRequestSpeaker = !isHost && me != null && !me.isSpeaker;
     final hasRequestedSpeaker = me?.hasPendingSpeakerRequest ?? false;
+    final hasRequestedScreenShare = me?.hasPendingScreenShareRequest ?? false;
+    final activeScreenSharer = room?.activeScreenSharerCallsign;
+    final isLocalScreenSharing = _conferenceService.isLocalScreenSharing;
     final shareUrl = _shareUrl;
 
     return Scaffold(
@@ -492,6 +561,44 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
 
           const Divider(height: 1),
 
+          if (activeScreenSharer != null)
+            Container(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    activeScreenSharer == myCallsign
+                        ? 'You are sharing your screen'
+                        : '$activeScreenSharer is sharing a screen',
+                    style: theme.textTheme.titleMedium,
+                  ),
+                  const SizedBox(height: 8),
+                  AspectRatio(
+                    aspectRatio: 16 / 9,
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(16),
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          color: theme.colorScheme.surfaceContainerHighest,
+                        ),
+                        child: _screenRenderer == null
+                            ? Center(
+                                child: Text(
+                                  'Connecting screen share...',
+                                  style: theme.textTheme.bodyMedium?.copyWith(
+                                    color: theme.colorScheme.onSurfaceVariant,
+                                  ),
+                                ),
+                              )
+                            : RTCVideoView(_screenRenderer!),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
           Expanded(
             child: DefaultTabController(
               length: 2,
@@ -542,6 +649,9 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
                                     isSpeaker: p.isSpeaker,
                                     hasPendingSpeakerRequest:
                                         p.hasPendingSpeakerRequest,
+                                    hasPendingScreenShareRequest:
+                                        p.hasPendingScreenShareRequest,
+                                    isScreenSharing: p.isScreenSharing,
                                     isHost: p.callsign == room?.hostCallsign,
                                     isMe: isSelf,
                                     canManage:
@@ -552,6 +662,8 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
                                         _promoteParticipant(p.callsign),
                                     onDemote: () =>
                                         _demoteParticipant(p.callsign),
+                                    onApproveScreenShare: () =>
+                                        _approveScreenShare(p.callsign),
                                   );
                                 },
                               ),
@@ -610,6 +722,33 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
                   onPressed: hasRequestedSpeaker ? null : _requestSpeakerAccess,
                 ),
               _CallButton(
+                icon: isLocalScreenSharing
+                    ? Icons.stop_screen_share
+                    : (isHost ? Icons.screen_share : Icons.present_to_all),
+                label: isLocalScreenSharing
+                    ? 'Stop Screen'
+                    : (isHost ? 'Share Screen' : 'Ask Screen'),
+                color: isLocalScreenSharing
+                    ? theme.colorScheme.primary
+                    : (hasRequestedScreenShare
+                          ? theme.colorScheme.primary
+                          : theme.colorScheme.tertiaryContainer),
+                iconColor: isLocalScreenSharing || hasRequestedScreenShare
+                    ? theme.colorScheme.onPrimary
+                    : theme.colorScheme.onTertiaryContainer,
+                onPressed: isLocalScreenSharing
+                    ? _toggleScreenShare
+                    : (isHost
+                          ? (activeScreenSharer == null
+                                ? _toggleScreenShare
+                                : null)
+                          : (hasRequestedScreenShare ||
+                                    (activeScreenSharer != null &&
+                                        activeScreenSharer != myCallsign)
+                                ? null
+                                : _requestScreenShare)),
+              ),
+              _CallButton(
                 icon: Icons.call_end,
                 label: isHost ? 'End' : 'Leave',
                 color: const Color(0xFFD90429),
@@ -631,11 +770,14 @@ class _ParticipantTile extends StatelessWidget {
   final bool isMuted;
   final bool isSpeaker;
   final bool hasPendingSpeakerRequest;
+  final bool hasPendingScreenShareRequest;
+  final bool isScreenSharing;
   final bool isHost;
   final bool isMe;
   final bool canManage;
   final VoidCallback? onPromote;
   final VoidCallback? onDemote;
+  final VoidCallback? onApproveScreenShare;
 
   const _ParticipantTile({
     required this.callsign,
@@ -644,11 +786,14 @@ class _ParticipantTile extends StatelessWidget {
     required this.isMuted,
     required this.isSpeaker,
     this.hasPendingSpeakerRequest = false,
+    this.hasPendingScreenShareRequest = false,
+    this.isScreenSharing = false,
     required this.isHost,
     required this.isMe,
     this.canManage = false,
     this.onPromote,
     this.onDemote,
+    this.onApproveScreenShare,
   });
 
   @override
@@ -674,7 +819,7 @@ class _ParticipantTile extends StatelessWidget {
           style: theme.textTheme.bodyLarge,
         ),
         subtitle: Text(
-          '$statusLabel - ${isSpeaker ? 'Speaker' : (hasPendingSpeakerRequest ? 'Listener, mic requested' : 'Listener')}',
+          '$statusLabel - ${isSpeaker ? 'Speaker' : (hasPendingSpeakerRequest ? 'Listener, mic requested' : 'Listener')}${isScreenSharing ? ', sharing screen' : (hasPendingScreenShareRequest ? ', screen requested' : '')}',
           style: TextStyle(
             color: isConnected ? Colors.green : Colors.orange,
             fontSize: 12,
@@ -711,6 +856,21 @@ class _ParticipantTile extends StatelessWidget {
                   tooltip: hasPendingSpeakerRequest
                       ? 'Approve speaker request'
                       : 'Promote to speaker',
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(
+                    minWidth: 36,
+                    minHeight: 36,
+                  ),
+                ),
+              if (hasPendingScreenShareRequest)
+                IconButton(
+                  icon: Icon(
+                    Icons.present_to_all,
+                    size: 20,
+                    color: theme.colorScheme.primary,
+                  ),
+                  onPressed: onApproveScreenShare,
+                  tooltip: 'Approve screen sharing',
                   padding: EdgeInsets.zero,
                   constraints: const BoxConstraints(
                     minWidth: 36,

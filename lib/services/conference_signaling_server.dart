@@ -6,6 +6,7 @@
 /// In star topology, participants connect only to the host. The signaling
 /// server relays WebRTC signals between host and each participant.
 /// Speakers are limited by [maxSpeakers]; listeners are unlimited.
+/// At most one participant may share a screen at a time.
 ///
 /// Endpoints:
 ///   GET  /meet/{code}  — shareable URL, serves the browser web client
@@ -49,6 +50,7 @@ class ConferenceSignalingServer {
   final String roomName;
   final String hostCallsign;
   final int maxSpeakers;
+  String? _activeScreenSharerCallsign;
   String? _webClientHtml;
   void Function(Map<String, dynamic> message)? onHostMessage;
 
@@ -155,6 +157,7 @@ class ConferenceSignalingServer {
       'speakers': speakerCallsigns,
       'participants': participantCallsigns,
       'max_speakers': maxSpeakers,
+      'active_screen_sharer': _activeScreenSharerCallsign,
     };
     request.response
       ..statusCode = HttpStatus.ok
@@ -226,6 +229,14 @@ class ConferenceSignalingServer {
         _handleHello(sender, message);
       case 'conference_speaker_request':
         _handleSpeakerRequest(sender);
+      case 'conference_screen_share_request':
+        _handleScreenShareRequest(sender);
+      case 'conference_screen_share_permission':
+        _handleScreenSharePermission(sender, message);
+      case 'conference_screen_share_state':
+        _handleScreenShareState(sender, message);
+      case 'conference_screen_share_stop':
+        _handleScreenShareStop(sender, message);
       case 'conference_chat_message':
         _handleChatMessage(sender, message);
       case 'conference_chat_history':
@@ -289,6 +300,7 @@ class ConferenceSignalingServer {
         'speakers': speakers,
         'listener_count': listenerCount,
         'max_speakers': maxSpeakers,
+        'active_screen_sharer': _activeScreenSharerCallsign,
       }),
     );
 
@@ -351,6 +363,81 @@ class ConferenceSignalingServer {
       'type': 'conference_speaker_request',
       'room_id': roomId,
       'callsign': callsign,
+    });
+  }
+
+  void _handleScreenShareRequest(SignalingParticipant sender) {
+    final callsign = sender.callsign;
+    if (callsign == null || callsign == hostCallsign) {
+      return;
+    }
+
+    onHostMessage?.call({
+      'type': 'conference_screen_share_request',
+      'room_id': roomId,
+      'callsign': callsign,
+    });
+  }
+
+  void _handleScreenSharePermission(
+    SignalingParticipant sender,
+    Map<String, dynamic> message,
+  ) {
+    if (sender.callsign != hostCallsign) {
+      return;
+    }
+
+    final toCallsign = message['to_callsign'] as String?;
+    final callsign = message['callsign'] as String?;
+    final approved = message['approved'] == true;
+    if (toCallsign == null || callsign == null) {
+      return;
+    }
+
+    sendRoomMessageFromHost({
+      'type': 'conference_screen_share_permission',
+      'room_id': roomId,
+      'callsign': callsign,
+      'approved': approved,
+    }, toCallsign: toCallsign);
+  }
+
+  void _handleScreenShareState(
+    SignalingParticipant sender,
+    Map<String, dynamic> message,
+  ) {
+    if (sender.callsign != hostCallsign) {
+      return;
+    }
+
+    final callsign = message['callsign'] as String?;
+    final active = message['active'] == true;
+    if (callsign == null || callsign.isEmpty) {
+      return;
+    }
+
+    _activeScreenSharerCallsign = active ? callsign : null;
+    sendRoomMessageFromHost({
+      'type': 'conference_screen_share_state',
+      'room_id': roomId,
+      'callsign': callsign,
+      'active': active,
+    });
+  }
+
+  void _handleScreenShareStop(
+    SignalingParticipant sender,
+    Map<String, dynamic> message,
+  ) {
+    final callsign = sender.callsign;
+    if (callsign == null || callsign == hostCallsign) {
+      return;
+    }
+
+    onHostMessage?.call({
+      'type': 'conference_screen_share_stop',
+      'room_id': roomId,
+      'callsign': message['callsign'] as String? ?? callsign,
     });
   }
 
@@ -446,6 +533,10 @@ class ConferenceSignalingServer {
 
     // Notify remaining participants
     if (participant.callsign != null) {
+      if (_activeScreenSharerCallsign?.toLowerCase() ==
+          participant.callsign!.toLowerCase()) {
+        _activeScreenSharerCallsign = null;
+      }
       final leftMessage = {
         'type': 'conference_participant_left',
         'callsign': participant.callsign,

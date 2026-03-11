@@ -26,11 +26,16 @@ class ConferenceHostPeerManager {
   final Map<String, ConferenceAudioPeer> _peers = {};
   final Map<String, SfuParticipantRole> _roles = {};
   MediaStream? _localStream;
+  MediaStream? _localScreenStream;
   bool _localMuted = false;
 
   /// Tracks received from speakers, keyed by callsign.
   final Map<String, MediaStreamTrack> _speakerTracks = {};
   final Map<String, MediaStream> _remoteStreams = {};
+  final Map<String, RTCRtpSender> _screenSenders = {};
+  MediaStreamTrack? _remoteScreenTrack;
+  MediaStream? _remoteScreenStream;
+  String? _remoteScreenSharer;
 
   /// Callback to send signaling messages (set by ConferenceService).
   ConferenceSignalSender? onSendSignal;
@@ -40,6 +45,10 @@ class ConferenceHostPeerManager {
 
   bool get isLocalMuted => _localMuted;
   MediaStream? get localStream => _localStream;
+  MediaStream? get localScreenStream => _localScreenStream;
+  MediaStream? get remoteScreenStream => _remoteScreenStream;
+  String? get remoteScreenSharer => _remoteScreenSharer;
+  bool get isLocalScreenSharing => _localScreenStream != null;
   Map<String, MediaStream> get remoteStreams =>
       Map.unmodifiable(_remoteStreams);
   int get peerCount => _peers.length;
@@ -83,14 +92,22 @@ class ConferenceHostPeerManager {
     _peers.clear();
     _roles.clear();
     _speakerTracks.clear();
+    _screenSenders.clear();
     for (final stream in _remoteStreams.values) {
       await stream.dispose();
     }
     _remoteStreams.clear();
+    _remoteScreenTrack = null;
+    await _remoteScreenStream?.dispose();
+    _remoteScreenStream = null;
+    _remoteScreenSharer = null;
 
     _localStream?.getTracks().forEach((t) => t.stop());
     _localStream?.dispose();
     _localStream = null;
+    _localScreenStream?.getTracks().forEach((t) => t.stop());
+    await _localScreenStream?.dispose();
+    _localScreenStream = null;
 
     _eventController.close();
     LogService().log('ConferenceHostPeerManager: Disposed');
@@ -113,6 +130,43 @@ class ConferenceHostPeerManager {
     for (final track in _localStream!.getAudioTracks()) {
       track.enabled = !_localMuted;
     }
+  }
+
+  Future<void> startLocalScreenShare(MediaStream stream) async {
+    final videoTracks = stream.getVideoTracks();
+    if (videoTracks.isEmpty) {
+      await stream.dispose();
+      throw StateError('Screen share stream does not contain video');
+    }
+
+    if (_localScreenStream != null && _localScreenStream!.id != stream.id) {
+      _localScreenStream!.getTracks().forEach((track) => track.stop());
+      await _localScreenStream!.dispose();
+    }
+
+    _localScreenStream = stream;
+    await _replaceForwardedScreenTrack(
+      videoTracks.first,
+      stream,
+      excludeKey: null,
+    );
+    _eventController.add(
+      ConferenceEvent('local_screen_stream', 'host', stream),
+    );
+  }
+
+  Future<void> stopLocalScreenShare() async {
+    if (_localScreenStream == null) {
+      return;
+    }
+
+    await _replaceForwardedScreenTrack(null, null, excludeKey: null);
+    _localScreenStream!.getTracks().forEach((track) => track.stop());
+    await _localScreenStream!.dispose();
+    _localScreenStream = null;
+    _eventController.add(
+      ConferenceEvent('local_screen_stream_removed', 'host'),
+    );
   }
 
   // ── Add speaker ────────────────────────────────────────────────
@@ -160,36 +214,53 @@ class ConferenceHostPeerManager {
 
     final isSpeaker = _roles[key] == SfuParticipantRole.speaker;
 
-    // Close existing peer if any (renegotiation)
     final existing = _peers[key];
-    if (existing != null) {
-      await _closePeer(existing);
-    }
+    late final ConferenceAudioPeer peer;
+    final isRenegotiation = existing != null && existing.peerConnection != null;
 
-    final peer = ConferenceAudioPeer(
-      callsign: callsign,
-      sessionId: sessionId,
-      state: ConferencePeerState.connecting,
-    );
-    peer.connectionCompleter = Completer<bool>();
-    _peers[key] = peer;
+    if (isRenegotiation) {
+      peer = existing;
+      peer.sessionId = sessionId;
+    } else {
+      peer = ConferenceAudioPeer(
+        callsign: callsign,
+        sessionId: sessionId,
+        state: ConferencePeerState.connecting,
+      );
+      peer.connectionCompleter = Completer<bool>();
+      _peers[key] = peer;
 
-    peer.peerConnection = await createPeerConnection(
-      _config.toRTCConfiguration(),
-    );
-    _setupHandlers(peer);
+      peer.peerConnection = await createPeerConnection(
+        _config.toRTCConfiguration(),
+      );
+      _setupHandlers(peer);
 
-    // Add host's own audio track
-    if (_localStream != null) {
-      for (final track in _localStream!.getAudioTracks()) {
-        await peer.peerConnection!.addTrack(track, _localStream!);
+      // Add host's own audio track
+      if (_localStream != null) {
+        for (final track in _localStream!.getAudioTracks()) {
+          await peer.peerConnection!.addTrack(track, _localStream!);
+        }
       }
-    }
 
-    // Add all other speaker tracks to this connection
-    for (final entry in _speakerTracks.entries) {
-      if (entry.key != key) {
-        await peer.peerConnection!.addTrack(entry.value, _localStream!);
+      // Add all other speaker tracks to this connection
+      for (final entry in _speakerTracks.entries) {
+        if (entry.key != key) {
+          await peer.peerConnection!.addTrack(entry.value, _localStream!);
+        }
+      }
+
+      final localScreenTracks =
+          _localScreenStream?.getVideoTracks() ?? const [];
+      final screenTrack = localScreenTracks.isNotEmpty
+          ? localScreenTracks.first
+          : (_remoteScreenSharer == key ? null : _remoteScreenTrack);
+      final screenStream = _localScreenStream ?? _remoteScreenStream;
+      if (screenTrack != null && screenStream != null) {
+        final sender = await peer.peerConnection!.addTrack(
+          screenTrack,
+          screenStream,
+        );
+        _screenSenders[key] = sender;
       }
     }
 
@@ -207,7 +278,7 @@ class ConferenceHostPeerManager {
     // Create answer
     final answer = await peer.peerConnection!.createAnswer({
       'offerToReceiveAudio': isSpeaker,
-      'offerToReceiveVideo': false,
+      'offerToReceiveVideo': true,
     });
     await peer.peerConnection!.setLocalDescription(answer);
 
@@ -271,6 +342,10 @@ class ConferenceHostPeerManager {
 
     // Remove speaker track if they were a speaker
     await _removeSpeakerTrack(key);
+    if (_remoteScreenSharer == key) {
+      await clearRemoteScreenShare(callsign);
+    }
+    _screenSenders.remove(key);
 
     _roles.remove(key);
     await _closePeer(peer);
@@ -291,6 +366,10 @@ class ConferenceHostPeerManager {
     });
 
     await _removeSpeakerTrack(key);
+    if (_remoteScreenSharer == key) {
+      await clearRemoteScreenShare(callsign);
+    }
+    _screenSenders.remove(key);
     _roles.remove(key);
     await _closePeer(peer);
     _eventController.add(ConferenceEvent('peer_disconnected', callsign));
@@ -327,6 +406,37 @@ class ConferenceHostPeerManager {
     );
   }
 
+  Future<void> clearRemoteScreenShare(String callsign) async {
+    final key = callsign.toUpperCase();
+    if (_remoteScreenSharer != key) {
+      return;
+    }
+
+    try {
+      await _replaceForwardedScreenTrack(null, null, excludeKey: key);
+    } catch (e) {
+      LogService().log(
+        'ConferenceHostPeerManager: Failed to remove forwarded screen tracks: $e',
+      );
+    }
+    _remoteScreenTrack = null;
+    _remoteScreenSharer = null;
+    final remoteStream = _remoteScreenStream;
+    _remoteScreenStream = null;
+    if (remoteStream != null) {
+      try {
+        await remoteStream.dispose();
+      } catch (e) {
+        LogService().log(
+          'ConferenceHostPeerManager: Failed to dispose remote screen stream: $e',
+        );
+      }
+    }
+    _eventController.add(
+      ConferenceEvent('remote_screen_stream_removed', callsign),
+    );
+  }
+
   // ── Internal: renegotiation ────────────────────────────────────
 
   /// Send a new offer to a participant (host always offers during renegotiation).
@@ -339,7 +449,7 @@ class ConferenceHostPeerManager {
 
     final offer = await pc.createOffer({
       'offerToReceiveAudio': isSpeaker,
-      'offerToReceiveVideo': false,
+      'offerToReceiveVideo': true,
     });
     await pc.setLocalDescription(offer);
 
@@ -356,6 +466,47 @@ class ConferenceHostPeerManager {
     LogService().log(
       'ConferenceHostPeerManager: Renegotiation offer to ${peer.callsign}',
     );
+  }
+
+  Future<void> _replaceForwardedScreenTrack(
+    MediaStreamTrack? track,
+    MediaStream? stream, {
+    required String? excludeKey,
+  }) async {
+    for (final entry in _peers.entries) {
+      if (excludeKey != null && entry.key == excludeKey) {
+        continue;
+      }
+
+      final pc = entry.value.peerConnection;
+      if (pc == null) {
+        continue;
+      }
+
+      final existingSender = _screenSenders.remove(entry.key);
+      if (existingSender != null) {
+        try {
+          await pc.removeTrack(existingSender);
+        } catch (e) {
+          LogService().log(
+            'ConferenceHostPeerManager: Failed to remove screen sender from ${entry.key}: $e',
+          );
+        }
+      }
+
+      if (track != null && stream != null) {
+        try {
+          final sender = await pc.addTrack(track, stream);
+          _screenSenders[entry.key] = sender;
+        } catch (e) {
+          LogService().log(
+            'ConferenceHostPeerManager: Failed to add screen sender to ${entry.key}: $e',
+          );
+        }
+      }
+
+      await _renegotiate(entry.key);
+    }
   }
 
   /// Called when a speaker track is received. Stores it and adds
@@ -483,7 +634,7 @@ class ConferenceHostPeerManager {
       }
     };
 
-    // Remote audio track — only relevant for speakers
+    // Remote tracks from participants.
     pc.onTrack = (RTCTrackEvent event) async {
       if (event.track.kind == 'audio' &&
           _roles[key] == SfuParticipantRole.speaker) {
@@ -507,6 +658,40 @@ class ConferenceHostPeerManager {
           ConferenceEvent('remote_stream', peer.callsign, stream),
         );
         await _onSpeakerTrackReceived(key, event.track);
+        return;
+      }
+
+      if (event.track.kind == 'video') {
+        LogService().log(
+          'ConferenceHostPeerManager: Screen track received from ${peer.callsign}',
+        );
+        MediaStream stream;
+        if (event.streams.isNotEmpty) {
+          stream = event.streams.first;
+        } else {
+          stream = await createLocalMediaStream('conference-screen-$key');
+          await stream.addTrack(event.track);
+        }
+
+        if (_remoteScreenSharer != null && _remoteScreenSharer != key) {
+          await clearRemoteScreenShare(_remoteScreenSharer!);
+        }
+
+        final previous = _remoteScreenStream;
+        if (previous != null && previous.id != stream.id) {
+          await previous.dispose();
+        }
+        _remoteScreenSharer = key;
+        _remoteScreenTrack = event.track;
+        _remoteScreenStream = stream;
+        await _replaceForwardedScreenTrack(
+          event.track,
+          stream,
+          excludeKey: key,
+        );
+        _eventController.add(
+          ConferenceEvent('remote_screen_stream', peer.callsign, stream),
+        );
       }
     };
   }

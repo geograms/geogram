@@ -13,6 +13,10 @@
 ///   conference_leave        — participant leaves
 ///   conference_end          — host ends the conference
 ///   conference_role_change  — host promotes/demotes a participant
+///   conference_screen_share_request     — participant asks host permission
+///   conference_screen_share_permission  — host grants screen-share access
+///   conference_screen_share_state       — host broadcasts current sharer
+///   conference_screen_share_stop        — sharer notifies host about stopping
 library;
 
 import 'dart:convert';
@@ -27,6 +31,7 @@ class ConferenceRoomInfo {
   final DateTime createdAt;
   final Set<String> participantCallsigns = {};
   final Set<String> speakerCallsigns = {};
+  String? activeScreenSharerCallsign;
 
   ConferenceRoomInfo({
     required this.roomId,
@@ -53,6 +58,7 @@ class ConferenceRoomInfo {
     'participants': participantCallsigns.toList(),
     'speakers': speakerCallsigns.toList(),
     'max_speakers': maxSpeakers,
+    'active_screen_sharer': activeScreenSharerCallsign,
     'created_at': createdAt.toIso8601String(),
   };
 }
@@ -105,6 +111,18 @@ mixin ConferenceMixin {
       case 'conference_chat_history':
         _handleChatHistory(clientId, message);
         return true;
+      case 'conference_screen_share_request':
+        _handleScreenShareRequest(clientId, message);
+        return true;
+      case 'conference_screen_share_permission':
+        _handleScreenSharePermission(clientId, message);
+        return true;
+      case 'conference_screen_share_state':
+        _handleScreenShareState(clientId, message);
+        return true;
+      case 'conference_screen_share_stop':
+        _handleScreenShareStop(clientId, message);
+        return true;
       case 'conference_list':
         _handleList(clientId);
         return true;
@@ -124,6 +142,10 @@ mixin ConferenceMixin {
         if (callsign != null) {
           entry.value.participantCallsigns.remove(callsign);
           entry.value.speakerCallsigns.remove(callsign);
+          if (entry.value.activeScreenSharerCallsign?.toUpperCase() ==
+              callsign.toUpperCase()) {
+            entry.value.activeScreenSharerCallsign = null;
+          }
           _broadcastToRoom(entry.key, {
             'type': 'conference_participant_left',
             'callsign': callsign,
@@ -264,6 +286,10 @@ mixin ConferenceMixin {
 
     room.participantCallsigns.remove(callsign);
     room.speakerCallsigns.remove(callsign);
+    if (room.activeScreenSharerCallsign?.toUpperCase() ==
+        callsign.toUpperCase()) {
+      room.activeScreenSharerCallsign = null;
+    }
 
     _broadcastToRoom(roomId, {
       'type': 'conference_participant_left',
@@ -402,6 +428,31 @@ mixin ConferenceMixin {
     );
   }
 
+  void _handleScreenShareRequest(
+    String clientId,
+    Map<String, dynamic> message,
+  ) {
+    final roomId = message['room_id'] as String?;
+    final callsign = conferenceGetClientCallsign(clientId);
+    if (roomId == null || callsign == null) {
+      return;
+    }
+
+    final room = _conferenceRooms[roomId];
+    if (room == null || !room.participantCallsigns.contains(callsign)) {
+      return;
+    }
+
+    conferenceSendToClient(
+      room.hostClientId,
+      jsonEncode({
+        'type': 'conference_screen_share_request',
+        'room_id': roomId,
+        'callsign': callsign,
+      }),
+    );
+  }
+
   void _handleChatMessage(String clientId, Map<String, dynamic> message) {
     final roomId = message['room_id'] as String?;
     final fromCallsign = conferenceGetClientCallsign(clientId);
@@ -450,6 +501,84 @@ mixin ConferenceMixin {
     conferenceSendToClient(
       clientId,
       jsonEncode({'type': 'conference_list', 'rooms': getConferenceRooms()}),
+    );
+  }
+
+  void _handleScreenSharePermission(
+    String clientId,
+    Map<String, dynamic> message,
+  ) {
+    final roomId = message['room_id'] as String?;
+    final toCallsign = message['to_callsign'] as String?;
+    final callsign = message['callsign'] as String?;
+    final approved = message['approved'] == true;
+    if (roomId == null || toCallsign == null || callsign == null) {
+      return;
+    }
+
+    final room = _conferenceRooms[roomId];
+    if (room == null || room.hostClientId != clientId) {
+      return;
+    }
+
+    final targetClientId = conferenceFindClientId(toCallsign);
+    if (targetClientId == null) {
+      return;
+    }
+
+    conferenceSendToClient(
+      targetClientId,
+      jsonEncode({
+        'type': 'conference_screen_share_permission',
+        'room_id': roomId,
+        'callsign': callsign,
+        'approved': approved,
+        'from_callsign': room.hostCallsign,
+      }),
+    );
+  }
+
+  void _handleScreenShareState(String clientId, Map<String, dynamic> message) {
+    final roomId = message['room_id'] as String?;
+    final callsign = message['callsign'] as String?;
+    final active = message['active'] == true;
+    if (roomId == null || callsign == null) {
+      return;
+    }
+
+    final room = _conferenceRooms[roomId];
+    if (room == null || room.hostClientId != clientId) {
+      return;
+    }
+
+    room.activeScreenSharerCallsign = active ? callsign : null;
+    _broadcastToRoom(roomId, {
+      'type': 'conference_screen_share_state',
+      'room_id': roomId,
+      'callsign': callsign,
+      'active': active,
+    });
+  }
+
+  void _handleScreenShareStop(String clientId, Map<String, dynamic> message) {
+    final roomId = message['room_id'] as String?;
+    final callsign = conferenceGetClientCallsign(clientId);
+    if (roomId == null || callsign == null) {
+      return;
+    }
+
+    final room = _conferenceRooms[roomId];
+    if (room == null || !room.participantCallsigns.contains(callsign)) {
+      return;
+    }
+
+    conferenceSendToClient(
+      room.hostClientId,
+      jsonEncode({
+        'type': 'conference_screen_share_stop',
+        'room_id': roomId,
+        'callsign': message['callsign'] as String? ?? callsign,
+      }),
     );
   }
 

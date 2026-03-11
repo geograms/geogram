@@ -49,6 +49,8 @@ class ConferenceParticipant {
   bool isConnected;
   ConferenceParticipantRole participantRole;
   bool hasPendingSpeakerRequest;
+  bool hasPendingScreenShareRequest;
+  bool isScreenSharing;
 
   ConferenceParticipant({
     required this.callsign,
@@ -56,6 +58,8 @@ class ConferenceParticipant {
     this.isConnected = false,
     this.participantRole = ConferenceParticipantRole.listener,
     this.hasPendingSpeakerRequest = false,
+    this.hasPendingScreenShareRequest = false,
+    this.isScreenSharing = false,
   });
 
   bool get isSpeaker => participantRole == ConferenceParticipantRole.speaker;
@@ -66,6 +70,8 @@ class ConferenceParticipant {
     'is_connected': isConnected,
     'role': participantRole.name,
     'speaker_request_pending': hasPendingSpeakerRequest,
+    'screen_share_request_pending': hasPendingScreenShareRequest,
+    'is_screen_sharing': isScreenSharing,
   };
 }
 
@@ -79,6 +85,7 @@ class ConferenceRoom {
   final Map<String, ConferenceParticipant> participants = {};
   final String chatRoomId;
   int maxSpeakers;
+  String? activeScreenSharerCallsign;
 
   ConferenceRoom({
     required this.roomId,
@@ -108,6 +115,7 @@ class ConferenceRoom {
     'listener_count': listenerCount,
     'participants': participants.values.map((p) => p.toJson()).toList(),
     'max_speakers': maxSpeakers,
+    'active_screen_sharer': activeScreenSharerCallsign,
     'start_time': startTime.toIso8601String(),
   };
 }
@@ -137,6 +145,7 @@ class ConferenceService {
   final List<ChatMessage> _chatMessages = [];
   final Set<String> _chatMessageIds = {};
   Future<void> _messageQueue = Future<void>.value();
+  bool _screenShareApproved = false;
 
   final _stateController = StreamController<ConferenceState>.broadcast();
   final _eventController = StreamController<ConferenceEvent>.broadcast();
@@ -148,6 +157,37 @@ class ConferenceService {
   List<ChatMessage> get chatMessages => List.unmodifiable(_chatMessages);
   String? get chatTranscriptPath =>
       _room == null ? null : _chatStore.transcriptAbsolutePath(_room!.roomId);
+  MediaStream? get localScreenStream {
+    if (_hostPeerManager != null) {
+      return _hostPeerManager!.localScreenStream;
+    }
+    if (_participantPeerManager != null) {
+      return _participantPeerManager!.localScreenStream;
+    }
+    return null;
+  }
+
+  MediaStream? get remoteScreenStream {
+    if (_hostPeerManager != null) {
+      return _hostPeerManager!.remoteScreenStream;
+    }
+    if (_participantPeerManager != null) {
+      return _participantPeerManager!.remoteScreenStream;
+    }
+    return null;
+  }
+
+  MediaStream? get activeScreenStream {
+    final activeSharer = activeScreenSharer;
+    if (activeSharer == null) {
+      return null;
+    }
+    if (activeSharer.toUpperCase() == _myCallsign.toUpperCase()) {
+      return localScreenStream;
+    }
+    return remoteScreenStream;
+  }
+
   List<MediaStream> get remoteAudioStreams {
     if (_hostPeerManager != null) {
       return _hostPeerManager!.remoteStreams.values.toList();
@@ -164,6 +204,19 @@ class ConferenceService {
           .map((participant) => participant.callsign)
           .toList() ??
       const [];
+
+  List<String> get pendingScreenShareRequests =>
+      _room?.participants.values
+          .where((participant) => participant.hasPendingScreenShareRequest)
+          .map((participant) => participant.callsign)
+          .toList() ??
+      const [];
+
+  String? get activeScreenSharer => _room?.activeScreenSharerCallsign;
+
+  bool get isLocalScreenSharing =>
+      activeScreenSharer?.toUpperCase() == _myCallsign.toUpperCase() &&
+      localScreenStream != null;
 
   bool get isLocalMuted {
     if (_hostPeerManager != null) return _hostPeerManager!.isLocalMuted;
@@ -512,6 +565,136 @@ class ConferenceService {
     LogService().log('ConferenceService: Speaker request sent by $_myCallsign');
   }
 
+  Future<void> requestToShareScreen() async {
+    if (_role != ConferenceRole.joiner) {
+      throw StateError('Only joiners can request screen sharing');
+    }
+
+    final room = _room;
+    if (room == null) {
+      throw StateError('No active conference');
+    }
+
+    final me = room.participants[_myCallsign];
+    if (me == null) {
+      throw StateError('Local participant is not registered');
+    }
+    if (me.isScreenSharing) {
+      return;
+    }
+    if (room.activeScreenSharerCallsign != null &&
+        room.activeScreenSharerCallsign!.toUpperCase() !=
+            _myCallsign.toUpperCase()) {
+      throw StateError('Another participant is already sharing a screen');
+    }
+    if (me.hasPendingScreenShareRequest) {
+      return;
+    }
+
+    me.hasPendingScreenShareRequest = true;
+    _screenShareApproved = false;
+    _eventController.add(
+      ConferenceEvent('screen_share_request_pending', _myCallsign),
+    );
+    _sendConferenceRoomMessage({
+      'type': 'conference_screen_share_request',
+      'callsign': _myCallsign,
+    });
+    LogService().log(
+      'ConferenceService: Screen-share request sent by $_myCallsign',
+    );
+  }
+
+  Future<void> startScreenShare() async {
+    final room = _room;
+    if (room == null) {
+      throw StateError('No active conference');
+    }
+
+    if (room.activeScreenSharerCallsign != null &&
+        room.activeScreenSharerCallsign!.toUpperCase() !=
+            _myCallsign.toUpperCase()) {
+      throw StateError('Another participant is already sharing a screen');
+    }
+
+    final stream = await _captureDisplayStream();
+    final videoTracks = stream.getVideoTracks();
+    if (videoTracks.isEmpty) {
+      await stream.dispose();
+      throw StateError('Screen capture returned no video track');
+    }
+    final screenTrack = videoTracks.first;
+
+    screenTrack.onEnded = () {
+      unawaited(stopScreenShare());
+    };
+
+    if (_role == ConferenceRole.host) {
+      if (_hostPeerManager == null) {
+        await stream.dispose();
+        throw StateError('Host peer manager is not available');
+      }
+      await _hostPeerManager!.startLocalScreenShare(stream);
+      _setActiveScreenSharer(_myCallsign);
+      _broadcastScreenShareState(_myCallsign, active: true);
+      LogService().log('ConferenceService: Host started screen sharing');
+      return;
+    }
+
+    if (_role != ConferenceRole.joiner || _participantPeerManager == null) {
+      await stream.dispose();
+      throw StateError('Participant peer manager is not available');
+    }
+
+    final me = room.participants[_myCallsign];
+    if (me == null) {
+      await stream.dispose();
+      throw StateError('Local participant is not registered');
+    }
+    if (!_screenShareApproved &&
+        room.activeScreenSharerCallsign?.toUpperCase() !=
+            _myCallsign.toUpperCase()) {
+      await stream.dispose();
+      throw StateError('Host approval is required before sharing your screen');
+    }
+
+    await _participantPeerManager!.startScreenShare(stream);
+    _setActiveScreenSharer(_myCallsign);
+    _eventController.add(
+      ConferenceEvent('local_screen_share_started', _myCallsign, stream),
+    );
+    LogService().log('ConferenceService: Joiner started screen sharing');
+  }
+
+  Future<void> stopScreenShare() async {
+    final room = _room;
+    if (room == null) {
+      return;
+    }
+
+    if (room.activeScreenSharerCallsign?.toUpperCase() !=
+        _myCallsign.toUpperCase()) {
+      return;
+    }
+
+    if (_role == ConferenceRole.host) {
+      await _hostPeerManager?.stopLocalScreenShare();
+      _setActiveScreenSharer(null);
+      _broadcastScreenShareState(_myCallsign, active: false);
+      LogService().log('ConferenceService: Host stopped screen sharing');
+      return;
+    }
+
+    await _participantPeerManager?.stopScreenShare();
+    _screenShareApproved = false;
+    _setActiveScreenSharer(null);
+    _sendConferenceRoomMessage({
+      'type': 'conference_screen_share_stop',
+      'callsign': _myCallsign,
+    });
+    LogService().log('ConferenceService: Joiner stopped screen sharing');
+  }
+
   Future<void> sendChatMessage(String content) async {
     final room = _room;
     final trimmed = content.trim();
@@ -594,6 +777,40 @@ class ConferenceService {
     LogService().log('ConferenceService: Demoted $callsign to listener');
   }
 
+  Future<void> approveScreenShare(String callsign) async {
+    if (_role != ConferenceRole.host || _hostPeerManager == null) {
+      throw StateError('Only the host can approve screen sharing');
+    }
+
+    final room = _room;
+    if (room == null) {
+      throw StateError('No active conference');
+    }
+    if (room.activeScreenSharerCallsign != null &&
+        room.activeScreenSharerCallsign!.toUpperCase() !=
+            callsign.toUpperCase()) {
+      throw StateError('Another participant is already sharing a screen');
+    }
+
+    final participant = room.participants[callsign];
+    if (participant == null) {
+      throw StateError('Unknown participant: $callsign');
+    }
+
+    participant.hasPendingScreenShareRequest = false;
+    _sendConferenceRoomMessage({
+      'type': 'conference_screen_share_permission',
+      'callsign': callsign,
+      'approved': true,
+    }, toCallsign: callsign);
+    _eventController.add(
+      ConferenceEvent('screen_share_permission_granted', callsign),
+    );
+    LogService().log(
+      'ConferenceService: Approved screen sharing for $callsign',
+    );
+  }
+
   void _sendRoleChange(String callsign, String newRole) {
     final msg = {
       'type': 'conference_role_change',
@@ -645,10 +862,7 @@ class ConferenceService {
         if (_room?.signalingMode == ConferenceSignalingMode.lan) {
           try {
             _lanSocket?.add(
-              jsonEncode({
-                'type': 'conference_leave',
-                'callsign': _myCallsign,
-              }),
+              jsonEncode({'type': 'conference_leave', 'callsign': _myCallsign}),
             );
           } catch (e) {
             LogService().log(
@@ -803,6 +1017,14 @@ class ConferenceService {
         _handleConferenceEnd(msg);
       case 'conference_speaker_request':
         _handleSpeakerRequest(msg);
+      case 'conference_screen_share_request':
+        _handleScreenShareRequest(msg);
+      case 'conference_screen_share_permission':
+        await _handleScreenSharePermission(msg);
+      case 'conference_screen_share_state':
+        await _handleScreenShareState(msg);
+      case 'conference_screen_share_stop':
+        await _handleScreenShareStop(msg);
       case 'conference_role_change':
         await _handleRoleChange(msg);
       case 'conference_chat_message':
@@ -844,6 +1066,14 @@ class ConferenceService {
         _handleConferenceEnd(msg);
       case 'conference_speaker_request':
         _handleSpeakerRequest(msg);
+      case 'conference_screen_share_request':
+        _handleScreenShareRequest(msg);
+      case 'conference_screen_share_permission':
+        await _handleScreenSharePermission(msg);
+      case 'conference_screen_share_state':
+        await _handleScreenShareState(msg);
+      case 'conference_screen_share_stop':
+        await _handleScreenShareStop(msg);
       case 'conference_role_change':
         await _handleRoleChange(msg);
       case 'conference_chat_message':
@@ -877,6 +1107,7 @@ class ConferenceService {
     final hostCallsign = msg['host_callsign'] as String? ?? '';
     final speakers = (msg['speakers'] as List?)?.cast<String>() ?? [];
     final participants = msg['participants'] as List?;
+    final activeScreenSharer = msg['active_screen_sharer'] as String?;
 
     _room ??= ConferenceRoom(
       roomId: roomId,
@@ -914,6 +1145,7 @@ class ConferenceService {
       isConnected: true,
       participantRole: myRole,
     );
+    _setActiveScreenSharer(activeScreenSharer);
     await _loadStoredChatMessages();
 
     // In star topology, participant only connects to host
@@ -956,6 +1188,15 @@ class ConferenceService {
     if (callsign == null) return;
 
     _room?.participants.remove(callsign);
+    if (_room?.activeScreenSharerCallsign?.toUpperCase() ==
+        callsign.toUpperCase()) {
+      _setActiveScreenSharer(null);
+      if (_role == ConferenceRole.host) {
+        unawaited(_hostPeerManager?.clearRemoteScreenShare(callsign));
+      } else {
+        unawaited(_participantPeerManager?.clearRemoteScreenStream());
+      }
+    }
 
     if (_role == ConferenceRole.host) {
       final future = _hostPeerManager?.handleBye(callsign);
@@ -1076,6 +1317,98 @@ class ConferenceService {
     );
   }
 
+  void _handleScreenShareRequest(Map<String, dynamic> msg) {
+    final callsign = msg['callsign'] as String?;
+    if (callsign == null) {
+      return;
+    }
+
+    final participant = _room?.participants[callsign];
+    if (participant == null || participant.isScreenSharing) {
+      return;
+    }
+
+    participant.hasPendingScreenShareRequest = true;
+    _eventController.add(ConferenceEvent('screen_share_requested', callsign));
+    LogService().log(
+      'ConferenceService: Screen-share request received from $callsign',
+    );
+  }
+
+  Future<void> _handleScreenSharePermission(Map<String, dynamic> msg) async {
+    final callsign = msg['callsign'] as String?;
+    final approved = msg['approved'] == true;
+    if (callsign == null) {
+      return;
+    }
+
+    final participant = _room?.participants[callsign];
+    participant?.hasPendingScreenShareRequest = false;
+
+    if (callsign.toUpperCase() != _myCallsign.toUpperCase()) {
+      return;
+    }
+
+    if (!approved) {
+      _screenShareApproved = false;
+      _eventController.add(
+        ConferenceEvent('screen_share_permission_denied', callsign),
+      );
+      return;
+    }
+
+    _screenShareApproved = true;
+    try {
+      await startScreenShare();
+    } catch (error) {
+      _screenShareApproved = false;
+      LogService().log(
+        'ConferenceService: Failed to start approved screen share: $error',
+      );
+    }
+  }
+
+  Future<void> _handleScreenShareState(Map<String, dynamic> msg) async {
+    final callsign = msg['callsign'] as String?;
+    final active = msg['active'] == true;
+    if (callsign == null || callsign.isEmpty) {
+      return;
+    }
+
+    if (!active) {
+      if (_room?.activeScreenSharerCallsign?.toUpperCase() !=
+          callsign.toUpperCase()) {
+        return;
+      }
+      _setActiveScreenSharer(null);
+      if (_role == ConferenceRole.joiner) {
+        await _participantPeerManager?.clearRemoteScreenStream();
+      }
+      _eventController.add(ConferenceEvent('screen_share_stopped', callsign));
+      return;
+    }
+
+    _setActiveScreenSharer(callsign);
+    _eventController.add(ConferenceEvent('screen_share_started', callsign));
+  }
+
+  Future<void> _handleScreenShareStop(Map<String, dynamic> msg) async {
+    final callsign = msg['callsign'] as String?;
+    if (callsign == null || _role != ConferenceRole.host) {
+      return;
+    }
+
+    try {
+      await _hostPeerManager?.clearRemoteScreenShare(callsign);
+    } finally {
+      _setActiveScreenSharer(null);
+      _broadcastScreenShareState(callsign, active: false);
+    }
+    LogService().log(
+      'ConferenceService: Cleared remote screen sharing from $callsign',
+    );
+  }
+
   Future<void> _handleConferenceChatMessage(Map<String, dynamic> msg) async {
     final payload = msg['message'] as Map<String, dynamic>?;
     if (payload == null) return;
@@ -1107,11 +1440,23 @@ class ConferenceService {
 
       final p = _room?.participants[event.callsign];
       if (p != null) {
-        if (event.type == 'peer_connected' || event.type == 'remote_stream') {
+        if (event.type == 'peer_connected' ||
+            event.type == 'remote_stream' ||
+            event.type == 'remote_screen_stream') {
           p.isConnected = true;
         } else if (event.type == 'peer_disconnected') {
           p.isConnected = false;
         }
+      }
+
+      if (event.type == 'remote_screen_stream') {
+        _setActiveScreenSharer(event.callsign);
+        _broadcastScreenShareState(event.callsign, active: true);
+      } else if (event.type == 'remote_screen_stream_removed' &&
+          _room?.activeScreenSharerCallsign?.toUpperCase() ==
+              event.callsign.toUpperCase()) {
+        _setActiveScreenSharer(null);
+        _broadcastScreenShareState(event.callsign, active: false);
       }
     });
   }
@@ -1121,7 +1466,9 @@ class ConferenceService {
       _eventController.add(event);
 
       // For participant, the host connection state affects all participants
-      if (event.type == 'peer_connected' || event.type == 'remote_stream') {
+      if (event.type == 'peer_connected' ||
+          event.type == 'remote_stream' ||
+          event.type == 'remote_screen_stream') {
         // Mark host as connected
         final p = _room?.participants[event.callsign];
         if (p != null) p.isConnected = true;
@@ -1136,6 +1483,7 @@ class ConferenceService {
     _chatMessages.clear();
     _chatMessageIds.clear();
     _messageQueue = Future<void>.value();
+    _screenShareApproved = false;
   }
 
   void _enqueueMessage(Future<void> Function() handler) {
@@ -1153,6 +1501,32 @@ class ConferenceService {
         });
   }
 
+  void _broadcastScreenShareState(String callsign, {required bool active}) {
+    _sendConferenceRoomMessage({
+      'type': 'conference_screen_share_state',
+      'callsign': callsign,
+      'active': active,
+    });
+  }
+
+  void _setActiveScreenSharer(String? callsign) {
+    final room = _room;
+    if (room == null) {
+      return;
+    }
+
+    room.activeScreenSharerCallsign = callsign;
+    final activeKey = callsign?.toUpperCase();
+    for (final participant in room.participants.values) {
+      final isActive =
+          activeKey != null && participant.callsign.toUpperCase() == activeKey;
+      participant.isScreenSharing = isActive;
+      if (isActive) {
+        participant.hasPendingScreenShareRequest = false;
+      }
+    }
+  }
+
   Future<void> _prepareAudioRouting() async {
     if (kIsWeb) {
       return;
@@ -1166,6 +1540,30 @@ class ConferenceService {
     try {
       await Helper.ensureAudioSession();
     } catch (_) {}
+  }
+
+  Future<MediaStream> _captureDisplayStream() async {
+    if (!kIsWeb && WebRTC.platformIsDesktop) {
+      final sources = await desktopCapturer.getSources(
+        types: [SourceType.Screen],
+      );
+      if (sources.isEmpty) {
+        throw StateError('No desktop screen sources are available');
+      }
+      final source = sources.first;
+      return navigator.mediaDevices.getDisplayMedia({
+        'audio': false,
+        'video': {
+          'deviceId': {'exact': source.id},
+          'mandatory': {'frameRate': 15.0},
+        },
+      });
+    }
+
+    return navigator.mediaDevices.getDisplayMedia({
+      'audio': false,
+      'video': true,
+    });
   }
 
   Future<void> _loadStoredChatMessages() async {

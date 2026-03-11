@@ -471,7 +471,215 @@ else
 fi
 
 echo ""
-echo "[13] Verifying the local station server saw both clients..."
+echo "[13] Starting direct screen sharing from the host..."
+HOST_SCREEN_RESPONSE="$(post "$HOST_API" '{"action":"conference_start_screen_share"}')"
+if echo "$HOST_SCREEN_RESPONSE" | json_field "data['success']" | grep -qx "True"; then
+  ok "host started a direct screen share"
+else
+  fail "host could not start a direct screen share"
+  echo "$HOST_SCREEN_RESPONSE"
+fi
+
+echo ""
+echo "[14] Waiting for the guest to receive the host screen share..."
+HOST_SCREEN_ACTIVE=0
+for _ in $(seq 1 30); do
+  HOST_STATUS="$(post "$HOST_API" '{"action":"conference_status"}')"
+  GUEST_STATUS="$(post "$GUEST_API" '{"action":"conference_status"}')"
+  if HOST_STATUS="$HOST_STATUS" GUEST_STATUS="$GUEST_STATUS" HOST_CALLSIGN="$HOST_CALLSIGN" python3 - <<'PY'
+import json
+import os
+import sys
+
+host = json.loads(os.environ['HOST_STATUS'])
+guest = json.loads(os.environ['GUEST_STATUS'])
+host_callsign = os.environ['HOST_CALLSIGN']
+if host.get('active_screen_sharer') != host_callsign:
+    sys.exit(1)
+if guest.get('active_screen_sharer') != host_callsign:
+    sys.exit(1)
+if not host.get('local_screen_sharing'):
+    sys.exit(1)
+if guest.get('remote_screen_stream_count', 0) < 1:
+    sys.exit(1)
+PY
+  then
+    HOST_SCREEN_ACTIVE=1
+    break
+  fi
+  sleep 1
+done
+
+if [ "$HOST_SCREEN_ACTIVE" -eq 1 ]; then
+  ok "guest received the host screen share"
+else
+  fail "host screen share did not propagate"
+  echo "Host status: $HOST_STATUS"
+  echo "Guest status: $GUEST_STATUS"
+fi
+
+echo ""
+echo "[15] Stopping the host screen share and waiting for cleanup..."
+post "$HOST_API" '{"action":"conference_stop_screen_share"}' >/dev/null || true
+HOST_SCREEN_STOPPED=0
+for _ in $(seq 1 30); do
+  HOST_STATUS="$(post "$HOST_API" '{"action":"conference_status"}')"
+  GUEST_STATUS="$(post "$GUEST_API" '{"action":"conference_status"}')"
+  if HOST_STATUS="$HOST_STATUS" GUEST_STATUS="$GUEST_STATUS" python3 - <<'PY'
+import json
+import os
+import sys
+
+host = json.loads(os.environ['HOST_STATUS'])
+guest = json.loads(os.environ['GUEST_STATUS'])
+if host.get('active_screen_sharer') is not None:
+    sys.exit(1)
+if guest.get('active_screen_sharer') is not None:
+    sys.exit(1)
+if host.get('local_screen_sharing'):
+    sys.exit(1)
+if guest.get('remote_screen_stream_count', 0) != 0:
+    sys.exit(1)
+PY
+  then
+    HOST_SCREEN_STOPPED=1
+    break
+  fi
+  sleep 1
+done
+
+if [ "$HOST_SCREEN_STOPPED" -eq 1 ]; then
+  ok "host screen share stopped cleanly"
+else
+  fail "host screen share did not stop cleanly"
+  echo "Host status: $HOST_STATUS"
+  echo "Guest status: $GUEST_STATUS"
+fi
+
+echo ""
+echo "[16] Requesting guest screen share access and approving it..."
+REQUEST_SCREEN_RESPONSE="$(post "$GUEST_API" '{"action":"conference_request_screen_share"}')"
+if echo "$REQUEST_SCREEN_RESPONSE" | json_field "data['success']" | grep -qx "True"; then
+  ok "guest requested screen-share access"
+else
+  fail "guest could not request screen-share access"
+  echo "$REQUEST_SCREEN_RESPONSE"
+fi
+
+SCREEN_REQUESTED=0
+for _ in $(seq 1 20); do
+  HOST_STATUS="$(post "$HOST_API" '{"action":"conference_status"}')"
+  if HOST_STATUS="$HOST_STATUS" GUEST_CALLSIGN="$GUEST_CALLSIGN" python3 - <<'PY'
+import json
+import os
+import sys
+
+host = json.loads(os.environ['HOST_STATUS'])
+pending = host.get('pending_screen_share_requests') or []
+if os.environ['GUEST_CALLSIGN'] in pending:
+    sys.exit(0)
+sys.exit(1)
+PY
+  then
+    SCREEN_REQUESTED=1
+    break
+  fi
+  sleep 1
+done
+
+if [ "$SCREEN_REQUESTED" -eq 1 ]; then
+  ok "host received the guest screen-share request"
+else
+  fail "host never saw the guest screen-share request"
+  echo "$HOST_STATUS"
+fi
+
+APPROVE_SCREEN_RESPONSE="$(post "$HOST_API" "{\"action\":\"conference_approve_screen_share\",\"callsign\":\"${GUEST_CALLSIGN}\"}")"
+if echo "$APPROVE_SCREEN_RESPONSE" | json_field "data['success']" | grep -qx "True"; then
+  ok "host approved guest screen sharing"
+else
+  fail "host could not approve guest screen sharing"
+  echo "$APPROVE_SCREEN_RESPONSE"
+fi
+
+echo ""
+echo "[17] Waiting for the guest screen share to reach the host..."
+GUEST_SCREEN_ACTIVE=0
+for _ in $(seq 1 30); do
+  HOST_STATUS="$(post "$HOST_API" '{"action":"conference_status"}')"
+  GUEST_STATUS="$(post "$GUEST_API" '{"action":"conference_status"}')"
+  if HOST_STATUS="$HOST_STATUS" GUEST_STATUS="$GUEST_STATUS" GUEST_CALLSIGN="$GUEST_CALLSIGN" python3 - <<'PY'
+import json
+import os
+import sys
+
+host = json.loads(os.environ['HOST_STATUS'])
+guest = json.loads(os.environ['GUEST_STATUS'])
+callsign = os.environ['GUEST_CALLSIGN']
+if host.get('active_screen_sharer') != callsign:
+    sys.exit(1)
+if guest.get('active_screen_sharer') != callsign:
+    sys.exit(1)
+if not guest.get('local_screen_sharing'):
+    sys.exit(1)
+if host.get('remote_screen_stream_count', 0) < 1:
+    sys.exit(1)
+PY
+  then
+    GUEST_SCREEN_ACTIVE=1
+    break
+  fi
+  sleep 1
+done
+
+if [ "$GUEST_SCREEN_ACTIVE" -eq 1 ]; then
+  ok "host received the guest screen share"
+else
+  fail "guest screen share did not propagate"
+  echo "Host status: $HOST_STATUS"
+  echo "Guest status: $GUEST_STATUS"
+fi
+
+echo ""
+echo "[18] Stopping the guest screen share and waiting for cleanup..."
+post "$GUEST_API" '{"action":"conference_stop_screen_share"}' >/dev/null || true
+GUEST_SCREEN_STOPPED=0
+for _ in $(seq 1 30); do
+  HOST_STATUS="$(post "$HOST_API" '{"action":"conference_status"}')"
+  GUEST_STATUS="$(post "$GUEST_API" '{"action":"conference_status"}')"
+  if HOST_STATUS="$HOST_STATUS" GUEST_STATUS="$GUEST_STATUS" python3 - <<'PY'
+import json
+import os
+import sys
+
+host = json.loads(os.environ['HOST_STATUS'])
+guest = json.loads(os.environ['GUEST_STATUS'])
+if host.get('active_screen_sharer') is not None:
+    sys.exit(1)
+if guest.get('active_screen_sharer') is not None:
+    sys.exit(1)
+if host.get('remote_screen_stream_count', 0) != 0:
+    sys.exit(1)
+if guest.get('local_screen_sharing'):
+    sys.exit(1)
+PY
+  then
+    GUEST_SCREEN_STOPPED=1
+    break
+  fi
+  sleep 1
+done
+
+if [ "$GUEST_SCREEN_STOPPED" -eq 1 ]; then
+  ok "guest screen share stopped cleanly"
+else
+  fail "guest screen share did not stop cleanly"
+  echo "Host status: $HOST_STATUS"
+  echo "Guest status: $GUEST_STATUS"
+fi
+
+echo ""
+echo "[19] Verifying the local station server saw both clients..."
 STATION_STATUS="$(post "$MAIN_API" '{"action":"station_server_status"}')"
 if STATION_STATUS="$STATION_STATUS" python3 - <<'PY'
 import json
@@ -492,7 +700,7 @@ else
 fi
 
 echo ""
-echo "[14] Ending the meeting and stopping the local station server..."
+echo "[20] Ending the meeting and stopping the local station server..."
 post "$HOST_API" '{"action":"conference_end"}' >/dev/null || true
 post "$GUEST_API" '{"action":"conference_end"}' >/dev/null || true
 post "$MAIN_API" '{"action":"station_server_stop"}' >/dev/null || true

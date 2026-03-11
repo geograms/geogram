@@ -18,7 +18,7 @@ enum ConferencePeerState { idle, connecting, connected, failed, closed }
 /// Represents an audio peer connection to one conference participant.
 class ConferenceAudioPeer {
   final String callsign;
-  final String sessionId;
+  String sessionId;
   RTCPeerConnection? peerConnection;
   MediaStream? remoteStream;
   ConferencePeerState state;
@@ -43,7 +43,8 @@ typedef ConferenceSignalSender = void Function(Map<String, dynamic> signal);
 
 /// Event emitted when conference state changes.
 class ConferenceEvent {
-  final String type; // peer_connected, peer_disconnected, peer_muted, remote_stream
+  final String
+  type; // peer_connected, peer_disconnected, peer_muted, remote_stream
   final String callsign;
   final dynamic data;
 
@@ -76,7 +77,7 @@ class ConferencePeerManager {
   int get peerCount => _peers.length;
 
   ConferencePeerManager({WebRTCConfig? config})
-      : _config = config ?? const WebRTCConfig();
+    : _config = config ?? const WebRTCConfig();
 
   /// Update the ICE configuration (e.g. after receiving station STUN info).
   void setConfig(WebRTCConfig config) => _config = config;
@@ -181,8 +182,11 @@ class ConferencePeerManager {
   // ── Incoming connection (handle offer, create answer) ────────────
 
   /// Handle an incoming offer from [callsign].
-  Future<void> handleOffer(String callsign, String sessionId,
-      Map<String, dynamic> sdp) async {
+  Future<void> handleOffer(
+    String callsign,
+    String sessionId,
+    Map<String, dynamic> sdp,
+  ) async {
     final peer = ConferenceAudioPeer(
       callsign: callsign,
       sessionId: sessionId,
@@ -254,7 +258,9 @@ class ConferencePeerManager {
 
   /// Handle an incoming ICE candidate.
   Future<void> handleIceCandidate(
-      String callsign, Map<String, dynamic> candidate) async {
+    String callsign,
+    Map<String, dynamic> candidate,
+  ) async {
     final peer = _peers[callsign.toUpperCase()];
     if (peer == null) return;
 
@@ -320,7 +326,8 @@ class ConferencePeerManager {
     // Connection state
     pc.onConnectionState = (RTCPeerConnectionState state) {
       LogService().log(
-          'ConferencePeerManager: ${peer.callsign} connection state: $state');
+        'ConferencePeerManager: ${peer.callsign} connection state: $state',
+      );
 
       switch (state) {
         case RTCPeerConnectionState.RTCPeerConnectionStateConnected:
@@ -328,19 +335,25 @@ class ConferencePeerManager {
           if (!(peer.connectionCompleter?.isCompleted ?? true)) {
             peer.connectionCompleter!.complete(true);
           }
-          _eventController.add(ConferenceEvent('peer_connected', peer.callsign));
+          _eventController.add(
+            ConferenceEvent('peer_connected', peer.callsign),
+          );
 
         case RTCPeerConnectionState.RTCPeerConnectionStateFailed:
           peer.state = ConferencePeerState.failed;
           if (!(peer.connectionCompleter?.isCompleted ?? true)) {
             peer.connectionCompleter!.complete(false);
           }
-          _eventController.add(ConferenceEvent('peer_disconnected', peer.callsign));
+          _eventController.add(
+            ConferenceEvent('peer_disconnected', peer.callsign),
+          );
 
         case RTCPeerConnectionState.RTCPeerConnectionStateDisconnected:
         case RTCPeerConnectionState.RTCPeerConnectionStateClosed:
           peer.state = ConferencePeerState.closed;
-          _eventController.add(ConferenceEvent('peer_disconnected', peer.callsign));
+          _eventController.add(
+            ConferenceEvent('peer_disconnected', peer.callsign),
+          );
 
         default:
           break;
@@ -352,9 +365,11 @@ class ConferencePeerManager {
       if (event.streams.isNotEmpty) {
         peer.remoteStream = event.streams.first;
         _eventController.add(
-            ConferenceEvent('remote_stream', peer.callsign, peer.remoteStream));
+          ConferenceEvent('remote_stream', peer.callsign, peer.remoteStream),
+        );
         LogService().log(
-            'ConferencePeerManager: Remote audio track from ${peer.callsign}');
+          'ConferencePeerManager: Remote audio track from ${peer.callsign}',
+        );
       }
     };
   }
@@ -365,7 +380,9 @@ class ConferencePeerManager {
       await peer.peerConnection?.close();
       await peer.peerConnection?.dispose();
     } catch (e) {
-      LogService().log('ConferencePeerManager: Error closing ${peer.callsign}: $e');
+      LogService().log(
+        'ConferencePeerManager: Error closing ${peer.callsign}: $e',
+      );
     }
     peer.peerConnection = null;
     peer.remoteStream = null;

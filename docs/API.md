@@ -2724,9 +2724,13 @@ Triggers a debug action.
 | `conference_end` | End or leave the current conference | None |
 | `conference_mute` | Toggle mute in current conference | None |
 | `conference_request_speaker` | Request speaker access from the host (listener only) | None |
+| `conference_start_screen_share` | Start sharing the local screen in the current meeting | None |
+| `conference_stop_screen_share` | Stop sharing the local screen in the current meeting | None |
+| `conference_request_screen_share` | Request host permission to share the local screen (joiner only) | None |
 | `conference_send_chat` | Send a text message to the meeting chat | `content` (required): Message text |
 | `conference_promote` | Promote a listener to speaker (host only) | `callsign` (required): Callsign of participant to promote |
 | `conference_demote` | Demote a speaker to listener (host only) | `callsign` (required): Callsign of participant to demote |
+| `conference_approve_screen_share` | Approve a participant screen-share request (host only) | `callsign` (required): Callsign of participant to approve |
 | `atproto_status` | Get Teleport AT Proto bridge status | None |
 | `atproto_read_feed` | Read public Bluesky/AT feed for an actor | `actor` (required): Handle or DID, `limit` (optional): 1-100, `appview` (optional): Base URL override |
 | `atproto_sync_feed` | Trigger bridge-managed feed sync with fallback actor logic | None |

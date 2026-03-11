@@ -1228,6 +1228,22 @@ class DebugController {
         'params': {},
       },
       {
+        'action': 'conference_start_screen_share',
+        'description': 'Start sharing the local screen in the current meeting',
+        'params': {},
+      },
+      {
+        'action': 'conference_stop_screen_share',
+        'description': 'Stop sharing the local screen in the current meeting',
+        'params': {},
+      },
+      {
+        'action': 'conference_request_screen_share',
+        'description':
+            'Request host permission to share the local screen (joiner only)',
+        'params': {},
+      },
+      {
         'action': 'conference_send_chat',
         'description': 'Send a text message to the meeting chat',
         'params': {'content': 'Message text (required)'},
@@ -1241,6 +1257,14 @@ class DebugController {
         'action': 'conference_demote',
         'description': 'Demote a speaker to listener (host only)',
         'params': {'callsign': 'Callsign of participant to demote (required)'},
+      },
+      {
+        'action': 'conference_approve_screen_share',
+        'description': 'Approve a participant screen-share request (host only)',
+        'params': {
+          'callsign':
+              'Callsign of participant to approve for screen sharing (required)',
+        },
       },
       {
         'action': 'create_app',
@@ -2040,6 +2064,15 @@ class DebugController {
       case 'conference_request_speaker':
         return _conferenceRequestSpeaker();
 
+      case 'conference_start_screen_share':
+        return _conferenceStartScreenShare();
+
+      case 'conference_stop_screen_share':
+        return _conferenceStopScreenShare();
+
+      case 'conference_request_screen_share':
+        return _conferenceRequestScreenShare();
+
       case 'conference_send_chat':
         return _conferenceSendChat(params);
 
@@ -2048,6 +2081,9 @@ class DebugController {
 
       case 'conference_demote':
         return _conferenceDemote(params);
+
+      case 'conference_approve_screen_share':
+        return _conferenceApproveScreenShare(params);
 
       case 'create_app':
         return _createApp(params);
@@ -2148,9 +2184,13 @@ class DebugController {
       'role': cs.role?.name,
       'is_muted': cs.isLocalMuted,
       'remote_audio_stream_count': cs.remoteAudioStreams.length,
+      'remote_screen_stream_count': cs.remoteScreenStream == null ? 0 : 1,
+      'local_screen_sharing': cs.isLocalScreenSharing,
+      'active_screen_sharer': cs.activeScreenSharer,
       'room': cs.room?.toJson(),
       'chat_transcript_path': cs.chatTranscriptPath,
       'pending_speaker_requests': cs.pendingSpeakerRequests,
+      'pending_screen_share_requests': cs.pendingScreenShareRequests,
       'chat_messages': cs.chatMessages
           .map(
             (message) => {
@@ -2189,6 +2229,46 @@ class DebugController {
         'success': true,
         'message': 'Speaker request sent',
         'pending_speaker_requests': ConferenceService().pendingSpeakerRequests,
+      };
+    } catch (e) {
+      return {'success': false, 'error': e.toString()};
+    }
+  }
+
+  Future<Map<String, dynamic>> _conferenceStartScreenShare() async {
+    try {
+      await ConferenceService().startScreenShare();
+      return {
+        'success': true,
+        'message': 'Screen sharing started',
+        'active_screen_sharer': ConferenceService().activeScreenSharer,
+      };
+    } catch (e) {
+      return {'success': false, 'error': e.toString()};
+    }
+  }
+
+  Future<Map<String, dynamic>> _conferenceStopScreenShare() async {
+    try {
+      await ConferenceService().stopScreenShare();
+      return {
+        'success': true,
+        'message': 'Screen sharing stopped',
+        'active_screen_sharer': ConferenceService().activeScreenSharer,
+      };
+    } catch (e) {
+      return {'success': false, 'error': e.toString()};
+    }
+  }
+
+  Future<Map<String, dynamic>> _conferenceRequestScreenShare() async {
+    try {
+      await ConferenceService().requestToShareScreen();
+      return {
+        'success': true,
+        'message': 'Screen-share request sent',
+        'pending_screen_share_requests':
+            ConferenceService().pendingScreenShareRequests,
       };
     } catch (e) {
       return {'success': false, 'error': e.toString()};
@@ -2254,6 +2334,25 @@ class DebugController {
       return {
         'success': true,
         'message': '$callsign demoted to listener',
+        'room': ConferenceService().room?.toJson(),
+      };
+    } catch (e) {
+      return {'success': false, 'error': e.toString()};
+    }
+  }
+
+  Future<Map<String, dynamic>> _conferenceApproveScreenShare(
+    Map<String, dynamic> params,
+  ) async {
+    try {
+      final callsign = params['callsign'] as String?;
+      if (callsign == null) {
+        return {'success': false, 'error': 'Missing callsign parameter'};
+      }
+      await ConferenceService().approveScreenShare(callsign);
+      return {
+        'success': true,
+        'message': '$callsign approved for screen sharing',
         'room': ConferenceService().room?.toJson(),
       };
     } catch (e) {

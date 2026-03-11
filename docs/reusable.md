@@ -9441,7 +9441,7 @@ Key template variables:
 
 **File:** `lib/server/mixins/conference_mixin.dart`
 
-Station-side conference signaling relay (SFU star topology), shared by both `StationServer` (Desktop) and `PureStationServer` (CLI). The station acts as a relay for WebRTC signaling only — no audio media passes through it. Tracks speaker/listener roles and enforces speaker limits.
+Station-side conference signaling relay (SFU star topology), shared by both `StationServer` (Desktop) and `PureStationServer` (CLI). The station acts as a relay for WebRTC signaling only — no media passes through it. Tracks speaker/listener roles, enforces speaker limits, and relays screen-share permission/state messages.
 
 **Abstract contract (implement in station):**
 - `conferenceLog(level, message)` — logging
@@ -9454,13 +9454,13 @@ Station-side conference signaling relay (SFU star topology), shared by both `Sta
 - `conferenceHandleClientDisconnect(clientId)` — clean up on disconnect
 - `getConferenceRooms()` — list active rooms
 
-**Message types:** `conference_create`, `conference_join`, `conference_leave`, `conference_end`, `conference_signal`, `conference_role_change`, `conference_speaker_request`, `conference_chat_message`, `conference_chat_history`, `conference_list`
+**Message types:** `conference_create`, `conference_join`, `conference_leave`, `conference_end`, `conference_signal`, `conference_role_change`, `conference_speaker_request`, `conference_screen_share_request`, `conference_screen_share_permission`, `conference_screen_share_state`, `conference_screen_share_stop`, `conference_chat_message`, `conference_chat_history`, `conference_list`
 
 ### ConferenceSignalingServer
 
 **File:** `lib/services/conference_signaling_server.dart`
 
-Lightweight HTTP + WebSocket server run by the host for LAN-mode SFU signaling. Tracks speaker/listener roles per participant. Speakers limited by `maxSpeakers`; listeners unlimited.
+Lightweight HTTP + WebSocket server run by the host for LAN-mode SFU signaling. Tracks speaker/listener roles per participant, relays host approval for screen sharing, and keeps the current active screen sharer in room state. Speakers limited by `maxSpeakers`; listeners unlimited.
 
 **Endpoints:**
 - `GET /meet/info` — room info JSON (speakers, listeners, counts)
@@ -9488,7 +9488,7 @@ await server.stop();
 
 **File:** `lib/services/conference_host_peer_manager.dart`
 
-Host-side SFU manager. Maintains one `RTCPeerConnection` per participant. Receives audio tracks from speakers via `onTrack` and forwards them to every other connection. Listeners receive all speaker tracks but send no audio. No audio mixing — individual tracks forwarded as-is.
+Host-side SFU manager. Maintains one `RTCPeerConnection` per participant. Receives audio tracks from speakers via `onTrack` and forwards them to every other connection. It also forwards a single active screen-share video track, either from the host or from a permitted participant. Listeners receive all speaker tracks but send no audio. No audio mixing — individual tracks forwarded as-is.
 
 **Key methods:**
 - `startLocalAudio()` — capture host's microphone (host is always a speaker)
@@ -9496,13 +9496,15 @@ Host-side SFU manager. Maintains one `RTCPeerConnection` per participant. Receiv
 - `handleAnswer/handleIceCandidate/handleBye` — standard WebRTC signaling
 - `promoteToSpeaker(callsign)` — renegotiate to accept audio from participant
 - `demoteToListener(callsign)` — remove participant's track from all connections
+- `startLocalScreenShare(stream)` / `stopLocalScreenShare()` — manage host-originated screen sharing
+- `clearRemoteScreenShare(callsign)` — stop forwarding a participant screen share
 - `dispose()` — release all resources
 
 ### ConferenceParticipantPeerManager
 
 **File:** `lib/services/conference_participant_peer_manager.dart`
 
-Participant-side SFU manager. Maintains exactly ONE connection to the host. Receives multiple speaker tracks from the host. Sends local audio only if the participant is a speaker.
+Participant-side SFU manager. Maintains exactly ONE connection to the host. Receives multiple speaker tracks from the host plus a single forwarded screen-share video stream. Sends local audio only if the participant is a speaker, and sends local screen video only after the host approves screen sharing.
 
 **Key methods:**
 - `connectToHost(hostCallsign)` — create connection to host, send offer
@@ -9510,6 +9512,8 @@ Participant-side SFU manager. Maintains exactly ONE connection to the host. Rece
 - `handleAnswer/handleIceCandidate/handleBye` — standard WebRTC signaling
 - `onPromotedToSpeaker()` — start mic, add track to host connection
 - `onDemotedToListener()` — stop mic, remove track
+- `startScreenShare(stream)` / `stopScreenShare()` — add or remove a local screen track and renegotiate with the host
+- `clearRemoteScreenStream()` — clear the currently forwarded screen share
 - `startLocalAudio()` / `stopLocalAudio()` — mic control
 
 ### ConferencePeerManager (DEPRECATED)
@@ -9522,7 +9526,7 @@ Legacy mesh peer manager. Keep temporarily for shared types (`ConferenceAudioPee
 
 **File:** `lib/services/conference_service.dart`
 
-Singleton orchestration service. SFU star topology — all participants connect to host only. Auto-selects signaling mode (LAN or station). Supports speaker/listener roles with promote/demote.
+Singleton orchestration service. SFU star topology — all participants connect to host only. Auto-selects signaling mode (LAN or station). Supports speaker/listener roles with promote/demote, persisted meeting chat, and host-approved single-screen-share sessions.
 
 **Host flow:**
 ```dart
@@ -9530,6 +9534,7 @@ final room = await ConferenceService().hostConference(roomName: 'My Room', maxSp
 final urls = await ConferenceService().getMeetUrls();
 await ConferenceService().promoteToSpeaker('CALLSIGN');
 await ConferenceService().demoteToListener('CALLSIGN');
+await ConferenceService().startScreenShare();
 ```
 
 **Joiner flow (default: listener, no mic):**
@@ -9537,12 +9542,14 @@ await ConferenceService().demoteToListener('CALLSIGN');
 await ConferenceService().joinLan('ws://192.168.1.5:12345/meet/ws');
 await ConferenceService().joinLan(url, participantRole: ConferenceParticipantRole.speaker);
 await ConferenceService().discoverAndJoin('ABCD@X1SU86');
+await ConferenceService().requestToShareScreen();
 ```
 
 **State management:**
 - `stateStream` — ConferenceState changes (idle/starting/active/ending)
 - `events` — ConferenceEvent stream (peer connected/disconnected/role_changed)
 - `isLocalMuted`, `toggleMute()`, `endConference()`
+- `activeScreenSharer`, `activeScreenStream`, `pendingScreenShareRequests`
 
 ---
 
