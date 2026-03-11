@@ -11,6 +11,7 @@ import 'package:qr_flutter/qr_flutter.dart';
 
 import '../services/conference_service.dart';
 import '../services/profile_service.dart';
+import 'conference_home_page.dart';
 import '../widgets/message_input_widget.dart';
 import '../widgets/message_list_widget.dart';
 
@@ -30,6 +31,7 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
   RTCVideoRenderer? _screenRenderer;
   Future<void> _screenSyncQueue = Future<void>.value();
   String? _screenRendererStreamId;
+  bool _isExitingToHome = false;
 
   @override
   void initState() {
@@ -38,7 +40,7 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
     _stateSubscription = _conferenceService.stateStream.listen((state) {
       if (!mounted) return;
       if (state == ConferenceState.idle) {
-        Navigator.pop(context);
+        _returnToConferenceHome();
         return;
       }
       setState(() {});
@@ -74,7 +76,9 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
 
   Future<void> _endCall() async {
     await _conferenceService.endConference();
-    if (mounted) Navigator.pop(context);
+    if (mounted) {
+      _returnToConferenceHome();
+    }
   }
 
   void _toggleMute() {
@@ -162,6 +166,25 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
         await _conferenceService.stopScreenShare();
       } else {
         await _conferenceService.startScreenShare();
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('$e')));
+      }
+    }
+  }
+
+  Future<void> _toggleRecording() async {
+    try {
+      if (_conferenceService.isRecording) {
+        await _conferenceService.stopRecording();
+      } else {
+        await _conferenceService.startRecording();
+      }
+      if (mounted) {
+        setState(() {});
       }
     } catch (e) {
       if (mounted) {
@@ -491,9 +514,20 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
     );
   }
 
+  void _returnToConferenceHome() {
+    if (!mounted || _isExitingToHome) {
+      return;
+    }
+    _isExitingToHome = true;
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute(builder: (_) => const ConferenceHomePage()),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final mediaQuery = MediaQuery.of(context);
     final room = _conferenceService.room;
     final isHost = _conferenceService.role == ConferenceRole.host;
     final isMuted = _conferenceService.isLocalMuted;
@@ -505,10 +539,14 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
     final hasRequestedScreenShare = me?.hasPendingScreenShareRequest ?? false;
     final activeScreenSharer = room?.activeScreenSharerCallsign;
     final isLocalScreenSharing = _conferenceService.isLocalScreenSharing;
+    final isRecording = _conferenceService.isRecording;
     final isViewingLocalScreenShare =
         activeScreenSharer != null &&
         activeScreenSharer.toUpperCase() == myCallsign.toUpperCase();
     final shareUrl = _shareUrl;
+    final compactControls =
+        mediaQuery.orientation == Orientation.landscape ||
+        mediaQuery.size.height < 520;
     return Scaffold(
       backgroundColor: theme.colorScheme.surface,
       appBar: AppBar(
@@ -525,12 +563,20 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
       ),
       body: LayoutBuilder(
         builder: (context, constraints) {
-          final screenPreviewHeight =
-              activeScreenSharer == null || isViewingLocalScreenShare
+          final isCompactLayout = constraints.maxHeight < 520;
+          final showInlineScreenPreview =
+              activeScreenSharer != null &&
+              !isViewingLocalScreenShare &&
+              !isCompactLayout;
+          final showScreenPreviewBanner =
+              activeScreenSharer != null &&
+              !isViewingLocalScreenShare &&
+              isCompactLayout;
+          final screenPreviewHeight = !showInlineScreenPreview
               ? 0.0
               : math.min(
                   constraints.maxWidth * (9 / 16),
-                  ((constraints.maxHeight - 150).clamp(40, 220)).toDouble(),
+                  ((constraints.maxHeight - 260).clamp(32, 170)).toDouble(),
                 );
           final compactScreenPreview = screenPreviewHeight < 120;
 
@@ -620,6 +666,27 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
                         color: theme.colorScheme.onSurfaceVariant,
                       ),
                     ),
+                    if (isRecording) ...[
+                      const SizedBox(width: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 4,
+                        ),
+                        decoration: BoxDecoration(
+                          color: theme.colorScheme.error,
+                          borderRadius: BorderRadius.circular(999),
+                        ),
+                        child: Text(
+                          'REC',
+                          style: theme.textTheme.labelSmall?.copyWith(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: 0.8,
+                          ),
+                        ),
+                      ),
+                    ],
                   ],
                 ),
               ),
@@ -658,7 +725,38 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
                   ),
                 ),
 
-              if (activeScreenSharer != null && !isViewingLocalScreenShare)
+              if (showScreenPreviewBanner)
+                Container(
+                  width: double.infinity,
+                  margin: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 12,
+                  ),
+                  decoration: BoxDecoration(
+                    color: theme.colorScheme.surfaceContainerHighest,
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          '$activeScreenSharer is sharing a screen',
+                          style: theme.textTheme.titleSmall,
+                        ),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.fullscreen),
+                        tooltip: 'Open full screen',
+                        onPressed: _screenRenderer == null
+                            ? null
+                            : _openScreenShareFullscreen,
+                      ),
+                    ],
+                  ),
+                ),
+
+              if (showInlineScreenPreview)
                 Container(
                   padding: EdgeInsets.fromLTRB(
                     16,
@@ -821,9 +919,12 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
       // Bottom controls
       bottomNavigationBar: SafeArea(
         child: Container(
-          padding: const EdgeInsets.all(16),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+          padding: EdgeInsets.all(compactControls ? 10 : 16),
+          child: Wrap(
+            alignment: WrapAlignment.spaceEvenly,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: compactControls ? 12 : 18,
+            runSpacing: compactControls ? 8 : 12,
             children: [
               _CallButton(
                 icon: isMuted ? Icons.mic_off : Icons.mic,
@@ -833,6 +934,7 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
                     : theme.colorScheme.surfaceContainerHighest,
                 iconColor: isMuted ? Colors.white : theme.colorScheme.onSurface,
                 onPressed: _toggleMute,
+                compact: compactControls,
               ),
               if (canRequestSpeaker)
                 _CallButton(
@@ -847,6 +949,7 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
                       ? theme.colorScheme.onPrimary
                       : theme.colorScheme.onSecondaryContainer,
                   onPressed: hasRequestedSpeaker ? null : _requestSpeakerAccess,
+                  compact: compactControls,
                 ),
               _CallButton(
                 icon: isLocalScreenSharing
@@ -874,13 +977,30 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
                                         activeScreenSharer != myCallsign)
                                 ? null
                                 : _requestScreenShare)),
+                compact: compactControls,
               ),
+              if (isHost)
+                _CallButton(
+                  icon: isRecording
+                      ? Icons.stop_circle
+                      : Icons.fiber_manual_record,
+                  label: isRecording ? 'Stop Rec' : 'Record',
+                  color: isRecording
+                      ? theme.colorScheme.error
+                      : theme.colorScheme.secondaryContainer,
+                  iconColor: isRecording
+                      ? Colors.white
+                      : theme.colorScheme.onSecondaryContainer,
+                  onPressed: _toggleRecording,
+                  compact: compactControls,
+                ),
               _CallButton(
                 icon: Icons.call_end,
                 label: isHost ? 'End' : 'Leave',
                 color: const Color(0xFFD90429),
                 iconColor: Colors.white,
                 onPressed: _endCall,
+                compact: compactControls,
               ),
             ],
           ),
@@ -1210,6 +1330,7 @@ class _CallButton extends StatelessWidget {
   final Color color;
   final Color iconColor;
   final VoidCallback? onPressed;
+  final bool compact;
 
   const _CallButton({
     required this.icon,
@@ -1217,6 +1338,7 @@ class _CallButton extends StatelessWidget {
     required this.color,
     required this.iconColor,
     required this.onPressed,
+    this.compact = false,
   });
 
   @override
@@ -1224,14 +1346,27 @@ class _CallButton extends StatelessWidget {
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        FloatingActionButton(
-          heroTag: label,
-          onPressed: onPressed,
-          backgroundColor: color,
-          child: Icon(icon, color: iconColor),
+        if (compact)
+          FloatingActionButton.small(
+            heroTag: label,
+            onPressed: onPressed,
+            backgroundColor: color,
+            child: Icon(icon, color: iconColor, size: 20),
+          )
+        else
+          FloatingActionButton(
+            heroTag: label,
+            onPressed: onPressed,
+            backgroundColor: color,
+            child: Icon(icon, color: iconColor),
+          ),
+        SizedBox(height: compact ? 4 : 6),
+        Text(
+          label,
+          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+            fontSize: compact ? 11 : null,
+          ),
         ),
-        const SizedBox(height: 6),
-        Text(label, style: Theme.of(context).textTheme.bodySmall),
       ],
     );
   }

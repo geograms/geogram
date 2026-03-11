@@ -2679,8 +2679,8 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, EmailHandlerMixin,
       } else if (_isPlaceDetailsPath(path) && method == 'GET') {
         // /api/places/{callsign}/{folderName} - place details
         await _handlePlaceDetails(request);
-      } else if (_isCallsignApiPath(path)) {
-        // /{callsign}/api/* - proxy to connected device
+      } else if (_isCallsignApiPath(path) || _isCallsignMeetPath(path)) {
+        // /{callsign}/api/* or /{callsign}/meet/* - proxy to connected device
         await _handleCallsignApiProxy(request);
       } else if (isBlogPath(path)) {
         await handleBlogRequest(request);
@@ -6811,12 +6811,17 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, EmailHandlerMixin,
     return regex.hasMatch(path);
   }
 
+  bool _isCallsignMeetPath(String path) {
+    final regex = RegExp(r'^/([A-Za-z0-9]+)/meet/');
+    return regex.hasMatch(path);
+  }
+
   /// Handle /{callsign}/api/* requests - proxy to connected device
   Future<void> _handleCallsignApiProxy(HttpRequest request) async {
     final path = request.uri.path;
 
-    // Parse path: /{callsign}/api/{endpoint}
-    final regex = RegExp(r'^/([A-Za-z0-9]+)(/api/.*)$');
+    // Parse path: /{callsign}/api/{endpoint} or /{callsign}/meet/{endpoint}
+    final regex = RegExp(r'^/([A-Za-z0-9]+)/(api|meet)/(.*)$');
     final match = regex.firstMatch(path);
 
     if (match == null) {
@@ -6827,7 +6832,11 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, EmailHandlerMixin,
     }
 
     final callsign = match.group(1)!;
-    final apiPath = match.group(2)!; // /api/{endpoint}
+    final kind = match.group(2)!;
+    final remainingPath = match.group(3)!;
+    final apiPath = kind == 'meet'
+        ? '/api/meet/$remainingPath'
+        : '/api/$remainingPath';
 
     // Find the client by callsign (case-insensitive)
     PureConnectedClient? foundClient;

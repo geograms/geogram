@@ -172,13 +172,17 @@ class _ConferenceHomePageState extends State<ConferenceHomePage> {
     }
   }
 
-  void _openArchive(ConferenceArchiveEntry entry) {
-    Navigator.push(
+  Future<void> _openArchive(ConferenceArchiveEntry entry) async {
+    await Navigator.push(
       context,
       MaterialPageRoute(
         builder: (_) => ConferenceArchiveDetailPage(entry: entry),
       ),
     );
+    if (!mounted) {
+      return;
+    }
+    await _loadHistory();
   }
 
   @override

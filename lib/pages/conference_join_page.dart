@@ -59,11 +59,12 @@ class _ConferenceJoinPageState extends State<ConferenceJoinPage> {
           final wsScheme = uri.scheme == 'https' ? 'wss' : 'ws';
           final wsUrl = '$wsScheme://${uri.host}:${uri.port}/meet/ws';
           await _conferenceService.joinLan(wsUrl, participantRole: _joinRole);
-        } else if (segments.length == 3 && segments[1] == 'meet') {
-          final callsign = segments[0];
-          final code = segments[2];
-          final roomId = '$code@$callsign';
-          await _conferenceService.discoverAndJoin(roomId, participantRole: _joinRole);
+        } else if (segments.length >= 3 &&
+            segments[segments.length - 2] == 'meet') {
+          await _conferenceService.joinStationMeetUrl(
+            uri,
+            participantRole: _joinRole,
+          );
         } else {
           throw ArgumentError('Unrecognized URL format: $input');
         }

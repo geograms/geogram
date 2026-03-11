@@ -1238,6 +1238,16 @@ class DebugController {
         'params': {},
       },
       {
+        'action': 'conference_start_recording',
+        'description': 'Start recording the current meeting (host only)',
+        'params': {},
+      },
+      {
+        'action': 'conference_stop_recording',
+        'description': 'Stop recording the current meeting (host only)',
+        'params': {},
+      },
+      {
         'action': 'conference_request_screen_share',
         'description':
             'Request host permission to share the local screen (joiner only)',
@@ -2070,6 +2080,12 @@ class DebugController {
       case 'conference_stop_screen_share':
         return _conferenceStopScreenShare();
 
+      case 'conference_start_recording':
+        return _conferenceStartRecording();
+
+      case 'conference_stop_recording':
+        return _conferenceStopRecording();
+
       case 'conference_request_screen_share':
         return _conferenceRequestScreenShare();
 
@@ -2186,9 +2202,12 @@ class DebugController {
       'remote_audio_stream_count': cs.remoteAudioStreams.length,
       'remote_screen_stream_count': cs.remoteScreenStream == null ? 0 : 1,
       'local_screen_sharing': cs.isLocalScreenSharing,
+      'recording': cs.recordingStatus.toJson(),
       'active_screen_sharer': cs.activeScreenSharer,
       'room': cs.room?.toJson(),
+      'archive': cs.archiveEntry?.toJson(),
       'chat_transcript_path': cs.chatTranscriptPath,
+      'archive_path': cs.archiveEntry?.relativePath,
       'pending_speaker_requests': cs.pendingSpeakerRequests,
       'pending_screen_share_requests': cs.pendingScreenShareRequests,
       'chat_messages': cs.chatMessages
@@ -2255,6 +2274,33 @@ class DebugController {
         'success': true,
         'message': 'Screen sharing stopped',
         'active_screen_sharer': ConferenceService().activeScreenSharer,
+      };
+    } catch (e) {
+      return {'success': false, 'error': e.toString()};
+    }
+  }
+
+  Future<Map<String, dynamic>> _conferenceStartRecording() async {
+    try {
+      await ConferenceService().startRecording();
+      return {
+        'success': true,
+        'message': 'Meeting recording started',
+        'recording': ConferenceService().recordingStatus.toJson(),
+      };
+    } catch (e) {
+      return {'success': false, 'error': e.toString()};
+    }
+  }
+
+  Future<Map<String, dynamic>> _conferenceStopRecording() async {
+    try {
+      await ConferenceService().stopRecording();
+      return {
+        'success': true,
+        'message': 'Meeting recording stopped',
+        'recording': ConferenceService().recordingStatus.toJson(),
+        'archive': ConferenceService().archiveEntry?.toJson(),
       };
     } catch (e) {
       return {'success': false, 'error': e.toString()};

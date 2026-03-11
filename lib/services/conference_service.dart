@@ -19,14 +19,17 @@ import 'package:http/http.dart' as http;
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 
 import '../models/chat_message.dart';
-import 'conference_chat_store.dart';
+import '../models/conference_archive_entry.dart';
+import 'conference_archive_service.dart';
 import 'conference_host_peer_manager.dart';
 import 'conference_participant_peer_manager.dart';
 import 'conference_peer_manager.dart';
+import 'conference_recording_service.dart';
 import 'conference_signaling_server.dart';
 import 'devices_service.dart';
 import 'log_service.dart';
 import 'profile_service.dart';
+import 'station_service.dart';
 import 'websocket_service.dart';
 import 'webrtc_config.dart';
 
@@ -141,7 +144,10 @@ class ConferenceService {
 
   // Station-mode subscription
   StreamSubscription? _stationSubscription;
-  final ConferenceChatStore _chatStore = ConferenceChatStore();
+  final ConferenceArchiveService _archiveService = ConferenceArchiveService();
+  final ConferenceRecordingService _recordingService =
+      ConferenceRecordingService();
+  ConferenceArchiveEntry? _archiveEntry;
   final List<ChatMessage> _chatMessages = [];
   final Set<String> _chatMessageIds = {};
   Future<void> _messageQueue = Future<void>.value();
@@ -157,8 +163,12 @@ class ConferenceService {
   ConferenceState get state => _state;
   bool get isActive => _state == ConferenceState.active;
   List<ChatMessage> get chatMessages => List.unmodifiable(_chatMessages);
-  String? get chatTranscriptPath =>
-      _room == null ? null : _chatStore.transcriptAbsolutePath(_room!.roomId);
+  String? get chatTranscriptPath => _archiveEntry == null
+      ? null
+      : _archiveService.transcriptAbsolutePath(_archiveEntry!);
+  ConferenceArchiveEntry? get archiveEntry => _archiveEntry;
+  ConferenceRecordingStatus get recordingStatus => _recordingService.status;
+  bool get isRecording => _recordingService.isRecording;
   MediaStream? get localScreenStream {
     if (_hostPeerManager != null) {
       return _hostPeerManager!.localScreenStream;
@@ -273,6 +283,7 @@ class ConferenceService {
       participantRole:
           ConferenceParticipantRole.speaker, // Host is always a speaker
     );
+    await _ensureArchiveForRoom();
     await _loadStoredChatMessages();
 
     // Start host peer manager (SFU)
@@ -319,12 +330,95 @@ class ConferenceService {
     try {
       final uri = Uri.parse(stationUrl);
       final scheme = uri.scheme == 'wss' ? 'https' : 'http';
-      final host = uri.host;
       final code = roomCode ?? '';
-      return '$scheme://$host/${room.hostCallsign}/meet/$code';
+      final preservedPathSegments = uri.pathSegments.where((segment) {
+        if (segment.isEmpty) {
+          return false;
+        }
+        return segment.toLowerCase() != 'ws';
+      }).toList();
+      final pathSegments = <String>[
+        ...preservedPathSegments,
+        room.hostCallsign,
+        'meet',
+        code,
+      ];
+      return Uri(
+        scheme: scheme,
+        host: uri.host,
+        port: uri.hasPort ? uri.port : null,
+        pathSegments: pathSegments,
+      ).toString();
     } catch (_) {
       return null;
     }
+  }
+
+  Future<void> joinStationMeetUrl(
+    Uri meetUri, {
+    ConferenceParticipantRole participantRole =
+        ConferenceParticipantRole.listener,
+  }) async {
+    final segments = meetUri.pathSegments;
+    if (segments.length < 3 || segments[segments.length - 2] != 'meet') {
+      throw ArgumentError('Unrecognized meeting URL format: $meetUri');
+    }
+
+    final callsign = segments[segments.length - 3];
+    final code = segments.last;
+    final roomId = '$code@$callsign';
+    final targetStationUri = _stationUriFromMeetUri(meetUri);
+    final currentStationUrl = WebSocketService().connectedUrl;
+    final currentStationUri = currentStationUrl == null
+        ? null
+        : _normalizeStationUri(Uri.parse(currentStationUrl));
+
+    if (currentStationUri == null ||
+        !_isSameStationEndpoint(currentStationUri, targetStationUri)) {
+      final connected = await StationService().connectStation(
+        targetStationUri.toString(),
+      );
+      if (!connected) {
+        throw StateError(
+          'Failed to connect to station ${targetStationUri.host}',
+        );
+      }
+    }
+
+    await joinStation(roomId, participantRole: participantRole);
+  }
+
+  Uri _stationUriFromMeetUri(Uri meetUri) {
+    final pathSegments = meetUri.pathSegments;
+    final prefixSegments = pathSegments.length >= 3
+        ? pathSegments.sublist(0, pathSegments.length - 3)
+        : const <String>[];
+    return _normalizeStationUri(
+      meetUri.replace(
+        scheme: meetUri.scheme == 'https' ? 'wss' : 'ws',
+        pathSegments: prefixSegments,
+        query: null,
+        fragment: null,
+      ),
+    );
+  }
+
+  Uri _normalizeStationUri(Uri uri) {
+    final normalizedPathSegments = uri.pathSegments.where((segment) {
+      return segment.isNotEmpty && segment.toLowerCase() != 'ws';
+    }).toList();
+    return uri.replace(
+      pathSegments: normalizedPathSegments,
+      query: null,
+      fragment: null,
+    );
+  }
+
+  bool _isSameStationEndpoint(Uri a, Uri b) {
+    return a.scheme == b.scheme &&
+        a.host.toUpperCase() == b.host.toUpperCase() &&
+        a.port == b.port &&
+        a.path == b.path;
   }
 
   // ── Joiner: Join a conference ────────────────────────────────────
@@ -718,6 +812,45 @@ class ConferenceService {
     LogService().log('ConferenceService: Joiner stopped screen sharing');
   }
 
+  Future<void> startRecording() async {
+    if (_role != ConferenceRole.host) {
+      throw StateError('Only the host can record a meeting');
+    }
+    if (_archiveEntry == null) {
+      throw StateError('Meeting archive is not ready');
+    }
+
+    await _recordingService.start();
+    _eventController.add(
+      ConferenceEvent('recording_started', _myCallsign, recordingStatus.toJson()),
+    );
+  }
+
+  Future<void> stopRecording() async {
+    if (_role != ConferenceRole.host) {
+      throw StateError('Only the host can record a meeting');
+    }
+
+    final outputPath = await _recordingService.stop();
+    final archiveEntry = _archiveEntry;
+    if (archiveEntry != null &&
+        outputPath != null &&
+        outputPath.trim().isNotEmpty) {
+      _archiveEntry = await _archiveService.importFileFromExternal(
+        archiveEntry,
+        outputPath,
+        recording: true,
+      );
+    }
+    await _recordingService.clearTempRecording();
+    if (_archiveEntry != null) {
+      await _syncArchiveMetadata();
+    }
+    _eventController.add(
+      ConferenceEvent('recording_stopped', _myCallsign, recordingStatus.toJson()),
+    );
+  }
+
   Future<void> sendChatMessage(String content) async {
     final room = _room;
     final trimmed = content.trim();
@@ -859,6 +992,16 @@ class ConferenceService {
     _setState(ConferenceState.ending);
 
     try {
+      if (_role == ConferenceRole.host &&
+          (_recordingService.isRecording ||
+              _recordingService.status.tempOutputPath != null)) {
+        try {
+          await stopRecording();
+        } catch (e) {
+          LogService().log('ConferenceService: Failed to stop recording: $e');
+        }
+      }
+
       // Clean up signaling
       if (_role == ConferenceRole.host) {
         if (_room?.signalingMode == ConferenceSignalingMode.station) {
@@ -932,6 +1075,11 @@ class ConferenceService {
         );
       }
       _participantPeerManager = null;
+      try {
+        await _finalizeArchive();
+      } catch (e) {
+        LogService().log('ConferenceService: Failed to finalize archive: $e');
+      }
 
       _room = null;
       _role = null;
@@ -1170,6 +1318,7 @@ class ConferenceService {
       participantRole: myRole,
     );
     _setActiveScreenSharer(activeScreenSharer);
+    await _ensureArchiveForRoom();
     await _loadStoredChatMessages();
 
     // In star topology, participant only connects to host
@@ -1198,6 +1347,7 @@ class ConferenceService {
       callsign: callsign,
       participantRole: participantRole,
     );
+    unawaited(_syncArchiveMetadata());
     _eventController.add(ConferenceEvent('participant_joined', callsign));
     if (_role == ConferenceRole.host) {
       _sendChatHistoryToParticipant(callsign);
@@ -1235,6 +1385,7 @@ class ConferenceService {
       }
     }
 
+    unawaited(_syncArchiveMetadata());
     _eventController.add(ConferenceEvent('peer_disconnected', callsign));
     LogService().log('ConferenceService: $callsign left');
   }
@@ -1269,6 +1420,7 @@ class ConferenceService {
       }
     }
 
+    unawaited(_syncArchiveMetadata());
     _eventController.add(ConferenceEvent('role_changed', callsign, newRole));
     LogService().log('ConferenceService: $callsign role changed to $newRole');
   }
@@ -1431,6 +1583,7 @@ class ConferenceService {
       _setActiveScreenSharer(null);
       _broadcastScreenShareState(callsign, active: false);
     }
+    unawaited(_syncArchiveMetadata());
     LogService().log(
       'ConferenceService: Cleared remote screen sharing from $callsign',
     );
@@ -1520,6 +1673,7 @@ class ConferenceService {
     _chatMessages.clear();
     _chatMessageIds.clear();
     _messageQueue = Future<void>.value();
+    _archiveEntry = null;
     _screenShareStartOperation = null;
     _screenShareApproved = false;
   }
@@ -1563,6 +1717,7 @@ class ConferenceService {
         participant.hasPendingScreenShareRequest = false;
       }
     }
+    unawaited(_syncArchiveMetadata());
   }
 
   Future<void> _prepareAudioRouting() async {
@@ -1689,13 +1844,12 @@ class ConferenceService {
   }
 
   Future<void> _loadStoredChatMessages() async {
-    final room = _room;
-    if (room == null) return;
+    final archiveEntry = _archiveEntry;
+    if (archiveEntry == null) {
+      return;
+    }
 
-    final stored = await _chatStore.loadMessages(
-      room.roomId,
-      roomName: room.roomName,
-    );
+    final stored = await _archiveService.loadMessages(archiveEntry);
     _chatMessages
       ..clear()
       ..addAll(stored);
@@ -1704,14 +1858,20 @@ class ConferenceService {
       ..addAll(stored.map(_chatMessageKey));
     if (stored.isNotEmpty) {
       _eventController.add(
-        ConferenceEvent('chat_history_loaded', room.hostCallsign, stored),
+        ConferenceEvent(
+          'chat_history_loaded',
+          archiveEntry.hostCallsign,
+          stored,
+        ),
       );
     }
   }
 
   Future<void> _storeIncomingChatMessage(ChatMessage message) async {
-    final room = _room;
-    if (room == null) return;
+    final archiveEntry = _archiveEntry;
+    if (archiveEntry == null) {
+      return;
+    }
 
     final key = _chatMessageKey(message);
     if (!_chatMessageIds.add(key)) {
@@ -1720,7 +1880,7 @@ class ConferenceService {
 
     _chatMessages.add(message);
     _chatMessages.sort();
-    await _chatStore.saveMessage(room.roomId, room.roomName, message);
+    _archiveEntry = await _archiveService.saveMessage(archiveEntry, message);
     _eventController.add(
       ConferenceEvent('conference_chat_message', message.author, message),
     );
@@ -1798,6 +1958,109 @@ class ConferenceService {
     final now = DateTime.now().microsecondsSinceEpoch;
     final rand = Random().nextInt(1 << 20);
     return '$now-${rand.toRadixString(16)}';
+  }
+
+  Future<void> _ensureArchiveForRoom() async {
+    final room = _room;
+    if (room == null) {
+      return;
+    }
+    final meetUrls =
+        room.signalingMode == ConferenceSignalingMode.lan &&
+            _role == ConferenceRole.host
+        ? await getMeetUrls()
+        : const <String>[];
+
+    _archiveEntry = await _archiveService.ensureArchive(
+      roomId: room.roomId,
+      roomName: room.roomName,
+      hostCallsign: room.hostCallsign,
+      localCallsign: _myCallsign,
+      startedAt: room.startTime,
+      hostedByMe: _role == ConferenceRole.host,
+      participants: room.participants.keys.toList(),
+      speakers: room.speakers
+          .map((participant) => participant.callsign)
+          .toList(),
+      activeScreenSharer: room.activeScreenSharerCallsign,
+      signalingMode: room.signalingMode.name,
+      stationMeetUrl: stationMeetUrl,
+      meetUrls: meetUrls,
+    );
+  }
+
+  Future<void> _syncArchiveMetadata() async {
+    final room = _room;
+    final archiveEntry = _archiveEntry;
+    if (room == null || archiveEntry == null) {
+      return;
+    }
+    final meetUrls =
+        room.signalingMode == ConferenceSignalingMode.lan &&
+            _role == ConferenceRole.host
+        ? await getMeetUrls()
+        : archiveEntry.meetUrls;
+
+    _archiveEntry = await _archiveService.updateArchive(
+      archiveEntry,
+      roomName: room.roomName,
+      hostCallsign: room.hostCallsign,
+      localCallsign: _myCallsign,
+      hostedByMe: _role == ConferenceRole.host,
+      participants: _mergeArchivePeople(
+        archiveEntry.participants,
+        room.participants.keys,
+      ),
+      speakers: _mergeArchivePeople(
+        archiveEntry.speakers,
+        room.speakers.map((participant) => participant.callsign),
+      ),
+      activeScreenSharer: room.activeScreenSharerCallsign,
+      clearActiveScreenSharer: room.activeScreenSharerCallsign == null,
+      signalingMode: room.signalingMode.name,
+      stationMeetUrl: stationMeetUrl,
+      meetUrls: meetUrls,
+    );
+  }
+
+  Future<void> _finalizeArchive() async {
+    final room = _room;
+    final archiveEntry = _archiveEntry;
+    if (room == null || archiveEntry == null) {
+      return;
+    }
+
+    _archiveEntry = await _archiveService.markEnded(
+      archiveEntry,
+      participants: _mergeArchivePeople(
+        archiveEntry.participants,
+        room.participants.keys,
+      ),
+      speakers: _mergeArchivePeople(
+        archiveEntry.speakers,
+        room.speakers.map((participant) => participant.callsign),
+      ),
+    );
+    if (room.activeScreenSharerCallsign == null && _archiveEntry != null) {
+      _archiveEntry = await _archiveService.updateArchive(
+        _archiveEntry!,
+        activeScreenSharer: null,
+        clearActiveScreenSharer: true,
+        endedAt: _archiveEntry!.endedAt,
+      );
+    }
+  }
+
+  List<String> _mergeArchivePeople(
+    Iterable<String> existing,
+    Iterable<String> current,
+  ) {
+    final merged = <String>{
+      ...existing,
+      ...current,
+    }.toList()
+      ..sort();
+    return merged;
   }
 
   WebRTCConfig _buildConfig() {

@@ -9484,6 +9484,37 @@ await server.stop();
 - `relayFromHost(message)` — relay a host-originated WebRTC signal to one participant
 - `sendRoomMessageFromHost(message, {toCallsign})` — broadcast or direct-send room control/chat messages from the host
 
+### ConferenceArchiveService
+
+**File:** `lib/services/conference_archive_service.dart`
+
+Meeting archive/history manager backed by `ProfileStorage`. Creates and updates `meetings/archive/{YYYY-MM-DD}_{meetingname}/`, persists `meeting.json`, stores transcripts, and imports recordings or future shared assets without assuming that the profile is stored as plain files on disk.
+
+**Key methods:**
+- `ensureArchive(...)` — create or reopen the archive for an active meeting
+- `updateArchive(entry, ...)` — refresh meeting metadata and asset counts
+- `markEnded(entry, ...)` — mark a meeting as ended for history views
+- `listArchives()` — enumerate archived meetings for the Meetings home page
+- `loadMessages(entry)` / `saveMessage(entry, message)` — transcript persistence helpers
+- `importFileFromExternal(entry, externalPath, {recording})` — import a recording or other exported file into the archive
+- `exportArchiveFileToTemporaryPath(entry, relativeFilePath)` — export encrypted-profile assets for viewing
+
+### ConferenceRecordingService
+
+**File:** `lib/services/conference_recording_service.dart`
+
+Host-side recording helper for Meetings. The current implementation targets Linux desktop hosts and uses `ffmpeg` to capture the screen plus PulseAudio monitor/microphone sources before the result is imported into the meeting archive.
+
+**Key methods:**
+- `isSupported()` — capability check for the current host platform
+- `start()` — begin recording the current meeting
+- `stop()` — stop recording and return the temporary output path
+- `clearTempRecording()` — remove temporary output after archive import
+
+**Status model:**
+- `ConferenceRecordingStatus.state` — `idle`, `starting`, `recording`, `stopping`, or `failed`
+- `ConferenceRecordingStatus.tempOutputPath` — temporary recording file before archive import
+
 ### ConferenceHostPeerManager
 
 **File:** `lib/services/conference_host_peer_manager.dart`

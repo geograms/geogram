@@ -840,6 +840,8 @@ No authentication required.
 - **LAN**: `http://ip:port/meet/XXXX` — the 4-letter code, no callsign needed (IP is the direct connection)
 - **Station**: `http://p2p.radio/CALLSIGN/meet/XXXX` — includes callsign for routing through the station
 
+Meeting history is archived per profile under `meetings/archive/{YYYY-MM-DD}_{meetingname}/`. Each archive contains `meeting.json`, the meeting chat transcript, and imported recordings under `recordings/`.
+
 ---
 
 ### Clients
@@ -2726,6 +2728,8 @@ Triggers a debug action.
 | `conference_request_speaker` | Request speaker access from the host (listener only) | None |
 | `conference_start_screen_share` | Start sharing the local screen in the current meeting | None |
 | `conference_stop_screen_share` | Stop sharing the local screen in the current meeting | None |
+| `conference_start_recording` | Start recording the current meeting (host only, Linux desktop host) | None |
+| `conference_stop_recording` | Stop recording the current meeting (host only) and import it into the meeting archive | None |
 | `conference_request_screen_share` | Request host permission to share the local screen (joiner only) | None |
 | `conference_send_chat` | Send a text message to the meeting chat | `content` (required): Message text |
 | `conference_promote` | Promote a listener to speaker (host only) | `callsign` (required): Callsign of participant to promote |

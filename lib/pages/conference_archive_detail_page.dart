@@ -4,11 +4,8 @@ import 'package:flutter/material.dart';
 
 import '../models/chat_message.dart';
 import '../models/conference_archive_entry.dart';
-import '../services/app_service.dart';
 import '../services/conference_archive_service.dart';
 import '../services/file_launcher_service.dart';
-import '../services/i18n_service.dart';
-import 'files_browser_page.dart';
 import '../widgets/message_list_widget.dart';
 
 class ConferenceArchiveDetailPage extends StatefulWidget {
@@ -25,7 +22,6 @@ class _ConferenceArchiveDetailPageState
     extends State<ConferenceArchiveDetailPage> {
   final _archiveService = ConferenceArchiveService();
   final _fileLauncher = FileLauncherService();
-  final _i18n = I18nService();
 
   ConferenceArchiveEntry? _entry;
   List<ChatMessage> _messages = const <ChatMessage>[];
@@ -69,30 +65,6 @@ class _ConferenceArchiveDetailPageState
         _error = '$error';
       });
     }
-  }
-
-  void _openArchiveBrowser() {
-    final storage = AppService().profileStorage;
-    if (storage?.isEncrypted ?? false) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            'Encrypted meeting archives are available through the Files and Recordings tabs.',
-          ),
-        ),
-      );
-      return;
-    }
-    final archivePath = _archiveService.archiveAbsolutePath(_currentEntry);
-    Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => FilesBrowserPage(
-          appPath: archivePath,
-          appTitle: _currentEntry.roomName,
-          i18n: _i18n,
-        ),
-      ),
-    );
   }
 
   Future<void> _openAsset(ConferenceArchiveAsset asset) async {
@@ -191,17 +163,13 @@ class _ConferenceArchiveDetailPageState
             _InfoRow(label: 'Messages', value: '${entry.messageCount}'),
             _InfoRow(label: 'Files', value: '${entry.fileCount}'),
             _InfoRow(label: 'Recordings', value: '${entry.recordingCount}'),
+            _InfoRow(label: 'Archive', value: entry.relativePath),
             if (entry.stationMeetUrl != null &&
                 entry.stationMeetUrl!.isNotEmpty)
               _InfoRow(label: 'Meeting URL', value: entry.stationMeetUrl!),
             if (entry.meetUrls.isNotEmpty)
               _InfoRow(label: 'URLs', value: entry.meetUrls.join('\n')),
           ],
-        ),
-        FilledButton.icon(
-          onPressed: _openArchiveBrowser,
-          icon: const Icon(Icons.folder_open),
-          label: const Text('Browse Archive Folder'),
         ),
       ],
     );
@@ -250,12 +218,6 @@ class _ConferenceArchiveDetailPageState
           openingDisabled: _openingAsset,
           onOpenAsset: _openAsset,
         ),
-        const SizedBox(height: 16),
-        OutlinedButton.icon(
-          onPressed: _openArchiveBrowser,
-          icon: const Icon(Icons.folder_open),
-          label: const Text('Browse Archive Folder'),
-        ),
       ],
     );
   }
@@ -273,11 +235,6 @@ class _ConferenceArchiveDetailPageState
             icon: const Icon(Icons.refresh),
             tooltip: 'Refresh archive',
             onPressed: _loadArchive,
-          ),
-          IconButton(
-            icon: const Icon(Icons.folder_open),
-            tooltip: 'Browse archive files',
-            onPressed: _openArchiveBrowser,
           ),
         ],
       ),
