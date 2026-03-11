@@ -208,6 +208,14 @@ class ConferenceParticipantPeerManager {
         init: RTCRtpTransceiverInit(direction: TransceiverDirection.RecvOnly),
       );
     }
+    if (_localScreenStream == null) {
+      // Late joiners must advertise a recv-only video m-line so an already
+      // active host screen share can be attached in the initial answer.
+      await peer.peerConnection!.addTransceiver(
+        kind: RTCRtpMediaType.RTCRtpMediaTypeVideo,
+        init: RTCRtpTransceiverInit(direction: TransceiverDirection.RecvOnly),
+      );
+    }
 
     // Add local audio tracks only if speaker
     if (_role == SfuParticipantRole.speaker && _localStream != null) {

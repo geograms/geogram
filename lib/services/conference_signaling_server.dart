@@ -577,6 +577,8 @@ class ConferenceSignalingServer {
       ..putIfAbsent('room_id', () => roomId)
       ..putIfAbsent('from_callsign', () => hostCallsign);
 
+    _applyHostRoomStateMessage(payload);
+
     if (toCallsign != null && toCallsign.isNotEmpty) {
       final target = _participants.values
           .cast<SignalingParticipant?>()
@@ -596,6 +598,27 @@ class ConferenceSignalingServer {
     }
 
     _broadcast(jsonEncode(payload));
+  }
+
+  void _applyHostRoomStateMessage(Map<String, dynamic> message) {
+    final type = message['type'] as String?;
+    switch (type) {
+      case 'conference_screen_share_state':
+        final callsign = message['callsign'] as String?;
+        final active = message['active'] == true;
+        if (active && callsign != null && callsign.isNotEmpty) {
+          _activeScreenSharerCallsign = callsign;
+        } else if (!active) {
+          _activeScreenSharerCallsign = null;
+        }
+      case 'conference_screen_share_stop':
+        final callsign = message['callsign'] as String?;
+        if (callsign == null ||
+            _activeScreenSharerCallsign?.toLowerCase() ==
+                callsign.toLowerCase()) {
+          _activeScreenSharerCallsign = null;
+        }
+    }
   }
 
   /// Broadcast a host-originated role change to all participants.

@@ -292,7 +292,17 @@ else
 fi
 
 echo ""
-echo "[5] Joining the room from the temporary guest through the station relay..."
+echo "[5] Starting direct screen sharing from the host before join..."
+HOST_SCREEN_RESPONSE="$(post "$HOST_API" '{"action":"conference_start_screen_share"}')"
+if echo "$HOST_SCREEN_RESPONSE" | json_field "data['success']" | grep -qx "True"; then
+  ok "host started screen sharing before the guest joined"
+else
+  fail "host could not start screen sharing before the guest joined"
+  echo "$HOST_SCREEN_RESPONSE"
+fi
+
+echo ""
+echo "[6] Joining the room from the temporary guest through the station relay..."
 JOIN_RESPONSE="$(post "$GUEST_API" "{\"action\":\"conference_join\",\"room_id\":\"${ROOM_ID}\",\"role\":\"listener\"}")"
 if echo "$JOIN_RESPONSE" | json_field "data['success']" | grep -qx "True"; then
   ok "temporary guest accepted the station join request"
@@ -302,7 +312,7 @@ else
 fi
 
 echo ""
-echo "[6] Waiting for both station participants to appear..."
+echo "[7] Waiting for both station participants to appear and receive the active host screen share..."
 JOINED=0
 HOST_STATUS=""
 GUEST_STATUS=""
@@ -354,7 +364,15 @@ if not host_participants.get(os.environ['GUEST_CALLSIGN'], {}).get('is_connected
     sys.exit(1)
 if not guest_participants.get(os.environ['HOST_CALLSIGN'], {}).get('is_connected'):
     sys.exit(1)
+if host.get('active_screen_sharer') != os.environ['HOST_CALLSIGN']:
+    sys.exit(1)
+if guest.get('active_screen_sharer') != os.environ['HOST_CALLSIGN']:
+    sys.exit(1)
+if not host.get('local_screen_sharing'):
+    sys.exit(1)
 if guest.get('remote_audio_stream_count', 0) < 1:
+    sys.exit(1)
+if guest.get('remote_screen_stream_count', 0) < 1:
     sys.exit(1)
 PY
   then
@@ -365,15 +383,53 @@ PY
 done
 
 if [ "$JOINED" -eq 1 ]; then
-  ok "station host and guest agree on the two meeting participants"
+  ok "station host and guest agree on the two meeting participants, and the late joiner received the active host screen share"
 else
-  fail "station meeting never converged to two shared participants"
+  fail "station meeting never converged with the pre-existing host screen share"
   echo "Host status: $HOST_STATUS"
   echo "Guest status: $GUEST_STATUS"
 fi
 
 echo ""
-echo "[7] Requesting speaker access from the guest..."
+echo "[8] Stopping the pre-join host screen share and waiting for cleanup..."
+post "$HOST_API" '{"action":"conference_stop_screen_share"}' >/dev/null || true
+PREJOIN_HOST_SCREEN_STOPPED=0
+for _ in $(seq 1 30); do
+  HOST_STATUS="$(post "$HOST_API" '{"action":"conference_status"}')"
+  GUEST_STATUS="$(post "$GUEST_API" '{"action":"conference_status"}')"
+  if HOST_STATUS="$HOST_STATUS" GUEST_STATUS="$GUEST_STATUS" python3 - <<'PY'
+import json
+import os
+import sys
+
+host = json.loads(os.environ['HOST_STATUS'])
+guest = json.loads(os.environ['GUEST_STATUS'])
+if host.get('active_screen_sharer') is not None:
+    sys.exit(1)
+if guest.get('active_screen_sharer') is not None:
+    sys.exit(1)
+if host.get('local_screen_sharing'):
+    sys.exit(1)
+if guest.get('remote_screen_stream_count', 0) != 0:
+    sys.exit(1)
+PY
+  then
+    PREJOIN_HOST_SCREEN_STOPPED=1
+    break
+  fi
+  sleep 1
+done
+
+if [ "$PREJOIN_HOST_SCREEN_STOPPED" -eq 1 ]; then
+  ok "pre-join host screen share stopped cleanly"
+else
+  fail "pre-join host screen share did not stop cleanly"
+  echo "Host status: $HOST_STATUS"
+  echo "Guest status: $GUEST_STATUS"
+fi
+
+echo ""
+echo "[9] Requesting speaker access from the guest..."
 REQUEST_RESPONSE="$(post "$GUEST_API" '{"action":"conference_request_speaker"}')"
 if echo "$REQUEST_RESPONSE" | json_field "data['success']" | grep -qx "True"; then
   ok "guest requested speaker access"
@@ -383,7 +439,7 @@ else
 fi
 
 echo ""
-echo "[8] Waiting for the host to see the guest speaker request..."
+echo "[10] Waiting for the host to see the guest speaker request..."
 REQUESTED=0
 for _ in $(seq 1 20); do
   HOST_STATUS="$(post "$HOST_API" '{"action":"conference_status"}')"
@@ -413,7 +469,7 @@ else
 fi
 
 echo ""
-echo "[9] Promoting the guest to speaker..."
+echo "[11] Promoting the guest to speaker..."
 PROMOTE_RESPONSE="$(post "$HOST_API" "{\"action\":\"conference_promote\",\"callsign\":\"${GUEST_CALLSIGN}\"}")"
 if echo "$PROMOTE_RESPONSE" | json_field "data['success']" | grep -qx "True"; then
   ok "host promoted the guest to speaker"
@@ -423,7 +479,7 @@ else
 fi
 
 echo ""
-echo "[10] Waiting for both sides to reflect the new speaker role..."
+echo "[12] Waiting for both sides to reflect the new speaker role..."
 PROMOTED=0
 for _ in $(seq 1 20); do
   HOST_STATUS="$(post "$HOST_API" '{"action":"conference_status"}')"
@@ -475,7 +531,7 @@ else
 fi
 
 echo ""
-echo "[11] Sending a meeting chat message from the guest..."
+echo "[13] Sending a meeting chat message from the guest..."
 CHAT_TEXT="Station regression chat"
 CHAT_RESPONSE="$(post "$GUEST_API" "{\"action\":\"conference_send_chat\",\"content\":\"${CHAT_TEXT}\"}")"
 if echo "$CHAT_RESPONSE" | json_field "data['success']" | grep -qx "True"; then
@@ -486,7 +542,7 @@ else
 fi
 
 echo ""
-echo "[12] Waiting for the host transcript to persist the chat message..."
+echo "[14] Waiting for the host transcript to persist the chat message..."
 CHAT_SYNCED=0
 TRANSCRIPT_PATH=""
 for _ in $(seq 1 20); do
@@ -521,7 +577,7 @@ else
 fi
 
 echo ""
-echo "[13] Starting direct screen sharing from the host..."
+echo "[15] Starting direct screen sharing from the host..."
 HOST_SCREEN_RESPONSE="$(post "$HOST_API" '{"action":"conference_start_screen_share"}')"
 if echo "$HOST_SCREEN_RESPONSE" | json_field "data['success']" | grep -qx "True"; then
   ok "host started a direct screen share"
@@ -531,7 +587,7 @@ else
 fi
 
 echo ""
-echo "[14] Waiting for the guest to receive the host screen share..."
+echo "[16] Waiting for the guest to receive the host screen share..."
 HOST_SCREEN_ACTIVE=0
 for _ in $(seq 1 30); do
   HOST_STATUS="$(post "$HOST_API" '{"action":"conference_status"}')"
@@ -569,7 +625,7 @@ else
 fi
 
 echo ""
-echo "[15] Stopping the host screen share and waiting for cleanup..."
+echo "[17] Stopping the host screen share and waiting for cleanup..."
 post "$HOST_API" '{"action":"conference_stop_screen_share"}' >/dev/null || true
 HOST_SCREEN_STOPPED=0
 for _ in $(seq 1 30); do
@@ -607,7 +663,7 @@ else
 fi
 
 echo ""
-echo "[16] Requesting guest screen share access and approving it..."
+echo "[18] Requesting guest screen share access and approving it..."
 REQUEST_SCREEN_RESPONSE="$(post "$GUEST_API" '{"action":"conference_request_screen_share"}')"
 if echo "$REQUEST_SCREEN_RESPONSE" | json_field "data['success']" | grep -qx "True"; then
   ok "guest requested screen-share access"
@@ -653,7 +709,7 @@ else
 fi
 
 echo ""
-echo "[17] Waiting for the guest screen share to reach the host..."
+echo "[19] Waiting for the guest screen share to reach the host..."
 GUEST_SCREEN_ACTIVE=0
 for _ in $(seq 1 30); do
   HOST_STATUS="$(post "$HOST_API" '{"action":"conference_status"}')"
@@ -691,7 +747,7 @@ else
 fi
 
 echo ""
-echo "[18] Stopping the guest screen share and waiting for cleanup..."
+echo "[20] Stopping the guest screen share and waiting for cleanup..."
 post "$GUEST_API" '{"action":"conference_stop_screen_share"}' >/dev/null || true
 GUEST_SCREEN_STOPPED=0
 for _ in $(seq 1 30); do
@@ -729,7 +785,7 @@ else
 fi
 
 echo ""
-echo "[19] Verifying the local station server saw both clients..."
+echo "[21] Verifying the local station server saw both clients..."
 STATION_STATUS="$(post "$MAIN_API" '{"action":"station_server_status"}')"
 if STATION_STATUS="$STATION_STATUS" python3 - <<'PY'
 import json
@@ -750,7 +806,7 @@ else
 fi
 
 echo ""
-echo "[20] Ending the meeting and stopping the local station server..."
+echo "[22] Ending the meeting and stopping the local station server..."
 post "$HOST_API" '{"action":"conference_end"}' >/dev/null || true
 post "$GUEST_API" '{"action":"conference_end"}' >/dev/null || true
 post "$MAIN_API" '{"action":"station_server_stop"}' >/dev/null || true

@@ -145,6 +145,7 @@ class ConferenceService {
   final List<ChatMessage> _chatMessages = [];
   final Set<String> _chatMessageIds = {};
   Future<void> _messageQueue = Future<void>.value();
+  Future<void>? _screenShareStartOperation;
   bool _screenShareApproved = false;
 
   final _stateController = StreamController<ConferenceState>.broadcast();
@@ -606,6 +607,26 @@ class ConferenceService {
   }
 
   Future<void> startScreenShare() async {
+    if (localScreenStream != null) {
+      return;
+    }
+
+    final pendingOperation = _screenShareStartOperation;
+    if (pendingOperation != null) {
+      return pendingOperation;
+    }
+
+    late final Future<void> operation;
+    operation = _startScreenShareInternal().whenComplete(() {
+      if (identical(_screenShareStartOperation, operation)) {
+        _screenShareStartOperation = null;
+      }
+    });
+    _screenShareStartOperation = operation;
+    return operation;
+  }
+
+  Future<void> _startScreenShareInternal() async {
     final room = _room;
     if (room == null) {
       throw StateError('No active conference');
@@ -615,6 +636,13 @@ class ConferenceService {
         room.activeScreenSharerCallsign!.toUpperCase() !=
             _myCallsign.toUpperCase()) {
       throw StateError('Another participant is already sharing a screen');
+    }
+
+    if (_role == ConferenceRole.joiner &&
+        !_screenShareApproved &&
+        room.activeScreenSharerCallsign?.toUpperCase() !=
+            _myCallsign.toUpperCase()) {
+      throw StateError('Host approval is required before sharing your screen');
     }
 
     final stream = await _captureDisplayStream();
@@ -650,12 +678,6 @@ class ConferenceService {
     if (me == null) {
       await stream.dispose();
       throw StateError('Local participant is not registered');
-    }
-    if (!_screenShareApproved &&
-        room.activeScreenSharerCallsign?.toUpperCase() !=
-            _myCallsign.toUpperCase()) {
-      await stream.dispose();
-      throw StateError('Host approval is required before sharing your screen');
     }
 
     await _participantPeerManager!.startScreenShare(stream);
@@ -1483,6 +1505,7 @@ class ConferenceService {
     _chatMessages.clear();
     _chatMessageIds.clear();
     _messageQueue = Future<void>.value();
+    _screenShareStartOperation = null;
     _screenShareApproved = false;
   }
 
