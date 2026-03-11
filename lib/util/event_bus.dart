@@ -77,6 +77,23 @@ class EventBus {
 // Common Application Events
 // ============================================================
 
+/// Wapp module event bridged from WASM event bus
+class WappEventBridgeEvent extends AppEvent {
+  final String moduleId;
+  final String topic;
+  final String data;
+
+  WappEventBridgeEvent({
+    required this.moduleId,
+    required this.topic,
+    required this.data,
+  });
+
+  @override
+  String toString() =>
+      'WappEventBridgeEvent(module: $moduleId, topic: $topic)';
+}
+
 /// Chat message received
 class ChatMessageEvent extends AppEvent {
   final String roomId;
@@ -941,10 +958,14 @@ class EventCreatedEvent extends AppEvent {
   final String author;
   final String title;
 
+  /// Optional full event object for activity publishing.
+  final dynamic eventRecord;
+
   EventCreatedEvent({
     required this.eventId,
     required this.author,
     required this.title,
+    this.eventRecord,
   });
 
   @override

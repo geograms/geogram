@@ -16,7 +16,6 @@ import '../util/feedback_comment_utils.dart';
 import '../util/feedback_folder_utils.dart';
 import 'contact_service.dart';
 import 'profile_storage.dart';
-import 'station_activity_publisher_service.dart';
 
 /// Service for managing events, files, and reactions
 ///
@@ -336,9 +335,8 @@ class EventService {
         eventId: folderName,
         author: author,
         title: title,
+        eventRecord: event,
       ));
-
-      await StationActivityPublisherService().publishEventRecord(event);
 
       return event;
     } catch (e) {

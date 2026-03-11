@@ -82,7 +82,29 @@ mixin KarmaMixin {
       },
     );
 
+    _subscribeContentCreationKarma();
+
     log('INFO', 'Karma service started');
+  }
+
+  /// Subscribe to content-creation events and record karma.
+  void _subscribeContentCreationKarma() {
+    EventBus().on<BlogPostPublishedEvent>((event) {
+      karmaRecord(callsign: event.author, action: 'blog_published',
+          meta: {'post_id': event.postId});
+    });
+    EventBus().on<EventCreatedEvent>((event) {
+      karmaRecord(callsign: event.author, action: 'event_created',
+          meta: {'event_id': event.eventId});
+    });
+    EventBus().on<PlaceCreatedEvent>((event) {
+      karmaRecord(callsign: event.author, action: 'place_created',
+          meta: {'place_id': event.placeId});
+    });
+    EventBus().on<AlertCreatedEvent>((event) {
+      karmaRecord(callsign: event.author, action: 'alert_created',
+          meta: {'alert_id': event.alertId});
+    });
   }
 
   /// Call from onServerStop().
@@ -469,5 +491,65 @@ mixin KarmaMixin {
   /// Set previous chat message.
   void karmaSetPreviousChatMessage(String callsign, String content) {
     _karmaPreviousChatMessage[callsign.toUpperCase()] = content;
+  }
+
+  /// Record karma for a chat message (with anti-gaming validation).
+  void karmaRecordChatMessage({
+    required String callsign,
+    required String content,
+    required String roomId,
+  }) {
+    if (content.isEmpty) return;
+    final prev = karmaPreviousChatMessage(callsign);
+    if (KarmaEngine.isValidChatMessage(content, prev)) {
+      karmaSetPreviousChatMessage(callsign, content);
+      karmaRecord(callsign: callsign, action: 'chat_message',
+          meta: {'room_id': roomId, 'msg_length': content.length});
+    }
+  }
+
+  /// Record karma for feedback actions (likes, comments, verifications).
+  void recordFeedbackKarma(
+    String action,
+    String contentType,
+    String contentId,
+    Map<String, dynamic> body,
+    String? ownerCallsign,
+  ) {
+    // Get the actor's callsign from the NOSTR event in the body
+    String? actorNpub;
+    try {
+      final pubkey = body['pubkey'] as String?;
+      if (pubkey != null && pubkey.isNotEmpty) {
+        actorNpub = NostrCrypto.encodeNpub(pubkey);
+      }
+    } catch (_) {}
+
+    String? actorCallsign;
+    if (actorNpub != null) {
+      actorCallsign = Nip05RegistryService().getRegistrationByNpub(actorNpub)?.callsign;
+    }
+    if (actorCallsign == null) return;
+
+    // Block self-interaction
+    if (ownerCallsign != null && KarmaEngine.isSelfInteraction(actorCallsign, ownerCallsign)) {
+      return;
+    }
+
+    // Award karma to the actor
+    final giverAction = KarmaEngine.feedbackToKarmaAction(action, isGiver: true);
+    if (giverAction != null) {
+      karmaRecord(callsign: actorCallsign, action: giverAction,
+          meta: {'content_type': contentType, 'content_id': contentId});
+    }
+
+    // Award karma to the content owner
+    if (ownerCallsign != null) {
+      final receiverAction = KarmaEngine.feedbackToKarmaAction(action, isGiver: false);
+      if (receiverAction != null) {
+        karmaRecord(callsign: ownerCallsign, action: receiverAction,
+            meta: {'content_type': contentType, 'content_id': contentId, 'from': actorCallsign});
+      }
+    }
   }
 }

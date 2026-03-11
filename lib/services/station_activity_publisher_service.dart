@@ -102,6 +102,7 @@ class StationActivityPublisherService {
   final StationService _stationService = StationService();
 
   EventSubscription<ConnectionStateChangedEvent>? _connectionSubscription;
+  EventSubscription<EventCreatedEvent>? _eventCreatedSubscription;
   Timer? _processingTimer;
   bool _initialized = false;
   bool _isProcessing = false;
@@ -118,6 +119,11 @@ class StationActivityPublisherService {
         unawaited(processQueue());
       }
     });
+    _eventCreatedSubscription ??= EventBus().on<EventCreatedEvent>((event) {
+      if (event.eventRecord is Event) {
+        unawaited(publishEventRecord(event.eventRecord as Event));
+      }
+    });
     _processingTimer ??= Timer.periodic(
       _processInterval,
       (_) => unawaited(processQueue()),
@@ -129,6 +135,8 @@ class StationActivityPublisherService {
   Future<void> dispose() async {
     _connectionSubscription?.cancel();
     _connectionSubscription = null;
+    _eventCreatedSubscription?.cancel();
+    _eventCreatedSubscription = null;
     _processingTimer?.cancel();
     _processingTimer = null;
     _initialized = false;
