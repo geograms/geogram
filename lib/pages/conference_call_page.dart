@@ -2,6 +2,7 @@
 library;
 
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -475,220 +476,254 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
             ),
         ],
       ),
-      body: Column(
-        children: [
-          // Room info bar
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            child: Row(
-              children: [
-                Icon(
-                  room?.signalingMode == ConferenceSignalingMode.lan
-                      ? Icons.wifi
-                      : Icons.cloud,
-                  size: 16,
-                  color: theme.colorScheme.onSurfaceVariant,
+      body: LayoutBuilder(
+        builder: (context, constraints) {
+          final screenPreviewHeight = activeScreenSharer == null
+              ? 0.0
+              : math.min(
+                  constraints.maxWidth * (9 / 16),
+                  ((constraints.maxHeight - 150).clamp(40, 220)).toDouble(),
+                );
+          final compactScreenPreview = screenPreviewHeight < 120;
+
+          return Column(
+            children: [
+              // Room info bar
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 8,
                 ),
-                const SizedBox(width: 6),
-                if (room != null)
-                  Expanded(
-                    child: InkWell(
-                      onTap: _copyShareUrl,
-                      borderRadius: BorderRadius.circular(6),
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 8,
-                          vertical: 3,
-                        ),
-                        decoration: BoxDecoration(
-                          color: theme.colorScheme.primaryContainer,
-                          borderRadius: BorderRadius.circular(6),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Flexible(
-                              child: Text(
-                                shareUrl ?? room.roomId,
-                                style: theme.textTheme.labelMedium?.copyWith(
-                                  fontWeight: FontWeight.bold,
-                                  color: theme.colorScheme.onPrimaryContainer,
-                                ),
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
-                            const SizedBox(width: 4),
-                            Icon(
-                              Icons.copy,
-                              size: 12,
-                              color: theme.colorScheme.onPrimaryContainer,
-                            ),
-                          ],
-                        ),
-                      ),
+                child: Row(
+                  children: [
+                    Icon(
+                      room?.signalingMode == ConferenceSignalingMode.lan
+                          ? Icons.wifi
+                          : Icons.cloud,
+                      size: 16,
+                      color: theme.colorScheme.onSurfaceVariant,
                     ),
-                  ),
-                const SizedBox(width: 8),
-                // Speaker/listener count
-                Icon(
-                  Icons.mic,
-                  size: 14,
-                  color: theme.colorScheme.onSurfaceVariant,
-                ),
-                const SizedBox(width: 2),
-                Text(
-                  '${room?.speakerCount ?? 0}',
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: theme.colorScheme.onSurfaceVariant,
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Icon(
-                  Icons.headphones,
-                  size: 14,
-                  color: theme.colorScheme.onSurfaceVariant,
-                ),
-                const SizedBox(width: 2),
-                Text(
-                  '${room?.listenerCount ?? 0}',
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: theme.colorScheme.onSurfaceVariant,
-                  ),
-                ),
-              ],
-            ),
-          ),
-
-          const Divider(height: 1),
-
-          if (activeScreenSharer != null)
-            Container(
-              padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    activeScreenSharer == myCallsign
-                        ? 'You are sharing your screen'
-                        : '$activeScreenSharer is sharing a screen',
-                    style: theme.textTheme.titleMedium,
-                  ),
-                  const SizedBox(height: 8),
-                  AspectRatio(
-                    aspectRatio: 16 / 9,
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(16),
-                      child: DecoratedBox(
-                        decoration: BoxDecoration(
-                          color: theme.colorScheme.surfaceContainerHighest,
-                        ),
-                        child: _screenRenderer == null
-                            ? Center(
-                                child: Text(
-                                  'Connecting screen share...',
-                                  style: theme.textTheme.bodyMedium?.copyWith(
-                                    color: theme.colorScheme.onSurfaceVariant,
+                    const SizedBox(width: 6),
+                    if (room != null)
+                      Expanded(
+                        child: InkWell(
+                          onTap: _copyShareUrl,
+                          borderRadius: BorderRadius.circular(6),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 3,
+                            ),
+                            decoration: BoxDecoration(
+                              color: theme.colorScheme.primaryContainer,
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Flexible(
+                                  child: Text(
+                                    shareUrl ?? room.roomId,
+                                    style: theme.textTheme.labelMedium
+                                        ?.copyWith(
+                                          fontWeight: FontWeight.bold,
+                                          color: theme
+                                              .colorScheme
+                                              .onPrimaryContainer,
+                                        ),
+                                    overflow: TextOverflow.ellipsis,
                                   ),
                                 ),
-                              )
-                            : RTCVideoView(_screenRenderer!),
+                                const SizedBox(width: 4),
+                                Icon(
+                                  Icons.copy,
+                                  size: 12,
+                                  color: theme.colorScheme.onPrimaryContainer,
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    const SizedBox(width: 8),
+                    // Speaker/listener count
+                    Icon(
+                      Icons.mic,
+                      size: 14,
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                    const SizedBox(width: 2),
+                    Text(
+                      '${room?.speakerCount ?? 0}',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
                       ),
                     ),
-                  ),
-                ],
+                    const SizedBox(width: 8),
+                    Icon(
+                      Icons.headphones,
+                      size: 14,
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                    const SizedBox(width: 2),
+                    Text(
+                      '${room?.listenerCount ?? 0}',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
               ),
-            ),
 
-          Expanded(
-            child: DefaultTabController(
-              length: 2,
-              child: Column(
-                children: [
-                  TabBar(
-                    tabs: [
-                      Tab(text: 'People (${participants.length})'),
-                      Tab(
-                        text:
-                            'Chat (${_conferenceService.chatMessages.length})',
+              const Divider(height: 1),
+
+              if (activeScreenSharer != null)
+                Container(
+                  padding: EdgeInsets.fromLTRB(
+                    16,
+                    compactScreenPreview ? 10 : 16,
+                    16,
+                    8,
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        activeScreenSharer == myCallsign
+                            ? 'You are sharing your screen'
+                            : '$activeScreenSharer is sharing a screen',
+                        style: compactScreenPreview
+                            ? theme.textTheme.titleSmall
+                            : theme.textTheme.titleMedium,
+                      ),
+                      SizedBox(height: compactScreenPreview ? 6 : 8),
+                      SizedBox(
+                        width: double.infinity,
+                        height: screenPreviewHeight,
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(16),
+                          child: DecoratedBox(
+                            decoration: BoxDecoration(
+                              color: theme.colorScheme.surfaceContainerHighest,
+                            ),
+                            child: _screenRenderer == null
+                                ? Center(
+                                    child: Text(
+                                      'Connecting screen share...',
+                                      style: theme.textTheme.bodyMedium
+                                          ?.copyWith(
+                                            color: theme
+                                                .colorScheme
+                                                .onSurfaceVariant,
+                                          ),
+                                    ),
+                                  )
+                                : RTCVideoView(_screenRenderer!),
+                          ),
+                        ),
                       ),
                     ],
                   ),
-                  Expanded(
-                    child: TabBarView(
-                      children: [
-                        participants.isEmpty
-                            ? Center(
-                                child: Text(
-                                  'Waiting for participants...',
-                                  style: theme.textTheme.bodyLarge?.copyWith(
-                                    color: theme.colorScheme.onSurfaceVariant,
+                ),
+
+              Expanded(
+                child: DefaultTabController(
+                  length: 2,
+                  child: Column(
+                    children: [
+                      TabBar(
+                        tabs: [
+                          Tab(text: 'People (${participants.length})'),
+                          Tab(
+                            text:
+                                'Chat (${_conferenceService.chatMessages.length})',
+                          ),
+                        ],
+                      ),
+                      Expanded(
+                        child: TabBarView(
+                          children: [
+                            participants.isEmpty
+                                ? Center(
+                                    child: Text(
+                                      'Waiting for participants...',
+                                      style: theme.textTheme.bodyLarge
+                                          ?.copyWith(
+                                            color: theme
+                                                .colorScheme
+                                                .onSurfaceVariant,
+                                          ),
+                                    ),
+                                  )
+                                : ListView.builder(
+                                    padding: const EdgeInsets.all(8),
+                                    itemCount: participants.length,
+                                    itemBuilder: (context, index) {
+                                      final p = participants[index];
+                                      final isSelf = p.callsign == myCallsign;
+                                      final isRelayPresenceOnly =
+                                          !isHost &&
+                                          !isSelf &&
+                                          p.callsign != room?.hostCallsign;
+                                      final statusLabel = isRelayPresenceOnly
+                                          ? 'In room'
+                                          : (p.isConnected
+                                                ? 'Connected'
+                                                : 'Connecting...');
+                                      return _ParticipantTile(
+                                        callsign: p.callsign,
+                                        statusLabel: statusLabel,
+                                        isConnected:
+                                            p.isConnected ||
+                                            isRelayPresenceOnly,
+                                        isMuted: p.isMuted,
+                                        isSpeaker: p.isSpeaker,
+                                        hasPendingSpeakerRequest:
+                                            p.hasPendingSpeakerRequest,
+                                        hasPendingScreenShareRequest:
+                                            p.hasPendingScreenShareRequest,
+                                        isScreenSharing: p.isScreenSharing,
+                                        isHost:
+                                            p.callsign == room?.hostCallsign,
+                                        isMe: isSelf,
+                                        canManage:
+                                            isHost &&
+                                            p.callsign != room?.hostCallsign &&
+                                            !isSelf,
+                                        onPromote: () =>
+                                            _promoteParticipant(p.callsign),
+                                        onDemote: () =>
+                                            _demoteParticipant(p.callsign),
+                                        onApproveScreenShare: () =>
+                                            _approveScreenShare(p.callsign),
+                                      );
+                                    },
+                                  ),
+                            Column(
+                              children: [
+                                Expanded(
+                                  child: MessageListWidget(
+                                    messages: _conferenceService.chatMessages,
+                                    isGroupChat: true,
                                   ),
                                 ),
-                              )
-                            : ListView.builder(
-                                padding: const EdgeInsets.all(8),
-                                itemCount: participants.length,
-                                itemBuilder: (context, index) {
-                                  final p = participants[index];
-                                  final isSelf = p.callsign == myCallsign;
-                                  final isRelayPresenceOnly =
-                                      !isHost &&
-                                      !isSelf &&
-                                      p.callsign != room?.hostCallsign;
-                                  final statusLabel = isRelayPresenceOnly
-                                      ? 'In room'
-                                      : (p.isConnected
-                                            ? 'Connected'
-                                            : 'Connecting...');
-                                  return _ParticipantTile(
-                                    callsign: p.callsign,
-                                    statusLabel: statusLabel,
-                                    isConnected:
-                                        p.isConnected || isRelayPresenceOnly,
-                                    isMuted: p.isMuted,
-                                    isSpeaker: p.isSpeaker,
-                                    hasPendingSpeakerRequest:
-                                        p.hasPendingSpeakerRequest,
-                                    hasPendingScreenShareRequest:
-                                        p.hasPendingScreenShareRequest,
-                                    isScreenSharing: p.isScreenSharing,
-                                    isHost: p.callsign == room?.hostCallsign,
-                                    isMe: isSelf,
-                                    canManage:
-                                        isHost &&
-                                        p.callsign != room?.hostCallsign &&
-                                        !isSelf,
-                                    onPromote: () =>
-                                        _promoteParticipant(p.callsign),
-                                    onDemote: () =>
-                                        _demoteParticipant(p.callsign),
-                                    onApproveScreenShare: () =>
-                                        _approveScreenShare(p.callsign),
-                                  );
-                                },
-                              ),
-                        Column(
-                          children: [
-                            Expanded(
-                              child: MessageListWidget(
-                                messages: _conferenceService.chatMessages,
-                                isGroupChat: true,
-                              ),
-                            ),
-                            MessageInputWidget(
-                              onSend: _sendChatMessage,
-                              allowFiles: false,
+                                MessageInputWidget(
+                                  onSend: _sendChatMessage,
+                                  allowFiles: false,
+                                ),
+                              ],
                             ),
                           ],
                         ),
-                      ],
-                    ),
+                      ),
+                    ],
                   ),
-                ],
+                ),
               ),
-            ),
-          ),
-        ],
+            ],
+          );
+        },
       ),
 
       // Bottom controls
