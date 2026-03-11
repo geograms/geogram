@@ -22,6 +22,7 @@ PY
 VISITOR_API="http://localhost:${VISITOR_PORT}/api/debug"
 VISITOR_STATUS_URL="http://localhost:${VISITOR_PORT}/api/status"
 VISITOR_BIN="${ROOT_DIR}/build/linux/x64/debug/bundle/geogram"
+CRASH_LOG="${HOME}/.local/share/geogram/logs/crash.txt"
 
 PASS=0
 FAIL=0
@@ -33,6 +34,7 @@ HOST_CALLSIGN=""
 ATTENDEE_CALLSIGN=""
 ROOM_ID=""
 SIGNALING_PORT=""
+CRASH_BASELINE_LINES=0
 
 ok()   { PASS=$((PASS+1)); TOTAL=$((TOTAL+1)); echo "  PASS: $1"; }
 fail() { FAIL=$((FAIL+1)); TOTAL=$((TOTAL+1)); echo "  FAIL: $1"; }
@@ -43,6 +45,49 @@ post() {
 
 get_json() {
   curl -sf "$1" 2>/dev/null
+}
+
+capture_crash_baseline() {
+  if [ -f "$CRASH_LOG" ]; then
+    CRASH_BASELINE_LINES="$(wc -l < "$CRASH_LOG")"
+  else
+    CRASH_BASELINE_LINES=0
+  fi
+}
+
+check_webrtc_cleanup_logs() {
+  local found=0
+  local pattern='No active stream to cancel|MediaStreamDisposeFailed'
+
+  if [ -f "$CRASH_LOG" ]; then
+    local crash_excerpt=""
+    if [ "$CRASH_BASELINE_LINES" -gt 0 ]; then
+      crash_excerpt="$(sed -n "$((CRASH_BASELINE_LINES + 1)),\$p" "$CRASH_LOG")"
+    else
+      crash_excerpt="$(cat "$CRASH_LOG")"
+    fi
+    if printf '%s' "$crash_excerpt" | rg -n "$pattern" >/dev/null; then
+      fail "main client crash log contains WebRTC teardown errors"
+      printf '%s\n' "$crash_excerpt" | rg -n "$pattern" || true
+      found=1
+    else
+      ok "main client crash log contains no WebRTC teardown errors"
+    fi
+  else
+    ok "main client crash log contains no WebRTC teardown errors"
+  fi
+
+  if [ -n "$VISITOR_TMPDIR" ] && [ -f "${VISITOR_TMPDIR}/visitor.log" ]; then
+    if rg -n "$pattern" "${VISITOR_TMPDIR}/visitor.log" >/dev/null; then
+      fail "visitor client log contains WebRTC teardown errors"
+      rg -n "$pattern" "${VISITOR_TMPDIR}/visitor.log" || true
+      found=1
+    else
+      ok "visitor client log contains no WebRTC teardown errors"
+    fi
+  fi
+
+  return "$found"
 }
 
 cleanup() {
@@ -83,6 +128,7 @@ ok "main debug API reachable and visitor bundle exists"
 echo ""
 echo "[1] Resetting any prior conference state..."
 post "$MAIN_API" '{"action":"conference_end"}' >/dev/null || true
+capture_crash_baseline
 ok "main desktop conference reset"
 
 echo ""
@@ -642,6 +688,7 @@ else
 fi
 
 echo ""
+check_webrtc_cleanup_logs || true
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 if [ "$FAIL" -gt 0 ]; then
   exit 1

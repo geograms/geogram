@@ -116,8 +116,7 @@ class EventChannel {
           }
           is_listening_ = false;
         } else {
-          result = codec->EncodeErrorEnvelope(
-              "error", "No active stream to cancel", nullptr);
+          result = codec->EncodeSuccessEnvelope();
         }
         reply(result->data(), result->size());
       } else {

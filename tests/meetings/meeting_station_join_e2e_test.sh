@@ -11,6 +11,7 @@ ROOT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 MAIN_PORT=3456
 MAIN_API="http://localhost:${MAIN_PORT}/api/debug"
 VISITOR_BIN="${ROOT_DIR}/build/linux/x64/debug/bundle/geogram"
+CRASH_LOG="${HOME}/.local/share/geogram/logs/crash.txt"
 
 PASS=0
 FAIL=0
@@ -32,6 +33,7 @@ GUEST_CALLSIGN=""
 
 ROOM_ID=""
 STATION_PORT=""
+CRASH_BASELINE_LINES=0
 
 ok()   { PASS=$((PASS+1)); TOTAL=$((TOTAL+1)); echo "  PASS: $1"; }
 fail() { FAIL=$((FAIL+1)); TOTAL=$((TOTAL+1)); echo "  FAIL: $1"; }
@@ -42,6 +44,53 @@ post() {
 
 get_json() {
   curl -sf "$1" 2>/dev/null
+}
+
+capture_crash_baseline() {
+  if [ -f "$CRASH_LOG" ]; then
+    CRASH_BASELINE_LINES="$(wc -l < "$CRASH_LOG")"
+  else
+    CRASH_BASELINE_LINES=0
+  fi
+}
+
+check_webrtc_cleanup_logs() {
+  local found=0
+  local pattern='No active stream to cancel|MediaStreamDisposeFailed'
+
+  if [ -f "$CRASH_LOG" ]; then
+    local crash_excerpt=""
+    if [ "$CRASH_BASELINE_LINES" -gt 0 ]; then
+      crash_excerpt="$(sed -n "$((CRASH_BASELINE_LINES + 1)),\$p" "$CRASH_LOG")"
+    else
+      crash_excerpt="$(cat "$CRASH_LOG")"
+    fi
+    if printf '%s' "$crash_excerpt" | rg -n "$pattern" >/dev/null; then
+      fail "main client crash log contains WebRTC teardown errors"
+      printf '%s\n' "$crash_excerpt" | rg -n "$pattern" || true
+      found=1
+    else
+      ok "main client crash log contains no WebRTC teardown errors"
+    fi
+  else
+    ok "main client crash log contains no WebRTC teardown errors"
+  fi
+
+  for file in "${HOST_TMPDIR}/client.log" "${GUEST_TMPDIR}/client.log"; do
+    if [ -f "$file" ]; then
+      if rg -n "$pattern" "$file" >/dev/null; then
+        fail "$(basename "$(dirname "$file")") log contains WebRTC teardown errors"
+        rg -n "$pattern" "$file" || true
+        found=1
+      fi
+    fi
+  done
+
+  if [ "$found" -eq 0 ]; then
+    ok "temporary client logs contain no WebRTC teardown errors"
+  fi
+
+  return "$found"
 }
 
 json_field() {
@@ -172,6 +221,7 @@ ok "main debug API reachable and temp client bundle exists"
 echo ""
 echo "[1] Starting the local station server..."
 post "$MAIN_API" '{"action":"station_server_stop"}' >/dev/null || true
+capture_crash_baseline
 STATION_START="$(post "$MAIN_API" '{"action":"station_server_start"}')"
 STATION_PORT="$(echo "$STATION_START" | json_field "data['port']")"
 STATION_STATUS="$(post "$MAIN_API" '{"action":"station_server_status"}')"
@@ -733,6 +783,7 @@ else
 fi
 
 echo ""
+check_webrtc_cleanup_logs || true
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 if [ "$FAIL" -gt 0 ]; then
   exit 1

@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/services.dart';
 import 'package:webrtc_interface/webrtc_interface.dart';
 
 import 'factory_impl.dart';
@@ -89,10 +90,20 @@ class MediaStreamNative extends MediaStream {
 
   @override
   Future<void> dispose() async {
-    await WebRTC.invokeMethod(
-      'streamDispose',
-      <String, dynamic>{'streamId': id},
-    );
+    try {
+      await WebRTC.invokeMethod(
+        'streamDispose',
+        <String, dynamic>{'streamId': id},
+      );
+    } on PlatformException catch (e) {
+      final message = (e.message ?? '').toLowerCase();
+      final isMissingStream = e.code == 'MediaStreamDisposeFailed' ||
+          message.contains('not found') ||
+          message.contains('media stream is null');
+      if (!isMissingStream) {
+        rethrow;
+      }
+    }
   }
 
   @override

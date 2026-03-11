@@ -291,9 +291,22 @@ class RTCPeerConnectionNative extends RTCPeerConnection {
     if (obj is Exception) throw obj;
   }
 
+  bool _isDuplicateCancelError(PlatformException error) {
+    return error.code == 'error' &&
+        (error.message?.contains('No active stream to cancel') ?? false);
+  }
+
   @override
   Future<void> dispose() async {
-    await _eventSubscription?.cancel();
+    try {
+      await _eventSubscription?.cancel();
+    } on PlatformException catch (e) {
+      if (!_isDuplicateCancelError(e)) {
+        rethrow;
+      }
+    } finally {
+      _eventSubscription = null;
+    }
     await WebRTC.invokeMethod(
       'peerConnectionDispose',
       <String, dynamic>{'peerConnectionId': _peerConnectionId},
