@@ -61,6 +61,7 @@ import 'geoip_service.dart';
 import 'station_activity_store.dart';
 import 'station_group_access_service.dart';
 import '../server/mixins/karma_mixin.dart';
+import '../server/mixins/conference_mixin.dart';
 
 class _UploadPayload {
   final Uint8List bytes;
@@ -417,7 +418,7 @@ class _BackupProviderEntry {
 }
 
 /// Station server service for CLI mode
-class StationServerService with KarmaMixin {
+class StationServerService with KarmaMixin, ConferenceMixin {
   static final StationServerService _instance = StationServerService._internal();
   factory StationServerService() => _instance;
   StationServerService._internal();
@@ -930,6 +931,7 @@ class StationServerService with KarmaMixin {
         (data) => _handleWebSocketMessage(client, data),
         onDone: () {
           _nostrRelay?.unregisterConnection(clientId);
+          conferenceHandleClientDisconnect(clientId);
           _clients.remove(clientId);
           if (client.callsign != null) {
             final callsignKey = client.callsign!.toUpperCase();
@@ -945,6 +947,7 @@ class StationServerService with KarmaMixin {
         onError: (error) {
           _nostrRelay?.unregisterConnection(clientId);
           LogService().log('WebSocket error: $error');
+          conferenceHandleClientDisconnect(clientId);
           _clients.remove(clientId);
           if (client.callsign != null) {
             final callsignKey = client.callsign!.toUpperCase();
@@ -994,11 +997,47 @@ class StationServerService with KarmaMixin {
         } else if (type == 'email_send') {
           // Email relay - forward to recipient or queue
           _handleEmailSend(client, message);
+        } else if (handleConferenceMessage(client.id, message)) {
+          return;
         }
       }
     } catch (e) {
       LogService().log('WebSocket message error: $e');
     }
+  }
+
+  @override
+  void conferenceLog(String level, String message) {
+    LogService().log('ConferenceRelay: [$level] $message');
+  }
+
+  @override
+  bool conferenceSendToClient(String clientId, String data) {
+    final target = _clients[clientId];
+    if (target == null) return false;
+    try {
+      target.socket.add(data);
+      return true;
+    } catch (e) {
+      LogService().log('ConferenceRelay: Failed to send to $clientId: $e');
+      return false;
+    }
+  }
+
+  @override
+  String? conferenceFindClientId(String callsign) {
+    try {
+      return _clients.values.firstWhere(
+        (client) => client.callsign?.toUpperCase() == callsign.toUpperCase(),
+      ).id;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  @override
+  String? conferenceGetClientCallsign(String clientId) {
+    return _clients[clientId]?.callsign;
   }
 
   bool _isOpenRelayPath(String path) {

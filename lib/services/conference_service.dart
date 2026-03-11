@@ -492,7 +492,7 @@ class ConferenceService {
     };
 
     if (_room?.signalingMode == ConferenceSignalingMode.lan) {
-      _hostSelfSocket?.add(jsonEncode(msg));
+      _signalingServer?.broadcastRoleChangeFromHost(callsign, newRole);
     } else {
       msg['room_id'] = _room?.roomId ?? '';
       WebSocketService().send(msg);
@@ -536,8 +536,6 @@ class ConferenceService {
     _lanSocketSubscription = null;
     try { _lanSocket?.close(); } catch (_) {}
     _lanSocket = null;
-    try { _hostSelfSocket?.close(); } catch (_) {}
-    _hostSelfSocket = null;
     _stationSubscription?.cancel();
     _stationSubscription = null;
 
@@ -576,46 +574,15 @@ class ConferenceService {
     final port = await _signalingServer!.start();
     LogService().log('ConferenceService: LAN signaling on port $port');
 
-    // Host connects to its own signaling server for relay
-    _hostPeerManager!.onSendSignal = (signal) {
-      _connectHostToOwnServer(port, signal);
+    _signalingServer!.onHostMessage = (message) {
+      _handleLanMessage(jsonEncode(message));
     };
-  }
 
-  WebSocket? _hostSelfSocket;
-
-  Future<void> _connectHostToOwnServer(int port, Map<String, dynamic> firstSignal) async {
-    if (_hostSelfSocket != null) {
-      _hostSelfSocket!.add(jsonEncode(firstSignal));
-      return;
-    }
-
-    try {
-      _hostSelfSocket = await WebSocket.connect('ws://127.0.0.1:$port/meet/ws');
-      _hostSelfSocket!.listen(
-        (data) {
-          if (data is String) _handleLanMessage(data);
-        },
-        onDone: () => _hostSelfSocket = null,
-      );
-
-      // Announce ourselves as host (speaker)
-      _hostSelfSocket!.add(jsonEncode({
-        'type': 'conference_hello',
-        'callsign': _myCallsign,
-        'role': 'speaker',
-      }));
-
-      // Update signaling callback
-      _hostPeerManager!.onSendSignal = (signal) {
-        _hostSelfSocket?.add(jsonEncode(signal));
-      };
-
-      // Send the first signal
-      _hostSelfSocket!.add(jsonEncode(firstSignal));
-    } catch (e) {
-      LogService().log('ConferenceService: Host self-connect failed: $e');
-    }
+    // LAN host signaling stays in-process; the signaling server relays
+    // joiner signals back to the host and tracks the host implicitly.
+    _hostPeerManager!.onSendSignal = (signal) {
+      _signalingServer?.relayFromHost(signal);
+    };
   }
 
   // ── Station signaling (host) ─────────────────────────────────────
