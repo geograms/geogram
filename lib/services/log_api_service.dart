@@ -11,6 +11,7 @@ import 'package:shelf/shelf.dart' as shelf;
 import 'package:shelf/shelf_io.dart' as shelf_io;
 import 'hotspot_portal_service.dart';
 import 'log_service.dart';
+import 'config_service.dart';
 import 'profile_service.dart';
 import 'signing_service.dart';
 import 'app_service.dart';
@@ -68,6 +69,7 @@ import 'backup_service.dart';
 import '../models/backup_models.dart';
 import 'event_service.dart';
 import 'blog_service.dart';
+import 'report_service.dart';
 import '../models/blog_post.dart';
 import '../models/report.dart';
 import 'alert_feedback_service.dart';
@@ -2087,6 +2089,10 @@ function cleanup() {
 
       // Handle station actions separately (they are async)
       if (action.toLowerCase().startsWith('station_')) {
+        return await _handleStationAction(action.toLowerCase(), params, headers);
+      }
+
+      if (action.toLowerCase() == 'chat_post_local') {
         return await _handleStationAction(action.toLowerCase(), params, headers);
       }
 
@@ -8988,6 +8994,17 @@ function cleanup() {
         );
       }
 
+      void configureEventStorage(EventService service, String appPath) {
+        final profileStorage = AppService().profileStorage;
+        if (profileStorage != null) {
+          service.setStorage(
+            ScopedProfileStorage.fromAbsolutePath(profileStorage, appPath),
+          );
+        } else {
+          service.setStorage(FilesystemProfileStorage(appPath));
+        }
+      }
+
       switch (action) {
         case 'event_create':
           // Create a test event
@@ -8996,12 +9013,20 @@ function cleanup() {
           final location = params['location'] as String? ?? 'online';
           final locationName = params['location_name'] as String?;
           final appName = params['app_name'] as String? ?? 'my-events';
+          final visibility = params['visibility'] as String?;
+          final groupAccess = (params['group_access'] as String?)
+              ?.split(',')
+              .map((value) => value.trim())
+              .where((value) => value.isNotEmpty)
+              .toList();
 
           // Get callsign from profile service
           String callsign = 'TEST';
+          String? npub;
           try {
             final profile = ProfileService().getProfile();
             callsign = profile.callsign;
+            npub = profile.npub;
           } catch (e) {
             // Profile service not initialized, use TEST callsign
           }
@@ -9009,6 +9034,7 @@ function cleanup() {
           // Initialize EventService for this app
           final eventService = EventService();
           final appPath = '$dataDir/devices/$callsign/$appName';
+          configureEventStorage(eventService, appPath);
 
           // Initialize the events directory
           await eventService.initializeApp(appPath);
@@ -9020,6 +9046,9 @@ function cleanup() {
             location: location,
             locationName: locationName,
             content: content,
+            visibility: visibility,
+            groupAccess: groupAccess,
+            npub: npub,
           );
 
           if (event == null) {
@@ -9158,6 +9187,17 @@ function cleanup() {
         );
       }
 
+      void configureBlogStorage(BlogService service, String appPath) {
+        final profileStorage = AppService().profileStorage;
+        if (profileStorage != null) {
+          service.setStorage(
+            ScopedProfileStorage.fromAbsolutePath(profileStorage, appPath),
+          );
+        } else {
+          service.setStorage(FilesystemProfileStorage(appPath));
+        }
+      }
+
       // Get callsign and nickname from profile service
       String callsign = 'TEST';
       String nickname = 'TEST';
@@ -9186,6 +9226,7 @@ function cleanup() {
           // Initialize BlogService for this app
           final blogService = BlogService();
           final appPath = '$dataDir/devices/$callsign/$appName';
+          configureBlogStorage(blogService, appPath);
 
           // Initialize the blog directory
           await blogService.initializeApp(appPath, creatorNpub: npub);
@@ -9243,6 +9284,7 @@ function cleanup() {
 
           final blogService = BlogService();
           final appPath = '$dataDir/devices/$callsign/$appName';
+          configureBlogStorage(blogService, appPath);
 
           // Check if blog directory exists
           final blogDir = io.Directory(appPath);
@@ -9296,6 +9338,7 @@ function cleanup() {
           final appName = params['app_name'] as String? ?? 'blog';
           final blogService = BlogService();
           final appPath = '$dataDir/devices/$callsign/$appName';
+          configureBlogStorage(blogService, appPath);
 
           await blogService.initializeApp(appPath);
 
@@ -9340,6 +9383,7 @@ function cleanup() {
           final appName = params['app_name'] as String? ?? 'blog';
           final blogService = BlogService();
           final appPath = '$dataDir/devices/$callsign/$appName';
+          configureBlogStorage(blogService, appPath);
 
           // Check if the blog post exists
           final blogDir = io.Directory(appPath);
@@ -10285,12 +10329,38 @@ function cleanup() {
         case 'station_server_start':
           // Start the local StationServerService (for station mode)
           final stationServer = StationServerService();
+          final apiPort = port;
+
+          final stationConfig =
+              (ConfigService().get('stationServer') as Map?)?.cast<String, dynamic>();
+          if (stationConfig != null && stationConfig['enabled'] == true) {
+            ConfigService().set('stationServer', {
+              ...stationConfig,
+              'enabled': false,
+            });
+          }
 
           // Initialize if needed
           await stationServer.initialize();
 
-          // Start the server
-          final success = await stationServer.start();
+          // The debug API already occupies the app API port, so use a
+          // dedicated station port by default when the station config still
+          // points at the API listener.
+          if (!stationServer.isRunning && stationServer.settings.port == apiPort) {
+            final updatedSettings = StationServerSettings.fromJson(
+              stationServer.settings.toJson(),
+            );
+            updatedSettings.port = apiPort + 1;
+            await stationServer.updateSettings(updatedSettings);
+          }
+
+          // Start the server. The service begins accepting connections before
+          // slower post-bind setup finishes, so avoid blocking the debug API on
+          // model downloads and other non-essential startup work.
+          final success = await stationServer.start().timeout(
+                const Duration(seconds: 5),
+                onTimeout: () => stationServer.isRunning,
+              );
           final runningPort = stationServer.runningPort;
 
           LogService().log('LogApiService: Station server start result: $success, port: $runningPort');
@@ -10328,6 +10398,70 @@ function cleanup() {
             jsonEncode({
               'success': true,
               ...status,
+            }),
+            headers: headers,
+          );
+
+        case 'chat_post_local':
+          // Create a local chat message through ChatService so station activity
+          // publishing follows the same path as normal client usage.
+          final room = params['room'] as String? ?? 'main';
+          final content = params['content'] as String?;
+          if (content == null || content.isEmpty) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'content is required',
+              }),
+              headers: headers,
+            );
+          }
+
+          final initialized = await _initializeChatServiceIfNeeded(
+            createIfMissing: true,
+          );
+          if (!initialized) {
+            return shelf.Response.internalServerError(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Chat service not available',
+              }),
+              headers: headers,
+            );
+          }
+
+          final chatService = ChatService();
+          final channel = chatService.getChannel(room);
+          if (channel == null) {
+            return shelf.Response.notFound(
+              jsonEncode({
+                'success': false,
+                'error': 'Room not found',
+                'room': room,
+              }),
+              headers: headers,
+            );
+          }
+
+          final profile = ProfileService().getProfile();
+          final message = ChatMessage.now(
+            author: profile.callsign,
+            content: content,
+            metadata: {
+              if (profile.npub.isNotEmpty) 'npub': profile.npub,
+            },
+          );
+
+          await chatService.saveMessage(room, message);
+
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'message': 'Local chat message created',
+              'room': room,
+              'timestamp': message.timestamp,
+              'author': message.author,
+              'content': message.content,
             }),
             headers: headers,
           );
@@ -10616,6 +10750,7 @@ function cleanup() {
                 'station_server_start',
                 'station_server_stop',
                 'station_server_status',
+                'chat_post_local',
                 'station_send_chat',
                 'station_delete_chat',
                 'station_edit_chat',
@@ -11019,12 +11154,6 @@ function cleanup() {
             // Profile service not initialized, use TEST callsign
           }
 
-          // Create timestamp in expected format
-          final now = DateTime.now();
-          final seconds = now.second.toString().padLeft(2, '0');
-          final created = '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')} '
-              '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}_$seconds';
-
           // Parse severity
           ReportSeverity reportSeverity;
           switch (severity.toLowerCase()) {
@@ -11058,36 +11187,46 @@ function cleanup() {
               reportStatus = ReportStatus.open;
           }
 
-          // Create alert folder name using timestamp format: YYYY-MM-DD_HH-MM_title-slug
-          var titleSlug = title.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), '-').replaceAll(RegExp(r'^-+|-+$'), '');
-          // Limit title to 100 characters
-          if (titleSlug.length > 100) {
-            titleSlug = titleSlug.substring(0, 100).replaceAll(RegExp(r'-+$'), '');
+          final reportService = ReportService();
+          final appPath = '$dataDir/devices/$callsign/alerts';
+          final profileStorage = AppService().profileStorage;
+          final reportStorage = profileStorage != null
+              ? ScopedProfileStorage.fromAbsolutePath(profileStorage, appPath)
+              : FilesystemProfileStorage(appPath);
+          reportService.setStorage(reportStorage);
+          await reportService.initializeApp(appPath);
+
+          var report = await reportService.createReport(
+            title: title,
+            description: description,
+            author: callsign,
+            latitude: latitude,
+            longitude: longitude,
+            severity: reportSeverity,
+            type: type,
+          );
+
+          if (reportStatus != ReportStatus.open) {
+            report = report.copyWith(status: reportStatus);
+            await reportService.saveReport(
+              report,
+              notifyRelays: false,
+              updateLastModified: false,
+            );
           }
-          final folderName = '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}_'
-              '${now.hour.toString().padLeft(2, '0')}-${now.minute.toString().padLeft(2, '0')}_$titleSlug';
 
-          // Calculate region folder (rounded to 1 decimal) to match uploadPhotosToStation path
-          final roundedLat = (latitude * 10).round() / 10;
-          final roundedLon = (longitude * 10).round() / 10;
-          final regionFolder = '${roundedLat}_$roundedLon';
+          final reportRelativePath =
+              'active/${report.regionFolder}/${report.folderName}';
+          final alertPath = await reportStorage.getAbsolutePath(reportRelativePath);
 
-          // Create the alert directory in the proper structure: alerts/active/{regionFolder}/{folderName}
-          final alertDir = io.Directory('$dataDir/devices/$callsign/alerts/active/$regionFolder/$folderName');
-          await alertDir.create(recursive: true);
-
-          // Check if we should create a test photo
           final includePhoto = params['photo'] == true || params['photo'] == 'true';
           String? createdPhotoPath;
 
           if (includePhoto) {
-            // Create images subfolder
-            final imagesDir = io.Directory('${alertDir.path}/images');
-            await imagesDir.create(recursive: true);
+            await reportStorage.createDirectory('$reportRelativePath/images');
 
             // Use sequential naming: photo1.png
-            final testPhotoName = 'photo1.png';
-            createdPhotoPath = '${imagesDir.path}/$testPhotoName';
+            final photoRelativePath = '$reportRelativePath/images/photo1.png';
 
             // Create a minimal valid PNG (1x1 red pixel)
             final pngBytes = Uint8List.fromList([
@@ -11109,42 +11248,24 @@ function cleanup() {
               0xAE, 0x42, 0x60, 0x82, // CRC
             ]);
 
-            final photoFile = io.File(createdPhotoPath);
-            await photoFile.writeAsBytes(pngBytes);
+            await reportStorage.writeBytes(photoRelativePath, pngBytes);
+            createdPhotoPath = await reportStorage.getAbsolutePath(photoRelativePath);
 
             LogService().log('LogApiService: Created test photo at $createdPhotoPath');
           }
 
-          // Create the alert object
-          final alert = Report(
-            folderName: folderName,
-            titles: {'EN': title},
-            descriptions: {'EN': description},
-            latitude: latitude,
-            longitude: longitude,
-            type: type,
-            severity: reportSeverity,
-            status: reportStatus,
-            created: created,
-            author: callsign,
-          );
-
-          // Write report.txt
-          final reportFile = io.File('${alertDir.path}/report.txt');
-          await reportFile.writeAsString(alert.exportAsText());
-
-          LogService().log('LogApiService: Created test alert: ${alert.apiId}');
+          LogService().log('LogApiService: Created test alert: ${report.apiId}');
 
           return shelf.Response.ok(
             jsonEncode({
               'success': true,
               'message': 'Alert created${includePhoto ? " with photo" : ""}',
-              'alert_id': alert.apiId,
-              'folder_name': folderName,
-              'alert': alert.toApiJson(),
+              'alert_id': report.apiId,
+              'folder_name': report.folderName,
+              'alert': report.toApiJson(),
               'photo_created': includePhoto,
               'photo_path': createdPhotoPath,
-              'alert_path': alertDir.path,
+              'alert_path': alertPath,
             }),
             headers: headers,
           );

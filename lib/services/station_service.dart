@@ -1622,22 +1622,20 @@ class StationService {
         return false;
       }
 
-      final response = await _stationApiRequest(
-        stationUrl: stationUrl,
-        method: 'POST',
-        path: '/api/activity',
-        headers: {
-          ...headers,
-          'Content-Type': 'application/json',
-        },
-        body: jsonEncode(event.toJson()),
-        timeout: const Duration(seconds: 20),
+      final uri = Uri.parse(
+        _buildStationHttpUrl(_getHttpBaseUrl(stationUrl), '/api/activity'),
       );
+      final response = await _httpClient
+          .post(
+            uri,
+            headers: {
+              ...headers,
+              'Content-Type': 'application/json',
+            },
+            body: jsonEncode(event.toJson()),
+          )
+          .timeout(const Duration(seconds: 20));
 
-      if (response == null) {
-        LogService().log('StationService: Activity publish returned no response');
-        return false;
-      }
       if (response.statusCode >= 200 && response.statusCode < 300) {
         return true;
       }
@@ -1676,16 +1674,14 @@ class StationService {
               ],
             )
           : null;
-
-      final response = await _stationApiRequest(
-        stationUrl: stationUrl,
-        method: 'GET',
-        path: uri.toString(),
-        headers: headers,
-        timeout: const Duration(seconds: 20),
+      final requestUri = Uri.parse(
+        _buildStationHttpUrl(_getHttpBaseUrl(stationUrl), uri.toString()),
       );
+      final response = await _httpClient
+          .get(requestUri, headers: headers)
+          .timeout(const Duration(seconds: 20));
 
-      if (response == null || response.body.isEmpty) {
+      if (response.body.isEmpty) {
         return null;
       }
       if (response.statusCode < 200 || response.statusCode >= 300) {

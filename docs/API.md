@@ -2670,7 +2670,7 @@ Triggers a debug action.
 | `backup_get_status` | Get current backup/restore status | None |
 | `backup_restore` | Start restore from a provider snapshot | `provider_callsign` (required): Provider callsign, `snapshot_id` (required): Snapshot date (YYYY-MM-DD) |
 | `backup_list_snapshots` | List available snapshots for a client | `client_callsign` (required): Client callsign |
-| `event_create` | Create an event for testing | `title` (required): Event title, `content` (required): Event content, `location` (required): "online" or "lat,lon", `app_name` (optional): App name (default: "my-events"), `location_name` (optional): Venue name |
+| `event_create` | Create an event for testing | `title` (required): Event title, `content` (required): Event content, `location` (required): "online" or "lat,lon", `app_name` (optional): App name (default: "my-events"), `location_name` (optional): Venue name, `visibility` (optional): public/private/group, `group_access` (optional): comma-separated group IDs |
 | `event_list` | List all events | `year` (optional): Filter by year |
 | `event_delete` | Delete an event | `event_id` (required): Event ID (e.g., "2025-01-15_party"), `app_name` (optional): App name (default: "my-events") |
 | `alert_create` | Create an alert for testing | `title` (required): Alert title, `description` (required): Alert description, `latitude` (optional): Location lat, `longitude` (optional): Location lon, `severity` (optional): info/attention/urgent/emergency, `type` (optional): Alert type, `photo` (optional): If true, creates a test photo in the alert |
@@ -2687,6 +2687,7 @@ Triggers a debug action.
 | `station_server_start` | Start the station server | None. Starts StationServerService on port (API port + 1) |
 | `station_server_stop` | Stop the station server | None. Stops the running station server |
 | `station_server_status` | Get station server status | None. Returns running state, port, and connected client count |
+| `chat_post_local` | Create a local chat message | `room` (optional): Local chat room ID (default: `main`), `content` (required): Message text. Saves through `ChatService` so station activity publishing uses the normal client path |
 | `open_station_chat` | Open the station chat browser | None. Opens ChatBrowserPage connected to preferred station (or p2p.radio) |
 | `select_chat_room` | Select a chat room by ID | `room_id` (required): Room ID to select (e.g., "general") |
 | `send_chat_message` | Send a message to the currently selected room (via UI) | `content` (optional): Message text, `image_path` (optional): Path to image file |
