@@ -28,6 +28,8 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
   List<String> _meetUrls = [];
   final Map<String, RTCVideoRenderer> _audioRenderers = {};
   RTCVideoRenderer? _screenRenderer;
+  Future<void> _screenSyncQueue = Future<void>.value();
+  String? _screenRendererStreamId;
 
   @override
   void initState() {
@@ -44,12 +46,12 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
 
     _eventSubscription = _conferenceService.events.listen((_) {
       unawaited(_syncRemoteAudio());
-      unawaited(_syncScreenShare());
+      _queueScreenShareSync();
       if (mounted) setState(() {});
     });
 
     unawaited(_syncRemoteAudio());
-    unawaited(_syncScreenShare());
+    _queueScreenShareSync();
     _loadMeetUrls();
   }
 
@@ -214,25 +216,52 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
   }
 
   Future<void> _syncScreenShare() async {
+    final myCallsign = ProfileService().getProfile().callsign;
+    final activeSharer = _conferenceService.activeScreenSharer;
+    if (activeSharer != null &&
+        activeSharer.toUpperCase() == myCallsign.toUpperCase()) {
+      await _disposeScreenRenderer();
+      return;
+    }
+
     final stream = _conferenceService.activeScreenStream;
     if (stream == null) {
       await _disposeScreenRenderer();
       return;
     }
 
-    _screenRenderer ??= RTCVideoRenderer();
-    await _screenRenderer!.initialize();
-    _screenRenderer!.srcObject = stream;
+    var renderer = _screenRenderer;
+    if (renderer == null) {
+      renderer = RTCVideoRenderer();
+      await renderer.initialize();
+      _screenRenderer = renderer;
+    }
+
+    if (_screenRendererStreamId == stream.id &&
+        renderer.srcObject?.id == stream.id) {
+      return;
+    }
+
+    renderer.srcObject = null;
+    renderer.srcObject = stream;
+    _screenRendererStreamId = stream.id;
   }
 
   Future<void> _disposeScreenRenderer() async {
     final renderer = _screenRenderer;
     _screenRenderer = null;
+    _screenRendererStreamId = null;
     if (renderer == null) {
       return;
     }
     renderer.srcObject = null;
     await renderer.dispose();
+  }
+
+  void _queueScreenShareSync() {
+    _screenSyncQueue = _screenSyncQueue
+        .catchError((Object error, StackTrace stackTrace) {})
+        .then((_) => _syncScreenShare());
   }
 
   void _showShareSheet() {
@@ -460,6 +489,9 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
     final hasRequestedScreenShare = me?.hasPendingScreenShareRequest ?? false;
     final activeScreenSharer = room?.activeScreenSharerCallsign;
     final isLocalScreenSharing = _conferenceService.isLocalScreenSharing;
+    final isViewingLocalScreenShare =
+        activeScreenSharer != null &&
+        activeScreenSharer.toUpperCase() == myCallsign.toUpperCase();
     final shareUrl = _shareUrl;
 
     return Scaffold(
@@ -478,7 +510,8 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
       ),
       body: LayoutBuilder(
         builder: (context, constraints) {
-          final screenPreviewHeight = activeScreenSharer == null
+          final screenPreviewHeight =
+              activeScreenSharer == null || isViewingLocalScreenShare
               ? 0.0
               : math.min(
                   constraints.maxWidth * (9 / 16),
@@ -578,7 +611,39 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
 
               const Divider(height: 1),
 
-              if (activeScreenSharer != null)
+              if (isViewingLocalScreenShare)
+                Container(
+                  width: double.infinity,
+                  margin: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 12,
+                  ),
+                  decoration: BoxDecoration(
+                    color: theme.colorScheme.primaryContainer,
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(
+                        Icons.screen_share,
+                        color: theme.colorScheme.onPrimaryContainer,
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          'You are sharing your screen',
+                          style: theme.textTheme.titleSmall?.copyWith(
+                            color: theme.colorScheme.onPrimaryContainer,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+
+              if (activeScreenSharer != null && !isViewingLocalScreenShare)
                 Container(
                   padding: EdgeInsets.fromLTRB(
                     16,

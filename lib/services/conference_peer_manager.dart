@@ -41,6 +41,43 @@ class ConferenceAudioPeer {
 /// Callback signature for sending signaling messages.
 typedef ConferenceSignalSender = void Function(Map<String, dynamic> signal);
 
+Future<void> configureConferenceScreenSender(
+  RTCRtpSender sender, {
+  required String logLabel,
+}) async {
+  if (sender.track?.kind != 'video') {
+    return;
+  }
+
+  try {
+    final parameters = sender.parameters;
+    final encodings =
+        parameters.encodings == null || parameters.encodings!.isEmpty
+        ? <RTCRtpEncoding>[RTCRtpEncoding()]
+        : parameters.encodings!;
+
+    for (final encoding in encodings) {
+      encoding.maxBitrate = 1200000;
+      encoding.maxFramerate = 8;
+      encoding.scaleResolutionDownBy = 2.0;
+    }
+
+    parameters.encodings = encodings;
+    parameters.degradationPreference = RTCDegradationPreference.BALANCED;
+
+    final applied = await sender.setParameters(parameters);
+    if (!applied) {
+      LogService().log(
+        'ConferencePeerManager: Screen sender tuning was rejected for $logLabel',
+      );
+    }
+  } catch (e) {
+    LogService().log(
+      'ConferencePeerManager: Failed to tune screen sender for $logLabel: $e',
+    );
+  }
+}
+
 /// Event emitted when conference state changes.
 class ConferenceEvent {
   final String
@@ -81,6 +118,13 @@ class ConferencePeerManager {
 
   /// Update the ICE configuration (e.g. after receiving station STUN info).
   void setConfig(WebRTCConfig config) => _config = config;
+
+  void _emitEvent(ConferenceEvent event) {
+    if (_eventController.isClosed) {
+      return;
+    }
+    _eventController.add(event);
+  }
 
   // ── Lifecycle ────────────────────────────────────────────────────
 
@@ -284,7 +328,7 @@ class ConferencePeerManager {
     if (peer == null) return;
 
     await _closePeer(peer);
-    _eventController.add(ConferenceEvent('peer_disconnected', callsign));
+    _emitEvent(ConferenceEvent('peer_disconnected', callsign));
   }
 
   /// Disconnect from a specific peer.
@@ -301,7 +345,7 @@ class ConferencePeerManager {
     });
 
     await _closePeer(peer);
-    _eventController.add(ConferenceEvent('peer_disconnected', callsign));
+    _emitEvent(ConferenceEvent('peer_disconnected', callsign));
   }
 
   // ── Setup handlers ───────────────────────────────────────────────
@@ -335,25 +379,19 @@ class ConferencePeerManager {
           if (!(peer.connectionCompleter?.isCompleted ?? true)) {
             peer.connectionCompleter!.complete(true);
           }
-          _eventController.add(
-            ConferenceEvent('peer_connected', peer.callsign),
-          );
+          _emitEvent(ConferenceEvent('peer_connected', peer.callsign));
 
         case RTCPeerConnectionState.RTCPeerConnectionStateFailed:
           peer.state = ConferencePeerState.failed;
           if (!(peer.connectionCompleter?.isCompleted ?? true)) {
             peer.connectionCompleter!.complete(false);
           }
-          _eventController.add(
-            ConferenceEvent('peer_disconnected', peer.callsign),
-          );
+          _emitEvent(ConferenceEvent('peer_disconnected', peer.callsign));
 
         case RTCPeerConnectionState.RTCPeerConnectionStateDisconnected:
         case RTCPeerConnectionState.RTCPeerConnectionStateClosed:
           peer.state = ConferencePeerState.closed;
-          _eventController.add(
-            ConferenceEvent('peer_disconnected', peer.callsign),
-          );
+          _emitEvent(ConferenceEvent('peer_disconnected', peer.callsign));
 
         default:
           break;
@@ -364,7 +402,7 @@ class ConferencePeerManager {
     pc.onTrack = (RTCTrackEvent event) {
       if (event.streams.isNotEmpty) {
         peer.remoteStream = event.streams.first;
-        _eventController.add(
+        _emitEvent(
           ConferenceEvent('remote_stream', peer.callsign, peer.remoteStream),
         );
         LogService().log(

@@ -187,7 +187,11 @@ public class MethodCallHandlerImpl implements MethodCallHandler, StateProvider {
 
     getUserMediaImpl = new GetUserMediaImpl(this, context);
 
-    cameraUtils = new CameraUtils(getUserMediaImpl, activity);
+    if (activity != null) {
+      cameraUtils = new CameraUtils(getUserMediaImpl, activity);
+    } else {
+      Log.w(TAG, "initialize(): Activity unavailable, camera utilities disabled until attached");
+    }
 
     frameCryptor = new FlutterRTCFrameCryptor(this);
 
@@ -636,26 +640,41 @@ public class MethodCallHandlerImpl implements MethodCallHandler, StateProvider {
       }
       case "mediaStreamTrackHasTorch": {
         String trackId = call.argument("trackId");
+        if (!requireCameraUtils("mediaStreamTrackHasTorch", result)) {
+          break;
+        }
         cameraUtils.hasTorch(trackId, result);
         break;
       }
       case "mediaStreamTrackSetTorch": {
         String trackId = call.argument("trackId");
         boolean torch = call.argument("torch");
+        if (!requireCameraUtils("mediaStreamTrackSetTorch", result)) {
+          break;
+        }
         cameraUtils.setTorch(trackId, torch, result);
         break;
       }
       case "mediaStreamTrackSetZoom": {
         String trackId = call.argument("trackId");
         double zoomLevel = call.argument("zoomLevel");
+        if (!requireCameraUtils("mediaStreamTrackSetZoom", result)) {
+          break;
+        }
         cameraUtils.setZoom(trackId, zoomLevel, result);
         break;
       }
       case "mediaStreamTrackSetFocusMode": {
+        if (!requireCameraUtils("mediaStreamTrackSetFocusMode", result)) {
+          break;
+        }
         cameraUtils.setFocusMode(call, result);
         break;
       }
       case "mediaStreamTrackSetFocusPoint":{
+        if (!requireCameraUtils("mediaStreamTrackSetFocusPoint", result)) {
+          break;
+        }
         Map<String, Object> focusPoint = call.argument("focusPoint");
         Boolean reset = (Boolean)focusPoint.get("reset");
         Double x = null;
@@ -668,10 +687,16 @@ public class MethodCallHandlerImpl implements MethodCallHandler, StateProvider {
         break;
       }
       case "mediaStreamTrackSetExposureMode": {
+        if (!requireCameraUtils("mediaStreamTrackSetExposureMode", result)) {
+          break;
+        }
         cameraUtils.setExposureMode(call, result);
         break;
       }
       case "mediaStreamTrackSetExposurePoint": {
+        if (!requireCameraUtils("mediaStreamTrackSetExposurePoint", result)) {
+          break;
+        }
         Map<String, Object> exposurePoint = call.argument("exposurePoint");
         Boolean reset = (Boolean)exposurePoint.get("reset");
         Double x = null;
@@ -2067,6 +2092,17 @@ public class MethodCallHandlerImpl implements MethodCallHandler, StateProvider {
 
   public void setActivity(Activity activity) {
     this.activity = activity;
+    if (cameraUtils == null && activity != null && getUserMediaImpl != null) {
+      cameraUtils = new CameraUtils(getUserMediaImpl, activity);
+    }
+  }
+
+  private boolean requireCameraUtils(String method, Result result) {
+    if (cameraUtils != null) {
+      return true;
+    }
+    resultError(method, "camera utils unavailable (activity not attached)", result);
+    return false;
   }
 
   public void addTrack(String peerConnectionId, String trackId, List<String> streamIds, Result result) {

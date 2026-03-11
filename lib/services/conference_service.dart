@@ -1543,6 +1543,10 @@ class ConferenceService {
   }
 
   Future<MediaStream> _captureDisplayStream() async {
+    const targetScreenShareWidth = 1280;
+    const targetScreenShareHeight = 720;
+    const targetScreenShareFrameRate = 8;
+
     if (!kIsWeb && WebRTC.platformIsDesktop) {
       final sources = await desktopCapturer.getSources(
         types: [SourceType.Screen],
@@ -1555,14 +1559,21 @@ class ConferenceService {
         'audio': false,
         'video': {
           'deviceId': {'exact': source.id},
-          'mandatory': {'frameRate': 15.0},
+          'width': targetScreenShareWidth,
+          'height': targetScreenShareHeight,
+          'frameRate': targetScreenShareFrameRate,
+          'mandatory': {'frameRate': targetScreenShareFrameRate.toDouble()},
         },
       });
     }
 
     return navigator.mediaDevices.getDisplayMedia({
       'audio': false,
-      'video': true,
+      'video': {
+        'width': targetScreenShareWidth,
+        'height': targetScreenShareHeight,
+        'frameRate': targetScreenShareFrameRate,
+      },
     });
   }
 

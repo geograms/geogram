@@ -53,6 +53,13 @@ class ConferenceParticipantPeerManager {
 
   void setConfig(WebRTCConfig config) => _config = config;
 
+  void _emitEvent(ConferenceEvent event) {
+    if (_eventController.isClosed) {
+      return;
+    }
+    _eventController.add(event);
+  }
+
   // ── Lifecycle ──────────────────────────────────────────────────
 
   /// Start local audio capture (speakers only).
@@ -138,7 +145,11 @@ class ConferenceParticipantPeerManager {
     final pc = _hostPeer?.peerConnection;
     if (pc != null) {
       await _removeLocalVideoSenders(pc);
-      await pc.addTrack(videoTracks.first, stream);
+      final sender = await pc.addTrack(videoTracks.first, stream);
+      await configureConferenceScreenSender(
+        sender,
+        logLabel: 'participant screen -> ${_hostPeer?.callsign ?? 'host'}',
+      );
       await _renegotiateWithHost();
     }
   }
@@ -153,7 +164,7 @@ class ConferenceParticipantPeerManager {
     _localScreenStream?.getTracks().forEach((track) => track.stop());
     await _localScreenStream?.dispose();
     _localScreenStream = null;
-    _eventController.add(
+    _emitEvent(
       ConferenceEvent('local_screen_stream_removed', _hostPeer?.callsign ?? ''),
     );
   }
@@ -164,7 +175,7 @@ class ConferenceParticipantPeerManager {
     if (stream != null) {
       await stream.dispose();
     }
-    _eventController.add(
+    _emitEvent(
       ConferenceEvent(
         'remote_screen_stream_removed',
         _hostPeer?.callsign ?? '',
@@ -206,7 +217,14 @@ class ConferenceParticipantPeerManager {
     }
     if (_localScreenStream != null) {
       for (final track in _localScreenStream!.getVideoTracks()) {
-        await peer.peerConnection!.addTrack(track, _localScreenStream!);
+        final sender = await peer.peerConnection!.addTrack(
+          track,
+          _localScreenStream!,
+        );
+        await configureConferenceScreenSender(
+          sender,
+          logLabel: 'participant reconnect screen -> $hostCallsign',
+        );
       }
     }
 
@@ -321,7 +339,7 @@ class ConferenceParticipantPeerManager {
 
     await _closePeer(_hostPeer!);
     _hostPeer = null;
-    _eventController.add(ConferenceEvent('peer_disconnected', callsign));
+    _emitEvent(ConferenceEvent('peer_disconnected', callsign));
   }
 
   // ── Role changes ───────────────────────────────────────────────
@@ -473,9 +491,7 @@ class ConferenceParticipantPeerManager {
 
       if (event.track.kind == 'audio') {
         _remoteStreams[stream.id] = stream;
-        _eventController.add(
-          ConferenceEvent('remote_stream', peer.callsign, stream),
-        );
+        _emitEvent(ConferenceEvent('remote_stream', peer.callsign, stream));
         LogService().log(
           'ConferenceParticipantPeerManager: Remote audio track from host '
           '(stream: ${stream.id})',
@@ -489,7 +505,7 @@ class ConferenceParticipantPeerManager {
           await previous.dispose();
         }
         _remoteScreenStream = stream;
-        _eventController.add(
+        _emitEvent(
           ConferenceEvent('remote_screen_stream', peer.callsign, stream),
         );
         LogService().log(
@@ -508,7 +524,7 @@ class ConferenceParticipantPeerManager {
     if (!(peer.connectionCompleter?.isCompleted ?? true)) {
       peer.connectionCompleter!.complete(true);
     }
-    _eventController.add(ConferenceEvent('peer_connected', peer.callsign));
+    _emitEvent(ConferenceEvent('peer_connected', peer.callsign));
   }
 
   void _markPeerDisconnected(ConferenceAudioPeer peer, {bool failed = false}) {
@@ -522,7 +538,7 @@ class ConferenceParticipantPeerManager {
     if (failed && !(peer.connectionCompleter?.isCompleted ?? true)) {
       peer.connectionCompleter!.complete(false);
     }
-    _eventController.add(ConferenceEvent('peer_disconnected', peer.callsign));
+    _emitEvent(ConferenceEvent('peer_disconnected', peer.callsign));
   }
 
   Future<void> _closePeer(ConferenceAudioPeer peer) async {

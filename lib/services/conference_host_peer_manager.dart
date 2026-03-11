@@ -66,6 +66,13 @@ class ConferenceHostPeerManager {
 
   void setConfig(WebRTCConfig config) => _config = config;
 
+  void _emitEvent(ConferenceEvent event) {
+    if (_eventController.isClosed) {
+      return;
+    }
+    _eventController.add(event);
+  }
+
   // ── Lifecycle ──────────────────────────────────────────────────
 
   /// Capture the host's local microphone (host is always a speaker).
@@ -150,9 +157,7 @@ class ConferenceHostPeerManager {
       stream,
       excludeKey: null,
     );
-    _eventController.add(
-      ConferenceEvent('local_screen_stream', 'host', stream),
-    );
+    _emitEvent(ConferenceEvent('local_screen_stream', 'host', stream));
   }
 
   Future<void> stopLocalScreenShare() async {
@@ -164,9 +169,7 @@ class ConferenceHostPeerManager {
     _localScreenStream!.getTracks().forEach((track) => track.stop());
     await _localScreenStream!.dispose();
     _localScreenStream = null;
-    _eventController.add(
-      ConferenceEvent('local_screen_stream_removed', 'host'),
-    );
+    _emitEvent(ConferenceEvent('local_screen_stream_removed', 'host'));
   }
 
   // ── Add speaker ────────────────────────────────────────────────
@@ -260,6 +263,10 @@ class ConferenceHostPeerManager {
           screenTrack,
           screenStream,
         );
+        await configureConferenceScreenSender(
+          sender,
+          logLabel: 'host screen -> ${peer.callsign}',
+        );
         _screenSenders[key] = sender;
       }
     }
@@ -349,7 +356,7 @@ class ConferenceHostPeerManager {
 
     _roles.remove(key);
     await _closePeer(peer);
-    _eventController.add(ConferenceEvent('peer_disconnected', callsign));
+    _emitEvent(ConferenceEvent('peer_disconnected', callsign));
   }
 
   /// Disconnect from a specific participant.
@@ -372,7 +379,7 @@ class ConferenceHostPeerManager {
     _screenSenders.remove(key);
     _roles.remove(key);
     await _closePeer(peer);
-    _eventController.add(ConferenceEvent('peer_disconnected', callsign));
+    _emitEvent(ConferenceEvent('peer_disconnected', callsign));
   }
 
   // ── Promote / demote ───────────────────────────────────────────
@@ -432,9 +439,7 @@ class ConferenceHostPeerManager {
         );
       }
     }
-    _eventController.add(
-      ConferenceEvent('remote_screen_stream_removed', callsign),
-    );
+    _emitEvent(ConferenceEvent('remote_screen_stream_removed', callsign));
   }
 
   // ── Internal: renegotiation ────────────────────────────────────
@@ -497,6 +502,10 @@ class ConferenceHostPeerManager {
       if (track != null && stream != null) {
         try {
           final sender = await pc.addTrack(track, stream);
+          await configureConferenceScreenSender(
+            sender,
+            logLabel: 'forwarded screen -> ${entry.value.callsign}',
+          );
           _screenSenders[entry.key] = sender;
         } catch (e) {
           LogService().log(
@@ -545,7 +554,7 @@ class ConferenceHostPeerManager {
     final remoteStream = _remoteStreams.remove(key);
     if (remoteStream != null) {
       await remoteStream.dispose();
-      _eventController.add(ConferenceEvent('remote_stream_removed', key));
+      _emitEvent(ConferenceEvent('remote_stream_removed', key));
     }
     if (track == null) return;
 
@@ -654,9 +663,7 @@ class ConferenceHostPeerManager {
           await previous.dispose();
         }
         _remoteStreams[key] = stream;
-        _eventController.add(
-          ConferenceEvent('remote_stream', peer.callsign, stream),
-        );
+        _emitEvent(ConferenceEvent('remote_stream', peer.callsign, stream));
         await _onSpeakerTrackReceived(key, event.track);
         return;
       }
@@ -689,7 +696,7 @@ class ConferenceHostPeerManager {
           stream,
           excludeKey: key,
         );
-        _eventController.add(
+        _emitEvent(
           ConferenceEvent('remote_screen_stream', peer.callsign, stream),
         );
       }
@@ -704,7 +711,7 @@ class ConferenceHostPeerManager {
     if (!(peer.connectionCompleter?.isCompleted ?? true)) {
       peer.connectionCompleter!.complete(true);
     }
-    _eventController.add(ConferenceEvent('peer_connected', peer.callsign));
+    _emitEvent(ConferenceEvent('peer_connected', peer.callsign));
   }
 
   void _markPeerDisconnected(ConferenceAudioPeer peer, {bool failed = false}) {
@@ -718,7 +725,7 @@ class ConferenceHostPeerManager {
     if (failed && !(peer.connectionCompleter?.isCompleted ?? true)) {
       peer.connectionCompleter!.complete(false);
     }
-    _eventController.add(ConferenceEvent('peer_disconnected', peer.callsign));
+    _emitEvent(ConferenceEvent('peer_disconnected', peer.callsign));
   }
 
   Future<void> _closePeer(ConferenceAudioPeer peer) async {
