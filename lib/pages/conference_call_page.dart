@@ -2,15 +2,12 @@
 library;
 
 import 'dart:async';
-import 'dart:io';
 import 'dart:math' as math;
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:qr_flutter/qr_flutter.dart';
-import 'package:window_manager/window_manager.dart';
 
 import '../services/conference_service.dart';
 import '../services/profile_service.dart';
@@ -33,6 +30,10 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
   RTCVideoRenderer? _screenRenderer;
   Future<void> _screenSyncQueue = Future<void>.value();
   String? _screenRendererStreamId;
+  final FocusNode _screenShareFullscreenFocusNode = FocusNode();
+  Timer? _screenShareFullscreenOverlayTimer;
+  bool _isScreenShareFullscreen = false;
+  bool _showScreenShareFullscreenOverlay = true;
 
   @override
   void initState() {
@@ -70,6 +71,8 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
   void dispose() {
     _stateSubscription?.cancel();
     _eventSubscription?.cancel();
+    _screenShareFullscreenOverlayTimer?.cancel();
+    _screenShareFullscreenFocusNode.dispose();
     unawaited(_disposeAudioRenderers());
     unawaited(_disposeScreenRenderer());
     super.dispose();
@@ -223,12 +226,14 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
     final activeSharer = _conferenceService.activeScreenSharer;
     if (activeSharer != null &&
         activeSharer.toUpperCase() == myCallsign.toUpperCase()) {
+      _closeScreenShareFullscreen();
       await _disposeScreenRenderer();
       return;
     }
 
     final stream = _conferenceService.activeScreenStream;
     if (stream == null) {
+      _closeScreenShareFullscreen();
       await _disposeScreenRenderer();
       return;
     }
@@ -261,14 +266,61 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
     await renderer.dispose();
   }
 
-  Future<void> _openScreenShareFullscreen() async {
-    await Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => _ConferenceScreenShareFullscreenPage(
-          conferenceService: _conferenceService,
-        ),
-      ),
-    );
+  void _openScreenShareFullscreen() {
+    if (_screenRenderer == null) {
+      return;
+    }
+    setState(() {
+      _isScreenShareFullscreen = true;
+    });
+    _showScreenShareFullscreenControls();
+  }
+
+  void _closeScreenShareFullscreen() {
+    if (!_isScreenShareFullscreen) {
+      return;
+    }
+    _screenShareFullscreenOverlayTimer?.cancel();
+    if (mounted) {
+      setState(() {
+        _isScreenShareFullscreen = false;
+        _showScreenShareFullscreenOverlay = true;
+      });
+    } else {
+      _isScreenShareFullscreen = false;
+      _showScreenShareFullscreenOverlay = true;
+    }
+  }
+
+  void _showScreenShareFullscreenControls() {
+    if (!_isScreenShareFullscreen || !mounted) {
+      return;
+    }
+    setState(() {
+      _showScreenShareFullscreenOverlay = true;
+    });
+    _screenShareFullscreenOverlayTimer?.cancel();
+    _screenShareFullscreenOverlayTimer = Timer(const Duration(seconds: 3), () {
+      if (mounted && _isScreenShareFullscreen) {
+        setState(() {
+          _showScreenShareFullscreenOverlay = false;
+        });
+      }
+    });
+  }
+
+  KeyEventResult _handleScreenShareFullscreenKeyEvent(
+    FocusNode node,
+    KeyEvent event,
+  ) {
+    if (event is! KeyDownEvent) {
+      return KeyEventResult.ignored;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.escape) {
+      _closeScreenShareFullscreen();
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
   }
 
   void _queueScreenShareSync() {
@@ -506,381 +558,519 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
         activeScreenSharer != null &&
         activeScreenSharer.toUpperCase() == myCallsign.toUpperCase();
     final shareUrl = _shareUrl;
+    final isShowingFullscreenScreenShare =
+        _isScreenShareFullscreen &&
+        _screenRenderer != null &&
+        activeScreenSharer != null &&
+        !isViewingLocalScreenShare;
 
-    return Scaffold(
-      backgroundColor: theme.colorScheme.surface,
-      appBar: AppBar(
-        title: Text(room?.roomName ?? 'Meeting'),
-        automaticallyImplyLeading: false,
-        actions: [
-          if (isHost)
-            IconButton(
-              icon: const Icon(Icons.share),
-              onPressed: _showShareSheet,
-              tooltip: 'Share meeting',
-            ),
-        ],
-      ),
-      body: LayoutBuilder(
-        builder: (context, constraints) {
-          final screenPreviewHeight =
-              activeScreenSharer == null || isViewingLocalScreenShare
-              ? 0.0
-              : math.min(
-                  constraints.maxWidth * (9 / 16),
-                  ((constraints.maxHeight - 150).clamp(40, 220)).toDouble(),
-                );
-          final compactScreenPreview = screenPreviewHeight < 120;
-
-          return Column(
-            children: [
-              // Room info bar
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 8,
-                ),
-                child: Row(
-                  children: [
-                    Icon(
-                      room?.signalingMode == ConferenceSignalingMode.lan
-                          ? Icons.wifi
-                          : Icons.cloud,
-                      size: 16,
-                      color: theme.colorScheme.onSurfaceVariant,
-                    ),
-                    const SizedBox(width: 6),
-                    if (room != null)
-                      Expanded(
-                        child: InkWell(
-                          onTap: _copyShareUrl,
-                          borderRadius: BorderRadius.circular(6),
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 8,
-                              vertical: 3,
-                            ),
-                            decoration: BoxDecoration(
-                              color: theme.colorScheme.primaryContainer,
-                              borderRadius: BorderRadius.circular(6),
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Flexible(
-                                  child: Text(
-                                    shareUrl ?? room.roomId,
-                                    style: theme.textTheme.labelMedium
-                                        ?.copyWith(
-                                          fontWeight: FontWeight.bold,
-                                          color: theme
-                                              .colorScheme
-                                              .onPrimaryContainer,
-                                        ),
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                ),
-                                const SizedBox(width: 4),
-                                Icon(
-                                  Icons.copy,
-                                  size: 12,
-                                  color: theme.colorScheme.onPrimaryContainer,
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ),
-                    const SizedBox(width: 8),
-                    // Speaker/listener count
-                    Icon(
-                      Icons.mic,
-                      size: 14,
-                      color: theme.colorScheme.onSurfaceVariant,
-                    ),
-                    const SizedBox(width: 2),
-                    Text(
-                      '${room?.speakerCount ?? 0}',
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: theme.colorScheme.onSurfaceVariant,
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Icon(
-                      Icons.headphones,
-                      size: 14,
-                      color: theme.colorScheme.onSurfaceVariant,
-                    ),
-                    const SizedBox(width: 2),
-                    Text(
-                      '${room?.listenerCount ?? 0}',
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: theme.colorScheme.onSurfaceVariant,
-                      ),
-                    ),
-                  ],
-                ),
+    return PopScope(
+      canPop: !_isScreenShareFullscreen,
+      onPopInvokedWithResult: (didPop, result) {
+        if (!didPop && _isScreenShareFullscreen) {
+          _closeScreenShareFullscreen();
+        }
+      },
+      child: Scaffold(
+        backgroundColor: theme.colorScheme.surface,
+        appBar: AppBar(
+          title: Text(room?.roomName ?? 'Meeting'),
+          automaticallyImplyLeading: false,
+          actions: [
+            if (isHost)
+              IconButton(
+                icon: const Icon(Icons.share),
+                onPressed: _showShareSheet,
+                tooltip: 'Share meeting',
               ),
+          ],
+        ),
+        body: LayoutBuilder(
+          builder: (context, constraints) {
+            final screenPreviewHeight =
+                activeScreenSharer == null || isViewingLocalScreenShare
+                ? 0.0
+                : math.min(
+                    constraints.maxWidth * (9 / 16),
+                    ((constraints.maxHeight - 150).clamp(40, 220)).toDouble(),
+                  );
+            final compactScreenPreview = screenPreviewHeight < 120;
 
-              const Divider(height: 1),
-
-              if (isViewingLocalScreenShare)
-                Container(
-                  width: double.infinity,
-                  margin: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 14,
-                    vertical: 12,
-                  ),
-                  decoration: BoxDecoration(
-                    color: theme.colorScheme.primaryContainer,
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                  child: Row(
-                    children: [
-                      Icon(
-                        Icons.screen_share,
-                        color: theme.colorScheme.onPrimaryContainer,
+            return Stack(
+              children: [
+                Column(
+                  children: [
+                    // Room info bar
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 8,
                       ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Text(
-                          'You are sharing your screen',
-                          style: theme.textTheme.titleSmall?.copyWith(
-                            color: theme.colorScheme.onPrimaryContainer,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-
-              if (activeScreenSharer != null && !isViewingLocalScreenShare)
-                Container(
-                  padding: EdgeInsets.fromLTRB(
-                    16,
-                    compactScreenPreview ? 10 : 16,
-                    16,
-                    8,
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
+                      child: Row(
                         children: [
-                          Expanded(
-                            child: Text(
-                              activeScreenSharer == myCallsign
-                                  ? 'You are sharing your screen'
-                                  : '$activeScreenSharer is sharing a screen',
-                              style: compactScreenPreview
-                                  ? theme.textTheme.titleSmall
-                                  : theme.textTheme.titleMedium,
+                          Icon(
+                            room?.signalingMode == ConferenceSignalingMode.lan
+                                ? Icons.wifi
+                                : Icons.cloud,
+                            size: 16,
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
+                          const SizedBox(width: 6),
+                          if (room != null)
+                            Expanded(
+                              child: InkWell(
+                                onTap: _copyShareUrl,
+                                borderRadius: BorderRadius.circular(6),
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 8,
+                                    vertical: 3,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: theme.colorScheme.primaryContainer,
+                                    borderRadius: BorderRadius.circular(6),
+                                  ),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Flexible(
+                                        child: Text(
+                                          shareUrl ?? room.roomId,
+                                          style: theme.textTheme.labelMedium
+                                              ?.copyWith(
+                                                fontWeight: FontWeight.bold,
+                                                color: theme
+                                                    .colorScheme
+                                                    .onPrimaryContainer,
+                                              ),
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                      ),
+                                      const SizedBox(width: 4),
+                                      Icon(
+                                        Icons.copy,
+                                        size: 12,
+                                        color: theme
+                                            .colorScheme
+                                            .onPrimaryContainer,
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ),
+                          const SizedBox(width: 8),
+                          // Speaker/listener count
+                          Icon(
+                            Icons.mic,
+                            size: 14,
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
+                          const SizedBox(width: 2),
+                          Text(
+                            '${room?.speakerCount ?? 0}',
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: theme.colorScheme.onSurfaceVariant,
                             ),
                           ),
-                          if (_screenRenderer != null)
-                            IconButton(
-                              icon: const Icon(Icons.fullscreen),
-                              tooltip: 'Open full screen',
-                              onPressed: _openScreenShareFullscreen,
+                          const SizedBox(width: 8),
+                          Icon(
+                            Icons.headphones,
+                            size: 14,
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
+                          const SizedBox(width: 2),
+                          Text(
+                            '${room?.listenerCount ?? 0}',
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: theme.colorScheme.onSurfaceVariant,
                             ),
+                          ),
                         ],
                       ),
-                      SizedBox(height: compactScreenPreview ? 6 : 8),
-                      SizedBox(
-                        width: double.infinity,
-                        height: screenPreviewHeight,
-                        child: ClipRRect(
-                          borderRadius: BorderRadius.circular(16),
-                          child: DecoratedBox(
-                            decoration: BoxDecoration(
-                              color: theme.colorScheme.surfaceContainerHighest,
-                            ),
-                            child: _screenRenderer == null
-                                ? Center(
-                                    child: Text(
-                                      'Connecting screen share...',
-                                      style: theme.textTheme.bodyMedium
-                                          ?.copyWith(
-                                            color: theme
-                                                .colorScheme
-                                                .onSurfaceVariant,
-                                          ),
-                                    ),
-                                  )
-                                : RTCVideoView(_screenRenderer!),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
+                    ),
 
-              Expanded(
-                child: DefaultTabController(
-                  length: 2,
-                  child: Column(
-                    children: [
-                      TabBar(
-                        tabs: [
-                          Tab(text: 'People (${participants.length})'),
-                          Tab(
-                            text:
-                                'Chat (${_conferenceService.chatMessages.length})',
-                          ),
-                        ],
-                      ),
-                      Expanded(
-                        child: TabBarView(
+                    const Divider(height: 1),
+
+                    if (isViewingLocalScreenShare)
+                      Container(
+                        width: double.infinity,
+                        margin: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 14,
+                          vertical: 12,
+                        ),
+                        decoration: BoxDecoration(
+                          color: theme.colorScheme.primaryContainer,
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        child: Row(
                           children: [
-                            participants.isEmpty
-                                ? Center(
-                                    child: Text(
-                                      'Waiting for participants...',
-                                      style: theme.textTheme.bodyLarge
-                                          ?.copyWith(
-                                            color: theme
-                                                .colorScheme
-                                                .onSurfaceVariant,
-                                          ),
-                                    ),
-                                  )
-                                : ListView.builder(
-                                    padding: const EdgeInsets.all(8),
-                                    itemCount: participants.length,
-                                    itemBuilder: (context, index) {
-                                      final p = participants[index];
-                                      final isSelf = p.callsign == myCallsign;
-                                      final isRelayPresenceOnly =
-                                          !isHost &&
-                                          !isSelf &&
-                                          p.callsign != room?.hostCallsign;
-                                      final statusLabel = isRelayPresenceOnly
-                                          ? 'In room'
-                                          : (p.isConnected
-                                                ? 'Connected'
-                                                : 'Connecting...');
-                                      return _ParticipantTile(
-                                        callsign: p.callsign,
-                                        statusLabel: statusLabel,
-                                        isConnected:
-                                            p.isConnected ||
-                                            isRelayPresenceOnly,
-                                        isMuted: p.isMuted,
-                                        isSpeaker: p.isSpeaker,
-                                        hasPendingSpeakerRequest:
-                                            p.hasPendingSpeakerRequest,
-                                        hasPendingScreenShareRequest:
-                                            p.hasPendingScreenShareRequest,
-                                        isScreenSharing: p.isScreenSharing,
-                                        isHost:
-                                            p.callsign == room?.hostCallsign,
-                                        isMe: isSelf,
-                                        canManage:
-                                            isHost &&
-                                            p.callsign != room?.hostCallsign &&
-                                            !isSelf,
-                                        onPromote: () =>
-                                            _promoteParticipant(p.callsign),
-                                        onDemote: () =>
-                                            _demoteParticipant(p.callsign),
-                                        onApproveScreenShare: () =>
-                                            _approveScreenShare(p.callsign),
-                                      );
-                                    },
-                                  ),
-                            Column(
-                              children: [
-                                Expanded(
-                                  child: MessageListWidget(
-                                    messages: _conferenceService.chatMessages,
-                                    isGroupChat: true,
-                                  ),
+                            Icon(
+                              Icons.screen_share,
+                              color: theme.colorScheme.onPrimaryContainer,
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Text(
+                                'You are sharing your screen',
+                                style: theme.textTheme.titleSmall?.copyWith(
+                                  color: theme.colorScheme.onPrimaryContainer,
+                                  fontWeight: FontWeight.w600,
                                 ),
-                                MessageInputWidget(
-                                  onSend: _sendChatMessage,
-                                  allowFiles: false,
-                                ),
-                              ],
+                              ),
                             ),
                           ],
                         ),
                       ),
-                    ],
-                  ),
-                ),
-              ),
-            ],
-          );
-        },
-      ),
 
-      // Bottom controls
-      bottomNavigationBar: SafeArea(
-        child: Container(
-          padding: const EdgeInsets.all(16),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-            children: [
-              _CallButton(
-                icon: isMuted ? Icons.mic_off : Icons.mic,
-                label: isMuted ? 'Unmute' : 'Mute',
-                color: isMuted
-                    ? theme.colorScheme.error
-                    : theme.colorScheme.surfaceContainerHighest,
-                iconColor: isMuted ? Colors.white : theme.colorScheme.onSurface,
-                onPressed: _toggleMute,
-              ),
-              if (canRequestSpeaker)
-                _CallButton(
-                  icon: hasRequestedSpeaker
-                      ? Icons.pan_tool_alt
-                      : Icons.record_voice_over,
-                  label: hasRequestedSpeaker ? 'Requested' : 'Request Mic',
-                  color: hasRequestedSpeaker
-                      ? theme.colorScheme.primary
-                      : theme.colorScheme.secondaryContainer,
-                  iconColor: hasRequestedSpeaker
-                      ? theme.colorScheme.onPrimary
-                      : theme.colorScheme.onSecondaryContainer,
-                  onPressed: hasRequestedSpeaker ? null : _requestSpeakerAccess,
+                    if (activeScreenSharer != null &&
+                        !isViewingLocalScreenShare)
+                      Container(
+                        padding: EdgeInsets.fromLTRB(
+                          16,
+                          compactScreenPreview ? 10 : 16,
+                          16,
+                          8,
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    activeScreenSharer == myCallsign
+                                        ? 'You are sharing your screen'
+                                        : '$activeScreenSharer is sharing a screen',
+                                    style: compactScreenPreview
+                                        ? theme.textTheme.titleSmall
+                                        : theme.textTheme.titleMedium,
+                                  ),
+                                ),
+                                if (_screenRenderer != null)
+                                  IconButton(
+                                    icon: const Icon(Icons.fullscreen),
+                                    tooltip: 'Open full screen',
+                                    onPressed: _openScreenShareFullscreen,
+                                  ),
+                              ],
+                            ),
+                            SizedBox(height: compactScreenPreview ? 6 : 8),
+                            SizedBox(
+                              width: double.infinity,
+                              height: screenPreviewHeight,
+                              child: ClipRRect(
+                                borderRadius: BorderRadius.circular(16),
+                                child: DecoratedBox(
+                                  decoration: BoxDecoration(
+                                    color: theme
+                                        .colorScheme
+                                        .surfaceContainerHighest,
+                                  ),
+                                  child: _screenRenderer == null
+                                      ? Center(
+                                          child: Text(
+                                            'Connecting screen share...',
+                                            style: theme.textTheme.bodyMedium
+                                                ?.copyWith(
+                                                  color: theme
+                                                      .colorScheme
+                                                      .onSurfaceVariant,
+                                                ),
+                                          ),
+                                        )
+                                      : (_isScreenShareFullscreen
+                                            ? Center(
+                                                child: Text(
+                                                  'Screen share opened in full screen',
+                                                  style: theme
+                                                      .textTheme
+                                                      .bodyMedium
+                                                      ?.copyWith(
+                                                        color: theme
+                                                            .colorScheme
+                                                            .onSurfaceVariant,
+                                                      ),
+                                                ),
+                                              )
+                                            : RTCVideoView(_screenRenderer!)),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+
+                    Expanded(
+                      child: DefaultTabController(
+                        length: 2,
+                        child: Column(
+                          children: [
+                            TabBar(
+                              tabs: [
+                                Tab(text: 'People (${participants.length})'),
+                                Tab(
+                                  text:
+                                      'Chat (${_conferenceService.chatMessages.length})',
+                                ),
+                              ],
+                            ),
+                            Expanded(
+                              child: TabBarView(
+                                children: [
+                                  participants.isEmpty
+                                      ? Center(
+                                          child: Text(
+                                            'Waiting for participants...',
+                                            style: theme.textTheme.bodyLarge
+                                                ?.copyWith(
+                                                  color: theme
+                                                      .colorScheme
+                                                      .onSurfaceVariant,
+                                                ),
+                                          ),
+                                        )
+                                      : ListView.builder(
+                                          padding: const EdgeInsets.all(8),
+                                          itemCount: participants.length,
+                                          itemBuilder: (context, index) {
+                                            final p = participants[index];
+                                            final isSelf =
+                                                p.callsign == myCallsign;
+                                            final isRelayPresenceOnly =
+                                                !isHost &&
+                                                !isSelf &&
+                                                p.callsign !=
+                                                    room?.hostCallsign;
+                                            final statusLabel =
+                                                isRelayPresenceOnly
+                                                ? 'In room'
+                                                : (p.isConnected
+                                                      ? 'Connected'
+                                                      : 'Connecting...');
+                                            return _ParticipantTile(
+                                              callsign: p.callsign,
+                                              statusLabel: statusLabel,
+                                              isConnected:
+                                                  p.isConnected ||
+                                                  isRelayPresenceOnly,
+                                              isMuted: p.isMuted,
+                                              isSpeaker: p.isSpeaker,
+                                              hasPendingSpeakerRequest:
+                                                  p.hasPendingSpeakerRequest,
+                                              hasPendingScreenShareRequest: p
+                                                  .hasPendingScreenShareRequest,
+                                              isScreenSharing:
+                                                  p.isScreenSharing,
+                                              isHost:
+                                                  p.callsign ==
+                                                  room?.hostCallsign,
+                                              isMe: isSelf,
+                                              canManage:
+                                                  isHost &&
+                                                  p.callsign !=
+                                                      room?.hostCallsign &&
+                                                  !isSelf,
+                                              onPromote: () =>
+                                                  _promoteParticipant(
+                                                    p.callsign,
+                                                  ),
+                                              onDemote: () =>
+                                                  _demoteParticipant(
+                                                    p.callsign,
+                                                  ),
+                                              onApproveScreenShare: () =>
+                                                  _approveScreenShare(
+                                                    p.callsign,
+                                                  ),
+                                            );
+                                          },
+                                        ),
+                                  Column(
+                                    children: [
+                                      Expanded(
+                                        child: MessageListWidget(
+                                          messages:
+                                              _conferenceService.chatMessages,
+                                          isGroupChat: true,
+                                        ),
+                                      ),
+                                      MessageInputWidget(
+                                        onSend: _sendChatMessage,
+                                        allowFiles: false,
+                                      ),
+                                    ],
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
-              _CallButton(
-                icon: isLocalScreenSharing
-                    ? Icons.stop_screen_share
-                    : (isHost ? Icons.screen_share : Icons.present_to_all),
-                label: isLocalScreenSharing
-                    ? 'Stop Screen'
-                    : (isHost ? 'Share Screen' : 'Ask Screen'),
-                color: isLocalScreenSharing
-                    ? theme.colorScheme.primary
-                    : (hasRequestedScreenShare
-                          ? theme.colorScheme.primary
-                          : theme.colorScheme.tertiaryContainer),
-                iconColor: isLocalScreenSharing || hasRequestedScreenShare
-                    ? theme.colorScheme.onPrimary
-                    : theme.colorScheme.onTertiaryContainer,
-                onPressed: isLocalScreenSharing
-                    ? _toggleScreenShare
-                    : (isHost
-                          ? (activeScreenSharer == null
-                                ? _toggleScreenShare
-                                : null)
-                          : (hasRequestedScreenShare ||
-                                    (activeScreenSharer != null &&
-                                        activeScreenSharer != myCallsign)
-                                ? null
-                                : _requestScreenShare)),
-              ),
-              _CallButton(
-                icon: Icons.call_end,
-                label: isHost ? 'End' : 'Leave',
-                color: const Color(0xFFD90429),
-                iconColor: Colors.white,
-                onPressed: _endCall,
-              ),
-            ],
+                if (isShowingFullscreenScreenShare)
+                  Positioned.fill(
+                    child: DecoratedBox(
+                      decoration: const BoxDecoration(color: Colors.black),
+                      child: Focus(
+                        focusNode: _screenShareFullscreenFocusNode,
+                        autofocus: true,
+                        onKeyEvent: _handleScreenShareFullscreenKeyEvent,
+                        child: MouseRegion(
+                          onHover: (_) => _showScreenShareFullscreenControls(),
+                          onEnter: (_) => _showScreenShareFullscreenControls(),
+                          child: GestureDetector(
+                            behavior: HitTestBehavior.opaque,
+                            onTap: _showScreenShareFullscreenControls,
+                            onPanDown: (_) =>
+                                _showScreenShareFullscreenControls(),
+                            child: Stack(
+                              fit: StackFit.expand,
+                              children: [
+                                Center(child: RTCVideoView(_screenRenderer!)),
+                                if (_showScreenShareFullscreenOverlay)
+                                  SafeArea(
+                                    child: Padding(
+                                      padding: const EdgeInsets.all(16),
+                                      child: Row(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Expanded(
+                                            child: Container(
+                                              padding:
+                                                  const EdgeInsets.symmetric(
+                                                    horizontal: 12,
+                                                    vertical: 10,
+                                                  ),
+                                              decoration: BoxDecoration(
+                                                color: Colors.black.withValues(
+                                                  alpha: 0.55,
+                                                ),
+                                                borderRadius:
+                                                    BorderRadius.circular(14),
+                                              ),
+                                              child: Text(
+                                                '$activeScreenSharer is sharing a screen',
+                                                style: theme
+                                                    .textTheme
+                                                    .titleSmall
+                                                    ?.copyWith(
+                                                      color: Colors.white,
+                                                      fontWeight:
+                                                          FontWeight.w600,
+                                                    ),
+                                              ),
+                                            ),
+                                          ),
+                                          const SizedBox(width: 12),
+                                          IconButton(
+                                            icon: Container(
+                                              padding: const EdgeInsets.all(10),
+                                              decoration: BoxDecoration(
+                                                color: Colors.black.withValues(
+                                                  alpha: 0.55,
+                                                ),
+                                                shape: BoxShape.circle,
+                                              ),
+                                              child: const Icon(
+                                                Icons.fullscreen_exit,
+                                                color: Colors.white,
+                                              ),
+                                            ),
+                                            tooltip: 'Exit full screen',
+                                            onPressed:
+                                                _closeScreenShareFullscreen,
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            );
+          },
+        ),
+
+        // Bottom controls
+        bottomNavigationBar: SafeArea(
+          child: Container(
+            padding: const EdgeInsets.all(16),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              children: [
+                _CallButton(
+                  icon: isMuted ? Icons.mic_off : Icons.mic,
+                  label: isMuted ? 'Unmute' : 'Mute',
+                  color: isMuted
+                      ? theme.colorScheme.error
+                      : theme.colorScheme.surfaceContainerHighest,
+                  iconColor: isMuted
+                      ? Colors.white
+                      : theme.colorScheme.onSurface,
+                  onPressed: _toggleMute,
+                ),
+                if (canRequestSpeaker)
+                  _CallButton(
+                    icon: hasRequestedSpeaker
+                        ? Icons.pan_tool_alt
+                        : Icons.record_voice_over,
+                    label: hasRequestedSpeaker ? 'Requested' : 'Request Mic',
+                    color: hasRequestedSpeaker
+                        ? theme.colorScheme.primary
+                        : theme.colorScheme.secondaryContainer,
+                    iconColor: hasRequestedSpeaker
+                        ? theme.colorScheme.onPrimary
+                        : theme.colorScheme.onSecondaryContainer,
+                    onPressed: hasRequestedSpeaker
+                        ? null
+                        : _requestSpeakerAccess,
+                  ),
+                _CallButton(
+                  icon: isLocalScreenSharing
+                      ? Icons.stop_screen_share
+                      : (isHost ? Icons.screen_share : Icons.present_to_all),
+                  label: isLocalScreenSharing
+                      ? 'Stop Screen'
+                      : (isHost ? 'Share Screen' : 'Ask Screen'),
+                  color: isLocalScreenSharing
+                      ? theme.colorScheme.primary
+                      : (hasRequestedScreenShare
+                            ? theme.colorScheme.primary
+                            : theme.colorScheme.tertiaryContainer),
+                  iconColor: isLocalScreenSharing || hasRequestedScreenShare
+                      ? theme.colorScheme.onPrimary
+                      : theme.colorScheme.onTertiaryContainer,
+                  onPressed: isLocalScreenSharing
+                      ? _toggleScreenShare
+                      : (isHost
+                            ? (activeScreenSharer == null
+                                  ? _toggleScreenShare
+                                  : null)
+                            : (hasRequestedScreenShare ||
+                                      (activeScreenSharer != null &&
+                                          activeScreenSharer != myCallsign)
+                                  ? null
+                                  : _requestScreenShare)),
+                ),
+                _CallButton(
+                  icon: Icons.call_end,
+                  label: isHost ? 'End' : 'Leave',
+                  color: const Color(0xFFD90429),
+                  iconColor: Colors.white,
+                  onPressed: _endCall,
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -1004,257 +1194,6 @@ class _ParticipantTile extends StatelessWidget {
                 ),
             ],
           ],
-        ),
-      ),
-    );
-  }
-}
-
-class _ConferenceScreenShareFullscreenPage extends StatefulWidget {
-  final ConferenceService conferenceService;
-
-  const _ConferenceScreenShareFullscreenPage({required this.conferenceService});
-
-  @override
-  State<_ConferenceScreenShareFullscreenPage> createState() =>
-      _ConferenceScreenShareFullscreenPageState();
-}
-
-class _ConferenceScreenShareFullscreenPageState
-    extends State<_ConferenceScreenShareFullscreenPage> {
-  StreamSubscription? _stateSubscription;
-  StreamSubscription? _eventSubscription;
-  RTCVideoRenderer? _renderer;
-  String? _rendererStreamId;
-  Future<void> _syncQueue = Future<void>.value();
-  Timer? _overlayTimer;
-  final FocusNode _focusNode = FocusNode();
-  bool _showOverlay = true;
-  bool _closing = false;
-
-  @override
-  void initState() {
-    super.initState();
-    unawaited(_enterFullscreen());
-    _stateSubscription = widget.conferenceService.stateStream.listen((state) {
-      if (!mounted) return;
-      if (state == ConferenceState.idle) {
-        _closeViewer();
-      }
-    });
-    _eventSubscription = widget.conferenceService.events.listen((_) {
-      _queueSync();
-    });
-    _queueSync();
-    _showOverlayTemporarily();
-  }
-
-  @override
-  void dispose() {
-    _overlayTimer?.cancel();
-    _stateSubscription?.cancel();
-    _eventSubscription?.cancel();
-    _focusNode.dispose();
-    unawaited(_disposeRenderer());
-    unawaited(_exitFullscreen());
-    super.dispose();
-  }
-
-  Future<void> _enterFullscreen() async {
-    if (!kIsWeb &&
-        (Platform.isLinux || Platform.isWindows || Platform.isMacOS)) {
-      await windowManager.setFullScreen(true);
-      return;
-    }
-
-    await SystemChrome.setPreferredOrientations([
-      DeviceOrientation.landscapeLeft,
-      DeviceOrientation.landscapeRight,
-    ]);
-    await SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
-  }
-
-  Future<void> _exitFullscreen() async {
-    if (!kIsWeb &&
-        (Platform.isLinux || Platform.isWindows || Platform.isMacOS)) {
-      await windowManager.setFullScreen(false);
-      return;
-    }
-
-    await SystemChrome.setPreferredOrientations([
-      DeviceOrientation.portraitUp,
-      DeviceOrientation.portraitDown,
-      DeviceOrientation.landscapeLeft,
-      DeviceOrientation.landscapeRight,
-    ]);
-    await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
-  }
-
-  Future<void> _syncRenderer() async {
-    final myCallsign = ProfileService().getProfile().callsign;
-    final activeSharer = widget.conferenceService.activeScreenSharer;
-    if (activeSharer == null ||
-        activeSharer.toUpperCase() == myCallsign.toUpperCase()) {
-      await _closeViewer();
-      return;
-    }
-
-    final stream = widget.conferenceService.activeScreenStream;
-    if (stream == null) {
-      if (mounted) setState(() {});
-      return;
-    }
-
-    var renderer = _renderer;
-    if (renderer == null) {
-      renderer = RTCVideoRenderer();
-      await renderer.initialize();
-      _renderer = renderer;
-    }
-
-    if (_rendererStreamId == stream.id && renderer.srcObject?.id == stream.id) {
-      if (mounted) setState(() {});
-      return;
-    }
-
-    renderer.srcObject = null;
-    renderer.srcObject = stream;
-    _rendererStreamId = stream.id;
-    if (mounted) setState(() {});
-  }
-
-  Future<void> _disposeRenderer() async {
-    final renderer = _renderer;
-    _renderer = null;
-    _rendererStreamId = null;
-    if (renderer == null) {
-      return;
-    }
-    renderer.srcObject = null;
-    await renderer.dispose();
-  }
-
-  void _queueSync() {
-    _syncQueue = _syncQueue
-        .catchError((Object error, StackTrace stackTrace) {})
-        .then((_) => _syncRenderer());
-  }
-
-  void _showOverlayTemporarily() {
-    if (!mounted) {
-      return;
-    }
-    setState(() => _showOverlay = true);
-    _overlayTimer?.cancel();
-    _overlayTimer = Timer(const Duration(seconds: 3), () {
-      if (mounted) {
-        setState(() => _showOverlay = false);
-      }
-    });
-  }
-
-  Future<void> _closeViewer() async {
-    if (_closing || !mounted) {
-      return;
-    }
-    _closing = true;
-    Navigator.of(context).maybePop();
-  }
-
-  KeyEventResult _handleKeyEvent(FocusNode node, KeyEvent event) {
-    if (event is! KeyDownEvent) {
-      return KeyEventResult.ignored;
-    }
-    if (event.logicalKey == LogicalKeyboardKey.escape) {
-      unawaited(_closeViewer());
-      return KeyEventResult.handled;
-    }
-    return KeyEventResult.ignored;
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final activeSharer = widget.conferenceService.activeScreenSharer;
-
-    return Scaffold(
-      backgroundColor: Colors.black,
-      body: PopScope(
-        child: Focus(
-          focusNode: _focusNode,
-          autofocus: true,
-          onKeyEvent: _handleKeyEvent,
-          child: MouseRegion(
-            onHover: (_) => _showOverlayTemporarily(),
-            onEnter: (_) => _showOverlayTemporarily(),
-            child: GestureDetector(
-              onTap: _showOverlayTemporarily,
-              onPanDown: (_) => _showOverlayTemporarily(),
-              child: Stack(
-                fit: StackFit.expand,
-                children: [
-                  if (_renderer != null)
-                    Center(child: RTCVideoView(_renderer!))
-                  else
-                    Center(
-                      child: Text(
-                        'Connecting screen share...',
-                        style: theme.textTheme.titleMedium?.copyWith(
-                          color: Colors.white,
-                        ),
-                      ),
-                    ),
-                  if (_showOverlay)
-                    Positioned(
-                      top: 16,
-                      left: 16,
-                      right: 16,
-                      child: Row(
-                        children: [
-                          Expanded(
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 12,
-                                vertical: 10,
-                              ),
-                              decoration: BoxDecoration(
-                                color: Colors.black.withValues(alpha: 0.55),
-                                borderRadius: BorderRadius.circular(14),
-                              ),
-                              child: Text(
-                                activeSharer == null
-                                    ? 'Shared screen'
-                                    : '$activeSharer is sharing a screen',
-                                style: theme.textTheme.titleSmall?.copyWith(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                          IconButton(
-                            icon: Container(
-                              padding: const EdgeInsets.all(10),
-                              decoration: BoxDecoration(
-                                color: Colors.black.withValues(alpha: 0.55),
-                                shape: BoxShape.circle,
-                              ),
-                              child: const Icon(
-                                Icons.fullscreen_exit,
-                                color: Colors.white,
-                              ),
-                            ),
-                            tooltip: 'Exit full screen',
-                            onPressed: _closeViewer,
-                          ),
-                        ],
-                      ),
-                    ),
-                ],
-              ),
-            ),
-          ),
         ),
       ),
     );
