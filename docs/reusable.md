@@ -64,6 +64,7 @@ This document catalogs reusable UI components available in the Geogram codebase.
 
 ### API Handlers (Shared between CLI and Desktop stations)
 - [AppsHandler](#appshandler) - Aggregated app discovery (`GET /api/apps`) — returns availability + counts for blog, chat, events, alerts, shared in a single call
+- [ActivityHandler / StationActivityStore / StationGroupAccessService](#activityhandler--stationactivitystore--stationgroupaccessservice) - Shared station activity feed ingestion, storage, and private-group access filtering
 
 ### Shared Folder Components
 - [SharedFolder Model](#sharedfolder-model) - Data model for shared folder entries (JSON serialization, visibility)
@@ -9561,6 +9562,53 @@ final handler = AppsHandler(
 final result = await handler.getApps();
 // result['apps']['blog'] == {'available': true, 'count': 5}
 ```
+
+---
+
+## ActivityHandler / StationActivityStore / StationGroupAccessService
+
+**Files:**
+- `lib/api/handlers/activity_handler.dart`
+- `lib/services/station_activity_store.dart`
+- `lib/services/station_group_access_service.dart`
+- `lib/models/station_activity_event.dart`
+
+Shared station activity feed infrastructure used by both `PureStationServer` (CLI) and `StationServerService` (Desktop/App station). Together these provide the new `/api/activity` endpoint, persistent activity storage in `activity/activity.sqlite3`, and authenticated filtering for restricted events tied to shared groups.
+
+**What it provides:**
+- `StationActivityEvent` — reusable feed item model with stable ID, device-supplied `date`, and station-assigned monotonic `index`
+- `StationActivityStore` — SQLite-backed store with a hard cap of `100000` rows and automatic oldest-first pruning
+- `ActivityHandler` — shared `GET /api/activity` / `POST /api/activity` logic used by both station implementations
+- `StationGroupAccessService` — resolves whether an authenticated requester belongs to any allowed group by reading the shared groups app through `ProfileStorage`
+
+**Feed visibility rules:**
+- Unauthenticated requests receive public activity only
+- Authenticated NOSTR requests may also receive restricted/group activity when the requester is the author, is directly listed in `allowed_npubs`, or belongs to one of the `allowed_groups`
+- Clients publish local creations to their preferred station and queue them offline until a station connection is available again
+
+**Stored event shape:**
+```json
+{
+  "id": "sha256...",
+  "app_type": "chat",
+  "action": "message",
+  "source_id": "room42:2026-03-11 10:30_00:KB1ABC",
+  "source_name": "Field Ops",
+  "author_callsign": "KB1ABC",
+  "author_npub": "npub1...",
+  "summary": "Need backup at checkpoint 2",
+  "date": "2026-03-11 10:30_00",
+  "visibility": "group",
+  "allowed_groups": ["team-alpha"],
+  "allowed_npubs": [],
+  "index": 1542
+}
+```
+
+**Usage notes:**
+- Devices publish activity with NOSTR auth to `POST /api/activity`
+- Stations sanitize author identity from the authenticated request before insertion
+- Feed consumers can poll `GET /api/activity?since_index=<n>&limit=<m>&app_types=blog,chat`
 
 ---
 

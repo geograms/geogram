@@ -21,6 +21,7 @@ import 'profile_service.dart';
 import 'signing_service.dart';
 import 'alert_sharing_service.dart';
 import 'profile_storage.dart';
+import 'station_activity_publisher_service.dart';
 
 /// Service for managing reports
 class ReportService {
@@ -416,6 +417,8 @@ class ReportService {
       author: author,
       title: title,
     ));
+
+    await StationActivityPublisherService().publishReport(report);
 
     return report;
   }

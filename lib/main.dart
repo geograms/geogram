@@ -33,6 +33,7 @@ import 'services/chat_notification_service.dart';
 import 'services/station_content_notification_service.dart';
 import 'services/now_service.dart';
 import 'services/now_notification_bridge.dart';
+import 'services/station_activity_publisher_service.dart';
 import 'services/station_chat_queue_service.dart';
 import 'services/dm_notification_service.dart';
 import 'services/backup_notification_service.dart';
@@ -409,6 +410,10 @@ void main() async {
     // Initialize station chat queue processing (keeps retrying queued sends)
     StationChatQueueService().initialize();
     LogService().log('StationChatQueueService initialized');
+
+    // Initialize station activity publishing (keeps retrying queued feed updates)
+    StationActivityPublisherService().initialize();
+    LogService().log('StationActivityPublisherService initialized');
 
     // Initialize USB attachment service (Android only, for ESP32 auto-detection)
     if (!kIsWeb && Platform.isAndroid) {

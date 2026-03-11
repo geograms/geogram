@@ -15,6 +15,7 @@ import '../util/event_bus.dart';
 import 'log_service.dart';
 import 'app_service.dart';
 import 'profile_storage.dart';
+import 'station_activity_publisher_service.dart';
 
 /// Model for chat security (reused for blog)
 class ChatSecurity {
@@ -404,6 +405,8 @@ class BlogService {
         author: author,
         title: title,
       ));
+
+      await StationActivityPublisherService().publishBlogPost(signedPost);
 
       // Regenerate blog cache
       if (_appPath != null) {

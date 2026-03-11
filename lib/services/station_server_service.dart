@@ -22,7 +22,9 @@ import '../services/chat_service.dart';
 import '../services/profile_storage.dart';
 import '../services/app_args.dart';
 import '../services/event_service.dart';
+import '../models/station_activity_event.dart';
 import '../api/handlers/alert_handler.dart';
+import '../api/handlers/activity_handler.dart';
 import '../api/handlers/place_handler.dart';
 import '../api/handlers/feedback_handler.dart';
 import '../services/nip05_registry_service.dart';
@@ -56,6 +58,8 @@ import 'nostr_storage_paths.dart';
 import 'email_relay_service.dart';
 import 'stun_server_service.dart';
 import 'geoip_service.dart';
+import 'station_activity_store.dart';
+import 'station_group_access_service.dart';
 import '../server/mixins/karma_mixin.dart';
 
 class _UploadPayload {
@@ -449,6 +453,7 @@ class StationServerService with KarmaMixin {
 
   // Shared alert API handlers
   AlertHandler? _alertApi;
+  ActivityHandler? _activityApi;
   PlaceHandler? _placeApi;
   FeedbackHandler? _feedbackApi;
 
@@ -501,6 +506,27 @@ class StationServerService with KarmaMixin {
       );
     }
     return _feedbackApi!;
+  }
+
+  ActivityHandler get activityApi {
+    if (_activityApi == null) {
+      final activityProfile = ProfileService().getProfile();
+      final rootStorage = FilesystemProfileStorage(
+        '${StorageConfig().baseDir}/devices/${activityProfile.callsign}',
+      );
+      _activityApi = ActivityHandler(
+        store: StationActivityStore(
+          baseDir: StorageConfig().baseDir,
+          log: (level, message) => LogService().log('ActivityStore: [$level] $message'),
+        ),
+        groupAccess: StationGroupAccessService(
+          rootStorage: rootStorage,
+          log: (level, message) => LogService().log('ActivityGroups: [$level] $message'),
+        ),
+        log: (level, message) => LogService().log('ActivityHandler: [$level] $message'),
+      );
+    }
+    return _activityApi!;
   }
 
   bool get isRunning => _running;
@@ -640,8 +666,8 @@ class StationServerService with KarmaMixin {
       await nip05Registry.init();
       // Set station owner for reserved nicknames
       final profile = ProfileService().getProfile();
-      if (profile.npub != null) {
-        nip05Registry.setStationOwner(profile.npub!);
+      if (profile.npub.isNotEmpty) {
+        nip05Registry.setStationOwner(profile.npub);
       }
 
       // Configure encrypted offline email cache directory (10MB per recipient).
@@ -782,6 +808,8 @@ class StationServerService with KarmaMixin {
       } else if (path == '/api/places' || path == '/api/places/list') {
         // GET /api/places - list places (using shared handler)
         await _handlePlacesApi(request);
+      } else if (path == '/api/activity') {
+        await _handleActivityApi(request);
       } else if (path == '/api/events' || path == '/api/events/list' || path.startsWith('/api/events/')) {
         await _handleEventsRequest(request);
       } else if (path.startsWith('/api/feedback/')) {
@@ -4812,6 +4840,99 @@ h2 { font-size: 1.2rem; margin: 0 0 20px 0; }
 
     request.response.headers.contentType = ContentType.json;
     request.response.write(jsonEncode(result));
+  }
+
+  Future<void> _handleActivityApi(HttpRequest request) async {
+    try {
+      request.response.headers.contentType = ContentType.json;
+
+      if (request.method == 'GET') {
+        final authEvent = _verifyNostrAuthHeader(request);
+        final params = request.uri.queryParameters;
+        final appTypes = params['app_types']
+            ?.split(',')
+            .map((value) => value.trim())
+            .where((value) => value.isNotEmpty)
+            .toList();
+        final result = await activityApi.getFeed(
+          requesterNpub: authEvent?.npub,
+          sinceIndex: int.tryParse(params['since_index'] ?? ''),
+          limit: int.tryParse(params['limit'] ?? '') ?? 50,
+          appTypes: appTypes == null || appTypes.isEmpty ? null : appTypes,
+        );
+        request.response.statusCode = result['success'] == false ? 500 : 200;
+        request.response.write(jsonEncode(result));
+        return;
+      }
+
+      if (request.method == 'POST') {
+        final authEvent = _verifyNostrAuthHeader(request);
+        if (authEvent == null) {
+          request.response.statusCode = 401;
+          request.response.write(jsonEncode({'success': false, 'error': 'Unauthorized'}));
+          return;
+        }
+
+        final body = await utf8.decoder.bind(request).join();
+        final payload = jsonDecode(body) as Map<String, dynamic>;
+        final incoming = StationActivityEvent.fromJson(payload);
+        if (incoming.appType.isEmpty ||
+            incoming.action.isEmpty ||
+            incoming.sourceId.isEmpty ||
+            incoming.summary.isEmpty ||
+            incoming.date.isEmpty) {
+          request.response.statusCode = 400;
+          request.response.write(jsonEncode({'success': false, 'error': 'Missing required fields'}));
+          return;
+        }
+
+        final authorCallsign =
+            authEvent.getTagValue('callsign') ?? incoming.authorCallsign;
+        final sanitized = StationActivityEvent.create(
+          appType: incoming.appType,
+          action: incoming.action,
+          sourceId: incoming.sourceId,
+          sourceName: incoming.sourceName,
+          authorCallsign: authorCallsign,
+          authorNpub: authEvent.npub,
+          summary: incoming.summary,
+          date: incoming.date,
+          visibility: incoming.visibility,
+          allowedGroups: incoming.allowedGroups,
+          allowedNpubs: incoming.allowedNpubs,
+          metadata: incoming.metadata,
+        );
+
+        final result = await activityApi.postActivity(sanitized);
+        request.response.statusCode = result['success'] == false ? 500 : 200;
+        request.response.write(jsonEncode(result));
+
+        final storedJson = result['activity'];
+        if (result['success'] == true &&
+            result['inserted'] == true &&
+            storedJson is Map<String, dynamic>) {
+          final stored = StationActivityEvent.fromJson(storedJson);
+          if (stored.index != null) {
+            _broadcastUpdate(
+              'UPDATE:${stored.authorCallsign}/activity/${stored.index}',
+            );
+          }
+        }
+        return;
+      }
+
+      request.response.statusCode = 405;
+      request.response.write(jsonEncode({'success': false, 'error': 'Method not allowed'}));
+    } catch (e) {
+      LogService().log('Error in activity API: $e');
+      request.response.statusCode = 500;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({
+        'success': false,
+        'error': 'Internal server error',
+        'message': e.toString(),
+      }));
+    }
   }
 
   /// Handle /api/events/* requests (list, details, files, and media)

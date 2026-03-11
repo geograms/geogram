@@ -19,6 +19,7 @@ import 'profile_service.dart';
 import 'nip05_registry_service.dart';
 import 'profile_storage.dart';
 import 'signing_service.dart';
+import 'station_activity_publisher_service.dart';
 
 // NOTE: All file operations now use ProfileStorage abstraction.
 // File watching (startWatching/stopWatching) still requires direct filesystem access
@@ -735,6 +736,22 @@ class ChatService {
         verified: message.isVerified,
       ));
     }
+
+    final currentProfile = ProfileService().getProfile();
+    final legacyAllowedNpubs = channel.isPublic
+        ? const <String>[]
+        : channel.participants
+            .where((participant) => participant != '*')
+            .map((participant) => _participants[participant] ?? '')
+            .where((npub) => npub.isNotEmpty)
+            .toList();
+    await StationActivityPublisherService().publishChatMessage(
+      channel,
+      message,
+      currentCallsign: currentProfile.callsign,
+      currentNpub: currentProfile.npub,
+      allowedNpubs: legacyAllowedNpubs,
+    );
   }
 
   /// Get daily message file path for main channel (ProfileStorage)

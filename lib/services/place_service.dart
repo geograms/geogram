@@ -12,6 +12,7 @@ import 'location_service.dart';
 import '../util/event_bus.dart';
 import 'log_service.dart';
 import 'profile_storage.dart';
+import 'station_activity_publisher_service.dart';
 import 'storage_config.dart';
 
 // ============================================================================
@@ -298,6 +299,8 @@ class PlaceService {
         author: place.author,
         name: place.name,
       ));
+
+      await StationActivityPublisherService().publishPlace(place);
 
       return null; // Success
     } catch (e) {

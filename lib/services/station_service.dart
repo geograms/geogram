@@ -6,6 +6,7 @@ import 'package:path/path.dart' as p;
 import '../connection/connection_manager.dart';
 import 'station_cache_service.dart';
 import '../models/station.dart';
+import '../models/station_activity_event.dart';
 import '../models/station_chat_room.dart';
 import '../models/update_notification.dart';
 import '../services/config_service.dart';
@@ -1603,6 +1604,100 @@ class StationService {
       return {'Authorization': 'Nostr $encoded'};
     } catch (e) {
       LogService().log('Failed to build NOSTR auth headers: $e');
+      return null;
+    }
+  }
+
+  Future<bool> postActivityEvent(String stationUrl, StationActivityEvent event) async {
+    try {
+      final headers = await _buildNostrAuthHeaders(
+        action: 'publish_activity',
+        extraTags: [
+          ['resource', 'activity'],
+          ['activity', event.id],
+        ],
+      );
+      if (headers == null) {
+        LogService().log('StationService: Cannot publish activity without NOSTR auth');
+        return false;
+      }
+
+      final response = await _stationApiRequest(
+        stationUrl: stationUrl,
+        method: 'POST',
+        path: '/api/activity',
+        headers: {
+          ...headers,
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode(event.toJson()),
+        timeout: const Duration(seconds: 20),
+      );
+
+      if (response == null) {
+        LogService().log('StationService: Activity publish returned no response');
+        return false;
+      }
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        return true;
+      }
+
+      LogService().log(
+        'StationService: Activity publish failed ${response.statusCode}: ${response.body}',
+      );
+      return false;
+    } catch (e) {
+      LogService().log('StationService: Activity publish error: $e');
+      return false;
+    }
+  }
+
+  Future<Map<String, dynamic>?> fetchActivityFeed(
+    String stationUrl, {
+    int? sinceIndex,
+    int limit = 50,
+    List<String>? appTypes,
+    bool includeAuthenticated = true,
+  }) async {
+    try {
+      final query = <String, String>{
+        'limit': limit.clamp(1, 200).toString(),
+        if (sinceIndex != null && sinceIndex > 0)
+          'since_index': sinceIndex.toString(),
+        if (appTypes != null && appTypes.isNotEmpty)
+          'app_types': appTypes.join(','),
+      };
+      final uri = Uri(path: '/api/activity', queryParameters: query);
+      final headers = includeAuthenticated
+          ? await _buildNostrAuthHeaders(
+              action: 'read_activity',
+              extraTags: const [
+                ['resource', 'activity'],
+              ],
+            )
+          : null;
+
+      final response = await _stationApiRequest(
+        stationUrl: stationUrl,
+        method: 'GET',
+        path: uri.toString(),
+        headers: headers,
+        timeout: const Duration(seconds: 20),
+      );
+
+      if (response == null || response.body.isEmpty) {
+        return null;
+      }
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        LogService().log(
+          'StationService: Activity feed failed ${response.statusCode}: ${response.body}',
+        );
+        return null;
+      }
+
+      return jsonDecode(response.body) as Map<String, dynamic>;
+    } catch (e) {
+      LogService().log('StationService: Activity feed error: $e');
       return null;
     }
   }
