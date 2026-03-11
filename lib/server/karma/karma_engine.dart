@@ -268,9 +268,9 @@ class KarmaEngine {
     KarmaMission(
       name: 'Chat',
       verb: 'Send Messages',
-      description: 'Join a chat room and send messages or react to others\' messages. '
-          'Earn 1 point per message (up to 10) and 1 point per reaction (up to 5).',
-      actionKeys: ['chat_message', 'chat_reaction'],
+      description: 'Join a chat room and send messages. '
+          'Earn 1 point per message (up to 10).',
+      actionKeys: ['chat_message'],
       navigateTo: 'chat',
     ),
     KarmaMission(
@@ -301,8 +301,9 @@ class KarmaEngine {
       name: 'Social',
       verb: 'Engage Socially',
       description: 'Interact with others\' content: like posts (1 point, up to 10), '
-          'leave comments (1 point, up to 5), or verify alerts (1 point, up to 5).',
-      actionKeys: ['like_given', 'comment_given', 'verify_given'],
+          'react to chat messages (1 point, up to 5), leave comments (1 point, up to 5), '
+          'or verify alerts (1 point, up to 5).',
+      actionKeys: ['like_given', 'chat_reaction', 'comment_given', 'verify_given'],
       navigateTo: null,
     ),
     KarmaMission(

@@ -8925,6 +8925,12 @@ class PureStationServer with EmailHandlerMixin, BlogHandlerMixin, ConsoleCommand
 
     await _saveRoomMessages(roomId, targetCallsign);
 
+    // Record chat reaction karma
+    karmaRecord(
+        callsign: actorCallsign,
+        action: 'chat_reaction',
+        meta: {'room_id': roomId});
+
     request.response.headers.contentType = ContentType.json;
     request.response.write(jsonEncode({
       'success': true,
