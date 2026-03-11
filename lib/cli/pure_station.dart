@@ -2019,6 +2019,9 @@ class PureStationServer with EmailHandlerMixin, BlogHandlerMixin, ConsoleCommand
       EventBus().on<PlaceCreatedEvent>((event) {
         _broadcastUpdate('UPDATE:${event.author}/places/${event.placeId}');
       });
+      EventBus().on<AlertCreatedEvent>((event) {
+        _broadcastUpdate('UPDATE:${event.author}/alerts/${event.alertId}');
+      });
 
       return true;
     } catch (e) {
@@ -2924,12 +2927,12 @@ class PureStationServer with EmailHandlerMixin, BlogHandlerMixin, ConsoleCommand
       } else if (_isAlertFileUploadPath(path) && method == 'GET') {
         // /{callsign}/api/alerts/{alertId}/files/{filename} - serve alert photo
         await _handleAlertFileServe(request);
-      } else if (_isPlaceFileUploadPath(path) && method == 'POST') {
+      } else if (placeApi.isFileUploadPath(path) && method == 'POST') {
         // /{callsign}/api/places/files/{path} - upload place file
-        await _handlePlaceFileUpload(request);
-      } else if (_isPlaceFileUploadPath(path) && method == 'GET') {
+        await placeApi.uploadFile(request);
+      } else if (placeApi.isFileUploadPath(path) && method == 'GET') {
         // /{callsign}/api/places/files/{path} - serve place file
-        await _handlePlaceFileServe(request);
+        await placeApi.serveFile(request);
       } else if (_isAlertDetailsPath(path) && method == 'GET') {
         // /{callsign}/api/alerts/{alertId} - serve local alert details with photos list
         await _handleAlertDetails(request);
@@ -3454,6 +3457,13 @@ class PureStationServer with EmailHandlerMixin, BlogHandlerMixin, ConsoleCommand
 
                 // Persist to disk
                 _saveRoomMessages(roomId);
+
+                // Record chat message karma
+                karmaRecordChatMessage(
+                  callsign: msg.senderCallsign,
+                  content: msg.content,
+                  roomId: roomId,
+                );
 
                 // Broadcast to other clients
                 final payload = jsonEncode({
@@ -5852,6 +5862,11 @@ class PureStationServer with EmailHandlerMixin, BlogHandlerMixin, ConsoleCommand
             request.response.write(jsonEncode({'error': 'Unknown feedback action'}));
             return;
         }
+
+        // Record karma for successful feedback actions
+        if (result['success'] == true) {
+          recordFeedbackKarma(action, contentType, contentId, jsonBody, callsign);
+        }
       } else {
         request.response.statusCode = 405;
         request.response.headers.contentType = ContentType.json;
@@ -6585,13 +6600,6 @@ class PureStationServer with EmailHandlerMixin, BlogHandlerMixin, ConsoleCommand
   }
 
   /// Check if path matches place file upload/download patterns.
-  /// Patterns:
-  /// - /{callsign}/api/places/files/{path}
-  /// - /{callsign}/api/places/{placePath}/files/{path}
-  bool _isPlaceFileUploadPath(String path) {
-    return _parsePlaceFileRequest(path) != null;
-  }
-
   /// Check if path matches /{callsign}/api/alerts/{alertId} pattern for alert details
   /// This should NOT match paths with /files/ (those are handled by _isAlertFileUploadPath)
   bool _isAlertDetailsPath(String path) {
@@ -6799,65 +6807,6 @@ class PureStationServer with EmailHandlerMixin, BlogHandlerMixin, ConsoleCommand
     }
   }
 
-  /// Handle POST /{callsign}/api/places/files/{path} - upload place file
-  Future<void> _handlePlaceFileUpload(HttpRequest request) async {
-    try {
-      final pathValue = request.uri.path;
-      final parsed = _parsePlaceFileRequest(pathValue);
-      if (parsed == null) {
-        request.response.statusCode = 400;
-        request.response.headers.contentType = ContentType.json;
-        request.response.write(jsonEncode({'error': 'Invalid path format'}));
-        return;
-      }
-
-      final callsign = parsed.callsign;
-      final relativePath = _normalizePlaceRelativePath(parsed.relativePath);
-
-      if (_isInvalidRelativePath(relativePath)) {
-        request.response.statusCode = 400;
-        request.response.headers.contentType = ContentType.json;
-        request.response.write(jsonEncode({'error': 'Invalid path'}));
-        return;
-      }
-
-      final bytes = await request.fold<List<int>>(
-        <int>[],
-        (previous, element) => previous..addAll(element),
-      );
-
-      if (bytes.isEmpty) {
-        request.response.statusCode = 400;
-        request.response.headers.contentType = ContentType.json;
-        request.response.write(jsonEncode({'error': 'Empty file'}));
-        return;
-      }
-
-      final placesRoot = path.join(_dataDir!, 'devices', callsign, 'places');
-      final filePath = path.join(placesRoot, relativePath);
-      final parentDir = Directory(path.dirname(filePath));
-      if (!await parentDir.exists()) {
-        await parentDir.create(recursive: true);
-      }
-
-      final file = File(filePath);
-      await file.writeAsBytes(bytes, flush: true);
-
-      request.response.statusCode = 201;
-      request.response.headers.contentType = ContentType.json;
-      request.response.write(jsonEncode({
-        'success': true,
-        'path': '/$callsign/places/$relativePath',
-        'size': bytes.length,
-      }));
-    } catch (e) {
-      _log('ERROR', 'Error handling place file upload: $e');
-      request.response.statusCode = 500;
-      request.response.headers.contentType = ContentType.json;
-      request.response.write(jsonEncode({'error': 'Internal server error', 'message': e.toString()}));
-    }
-  }
-
   /// Handle GET /{callsign}/api/alerts/{alertId}/files/{filename} - serve alert photo
   /// Also handles: /{callsign}/api/alerts/{alertId}/files/images/{filename}
   Future<void> _handleAlertFileServe(HttpRequest request) async {
@@ -7003,98 +6952,6 @@ class PureStationServer with EmailHandlerMixin, BlogHandlerMixin, ConsoleCommand
     }
   }
 
-  /// Handle GET /{callsign}/api/places/files/{path} - serve place file
-  Future<void> _handlePlaceFileServe(HttpRequest request) async {
-    try {
-      final pathValue = request.uri.path;
-      final parsed = _parsePlaceFileRequest(pathValue);
-      if (parsed == null) {
-        request.response.statusCode = 400;
-        request.response.headers.contentType = ContentType.json;
-        request.response.write(jsonEncode({'error': 'Invalid path format'}));
-        return;
-      }
-
-      final callsign = parsed.callsign;
-      final relativePath = parsed.relativePath;
-
-      if (_isInvalidRelativePath(relativePath)) {
-        request.response.statusCode = 400;
-        request.response.headers.contentType = ContentType.json;
-        request.response.write(jsonEncode({'error': 'Invalid path'}));
-        return;
-      }
-
-      final placesRoot = path.join(_dataDir!, 'devices', callsign, 'places');
-      final filePath = path.join(placesRoot, relativePath);
-      final file = File(filePath);
-
-      if (!await file.exists()) {
-        request.response.statusCode = 404;
-        request.response.headers.contentType = ContentType.json;
-        request.response.write(jsonEncode({'error': 'File not found'}));
-        return;
-      }
-
-      final ext = path.extension(filePath).toLowerCase();
-      String contentType = 'application/octet-stream';
-      if (ext == '.jpg' || ext == '.jpeg') {
-        contentType = 'image/jpeg';
-      } else if (ext == '.png') {
-        contentType = 'image/png';
-      } else if (ext == '.gif') {
-        contentType = 'image/gif';
-      } else if (ext == '.webp') {
-        contentType = 'image/webp';
-      } else if (ext == '.txt') {
-        contentType = 'text/plain';
-      }
-
-      final bytes = await file.readAsBytes();
-      request.response.headers.set('Content-Type', contentType);
-      request.response.headers.set('Content-Length', bytes.length.toString());
-      request.response.add(bytes);
-    } catch (e) {
-      _log('ERROR', 'Error serving place file: $e');
-      request.response.statusCode = 500;
-      request.response.headers.contentType = ContentType.json;
-      request.response.write(jsonEncode({'error': 'Internal server error', 'message': e.toString()}));
-    }
-  }
-
-  ({String callsign, String relativePath})? _parsePlaceFileRequest(String path) {
-    final parts = path.split('/').where((p) => p.isNotEmpty).toList();
-    if (parts.length < 5) return null;
-    if (parts[1] != 'api' || parts[2] != 'places') return null;
-
-    final callsign = parts[0].toUpperCase();
-
-    if (parts[3] == 'files') {
-      if (parts.length < 5) return null;
-      return (callsign: callsign, relativePath: parts.sublist(4).join('/'));
-    }
-
-    final filesIndex = parts.indexOf('files');
-    if (filesIndex <= 3 || filesIndex == parts.length - 1) return null;
-
-    final placePath = parts.sublist(3, filesIndex).join('/');
-    final filePath = parts.sublist(filesIndex + 1).join('/');
-    if (placePath.isEmpty || filePath.isEmpty) return null;
-
-    return (callsign: callsign, relativePath: '$placePath/$filePath');
-  }
-
-  String _normalizePlaceRelativePath(String relativePath) {
-    final segments = relativePath
-        .split('/')
-        .where((segment) => segment.isNotEmpty)
-        .toList();
-    if (segments.length > 1 && segments.first == 'places') {
-      return segments.sublist(1).join('/');
-    }
-    return relativePath;
-  }
-
   ({String callsign, String folderName})? _parsePlaceDetailsRequest(String path) {
     final parts = path.split('/').where((p) => p.isNotEmpty).toList();
     if (parts.length < 3) return null;
@@ -7110,15 +6967,6 @@ class PureStationServer with EmailHandlerMixin, BlogHandlerMixin, ConsoleCommand
     }
 
     return null;
-  }
-
-  bool _isInvalidRelativePath(String relativePath) {
-    if (relativePath.isEmpty) return true;
-    if (relativePath.contains('\\')) return true;
-    final normalized = path.normalize(relativePath);
-    if (path.isAbsolute(normalized)) return true;
-    final segments = normalized.split(path.separator);
-    return segments.any((segment) => segment == '..');
   }
 
   /// Check if path matches /{callsign}/api/* pattern
