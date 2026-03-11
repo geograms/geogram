@@ -2,12 +2,15 @@
 library;
 
 import 'dart:async';
+import 'dart:io';
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:qr_flutter/qr_flutter.dart';
+import 'package:window_manager/window_manager.dart';
 
 import '../services/conference_service.dart';
 import '../services/profile_service.dart';
@@ -256,6 +259,16 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
     }
     renderer.srcObject = null;
     await renderer.dispose();
+  }
+
+  Future<void> _openScreenShareFullscreen() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => _ConferenceScreenShareFullscreenPage(
+          conferenceService: _conferenceService,
+        ),
+      ),
+    );
   }
 
   void _queueScreenShareSync() {
@@ -654,13 +667,25 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        activeScreenSharer == myCallsign
-                            ? 'You are sharing your screen'
-                            : '$activeScreenSharer is sharing a screen',
-                        style: compactScreenPreview
-                            ? theme.textTheme.titleSmall
-                            : theme.textTheme.titleMedium,
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              activeScreenSharer == myCallsign
+                                  ? 'You are sharing your screen'
+                                  : '$activeScreenSharer is sharing a screen',
+                              style: compactScreenPreview
+                                  ? theme.textTheme.titleSmall
+                                  : theme.textTheme.titleMedium,
+                            ),
+                          ),
+                          if (_screenRenderer != null)
+                            IconButton(
+                              icon: const Icon(Icons.fullscreen),
+                              tooltip: 'Open full screen',
+                              onPressed: _openScreenShareFullscreen,
+                            ),
+                        ],
                       ),
                       SizedBox(height: compactScreenPreview ? 6 : 8),
                       SizedBox(
@@ -979,6 +1004,257 @@ class _ParticipantTile extends StatelessWidget {
                 ),
             ],
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ConferenceScreenShareFullscreenPage extends StatefulWidget {
+  final ConferenceService conferenceService;
+
+  const _ConferenceScreenShareFullscreenPage({required this.conferenceService});
+
+  @override
+  State<_ConferenceScreenShareFullscreenPage> createState() =>
+      _ConferenceScreenShareFullscreenPageState();
+}
+
+class _ConferenceScreenShareFullscreenPageState
+    extends State<_ConferenceScreenShareFullscreenPage> {
+  StreamSubscription? _stateSubscription;
+  StreamSubscription? _eventSubscription;
+  RTCVideoRenderer? _renderer;
+  String? _rendererStreamId;
+  Future<void> _syncQueue = Future<void>.value();
+  Timer? _overlayTimer;
+  final FocusNode _focusNode = FocusNode();
+  bool _showOverlay = true;
+  bool _closing = false;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_enterFullscreen());
+    _stateSubscription = widget.conferenceService.stateStream.listen((state) {
+      if (!mounted) return;
+      if (state == ConferenceState.idle) {
+        _closeViewer();
+      }
+    });
+    _eventSubscription = widget.conferenceService.events.listen((_) {
+      _queueSync();
+    });
+    _queueSync();
+    _showOverlayTemporarily();
+  }
+
+  @override
+  void dispose() {
+    _overlayTimer?.cancel();
+    _stateSubscription?.cancel();
+    _eventSubscription?.cancel();
+    _focusNode.dispose();
+    unawaited(_disposeRenderer());
+    unawaited(_exitFullscreen());
+    super.dispose();
+  }
+
+  Future<void> _enterFullscreen() async {
+    if (!kIsWeb &&
+        (Platform.isLinux || Platform.isWindows || Platform.isMacOS)) {
+      await windowManager.setFullScreen(true);
+      return;
+    }
+
+    await SystemChrome.setPreferredOrientations([
+      DeviceOrientation.landscapeLeft,
+      DeviceOrientation.landscapeRight,
+    ]);
+    await SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+  }
+
+  Future<void> _exitFullscreen() async {
+    if (!kIsWeb &&
+        (Platform.isLinux || Platform.isWindows || Platform.isMacOS)) {
+      await windowManager.setFullScreen(false);
+      return;
+    }
+
+    await SystemChrome.setPreferredOrientations([
+      DeviceOrientation.portraitUp,
+      DeviceOrientation.portraitDown,
+      DeviceOrientation.landscapeLeft,
+      DeviceOrientation.landscapeRight,
+    ]);
+    await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+  }
+
+  Future<void> _syncRenderer() async {
+    final myCallsign = ProfileService().getProfile().callsign;
+    final activeSharer = widget.conferenceService.activeScreenSharer;
+    if (activeSharer == null ||
+        activeSharer.toUpperCase() == myCallsign.toUpperCase()) {
+      await _closeViewer();
+      return;
+    }
+
+    final stream = widget.conferenceService.activeScreenStream;
+    if (stream == null) {
+      if (mounted) setState(() {});
+      return;
+    }
+
+    var renderer = _renderer;
+    if (renderer == null) {
+      renderer = RTCVideoRenderer();
+      await renderer.initialize();
+      _renderer = renderer;
+    }
+
+    if (_rendererStreamId == stream.id && renderer.srcObject?.id == stream.id) {
+      if (mounted) setState(() {});
+      return;
+    }
+
+    renderer.srcObject = null;
+    renderer.srcObject = stream;
+    _rendererStreamId = stream.id;
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _disposeRenderer() async {
+    final renderer = _renderer;
+    _renderer = null;
+    _rendererStreamId = null;
+    if (renderer == null) {
+      return;
+    }
+    renderer.srcObject = null;
+    await renderer.dispose();
+  }
+
+  void _queueSync() {
+    _syncQueue = _syncQueue
+        .catchError((Object error, StackTrace stackTrace) {})
+        .then((_) => _syncRenderer());
+  }
+
+  void _showOverlayTemporarily() {
+    if (!mounted) {
+      return;
+    }
+    setState(() => _showOverlay = true);
+    _overlayTimer?.cancel();
+    _overlayTimer = Timer(const Duration(seconds: 3), () {
+      if (mounted) {
+        setState(() => _showOverlay = false);
+      }
+    });
+  }
+
+  Future<void> _closeViewer() async {
+    if (_closing || !mounted) {
+      return;
+    }
+    _closing = true;
+    Navigator.of(context).maybePop();
+  }
+
+  KeyEventResult _handleKeyEvent(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent) {
+      return KeyEventResult.ignored;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.escape) {
+      unawaited(_closeViewer());
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final activeSharer = widget.conferenceService.activeScreenSharer;
+
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: PopScope(
+        child: Focus(
+          focusNode: _focusNode,
+          autofocus: true,
+          onKeyEvent: _handleKeyEvent,
+          child: MouseRegion(
+            onHover: (_) => _showOverlayTemporarily(),
+            onEnter: (_) => _showOverlayTemporarily(),
+            child: GestureDetector(
+              onTap: _showOverlayTemporarily,
+              onPanDown: (_) => _showOverlayTemporarily(),
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  if (_renderer != null)
+                    Center(child: RTCVideoView(_renderer!))
+                  else
+                    Center(
+                      child: Text(
+                        'Connecting screen share...',
+                        style: theme.textTheme.titleMedium?.copyWith(
+                          color: Colors.white,
+                        ),
+                      ),
+                    ),
+                  if (_showOverlay)
+                    Positioned(
+                      top: 16,
+                      left: 16,
+                      right: 16,
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 12,
+                                vertical: 10,
+                              ),
+                              decoration: BoxDecoration(
+                                color: Colors.black.withValues(alpha: 0.55),
+                                borderRadius: BorderRadius.circular(14),
+                              ),
+                              child: Text(
+                                activeSharer == null
+                                    ? 'Shared screen'
+                                    : '$activeSharer is sharing a screen',
+                                style: theme.textTheme.titleSmall?.copyWith(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          IconButton(
+                            icon: Container(
+                              padding: const EdgeInsets.all(10),
+                              decoration: BoxDecoration(
+                                color: Colors.black.withValues(alpha: 0.55),
+                                shape: BoxShape.circle,
+                              ),
+                              child: const Icon(
+                                Icons.fullscreen_exit,
+                                color: Colors.white,
+                              ),
+                            ),
+                            tooltip: 'Exit full screen',
+                            onPressed: _closeViewer,
+                          ),
+                        ],
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ),
         ),
       ),
     );
