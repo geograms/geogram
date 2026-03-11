@@ -87,8 +87,8 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
   }
 
   String? get _shareUrl {
-    if (_meetUrls.isNotEmpty) return _meetUrls.first;
-    return _conferenceService.stationMeetUrl;
+    return _conferenceService.shareableStationMeetUrl ??
+        (_meetUrls.isNotEmpty ? _meetUrls.first : null);
   }
 
   void _copyShareUrl() {
@@ -308,7 +308,7 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
     if (room == null) return;
 
     final primaryUrl = _shareUrl;
-    final stationUrl = _conferenceService.stationMeetUrl;
+    final stationUrl = _conferenceService.shareableStationMeetUrl;
 
     showModalBottomSheet(
       context: context,
@@ -332,7 +332,7 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
                 child: Column(
                   children: [
                     Text(
-                      _meetUrls.isNotEmpty ? 'Join link' : 'Station link',
+                      primaryUrl == stationUrl ? 'Station link' : 'Join link',
                       style: Theme.of(ctx).textTheme.labelMedium?.copyWith(
                         color: Theme.of(ctx).colorScheme.onPrimaryContainer,
                       ),
@@ -463,7 +463,9 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
                 ),
             ],
 
-            if (_meetUrls.isNotEmpty && stationUrl != null) ...[
+            if (_meetUrls.isNotEmpty &&
+                stationUrl != null &&
+                stationUrl != primaryUrl) ...[
               const SizedBox(height: 12),
               Text(
                 'Station link',

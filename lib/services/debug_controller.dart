@@ -18,6 +18,7 @@ import 'profile_service.dart';
 import 'storage_config.dart';
 import '../util/nostr_key_generator.dart';
 import 'conference_service.dart';
+import 'conference_schedule_service.dart';
 import 'devices_service.dart';
 import 'log_service.dart';
 import 'usb_aoa_service.dart';
@@ -1213,6 +1214,26 @@ class DebugController {
         'params': {},
       },
       {
+        'action': 'conference_schedule',
+        'description': 'Create a scheduled meeting without starting it',
+        'params': {
+          'room_name': '(optional) Meeting name (default: "Test Meeting")',
+          'max_speakers': '(optional) Max speakers including host (default: 6)',
+          'scheduled_at':
+              '(optional) ISO-8601 timestamp for automatic start',
+        },
+      },
+      {
+        'action': 'conference_list_schedules',
+        'description': 'List scheduled meetings',
+        'params': {},
+      },
+      {
+        'action': 'conference_start_scheduled',
+        'description': 'Start a scheduled meeting by room ID',
+        'params': {'room_id': 'Scheduled room ID (required)'},
+      },
+      {
         'action': 'conference_end',
         'description': 'End or leave the current conference',
         'params': {},
@@ -2065,6 +2086,15 @@ class DebugController {
       case 'conference_status':
         return _conferenceStatus();
 
+      case 'conference_schedule':
+        return _conferenceSchedule(params);
+
+      case 'conference_list_schedules':
+        return _conferenceListSchedules();
+
+      case 'conference_start_scheduled':
+        return _conferenceStartScheduled(params);
+
       case 'conference_end':
         return _conferenceEnd();
 
@@ -2157,7 +2187,7 @@ class DebugController {
         'message': 'Conference hosted (SFU, max $maxSpeakers speakers)',
         'room': room.toJson(),
         'meet_urls': meetUrls,
-        'station_meet_url': ConferenceService().stationMeetUrl,
+        'station_meet_url': ConferenceService().shareableStationMeetUrl,
       };
     } catch (e) {
       return {'success': false, 'error': e.toString()};
@@ -2192,6 +2222,62 @@ class DebugController {
     }
   }
 
+  Future<Map<String, dynamic>> _conferenceSchedule(
+    Map<String, dynamic> params,
+  ) async {
+    try {
+      final roomName = params['room_name'] as String? ?? 'Test Meeting';
+      final maxSpeakers = params['max_speakers'] as int? ?? 6;
+      DateTime? scheduledAt;
+      final scheduledAtRaw = params['scheduled_at'] as String?;
+      if (scheduledAtRaw != null && scheduledAtRaw.trim().isNotEmpty) {
+        scheduledAt = DateTime.tryParse(scheduledAtRaw)?.toLocal();
+      }
+      final entry = await ConferenceService().scheduleConference(
+        roomName: roomName,
+        maxSpeakers: maxSpeakers,
+        scheduledAt: scheduledAt,
+      );
+      return {
+        'success': true,
+        'schedule': entry.toJson(),
+      };
+    } catch (e) {
+      return {'success': false, 'error': e.toString()};
+    }
+  }
+
+  Future<Map<String, dynamic>> _conferenceListSchedules() async {
+    try {
+      final schedules = await ConferenceScheduleService().listSchedules();
+      return {
+        'success': true,
+        'schedules': schedules.map((entry) => entry.toJson()).toList(),
+      };
+    } catch (e) {
+      return {'success': false, 'error': e.toString()};
+    }
+  }
+
+  Future<Map<String, dynamic>> _conferenceStartScheduled(
+    Map<String, dynamic> params,
+  ) async {
+    try {
+      final roomId = params['room_id'] as String?;
+      if (roomId == null || roomId.isEmpty) {
+        return {'success': false, 'error': 'room_id is required'};
+      }
+      final room = await ConferenceService().startScheduledConference(roomId);
+      return {
+        'success': true,
+        'room': room.toJson(),
+        'station_meet_url': ConferenceService().shareableStationMeetUrl,
+      };
+    } catch (e) {
+      return {'success': false, 'error': e.toString()};
+    }
+  }
+
   Map<String, dynamic> _conferenceStatus() {
     final cs = ConferenceService();
     return {
@@ -2206,6 +2292,8 @@ class DebugController {
       'active_screen_sharer': cs.activeScreenSharer,
       'room': cs.room?.toJson(),
       'archive': cs.archiveEntry?.toJson(),
+      'station_meet_url': cs.shareableStationMeetUrl,
+      'preferred_station_meet_url': cs.preferredStationMeetUrl,
       'chat_transcript_path': cs.chatTranscriptPath,
       'archive_path': cs.archiveEntry?.relativePath,
       'pending_speaker_requests': cs.pendingSpeakerRequests,

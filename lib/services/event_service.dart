@@ -16,7 +16,6 @@ import '../util/feedback_comment_utils.dart';
 import '../util/feedback_folder_utils.dart';
 import 'contact_service.dart';
 import 'profile_storage.dart';
-import 'station_activity_publisher_service.dart';
 
 /// Service for managing events, files, and reactions
 ///
@@ -26,6 +25,10 @@ class EventService {
   static final EventService _instance = EventService._internal();
   factory EventService() => _instance;
   EventService._internal();
+
+  /// Optional callback to publish activity when an event is created.
+  /// Set by Flutter app; not available in CLI mode.
+  static Future<void> Function(Event)? onEventCreated;
 
   /// Profile storage for file operations (encrypted or filesystem)
   /// IMPORTANT: This MUST be set before using the service.
@@ -338,7 +341,7 @@ class EventService {
         title: title,
       ));
 
-      await StationActivityPublisherService().publishEventRecord(event);
+      await onEventCreated?.call(event);
 
       return event;
     } catch (e) {

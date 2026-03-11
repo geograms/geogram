@@ -20,12 +20,14 @@ import 'package:flutter_webrtc/flutter_webrtc.dart';
 
 import '../models/chat_message.dart';
 import '../models/conference_archive_entry.dart';
+import '../models/conference_schedule_entry.dart';
 import 'app_args.dart';
 import 'conference_archive_service.dart';
 import 'conference_host_peer_manager.dart';
 import 'conference_participant_peer_manager.dart';
 import 'conference_peer_manager.dart';
 import 'conference_recording_service.dart';
+import 'conference_schedule_service.dart';
 import 'conference_signaling_server.dart';
 import 'conference_web_page_service.dart';
 import 'devices_service.dart';
@@ -147,6 +149,7 @@ class ConferenceService {
   // Station-mode subscription
   StreamSubscription? _stationSubscription;
   final ConferenceArchiveService _archiveService = ConferenceArchiveService();
+  final ConferenceScheduleService _scheduleService = ConferenceScheduleService();
   final ConferenceRecordingService _recordingService =
       ConferenceRecordingService();
   ConferenceArchiveEntry? _archiveEntry;
@@ -154,6 +157,7 @@ class ConferenceService {
   final Set<String> _chatMessageIds = {};
   Future<void> _messageQueue = Future<void>.value();
   Timer? _remoteScreenRecoveryTimer;
+  Timer? _scheduledStartTimer;
   Future<void>? _screenShareStartOperation;
   bool _screenShareApproved = false;
 
@@ -255,6 +259,7 @@ class ConferenceService {
   Future<ConferenceRoom> hostConference({
     required String roomName,
     int maxSpeakers = 6,
+    String? roomIdOverride,
   }) async {
     if (_state != ConferenceState.idle) {
       throw StateError('Conference already active');
@@ -264,8 +269,9 @@ class ConferenceService {
     _role = ConferenceRole.host;
     _resetMeetingState();
     await _prepareAudioRouting();
+    await _ensureStationConnectionForHosting();
 
-    final roomId = _generateRoomId();
+    final roomId = roomIdOverride ?? _generateRoomId();
     final callsign = _myCallsign;
     final wsService = WebSocketService();
     final mode = wsService.isConnected
@@ -287,6 +293,11 @@ class ConferenceService {
     );
     await _ensureArchiveForRoom();
     await _loadStoredChatMessages();
+    await _scheduleService.markActive(
+      roomId,
+      stationMeetUrl: shareableStationMeetUrl,
+    );
+    unawaited(_refreshScheduledAutoStartTimer());
 
     // Start host peer manager (SFU)
     _hostPeerManager = ConferenceHostPeerManager(config: _buildConfig());
@@ -327,12 +338,39 @@ class ConferenceService {
   String? get stationMeetUrl {
     final room = _room;
     if (room == null) return null;
-    final stationUrl = WebSocketService().connectedUrl;
-    if (stationUrl == null) return null;
+    return _buildMeetUrlFromStationUrl(WebSocketService().connectedUrl, room);
+  }
+
+  String? get preferredStationMeetUrl {
+    final room = _room;
+    if (room == null) {
+      return null;
+    }
+    if (room.signalingMode != ConferenceSignalingMode.station &&
+        !WebSocketService().isConnected) {
+      return null;
+    }
+    try {
+      return _buildMeetUrlFromStationUrl(
+        StationService().getPreferredStation()?.url,
+        room,
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  String? get shareableStationMeetUrl =>
+      stationMeetUrl ?? preferredStationMeetUrl;
+
+  String? _buildMeetUrlFromStationUrl(String? stationUrl, ConferenceRoom room) {
+    if (stationUrl == null || stationUrl.trim().isEmpty) {
+      return null;
+    }
     try {
       final uri = Uri.parse(stationUrl);
       final scheme = uri.scheme == 'wss' ? 'https' : 'http';
-      final code = roomCode ?? '';
+      final code = _roomCodeFromRoomId(room.roomId);
       final preservedPathSegments = uri.pathSegments.where((segment) {
         if (segment.isEmpty) {
           return false;
@@ -354,6 +392,60 @@ class ConferenceService {
     } catch (_) {
       return null;
     }
+  }
+
+  Future<ConferenceScheduleEntry> scheduleConference({
+    required String roomName,
+    int maxSpeakers = 6,
+    DateTime? scheduledAt,
+  }) async {
+    await _ensureStationConnectionForHosting();
+    final roomId = _generateRoomId();
+    final tempRoom = ConferenceRoom(
+      roomId: roomId,
+      roomName: roomName,
+      hostCallsign: _myCallsign,
+      signalingMode: WebSocketService().isConnected
+          ? ConferenceSignalingMode.station
+          : ConferenceSignalingMode.lan,
+      maxSpeakers: maxSpeakers,
+    );
+    final entry = await _scheduleService.createSchedule(
+      roomId: roomId,
+      roomName: roomName,
+      hostCallsign: _myCallsign,
+      maxSpeakers: maxSpeakers,
+      scheduledAt: scheduledAt,
+      stationMeetUrl: _buildMeetUrlFromStationUrl(
+        WebSocketService().connectedUrl ??
+            (() {
+              try {
+                return StationService().getPreferredStation()?.url;
+              } catch (_) {
+                return null;
+              }
+            })(),
+        tempRoom,
+      ),
+    );
+    await _refreshScheduledAutoStartTimer();
+    return entry;
+  }
+
+  Future<ConferenceRoom> startScheduledConference(String roomId) async {
+    final schedule = await _scheduleService.findScheduleByRoomId(roomId);
+    if (schedule == null) {
+      throw StateError('Scheduled meeting not found');
+    }
+    return hostConference(
+      roomName: schedule.roomName,
+      maxSpeakers: schedule.maxSpeakers,
+      roomIdOverride: schedule.roomId,
+    );
+  }
+
+  Future<void> initializeScheduledMeetings() async {
+    await _refreshScheduledAutoStartTimer();
   }
 
   Future<void> joinStationMeetUrl(
@@ -1009,6 +1101,8 @@ class ConferenceService {
     }
 
     _setState(ConferenceState.ending);
+    final roomId = _room?.roomId;
+    final wasHost = _role == ConferenceRole.host;
 
     try {
       if (_role == ConferenceRole.host &&
@@ -1099,6 +1193,16 @@ class ConferenceService {
       } catch (e) {
         LogService().log('ConferenceService: Failed to finalize archive: $e');
       }
+      if (wasHost && roomId != null) {
+        try {
+          await _scheduleService.markCompleted(roomId);
+        } catch (e) {
+          LogService().log(
+            'ConferenceService: Failed to mark scheduled meeting completed: $e',
+          );
+        }
+      }
+      unawaited(_refreshScheduledAutoStartTimer());
 
       _room = null;
       _role = null;
@@ -2016,7 +2120,7 @@ class ConferenceService {
           .toList(),
       activeScreenSharer: room.activeScreenSharerCallsign,
       signalingMode: room.signalingMode.name,
-      stationMeetUrl: stationMeetUrl,
+      stationMeetUrl: shareableStationMeetUrl,
       meetUrls: meetUrls,
     );
   }
@@ -2050,7 +2154,7 @@ class ConferenceService {
       activeScreenSharer: room.activeScreenSharerCallsign,
       clearActiveScreenSharer: room.activeScreenSharerCallsign == null,
       signalingMode: room.signalingMode.name,
-      stationMeetUrl: stationMeetUrl,
+      stationMeetUrl: shareableStationMeetUrl,
       meetUrls: meetUrls,
     );
   }
@@ -2119,6 +2223,80 @@ class ConferenceService {
     );
     final callsign = _myCallsign;
     return '$letters@$callsign';
+  }
+
+  String _roomCodeFromRoomId(String roomId) {
+    final at = roomId.indexOf('@');
+    return at > 0 ? roomId.substring(0, at) : roomId;
+  }
+
+  Future<void> _ensureStationConnectionForHosting() async {
+    final wsService = WebSocketService();
+    if (wsService.isConnected) {
+      return;
+    }
+    final stationService = StationService();
+    if (!stationService.isInitialized) {
+      await stationService.initialize();
+    }
+    if (wsService.isConnected) {
+      return;
+    }
+    final preferred = stationService.getPreferredStation();
+    if (preferred == null || preferred.url.trim().isEmpty) {
+      return;
+    }
+    try {
+      await stationService.connectStation(preferred.url);
+    } catch (error) {
+      LogService().log(
+        'ConferenceService: Preferred station connection failed before hosting: $error',
+      );
+    }
+  }
+
+  Future<void> _refreshScheduledAutoStartTimer() async {
+    _scheduledStartTimer?.cancel();
+    _scheduledStartTimer = null;
+
+    final schedules = await _scheduleService.listSchedules(
+      includeCompleted: false,
+    );
+    final pending = schedules.where((entry) {
+      return entry.isScheduled && entry.scheduledAt != null;
+    }).toList()
+      ..sort((a, b) => a.scheduledAt!.compareTo(b.scheduledAt!));
+
+    if (pending.isEmpty) {
+      return;
+    }
+
+    final now = DateTime.now().toLocal();
+    final due = pending.where((entry) => !entry.scheduledAt!.isAfter(now)).toList();
+    if (due.isNotEmpty) {
+      if (_state == ConferenceState.idle) {
+        try {
+          await startScheduledConference(due.first.roomId);
+          return;
+        } catch (error) {
+          LogService().log(
+            'ConferenceService: Failed to auto-start scheduled meeting ${due.first.roomId}: $error',
+          );
+        }
+      }
+      _scheduledStartTimer = Timer(
+        const Duration(minutes: 1),
+        () => unawaited(_refreshScheduledAutoStartTimer()),
+      );
+      return;
+    }
+
+    final next = pending.first;
+    final delay = next.scheduledAt!.difference(now);
+    _scheduledStartTimer = Timer(
+      delay,
+      () => unawaited(_refreshScheduledAutoStartTimer()),
+    );
   }
 
   Future<List<String>> _getLocalIPs() async {

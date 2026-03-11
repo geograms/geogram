@@ -1,13 +1,10 @@
 Categories:
   - Connectivity
   - Internet
-
 License: Apache-2.0
-
 AuthorName: Geogram
 AuthorEmail: brito_pt@pm.me
 AuthorWebSite: https://geogram.radio
-
 SourceCode: https://github.com/geograms/geogram
 IssueTracker: https://github.com/geograms/geogram/issues
 Changelog: https://github.com/geograms/geogram/releases
@@ -18,9 +15,9 @@ RepoType: git
 Repo: https://github.com/geograms/geogram.git
 
 Builds:
-  - versionName: 1.7.1
-    versionCode: 532
-    commit: v1.7.1
+  - versionName: 1.6.101
+    versionCode: 4
+    commit: a38826fa245fe6e4c0be2e9a39169b170027b93b
     output: build/app/outputs/flutter-apk/app-release.apk
     srclibs:
       - flutter@stable
@@ -30,15 +27,125 @@ Builds:
       - windows
       - linux
       - web
+      - geogram-cli
+      - bin
+      - android/tinyemu
+      - android/app/src/main/jniLibs
+      - third_party/flutter_webrtc/third_party/libwebrtc/lib
     prebuild:
-      - export PATH="$PATH:$$flutter$$/bin"
-      - flutter config --no-analytics
-      - flutter pub get
+      - export flutter_version=$(cat .flutter-version)
+      - git -C $$flutter$$ fetch --tags
+      - git -C $$flutter$$ checkout -f $flutter_version
+      - export PUB_CACHE=$(pwd)/.pub-cache
+      - sed -i -e '/tinyemu/d' -e '/flutter_map_tile_caching/d' pubspec.yaml
+      - sed -i -e "/import 'package:flutter_map_tile_caching/d" -e 's/fmtc\.FMTCStore?/Object?/g'
+        -e '/FMTCObjectBoxBackend/,/);/d' -e '/_tileStore = fmtc\./d' -e '/_tileStore!\.manage/d'
+        lib/services/map_tile_service.dart
+      - $$flutter$$/bin/flutter config --no-analytics
+      - $$flutter$$/bin/flutter pub get
+      - cd $PUB_CACHE/hosted/pub.dev/geolocator_android-*/android
+      - sed -i -e '/gms/d' build.gradle
+      - cd src/main/java/com/baseflow/geolocator/location
+      - rm FusedLocationClient.java
+      - sed -i -e '/if (forceAndroidLocationManager) {/,/^  }/c return new LocationManagerClient(context,
+        locationOptions);}' -e '/isGooglePlayServicesAvailable/,/^  }/d' -e '/gms/d'
+        GeolocationManager.java
+    scandelete:
+      - .pub-cache
     build:
-      - export PATH="$PATH:$$flutter$$/bin"
-      - flutter build apk --release
+      - export PUB_CACHE=$(pwd)/.pub-cache
+      - $$flutter$$/bin/flutter build apk --release
 
-AutoUpdateMode: Version
-UpdateCheckMode: Tags
-CurrentVersion: 1.7.1
-CurrentVersionCode: 532
+  - versionName: 1.9.0
+    versionCode: 5
+    commit: 409e95a0d610d5ca98d838082fdb6163fa4be7c6
+    output: build/app/outputs/flutter-apk/app-release.apk
+    srclibs:
+      - flutter@stable
+    rm:
+      - ios
+      - macos
+      - windows
+      - linux
+      - web
+      - geogram-cli
+      - bin
+      - android/tinyemu
+      - android/app/src/main/jniLibs
+      - third_party/flutter_webrtc/third_party/libwebrtc/lib
+      - third_party/whisper_flutter_new/android/.cxx
+      - third_party/whisper_flutter_new/example
+    prebuild:
+      - export flutter_version=$(cat .flutter-version)
+      - git -C $$flutter$$ fetch --tags
+      - git -C $$flutter$$ checkout -f $flutter_version
+      - export PUB_CACHE=$(pwd)/.pub-cache
+      - sed -i -e '/tinyemu/d' -e '/flutter_map_tile_caching/d' pubspec.yaml
+      - sed -i -e "/import 'package:flutter_map_tile_caching/d" -e 's/fmtc\.FMTCStore?/Object?/g'
+        -e '/FMTCObjectBoxBackend/,/);/d' -e '/_tileStore = fmtc\./d' -e '/_tileStore!\.manage/d'
+        lib/services/map_tile_service.dart
+      - $$flutter$$/bin/flutter config --no-analytics
+      - $$flutter$$/bin/flutter pub get
+      - cd $PUB_CACHE/hosted/pub.dev/geolocator_android-*/android
+      - sed -i -e '/gms/d' build.gradle
+      - cd src/main/java/com/baseflow/geolocator/location
+      - rm FusedLocationClient.java
+      - sed -i -e '/if (forceAndroidLocationManager) {/,/^  }/c return new LocationManagerClient(context,
+        locationOptions);}' -e '/isGooglePlayServicesAvailable/,/^  }/d' -e '/gms/d'
+        GeolocationManager.java
+    scandelete:
+      - .pub-cache
+    build:
+      - export PUB_CACHE=$(pwd)/.pub-cache
+      - $$flutter$$/bin/flutter build apk --release --build-number=5
+
+  - versionName: 1.31.0
+    versionCode: 6
+    commit: 328a85fa8b96b9894dc261a9c121b8f8a6831f43
+    output: build/app/outputs/flutter-apk/app-release.apk
+    srclibs:
+      - flutter@stable
+    rm:
+      - ios
+      - macos
+      - windows
+      - linux
+      - web
+      - geogram-cli
+      - bin
+      - android/tinyemu
+      - android/app/src/main/jniLibs
+      - third_party/flutter_webrtc/third_party/libwebrtc/lib
+      - third_party/whisper_flutter_new/android/.cxx
+      - third_party/whisper_flutter_new/example
+      - third_party/ble_peripheral/example
+      - third_party/sqlite
+    prebuild:
+      - export flutter_version=$(cat .flutter-version)
+      - git -C $$flutter$$ fetch --tags
+      - git -C $$flutter$$ checkout -f $flutter_version
+      - export PUB_CACHE=$(pwd)/.pub-cache
+      - sed -i -e '/tinyemu/d' -e '/flutter_map_tile_caching/d' -e '/media_kit/d'
+        pubspec.yaml
+      - sed -i -e "/import 'package:flutter_map_tile_caching/d" -e 's/fmtc\.FMTCStore?/Object?/g'
+        -e '/FMTCObjectBoxBackend/,/);/d' -e '/_tileStore = fmtc\./d' -e '/_tileStore!\.manage/d'
+        lib/services/map_tile_service.dart
+      - $$flutter$$/bin/flutter config --no-analytics
+      - $$flutter$$/bin/flutter pub get
+      - cd $PUB_CACHE/hosted/pub.dev/geolocator_android-*/android
+      - sed -i -e '/gms/d' build.gradle
+      - cd src/main/java/com/baseflow/geolocator/location
+      - rm FusedLocationClient.java
+      - sed -i -e '/if (forceAndroidLocationManager) {/,/^  }/c return new LocationManagerClient(context,
+        locationOptions);}' -e '/isGooglePlayServicesAvailable/,/^  }/d' -e '/gms/d'
+        GeolocationManager.java
+    scandelete:
+      - .pub-cache
+    build:
+      - export PUB_CACHE=$(pwd)/.pub-cache
+      - $$flutter$$/bin/flutter build apk --release --build-number=6
+
+AutoUpdateMode: None
+UpdateCheckMode: None
+CurrentVersion: 1.31.0
+CurrentVersionCode: 6

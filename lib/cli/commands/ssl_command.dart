@@ -5,7 +5,7 @@
  * SSL command: domain, email, request, test, renew, autorenew, selfsigned, enable, disable
  */
 
-import '../../station.dart' show PureRelaySettings, SslCertificateManager;
+import '../pure_station.dart' show PureRelaySettings, SslCertificateManager;
 import 'command.dart';
 import 'command_context.dart';
 import 'service_interfaces.dart';

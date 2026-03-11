@@ -5,10 +5,13 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 
 import '../models/conference_archive_entry.dart';
+import '../models/conference_schedule_entry.dart';
 import '../services/conference_archive_service.dart';
+import '../services/conference_schedule_service.dart';
 import '../services/conference_service.dart';
 import '../services/devices_service.dart';
 import '../services/i18n_service.dart';
@@ -28,6 +31,7 @@ class ConferenceHomePage extends StatefulWidget {
 
 class _ConferenceHomePageState extends State<ConferenceHomePage> {
   final _archiveService = ConferenceArchiveService();
+  final _scheduleService = ConferenceScheduleService();
   final _conferenceService = ConferenceService();
   final _i18n = I18nService();
   StreamSubscription? _stateSub;
@@ -39,6 +43,10 @@ class _ConferenceHomePageState extends State<ConferenceHomePage> {
   Timer? _scanTimer;
   List<ConferenceArchiveEntry> _historyEntries =
       const <ConferenceArchiveEntry>[];
+  List<ConferenceScheduleEntry> _scheduledEntries =
+      const <ConferenceScheduleEntry>[];
+  bool _scheduleLoading = true;
+  String? _scheduleError;
   bool _historyLoading = true;
   String? _historyError;
 
@@ -52,10 +60,12 @@ class _ConferenceHomePageState extends State<ConferenceHomePage> {
       }
       setState(() => _state = s);
       if (s == ConferenceState.idle) {
+        unawaited(_loadSchedules());
         unawaited(_loadHistory());
       }
     });
     _scanForMeetings();
+    _loadSchedules();
     _loadHistory();
     _scanTimer = Timer.periodic(
       const Duration(seconds: 15),
@@ -153,6 +163,35 @@ class _ConferenceHomePageState extends State<ConferenceHomePage> {
     }
   }
 
+  Future<void> _loadSchedules() async {
+    if (mounted) {
+      setState(() {
+        _scheduleLoading = true;
+        _scheduleError = null;
+      });
+    }
+    try {
+      final entries = await _scheduleService.listSchedules(
+        includeCompleted: false,
+      );
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _scheduledEntries = entries;
+        _scheduleLoading = false;
+      });
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _scheduleLoading = false;
+        _scheduleError = '$error';
+      });
+    }
+  }
+
   void _joinNearbyMeeting(Map<String, dynamic> meeting) async {
     final roomId = meeting['room_id'] as String?;
     if (roomId == null) return;
@@ -185,6 +224,52 @@ class _ConferenceHomePageState extends State<ConferenceHomePage> {
     await _loadHistory();
   }
 
+  Future<void> _startScheduledMeeting(ConferenceScheduleEntry entry) async {
+    try {
+      await _conferenceService.startScheduledConference(entry.roomId);
+      if (!mounted) return;
+      await _loadSchedules();
+      if (!mounted) return;
+      Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => const ConferenceCallPage()),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Failed to start: $e')));
+    }
+  }
+
+  Future<void> _copyScheduleLink(ConferenceScheduleEntry entry) async {
+    final url = entry.stationMeetUrl;
+    if (url == null || url.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No station link available yet')),
+      );
+      return;
+    }
+    await Clipboard.setData(ClipboardData(text: url));
+    if (!mounted) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('Link copied')));
+  }
+
+  String _formatScheduleDate(DateTime value) {
+    final local = value.toLocal();
+    final day =
+        '${local.year.toString().padLeft(4, '0')}-'
+        '${local.month.toString().padLeft(2, '0')}-'
+        '${local.day.toString().padLeft(2, '0')}';
+    final time =
+        '${local.hour.toString().padLeft(2, '0')}:'
+        '${local.minute.toString().padLeft(2, '0')}';
+    return '$day $time';
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -199,6 +284,7 @@ class _ConferenceHomePageState extends State<ConferenceHomePage> {
           child: RefreshIndicator(
             onRefresh: () async {
               await _scanForMeetings();
+              await _loadSchedules();
               await _loadHistory();
             },
             child: ListView(
@@ -227,7 +313,7 @@ class _ConferenceHomePageState extends State<ConferenceHomePage> {
                       MaterialPageRoute(
                         builder: (_) => const ConferenceHostPage(),
                       ),
-                    ),
+                    ).then((_) => _loadSchedules()),
                     icon: const Icon(Icons.add_call),
                     label: const Text(
                       'Host a Meeting',
@@ -302,6 +388,172 @@ class _ConferenceHomePageState extends State<ConferenceHomePage> {
                     ),
                   ),
                 ],
+
+                const SizedBox(height: 24),
+                const Divider(),
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Icon(
+                      Icons.event,
+                      size: 18,
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      'Scheduled Meetings',
+                      style: theme.textTheme.titleSmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                    const Spacer(),
+                    if (_scheduleLoading)
+                      const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    else
+                      IconButton(
+                        icon: const Icon(Icons.refresh, size: 18),
+                        padding: EdgeInsets.zero,
+                        onPressed: _loadSchedules,
+                        tooltip: 'Refresh schedules',
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                if (_scheduleError != null)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    child: Text(
+                      _scheduleError!,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.error,
+                      ),
+                    ),
+                  )
+                else if (!_scheduleLoading && _scheduledEntries.isEmpty)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    child: Text(
+                      'No scheduled meetings yet',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  )
+                else
+                  ..._scheduledEntries.map(
+                    (entry) => Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: Card(
+                        clipBehavior: Clip.antiAlias,
+                        child: Padding(
+                          padding: const EdgeInsets.all(12),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                children: [
+                                  Icon(
+                                    entry.isActive
+                                        ? Icons.podcasts
+                                        : Icons.schedule,
+                                    color: theme.colorScheme.primary,
+                                  ),
+                                  const SizedBox(width: 12),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          entry.roomName,
+                                          style: theme.textTheme.bodyLarge
+                                              ?.copyWith(
+                                                fontWeight: FontWeight.w600,
+                                              ),
+                                        ),
+                                        const SizedBox(height: 2),
+                                        Text(
+                                          entry.scheduledAt == null
+                                              ? 'Start when host decides'
+                                              : 'Scheduled for ${_formatScheduleDate(entry.scheduledAt!)}',
+                                          style: theme.textTheme.bodySmall
+                                              ?.copyWith(
+                                                color: theme
+                                                    .colorScheme
+                                                    .onSurfaceVariant,
+                                              ),
+                                        ),
+                                        if (entry.stationMeetUrl != null &&
+                                            entry.stationMeetUrl!.isNotEmpty) ...[
+                                          const SizedBox(height: 4),
+                                          Text(
+                                            entry.stationMeetUrl!,
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: theme.textTheme.labelSmall
+                                                ?.copyWith(
+                                                  color: theme
+                                                      .colorScheme
+                                                      .onSurfaceVariant,
+                                                ),
+                                          ),
+                                        ],
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 12),
+                              Wrap(
+                                spacing: 8,
+                                runSpacing: 8,
+                                children: [
+                                  OutlinedButton.icon(
+                                    onPressed: entry.stationMeetUrl == null ||
+                                            entry.stationMeetUrl!.isEmpty
+                                        ? null
+                                        : () => _copyScheduleLink(entry),
+                                    icon: const Icon(Icons.link),
+                                    label: const Text('Copy link'),
+                                  ),
+                                  FilledButton.icon(
+                                    onPressed: entry.isActive
+                                        ? (_conferenceService.state ==
+                                                    ConferenceState.active &&
+                                                _conferenceService.room?.roomId ==
+                                                    entry.roomId
+                                            ? () => Navigator.push(
+                                                  context,
+                                                  MaterialPageRoute(
+                                                    builder: (_) =>
+                                                        const ConferenceCallPage(),
+                                                  ),
+                                                )
+                                            : null)
+                                        : () => _startScheduledMeeting(entry),
+                                    icon: Icon(
+                                      entry.isActive
+                                          ? Icons.call
+                                          : Icons.play_arrow,
+                                    ),
+                                    label: Text(
+                                      entry.isActive
+                                          ? 'Open active meeting'
+                                          : 'Start now',
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
 
                 // Nearby meetings section
                 const SizedBox(height: 24),

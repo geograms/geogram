@@ -26,6 +26,7 @@
 
 .meeting-subtitle,
 #status,
+#meeting-note,
 #nostr-gate-msg,
 .participant-role,
 .chat-meta {
@@ -39,6 +40,10 @@
 
 #nostr-gate-msg {
   margin-bottom: 16px;
+}
+
+#meeting-note {
+  margin-bottom: 12px;
 }
 
 #join-form {
@@ -192,6 +197,11 @@ button:disabled {
   min-height: 320px;
 }
 
+#archive-assets-shell {
+  display: none;
+  margin-top: 18px;
+}
+
 #chat-messages {
   flex: 1;
   min-height: 180px;
@@ -221,6 +231,32 @@ button:disabled {
 
 .chat-author {
   color: var(--accent);
+  font-weight: bold;
+}
+
+#archive-assets {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.archive-asset {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  color: inherit;
+  text-decoration: none;
+}
+
+.archive-asset:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.archive-asset-title {
   font-weight: bold;
 }
 

@@ -12,6 +12,16 @@ class ConferenceWebPageConfig {
   final String transportMode;
   final String? signalingWsUrl;
   final String logoText;
+  final String pageMode;
+  final String? statusText;
+  final String? sessionStateUrl;
+  final String? stationMeetUrl;
+  final DateTime? scheduledAt;
+  final DateTime? startedAt;
+  final DateTime? endedAt;
+  final List<Map<String, dynamic>> initialMessages;
+  final List<Map<String, dynamic>> archiveFiles;
+  final List<Map<String, dynamic>> archiveRecordings;
 
   const ConferenceWebPageConfig({
     required this.roomId,
@@ -21,6 +31,16 @@ class ConferenceWebPageConfig {
     required this.maxParticipants,
     required this.transportMode,
     required this.logoText,
+    this.pageMode = 'active',
+    this.statusText,
+    this.sessionStateUrl,
+    this.stationMeetUrl,
+    this.scheduledAt,
+    this.startedAt,
+    this.endedAt,
+    this.initialMessages = const <Map<String, dynamic>>[],
+    this.archiveFiles = const <Map<String, dynamic>>[],
+    this.archiveRecordings = const <Map<String, dynamic>>[],
     this.signalingWsUrl,
   });
 }
@@ -63,6 +83,15 @@ class ConferenceWebPageService {
       'maxParticipants': config.maxParticipants,
       'transportMode': config.transportMode,
       'signalingWsUrl': config.signalingWsUrl,
+      'pageMode': config.pageMode,
+      'sessionStateUrl': config.sessionStateUrl,
+      'stationMeetUrl': config.stationMeetUrl,
+      'scheduledAt': config.scheduledAt?.toIso8601String(),
+      'startedAt': config.startedAt?.toIso8601String(),
+      'endedAt': config.endedAt?.toIso8601String(),
+      'initialMessages': config.initialMessages,
+      'archiveFiles': config.archiveFiles,
+      'archiveRecordings': config.archiveRecordings,
     });
 
     final html = themeService.processTemplate(template, {
@@ -74,7 +103,7 @@ class ConferenceWebPageService {
         '${config.participantCount} participant${config.participantCount == 1 ? '' : 's'} · '
         'up to ${config.maxParticipants} speakers',
       ),
-      'STATUS_TEXT': 'Connect with Nostr to join',
+      'STATUS_TEXT': config.statusText ?? 'Connect with Nostr to join',
       'DATA_JSON': dataJson,
       'SCRIPTS': '${getNostrLoginScripts()}\n$_meetingScripts',
       'NOSTR_STYLES': getNostrLoginStyles(),
@@ -121,6 +150,7 @@ class ConferenceWebPageService {
         <h1 class="meeting-title">{{ROOM_TITLE}}</h1>
         <div class="meeting-subtitle">{{ROOM_SUBTITLE}}</div>
         <div id="status">{{STATUS_TEXT}}</div>
+        <div id="meeting-note" class="meeting-note"></div>
         <div id="nostr-gate-msg">Use the identity button above to authenticate before joining the meeting.</div>
         <div id="join-form">
           <input id="nickname" type="text" placeholder="Nickname (optional)" maxlength="20" autofocus>
@@ -159,6 +189,10 @@ class ConferenceWebPageService {
                 <input id="chat-input" type="text" placeholder="Type a message..." maxlength="500">
                 <button id="btn-send-chat" type="button">Send</button>
               </div>
+            </div>
+            <div id="archive-assets-shell">
+              <div class="sidebar-title">Archive</div>
+              <div id="archive-assets"></div>
             </div>
           </aside>
         </div>
@@ -215,6 +249,11 @@ const chatInput = document.getElementById('chat-input');
 const chatMessagesEl = document.getElementById('chat-messages');
 const sendChatBtn = document.getElementById('btn-send-chat');
 const fullscreenBtn = document.getElementById('btn-screen-fullscreen');
+const meetingNoteEl = document.getElementById('meeting-note');
+const archiveAssetsShellEl = document.getElementById('archive-assets-shell');
+const archiveAssetsEl = document.getElementById('archive-assets');
+const PAGE_MODE = CONFIG.pageMode || 'active';
+let sessionStateTimer = null;
 
 screenVideoEl.muted = true;
 
@@ -248,9 +287,35 @@ function escapeHtml(value) {
 
 function getPreferredNickname() {
   return nicknameInput.value.trim() ||
+    getStoredNickname() ||
     (window.GeogramNostr && window.GeogramNostr.nickname) ||
     (window.GeogramNostr && window.GeogramNostr.callsign) ||
     '';
+}
+
+function getStoredNickname() {
+  try {
+    return localStorage.getItem('geogram_nostr_nickname') || '';
+  } catch (_) {
+    return '';
+  }
+}
+
+function formatDateTimeLabel(value) {
+  if (!value) {
+    return '';
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  return date.toLocaleString([], {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit'
+  });
 }
 
 function enableJoinButtons() {
@@ -260,9 +325,11 @@ function enableJoinButtons() {
 
 function syncJoinGate() {
   const ready = isNostrReady();
-  nostrGateMsg.style.display = ready ? 'none' : '';
-  joinForm.style.display = ready && callUi.style.display !== 'block' ? 'flex' : 'none';
-  if (ready && !nicknameInput.value) {
+  const allowJoin = PAGE_MODE === 'active';
+  nostrGateMsg.style.display = allowJoin ? (ready ? 'none' : '') : 'none';
+  joinForm.style.display =
+    allowJoin && ready && callUi.style.display !== 'block' ? 'flex' : 'none';
+  if (!nicknameInput.value) {
     nicknameInput.value = getPreferredNickname();
   }
 }
@@ -423,6 +490,142 @@ function renderChatMessages() {
     chatMessagesEl.appendChild(row);
   });
   chatMessagesEl.scrollTop = chatMessagesEl.scrollHeight;
+}
+
+function renderArchiveAssets() {
+  if (!archiveAssetsShellEl || !archiveAssetsEl) {
+    return;
+  }
+  const recordings = Array.isArray(CONFIG.archiveRecordings) ? CONFIG.archiveRecordings : [];
+  const files = Array.isArray(CONFIG.archiveFiles) ? CONFIG.archiveFiles : [];
+  const assets = recordings.map(function(item) {
+    return Object.assign({ kind: 'Recording' }, item);
+  }).concat(files.map(function(item) {
+    return Object.assign({ kind: 'File' }, item);
+  }));
+
+  if (!assets.length) {
+    archiveAssetsShellEl.style.display = 'none';
+    archiveAssetsEl.innerHTML = '';
+    return;
+  }
+
+  archiveAssetsShellEl.style.display = 'block';
+  archiveAssetsEl.innerHTML = '';
+  assets.forEach(function(asset) {
+    const row = document.createElement('a');
+    row.className = 'archive-asset';
+    row.href = asset.url || '#';
+    row.target = '_blank';
+    row.rel = 'noopener';
+    const sizeLabel = asset.size ? Math.max(1, Math.round(asset.size / 1024)) + ' KB' : '';
+    row.innerHTML =
+      '<div><div class="archive-asset-title">' + escapeHtml(asset.name || asset.path || asset.kind) +
+      '</div><div class="participant-role">' + escapeHtml(asset.kind) + '</div></div>' +
+      '<div class="participant-role participant-state">' + escapeHtml(sizeLabel) + '</div>';
+    archiveAssetsEl.appendChild(row);
+  });
+}
+
+function renderArchiveSummary() {
+  if (!participantsEl) {
+    return;
+  }
+  participantsEl.innerHTML = '';
+  const items = [];
+  if (CONFIG.hostCallsign) items.push(['Host', CONFIG.hostCallsign]);
+  if (CONFIG.scheduledAt) items.push(['Scheduled', formatDateTimeLabel(CONFIG.scheduledAt)]);
+  if (CONFIG.startedAt) items.push(['Started', formatDateTimeLabel(CONFIG.startedAt)]);
+  if (CONFIG.endedAt) items.push(['Ended', formatDateTimeLabel(CONFIG.endedAt)]);
+  if (CONFIG.stationMeetUrl) items.push(['Link', CONFIG.stationMeetUrl]);
+  items.forEach(function(item) {
+    const li = document.createElement('li');
+    li.innerHTML =
+      '<div><div>' + escapeHtml(item[0]) + '</div></div>' +
+      '<div class="participant-role participant-state">' + escapeHtml(item[1]) + '</div>';
+    participantsEl.appendChild(li);
+  });
+}
+
+function stopSessionStatePolling() {
+  if (sessionStateTimer) {
+    clearInterval(sessionStateTimer);
+    sessionStateTimer = null;
+  }
+}
+
+function startSessionStatePolling() {
+  if (!CONFIG.sessionStateUrl || PAGE_MODE !== 'scheduled' || sessionStateTimer) {
+    return;
+  }
+  sessionStateTimer = setInterval(async function() {
+    try {
+      const response = await fetch(CONFIG.sessionStateUrl, { cache: 'no-store' });
+      if (!response.ok) {
+        return;
+      }
+      const data = await response.json();
+      if (data.state === 'active' || data.state === 'archive') {
+        window.location.reload();
+      }
+    } catch (_) {}
+  }, 15000);
+}
+
+function applyStaticMode() {
+  if (PAGE_MODE === 'archive') {
+    setStatus('Meeting ended. Chat and files remain available read-only.');
+    if (meetingNoteEl) {
+      meetingNoteEl.textContent =
+        CONFIG.endedAt
+          ? 'Archive available since ' + formatDateTimeLabel(CONFIG.endedAt) + '.'
+          : 'Archive available in read-only mode.';
+    }
+    nostrGateMsg.style.display = 'none';
+    joinForm.style.display = 'none';
+    callUi.style.display = 'block';
+    if (screenShellEl) screenShellEl.style.display = 'none';
+    if (muteBtn) muteBtn.style.display = 'none';
+    if (requestSpeakerBtn) requestSpeakerBtn.style.display = 'none';
+    if (leaveBtn) leaveBtn.style.display = 'none';
+    if (chatInput) {
+      chatInput.disabled = true;
+      chatInput.placeholder = 'Read-only archive';
+    }
+    if (sendChatBtn) sendChatBtn.disabled = true;
+    renderArchiveSummary();
+    (CONFIG.initialMessages || []).forEach(function(message) {
+      appendChatMessage(message, message.author || CONFIG.hostCallsign || '');
+    });
+    renderArchiveAssets();
+    return;
+  }
+
+  if (archiveAssetsShellEl) {
+    archiveAssetsShellEl.style.display = 'none';
+  }
+  if (PAGE_MODE === 'scheduled') {
+    setStatus(CONFIG.statusText || 'Meeting scheduled');
+    if (meetingNoteEl) {
+      meetingNoteEl.textContent = CONFIG.scheduledAt
+        ? 'Scheduled for ' + formatDateTimeLabel(CONFIG.scheduledAt) + '. This page will update when the host starts the meeting.'
+        : 'This meeting is scheduled. Return here when the host starts it.';
+    }
+    nostrGateMsg.style.display = 'none';
+    joinForm.style.display = 'none';
+    callUi.style.display = 'block';
+    if (screenShellEl) screenShellEl.style.display = 'none';
+    if (muteBtn) muteBtn.style.display = 'none';
+    if (requestSpeakerBtn) requestSpeakerBtn.style.display = 'none';
+    if (leaveBtn) leaveBtn.style.display = 'none';
+    if (chatInput) {
+      chatInput.disabled = true;
+      chatInput.placeholder = 'Chat opens when the meeting starts';
+    }
+    if (sendChatBtn) sendChatBtn.disabled = true;
+    renderArchiveSummary();
+    startSessionStatePolling();
+  }
 }
 
 function appendChatMessage(message, fallbackAuthor) {
@@ -637,7 +840,9 @@ function scheduleScreenReconnect() {
 
 document.addEventListener('nostr-connected', function() {
   syncJoinGate();
-  setStatus('Ready to join');
+  if (PAGE_MODE === 'active') {
+    setStatus('Ready to join');
+  }
   const nick = getPreferredNickname();
   if (nick && !nicknameInput.value) {
     nicknameInput.value = nick;
@@ -666,6 +871,9 @@ fullscreenBtn.addEventListener('click', async function() {
 });
 
 async function joinConference(role) {
+  if (PAGE_MODE !== 'active') {
+    return;
+  }
   if (!isNostrReady()) {
     setStatus('Connect with Nostr before joining');
     return;
@@ -1177,6 +1385,7 @@ function cleanup(statusMessage) {
     helloFallbackTimer = null;
   }
   clearScreenReconnectTimer();
+  stopSessionStatePolling();
   closeSocket();
   Object.keys(audioElements).forEach(function(key) {
     audioElements[key].srcObject = null;
@@ -1208,6 +1417,7 @@ function cleanup(statusMessage) {
   setStatus(statusMessage || (isNostrReady() ? 'Ready to join' : 'Connect with Nostr to join'));
 }
 
+applyStaticMode();
 syncJoinGate();
 syncSelfControls();
 ''';

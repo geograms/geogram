@@ -4,6 +4,7 @@ import 'dart:io' as io if (dart.library.html) '../platform/io_stub.dart';
 import 'dart:math';
 import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
+import 'package:mime/mime.dart';
 import 'package:http/http.dart' as http;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:path/path.dart' as path;
@@ -29,6 +30,8 @@ import 'direct_message_service.dart';
 import 'message_retention_service.dart';
 import 'devices_service.dart';
 import 'conference_service.dart';
+import 'conference_archive_service.dart';
+import 'conference_schedule_service.dart';
 import 'conference_web_page_service.dart';
 import 'device_apps_service.dart';
 import 'chat_file_upload_manager.dart';
@@ -58,6 +61,8 @@ import 'local_backup_service.dart';
 import '../version.dart';
 import '../models/chat_channel.dart';
 import '../models/chat_message.dart';
+import '../models/conference_archive_entry.dart';
+import '../models/conference_schedule_entry.dart';
 import '../util/chat_format.dart';
 import '../util/html_utils.dart';
 import '../util/nostr_event.dart';
@@ -118,6 +123,24 @@ import 'shared_folder_service.dart';
 import 'groups_service.dart';
 import 'hotspot_portal_service.dart';
 import '../models/app.dart';
+
+class _MeetSessionSnapshot {
+  final String state;
+  final ConferenceArchiveEntry? archive;
+  final ConferenceScheduleEntry? schedule;
+
+  const _MeetSessionSnapshot._({
+    required this.state,
+    this.archive,
+    this.schedule,
+  });
+
+  const _MeetSessionSnapshot.active() : this._(state: 'active');
+  const _MeetSessionSnapshot.scheduled(ConferenceScheduleEntry schedule)
+      : this._(state: 'scheduled', schedule: schedule);
+  const _MeetSessionSnapshot.archive(ConferenceArchiveEntry archive)
+      : this._(state: 'archive', archive: archive);
+}
 
 class LogApiService with ChatModificationMixin {
   static final LogApiService _instance = LogApiService._internal();
@@ -345,12 +368,9 @@ class LogApiService with ChatModificationMixin {
         return _handleMeetInfoRequest(headers);
       }
       if (urlPath.startsWith('meet/')) {
-        final code = urlPath.substring('meet/'.length);
-        if (code.isNotEmpty &&
-            code != 'styles.css' &&
-            code != 'active' &&
-            code != 'info') {
-          return await _handleMeetJoinPage(request, code, headers);
+        final response = await _handleMeetRoute(request, urlPath, headers);
+        if (response != null) {
+          return response;
         }
       }
     }
@@ -392,13 +412,19 @@ class LogApiService with ChatModificationMixin {
     if (urlPath == 'api/meet/info' && request.method == 'GET') {
       return _handleMeetInfoRequest(headers);
     }
+    if (urlPath.startsWith('api/meet/session/') && request.method == 'GET') {
+      final code = urlPath.substring('api/meet/session/'.length);
+      if (code.isNotEmpty) {
+        return await _handleMeetSessionStateRequest(code, headers);
+      }
+    }
     if (urlPath.startsWith('api/meet/') && request.method == 'GET') {
-      // /api/meet/{code} — serve a join page for the meeting
       final code = urlPath.substring('api/meet/'.length);
       if (code.isNotEmpty &&
           code != 'active' &&
           code != 'info' &&
-          code != 'styles.css') {
+          code != 'styles.css' &&
+          !code.startsWith('session/')) {
         return await _handleMeetJoinPage(request, code, headers);
       }
     }
@@ -928,26 +954,168 @@ class LogApiService with ChatModificationMixin {
     );
   }
 
+  Future<shelf.Response?> _handleMeetRoute(
+    shelf.Request request,
+    String urlPath,
+    Map<String, String> headers,
+  ) async {
+    final rest = urlPath.substring('meet/'.length);
+    final segments = rest.split('/').where((segment) => segment.isNotEmpty).toList();
+    if (segments.isEmpty) {
+      return null;
+    }
+
+    final code = segments.first;
+    if (segments.length == 1) {
+      return _handleMeetJoinPage(request, code, headers);
+    }
+
+    if (segments.length == 2 && segments[1] == 'state.json') {
+      return _handleMeetSessionStateRequest(code, headers);
+    }
+
+    final relativeFilePath = segments.sublist(1).join('/');
+    return _handleMeetArchiveAssetRequest(code, relativeFilePath, headers);
+  }
+
+  String _meetRoomId(String code) {
+    final callsign = ProfileService().getProfile().callsign;
+    return '$code@$callsign';
+  }
+
+  Future<_MeetSessionSnapshot?> _resolveMeetSessionSnapshot(String code) async {
+    final conf = ConferenceService();
+    final activeRoom = conf.room;
+    if (conf.isActive &&
+        activeRoom != null &&
+        activeRoom.hostCallsign.toUpperCase() ==
+            ProfileService().getProfile().callsign.toUpperCase() &&
+        (conf.roomCode ?? '').toUpperCase() == code.toUpperCase()) {
+      return const _MeetSessionSnapshot.active();
+    }
+
+    final roomId = _meetRoomId(code);
+    final schedule = await ConferenceScheduleService().findScheduleByRoomId(roomId);
+    if (schedule != null && !schedule.isCompleted) {
+      return _MeetSessionSnapshot.scheduled(schedule);
+    }
+
+    final archive = await ConferenceArchiveService().findArchiveByRoomId(roomId);
+    if (archive != null) {
+      return _MeetSessionSnapshot.archive(archive);
+    }
+
+    return null;
+  }
+
+  Future<shelf.Response> _handleMeetSessionStateRequest(
+    String code,
+    Map<String, String> headers,
+  ) async {
+    final snapshot = await _resolveMeetSessionSnapshot(code);
+    if (snapshot == null) {
+      return shelf.Response.notFound(
+        jsonEncode({'state': 'not_found', 'code': code}),
+        headers: headers,
+      );
+    }
+
+    if (snapshot.state == 'active') {
+      final conf = ConferenceService();
+      final room = conf.room!;
+      return shelf.Response.ok(
+        jsonEncode({
+          'state': 'active',
+          'room_id': room.roomId,
+          'room_name': room.roomName,
+          'host_callsign': room.hostCallsign,
+          'participant_count': room.participants.length,
+          'max_participants': room.maxSpeakers,
+          'station_meet_url': conf.shareableStationMeetUrl,
+          'signaling_mode': room.signalingMode.name,
+        }),
+        headers: headers,
+      );
+    }
+
+    if (snapshot.state == 'scheduled') {
+      final schedule = snapshot.schedule!;
+      return shelf.Response.ok(
+        jsonEncode({
+          'state': 'scheduled',
+          ...schedule.toJson(),
+        }),
+        headers: headers,
+      );
+    }
+
+    final archive = snapshot.archive!;
+    return shelf.Response.ok(
+      jsonEncode({
+        'state': 'archive',
+        ...archive.toJson(),
+      }),
+      headers: headers,
+    );
+  }
+
+  Future<shelf.Response> _handleMeetArchiveAssetRequest(
+    String code,
+    String relativeFilePath,
+    Map<String, String> headers,
+  ) async {
+    if (relativeFilePath.isEmpty ||
+        relativeFilePath.contains('..') ||
+        (!relativeFilePath.startsWith('files/') &&
+            !relativeFilePath.startsWith('recordings/'))) {
+      return shelf.Response.notFound(
+        jsonEncode({'error': 'Asset not found'}),
+        headers: headers,
+      );
+    }
+
+    final archive = await ConferenceArchiveService().findArchiveByRoomId(
+      _meetRoomId(code),
+    );
+    if (archive == null) {
+      return shelf.Response.notFound(
+        jsonEncode({'error': 'Meeting archive not found'}),
+        headers: headers,
+      );
+    }
+
+    final bytes = await ConferenceArchiveService().readArchiveFileBytes(
+      archive,
+      relativeFilePath,
+    );
+    if (bytes == null) {
+      return shelf.Response.notFound(
+        jsonEncode({'error': 'Asset not found'}),
+        headers: headers,
+      );
+    }
+
+    final contentType =
+        lookupMimeType(relativeFilePath, headerBytes: bytes) ??
+        'application/octet-stream';
+    return shelf.Response.ok(
+      bytes,
+      headers: {
+        ...headers,
+        'Content-Type': contentType,
+        'Content-Length': bytes.length.toString(),
+      },
+    );
+  }
+
   /// Handle GET /api/meet/{code} — serves an HTML join page for the meeting.
   Future<shelf.Response> _handleMeetJoinPage(
     shelf.Request request,
     String code,
     Map<String, String> headers,
   ) async {
-    final conf = ConferenceService();
-    if (!conf.isActive || conf.room == null) {
-      final htmlHeaders = Map<String, String>.from(headers);
-      htmlHeaders['Content-Type'] = 'text/html; charset=utf-8';
-      return shelf.Response.notFound(
-        _meetNotFoundHtml(code),
-        headers: htmlHeaders,
-      );
-    }
-
-    final room = conf.room!;
-    // Verify the code matches the current room
-    final roomCode = conf.roomCode;
-    if (roomCode != null && roomCode.toUpperCase() != code.toUpperCase()) {
+    final snapshot = await _resolveMeetSessionSnapshot(code);
+    if (snapshot == null) {
       final htmlHeaders = Map<String, String>.from(headers);
       htmlHeaders['Content-Type'] = 'text/html; charset=utf-8';
       return shelf.Response.notFound(
@@ -958,11 +1126,15 @@ class LogApiService with ChatModificationMixin {
 
     final htmlHeaders = Map<String, String>.from(headers);
     htmlHeaders['Content-Type'] = 'text/html; charset=utf-8';
-    final signalingWsUrl = room.signalingMode == ConferenceSignalingMode.lan
-        ? _lanSignalingWsUrl(request, conf)
-        : WebSocketService().connectedUrl;
-    final assets = await ConferenceWebPageService().buildJoinPage(
-      ConferenceWebPageConfig(
+    late final ConferenceWebPageConfig config;
+
+    if (snapshot.state == 'active') {
+      final conf = ConferenceService();
+      final room = conf.room!;
+      final signalingWsUrl = room.signalingMode == ConferenceSignalingMode.lan
+          ? _lanSignalingWsUrl(request, conf)
+          : WebSocketService().connectedUrl;
+      config = ConferenceWebPageConfig(
         roomId: room.roomId,
         roomName: room.roomName,
         hostCallsign: room.hostCallsign,
@@ -971,8 +1143,72 @@ class LogApiService with ChatModificationMixin {
         transportMode: room.signalingMode.name,
         signalingWsUrl: signalingWsUrl,
         logoText: room.roomName,
-      ),
-    );
+        pageMode: 'active',
+        sessionStateUrl: '$code/state.json',
+        stationMeetUrl: conf.shareableStationMeetUrl,
+      );
+    } else if (snapshot.state == 'scheduled') {
+      final schedule = snapshot.schedule!;
+      config = ConferenceWebPageConfig(
+        roomId: schedule.roomId,
+        roomName: schedule.roomName,
+        hostCallsign: schedule.hostCallsign,
+        participantCount: 0,
+        maxParticipants: schedule.maxSpeakers,
+        transportMode: schedule.stationMeetUrl?.isNotEmpty == true
+            ? ConferenceSignalingMode.station.name
+            : ConferenceSignalingMode.lan.name,
+        logoText: schedule.roomName,
+        pageMode: 'scheduled',
+        sessionStateUrl: '$code/state.json',
+        stationMeetUrl: schedule.stationMeetUrl,
+        scheduledAt: schedule.scheduledAt,
+        statusText: schedule.scheduledAt == null
+            ? 'Meeting scheduled. The host will start it when ready.'
+            : 'Meeting scheduled for ${schedule.scheduledAt!.toLocal()}',
+      );
+    } else {
+      final archive = snapshot.archive!;
+      final messages = await ConferenceArchiveService().loadMessages(archive);
+      config = ConferenceWebPageConfig(
+        roomId: archive.roomId,
+        roomName: archive.roomName,
+        hostCallsign: archive.hostCallsign,
+        participantCount: archive.participants.length,
+        maxParticipants: archive.speakers.length,
+        transportMode: archive.signalingMode,
+        logoText: archive.roomName,
+        pageMode: 'archive',
+        sessionStateUrl: '$code/state.json',
+        stationMeetUrl: archive.stationMeetUrl,
+        startedAt: archive.startedAt,
+        endedAt: archive.endedAt,
+        initialMessages: messages.map((message) => message.toJson()).toList(),
+        archiveFiles: archive.files
+            .map(
+              (asset) => {
+                ...asset.toJson(),
+                'url': Uri(
+                  pathSegments: [code, ...asset.relativePath.split('/')],
+                ).toString(),
+              },
+            )
+            .toList(),
+        archiveRecordings: archive.recordings
+            .map(
+              (asset) => {
+                ...asset.toJson(),
+                'url': Uri(
+                  pathSegments: [code, ...asset.relativePath.split('/')],
+                ).toString(),
+              },
+            )
+            .toList(),
+        statusText: 'Meeting archive',
+      );
+    }
+
+    final assets = await ConferenceWebPageService().buildJoinPage(config);
     return shelf.Response.ok(assets.html, headers: htmlHeaders);
   }
 
@@ -1023,7 +1259,7 @@ class LogApiService with ChatModificationMixin {
       'signaling_port': conf.signalingPort,
       'participant_count': room.participants.length,
       'max_participants': room.maxSpeakers,
-      'station_meet_url': conf.stationMeetUrl,
+      'station_meet_url': conf.shareableStationMeetUrl,
     };
 
     return shelf.Response.ok(

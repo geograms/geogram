@@ -2368,6 +2368,7 @@ class ThemesEmbedded {
         <h1 class="meeting-title">{{ROOM_TITLE}}</h1>
         <div class="meeting-subtitle">{{ROOM_SUBTITLE}}</div>
         <div id="status">{{STATUS_TEXT}}</div>
+        <div id="meeting-note" class="meeting-note"></div>
         <div id="nostr-gate-msg">Use the identity button above to authenticate before joining the meeting.</div>
         <div id="join-form">
           <input id="nickname" type="text" placeholder="Nickname (optional)" maxlength="20" autofocus>
@@ -2410,6 +2411,11 @@ class ThemesEmbedded {
                 <input id="chat-input" type="text" placeholder="Type a message..." maxlength="500">
                 <button id="btn-send-chat" type="button">Send</button>
               </div>
+            </div>
+
+            <div id="archive-assets-shell">
+              <div class="sidebar-title">Archive</div>
+              <div id="archive-assets"></div>
             </div>
           </aside>
         </div>
@@ -2463,6 +2469,7 @@ class ThemesEmbedded {
 
 .meeting-subtitle,
 #status,
+#meeting-note,
 #nostr-gate-msg,
 .participant-role,
 .chat-meta {
@@ -2476,6 +2483,10 @@ class ThemesEmbedded {
 
 #nostr-gate-msg {
   margin-bottom: 16px;
+}
+
+#meeting-note {
+  margin-bottom: 12px;
 }
 
 #join-form {
@@ -2629,6 +2640,11 @@ button:disabled {
   min-height: 320px;
 }
 
+#archive-assets-shell {
+  display: none;
+  margin-top: 18px;
+}
+
 #chat-messages {
   flex: 1;
   min-height: 180px;
@@ -2658,6 +2674,32 @@ button:disabled {
 
 .chat-author {
   color: var(--accent);
+  font-weight: bold;
+}
+
+#archive-assets {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.archive-asset {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  color: inherit;
+  text-decoration: none;
+}
+
+.archive-asset:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.archive-asset-title {
   font-weight: bold;
 }
 

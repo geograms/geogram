@@ -2723,6 +2723,9 @@ Triggers a debug action.
 | `conference_host` | Host a new SFU audio conference (LAN or station mode) | `room_name` (optional): Conference name (default: "Test Meeting"), `max_speakers` (optional): Max speakers including host (default: 6) |
 | `conference_join` | Join an existing conference | `url` (optional): WebSocket URL for LAN mode, `room_id` (optional): Room ID for station mode, `role` (optional): "speaker" or "listener" (default: "listener") |
 | `conference_status` | Get current conference status | None |
+| `conference_schedule` | Create a scheduled meeting without starting it | `room_name` (optional): Conference name (default: "Test Meeting"), `max_speakers` (optional): Max speakers including host (default: 6), `scheduled_at` (optional): ISO-8601 timestamp for automatic start |
+| `conference_list_schedules` | List scheduled meetings | None |
+| `conference_start_scheduled` | Start a scheduled meeting by room ID | `room_id` (required): Scheduled meeting room ID |
 | `conference_end` | End or leave the current conference | None |
 | `conference_mute` | Toggle mute in current conference | None |
 | `conference_request_speaker` | Request speaker access from the host (listener only) | None |

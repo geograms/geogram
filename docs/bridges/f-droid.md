@@ -163,6 +163,27 @@ git push myfork add-geogram
 2. Look for the `fdroid build` job in the pipeline
 3. Review logs for any build failures
 
+## versionCode / build-number Pattern
+
+F-Droid metadata declares `versionCode: N` for each build entry. The APK's
+actual versionCode must match exactly or the post-build check fails.
+
+Flutter derives versionCode from the `+N` suffix in `pubspec.yaml`'s
+`version:` field (e.g. `version: 1.9.0+1` → versionCode 1). Since the
+geogram repo uses `+1` for all releases, the metadata's `versionCode` and
+the APK's versionCode would diverge.
+
+**Fix**: override at build time with `--build-number=N`:
+
+```yaml
+build:
+  - $$flutter$$/bin/flutter build apk --release --build-number=5
+```
+
+This forces the APK versionCode to match the metadata declaration regardless
+of what `pubspec.yaml` says. Increment `--build-number` for each new F-Droid
+build entry.
+
 ## Common Issues
 
 ### "DependencyInfoBlock" Error

@@ -25,6 +25,7 @@ import 'services/encrypted_storage_service.dart';
 import 'services/profile_service.dart';
 import 'services/profile_storage.dart';
 import 'services/station_service.dart';
+import 'services/conference_service.dart';
 import 'services/station_node_service.dart';
 import 'services/station_discovery_service.dart';
 import 'services/notification_service.dart';
@@ -33,6 +34,7 @@ import 'services/chat_notification_service.dart';
 import 'services/station_content_notification_service.dart';
 import 'services/now_service.dart';
 import 'services/now_notification_bridge.dart';
+import 'services/event_service.dart';
 import 'services/station_activity_publisher_service.dart';
 import 'services/station_chat_queue_service.dart';
 import 'services/dm_notification_service.dart';
@@ -415,6 +417,10 @@ void main() async {
     StationActivityPublisherService().initialize();
     LogService().log('StationActivityPublisherService initialized');
 
+    // Wire event-creation activity publishing (decoupled for CLI compatibility)
+    EventService.onEventCreated = (event) =>
+        StationActivityPublisherService().publishEventRecord(event);
+
     // Initialize USB attachment service (Android only, for ESP32 auto-detection)
     if (!kIsWeb && Platform.isAndroid) {
       UsbAttachmentService().initialize();
@@ -681,6 +687,8 @@ void main() async {
       if (firstLaunchComplete) {
         await StationService().initialize();
         LogService().log('StationService initialized (deferred)');
+        await ConferenceService().initializeScheduledMeetings();
+        LogService().log('ConferenceService schedule timers initialized');
       } else {
         LogService().log(
           'StationService skipped on first launch - will start after onboarding',
@@ -1829,6 +1837,8 @@ class _HomePageState extends State<HomePage> {
     try {
       await StationService().initialize();
       LogService().log('StationService initialized after onboarding');
+      await ConferenceService().initializeScheduledMeetings();
+      LogService().log('ConferenceService schedule timers initialized');
     } catch (e) {
       LogService().log('StationService failed to start after onboarding: $e');
     }

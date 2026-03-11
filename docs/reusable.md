@@ -9495,7 +9495,7 @@ await server.stop();
 
 **File:** `lib/services/conference_web_page_service.dart`
 
-Shared browser page builder for Meetings. Generates the themed HTML shell, injects the reusable NOSTR login component, and emits the browser-side meeting client used by the device web server, the station proxy path, and the LAN signaling server fallback.
+Shared browser page builder for Meetings. Generates the themed HTML shell, injects the reusable NOSTR login component, and emits the browser-side meeting client used by the device web server, the station proxy path, and the LAN signaling server fallback. The same builder now serves active calls, scheduled waiting pages, and post-call read-only archives.
 
 **Key types:**
 - `ConferenceWebPageConfig` — input describing room metadata, transport mode, and optional explicit signaling URL
@@ -9503,6 +9503,23 @@ Shared browser page builder for Meetings. Generates the themed HTML shell, injec
 
 **Key method:**
 - `buildJoinPage(config)` — returns a themed browser client for `/meet/{code}` hosting paths
+
+### ConferenceScheduleService
+
+**File:** `lib/services/conference_schedule_service.dart`
+
+Meeting scheduling metadata manager backed by `ProfileStorage`. Persists one-off scheduled meetings under `meetings/scheduled/`, keeps the generated room ID stable from scheduled state through active call and archive, and supports optional auto-start timestamps.
+
+**Key model:**
+- `ConferenceScheduleEntry` — room metadata, `scheduledAt`, `startedAt`, `endedAt`, status, and preferred station meeting URL
+
+**Key methods:**
+- `createSchedule(...)` — create or update a scheduled meeting record
+- `findScheduleByRoomId(roomId)` — look up a scheduled meeting by its stable room ID
+- `listSchedules({includeCompleted})` — enumerate scheduled and completed meeting entries
+- `markActive(roomId, ...)` — flip a schedule into active state when the host starts the meeting
+- `markCompleted(roomId, ...)` — mark the schedule complete after the meeting ends
+- `dueSchedules(now)` — list scheduled entries whose auto-start time has arrived
 
 ### ConferenceArchiveService
 
