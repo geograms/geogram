@@ -40,7 +40,8 @@ class ConferenceRoomInfo {
     speakerCallsigns.add(hostCallsign);
   }
 
-  int get listenerCount => participantCallsigns.length - speakerCallsigns.length;
+  int get listenerCount =>
+      participantCallsigns.length - speakerCallsigns.length;
 
   Map<String, dynamic> toJson() => {
     'room_id': roomId,
@@ -95,6 +96,15 @@ mixin ConferenceMixin {
       case 'conference_role_change':
         _handleRoleChange(clientId, message);
         return true;
+      case 'conference_speaker_request':
+        _handleSpeakerRequest(clientId, message);
+        return true;
+      case 'conference_chat_message':
+        _handleChatMessage(clientId, message);
+        return true;
+      case 'conference_chat_history':
+        _handleChatHistory(clientId, message);
+        return true;
       case 'conference_list':
         _handleList(clientId);
         return true;
@@ -141,20 +151,26 @@ mixin ConferenceMixin {
     final maxSpeakers = message['max_speakers'] as int? ?? 6;
 
     if (roomId == null || hostCallsign == null) {
-      conferenceSendToClient(clientId, jsonEncode({
-        'type': 'conference_error',
-        'error': 'invalid_request',
-        'message': 'Missing room_id or not authenticated',
-      }));
+      conferenceSendToClient(
+        clientId,
+        jsonEncode({
+          'type': 'conference_error',
+          'error': 'invalid_request',
+          'message': 'Missing room_id or not authenticated',
+        }),
+      );
       return;
     }
 
     if (_conferenceRooms.containsKey(roomId)) {
-      conferenceSendToClient(clientId, jsonEncode({
-        'type': 'conference_error',
-        'error': 'room_exists',
-        'room_id': roomId,
-      }));
+      conferenceSendToClient(
+        clientId,
+        jsonEncode({
+          'type': 'conference_error',
+          'error': 'room_exists',
+          'room_id': roomId,
+        }),
+      );
       return;
     }
 
@@ -167,12 +183,15 @@ mixin ConferenceMixin {
     );
     _conferenceRooms[roomId] = room;
 
-    conferenceSendToClient(clientId, jsonEncode({
-      'type': 'conference_created',
-      ...room.toJson(),
-    }));
+    conferenceSendToClient(
+      clientId,
+      jsonEncode({'type': 'conference_created', ...room.toJson()}),
+    );
 
-    conferenceLog('INFO', 'Conference created: $roomId by $hostCallsign (max $maxSpeakers speakers)');
+    conferenceLog(
+      'INFO',
+      'Conference created: $roomId by $hostCallsign (max $maxSpeakers speakers)',
+    );
   }
 
   void _handleJoin(String clientId, Map<String, dynamic> message) {
@@ -181,20 +200,23 @@ mixin ConferenceMixin {
     final requestedRole = message['role'] as String? ?? 'listener';
 
     if (roomId == null || callsign == null) {
-      conferenceSendToClient(clientId, jsonEncode({
-        'type': 'conference_error',
-        'error': 'invalid_request',
-      }));
+      conferenceSendToClient(
+        clientId,
+        jsonEncode({'type': 'conference_error', 'error': 'invalid_request'}),
+      );
       return;
     }
 
     final room = _conferenceRooms[roomId];
     if (room == null) {
-      conferenceSendToClient(clientId, jsonEncode({
-        'type': 'conference_error',
-        'error': 'room_not_found',
-        'room_id': roomId,
-      }));
+      conferenceSendToClient(
+        clientId,
+        jsonEncode({
+          'type': 'conference_error',
+          'error': 'room_not_found',
+          'room_id': roomId,
+        }),
+      );
       return;
     }
 
@@ -211,10 +233,10 @@ mixin ConferenceMixin {
     }
 
     // Send welcome with speaker info
-    conferenceSendToClient(clientId, jsonEncode({
-      'type': 'conference_welcome',
-      ...room.toJson(),
-    }));
+    conferenceSendToClient(
+      clientId,
+      jsonEncode({'type': 'conference_welcome', ...room.toJson()}),
+    );
 
     // Notify existing participants
     _broadcastToRoom(roomId, {
@@ -224,9 +246,12 @@ mixin ConferenceMixin {
       'room_id': roomId,
     }, excludeCallsign: callsign);
 
-    conferenceLog('INFO', 'Conference $roomId: $callsign joined as $actualRole '
-        '(${room.speakerCallsigns.length}/${room.maxSpeakers} speakers, '
-        '${room.listenerCount} listeners)');
+    conferenceLog(
+      'INFO',
+      'Conference $roomId: $callsign joined as $actualRole '
+          '(${room.speakerCallsigns.length}/${room.maxSpeakers} speakers, '
+          '${room.listenerCount} listeners)',
+    );
   }
 
   void _handleLeave(String clientId, Map<String, dynamic> message) {
@@ -261,11 +286,14 @@ mixin ConferenceMixin {
     if (room == null) return;
 
     if (room.hostClientId != clientId) {
-      conferenceSendToClient(clientId, jsonEncode({
-        'type': 'conference_error',
-        'error': 'not_host',
-        'room_id': roomId,
-      }));
+      conferenceSendToClient(
+        clientId,
+        jsonEncode({
+          'type': 'conference_error',
+          'error': 'not_host',
+          'room_id': roomId,
+        }),
+      );
       return;
     }
 
@@ -306,11 +334,14 @@ mixin ConferenceMixin {
 
     // Only the host can change roles
     if (room.hostClientId != clientId) {
-      conferenceSendToClient(clientId, jsonEncode({
-        'type': 'conference_error',
-        'error': 'not_host',
-        'room_id': roomId,
-      }));
+      conferenceSendToClient(
+        clientId,
+        jsonEncode({
+          'type': 'conference_error',
+          'error': 'not_host',
+          'room_id': roomId,
+        }),
+      );
       return;
     }
 
@@ -318,12 +349,15 @@ mixin ConferenceMixin {
     if (newRole == 'speaker' &&
         !room.speakerCallsigns.contains(targetCallsign) &&
         room.speakerCallsigns.length >= room.maxSpeakers) {
-      conferenceSendToClient(clientId, jsonEncode({
-        'type': 'conference_error',
-        'error': 'speaker_limit_reached',
-        'room_id': roomId,
-        'max_speakers': room.maxSpeakers,
-      }));
+      conferenceSendToClient(
+        clientId,
+        jsonEncode({
+          'type': 'conference_error',
+          'error': 'speaker_limit_reached',
+          'room_id': roomId,
+          'max_speakers': room.maxSpeakers,
+        }),
+      );
       return;
     }
 
@@ -342,14 +376,81 @@ mixin ConferenceMixin {
       'room_id': roomId,
     });
 
-    conferenceLog('INFO', 'Conference $roomId: $targetCallsign role changed to $newRole');
+    conferenceLog(
+      'INFO',
+      'Conference $roomId: $targetCallsign role changed to $newRole',
+    );
+  }
+
+  void _handleSpeakerRequest(String clientId, Map<String, dynamic> message) {
+    final roomId = message['room_id'] as String?;
+    final callsign = conferenceGetClientCallsign(clientId);
+    if (roomId == null || callsign == null) return;
+
+    final room = _conferenceRooms[roomId];
+    if (room == null || !room.participantCallsigns.contains(callsign)) {
+      return;
+    }
+
+    conferenceSendToClient(
+      room.hostClientId,
+      jsonEncode({
+        'type': 'conference_speaker_request',
+        'room_id': roomId,
+        'callsign': callsign,
+      }),
+    );
+  }
+
+  void _handleChatMessage(String clientId, Map<String, dynamic> message) {
+    final roomId = message['room_id'] as String?;
+    final fromCallsign = conferenceGetClientCallsign(clientId);
+    if (roomId == null || fromCallsign == null) return;
+
+    final room = _conferenceRooms[roomId];
+    if (room == null || !room.participantCallsigns.contains(fromCallsign)) {
+      return;
+    }
+
+    _broadcastToRoom(roomId, {
+      'type': 'conference_chat_message',
+      'room_id': roomId,
+      'from_callsign': fromCallsign,
+      'message': message['message'],
+    }, excludeCallsign: fromCallsign);
+  }
+
+  void _handleChatHistory(String clientId, Map<String, dynamic> message) {
+    final roomId = message['room_id'] as String?;
+    final toCallsign = message['to_callsign'] as String?;
+    if (roomId == null || toCallsign == null) return;
+
+    final room = _conferenceRooms[roomId];
+    if (room == null || room.hostClientId != clientId) {
+      return;
+    }
+
+    final targetClientId = conferenceFindClientId(toCallsign);
+    if (targetClientId == null) {
+      return;
+    }
+
+    conferenceSendToClient(
+      targetClientId,
+      jsonEncode({
+        'type': 'conference_chat_history',
+        'room_id': roomId,
+        'messages': message['messages'],
+        'from_callsign': room.hostCallsign,
+      }),
+    );
   }
 
   void _handleList(String clientId) {
-    conferenceSendToClient(clientId, jsonEncode({
-      'type': 'conference_list',
-      'rooms': getConferenceRooms(),
-    }));
+    conferenceSendToClient(
+      clientId,
+      jsonEncode({'type': 'conference_list', 'rooms': getConferenceRooms()}),
+    );
   }
 
   // ── Helpers ──────────────────────────────────────────────────────

@@ -2723,6 +2723,8 @@ Triggers a debug action.
 | `conference_status` | Get current conference status | None |
 | `conference_end` | End or leave the current conference | None |
 | `conference_mute` | Toggle mute in current conference | None |
+| `conference_request_speaker` | Request speaker access from the host (listener only) | None |
+| `conference_send_chat` | Send a text message to the meeting chat | `content` (required): Message text |
 | `conference_promote` | Promote a listener to speaker (host only) | `callsign` (required): Callsign of participant to promote |
 | `conference_demote` | Demote a speaker to listener (host only) | `callsign` (required): Callsign of participant to demote |
 | `atproto_status` | Get Teleport AT Proto bridge status | None |

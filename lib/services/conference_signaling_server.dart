@@ -56,21 +56,19 @@ class ConferenceSignalingServer {
   bool get isRunning => _httpServer != null;
   int get participantCount => participantCallsigns.length;
 
-  List<String> get participantCallsigns =>
-      <String>{
-        hostCallsign,
-        ..._participants.values
-          .where((p) => p.callsign != null)
-          .map((p) => p.callsign!)
-      }.toList();
+  List<String> get participantCallsigns => <String>{
+    hostCallsign,
+    ..._participants.values
+        .where((p) => p.callsign != null)
+        .map((p) => p.callsign!),
+  }.toList();
 
-  List<String> get speakerCallsigns =>
-      <String>{
-        hostCallsign,
-        ..._participants.values
-          .where((p) => p.callsign != null && p.isSpeaker)
-          .map((p) => p.callsign!)
-      }.toList();
+  List<String> get speakerCallsigns => <String>{
+    hostCallsign,
+    ..._participants.values
+        .where((p) => p.callsign != null && p.isSpeaker)
+        .map((p) => p.callsign!),
+  }.toList();
 
   int get listenerCount => participantCount - speakerCount;
 
@@ -91,9 +89,12 @@ class ConferenceSignalingServer {
     final boundPort = _httpServer!.port;
     LogService().log('Conference signaling server started on port $boundPort');
 
-    _httpServer!.listen(_handleRequest, onError: (e) {
-      LogService().log('Conference server error: $e');
-    });
+    _httpServer!.listen(
+      _handleRequest,
+      onError: (e) {
+        LogService().log('Conference server error: $e');
+      },
+    );
 
     return boundPort;
   }
@@ -190,7 +191,8 @@ class ConferenceSignalingServer {
       return;
     }
 
-    final id = '${DateTime.now().millisecondsSinceEpoch}-${Random().nextInt(999999)}';
+    final id =
+        '${DateTime.now().millisecondsSinceEpoch}-${Random().nextInt(999999)}';
     final participant = SignalingParticipant(id: id, socket: socket);
     _participants[id] = participant;
 
@@ -222,6 +224,12 @@ class ConferenceSignalingServer {
     switch (type) {
       case 'conference_hello':
         _handleHello(sender, message);
+      case 'conference_speaker_request':
+        _handleSpeakerRequest(sender);
+      case 'conference_chat_message':
+        _handleChatMessage(sender, message);
+      case 'conference_chat_history':
+        _handleChatHistory(sender, message);
       case 'webrtc_offer':
       case 'webrtc_answer':
       case 'webrtc_ice':
@@ -245,39 +253,44 @@ class ConferenceSignalingServer {
       // Downgrade to listener instead of rejecting
       sender.role = 'listener';
       LogService().log(
-          'Conference: $callsign wanted speaker but limit reached, joining as listener');
+        'Conference: $callsign wanted speaker but limit reached, joining as listener',
+      );
     } else {
       sender.role = requestedRole;
     }
 
     sender.callsign = callsign;
-    LogService().log('Conference participant identified: $callsign (${sender.role})');
+    LogService().log(
+      'Conference participant identified: $callsign (${sender.role})',
+    );
 
     // Send the current participant list to the new joiner
     final existing = <String>{
       hostCallsign,
       ..._participants.values
-        .where((p) => p.id != sender.id && p.callsign != null)
-        .map((p) => p.callsign!)
+          .where((p) => p.id != sender.id && p.callsign != null)
+          .map((p) => p.callsign!),
     }.toList();
 
     final speakers = <String>{
       hostCallsign,
       ..._participants.values
-        .where((p) => p.id != sender.id && p.callsign != null && p.isSpeaker)
-        .map((p) => p.callsign!)
+          .where((p) => p.id != sender.id && p.callsign != null && p.isSpeaker)
+          .map((p) => p.callsign!),
     }.toList();
 
-    sender.socket.add(jsonEncode({
-      'type': 'conference_welcome',
-      'room_id': roomId,
-      'room_name': roomName,
-      'host_callsign': hostCallsign,
-      'participants': existing,
-      'speakers': speakers,
-      'listener_count': listenerCount,
-      'max_speakers': maxSpeakers,
-    }));
+    sender.socket.add(
+      jsonEncode({
+        'type': 'conference_welcome',
+        'room_id': roomId,
+        'room_name': roomName,
+        'host_callsign': hostCallsign,
+        'participants': existing,
+        'speakers': speakers,
+        'listener_count': listenerCount,
+        'max_speakers': maxSpeakers,
+      }),
+    );
 
     // Notify existing participants about the new joiner
     _broadcast(
@@ -295,7 +308,10 @@ class ConferenceSignalingServer {
     });
   }
 
-  void _handleRoleChange(SignalingParticipant sender, Map<String, dynamic> message) {
+  void _handleRoleChange(
+    SignalingParticipant sender,
+    Map<String, dynamic> message,
+  ) {
     final targetCallsign = message['callsign'] as String?;
     final newRole = message['role'] as String?;
     if (targetCallsign == null || newRole == null) return;
@@ -304,10 +320,12 @@ class ConferenceSignalingServer {
     if (sender.callsign != hostCallsign) return;
 
     // Update the target's role
-    final target = _participants.values.cast<SignalingParticipant?>().firstWhere(
-      (p) => p!.callsign?.toLowerCase() == targetCallsign.toLowerCase(),
-      orElse: () => null,
-    );
+    final target = _participants.values
+        .cast<SignalingParticipant?>()
+        .firstWhere(
+          (p) => p!.callsign?.toLowerCase() == targetCallsign.toLowerCase(),
+          orElse: () => null,
+        );
 
     if (target != null) {
       target.role = newRole;
@@ -323,6 +341,59 @@ class ConferenceSignalingServer {
     onHostMessage?.call(roleChange);
   }
 
+  void _handleSpeakerRequest(SignalingParticipant sender) {
+    final callsign = sender.callsign;
+    if (callsign == null || callsign == hostCallsign) {
+      return;
+    }
+
+    onHostMessage?.call({
+      'type': 'conference_speaker_request',
+      'room_id': roomId,
+      'callsign': callsign,
+    });
+  }
+
+  void _handleChatMessage(
+    SignalingParticipant sender,
+    Map<String, dynamic> message,
+  ) {
+    final callsign = sender.callsign;
+    if (callsign == null) return;
+
+    final payload = {
+      'type': 'conference_chat_message',
+      'room_id': roomId,
+      'from_callsign': callsign,
+      'message': message['message'],
+    };
+
+    if (callsign.toLowerCase() != hostCallsign.toLowerCase()) {
+      onHostMessage?.call(payload);
+    }
+    _broadcast(jsonEncode(payload), excludeId: sender.id);
+  }
+
+  void _handleChatHistory(
+    SignalingParticipant sender,
+    Map<String, dynamic> message,
+  ) {
+    if (sender.callsign?.toLowerCase() != hostCallsign.toLowerCase()) {
+      return;
+    }
+
+    final toCallsign = message['to_callsign'] as String?;
+    if (toCallsign == null || toCallsign.isEmpty) {
+      return;
+    }
+
+    sendRoomMessageFromHost({
+      'type': 'conference_chat_history',
+      'room_id': roomId,
+      'messages': message['messages'],
+    }, toCallsign: toCallsign);
+  }
+
   /// Relay a WebRTC signal to a specific participant identified by to_callsign.
   void _relaySignal(SignalingParticipant sender, Map<String, dynamic> message) {
     final toCallsign = message['to_callsign'] as String?;
@@ -336,17 +407,21 @@ class ConferenceSignalingServer {
       return;
     }
 
-    final target = _participants.values.cast<SignalingParticipant?>().firstWhere(
-      (p) => p!.callsign?.toLowerCase() == toCallsign.toLowerCase(),
-      orElse: () => null,
-    );
+    final target = _participants.values
+        .cast<SignalingParticipant?>()
+        .firstWhere(
+          (p) => p!.callsign?.toLowerCase() == toCallsign.toLowerCase(),
+          orElse: () => null,
+        );
 
     if (target == null) {
-      sender.socket.add(jsonEncode({
-        'type': 'webrtc_error',
-        'error': 'target_not_connected',
-        'to_callsign': toCallsign,
-      }));
+      sender.socket.add(
+        jsonEncode({
+          'type': 'webrtc_error',
+          'error': 'target_not_connected',
+          'to_callsign': toCallsign,
+        }),
+      );
       return;
     }
 
@@ -361,7 +436,9 @@ class ConferenceSignalingServer {
     final participant = _participants.remove(id);
     if (participant == null) return;
 
-    LogService().log('Conference participant left: ${participant.callsign ?? id}');
+    LogService().log(
+      'Conference participant left: ${participant.callsign ?? id}',
+    );
 
     try {
       participant.socket.close();
@@ -384,10 +461,12 @@ class ConferenceSignalingServer {
     final toCallsign = message['to_callsign'] as String?;
     if (toCallsign == null || toCallsign.isEmpty) return;
 
-    final target = _participants.values.cast<SignalingParticipant?>().firstWhere(
-      (p) => p!.callsign?.toLowerCase() == toCallsign.toLowerCase(),
-      orElse: () => null,
-    );
+    final target = _participants.values
+        .cast<SignalingParticipant?>()
+        .firstWhere(
+          (p) => p!.callsign?.toLowerCase() == toCallsign.toLowerCase(),
+          orElse: () => null,
+        );
     if (target == null) return;
 
     final payload = Map<String, dynamic>.from(message);
@@ -399,12 +478,43 @@ class ConferenceSignalingServer {
     }
   }
 
+  void sendRoomMessageFromHost(
+    Map<String, dynamic> message, {
+    String? toCallsign,
+  }) {
+    final payload = Map<String, dynamic>.from(message)
+      ..putIfAbsent('room_id', () => roomId)
+      ..putIfAbsent('from_callsign', () => hostCallsign);
+
+    if (toCallsign != null && toCallsign.isNotEmpty) {
+      final target = _participants.values
+          .cast<SignalingParticipant?>()
+          .firstWhere(
+            (p) => p!.callsign?.toLowerCase() == toCallsign.toLowerCase(),
+            orElse: () => null,
+          );
+      if (target == null) return;
+      try {
+        target.socket.add(jsonEncode(payload));
+      } catch (e) {
+        LogService().log(
+          'Conference direct room message failed to $toCallsign: $e',
+        );
+      }
+      return;
+    }
+
+    _broadcast(jsonEncode(payload));
+  }
+
   /// Broadcast a host-originated role change to all participants.
   void broadcastRoleChangeFromHost(String callsign, String newRole) {
-    final target = _participants.values.cast<SignalingParticipant?>().firstWhere(
-      (p) => p!.callsign?.toLowerCase() == callsign.toLowerCase(),
-      orElse: () => null,
-    );
+    final target = _participants.values
+        .cast<SignalingParticipant?>()
+        .firstWhere(
+          (p) => p!.callsign?.toLowerCase() == callsign.toLowerCase(),
+          orElse: () => null,
+        );
     if (target != null) {
       target.role = newRole;
     }

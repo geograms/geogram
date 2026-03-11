@@ -30,6 +30,7 @@ class ConferenceHostPeerManager {
 
   /// Tracks received from speakers, keyed by callsign.
   final Map<String, MediaStreamTrack> _speakerTracks = {};
+  final Map<String, MediaStream> _remoteStreams = {};
 
   /// Callback to send signaling messages (set by ConferenceService).
   ConferenceSignalSender? onSendSignal;
@@ -39,6 +40,8 @@ class ConferenceHostPeerManager {
 
   bool get isLocalMuted => _localMuted;
   MediaStream? get localStream => _localStream;
+  Map<String, MediaStream> get remoteStreams =>
+      Map.unmodifiable(_remoteStreams);
   int get peerCount => _peers.length;
 
   List<String> get connectedPeers =>
@@ -50,7 +53,7 @@ class ConferenceHostPeerManager {
       .toList();
 
   ConferenceHostPeerManager({WebRTCConfig? config})
-      : _config = config ?? const WebRTCConfig();
+    : _config = config ?? const WebRTCConfig();
 
   void setConfig(WebRTCConfig config) => _config = config;
 
@@ -80,6 +83,10 @@ class ConferenceHostPeerManager {
     _peers.clear();
     _roles.clear();
     _speakerTracks.clear();
+    for (final stream in _remoteStreams.values) {
+      await stream.dispose();
+    }
+    _remoteStreams.clear();
 
     _localStream?.getTracks().forEach((t) => t.stop());
     _localStream?.dispose();
@@ -117,7 +124,9 @@ class ConferenceHostPeerManager {
     _roles[callsign.toUpperCase()] = SfuParticipantRole.speaker;
     // Connection is established when we receive their offer via handleOffer
     // or when we initiate via _createOfferTo.
-    LogService().log('ConferenceHostPeerManager: $callsign registered as speaker');
+    LogService().log(
+      'ConferenceHostPeerManager: $callsign registered as speaker',
+    );
   }
 
   // ── Add listener ───────────────────────────────────────────────
@@ -125,7 +134,9 @@ class ConferenceHostPeerManager {
   /// Register a listener. The connection is created when their offer arrives.
   Future<void> addListener(String callsign) async {
     _roles[callsign.toUpperCase()] = SfuParticipantRole.listener;
-    LogService().log('ConferenceHostPeerManager: $callsign registered as listener');
+    LogService().log(
+      'ConferenceHostPeerManager: $callsign registered as listener',
+    );
   }
 
   // ── Handle incoming offer from a participant ───────────────────
@@ -208,7 +219,8 @@ class ConferenceHostPeerManager {
     });
 
     LogService().log(
-        'ConferenceHostPeerManager: Answered offer from $callsign (${isSpeaker ? "speaker" : "listener"})');
+      'ConferenceHostPeerManager: Answered offer from $callsign (${isSpeaker ? "speaker" : "listener"})',
+    );
   }
 
   /// Handle an answer to our renegotiation offer.
@@ -231,7 +243,9 @@ class ConferenceHostPeerManager {
 
   /// Handle an incoming ICE candidate.
   Future<void> handleIceCandidate(
-      String callsign, Map<String, dynamic> candidate) async {
+    String callsign,
+    Map<String, dynamic> candidate,
+  ) async {
     final peer = _peers[callsign.toUpperCase()];
     if (peer == null) return;
 
@@ -241,7 +255,8 @@ class ConferenceHostPeerManager {
       candidate['sdpMLineIndex'] as int?,
     );
 
-    if (peer.peerConnection?.getRemoteDescription() != null) {
+    final remoteDescription = await peer.peerConnection?.getRemoteDescription();
+    if (remoteDescription != null) {
       await peer.peerConnection!.addCandidate(iceCandidate);
     } else {
       peer.pendingIceCandidates.add(iceCandidate);
@@ -291,7 +306,9 @@ class ConferenceHostPeerManager {
 
     // Renegotiate: create a new offer that accepts audio
     await _renegotiate(key);
-    LogService().log('ConferenceHostPeerManager: Promoted $callsign to speaker');
+    LogService().log(
+      'ConferenceHostPeerManager: Promoted $callsign to speaker',
+    );
   }
 
   /// Demote a speaker to listener. Removes their track from all
@@ -305,7 +322,9 @@ class ConferenceHostPeerManager {
 
     // Renegotiate: create a new offer that doesn't accept audio
     await _renegotiate(key);
-    LogService().log('ConferenceHostPeerManager: Demoted $callsign to listener');
+    LogService().log(
+      'ConferenceHostPeerManager: Demoted $callsign to listener',
+    );
   }
 
   // ── Internal: renegotiation ────────────────────────────────────
@@ -334,12 +353,17 @@ class ConferenceHostPeerManager {
       'sdp': {'type': offer.type, 'sdp': offer.sdp},
     });
 
-    LogService().log('ConferenceHostPeerManager: Renegotiation offer to ${peer.callsign}');
+    LogService().log(
+      'ConferenceHostPeerManager: Renegotiation offer to ${peer.callsign}',
+    );
   }
 
   /// Called when a speaker track is received. Stores it and adds
   /// to all other connections, triggering renegotiation for each.
-  Future<void> _onSpeakerTrackReceived(String key, MediaStreamTrack track) async {
+  Future<void> _onSpeakerTrackReceived(
+    String key,
+    MediaStreamTrack track,
+  ) async {
     _speakerTracks[key] = track;
 
     // Add this track to all OTHER peer connections
@@ -354,17 +378,24 @@ class ConferenceHostPeerManager {
         await _renegotiate(entry.key);
       } catch (e) {
         LogService().log(
-            'ConferenceHostPeerManager: Failed to add track to ${entry.key}: $e');
+          'ConferenceHostPeerManager: Failed to add track to ${entry.key}: $e',
+        );
       }
     }
 
     LogService().log(
-        'ConferenceHostPeerManager: Speaker track from $key forwarded to ${_peers.length - 1} peers');
+      'ConferenceHostPeerManager: Speaker track from $key forwarded to ${_peers.length - 1} peers',
+    );
   }
 
   /// Remove a speaker's track from all connections.
   Future<void> _removeSpeakerTrack(String key) async {
     final track = _speakerTracks.remove(key);
+    final remoteStream = _remoteStreams.remove(key);
+    if (remoteStream != null) {
+      await remoteStream.dispose();
+      _eventController.add(ConferenceEvent('remote_stream_removed', key));
+    }
     if (track == null) return;
 
     // Remove from all other connections
@@ -383,7 +414,8 @@ class ConferenceHostPeerManager {
         await _renegotiate(entry.key);
       } catch (e) {
         LogService().log(
-            'ConferenceHostPeerManager: Failed to remove track from ${entry.key}: $e');
+          'ConferenceHostPeerManager: Failed to remove track from ${entry.key}: $e',
+        );
       }
     }
   }
@@ -411,42 +443,97 @@ class ConferenceHostPeerManager {
     // Connection state
     pc.onConnectionState = (RTCPeerConnectionState state) {
       LogService().log(
-          'ConferenceHostPeerManager: ${peer.callsign} connection state: $state');
+        'ConferenceHostPeerManager: ${peer.callsign} connection state: $state',
+      );
 
       switch (state) {
         case RTCPeerConnectionState.RTCPeerConnectionStateConnected:
-          peer.state = ConferencePeerState.connected;
-          if (!(peer.connectionCompleter?.isCompleted ?? true)) {
-            peer.connectionCompleter!.complete(true);
-          }
-          _eventController.add(ConferenceEvent('peer_connected', peer.callsign));
+          _markPeerConnected(peer);
 
         case RTCPeerConnectionState.RTCPeerConnectionStateFailed:
-          peer.state = ConferencePeerState.failed;
-          if (!(peer.connectionCompleter?.isCompleted ?? true)) {
-            peer.connectionCompleter!.complete(false);
-          }
-          _eventController.add(ConferenceEvent('peer_disconnected', peer.callsign));
+          _markPeerDisconnected(peer, failed: true);
 
         case RTCPeerConnectionState.RTCPeerConnectionStateDisconnected:
         case RTCPeerConnectionState.RTCPeerConnectionStateClosed:
-          peer.state = ConferencePeerState.closed;
-          _eventController.add(ConferenceEvent('peer_disconnected', peer.callsign));
+          _markPeerDisconnected(peer);
 
         default:
           break;
       }
     };
 
+    pc.onIceConnectionState = (RTCIceConnectionState state) {
+      LogService().log(
+        'ConferenceHostPeerManager: ${peer.callsign} ICE state: $state',
+      );
+      switch (state) {
+        case RTCIceConnectionState.RTCIceConnectionStateConnected:
+        case RTCIceConnectionState.RTCIceConnectionStateCompleted:
+          _markPeerConnected(peer);
+          break;
+        case RTCIceConnectionState.RTCIceConnectionStateFailed:
+          _markPeerDisconnected(peer, failed: true);
+          break;
+        case RTCIceConnectionState.RTCIceConnectionStateDisconnected:
+        case RTCIceConnectionState.RTCIceConnectionStateClosed:
+          _markPeerDisconnected(peer);
+          break;
+        default:
+          break;
+      }
+    };
+
     // Remote audio track — only relevant for speakers
-    pc.onTrack = (RTCTrackEvent event) {
+    pc.onTrack = (RTCTrackEvent event) async {
       if (event.track.kind == 'audio' &&
           _roles[key] == SfuParticipantRole.speaker) {
         LogService().log(
-            'ConferenceHostPeerManager: Audio track received from ${peer.callsign}');
-        _onSpeakerTrackReceived(key, event.track);
+          'ConferenceHostPeerManager: Audio track received from ${peer.callsign}',
+        );
+        MediaStream stream;
+        if (event.streams.isNotEmpty) {
+          stream = event.streams.first;
+        } else {
+          stream = await createLocalMediaStream('conference-host-$key');
+          await stream.addTrack(event.track);
+        }
+
+        final previous = _remoteStreams[key];
+        if (previous != null && previous.id != stream.id) {
+          await previous.dispose();
+        }
+        _remoteStreams[key] = stream;
+        _eventController.add(
+          ConferenceEvent('remote_stream', peer.callsign, stream),
+        );
+        await _onSpeakerTrackReceived(key, event.track);
       }
     };
+  }
+
+  void _markPeerConnected(ConferenceAudioPeer peer) {
+    if (peer.state == ConferencePeerState.connected) {
+      return;
+    }
+    peer.state = ConferencePeerState.connected;
+    if (!(peer.connectionCompleter?.isCompleted ?? true)) {
+      peer.connectionCompleter!.complete(true);
+    }
+    _eventController.add(ConferenceEvent('peer_connected', peer.callsign));
+  }
+
+  void _markPeerDisconnected(ConferenceAudioPeer peer, {bool failed = false}) {
+    if (peer.state == ConferencePeerState.closed ||
+        peer.state == ConferencePeerState.failed) {
+      return;
+    }
+    peer.state = failed
+        ? ConferencePeerState.failed
+        : ConferencePeerState.closed;
+    if (failed && !(peer.connectionCompleter?.isCompleted ?? true)) {
+      peer.connectionCompleter!.complete(false);
+    }
+    _eventController.add(ConferenceEvent('peer_disconnected', peer.callsign));
   }
 
   Future<void> _closePeer(ConferenceAudioPeer peer) async {
@@ -456,7 +543,8 @@ class ConferenceHostPeerManager {
       await peer.peerConnection?.dispose();
     } catch (e) {
       LogService().log(
-          'ConferenceHostPeerManager: Error closing ${peer.callsign}: $e');
+        'ConferenceHostPeerManager: Error closing ${peer.callsign}: $e',
+      );
     }
     peer.peerConnection = null;
     peer.remoteStream = null;

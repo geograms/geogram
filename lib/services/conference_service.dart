@@ -14,8 +14,12 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:http/http.dart' as http;
+import 'package:flutter_webrtc/flutter_webrtc.dart';
 
+import '../models/chat_message.dart';
+import 'conference_chat_store.dart';
 import 'conference_host_peer_manager.dart';
 import 'conference_participant_peer_manager.dart';
 import 'conference_peer_manager.dart';
@@ -44,12 +48,14 @@ class ConferenceParticipant {
   bool isMuted;
   bool isConnected;
   ConferenceParticipantRole participantRole;
+  bool hasPendingSpeakerRequest;
 
   ConferenceParticipant({
     required this.callsign,
     this.isMuted = false,
     this.isConnected = false,
     this.participantRole = ConferenceParticipantRole.listener,
+    this.hasPendingSpeakerRequest = false,
   });
 
   bool get isSpeaker => participantRole == ConferenceParticipantRole.speaker;
@@ -59,6 +65,7 @@ class ConferenceParticipant {
     'is_muted': isMuted,
     'is_connected': isConnected,
     'role': participantRole.name,
+    'speaker_request_pending': hasPendingSpeakerRequest,
   };
 }
 
@@ -70,6 +77,7 @@ class ConferenceRoom {
   final ConferenceSignalingMode signalingMode;
   final DateTime startTime;
   final Map<String, ConferenceParticipant> participants = {};
+  final String chatRoomId;
   int maxSpeakers;
 
   ConferenceRoom({
@@ -78,7 +86,8 @@ class ConferenceRoom {
     required this.hostCallsign,
     required this.signalingMode,
     this.maxSpeakers = 6,
-  }) : startTime = DateTime.now();
+  }) : chatRoomId = roomId.replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '_'),
+       startTime = DateTime.now();
 
   List<ConferenceParticipant> get speakers =>
       participants.values.where((p) => p.isSpeaker).toList();
@@ -124,6 +133,10 @@ class ConferenceService {
 
   // Station-mode subscription
   StreamSubscription? _stationSubscription;
+  final ConferenceChatStore _chatStore = ConferenceChatStore();
+  final List<ChatMessage> _chatMessages = [];
+  final Set<String> _chatMessageIds = {};
+  Future<void> _messageQueue = Future<void>.value();
 
   final _stateController = StreamController<ConferenceState>.broadcast();
   final _eventController = StreamController<ConferenceEvent>.broadcast();
@@ -132,10 +145,31 @@ class ConferenceService {
   ConferenceRole? get role => _role;
   ConferenceState get state => _state;
   bool get isActive => _state == ConferenceState.active;
+  List<ChatMessage> get chatMessages => List.unmodifiable(_chatMessages);
+  String? get chatTranscriptPath =>
+      _room == null ? null : _chatStore.transcriptAbsolutePath(_room!.roomId);
+  List<MediaStream> get remoteAudioStreams {
+    if (_hostPeerManager != null) {
+      return _hostPeerManager!.remoteStreams.values.toList();
+    }
+    if (_participantPeerManager != null) {
+      return _participantPeerManager!.remoteStreams.values.toList();
+    }
+    return const [];
+  }
+
+  List<String> get pendingSpeakerRequests =>
+      _room?.participants.values
+          .where((participant) => participant.hasPendingSpeakerRequest)
+          .map((participant) => participant.callsign)
+          .toList() ??
+      const [];
 
   bool get isLocalMuted {
     if (_hostPeerManager != null) return _hostPeerManager!.isLocalMuted;
-    if (_participantPeerManager != null) return _participantPeerManager!.isLocalMuted;
+    if (_participantPeerManager != null) {
+      return _participantPeerManager!.isLocalMuted;
+    }
     return false;
   }
 
@@ -161,6 +195,8 @@ class ConferenceService {
 
     _setState(ConferenceState.starting);
     _role = ConferenceRole.host;
+    _resetMeetingState();
+    await _prepareAudioRouting();
 
     final roomId = _generateRoomId();
     final callsign = _myCallsign;
@@ -179,13 +215,13 @@ class ConferenceService {
     _room!.participants[callsign] = ConferenceParticipant(
       callsign: callsign,
       isConnected: true,
-      participantRole: ConferenceParticipantRole.speaker, // Host is always a speaker
+      participantRole:
+          ConferenceParticipantRole.speaker, // Host is always a speaker
     );
+    await _loadStoredChatMessages();
 
     // Start host peer manager (SFU)
-    _hostPeerManager = ConferenceHostPeerManager(
-      config: _buildConfig(),
-    );
+    _hostPeerManager = ConferenceHostPeerManager(config: _buildConfig());
     await _hostPeerManager!.startLocalAudio();
     _listenHostPeerEvents();
 
@@ -196,7 +232,9 @@ class ConferenceService {
     }
 
     _setState(ConferenceState.active);
-    LogService().log('ConferenceService: Hosting "$roomName" ($mode) as $callsign');
+    LogService().log(
+      'ConferenceService: Hosting "$roomName" ($mode) as $callsign',
+    );
     return _room!;
   }
 
@@ -238,8 +276,10 @@ class ConferenceService {
 
   /// Join a LAN-mode conference via WebSocket URL.
   /// Defaults to listener role (no mic access needed).
-  Future<void> joinLan(String wsUrl, {
-    ConferenceParticipantRole participantRole = ConferenceParticipantRole.listener,
+  Future<void> joinLan(
+    String wsUrl, {
+    ConferenceParticipantRole participantRole =
+        ConferenceParticipantRole.listener,
   }) async {
     if (_state != ConferenceState.idle) {
       throw StateError('Conference already active');
@@ -247,6 +287,8 @@ class ConferenceService {
 
     _setState(ConferenceState.starting);
     _role = ConferenceRole.joiner;
+    _resetMeetingState();
+    await _prepareAudioRouting();
 
     final sfuRole = participantRole == ConferenceParticipantRole.speaker
         ? SfuParticipantRole.speaker
@@ -286,19 +328,25 @@ class ConferenceService {
     };
 
     // Announce ourselves with role
-    _lanSocket!.add(jsonEncode({
-      'type': 'conference_hello',
-      'callsign': _myCallsign,
-      'role': participantRole.name,
-    }));
+    _lanSocket!.add(
+      jsonEncode({
+        'type': 'conference_hello',
+        'callsign': _myCallsign,
+        'role': participantRole.name,
+      }),
+    );
 
-    LogService().log('ConferenceService: Joining LAN conference at $wsUrl as ${participantRole.name}');
+    LogService().log(
+      'ConferenceService: Joining LAN conference at $wsUrl as ${participantRole.name}',
+    );
   }
 
   /// Join a station-mode conference.
   /// Defaults to listener role.
-  Future<void> joinStation(String roomId, {
-    ConferenceParticipantRole participantRole = ConferenceParticipantRole.listener,
+  Future<void> joinStation(
+    String roomId, {
+    ConferenceParticipantRole participantRole =
+        ConferenceParticipantRole.listener,
   }) async {
     if (_state != ConferenceState.idle) {
       throw StateError('Conference already active');
@@ -306,6 +354,8 @@ class ConferenceService {
 
     _setState(ConferenceState.starting);
     _role = ConferenceRole.joiner;
+    _resetMeetingState();
+    await _prepareAudioRouting();
 
     final sfuRole = participantRole == ConferenceParticipantRole.speaker
         ? SfuParticipantRole.speaker
@@ -347,14 +397,18 @@ class ConferenceService {
       'role': participantRole.name,
     });
 
-    LogService().log('ConferenceService: Joining station conference $roomId as ${participantRole.name}');
+    LogService().log(
+      'ConferenceService: Joining station conference $roomId as ${participantRole.name}',
+    );
   }
 
   // ── Discovery: find meeting by room ID ──────────────────────────
 
   /// Discover and join a meeting from a room ID with `@callsign` suffix.
-  Future<void> discoverAndJoin(String roomId, {
-    ConferenceParticipantRole participantRole = ConferenceParticipantRole.listener,
+  Future<void> discoverAndJoin(
+    String roomId, {
+    ConferenceParticipantRole participantRole =
+        ConferenceParticipantRole.listener,
   }) async {
     final atIndex = roomId.indexOf('@');
     if (atIndex < 0) {
@@ -362,8 +416,10 @@ class ConferenceService {
     }
     final hostCallsign = roomId.substring(atIndex + 1);
 
-    LogService().log('ConferenceService: Discovering meeting $roomId '
-        '(host: $hostCallsign)');
+    LogService().log(
+      'ConferenceService: Discovering meeting $roomId '
+      '(host: $hostCallsign)',
+    );
 
     // Try LAN discovery first
     final devices = DevicesService().getAllDevices();
@@ -376,9 +432,9 @@ class ConferenceService {
       try {
         final baseUrl = hostDevice!.url!;
         final uri = Uri.parse('$baseUrl/api/meet/active');
-        final response = await http.get(uri).timeout(
-          const Duration(seconds: 5),
-        );
+        final response = await http
+            .get(uri)
+            .timeout(const Duration(seconds: 5));
 
         if (response.statusCode == 200) {
           final data = jsonDecode(response.body) as Map<String, dynamic>;
@@ -389,22 +445,21 @@ class ConferenceService {
             final host = Uri.parse(baseUrl).host;
             final wsUrl = 'ws://$host:$sigPort/meet/ws';
             LogService().log(
-                'ConferenceService: Found meeting via LAN at $wsUrl');
+              'ConferenceService: Found meeting via LAN at $wsUrl',
+            );
             await joinLan(wsUrl, participantRole: participantRole);
             return;
           }
         }
       } catch (e) {
-        LogService().log(
-            'ConferenceService: LAN discovery failed: $e');
+        LogService().log('ConferenceService: LAN discovery failed: $e');
       }
     }
 
     // Fallback: try station relay
     final wsService = WebSocketService();
     if (wsService.isConnected) {
-      LogService().log(
-          'ConferenceService: Trying station relay for $roomId');
+      LogService().log('ConferenceService: Trying station relay for $roomId');
       await joinStation(roomId, participantRole: participantRole);
       return;
     }
@@ -427,6 +482,59 @@ class ConferenceService {
     _participantPeerManager?.setMuted(muted);
   }
 
+  Future<void> requestToSpeak() async {
+    if (_role != ConferenceRole.joiner) {
+      throw StateError('Only joiners can request speaker access');
+    }
+
+    final room = _room;
+    if (room == null) {
+      throw StateError('No active conference');
+    }
+
+    final me = room.participants[_myCallsign];
+    if (me == null || me.isSpeaker) {
+      throw StateError('Only listeners can request speaker access');
+    }
+
+    if (me.hasPendingSpeakerRequest) {
+      return;
+    }
+
+    me.hasPendingSpeakerRequest = true;
+    _eventController.add(
+      ConferenceEvent('speaker_request_pending', _myCallsign),
+    );
+    _sendConferenceRoomMessage({
+      'type': 'conference_speaker_request',
+      'callsign': _myCallsign,
+    });
+    LogService().log('ConferenceService: Speaker request sent by $_myCallsign');
+  }
+
+  Future<void> sendChatMessage(String content) async {
+    final room = _room;
+    final trimmed = content.trim();
+    if (room == null || trimmed.isEmpty) {
+      return;
+    }
+
+    final message = ChatMessage.now(
+      author: _myCallsign,
+      content: trimmed,
+      metadata: {
+        'conference_id': _generateChatMessageId(),
+        'room_id': room.roomId,
+      },
+    );
+
+    await _storeIncomingChatMessage(message);
+    _sendConferenceRoomMessage({
+      'type': 'conference_chat_message',
+      'message': _serializeChatMessage(message),
+    });
+  }
+
   // ── Promote / demote (host only) ─────────────────────────────────
 
   /// Promote a listener to speaker. Host-only operation.
@@ -447,14 +555,15 @@ class ConferenceService {
     final p = room.participants[callsign];
     if (p != null) {
       p.participantRole = ConferenceParticipantRole.speaker;
+      p.hasPendingSpeakerRequest = false;
     }
 
-    // Renegotiate the connection
-    await _hostPeerManager!.promoteToSpeaker(callsign);
-
-    // Send role change notification via signaling
+    // Update the participant first so their next SDP answer includes audio.
     _sendRoleChange(callsign, 'speaker');
     _eventController.add(ConferenceEvent('role_changed', callsign, 'speaker'));
+
+    // Renegotiate the connection after the role change notification.
+    await _hostPeerManager!.promoteToSpeaker(callsign);
 
     LogService().log('ConferenceService: Promoted $callsign to speaker');
   }
@@ -472,14 +581,15 @@ class ConferenceService {
     final p = room.participants[callsign];
     if (p != null) {
       p.participantRole = ConferenceParticipantRole.listener;
+      p.hasPendingSpeakerRequest = false;
     }
 
-    // Renegotiate the connection
-    await _hostPeerManager!.demoteToListener(callsign);
-
-    // Send role change notification via signaling
+    // Update the participant first so they stop sending audio before renegotiation.
     _sendRoleChange(callsign, 'listener');
     _eventController.add(ConferenceEvent('role_changed', callsign, 'listener'));
+
+    // Renegotiate the connection after the role change notification.
+    await _hostPeerManager!.demoteToListener(callsign);
 
     LogService().log('ConferenceService: Demoted $callsign to listener');
   }
@@ -508,52 +618,98 @@ class ConferenceService {
 
     _setState(ConferenceState.ending);
 
-    // Clean up signaling
-    if (_role == ConferenceRole.host) {
-      if (_room?.signalingMode == ConferenceSignalingMode.station) {
-        WebSocketService().send({
-          'type': 'conference_end',
-          'room_id': _room?.roomId,
-        });
-      }
-      await _signalingServer?.stop();
-      _signalingServer = null;
-    } else {
-      if (_room?.signalingMode == ConferenceSignalingMode.lan) {
-        _lanSocket?.add(jsonEncode({
-          'type': 'conference_leave',
-          'callsign': _myCallsign,
-        }));
+    try {
+      // Clean up signaling
+      if (_role == ConferenceRole.host) {
+        if (_room?.signalingMode == ConferenceSignalingMode.station) {
+          try {
+            WebSocketService().send({
+              'type': 'conference_end',
+              'room_id': _room?.roomId,
+            });
+          } catch (e) {
+            LogService().log(
+              'ConferenceService: Failed to notify station conference end: $e',
+            );
+          }
+        }
+        try {
+          await _signalingServer?.stop();
+        } catch (e) {
+          LogService().log(
+            'ConferenceService: Failed to stop signaling server: $e',
+          );
+        }
+        _signalingServer = null;
       } else {
-        WebSocketService().send({
-          'type': 'conference_leave',
-          'room_id': _room?.roomId,
-        });
+        if (_room?.signalingMode == ConferenceSignalingMode.lan) {
+          try {
+            _lanSocket?.add(
+              jsonEncode({
+                'type': 'conference_leave',
+                'callsign': _myCallsign,
+              }),
+            );
+          } catch (e) {
+            LogService().log(
+              'ConferenceService: Failed to notify LAN conference leave: $e',
+            );
+          }
+        } else {
+          try {
+            WebSocketService().send({
+              'type': 'conference_leave',
+              'room_id': _room?.roomId,
+            });
+          } catch (e) {
+            LogService().log(
+              'ConferenceService: Failed to notify station conference leave: $e',
+            );
+          }
+        }
       }
+    } finally {
+      await _lanSocketSubscription?.cancel();
+      _lanSocketSubscription = null;
+      try {
+        await _lanSocket?.close();
+      } catch (_) {}
+      _lanSocket = null;
+      await _stationSubscription?.cancel();
+      _stationSubscription = null;
+
+      try {
+        await _hostPeerManager?.dispose();
+      } catch (e) {
+        LogService().log(
+          'ConferenceService: Failed to dispose host peer manager: $e',
+        );
+      }
+      _hostPeerManager = null;
+      try {
+        await _participantPeerManager?.dispose();
+      } catch (e) {
+        LogService().log(
+          'ConferenceService: Failed to dispose participant peer manager: $e',
+        );
+      }
+      _participantPeerManager = null;
+
+      _room = null;
+      _role = null;
+      _setState(ConferenceState.idle);
+      LogService().log('ConferenceService: Conference ended');
     }
-
-    _lanSocketSubscription?.cancel();
-    _lanSocketSubscription = null;
-    try { _lanSocket?.close(); } catch (_) {}
-    _lanSocket = null;
-    _stationSubscription?.cancel();
-    _stationSubscription = null;
-
-    await _hostPeerManager?.dispose();
-    _hostPeerManager = null;
-    await _participantPeerManager?.dispose();
-    _participantPeerManager = null;
-
-    _room = null;
-    _role = null;
-    _setState(ConferenceState.idle);
-    LogService().log('ConferenceService: Conference ended');
   }
 
   // ── LAN signaling (host) ────────────────────────────────────────
 
   Future<void> _startLanSignaling(
-      String roomId, String roomName, String callsign, int maxSpeakers) async {
+    String roomId,
+    String roomName,
+    String callsign,
+    int maxSpeakers,
+  ) async {
     _signalingServer = ConferenceSignalingServer(
       roomId: roomId,
       roomName: roomName,
@@ -588,7 +744,10 @@ class ConferenceService {
   // ── Station signaling (host) ─────────────────────────────────────
 
   Future<void> _startStationSignaling(
-      String roomId, String roomName, int maxSpeakers) async {
+    String roomId,
+    String roomName,
+    int maxSpeakers,
+  ) async {
     // Subscribe to station messages
     _stationSubscription = WebSocketService().messages.listen((msg) {
       final type = msg['type'] as String?;
@@ -619,6 +778,10 @@ class ConferenceService {
   // ── Message handling ─────────────────────────────────────────────
 
   void _handleLanMessage(String raw) {
+    _enqueueMessage(() => _handleLanMessageAsync(raw));
+  }
+
+  Future<void> _handleLanMessageAsync(String raw) async {
     Map<String, dynamic> msg;
     try {
       msg = jsonDecode(raw) as Map<String, dynamic>;
@@ -631,30 +794,40 @@ class ConferenceService {
 
     switch (type) {
       case 'conference_welcome':
-        _handleWelcome(msg);
+        await _handleWelcome(msg);
       case 'conference_participant_joined':
         _handleParticipantJoined(msg);
       case 'conference_participant_left':
         _handleParticipantLeft(msg);
       case 'conference_end':
         _handleConferenceEnd(msg);
+      case 'conference_speaker_request':
+        _handleSpeakerRequest(msg);
       case 'conference_role_change':
-        _handleRoleChange(msg);
+        await _handleRoleChange(msg);
+      case 'conference_chat_message':
+        await _handleConferenceChatMessage(msg);
+      case 'conference_chat_history':
+        await _handleConferenceChatHistory(msg);
       case 'conference_error':
         LogService().log('ConferenceService: Error: ${msg['error']}');
       // WebRTC signals
       case 'webrtc_offer':
-        _handleWebRTCOffer(msg);
+        await _handleWebRTCOffer(msg);
       case 'webrtc_answer':
-        _handleWebRTCAnswer(msg);
+        await _handleWebRTCAnswer(msg);
       case 'webrtc_ice':
-        _handleWebRTCIce(msg);
+        await _handleWebRTCIce(msg);
       case 'webrtc_bye':
-        _handleWebRTCBye(msg);
+        await _handleWebRTCBye(msg);
     }
   }
 
   void _handleStationMessage(Map<String, dynamic> msg) {
+    _enqueueMessage(() => _handleStationMessageAsync(msg));
+  }
+
+  Future<void> _handleStationMessageAsync(Map<String, dynamic> msg) async {
     final type = msg['type'] as String?;
     if (type == null) return;
 
@@ -662,15 +835,21 @@ class ConferenceService {
       case 'conference_created':
         LogService().log('ConferenceService: Room created on station');
       case 'conference_welcome':
-        _handleWelcome(msg);
+        await _handleWelcome(msg);
       case 'conference_participant_joined':
         _handleParticipantJoined(msg);
       case 'conference_participant_left':
         _handleParticipantLeft(msg);
       case 'conference_end':
         _handleConferenceEnd(msg);
+      case 'conference_speaker_request':
+        _handleSpeakerRequest(msg);
       case 'conference_role_change':
-        _handleRoleChange(msg);
+        await _handleRoleChange(msg);
+      case 'conference_chat_message':
+        await _handleConferenceChatMessage(msg);
+      case 'conference_chat_history':
+        await _handleConferenceChatHistory(msg);
       case 'conference_error':
         LogService().log('ConferenceService: Station error: ${msg['error']}');
       case 'conference_signal':
@@ -680,42 +859,41 @@ class ConferenceService {
           msg['type'] = signalType;
           switch (signalType) {
             case 'webrtc_offer':
-              _handleWebRTCOffer(msg);
+              await _handleWebRTCOffer(msg);
             case 'webrtc_answer':
-              _handleWebRTCAnswer(msg);
+              await _handleWebRTCAnswer(msg);
             case 'webrtc_ice':
-              _handleWebRTCIce(msg);
+              await _handleWebRTCIce(msg);
             case 'webrtc_bye':
-              _handleWebRTCBye(msg);
+              await _handleWebRTCBye(msg);
           }
         }
     }
   }
 
-  void _handleWelcome(Map<String, dynamic> msg) {
+  Future<void> _handleWelcome(Map<String, dynamic> msg) async {
     final roomId = msg['room_id'] as String? ?? _room?.roomId ?? '';
     final roomName = msg['room_name'] as String? ?? _room?.roomName ?? '';
     final hostCallsign = msg['host_callsign'] as String? ?? '';
     final speakers = (msg['speakers'] as List?)?.cast<String>() ?? [];
     final participants = msg['participants'] as List?;
 
-    if (_room == null) {
-      // Joiner — create room info from welcome
-      _room = ConferenceRoom(
-        roomId: roomId,
-        roomName: roomName,
-        hostCallsign: hostCallsign,
-        signalingMode: _lanSocket != null
-            ? ConferenceSignalingMode.lan
-            : ConferenceSignalingMode.station,
-        maxSpeakers: msg['max_speakers'] as int? ?? 6,
-      );
-    }
+    _room ??= ConferenceRoom(
+      roomId: roomId,
+      roomName: roomName,
+      hostCallsign: hostCallsign,
+      signalingMode: _lanSocket != null
+          ? ConferenceSignalingMode.lan
+          : ConferenceSignalingMode.station,
+      maxSpeakers: msg['max_speakers'] as int? ?? 6,
+    );
 
     // Add existing participants with their roles
     if (participants != null) {
       for (final p in participants) {
-        final callsign = p is String ? p : (p as Map<String, dynamic>)['callsign'] as String? ?? '';
+        final callsign = p is String
+            ? p
+            : (p as Map<String, dynamic>)['callsign'] as String? ?? '';
         if (callsign.isEmpty) continue;
         final isSpeaker = speakers.contains(callsign);
         _room!.participants[callsign] = ConferenceParticipant(
@@ -736,15 +914,18 @@ class ConferenceService {
       isConnected: true,
       participantRole: myRole,
     );
+    await _loadStoredChatMessages();
 
     // In star topology, participant only connects to host
     if (_role == ConferenceRole.joiner && _participantPeerManager != null) {
-      _participantPeerManager!.connectToHost(hostCallsign);
+      await _participantPeerManager!.connectToHost(hostCallsign);
     }
 
     _setState(ConferenceState.active);
-    LogService().log('ConferenceService: Welcome received, '
-        '${speakers.length} speakers, host=$hostCallsign');
+    LogService().log(
+      'ConferenceService: Welcome received, '
+      '${speakers.length} speakers, host=$hostCallsign',
+    );
   }
 
   void _handleParticipantJoined(Map<String, dynamic> msg) {
@@ -760,7 +941,10 @@ class ConferenceService {
       callsign: callsign,
       participantRole: participantRole,
     );
-    _eventController.add(ConferenceEvent('peer_connected', callsign));
+    _eventController.add(ConferenceEvent('participant_joined', callsign));
+    if (_role == ConferenceRole.host) {
+      _sendChatHistoryToParticipant(callsign);
+    }
 
     // In star topology, the joiner sends the offer to host.
     // Host just waits for the offer.
@@ -774,9 +958,15 @@ class ConferenceService {
     _room?.participants.remove(callsign);
 
     if (_role == ConferenceRole.host) {
-      _hostPeerManager?.handleBye(callsign);
-    } else {
-      _participantPeerManager?.handleBye(callsign);
+      final future = _hostPeerManager?.handleBye(callsign);
+      if (future != null) {
+        unawaited(future);
+      }
+    } else if (callsign == _room?.hostCallsign) {
+      final future = _participantPeerManager?.handleBye(callsign);
+      if (future != null) {
+        unawaited(future);
+      }
     }
 
     _eventController.add(ConferenceEvent('peer_disconnected', callsign));
@@ -785,10 +975,10 @@ class ConferenceService {
 
   void _handleConferenceEnd(Map<String, dynamic> msg) {
     LogService().log('ConferenceService: Conference ended by host');
-    endConference();
+    unawaited(endConference());
   }
 
-  void _handleRoleChange(Map<String, dynamic> msg) {
+  Future<void> _handleRoleChange(Map<String, dynamic> msg) async {
     final callsign = msg['callsign'] as String?;
     final newRole = msg['role'] as String?;
     if (callsign == null || newRole == null) return;
@@ -801,14 +991,15 @@ class ConferenceService {
     final p = _room?.participants[callsign];
     if (p != null) {
       p.participantRole = participantRole;
+      p.hasPendingSpeakerRequest = false;
     }
 
     // If this role change is for us (we're a participant)
     if (callsign == _myCallsign && _participantPeerManager != null) {
       if (participantRole == ConferenceParticipantRole.speaker) {
-        _participantPeerManager!.onPromotedToSpeaker();
+        await _participantPeerManager!.onPromotedToSpeaker();
       } else {
-        _participantPeerManager!.onDemotedToListener();
+        await _participantPeerManager!.onDemotedToListener();
       }
     }
 
@@ -818,7 +1009,7 @@ class ConferenceService {
 
   // ── WebRTC signal handling ───────────────────────────────────────
 
-  void _handleWebRTCOffer(Map<String, dynamic> msg) {
+  Future<void> _handleWebRTCOffer(Map<String, dynamic> msg) async {
     final from = msg['from_callsign'] as String?;
     final sessionId = msg['session_id'] as String?;
     final sdp = msg['sdp'] as Map<String, dynamic>?;
@@ -826,47 +1017,81 @@ class ConferenceService {
 
     if (_role == ConferenceRole.host && _hostPeerManager != null) {
       final role = msg['role'] as String?;
-      _hostPeerManager!.handleOffer(from, sessionId, sdp, role: role);
+      await _hostPeerManager!.handleOffer(from, sessionId, sdp, role: role);
     } else if (_participantPeerManager != null) {
       // Renegotiation offer from host
-      _participantPeerManager!.handleOffer(from, sessionId, sdp);
+      await _participantPeerManager!.handleOffer(from, sessionId, sdp);
     }
   }
 
-  void _handleWebRTCAnswer(Map<String, dynamic> msg) {
+  Future<void> _handleWebRTCAnswer(Map<String, dynamic> msg) async {
     final from = msg['from_callsign'] as String?;
     final sdp = msg['sdp'] as Map<String, dynamic>?;
     if (from == null || sdp == null) return;
 
     if (_role == ConferenceRole.host) {
-      _hostPeerManager?.handleAnswer(from, sdp);
+      await _hostPeerManager?.handleAnswer(from, sdp);
     } else {
-      _participantPeerManager?.handleAnswer(from, sdp);
+      await _participantPeerManager?.handleAnswer(from, sdp);
     }
   }
 
-  void _handleWebRTCIce(Map<String, dynamic> msg) {
+  Future<void> _handleWebRTCIce(Map<String, dynamic> msg) async {
     final from = msg['from_callsign'] as String?;
     final candidate = msg['candidate'] as Map<String, dynamic>?;
     if (from == null || candidate == null) return;
 
     if (_role == ConferenceRole.host) {
-      _hostPeerManager?.handleIceCandidate(from, candidate);
+      await _hostPeerManager?.handleIceCandidate(from, candidate);
     } else {
-      _participantPeerManager?.handleIceCandidate(from, candidate);
+      await _participantPeerManager?.handleIceCandidate(from, candidate);
     }
   }
 
-  void _handleWebRTCBye(Map<String, dynamic> msg) {
+  Future<void> _handleWebRTCBye(Map<String, dynamic> msg) async {
     final from = msg['from_callsign'] as String?;
     if (from == null) return;
 
     if (_role == ConferenceRole.host) {
-      _hostPeerManager?.handleBye(from);
-    } else {
-      _participantPeerManager?.handleBye(from);
+      await _hostPeerManager?.handleBye(from);
+    } else if (from == _room?.hostCallsign) {
+      await _participantPeerManager?.handleBye(from);
     }
     _room?.participants.remove(from);
+  }
+
+  void _handleSpeakerRequest(Map<String, dynamic> msg) {
+    final callsign = msg['callsign'] as String?;
+    if (callsign == null) return;
+
+    final participant = _room?.participants[callsign];
+    if (participant == null || participant.isSpeaker) {
+      return;
+    }
+
+    participant.hasPendingSpeakerRequest = true;
+    _eventController.add(ConferenceEvent('speaker_requested', callsign));
+    LogService().log(
+      'ConferenceService: Speaker request received from $callsign',
+    );
+  }
+
+  Future<void> _handleConferenceChatMessage(Map<String, dynamic> msg) async {
+    final payload = msg['message'] as Map<String, dynamic>?;
+    if (payload == null) return;
+    final message = _deserializeChatMessage(payload);
+    await _storeIncomingChatMessage(message);
+  }
+
+  Future<void> _handleConferenceChatHistory(Map<String, dynamic> msg) async {
+    final messages = (msg['messages'] as List<dynamic>? ?? [])
+        .whereType<Map<String, dynamic>>()
+        .map(_deserializeChatMessage)
+        .toList();
+
+    for (final message in messages) {
+      await _storeIncomingChatMessage(message);
+    }
   }
 
   // ── Helpers ──────────────────────────────────────────────────────
@@ -882,7 +1107,11 @@ class ConferenceService {
 
       final p = _room?.participants[event.callsign];
       if (p != null) {
-        p.isConnected = event.type == 'peer_connected';
+        if (event.type == 'peer_connected' || event.type == 'remote_stream') {
+          p.isConnected = true;
+        } else if (event.type == 'peer_disconnected') {
+          p.isConnected = false;
+        }
       }
     });
   }
@@ -892,12 +1121,163 @@ class ConferenceService {
       _eventController.add(event);
 
       // For participant, the host connection state affects all participants
-      if (event.type == 'peer_connected') {
+      if (event.type == 'peer_connected' || event.type == 'remote_stream') {
         // Mark host as connected
         final p = _room?.participants[event.callsign];
         if (p != null) p.isConnected = true;
+      } else if (event.type == 'peer_disconnected') {
+        final p = _room?.participants[event.callsign];
+        if (p != null) p.isConnected = false;
       }
     });
+  }
+
+  void _resetMeetingState() {
+    _chatMessages.clear();
+    _chatMessageIds.clear();
+    _messageQueue = Future<void>.value();
+  }
+
+  void _enqueueMessage(Future<void> Function() handler) {
+    _messageQueue = _messageQueue
+        .catchError((Object error, StackTrace stackTrace) {
+          LogService().log(
+            'ConferenceService: Previous queued message failed: $error',
+          );
+        })
+        .then((_) => handler())
+        .catchError((Object error, StackTrace stackTrace) {
+          LogService().log(
+            'ConferenceService: Failed to handle queued message: $error',
+          );
+        });
+  }
+
+  Future<void> _prepareAudioRouting() async {
+    if (kIsWeb) {
+      return;
+    }
+    if (!(Platform.isAndroid || Platform.isIOS || Platform.isMacOS)) {
+      return;
+    }
+    try {
+      await Helper.setSpeakerphoneOnButPreferBluetooth();
+    } catch (_) {}
+    try {
+      await Helper.ensureAudioSession();
+    } catch (_) {}
+  }
+
+  Future<void> _loadStoredChatMessages() async {
+    final room = _room;
+    if (room == null) return;
+
+    final stored = await _chatStore.loadMessages(
+      room.roomId,
+      roomName: room.roomName,
+    );
+    _chatMessages
+      ..clear()
+      ..addAll(stored);
+    _chatMessageIds
+      ..clear()
+      ..addAll(stored.map(_chatMessageKey));
+    if (stored.isNotEmpty) {
+      _eventController.add(
+        ConferenceEvent('chat_history_loaded', room.hostCallsign, stored),
+      );
+    }
+  }
+
+  Future<void> _storeIncomingChatMessage(ChatMessage message) async {
+    final room = _room;
+    if (room == null) return;
+
+    final key = _chatMessageKey(message);
+    if (!_chatMessageIds.add(key)) {
+      return;
+    }
+
+    _chatMessages.add(message);
+    _chatMessages.sort();
+    await _chatStore.saveMessage(room.roomId, room.roomName, message);
+    _eventController.add(
+      ConferenceEvent('conference_chat_message', message.author, message),
+    );
+  }
+
+  void _sendConferenceRoomMessage(
+    Map<String, dynamic> message, {
+    String? toCallsign,
+  }) {
+    final room = _room;
+    if (room == null) return;
+
+    final payload = Map<String, dynamic>.from(message)
+      ..putIfAbsent('room_id', () => room.roomId);
+    if (toCallsign != null && toCallsign.isNotEmpty) {
+      payload['to_callsign'] = toCallsign;
+    }
+
+    if (room.signalingMode == ConferenceSignalingMode.lan) {
+      if (_role == ConferenceRole.host) {
+        _signalingServer?.sendRoomMessageFromHost(
+          payload,
+          toCallsign: toCallsign,
+        );
+      } else {
+        _lanSocket?.add(jsonEncode(payload));
+      }
+      return;
+    }
+
+    WebSocketService().send(payload);
+  }
+
+  void _sendChatHistoryToParticipant(String callsign) {
+    if (_chatMessages.isEmpty) {
+      return;
+    }
+
+    _sendConferenceRoomMessage({
+      'type': 'conference_chat_history',
+      'messages': _chatMessages.map(_serializeChatMessage).toList(),
+    }, toCallsign: callsign);
+  }
+
+  Map<String, dynamic> _serializeChatMessage(ChatMessage message) => {
+    'author': message.author,
+    'timestamp': message.timestamp,
+    'content': message.content,
+    'metadata': Map<String, String>.from(message.metadata),
+    'reactions': message.reactions.map(
+      (key, value) => MapEntry(key, List<String>.from(value)),
+    ),
+  };
+
+  ChatMessage _deserializeChatMessage(Map<String, dynamic> json) {
+    return ChatMessage(
+      author: json['author'] as String? ?? '',
+      timestamp: json['timestamp'] as String? ?? '',
+      content: json['content'] as String? ?? '',
+      metadata: Map<String, String>.from(json['metadata'] as Map? ?? const {}),
+      reactions: (json['reactions'] as Map? ?? const {}).map(
+        (key, value) => MapEntry(
+          key.toString(),
+          List<String>.from(value as List? ?? const []),
+        ),
+      ),
+    );
+  }
+
+  String _chatMessageKey(ChatMessage message) =>
+      message.getMeta('conference_id') ??
+      '${message.timestamp}|${message.author}|${message.content}';
+
+  String _generateChatMessageId() {
+    final now = DateTime.now().microsecondsSinceEpoch;
+    final rand = Random().nextInt(1 << 20);
+    return '$now-${rand.toRadixString(16)}';
   }
 
   WebRTCConfig _buildConfig() {
@@ -920,7 +1300,8 @@ class ConferenceService {
   String _generateRoomId() {
     final r = Random();
     final letters = String.fromCharCodes(
-        List.generate(4, (_) => r.nextInt(26) + 65));
+      List.generate(4, (_) => r.nextInt(26) + 65),
+    );
     final callsign = _myCallsign;
     return '$letters@$callsign';
   }

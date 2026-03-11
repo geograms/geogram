@@ -51,5 +51,7 @@
 	<string>Geogram uses Bluetooth to connect with nearby devices</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Camera access is required to scan QR codes for importing contacts</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Microphone access is required to host or speak in Geogram meetings</string>
 </dict>
 </plist>

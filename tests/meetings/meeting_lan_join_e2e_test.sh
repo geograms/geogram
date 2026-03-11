@@ -125,6 +125,18 @@ if ! get_json "$VISITOR_STATUS_URL" >/dev/null; then
   tail -n 100 "${VISITOR_TMPDIR}/visitor.log" || true
   exit 1
 fi
+for _ in $(seq 1 60); do
+  if post "$VISITOR_API" '{"action":"conference_status"}' >/dev/null; then
+    break
+  fi
+  sleep 1
+done
+if ! post "$VISITOR_API" '{"action":"conference_status"}' >/dev/null; then
+  echo "FATAL: visitor debug API did not become ready on $VISITOR_API"
+  echo "Visitor log:"
+  tail -n 100 "${VISITOR_TMPDIR}/visitor.log" || true
+  exit 1
+fi
 ok "visitor desktop instance started"
 
 HOST_CALLSIGN="$(get_json "$VISITOR_STATUS_URL" | json_field "data['callsign']")"
@@ -195,6 +207,10 @@ def room_participants(payload):
     room = payload.get('room') or {}
     return sorted(p['callsign'] for p in room.get('participants') or [])
 
+def participant_map(payload):
+    room = payload.get('room') or {}
+    return {p['callsign']: p for p in room.get('participants') or []}
+
 if host.get('state') != 'active' or host.get('role') != 'host':
     sys.exit(1)
 if attendee.get('state') != 'active' or attendee.get('role') != 'joiner':
@@ -217,6 +233,14 @@ if meet.get('participant_count') != 2:
     sys.exit(1)
 if sorted(meet.get('participants') or []) != expected:
     sys.exit(1)
+host_participants = participant_map(host)
+attendee_participants = participant_map(attendee)
+if not host_participants.get(os.environ['ATTENDEE_CALLSIGN'], {}).get('is_connected'):
+    sys.exit(1)
+if not attendee_participants.get(os.environ['HOST_CALLSIGN'], {}).get('is_connected'):
+    sys.exit(1)
+if attendee.get('remote_audio_stream_count', 0) < 1:
+    sys.exit(1)
 PY
   then
     JOINED=1
@@ -235,7 +259,155 @@ else
 fi
 
 echo ""
-echo "[6] Ending the meeting and checking cleanup..."
+echo "[6] Requesting speaker access from the attendee..."
+REQUEST_RESPONSE="$(post "$MAIN_API" '{"action":"conference_request_speaker"}')"
+if echo "$REQUEST_RESPONSE" | json_field "data['success']" | grep -qx "True"; then
+  ok "attendee requested speaker access"
+else
+  fail "attendee could not request speaker access"
+  echo "$REQUEST_RESPONSE"
+fi
+
+echo ""
+echo "[7] Waiting for the host to see the speaker request..."
+REQUESTED=0
+for _ in $(seq 1 20); do
+  HOST_STATUS="$(post "$VISITOR_API" '{"action":"conference_status"}')"
+  if HOST_STATUS="$HOST_STATUS" ATTENDEE_CALLSIGN="$ATTENDEE_CALLSIGN" python3 - <<'PY'
+import json
+import os
+import sys
+
+host = json.loads(os.environ['HOST_STATUS'])
+pending = host.get('pending_speaker_requests') or []
+if os.environ['ATTENDEE_CALLSIGN'] in pending:
+    sys.exit(0)
+sys.exit(1)
+PY
+  then
+    REQUESTED=1
+    break
+  fi
+  sleep 1
+done
+
+if [ "$REQUESTED" -eq 1 ]; then
+  ok "host received the attendee speaker request"
+else
+  fail "host never saw the attendee speaker request"
+  echo "$HOST_STATUS"
+fi
+
+echo ""
+echo "[8] Promoting the attendee to speaker..."
+PROMOTE_RESPONSE="$(post "$VISITOR_API" "{\"action\":\"conference_promote\",\"callsign\":\"${ATTENDEE_CALLSIGN}\"}")"
+if echo "$PROMOTE_RESPONSE" | json_field "data['success']" | grep -qx "True"; then
+  ok "host promoted the attendee to speaker"
+else
+  fail "host could not promote the attendee"
+  echo "$PROMOTE_RESPONSE"
+fi
+
+echo ""
+echo "[9] Waiting for both sides to reflect the new speaker role..."
+PROMOTED=0
+for _ in $(seq 1 20); do
+  HOST_STATUS="$(post "$VISITOR_API" '{"action":"conference_status"}')"
+  ATTENDEE_STATUS="$(post "$MAIN_API" '{"action":"conference_status"}')"
+  if HOST_STATUS="$HOST_STATUS" ATTENDEE_STATUS="$ATTENDEE_STATUS" ATTENDEE_CALLSIGN="$ATTENDEE_CALLSIGN" python3 - <<'PY'
+import json
+import os
+import sys
+
+host = json.loads(os.environ['HOST_STATUS'])
+attendee = json.loads(os.environ['ATTENDEE_STATUS'])
+target = os.environ['ATTENDEE_CALLSIGN']
+
+def participant(payload, callsign):
+    room = payload.get('room') or {}
+    for entry in room.get('participants') or []:
+        if entry.get('callsign') == callsign:
+            return entry
+    return {}
+
+host_target = participant(host, target)
+attendee_self = participant(attendee, target)
+if host_target.get('role') != 'speaker':
+    sys.exit(1)
+if attendee_self.get('role') != 'speaker':
+    sys.exit(1)
+if host_target.get('speaker_request_pending'):
+    sys.exit(1)
+if attendee_self.get('speaker_request_pending'):
+    sys.exit(1)
+if host.get('remote_audio_stream_count', 0) < 1:
+    sys.exit(1)
+if attendee.get('remote_audio_stream_count', 0) < 1:
+    sys.exit(1)
+PY
+  then
+    PROMOTED=1
+    break
+  fi
+  sleep 1
+done
+
+if [ "$PROMOTED" -eq 1 ]; then
+  ok "host and attendee both show the attendee as a speaker"
+else
+  fail "speaker promotion did not propagate"
+  echo "Host status: $HOST_STATUS"
+  echo "Attendee status: $ATTENDEE_STATUS"
+fi
+
+echo ""
+echo "[10] Sending a meeting chat message from the attendee..."
+CHAT_TEXT="LAN regression chat"
+CHAT_RESPONSE="$(post "$MAIN_API" "{\"action\":\"conference_send_chat\",\"content\":\"${CHAT_TEXT}\"}")"
+if echo "$CHAT_RESPONSE" | json_field "data['success']" | grep -qx "True"; then
+  ok "attendee sent a meeting chat message"
+else
+  fail "attendee could not send a meeting chat message"
+  echo "$CHAT_RESPONSE"
+fi
+
+echo ""
+echo "[11] Waiting for the host transcript to persist the chat message..."
+CHAT_SYNCED=0
+TRANSCRIPT_PATH=""
+for _ in $(seq 1 20); do
+  HOST_STATUS="$(post "$VISITOR_API" '{"action":"conference_status"}')"
+  TRANSCRIPT_PATH="$(echo "$HOST_STATUS" | json_field "data.get('chat_transcript_path')")"
+  if HOST_STATUS="$HOST_STATUS" CHAT_TEXT="$CHAT_TEXT" python3 - <<'PY'
+import json
+import os
+import sys
+
+host = json.loads(os.environ['HOST_STATUS'])
+messages = host.get('chat_messages') or []
+if any(m.get('content') == os.environ['CHAT_TEXT'] for m in messages):
+    sys.exit(0)
+sys.exit(1)
+PY
+  then
+    if [ -n "$TRANSCRIPT_PATH" ] && [ "$TRANSCRIPT_PATH" != "None" ] && grep -Fq "$CHAT_TEXT" "$TRANSCRIPT_PATH"; then
+      CHAT_SYNCED=1
+      break
+    fi
+  fi
+  sleep 1
+done
+
+if [ "$CHAT_SYNCED" -eq 1 ]; then
+  ok "meeting chat reached the host status API and persisted transcript"
+else
+  fail "meeting chat did not persist on the host"
+  echo "Host status: $HOST_STATUS"
+  echo "Transcript path: $TRANSCRIPT_PATH"
+fi
+
+echo ""
+echo "[12] Ending the meeting and checking cleanup..."
 post "$MAIN_API" '{"action":"conference_end"}' >/dev/null || true
 post "$VISITOR_API" '{"action":"conference_end"}' >/dev/null || true
 sleep 2

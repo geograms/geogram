@@ -33,6 +33,8 @@ class ConferenceParticipantPeerManager {
   bool get isLocalMuted => _localMuted;
   MediaStream? get localStream => _localStream;
   SfuParticipantRole get role => _role;
+  Map<String, MediaStream> get remoteStreams =>
+      Map.unmodifiable(_remoteStreams);
   int get peerCount => _hostPeer != null ? 1 : 0;
 
   List<String> get connectedPeers =>
@@ -41,8 +43,8 @@ class ConferenceParticipantPeerManager {
   ConferenceParticipantPeerManager({
     WebRTCConfig? config,
     SfuParticipantRole role = SfuParticipantRole.listener,
-  })  : _config = config ?? const WebRTCConfig(),
-        _role = role;
+  }) : _config = config ?? const WebRTCConfig(),
+       _role = role;
 
   void setConfig(WebRTCConfig config) => _config = config;
 
@@ -77,6 +79,9 @@ class ConferenceParticipantPeerManager {
     if (_hostPeer != null) {
       await _closePeer(_hostPeer!);
       _hostPeer = null;
+    }
+    for (final stream in _remoteStreams.values) {
+      await stream.dispose();
     }
     _remoteStreams.clear();
 
@@ -126,6 +131,13 @@ class ConferenceParticipantPeerManager {
     );
     _setupHandlers(peer);
 
+    if (_role == SfuParticipantRole.listener) {
+      await peer.peerConnection!.addTransceiver(
+        kind: RTCRtpMediaType.RTCRtpMediaTypeAudio,
+        init: RTCRtpTransceiverInit(direction: TransceiverDirection.RecvOnly),
+      );
+    }
+
     // Add local audio tracks only if speaker
     if (_role == SfuParticipantRole.speaker && _localStream != null) {
       for (final track in _localStream!.getAudioTracks()) {
@@ -149,8 +161,9 @@ class ConferenceParticipantPeerManager {
     });
 
     LogService().log(
-        'ConferenceParticipantPeerManager: Sent offer to host $hostCallsign '
-        '(role: ${_role.name})');
+      'ConferenceParticipantPeerManager: Sent offer to host $hostCallsign '
+      '(role: ${_role.name})',
+    );
     return sessionId;
   }
 
@@ -158,7 +171,10 @@ class ConferenceParticipantPeerManager {
 
   /// Handle a renegotiation offer from the host (e.g., new speaker track added).
   Future<void> handleOffer(
-      String callsign, String sessionId, Map<String, dynamic> sdp) async {
+    String callsign,
+    String sessionId,
+    Map<String, dynamic> sdp,
+  ) async {
     final peer = _hostPeer;
     if (peer == null || peer.peerConnection == null) return;
 
@@ -190,7 +206,8 @@ class ConferenceParticipantPeerManager {
     });
 
     LogService().log(
-        'ConferenceParticipantPeerManager: Answered renegotiation from host');
+      'ConferenceParticipantPeerManager: Answered renegotiation from host',
+    );
   }
 
   /// Handle an answer from the host (to our initial offer).
@@ -208,13 +225,14 @@ class ConferenceParticipantPeerManager {
     }
     peer.pendingIceCandidates.clear();
 
-    LogService().log(
-        'ConferenceParticipantPeerManager: Set answer from host');
+    LogService().log('ConferenceParticipantPeerManager: Set answer from host');
   }
 
   /// Handle an incoming ICE candidate from host.
   Future<void> handleIceCandidate(
-      String callsign, Map<String, dynamic> candidate) async {
+    String callsign,
+    Map<String, dynamic> candidate,
+  ) async {
     final peer = _hostPeer;
     if (peer == null) return;
 
@@ -224,7 +242,8 @@ class ConferenceParticipantPeerManager {
       candidate['sdpMLineIndex'] as int?,
     );
 
-    if (peer.peerConnection?.getRemoteDescription() != null) {
+    final remoteDescription = await peer.peerConnection?.getRemoteDescription();
+    if (remoteDescription != null) {
       await peer.peerConnection!.addCandidate(iceCandidate);
     } else {
       peer.pendingIceCandidates.add(iceCandidate);
@@ -302,45 +321,96 @@ class ConferenceParticipantPeerManager {
     // Connection state
     pc.onConnectionState = (RTCPeerConnectionState state) {
       LogService().log(
-          'ConferenceParticipantPeerManager: Host connection state: $state');
+        'ConferenceParticipantPeerManager: Host connection state: $state',
+      );
 
       switch (state) {
         case RTCPeerConnectionState.RTCPeerConnectionStateConnected:
-          peer.state = ConferencePeerState.connected;
-          if (!(peer.connectionCompleter?.isCompleted ?? true)) {
-            peer.connectionCompleter!.complete(true);
-          }
-          _eventController.add(ConferenceEvent('peer_connected', peer.callsign));
+          _markPeerConnected(peer);
 
         case RTCPeerConnectionState.RTCPeerConnectionStateFailed:
-          peer.state = ConferencePeerState.failed;
-          if (!(peer.connectionCompleter?.isCompleted ?? true)) {
-            peer.connectionCompleter!.complete(false);
-          }
-          _eventController.add(ConferenceEvent('peer_disconnected', peer.callsign));
+          _markPeerDisconnected(peer, failed: true);
 
         case RTCPeerConnectionState.RTCPeerConnectionStateDisconnected:
         case RTCPeerConnectionState.RTCPeerConnectionStateClosed:
-          peer.state = ConferencePeerState.closed;
-          _eventController.add(ConferenceEvent('peer_disconnected', peer.callsign));
+          _markPeerDisconnected(peer);
 
         default:
           break;
       }
     };
 
-    // Remote audio tracks (multiple — one per speaker)
-    pc.onTrack = (RTCTrackEvent event) {
-      if (event.streams.isNotEmpty) {
-        final stream = event.streams.first;
-        _remoteStreams[stream.id] = stream;
-        _eventController.add(
-            ConferenceEvent('remote_stream', peer.callsign, stream));
-        LogService().log(
-            'ConferenceParticipantPeerManager: Remote audio track from host '
-            '(stream: ${stream.id})');
+    pc.onIceConnectionState = (RTCIceConnectionState state) {
+      LogService().log(
+        'ConferenceParticipantPeerManager: Host ICE state: $state',
+      );
+      switch (state) {
+        case RTCIceConnectionState.RTCIceConnectionStateConnected:
+        case RTCIceConnectionState.RTCIceConnectionStateCompleted:
+          _markPeerConnected(peer);
+          break;
+        case RTCIceConnectionState.RTCIceConnectionStateFailed:
+          _markPeerDisconnected(peer, failed: true);
+          break;
+        case RTCIceConnectionState.RTCIceConnectionStateDisconnected:
+        case RTCIceConnectionState.RTCIceConnectionStateClosed:
+          _markPeerDisconnected(peer);
+          break;
+        default:
+          break;
       }
     };
+
+    // Remote audio tracks (multiple — one per speaker)
+    pc.onTrack = (RTCTrackEvent event) async {
+      if (event.track.kind != 'audio') {
+        return;
+      }
+
+      MediaStream stream;
+      if (event.streams.isNotEmpty) {
+        stream = event.streams.first;
+      } else {
+        stream = await createLocalMediaStream(
+          'conference-remote-${peer.callsign}-${event.track.id}',
+        );
+        await stream.addTrack(event.track);
+      }
+
+      _remoteStreams[stream.id] = stream;
+      _eventController.add(
+        ConferenceEvent('remote_stream', peer.callsign, stream),
+      );
+      LogService().log(
+        'ConferenceParticipantPeerManager: Remote audio track from host '
+        '(stream: ${stream.id})',
+      );
+    };
+  }
+
+  void _markPeerConnected(ConferenceAudioPeer peer) {
+    if (peer.state == ConferencePeerState.connected) {
+      return;
+    }
+    peer.state = ConferencePeerState.connected;
+    if (!(peer.connectionCompleter?.isCompleted ?? true)) {
+      peer.connectionCompleter!.complete(true);
+    }
+    _eventController.add(ConferenceEvent('peer_connected', peer.callsign));
+  }
+
+  void _markPeerDisconnected(ConferenceAudioPeer peer, {bool failed = false}) {
+    if (peer.state == ConferencePeerState.closed ||
+        peer.state == ConferencePeerState.failed) {
+      return;
+    }
+    peer.state = failed
+        ? ConferencePeerState.failed
+        : ConferencePeerState.closed;
+    if (failed && !(peer.connectionCompleter?.isCompleted ?? true)) {
+      peer.connectionCompleter!.complete(false);
+    }
+    _eventController.add(ConferenceEvent('peer_disconnected', peer.callsign));
   }
 
   Future<void> _closePeer(ConferenceAudioPeer peer) async {
@@ -349,8 +419,7 @@ class ConferenceParticipantPeerManager {
       await peer.peerConnection?.close();
       await peer.peerConnection?.dispose();
     } catch (e) {
-      LogService().log(
-          'ConferenceParticipantPeerManager: Error closing: $e');
+      LogService().log('ConferenceParticipantPeerManager: Error closing: $e');
     }
     peer.peerConnection = null;
     peer.remoteStream = null;

@@ -5,10 +5,13 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 import '../services/conference_service.dart';
 import '../services/profile_service.dart';
+import '../widgets/message_input_widget.dart';
+import '../widgets/message_list_widget.dart';
 
 class ConferenceCallPage extends StatefulWidget {
   const ConferenceCallPage({super.key});
@@ -22,6 +25,7 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
   StreamSubscription? _stateSubscription;
   StreamSubscription? _eventSubscription;
   List<String> _meetUrls = [];
+  final Map<String, RTCVideoRenderer> _audioRenderers = {};
 
   @override
   void initState() {
@@ -37,9 +41,11 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
     });
 
     _eventSubscription = _conferenceService.events.listen((_) {
+      unawaited(_syncRemoteAudio());
       if (mounted) setState(() {});
     });
 
+    unawaited(_syncRemoteAudio());
     _loadMeetUrls();
   }
 
@@ -55,6 +61,7 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
   void dispose() {
     _stateSubscription?.cancel();
     _eventSubscription?.cancel();
+    unawaited(_disposeAudioRenderers());
     super.dispose();
   }
 
@@ -77,9 +84,9 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
     final url = _shareUrl;
     if (url == null) return;
     Clipboard.setData(ClipboardData(text: url));
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Link copied')),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('Link copied')));
   }
 
   Future<void> _promoteParticipant(String callsign) async {
@@ -87,9 +94,9 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
       await _conferenceService.promoteToSpeaker(callsign);
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('$e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('$e')));
       }
     }
   }
@@ -99,11 +106,66 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
       await _conferenceService.demoteToListener(callsign);
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('$e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('$e')));
       }
     }
+  }
+
+  Future<void> _requestSpeakerAccess() async {
+    try {
+      await _conferenceService.requestToSpeak();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('$e')));
+      }
+    }
+  }
+
+  Future<void> _sendChatMessage(String content, String? filePath) async {
+    await _conferenceService.sendChatMessage(content);
+    if (!mounted) return;
+    setState(() {});
+  }
+
+  Future<void> _syncRemoteAudio() async {
+    final activeStreams = _conferenceService.remoteAudioStreams;
+    final activeIds = activeStreams.map((stream) => stream.id).toSet();
+
+    for (final stream in activeStreams) {
+      await _attachRemoteStream(stream);
+    }
+
+    final staleIds = _audioRenderers.keys
+        .where((streamId) => !activeIds.contains(streamId))
+        .toList();
+    for (final streamId in staleIds) {
+      final renderer = _audioRenderers.remove(streamId);
+      if (renderer == null) continue;
+      renderer.srcObject = null;
+      await renderer.dispose();
+    }
+  }
+
+  Future<void> _attachRemoteStream(MediaStream stream) async {
+    var renderer = _audioRenderers[stream.id];
+    if (renderer == null) {
+      renderer = RTCVideoRenderer();
+      await renderer.initialize();
+      _audioRenderers[stream.id] = renderer;
+    }
+    renderer.srcObject = stream;
+  }
+
+  Future<void> _disposeAudioRenderers() async {
+    for (final renderer in _audioRenderers.values) {
+      renderer.srcObject = null;
+      await renderer.dispose();
+    }
+    _audioRenderers.clear();
   }
 
   void _showShareSheet() {
@@ -121,10 +183,7 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text(
-              'Share Meeting',
-              style: Theme.of(ctx).textTheme.titleLarge,
-            ),
+            Text('Share Meeting', style: Theme.of(ctx).textTheme.titleLarge),
             const SizedBox(height: 20),
 
             if (primaryUrl != null) ...[
@@ -172,9 +231,9 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
                 onPressed: () {
                   Clipboard.setData(ClipboardData(text: primaryUrl));
                   Navigator.pop(ctx);
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Link copied')),
-                  );
+                  ScaffoldMessenger.of(
+                    context,
+                  ).showSnackBar(const SnackBar(content: Text('Link copied')));
                 },
                 icon: const Icon(Icons.copy),
                 label: const Text('Copy Link'),
@@ -195,9 +254,9 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
               onTap: () {
                 Clipboard.setData(ClipboardData(text: room.roomId));
                 Navigator.pop(ctx);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Room ID copied')),
-                );
+                ScaffoldMessenger.of(
+                  context,
+                ).showSnackBar(const SnackBar(content: Text('Room ID copied')));
               },
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.center,
@@ -212,8 +271,11 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
                     ),
                   ),
                   const SizedBox(width: 6),
-                  Icon(Icons.copy, size: 14,
-                      color: Theme.of(ctx).colorScheme.onSurfaceVariant),
+                  Icon(
+                    Icons.copy,
+                    size: 14,
+                    color: Theme.of(ctx).colorScheme.onSurfaceVariant,
+                  ),
                 ],
               ),
             ),
@@ -234,14 +296,17 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
                     onTap: () {
                       Clipboard.setData(ClipboardData(text: url));
                       Navigator.pop(ctx);
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(content: Text('Copied: $url')),
-                      );
+                      ScaffoldMessenger.of(
+                        context,
+                      ).showSnackBar(SnackBar(content: Text('Copied: $url')));
                     },
                     child: Row(
                       children: [
-                        Icon(Icons.wifi, size: 14,
-                            color: Theme.of(ctx).colorScheme.onSurfaceVariant),
+                        Icon(
+                          Icons.wifi,
+                          size: 14,
+                          color: Theme.of(ctx).colorScheme.onSurfaceVariant,
+                        ),
                         const SizedBox(width: 6),
                         Expanded(
                           child: Text(
@@ -252,8 +317,11 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
                             ),
                           ),
                         ),
-                        Icon(Icons.copy, size: 14,
-                            color: Theme.of(ctx).colorScheme.onSurfaceVariant),
+                        Icon(
+                          Icons.copy,
+                          size: 14,
+                          color: Theme.of(ctx).colorScheme.onSurfaceVariant,
+                        ),
                       ],
                     ),
                   ),
@@ -279,8 +347,11 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
                 },
                 child: Row(
                   children: [
-                    Icon(Icons.cloud, size: 14,
-                        color: Theme.of(ctx).colorScheme.onSurfaceVariant),
+                    Icon(
+                      Icons.cloud,
+                      size: 14,
+                      color: Theme.of(ctx).colorScheme.onSurfaceVariant,
+                    ),
                     const SizedBox(width: 6),
                     Expanded(
                       child: Text(
@@ -291,8 +362,11 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
                         ),
                       ),
                     ),
-                    Icon(Icons.copy, size: 14,
-                        color: Theme.of(ctx).colorScheme.onSurfaceVariant),
+                    Icon(
+                      Icons.copy,
+                      size: 14,
+                      color: Theme.of(ctx).colorScheme.onSurfaceVariant,
+                    ),
                   ],
                 ),
               ),
@@ -312,6 +386,10 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
     final isHost = _conferenceService.role == ConferenceRole.host;
     final isMuted = _conferenceService.isLocalMuted;
     final participants = room?.participants.values.toList() ?? [];
+    final myCallsign = ProfileService().getProfile().callsign;
+    final me = room?.participants[myCallsign];
+    final canRequestSpeaker = !isHost && me != null && !me.isSpeaker;
+    final hasRequestedSpeaker = me?.hasPendingSpeakerRequest ?? false;
     final shareUrl = _shareUrl;
 
     return Scaffold(
@@ -350,7 +428,9 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
                       borderRadius: BorderRadius.circular(6),
                       child: Container(
                         padding: const EdgeInsets.symmetric(
-                            horizontal: 8, vertical: 3),
+                          horizontal: 8,
+                          vertical: 3,
+                        ),
                         decoration: BoxDecoration(
                           color: theme.colorScheme.primaryContainer,
                           borderRadius: BorderRadius.circular(6),
@@ -369,8 +449,11 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
                               ),
                             ),
                             const SizedBox(width: 4),
-                            Icon(Icons.copy, size: 12,
-                                color: theme.colorScheme.onPrimaryContainer),
+                            Icon(
+                              Icons.copy,
+                              size: 12,
+                              color: theme.colorScheme.onPrimaryContainer,
+                            ),
                           ],
                         ),
                       ),
@@ -378,8 +461,11 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
                   ),
                 const SizedBox(width: 8),
                 // Speaker/listener count
-                Icon(Icons.mic, size: 14,
-                    color: theme.colorScheme.onSurfaceVariant),
+                Icon(
+                  Icons.mic,
+                  size: 14,
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
                 const SizedBox(width: 2),
                 Text(
                   '${room?.speakerCount ?? 0}',
@@ -388,8 +474,11 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
                   ),
                 ),
                 const SizedBox(width: 8),
-                Icon(Icons.headphones, size: 14,
-                    color: theme.colorScheme.onSurfaceVariant),
+                Icon(
+                  Icons.headphones,
+                  size: 14,
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
                 const SizedBox(width: 2),
                 Text(
                   '${room?.listenerCount ?? 0}',
@@ -403,38 +492,89 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
 
           const Divider(height: 1),
 
-          // Participant list
           Expanded(
-            child: participants.isEmpty
-                ? Center(
-                    child: Text(
-                      'Waiting for participants...',
-                      style: theme.textTheme.bodyLarge?.copyWith(
-                        color: theme.colorScheme.onSurfaceVariant,
+            child: DefaultTabController(
+              length: 2,
+              child: Column(
+                children: [
+                  TabBar(
+                    tabs: [
+                      Tab(text: 'People (${participants.length})'),
+                      Tab(
+                        text:
+                            'Chat (${_conferenceService.chatMessages.length})',
                       ),
-                    ),
-                  )
-                : ListView.builder(
-                    padding: const EdgeInsets.all(8),
-                    itemCount: participants.length,
-                    itemBuilder: (context, index) {
-                      final p = participants[index];
-                      return _ParticipantTile(
-                        callsign: p.callsign,
-                        isConnected: p.isConnected,
-                        isMuted: p.isMuted,
-                        isSpeaker: p.isSpeaker,
-                        isHost: p.callsign == room?.hostCallsign,
-                        isMe: p.callsign ==
-                            ProfileService().getProfile().callsign,
-                        canManage: isHost &&
-                            p.callsign != room?.hostCallsign &&
-                            p.callsign != ProfileService().getProfile().callsign,
-                        onPromote: () => _promoteParticipant(p.callsign),
-                        onDemote: () => _demoteParticipant(p.callsign),
-                      );
-                    },
+                    ],
                   ),
+                  Expanded(
+                    child: TabBarView(
+                      children: [
+                        participants.isEmpty
+                            ? Center(
+                                child: Text(
+                                  'Waiting for participants...',
+                                  style: theme.textTheme.bodyLarge?.copyWith(
+                                    color: theme.colorScheme.onSurfaceVariant,
+                                  ),
+                                ),
+                              )
+                            : ListView.builder(
+                                padding: const EdgeInsets.all(8),
+                                itemCount: participants.length,
+                                itemBuilder: (context, index) {
+                                  final p = participants[index];
+                                  final isSelf = p.callsign == myCallsign;
+                                  final isRelayPresenceOnly =
+                                      !isHost &&
+                                      !isSelf &&
+                                      p.callsign != room?.hostCallsign;
+                                  final statusLabel = isRelayPresenceOnly
+                                      ? 'In room'
+                                      : (p.isConnected
+                                            ? 'Connected'
+                                            : 'Connecting...');
+                                  return _ParticipantTile(
+                                    callsign: p.callsign,
+                                    statusLabel: statusLabel,
+                                    isConnected:
+                                        p.isConnected || isRelayPresenceOnly,
+                                    isMuted: p.isMuted,
+                                    isSpeaker: p.isSpeaker,
+                                    hasPendingSpeakerRequest:
+                                        p.hasPendingSpeakerRequest,
+                                    isHost: p.callsign == room?.hostCallsign,
+                                    isMe: isSelf,
+                                    canManage:
+                                        isHost &&
+                                        p.callsign != room?.hostCallsign &&
+                                        !isSelf,
+                                    onPromote: () =>
+                                        _promoteParticipant(p.callsign),
+                                    onDemote: () =>
+                                        _demoteParticipant(p.callsign),
+                                  );
+                                },
+                              ),
+                        Column(
+                          children: [
+                            Expanded(
+                              child: MessageListWidget(
+                                messages: _conferenceService.chatMessages,
+                                isGroupChat: true,
+                              ),
+                            ),
+                            MessageInputWidget(
+                              onSend: _sendChatMessage,
+                              allowFiles: false,
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
           ),
         ],
       ),
@@ -452,14 +592,27 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
                 color: isMuted
                     ? theme.colorScheme.error
                     : theme.colorScheme.surfaceContainerHighest,
-                iconColor:
-                    isMuted ? Colors.white : theme.colorScheme.onSurface,
+                iconColor: isMuted ? Colors.white : theme.colorScheme.onSurface,
                 onPressed: _toggleMute,
               ),
+              if (canRequestSpeaker)
+                _CallButton(
+                  icon: hasRequestedSpeaker
+                      ? Icons.pan_tool_alt
+                      : Icons.record_voice_over,
+                  label: hasRequestedSpeaker ? 'Requested' : 'Request Mic',
+                  color: hasRequestedSpeaker
+                      ? theme.colorScheme.primary
+                      : theme.colorScheme.secondaryContainer,
+                  iconColor: hasRequestedSpeaker
+                      ? theme.colorScheme.onPrimary
+                      : theme.colorScheme.onSecondaryContainer,
+                  onPressed: hasRequestedSpeaker ? null : _requestSpeakerAccess,
+                ),
               _CallButton(
                 icon: Icons.call_end,
                 label: isHost ? 'End' : 'Leave',
-                color: theme.colorScheme.error,
+                color: const Color(0xFFD90429),
                 iconColor: Colors.white,
                 onPressed: _endCall,
               ),
@@ -473,9 +626,11 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
 
 class _ParticipantTile extends StatelessWidget {
   final String callsign;
+  final String statusLabel;
   final bool isConnected;
   final bool isMuted;
   final bool isSpeaker;
+  final bool hasPendingSpeakerRequest;
   final bool isHost;
   final bool isMe;
   final bool canManage;
@@ -484,9 +639,11 @@ class _ParticipantTile extends StatelessWidget {
 
   const _ParticipantTile({
     required this.callsign,
+    required this.statusLabel,
     required this.isConnected,
     required this.isMuted,
     required this.isSpeaker,
+    this.hasPendingSpeakerRequest = false,
     required this.isHost,
     required this.isMe,
     this.canManage = false,
@@ -517,7 +674,7 @@ class _ParticipantTile extends StatelessWidget {
           style: theme.textTheme.bodyLarge,
         ),
         subtitle: Text(
-          '${isConnected ? 'Connected' : 'Connecting...'} - ${isSpeaker ? 'Speaker' : 'Listener'}',
+          '$statusLabel - ${isSpeaker ? 'Speaker' : (hasPendingSpeakerRequest ? 'Listener, mic requested' : 'Listener')}',
           style: TextStyle(
             color: isConnected ? Colors.green : Colors.orange,
             fontSize: 12,
@@ -536,15 +693,29 @@ class _ParticipantTile extends StatelessWidget {
                   onPressed: onDemote,
                   tooltip: 'Demote to listener',
                   padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                  constraints: const BoxConstraints(
+                    minWidth: 36,
+                    minHeight: 36,
+                  ),
                 )
               else
                 IconButton(
-                  icon: const Icon(Icons.mic, size: 20),
+                  icon: Icon(
+                    hasPendingSpeakerRequest ? Icons.pan_tool_alt : Icons.mic,
+                    size: 20,
+                    color: hasPendingSpeakerRequest
+                        ? theme.colorScheme.primary
+                        : null,
+                  ),
                   onPressed: onPromote,
-                  tooltip: 'Promote to speaker',
+                  tooltip: hasPendingSpeakerRequest
+                      ? 'Approve speaker request'
+                      : 'Promote to speaker',
                   padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                  constraints: const BoxConstraints(
+                    minWidth: 36,
+                    minHeight: 36,
+                  ),
                 ),
             ],
           ],
@@ -559,7 +730,7 @@ class _CallButton extends StatelessWidget {
   final String label;
   final Color color;
   final Color iconColor;
-  final VoidCallback onPressed;
+  final VoidCallback? onPressed;
 
   const _CallButton({
     required this.icon,
@@ -581,10 +752,7 @@ class _CallButton extends StatelessWidget {
           child: Icon(icon, color: iconColor),
         ),
         const SizedBox(height: 6),
-        Text(
-          label,
-          style: Theme.of(context).textTheme.bodySmall,
-        ),
+        Text(label, style: Theme.of(context).textTheme.bodySmall),
       ],
     );
   }

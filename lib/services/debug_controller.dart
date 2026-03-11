@@ -8,7 +8,6 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
-import '../models/app.dart';
 import '../connection/connection_manager.dart';
 import '../connection/transports/usb_aoa_transport.dart';
 import 'package:path/path.dart' as path;
@@ -554,7 +553,9 @@ class DebugController {
         if (oldDir.existsSync()) {
           oldDir.deleteSync(recursive: true);
           cleanedUp = oldCallsign;
-          LogService().log('Debug: Cleaned up old callsign folder: $oldCallsign');
+          LogService().log(
+            'Debug: Cleaned up old callsign folder: $oldCallsign',
+          );
         }
       }
 
@@ -691,7 +692,10 @@ class DebugController {
   }
 
   /// Trigger P2P accept offer
-  void triggerP2PAccept({required String offerId, required String destination}) {
+  void triggerP2PAccept({
+    required String offerId,
+    required String destination,
+  }) {
     triggerAction(
       DebugAction.p2pAccept,
       params: {'offer_id': offerId, 'destination': destination},
@@ -714,33 +718,31 @@ class DebugController {
       {
         'action': 'navigate',
         'description': 'Navigate to a panel',
-        'params': {
-          'panel': 'Panel name: apps, maps, devices, settings, logs',
-        },
+        'params': {'panel': 'Panel name: apps, maps, devices, settings, logs'},
       },
       {
         'action': 'map_search',
         'description': 'Search for a place on the map by name or coordinates',
         'params': {
-          'query': 'Search query (place name or coordinates like "38.72, -9.14")',
+          'query':
+              'Search query (place name or coordinates like "38.72, -9.14")',
         },
       },
       {
         'action': 'map_route',
-        'description': 'Calculate route from current map center to coordinates (auto-downloads road data if needed)',
+        'description':
+            'Calculate route from current map center to coordinates (auto-downloads road data if needed)',
         'params': {
           'toLat': 'Destination latitude',
           'toLon': 'Destination longitude',
-          'mode': '(optional) Travel mode: driving or walking (default: driving)',
+          'mode':
+              '(optional) Travel mode: driving or walking (default: driving)',
         },
       },
       {
         'action': 'map_pin_location',
         'description': 'Pin user location on the map at specific coordinates',
-        'params': {
-          'lat': 'Latitude',
-          'lon': 'Longitude',
-        },
+        'params': {'lat': 'Latitude', 'lon': 'Longitude'},
       },
       {
         'action': 'manga_search',
@@ -752,7 +754,8 @@ class DebugController {
       },
       {
         'action': 'manga_browse',
-        'description': 'Browse a catalog page (popular, latest) from an extension',
+        'description':
+            'Browse a catalog page (popular, latest) from an extension',
         'params': {
           'extension_id': 'Extension ID (e.g. mangapill)',
           'tab': '(optional) Browse tab index (default: 0)',
@@ -1048,15 +1051,14 @@ class DebugController {
       {
         'action': 'mirror_enable',
         'description': 'Enable or disable mirror sync mode',
-        'params': {
-          'enabled': 'true/false (required)',
-        },
+        'params': {'enabled': 'true/false (required)'},
       },
       {
         'action': 'mirror_request_sync',
         'description': 'Request simple mirror sync from a peer',
         'params': {
-          'peer_url': 'Peer HTTP URL, e.g., http://192.168.1.100:3456 (required)',
+          'peer_url':
+              'Peer HTTP URL, e.g., http://192.168.1.100:3456 (required)',
           'folder': 'Folder path to sync, e.g., collections/blog (required)',
           'peer_callsign': 'Peer callsign, e.g., X1ABC (required)',
         },
@@ -1077,9 +1079,7 @@ class DebugController {
       {
         'action': 'mirror_remove_allowed_peer',
         'description': 'Remove an allowed sync peer',
-        'params': {
-          'npub': 'Peer NOSTR public key to remove (required)',
-        },
+        'params': {'npub': 'Peer NOSTR public key to remove (required)'},
       },
       {
         'action': 'mirror_sync_all',
@@ -1088,7 +1088,8 @@ class DebugController {
       },
       {
         'action': 'mirror_config',
-        'description': 'Show current mirror configuration (peers, apps, addresses)',
+        'description':
+            'Show current mirror configuration (peers, apps, addresses)',
         'params': {},
       },
       {
@@ -1109,9 +1110,7 @@ class DebugController {
       {
         'action': 'profile_delete',
         'description': 'Delete a profile by callsign',
-        'params': {
-          'callsign': 'Callsign of the profile to delete (required)',
-        },
+        'params': {'callsign': 'Callsign of the profile to delete (required)'},
       },
       {
         'action': 'open_flasher_monitor',
@@ -1130,7 +1129,8 @@ class DebugController {
         'description': 'Send files to another device via P2P transfer',
         'params': {
           'callsign': 'Target device callsign (required)',
-          'folder': 'Absolute path to folder containing files to send (required)',
+          'folder':
+              'Absolute path to folder containing files to send (required)',
         },
       },
       {
@@ -1154,16 +1154,12 @@ class DebugController {
       {
         'action': 'p2p_reject',
         'description': 'Reject an incoming transfer offer',
-        'params': {
-          'offer_id': 'Offer ID to reject (required)',
-        },
+        'params': {'offer_id': 'Offer ID to reject (required)'},
       },
       {
         'action': 'p2p_status',
         'description': 'Get status of a transfer offer',
-        'params': {
-          'offer_id': 'Offer ID to check (required)',
-        },
+        'params': {'offer_id': 'Offer ID to check (required)'},
       },
       {
         'action': 'list_devices',
@@ -1177,16 +1173,20 @@ class DebugController {
       },
       {
         'action': 'encrypt_storage_enable',
-        'description': 'Enable encrypted storage for current profile (migrate files to encrypted archive)',
+        'description':
+            'Enable encrypted storage for current profile (migrate files to encrypted archive)',
         'params': {
-          'nsec': '(optional) NOSTR secret key for encryption - uses profile nsec if not provided',
+          'nsec':
+              '(optional) NOSTR secret key for encryption - uses profile nsec if not provided',
         },
       },
       {
         'action': 'encrypt_storage_disable',
-        'description': 'Disable encrypted storage for current profile (extract files to folders)',
+        'description':
+            'Disable encrypted storage for current profile (extract files to folders)',
         'params': {
-          'nsec': '(optional) NOSTR secret key for decryption - uses profile nsec if not provided',
+          'nsec':
+              '(optional) NOSTR secret key for decryption - uses profile nsec if not provided',
         },
       },
       {
@@ -1201,7 +1201,8 @@ class DebugController {
         'action': 'conference_join',
         'description': 'Join an existing conference',
         'params': {
-          'url': '(optional) WebSocket URL for LAN mode (ws://host:port/meet/ws)',
+          'url':
+              '(optional) WebSocket URL for LAN mode (ws://host:port/meet/ws)',
           'room_id': '(optional) Room ID for station mode',
           'role': '(optional) "speaker" or "listener" (default: "listener")',
         },
@@ -1222,18 +1223,24 @@ class DebugController {
         'params': {},
       },
       {
+        'action': 'conference_request_speaker',
+        'description': 'Request speaker access from the host (listener only)',
+        'params': {},
+      },
+      {
+        'action': 'conference_send_chat',
+        'description': 'Send a text message to the meeting chat',
+        'params': {'content': 'Message text (required)'},
+      },
+      {
         'action': 'conference_promote',
         'description': 'Promote a listener to speaker (host only)',
-        'params': {
-          'callsign': 'Callsign of participant to promote (required)',
-        },
+        'params': {'callsign': 'Callsign of participant to promote (required)'},
       },
       {
         'action': 'conference_demote',
         'description': 'Demote a speaker to listener (host only)',
-        'params': {
-          'callsign': 'Callsign of participant to demote (required)',
-        },
+        'params': {'callsign': 'Callsign of participant to demote (required)'},
       },
       {
         'action': 'create_app',
@@ -1246,9 +1253,7 @@ class DebugController {
       {
         'action': 'open_app',
         'description': 'Open an existing app by type',
-        'params': {
-          'type': 'App type to open (required)',
-        },
+        'params': {'type': 'App type to open (required)'},
       },
       {
         'action': 'shared_add',
@@ -1256,7 +1261,8 @@ class DebugController {
         'params': {
           'title': 'Folder title (required)',
           'location': 'Absolute path to folder on disk (required)',
-          'visibility': '(optional) public, private, restricted (default: public)',
+          'visibility':
+              '(optional) public, private, restricted (default: public)',
           'description': '(optional) Folder description',
         },
       },
@@ -1267,17 +1273,20 @@ class DebugController {
       },
       {
         'action': 'bitchat_status',
-        'description': 'Get BitChat service status (identity, BLE state, peers, messages)',
+        'description':
+            'Get BitChat service status (identity, BLE state, peers, messages)',
         'params': {},
       },
       {
         'action': 'bitchat_enable',
-        'description': 'Enable BitChat service (generate identity if needed, start BLE)',
+        'description':
+            'Enable BitChat service (generate identity if needed, start BLE)',
         'params': {},
       },
       {
         'action': 'meshtastic_status',
-        'description': 'Get Meshtastic service status (BLE state, nodes, channels, messages)',
+        'description':
+            'Get Meshtastic service status (BLE state, nodes, channels, messages)',
         'params': {},
       },
       {
@@ -1287,7 +1296,8 @@ class DebugController {
       },
       {
         'action': 'meshtastic_log_level',
-        'description': 'Set Meshtastic log level (off, error, warn, info, debug)',
+        'description':
+            'Set Meshtastic log level (off, error, warn, info, debug)',
         'params': {'level': 'string (off|error|warn|info|debug)'},
       },
     ];
@@ -1327,7 +1337,9 @@ class DebugController {
         // Navigate to maps panel first
         navigateToPanelByName('maps');
         // Fire debug action event for the maps page to handle
-        _actionController.add(DebugActionEvent(action: DebugAction.mapSearch, params: params));
+        _actionController.add(
+          DebugActionEvent(action: DebugAction.mapSearch, params: params),
+        );
         return {'success': true, 'message': 'Map search triggered for: $query'};
 
       case 'map_route':
@@ -1337,8 +1349,13 @@ class DebugController {
           return {'success': false, 'error': 'Missing toLat/toLon parameters'};
         }
         navigateToPanelByName('maps');
-        _actionController.add(DebugActionEvent(action: DebugAction.mapRoute, params: params));
-        return {'success': true, 'message': 'Map route triggered to: $toLat, $toLon'};
+        _actionController.add(
+          DebugActionEvent(action: DebugAction.mapRoute, params: params),
+        );
+        return {
+          'success': true,
+          'message': 'Map route triggered to: $toLat, $toLon',
+        };
 
       case 'map_pin_location':
         final lat = params['lat'];
@@ -1347,8 +1364,13 @@ class DebugController {
           return {'success': false, 'error': 'Missing lat/lon parameters'};
         }
         navigateToPanelByName('maps');
-        _actionController.add(DebugActionEvent(action: DebugAction.mapPinLocation, params: params));
-        return {'success': true, 'message': 'Map pin location set to: $lat, $lon'};
+        _actionController.add(
+          DebugActionEvent(action: DebugAction.mapPinLocation, params: params),
+        );
+        return {
+          'success': true,
+          'message': 'Map pin location set to: $lat, $lon',
+        };
 
       case 'manga_search':
         final query = params['query'] as String?;
@@ -1368,20 +1390,31 @@ class DebugController {
           if (extensionId != null) {
             final searchResults = await extService.search(extensionId, query);
             results = searchResults
-                .map((r) => ExtensionSearchResult(extensionId: extensionId, result: r))
+                .map(
+                  (r) => ExtensionSearchResult(
+                    extensionId: extensionId,
+                    result: r,
+                  ),
+                )
                 .toList();
           } else {
             results = await extService.searchAllExtensions(query);
           }
           return {
             'success': true,
-            'extensions': extService.extensions.map((e) => {'id': e.id, 'name': e.name}).toList(),
-            'results': results.map((r) => {
-              'extension': r.extensionId,
-              'id': r.result.id,
-              'title': r.result.title,
-              'thumbnail': r.result.thumbnail,
-            }).toList(),
+            'extensions': extService.extensions
+                .map((e) => {'id': e.id, 'name': e.name})
+                .toList(),
+            'results': results
+                .map(
+                  (r) => {
+                    'extension': r.extensionId,
+                    'id': r.result.id,
+                    'title': r.result.title,
+                    'thumbnail': r.result.thumbnail,
+                  },
+                )
+                .toList(),
           };
         } catch (e) {
           return {'success': false, 'error': e.toString()};
@@ -1398,25 +1431,38 @@ class DebugController {
           }
           final extensionId = params['extension_id'] as String?;
           if (extensionId == null || extensionId.isEmpty) {
-            return {'success': false, 'error': 'Missing extension_id parameter'};
+            return {
+              'success': false,
+              'error': 'Missing extension_id parameter',
+            };
           }
           final tabIndex = int.tryParse(params['tab']?.toString() ?? '0') ?? 0;
           final ext = extService.getExtension(extensionId);
           if (ext == null) {
-            return {'success': false, 'error': 'Extension not found: $extensionId'};
+            return {
+              'success': false,
+              'error': 'Extension not found: $extensionId',
+            };
           }
           final results = await extService.browse(extensionId, tabIndex);
           return {
             'success': true,
             'extension': extensionId,
             'tab': tabIndex,
-            'tab_name': tabIndex < ext.browse.length ? ext.browse[tabIndex].name : 'unknown',
+            'tab_name': tabIndex < ext.browse.length
+                ? ext.browse[tabIndex].name
+                : 'unknown',
             'count': results.length,
-            'results': results.take(10).map((r) => {
-              'id': r.id,
-              'title': r.title,
-              'thumbnail': r.thumbnail,
-            }).toList(),
+            'results': results
+                .take(10)
+                .map(
+                  (r) => {
+                    'id': r.id,
+                    'title': r.title,
+                    'thumbnail': r.thumbnail,
+                  },
+                )
+                .toList(),
           };
         } catch (e) {
           return {'success': false, 'error': e.toString()};
@@ -1434,25 +1480,35 @@ class DebugController {
           final extensionId = params['extension_id'] as String?;
           final mangaId = params['manga_id'] as String?;
           if (extensionId == null || mangaId == null) {
-            return {'success': false, 'error': 'Missing extension_id or manga_id'};
+            return {
+              'success': false,
+              'error': 'Missing extension_id or manga_id',
+            };
           }
-          final seriesInfo = await extService.getSeriesInfo(extensionId, mangaId);
+          final seriesInfo = await extService.getSeriesInfo(
+            extensionId,
+            mangaId,
+          );
           final chapters = await extService.listChapters(extensionId, mangaId);
           return {
             'success': true,
             'series_info': seriesInfo,
             'chapters_count': chapters.length,
-            'first_chapters': chapters.take(3).map((c) => {
-              'id': c.id,
-              'number': c.number,
-              'title': c.title,
-            }).toList(),
+            'first_chapters': chapters
+                .take(3)
+                .map((c) => {'id': c.id, 'number': c.number, 'title': c.title})
+                .toList(),
             'last_chapters': chapters.length > 3
-                ? chapters.skip(chapters.length - 3).map((c) => {
-                    'id': c.id,
-                    'number': c.number,
-                    'title': c.title,
-                  }).toList()
+                ? chapters
+                      .skip(chapters.length - 3)
+                      .map(
+                        (c) => {
+                          'id': c.id,
+                          'number': c.number,
+                          'title': c.title,
+                        },
+                      )
+                      .toList()
                 : [],
           };
         } catch (e) {
@@ -1473,7 +1529,10 @@ class DebugController {
           final mangaTitle = params['manga_title'] as String?;
           final maxChapters = params['max_chapters'] as int? ?? 1;
           if (extensionId == null || mangaId == null || mangaTitle == null) {
-            return {'success': false, 'error': 'Missing extension_id, manga_id, or manga_title'};
+            return {
+              'success': false,
+              'error': 'Missing extension_id, manga_id, or manga_title',
+            };
           }
           final chapters = await extService.listChapters(extensionId, mangaId);
           if (chapters.isEmpty) {
@@ -1490,12 +1549,17 @@ class DebugController {
           final dataFile = File('$readerPath/manga/library/data.json');
           if (!await dataFile.exists()) {
             await dataFile.parent.create(recursive: true);
-            await dataFile.writeAsString(const JsonEncoder.withIndent('  ').convert({
-              'id': 'library', 'name': 'Library', 'type': 'manga',
-              'is_local': true, 'url': '$readerPath/manga/library/series',
-              'created_at': DateTime.now().toIso8601String(),
-              'modified_at': DateTime.now().toIso8601String(),
-            }));
+            await dataFile.writeAsString(
+              const JsonEncoder.withIndent('  ').convert({
+                'id': 'library',
+                'name': 'Library',
+                'type': 'manga',
+                'is_local': true,
+                'url': '$readerPath/manga/library/series',
+                'created_at': DateTime.now().toIso8601String(),
+                'modified_at': DateTime.now().toIso8601String(),
+              }),
+            );
           }
           final toDownload = chapters.take(maxChapters).toList();
           final coordinator = MangaDownloadCoordinator();
@@ -1509,7 +1573,9 @@ class DebugController {
             'success': true,
             'queued': toDownload.length,
             'series_dir': seriesDir,
-            'chapters': toDownload.map((c) => {'id': c.id, 'number': c.number}).toList(),
+            'chapters': toDownload
+                .map((c) => {'id': c.id, 'number': c.number})
+                .toList(),
           };
         } catch (e) {
           return {'success': false, 'error': e.toString()};
@@ -1524,12 +1590,16 @@ class DebugController {
             'active': coordinator.isActive,
             'paused': coordinator.isPaused,
             'queue_length': coordinator.queueLength,
-            'downloads': downloads.map((d) => {
-              'series': d.seriesTitle,
-              'chapter': d.chapterName,
-              'is_active': d.isActive,
-              'error': d.error,
-            }).toList(),
+            'downloads': downloads
+                .map(
+                  (d) => {
+                    'series': d.seriesTitle,
+                    'chapter': d.chapterName,
+                    'is_active': d.isActive,
+                    'error': d.error,
+                  },
+                )
+                .toList(),
           };
         } catch (e) {
           return {'success': false, 'error': e.toString()};
@@ -1635,7 +1705,10 @@ class DebugController {
         }
         // Import the specific type to access restartHelloRetry
         if (transport is! UsbAoaTransport) {
-          return {'success': false, 'error': 'Transport is not UsbAoaTransport'};
+          return {
+            'success': false,
+            'error': 'Transport is not UsbAoaTransport',
+          };
         }
         transport.restartHelloRetry();
         return {'success': true, 'message': 'USB hello retry restarted'};
@@ -1648,20 +1721,26 @@ class DebugController {
         }
         try {
           final devices = await usbService.listDevices();
-          final deviceList = devices.map((d) => {
-            'vid': d.vidHex,
-            'pid': d.pidHex,
-            'devPath': d.devPath,
-            'sysPath': d.sysPath,
-            'manufacturer': d.manufacturer,
-            'product': d.product,
-            'isAoaDevice': d.isAoaDevice,
-            'isAndroidDevice': d.isAndroidDevice,
-          }).toList();
+          final deviceList = devices
+              .map(
+                (d) => {
+                  'vid': d.vidHex,
+                  'pid': d.pidHex,
+                  'devPath': d.devPath,
+                  'sysPath': d.sysPath,
+                  'manufacturer': d.manufacturer,
+                  'product': d.product,
+                  'isAoaDevice': d.isAoaDevice,
+                  'isAndroidDevice': d.isAndroidDevice,
+                },
+              )
+              .toList();
 
           LogService().log('USB Scan: Found ${devices.length} device(s)');
           for (final d in devices) {
-            LogService().log('  - ${d.vidHex}:${d.pidHex} ${d.manufacturer ?? ""} ${d.product ?? ""} isAoa=${d.isAoaDevice}');
+            LogService().log(
+              '  - ${d.vidHex}:${d.pidHex} ${d.manufacturer ?? ""} ${d.product ?? ""} isAoa=${d.isAoaDevice}',
+            );
           }
 
           // If not connected and devices found, try to connect
@@ -1735,9 +1814,9 @@ class DebugController {
         String? nickname;
         try {
           final statusUrl = '$url/api/status';
-          final response = await http.get(Uri.parse(statusUrl)).timeout(
-            const Duration(seconds: 2),
-          );
+          final response = await http
+              .get(Uri.parse(statusUrl))
+              .timeout(const Duration(seconds: 2));
           if (response.statusCode == 200) {
             final data = jsonDecode(response.body) as Map<String, dynamic>;
             nickname = data['nickname'] as String?;
@@ -1747,13 +1826,18 @@ class DebugController {
         }
         // Call DevicesService directly to add the device as online
         final devicesService = DevicesService();
-        await devicesService.addDevice(callsign, url: url, name: nickname, isOnline: true);
+        await devicesService.addDevice(
+          callsign,
+          url: url,
+          name: nickname,
+          isOnline: true,
+        );
         // Also add the appropriate connection method based on URL
         final device = devicesService.getDevice(callsign);
         if (device != null) {
           // Determine connection method from URL
-          final connectionMethod = url.contains('localhost') ||
-                  url.contains('127.0.0.1')
+          final connectionMethod =
+              url.contains('localhost') || url.contains('127.0.0.1')
               ? 'wifi_local'
               : 'lan';
           if (!device.connectionMethods.contains(connectionMethod)) {
@@ -1815,17 +1899,11 @@ class DebugController {
 
       case 'open_local_chat':
         triggerOpenLocalChat();
-        return {
-          'success': true,
-          'message': 'Opening local chat collection',
-        };
+        return {'success': true, 'message': 'Opening local chat collection'};
 
       case 'welcome_open':
         triggerOpenWelcomePage();
-        return {
-          'success': true,
-          'message': 'Opening welcome page',
-        };
+        return {'success': true, 'message': 'Opening welcome page'};
 
       case 'welcome_finalize':
         return await _handleWelcomeFinalize();
@@ -1926,14 +2004,18 @@ class DebugController {
       case 'list_devices':
         final devicesService = DevicesService();
         final devices = devicesService.getAllDevices();
-        final deviceList = devices.map((d) => <String, dynamic>{
-          'callsign': d.callsign,
-          'nickname': d.nickname,
-          'isOnline': d.isOnline,
-          'connectionMethods': d.connectionMethods,
-          'url': d.url,
-          'npub': d.npub,
-        }).toList();
+        final deviceList = devices
+            .map(
+              (d) => <String, dynamic>{
+                'callsign': d.callsign,
+                'nickname': d.nickname,
+                'isOnline': d.isOnline,
+                'connectionMethods': d.connectionMethods,
+                'url': d.url,
+                'npub': d.npub,
+              },
+            )
+            .toList();
         return {
           'success': true,
           'count': deviceList.length,
@@ -1954,6 +2036,12 @@ class DebugController {
 
       case 'conference_mute':
         return _conferenceMute();
+
+      case 'conference_request_speaker':
+        return _conferenceRequestSpeaker();
+
+      case 'conference_send_chat':
+        return _conferenceSendChat(params);
 
       case 'conference_promote':
         return _conferencePromote(params);
@@ -2001,7 +2089,9 @@ class DebugController {
 
   // ── Conference debug actions ────────────────────────────────────
 
-  Future<Map<String, dynamic>> _conferenceHost(Map<String, dynamic> params) async {
+  Future<Map<String, dynamic>> _conferenceHost(
+    Map<String, dynamic> params,
+  ) async {
     try {
       final roomName = params['room_name'] as String? ?? 'Test Meeting';
       final maxSpeakers = params['max_speakers'] as int? ?? 6;
@@ -2022,7 +2112,9 @@ class DebugController {
     }
   }
 
-  Future<Map<String, dynamic>> _conferenceJoin(Map<String, dynamic> params) async {
+  Future<Map<String, dynamic>> _conferenceJoin(
+    Map<String, dynamic> params,
+  ) async {
     try {
       final wsUrl = params['url'] as String?;
       final roomId = params['room_id'] as String?;
@@ -2055,7 +2147,20 @@ class DebugController {
       'state': cs.state.name,
       'role': cs.role?.name,
       'is_muted': cs.isLocalMuted,
+      'remote_audio_stream_count': cs.remoteAudioStreams.length,
       'room': cs.room?.toJson(),
+      'chat_transcript_path': cs.chatTranscriptPath,
+      'pending_speaker_requests': cs.pendingSpeakerRequests,
+      'chat_messages': cs.chatMessages
+          .map(
+            (message) => {
+              'author': message.author,
+              'timestamp': message.timestamp,
+              'content': message.content,
+              'metadata': message.metadata,
+            },
+          )
+          .toList(),
     };
   }
 
@@ -2071,16 +2176,56 @@ class DebugController {
   Map<String, dynamic> _conferenceMute() {
     try {
       ConferenceService().toggleMute();
+      return {'success': true, 'is_muted': ConferenceService().isLocalMuted};
+    } catch (e) {
+      return {'success': false, 'error': e.toString()};
+    }
+  }
+
+  Future<Map<String, dynamic>> _conferenceRequestSpeaker() async {
+    try {
+      await ConferenceService().requestToSpeak();
       return {
         'success': true,
-        'is_muted': ConferenceService().isLocalMuted,
+        'message': 'Speaker request sent',
+        'pending_speaker_requests': ConferenceService().pendingSpeakerRequests,
       };
     } catch (e) {
       return {'success': false, 'error': e.toString()};
     }
   }
 
-  Future<Map<String, dynamic>> _conferencePromote(Map<String, dynamic> params) async {
+  Future<Map<String, dynamic>> _conferenceSendChat(
+    Map<String, dynamic> params,
+  ) async {
+    try {
+      final content = params['content'] as String?;
+      if (content == null || content.trim().isEmpty) {
+        return {'success': false, 'error': 'Missing content parameter'};
+      }
+      await ConferenceService().sendChatMessage(content);
+      return {
+        'success': true,
+        'message': 'Chat message sent',
+        'chat_messages': ConferenceService().chatMessages
+            .map(
+              (message) => {
+                'author': message.author,
+                'timestamp': message.timestamp,
+                'content': message.content,
+                'metadata': message.metadata,
+              },
+            )
+            .toList(),
+      };
+    } catch (e) {
+      return {'success': false, 'error': e.toString()};
+    }
+  }
+
+  Future<Map<String, dynamic>> _conferencePromote(
+    Map<String, dynamic> params,
+  ) async {
     try {
       final callsign = params['callsign'] as String?;
       if (callsign == null) {
@@ -2097,7 +2242,9 @@ class DebugController {
     }
   }
 
-  Future<Map<String, dynamic>> _conferenceDemote(Map<String, dynamic> params) async {
+  Future<Map<String, dynamic>> _conferenceDemote(
+    Map<String, dynamic> params,
+  ) async {
     try {
       final callsign = params['callsign'] as String?;
       if (callsign == null) {
@@ -2123,10 +2270,7 @@ class DebugController {
         return {'success': false, 'error': 'Missing type parameter'};
       }
       final title = params['title'] as String? ?? type;
-      final app = await AppService().createApp(
-        title: title,
-        type: type,
-      );
+      final app = await AppService().createApp(title: title, type: type);
       return {
         'success': true,
         'message': 'Created app: ${app.title} (${app.type})',
@@ -2155,14 +2299,12 @@ class DebugController {
         };
       }
       // Emit a navigate action with the app info
-      _actionController.add(DebugActionEvent(
-        action: DebugAction.navigateToPanel,
-        params: {
-          'panel': 'app',
-          'app_type': type,
-          'app_id': app.id,
-        },
-      ));
+      _actionController.add(
+        DebugActionEvent(
+          action: DebugAction.navigateToPanel,
+          params: {'panel': 'app', 'app_type': type, 'app_id': app.id},
+        ),
+      );
       return {
         'success': true,
         'message': 'Opening app: ${app.title} (${app.type})',
@@ -2186,9 +2328,10 @@ class DebugController {
       // Ensure the shared app exists
       final apps = await AppService().loadApps();
       var sharedApp = apps.where((a) => a.type == 'shared').firstOrNull;
-      if (sharedApp == null) {
-        sharedApp = await AppService().createApp(title: 'Shared', type: 'shared');
-      }
+      sharedApp ??= await AppService().createApp(
+        title: 'Shared',
+        type: 'shared',
+      );
 
       final storagePath = sharedApp.storagePath;
       if (storagePath == null) {
@@ -2201,7 +2344,10 @@ class DebugController {
         return {'success': false, 'error': 'Profile storage not available'};
       }
 
-      final scopedStorage = ScopedProfileStorage.fromAbsolutePath(profileStorage, storagePath);
+      final scopedStorage = ScopedProfileStorage.fromAbsolutePath(
+        profileStorage,
+        storagePath,
+      );
       final service = SharedFolderService();
       service.setStorage(scopedStorage);
       await service.initializeApp(storagePath);
@@ -2240,7 +2386,11 @@ class DebugController {
       final apps = await AppService().loadApps();
       final sharedApp = apps.where((a) => a.type == 'shared').firstOrNull;
       if (sharedApp == null) {
-        return {'success': true, 'folders': [], 'message': 'No shared app found'};
+        return {
+          'success': true,
+          'folders': [],
+          'message': 'No shared app found',
+        };
       }
 
       final storagePath = sharedApp.storagePath;
@@ -2253,7 +2403,10 @@ class DebugController {
         return {'success': false, 'error': 'Profile storage not available'};
       }
 
-      final scopedStorage = ScopedProfileStorage.fromAbsolutePath(profileStorage, storagePath);
+      final scopedStorage = ScopedProfileStorage.fromAbsolutePath(
+        profileStorage,
+        storagePath,
+      );
       final service = SharedFolderService();
       service.setStorage(scopedStorage);
       await service.initializeApp(storagePath);
@@ -2263,13 +2416,17 @@ class DebugController {
       return {
         'success': true,
         'count': folders.length,
-        'folders': folders.map((f) => {
-          'id': f.id,
-          'title': f.title,
-          'location': f.location,
-          'visibility': f.visibility.value,
-          'slug': f.sanitizedFilename,
-        }).toList(),
+        'folders': folders
+            .map(
+              (f) => {
+                'id': f.id,
+                'title': f.title,
+                'location': f.location,
+                'visibility': f.visibility.value,
+                'slug': f.sanitizedFilename,
+              },
+            )
+            .toList(),
       };
     } catch (e) {
       return {'success': false, 'error': e.toString()};
@@ -2346,7 +2503,8 @@ class DebugController {
   }
 
   Future<Map<String, dynamic>> _meshtasticLogLevel(
-      Map<String, dynamic> params) async {
+    Map<String, dynamic> params,
+  ) async {
     final levelStr = params['level'] as String?;
     if (levelStr == null) {
       return {

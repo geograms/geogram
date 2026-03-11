@@ -9454,7 +9454,7 @@ Station-side conference signaling relay (SFU star topology), shared by both `Sta
 - `conferenceHandleClientDisconnect(clientId)` — clean up on disconnect
 - `getConferenceRooms()` — list active rooms
 
-**Message types:** `conference_create`, `conference_join`, `conference_leave`, `conference_end`, `conference_signal`, `conference_role_change`, `conference_list`
+**Message types:** `conference_create`, `conference_join`, `conference_leave`, `conference_end`, `conference_signal`, `conference_role_change`, `conference_speaker_request`, `conference_chat_message`, `conference_chat_history`, `conference_list`
 
 ### ConferenceSignalingServer
 
@@ -9479,6 +9479,10 @@ server.setWebClientHtml(htmlString);
 final port = await server.start();
 await server.stop();
 ```
+
+**Extra host helpers:**
+- `relayFromHost(message)` — relay a host-originated WebRTC signal to one participant
+- `sendRoomMessageFromHost(message, {toCallsign})` — broadcast or direct-send room control/chat messages from the host
 
 ### ConferenceHostPeerManager
 
