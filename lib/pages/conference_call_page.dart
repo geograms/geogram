@@ -1030,6 +1030,8 @@ class _ConferenceScreenShareViewerPageState
     extends State<_ConferenceScreenShareViewerPage> {
   RTCVideoRenderer? _renderer;
   final FocusNode _focusNode = FocusNode();
+  final TransformationController _transformationController =
+      TransformationController();
   Timer? _overlayTimer;
   bool _showOverlay = true;
 
@@ -1044,6 +1046,7 @@ class _ConferenceScreenShareViewerPageState
   void dispose() {
     _overlayTimer?.cancel();
     _focusNode.dispose();
+    _transformationController.dispose();
     unawaited(_disposeRenderer());
     super.dispose();
   }
@@ -1117,10 +1120,9 @@ class _ConferenceScreenShareViewerPageState
         child: MouseRegion(
           onHover: (_) => _showOverlayTemporarily(),
           onEnter: (_) => _showOverlayTemporarily(),
-          child: GestureDetector(
+          child: Listener(
             behavior: HitTestBehavior.opaque,
-            onTap: _showOverlayTemporarily,
-            onPanDown: (_) => _showOverlayTemporarily(),
+            onPointerDown: (_) => _showOverlayTemporarily(),
             child: Stack(
               fit: StackFit.expand,
               children: [
@@ -1134,7 +1136,19 @@ class _ConferenceScreenShareViewerPageState
                     ),
                   )
                 else
-                  Center(child: RTCVideoView(_renderer!)),
+                  InteractiveViewer(
+                    transformationController: _transformationController,
+                    minScale: 1,
+                    maxScale: 4,
+                    panEnabled: true,
+                    scaleEnabled: true,
+                    trackpadScrollCausesScale: true,
+                    onInteractionStart: (_) => _showOverlayTemporarily(),
+                    onInteractionUpdate: (_) => _showOverlayTemporarily(),
+                    child: SizedBox.expand(
+                      child: Center(child: RTCVideoView(_renderer!)),
+                    ),
+                  ),
                 if (_showOverlay)
                   SafeArea(
                     child: Padding(
