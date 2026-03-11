@@ -1,6 +1,27 @@
 #include "flutter_screen_capture.h"
 
+#include "base/refcountedobject.h"
+
 namespace flutter_webrtc_plugin {
+
+namespace {
+
+class DefaultScreenMediaSource : public MediaSource {
+ public:
+  string id() const override { return "0"; }
+
+  string name() const override { return "default-screen"; }
+
+  portable::vector<unsigned char> thumbnail() const override {
+    return portable::vector<unsigned char>();
+  }
+
+  DesktopType type() const override { return DesktopType::kScreen; }
+
+  bool UpdateThumbnail() override { return false; }
+};
+
+}  // namespace
 
 FlutterScreenCapture::FlutterScreenCapture(FlutterWebRTCBase* base)
     : base_(base) {}
@@ -205,15 +226,6 @@ void FlutterScreenCapture::GetDisplayMedia(
     }
   }
 
-  if (sources_.empty()) {
-    EncodableList types;
-    types.push_back(EncodableValue("screen"));
-    if (!BuildDesktopSourcesList(types, true) || sources_.empty()) {
-      result->Error("Bad Arguments", "Failed to get desktop sources");
-      return;
-    }
-  }
-
   std::string uuid = base_->GenerateUUID();
 
   scoped_refptr<RTCMediaStream> stream =
@@ -235,14 +247,24 @@ void FlutterScreenCapture::GetDisplayMedia(
   }
 
   scoped_refptr<MediaSource> source;
-  for (auto src : sources_) {
-    if (src->id().std_string() == source_id) {
-      source = src;
+  if (source_id == "0") {
+    source = new libwebrtc::RefCountedObject<DefaultScreenMediaSource>();
+  } else {
+    if (sources_.empty()) {
+      EncodableList types;
+      types.push_back(EncodableValue("screen"));
+      types.push_back(EncodableValue("window"));
+      if (!BuildDesktopSourcesList(types, true) || sources_.empty()) {
+        result->Error("Bad Arguments", "Failed to get desktop sources");
+        return;
+      }
     }
-  }
 
-  if (!source.get() && source_id == "0" && !sources_.empty()) {
-    source = sources_.front();
+    for (auto src : sources_) {
+      if (src->id().std_string() == source_id) {
+        source = src;
+      }
+    }
   }
 
   if (!source.get()) {
