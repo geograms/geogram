@@ -2936,11 +2936,8 @@ class PureStationServer with EmailHandlerMixin, BlogHandlerMixin, ConsoleCommand
       } else if (_isPlaceDetailsPath(path) && method == 'GET') {
         // /api/places/{callsign}/{folderName} - place details
         await _handlePlaceDetails(request);
-      } else if (_isCallsignMeetPath(path)) {
-        // /{callsign}/meet/* - proxy to connected device (rewrite to /api/meet/*)
-        await _handleCallsignMeetProxy(request);
-      } else if (_isCallsignApiPath(path)) {
-        // /{callsign}/api/* - proxy to connected device
+      } else if (_isCallsignMeetPath(path) || _isCallsignApiPath(path)) {
+        // /{callsign}/api/* or /{callsign}/meet/* - proxy to connected device
         await _handleCallsignApiProxy(request);
       } else if (isBlogPath(path)) {
         await handleBlogRequest(request);
@@ -7129,12 +7126,13 @@ class PureStationServer with EmailHandlerMixin, BlogHandlerMixin, ConsoleCommand
     return regex.hasMatch(path);
   }
 
-  /// Handle /{callsign}/api/* requests - proxy to connected device
+  /// Handle /{callsign}/api/* or /{callsign}/meet/* requests - proxy to
+  /// the connected device while preserving the hosted path.
   Future<void> _handleCallsignApiProxy(HttpRequest request) async {
     final path = request.uri.path;
 
-    // Parse path: /{callsign}/api/{endpoint}
-    final regex = RegExp(r'^/([A-Za-z0-9]+)(/api/.*)$');
+    // Parse path: /{callsign}/api/{endpoint} or /{callsign}/meet/{endpoint}
+    final regex = RegExp(r'^/([A-Za-z0-9]+)(/(?:api|meet)/.*)$');
     final match = regex.firstMatch(path);
 
     if (match == null) {
@@ -7145,7 +7143,7 @@ class PureStationServer with EmailHandlerMixin, BlogHandlerMixin, ConsoleCommand
     }
 
     final callsign = match.group(1)!;
-    final apiPath = match.group(2)!; // /api/{endpoint}
+    final apiPath = match.group(2)!; // /api/{endpoint} or /meet/{endpoint}
 
     // Find the client by callsign (case-insensitive)
     PureConnectedClient? foundClient;
@@ -7255,119 +7253,9 @@ class PureStationServer with EmailHandlerMixin, BlogHandlerMixin, ConsoleCommand
     return regex.hasMatch(path);
   }
 
-  /// Handle /{callsign}/meet/* requests — proxy to connected device as /api/meet/*
+  /// Handle /{callsign}/meet/* requests — proxy to connected device.
   Future<void> _handleCallsignMeetProxy(HttpRequest request) async {
-    final path = request.uri.path;
-    final regex = RegExp(r'^/([A-Za-z0-9]+)/meet/(.*)$');
-    final match = regex.firstMatch(path);
-
-    if (match == null) {
-      request.response.statusCode = 400;
-      request.response.write('Invalid meet path format');
-      return;
-    }
-
-    final callsign = match.group(1)!;
-    final meetSubpath = match.group(2)!; // e.g. "PNOL", "info", "active"
-    final apiPath = '/api/meet/$meetSubpath'; // Rewrite to /api/meet/*
-
-    // Find the client by callsign (case-insensitive)
-    PureConnectedClient? foundClient;
-    for (final c in _clients.values) {
-      if (c.callsign?.toLowerCase() == callsign.toLowerCase()) {
-        foundClient = c;
-        break;
-      }
-    }
-
-    if (foundClient == null) {
-      request.response.statusCode = 404;
-      request.response.headers.contentType = ContentType.json;
-      request.response.write(jsonEncode({
-        'error': 'Device not connected',
-        'callsign': callsign.toUpperCase(),
-        'message': 'The device ${callsign.toUpperCase()} is not currently connected to this station',
-      }));
-      return;
-    }
-
-    final client = foundClient;
-    _log('INFO', 'Meet proxy: ${request.method} $path -> ${client.callsign} $apiPath');
-
-    // Proxy request to device via WebSocket (same pattern as _handleCallsignApiProxy)
-    final requestId = DateTime.now().millisecondsSinceEpoch.toString();
-    final proxyRequest = {
-      'type': 'HTTP_REQUEST',
-      'requestId': requestId,
-      'method': request.method,
-      'path': apiPath,
-      'headers': jsonEncode({}),
-      'body': '',
-    };
-
-    if (request.contentLength > 0) {
-      final body = await utf8.decodeStream(request);
-      proxyRequest['body'] = body;
-    }
-
-    final completer = Completer<Map<String, dynamic>>();
-    _pendingProxyRequests[requestId] = completer;
-
-    try {
-      client.socket.add(jsonEncode(proxyRequest));
-
-      final response = await completer.future.timeout(
-        const Duration(seconds: 30),
-        onTimeout: () => {
-          'type': 'HTTP_RESPONSE',
-          'statusCode': 504,
-          'responseHeaders': '{"Content-Type": "application/json"}',
-          'responseBody': jsonEncode({
-            'error': 'Gateway Timeout',
-            'message': 'Device ${callsign.toUpperCase()} did not respond in time',
-          }),
-          'isBase64': false,
-        },
-      );
-
-      request.response.statusCode = response['statusCode'] ?? 500;
-      if (response['responseHeaders'] != null) {
-        try {
-          final headers = jsonDecode(response['responseHeaders'] as String) as Map<String, dynamic>;
-          headers.forEach((key, value) {
-            if (key.toLowerCase() == 'content-type') {
-              final ct = value.toString();
-              if (ct.contains('json')) {
-                request.response.headers.contentType = ContentType.json;
-              } else if (ct.contains('html')) {
-                request.response.headers.contentType = ContentType.html;
-              } else if (ct.contains('text')) {
-                request.response.headers.contentType = ContentType.text;
-              }
-            }
-          });
-        } catch (_) {}
-      }
-
-      final body = response['responseBody'] ?? '';
-      final isBase64 = response['isBase64'] == true;
-      if (isBase64) {
-        request.response.add(base64Decode(body));
-      } else {
-        request.response.write(body);
-      }
-
-      _log('INFO', 'Meet proxy response: ${response['statusCode']} for ${client.callsign} $apiPath');
-    } catch (e) {
-      request.response.statusCode = 502;
-      request.response.headers.contentType = ContentType.json;
-      request.response.write(jsonEncode({
-        'error': 'Bad Gateway',
-        'message': e.toString(),
-      }));
-    } finally {
-      _pendingProxyRequests.remove(requestId);
-    }
+    await _handleCallsignApiProxy(request);
   }
 
   /// GET /search - Search across connected devices

@@ -18,7 +18,17 @@ class WebThemeService {
 
   /// List of app types that have theme templates
   static const List<String> appTypes = [
-    'home', 'chat', 'www', 'forum', 'blog', 'events', 'alerts', 'files', 'station', 'shared'
+    'home',
+    'chat',
+    'www',
+    'forum',
+    'blog',
+    'events',
+    'alerts',
+    'files',
+    'station',
+    'shared',
+    'meet',
   ];
 
   String? _themesDir;

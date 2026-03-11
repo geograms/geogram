@@ -22,6 +22,8 @@ class ThemesEmbedded {
     'default/forum/styles.css': _defaultForumStylesCss,
     'default/home/index.html': _defaultHomeIndexHtml,
     'default/home/styles.css': _defaultHomeStylesCss,
+    'default/meet/index.html': _defaultMeetIndexHtml,
+    'default/meet/styles.css': _defaultMeetStylesCss,
     'default/shared/directory.html': _defaultSharedDirectoryHtml,
     'default/shared/index.html': _defaultSharedIndexHtml,
     'default/shared/styles.css': _defaultSharedStylesCss,
@@ -2334,6 +2336,334 @@ class ThemesEmbedded {
     gap: var(--spacing-sm);
     min-width: auto;
     padding: var(--spacing-sm) var(--spacing-md);
+  }
+}
+''';
+
+  static const String _defaultMeetIndexHtml = r'''
+<!DOCTYPE html>
+<html lang="en" class="meet-page">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1">
+  <title>{{TITLE}}</title>
+  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="styles.css?v=1">
+  {{NOSTR_STYLES}}
+</head>
+<body>
+<div class="container">
+  <header class="header">
+    <div class="header__inner">
+      <div class="header__logo">
+        <div class="logo">{{LOGO_TEXT}}</div>
+      </div>
+      {{NOSTR_HEADER}}
+    </div>
+  </header>
+
+  <main class="main">
+    <div class="meeting-shell">
+      <section class="meeting-card">
+        <h1 class="meeting-title">{{ROOM_TITLE}}</h1>
+        <div class="meeting-subtitle">{{ROOM_SUBTITLE}}</div>
+        <div id="status">{{STATUS_TEXT}}</div>
+        <div id="nostr-gate-msg">Use the identity button above to authenticate before joining the meeting.</div>
+        <div id="join-form">
+          <input id="nickname" type="text" placeholder="Nickname (optional)" maxlength="20" autofocus>
+          <div class="button-row">
+            <button id="btn-join-listener" type="button">Join as Listener</button>
+            <button id="btn-join-speaker" type="button">Join as Speaker</button>
+          </div>
+        </div>
+      </section>
+
+      <section id="call-ui">
+        <div class="meeting-layout">
+          <div class="stage">
+            <div class="stage-panel" id="screen-share-shell">
+              <div class="stage-label">
+                <div id="screen-share-label">Shared screen</div>
+                <button id="btn-screen-fullscreen" type="button">Full screen</button>
+              </div>
+              <video id="screen-share-video" autoplay playsinline muted></video>
+              <div id="screen-share-placeholder">No screen is being shared right now.</div>
+            </div>
+
+            <div class="stage-panel">
+              <div class="meeting-controls">
+                <button id="btn-mute" type="button" style="display:none;">Mute</button>
+                <button id="btn-request-speaker" type="button" style="display:none;">Request Mic</button>
+                <button id="btn-leave" type="button">Leave</button>
+              </div>
+            </div>
+          </div>
+
+          <aside class="sidebar-panel">
+            <div class="sidebar-title">People</div>
+            <ul id="participants"></ul>
+
+            <div id="chat-shell">
+              <div class="sidebar-title">Chat</div>
+              <div id="chat-messages"></div>
+              <div class="chat-input-row">
+                <input id="chat-input" type="text" placeholder="Type a message..." maxlength="500">
+                <button id="btn-send-chat" type="button">Send</button>
+              </div>
+            </div>
+          </aside>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <footer class="footer">
+    <div class="footer__inner">
+      <div class="copyright">
+        <span>powered by geogram</span>
+      </div>
+    </div>
+  </footer>
+</div>
+
+<script>
+  window.GEOGRAM_MEETING = {{DATA_JSON}};
+  {{SCRIPTS}}
+</script>
+</body>
+</html>
+''';
+
+  static const String _defaultMeetStylesCss = r'''
+/* Meetings page - extends global Terminimal theme */
+
+.meet-page .container {
+  max-width: 1100px;
+}
+
+.meeting-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.meeting-card,
+.stage-panel,
+.sidebar-panel {
+  border: 1px solid var(--border-color);
+  border-radius: 14px;
+  padding: 18px;
+  background: rgba(0, 0, 0, 0.08);
+}
+
+.meeting-title {
+  margin: 0 0 6px 0;
+  font-size: 1.4rem;
+}
+
+.meeting-subtitle,
+#status,
+#nostr-gate-msg,
+.participant-role,
+.chat-meta {
+  color: var(--accent-alpha-70);
+}
+
+#status {
+  font-size: 0.95rem;
+  margin-bottom: 14px;
+}
+
+#nostr-gate-msg {
+  margin-bottom: 16px;
+}
+
+#join-form {
+  display: none;
+  gap: 12px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+#join-form input,
+#chat-input {
+  min-width: 240px;
+  flex: 1;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: transparent;
+  color: inherit;
+  padding: 12px 14px;
+  font: inherit;
+}
+
+.button-row,
+.meeting-controls,
+.chat-input-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+button {
+  border: 1px solid var(--border-color);
+  background: transparent;
+  color: inherit;
+  padding: 10px 14px;
+  font: inherit;
+  cursor: pointer;
+  border-radius: 10px;
+}
+
+button:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+#btn-join-speaker,
+#btn-request-speaker,
+#btn-send-chat {
+  border-color: var(--accent);
+}
+
+#btn-leave {
+  border-color: #d90429;
+  color: #d90429;
+}
+
+#btn-mute.muted,
+#btn-leave:hover {
+  background: #d90429;
+  color: #fff;
+}
+
+#call-ui {
+  display: none;
+}
+
+.meeting-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.9fr) minmax(280px, 0.9fr);
+  gap: 18px;
+}
+
+.stage {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.stage-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+#screen-share-shell {
+  display: none;
+}
+
+#screen-share-shell.active {
+  display: block;
+}
+
+#screen-share-video,
+#screen-share-placeholder {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border-radius: 12px;
+}
+
+#screen-share-video {
+  background: #000;
+  object-fit: contain;
+}
+
+#screen-share-placeholder {
+  border: 1px dashed var(--border-color);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.15);
+}
+
+.sidebar-title {
+  margin-bottom: 8px;
+  color: var(--accent);
+  font-weight: bold;
+}
+
+#participants {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 18px 0;
+}
+
+#participants li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--border-color);
+}
+
+#participants li:last-child {
+  border-bottom: 0;
+}
+
+.participant-state {
+  text-align: right;
+}
+
+#chat-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 320px;
+}
+
+#chat-messages {
+  flex: 1;
+  min-height: 180px;
+  max-height: 320px;
+  overflow-y: auto;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 10px;
+  background: rgba(0, 0, 0, 0.08);
+}
+
+.chat-message {
+  padding: 8px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.chat-message:last-child {
+  border-bottom: 0;
+}
+
+.chat-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 0.82rem;
+}
+
+.chat-author {
+  color: var(--accent);
+  font-weight: bold;
+}
+
+@media (max-width: 900px) {
+  .meeting-layout {
+    grid-template-columns: 1fr;
   }
 }
 ''';

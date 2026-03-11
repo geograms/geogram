@@ -29,6 +29,7 @@ import 'direct_message_service.dart';
 import 'message_retention_service.dart';
 import 'devices_service.dart';
 import 'conference_service.dart';
+import 'conference_web_page_service.dart';
 import 'device_apps_service.dart';
 import 'chat_file_upload_manager.dart';
 import 'app_args.dart';
@@ -62,7 +63,7 @@ import '../util/html_utils.dart';
 import '../util/nostr_event.dart';
 import '../util/nostr_crypto.dart';
 import '../util/reaction_utils.dart';
-import '../util/nostr_login_scripts.dart';
+import '../util/nostr_bundle.dart';
 import '../util/feedback_folder_utils.dart';
 import 'audio_service.dart';
 import 'backup_service.dart';
@@ -327,6 +328,33 @@ class LogApiService with ChatModificationMixin {
 
     final urlPath = request.url.path;
 
+    if (request.method == 'GET') {
+      if (urlPath == 'styles.css') {
+        return await _handleThemeStylesRequest(headers);
+      }
+      if (urlPath == 'lib/nostr.bundle.js') {
+        return _handleNostrBundleRequest(headers);
+      }
+      if (urlPath == 'meet/styles.css' || urlPath == 'api/meet/styles.css') {
+        return await _handleThemeStylesRequest(headers, appType: 'meet');
+      }
+      if (urlPath == 'meet/active') {
+        return _handleMeetActiveRequest(headers);
+      }
+      if (urlPath == 'meet/info') {
+        return _handleMeetInfoRequest(headers);
+      }
+      if (urlPath.startsWith('meet/')) {
+        final code = urlPath.substring('meet/'.length);
+        if (code.isNotEmpty &&
+            code != 'styles.css' &&
+            code != 'active' &&
+            code != 'info') {
+          return await _handleMeetJoinPage(request, code, headers);
+        }
+      }
+    }
+
     // Local AT Proto PDS endpoints (served on device API port, e.g. 3456)
     if (urlPath.startsWith('xrpc/') ||
         urlPath.startsWith('api/atproto/') ||
@@ -367,8 +395,11 @@ class LogApiService with ChatModificationMixin {
     if (urlPath.startsWith('api/meet/') && request.method == 'GET') {
       // /api/meet/{code} — serve a join page for the meeting
       final code = urlPath.substring('api/meet/'.length);
-      if (code.isNotEmpty && code != 'active' && code != 'info') {
-        return _handleMeetJoinPage(code, headers);
+      if (code.isNotEmpty &&
+          code != 'active' &&
+          code != 'info' &&
+          code != 'styles.css') {
+        return await _handleMeetJoinPage(request, code, headers);
       }
     }
 
@@ -702,6 +733,10 @@ class LogApiService with ChatModificationMixin {
         'hostname': io.Platform.localHostname,
         'endpoints': {
           '/api/status': 'Device status and location',
+          '/styles.css': 'Global web theme stylesheet for device-hosted pages',
+          '/meet/active': 'Active meeting info (room ID, signaling mode/port) or 404',
+          '/meet/info': 'Room info (participants list) on the local device web server',
+          '/meet/{code}': 'Meeting join page (HTML) on the local device web server',
           '/api/meet/active': 'Active meeting info (room ID, signaling port) or 404',
           '/api/meet/info': 'Room info (participants list)',
           '/api/meet/{code}': 'Meeting join page (HTML) for browser access via station',
@@ -894,7 +929,11 @@ class LogApiService with ChatModificationMixin {
   }
 
   /// Handle GET /api/meet/{code} — serves an HTML join page for the meeting.
-  shelf.Response _handleMeetJoinPage(String code, Map<String, String> headers) {
+  Future<shelf.Response> _handleMeetJoinPage(
+    shelf.Request request,
+    String code,
+    Map<String, String> headers,
+  ) async {
     final conf = ConferenceService();
     if (!conf.isActive || conf.room == null) {
       final htmlHeaders = Map<String, String>.from(headers);
@@ -919,1209 +958,22 @@ class LogApiService with ChatModificationMixin {
 
     final htmlHeaders = Map<String, String>.from(headers);
     htmlHeaders['Content-Type'] = 'text/html; charset=utf-8';
-    return shelf.Response.ok(
-      _meetJoinHtml(room.roomId, room.roomName, room.hostCallsign,
-          room.participants.length, room.maxSpeakers),
-      headers: htmlHeaders,
+    final signalingWsUrl = room.signalingMode == ConferenceSignalingMode.lan
+        ? _lanSignalingWsUrl(request, conf)
+        : WebSocketService().connectedUrl;
+    final assets = await ConferenceWebPageService().buildJoinPage(
+      ConferenceWebPageConfig(
+        roomId: room.roomId,
+        roomName: room.roomName,
+        hostCallsign: room.hostCallsign,
+        participantCount: room.participants.length,
+        maxParticipants: room.maxSpeakers,
+        transportMode: room.signalingMode.name,
+        signalingWsUrl: signalingWsUrl,
+        logoText: room.roomName,
+      ),
     );
-  }
-
-  String _meetJoinHtml(String roomId, String roomName, String hostCallsign,
-      int participantCount, int maxParticipants) {
-    final safeRoomName = htmlEscape.convert(roomName);
-    final safeHostCallsign = htmlEscape.convert(hostCallsign);
-    final nostrStyles = getNostrLoginStyles();
-    final nostrHeader = getNostrLoginHeaderHtml();
-    final nostrScripts = getNostrLoginScripts();
-    final baseStyles = StationHtmlTemplates.getBaseStyles();
-    final roomIdJson = jsonEncode(roomId);
-    final roomNameJson = jsonEncode(roomName);
-    final hostCallsignJson = jsonEncode(hostCallsign);
-    final participantCountJson = jsonEncode(participantCount);
-    final maxParticipantsJson = jsonEncode(maxParticipants);
-
-    return '''<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1">
-<title>$safeRoomName - Geogram Meeting</title>
-$nostrStyles
-<style>
-$baseStyles
-.meeting-shell { display: flex; flex-direction: column; gap: 18px; }
-.meeting-card {
-  border: 1px solid var(--border-color);
-  border-radius: 14px;
-  padding: 18px;
-  background: rgba(0, 0, 0, 0.08);
-}
-.meeting-title {
-  margin: 0 0 6px 0;
-  font-size: 1.4rem;
-}
-.meeting-subtitle {
-  color: var(--accent-alpha-70);
-  font-size: 0.95rem;
-  margin-bottom: 10px;
-}
-#status {
-  font-size: 0.95rem;
-  color: var(--accent-alpha-70);
-  margin-bottom: 14px;
-}
-#nostr-gate-msg {
-  color: var(--accent-alpha-70);
-  margin-bottom: 16px;
-}
-#join-form {
-  display: none;
-  gap: 12px;
-  flex-wrap: wrap;
-  align-items: center;
-}
-#join-form input,
-#chat-input {
-  min-width: 240px;
-  flex: 1;
-  border: 1px solid var(--border-color);
-  border-radius: 10px;
-  background: transparent;
-  color: inherit;
-  padding: 12px 14px;
-  font: inherit;
-}
-.button-row {
-  display: flex;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-button {
-  border: 1px solid var(--border-color);
-  background: transparent;
-  color: inherit;
-  padding: 10px 14px;
-  font: inherit;
-  cursor: pointer;
-  border-radius: 10px;
-}
-button:hover:not(:disabled) {
-  border-color: var(--accent);
-  color: var(--accent);
-}
-button:disabled {
-  opacity: 0.45;
-  cursor: default;
-}
-#btn-join-speaker,
-#btn-request-speaker,
-#btn-send-chat {
-  border-color: var(--accent);
-}
-#btn-leave {
-  border-color: #d90429;
-  color: #d90429;
-}
-#btn-mute.muted,
-#btn-leave:hover {
-  background: #d90429;
-  color: white;
-}
-#call-ui {
-  display: none;
-}
-.meeting-layout {
-  display: grid;
-  grid-template-columns: minmax(0, 1.9fr) minmax(280px, 0.9fr);
-  gap: 18px;
-}
-.stage {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-.stage-panel,
-.sidebar-panel {
-  border: 1px solid var(--border-color);
-  border-radius: 14px;
-  padding: 14px;
-  background: rgba(0, 0, 0, 0.06);
-}
-.stage-label {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 10px;
-}
-#screen-share-shell {
-  display: none;
-}
-#screen-share-shell.active {
-  display: block;
-}
-#screen-share-video {
-  width: 100%;
-  aspect-ratio: 16 / 9;
-  background: #000;
-  border-radius: 12px;
-  object-fit: contain;
-}
-#screen-share-placeholder {
-  width: 100%;
-  aspect-ratio: 16 / 9;
-  border-radius: 12px;
-  border: 1px dashed var(--border-color);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--accent-alpha-70);
-  background: rgba(0, 0, 0, 0.15);
-}
-.sidebar-title {
-  margin-bottom: 8px;
-  color: var(--accent);
-  font-weight: bold;
-}
-#participants {
-  list-style: none;
-  padding: 0;
-  margin: 0;
-}
-#participants li {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 9px 0;
-  border-bottom: 1px solid var(--border-color);
-}
-#participants li:last-child {
-  border-bottom: 0;
-}
-.participant-role {
-  color: var(--accent-alpha-70);
-  font-size: 0.88rem;
-}
-#chat-shell {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  min-height: 320px;
-}
-#chat-messages {
-  flex: 1;
-  min-height: 180px;
-  max-height: 320px;
-  overflow-y: auto;
-  border: 1px solid var(--border-color);
-  border-radius: 12px;
-  padding: 10px;
-  background: rgba(0, 0, 0, 0.08);
-}
-.chat-message {
-  padding: 8px 0;
-  border-bottom: 1px solid rgba(255,255,255,0.06);
-}
-.chat-message:last-child {
-  border-bottom: 0;
-}
-.chat-meta {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  font-size: 0.82rem;
-  color: var(--accent-alpha-70);
-}
-.chat-author {
-  color: var(--accent);
-  font-weight: bold;
-}
-.chat-input-row {
-  display: flex;
-  gap: 10px;
-}
-.meeting-controls {
-  display: flex;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-@media (max-width: 900px) {
-  .meeting-layout {
-    grid-template-columns: 1fr;
-  }
-}
-</style>
-</head>
-<body>
-<div class="container">
-  <header class="header">
-    <div class="header__inner">
-      <div class="header__logo">
-        <div class="logo">$safeRoomName</div>
-      </div>
-      $nostrHeader
-    </div>
-  </header>
-
-  <main class="main">
-    <div class="meeting-shell">
-      <section class="meeting-card">
-        <h1 class="meeting-title">$safeRoomName</h1>
-        <div class="meeting-subtitle">Hosted by $safeHostCallsign · $participantCount participants · up to $maxParticipants speakers</div>
-        <div id="status">Connect with Nostr to join</div>
-        <div id="nostr-gate-msg">Use the identity button above to authenticate before joining the meeting.</div>
-        <div id="join-form">
-          <input id="nickname" type="text" placeholder="Nickname (optional)" maxlength="20" autofocus>
-          <div class="button-row">
-            <button id="btn-join-listener">Join as Listener</button>
-            <button id="btn-join-speaker">Join as Speaker</button>
-          </div>
-        </div>
-      </section>
-
-      <section id="call-ui">
-        <div class="meeting-layout">
-          <div class="stage">
-            <div class="stage-panel" id="screen-share-shell">
-              <div class="stage-label">
-                <div id="screen-share-label">Shared screen</div>
-                <button id="btn-screen-fullscreen" type="button">Full screen</button>
-              </div>
-              <video id="screen-share-video" autoplay playsinline></video>
-              <div id="screen-share-placeholder">No screen is being shared right now.</div>
-            </div>
-            <div class="stage-panel">
-              <div class="meeting-controls">
-                <button id="btn-mute" type="button" style="display:none;">Mute</button>
-                <button id="btn-request-speaker" type="button" style="display:none;">Request Mic</button>
-                <button id="btn-leave" type="button">Leave</button>
-              </div>
-            </div>
-          </div>
-
-          <aside class="sidebar-panel">
-            <div class="sidebar-title">People</div>
-            <ul id="participants"></ul>
-            <div id="chat-shell">
-              <div class="sidebar-title">Chat</div>
-              <div id="chat-messages"></div>
-              <div class="chat-input-row">
-                <input id="chat-input" type="text" placeholder="Type a message..." maxlength="500">
-                <button id="btn-send-chat" type="button">Send</button>
-              </div>
-            </div>
-          </aside>
-        </div>
-      </section>
-    </div>
-  </main>
-
-  <footer class="footer">
-    <div class="footer__inner">
-      <div class="copyright">
-        <span>powered by geogram</span>
-      </div>
-    </div>
-  </footer>
-</div>
-
-<script>
-$nostrScripts
-
-// ── Conference client ───────────────────────────────────────────
-'use strict';
-
-const CONFIG = {
-  roomId: $roomIdJson,
-  roomName: $roomNameJson,
-  hostCallsign: $hostCallsignJson,
-  participantCount: $participantCountJson,
-  maxParticipants: $maxParticipantsJson
-};
-
-const loc = window.location;
-const pathSegments = loc.pathname.split('/').filter(Boolean);
-const stationBaseSegments = pathSegments.length >= 3 ? pathSegments.slice(0, -3) : [];
-const stationBasePath = stationBaseSegments.length ? ('/' + stationBaseSegments.join('/')) : '';
-const stationWsUrl = (loc.protocol === 'https:' ? 'wss://' : 'ws://') + loc.host + stationBasePath + '/';
-
-let ws = null;
-let helloFallbackTimer = null;
-let screenReconnectTimer = null;
-let helloSent = false;
-let joinRequested = false;
-let localStream = null;
-let myCallsign = '';
-let myRole = 'listener';
-let muted = false;
-let hostPc = null;
-let pendingIce = [];
-let activeScreenSharer = null;
-const audioElements = {};
-const participants = {};
-const chatMessages = [];
-
-const statusEl = document.getElementById('status');
-const joinForm = document.getElementById('join-form');
-const callUi = document.getElementById('call-ui');
-const participantsEl = document.getElementById('participants');
-const screenShellEl = document.getElementById('screen-share-shell');
-const screenLabelEl = document.getElementById('screen-share-label');
-const screenVideoEl = document.getElementById('screen-share-video');
-const screenPlaceholderEl = document.getElementById('screen-share-placeholder');
-const muteBtn = document.getElementById('btn-mute');
-const requestSpeakerBtn = document.getElementById('btn-request-speaker');
-const joinListenerBtn = document.getElementById('btn-join-listener');
-const joinSpeakerBtn = document.getElementById('btn-join-speaker');
-const nostrGateMsg = document.getElementById('nostr-gate-msg');
-const nicknameInput = document.getElementById('nickname');
-const leaveBtn = document.getElementById('btn-leave');
-const chatInput = document.getElementById('chat-input');
-const chatMessagesEl = document.getElementById('chat-messages');
-const sendChatBtn = document.getElementById('btn-send-chat');
-const fullscreenBtn = document.getElementById('btn-screen-fullscreen');
-
-function setStatus(msg) { statusEl.textContent = msg; }
-function makeSessionId() {
-  return Date.now().toString(36) + '-' + Math.random().toString(16).slice(2);
-}
-function isNostrReady() {
-  return !!(
-    window.GeogramNostr &&
-    window.GeogramNostr.connected &&
-    window.nostr &&
-    typeof window.nostr.signEvent === 'function'
-  );
-}
-function enableJoinButtons() {
-  joinListenerBtn.disabled = false;
-  joinSpeakerBtn.disabled = false;
-}
-function getPreferredNickname() {
-  return nicknameInput.value.trim() ||
-    (window.GeogramNostr && window.GeogramNostr.nickname) ||
-    (window.GeogramNostr && window.GeogramNostr.callsign) ||
-    '';
-}
-function syncJoinGate() {
-  const ready = isNostrReady();
-  nostrGateMsg.style.display = ready ? 'none' : '';
-  joinForm.style.display = ready && callUi.style.display !== 'block' ? 'flex' : 'none';
-  if (ready && !nicknameInput.value) {
-    nicknameInput.value = getPreferredNickname();
-  }
-}
-function asTimestamp(date) {
-  const pad = (value) => String(value).padStart(2, '0');
-  return date.getFullYear() + '-' + pad(date.getMonth() + 1) + '-' + pad(date.getDate()) +
-    ' ' + pad(date.getHours()) + ':' + pad(date.getMinutes()) + '_' + pad(date.getSeconds());
-}
-function messageKey(message) {
-  const metadata = message.metadata || {};
-  return metadata.conference_id || [message.author, message.timestamp, message.content].join('|');
-}
-function escapeHtml(value) {
-  return String(value)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
-function closeSocket() {
-  if (!ws) {
-    return;
-  }
-  const activeSocket = ws;
-  ws = null;
-  activeSocket.onclose = null;
-  activeSocket.onerror = null;
-  activeSocket.onmessage = null;
-  activeSocket.onopen = null;
-  try { activeSocket.close(); } catch (_) {}
-}
-function clearScreenReconnectTimer() {
-  if (screenReconnectTimer) {
-    clearTimeout(screenReconnectTimer);
-    screenReconnectTimer = null;
-  }
-}
-function sortParticipants() {
-  return Object.keys(participants).sort((a, b) => {
-    if (a === CONFIG.hostCallsign) return -1;
-    if (b === CONFIG.hostCallsign) return 1;
-    if (a === myCallsign) return -1;
-    if (b === myCallsign) return 1;
-    return a.localeCompare(b);
-  });
-}
-function updateParticipants() {
-  participantsEl.innerHTML = '';
-  sortParticipants().forEach((callsign) => {
-    const info = participants[callsign] || { role: 'listener', connected: false };
-    const li = document.createElement('li');
-    const name = callsign + (callsign === myCallsign ? ' (You)' : '') + (callsign === CONFIG.hostCallsign ? ' (Host)' : '');
-    const state = info.mediaState || (info.connected ? 'In room' : 'Connecting');
-    li.innerHTML = '<div><div>' + escapeHtml(name) + '</div><div class="participant-role">' +
-      escapeHtml(info.role || 'listener') + (info.screenSharing ? ' · screen' : '') +
-      '</div></div><div class="participant-role">' + escapeHtml(state) + '</div>';
-    participantsEl.appendChild(li);
-  });
-}
-function syncSelfControls() {
-  muteBtn.style.display = myRole === 'speaker' && localStream ? '' : 'none';
-  const canRequestSpeaker = myRole !== 'speaker' && myCallsign !== CONFIG.hostCallsign;
-  requestSpeakerBtn.style.display = canRequestSpeaker ? '' : 'none';
-  const canChat = ws && ws.readyState === WebSocket.OPEN && callUi.style.display === 'block';
-  chatInput.disabled = !canChat;
-  sendChatBtn.disabled = !canChat;
-}
-function updateScreenState() {
-  if (!activeScreenSharer) {
-    screenShellEl.classList.remove('active');
-    screenPlaceholderEl.textContent = 'No screen is being shared right now.';
-    screenPlaceholderEl.style.display = 'flex';
-    screenVideoEl.srcObject = null;
-    screenVideoEl.pause();
-    clearScreenReconnectTimer();
-    return;
-  }
-  screenShellEl.classList.add('active');
-  screenLabelEl.textContent = activeScreenSharer + ' is sharing a screen';
-  if (
-    screenVideoEl.srcObject &&
-    screenVideoEl.srcObject.getVideoTracks &&
-    screenVideoEl.srcObject.getVideoTracks().length > 0
-  ) {
-    screenPlaceholderEl.style.display = 'none';
-  } else {
-    screenPlaceholderEl.textContent = 'Connecting screen share...';
-    screenPlaceholderEl.style.display = 'flex';
-  }
-}
-function setActiveScreenSharer(callsign) {
-  activeScreenSharer = callsign || null;
-  Object.keys(participants).forEach(function(participantCallsign) {
-    participants[participantCallsign].screenSharing = participantCallsign === activeScreenSharer;
-  });
-  updateParticipants();
-  updateScreenState();
-}
-function normalizeChatMessage(message, fallbackAuthor) {
-  const normalized = Object.assign({}, message || {});
-  if (!normalized.author && fallbackAuthor) {
-    normalized.author = fallbackAuthor;
-  }
-  if (!normalized.timestamp) {
-    normalized.timestamp = asTimestamp(new Date());
-  }
-  if (!normalized.metadata) {
-    normalized.metadata = {};
-  }
-  return normalized;
-}
-function appendChatMessage(message, fallbackAuthor) {
-  const normalized = normalizeChatMessage(message, fallbackAuthor);
-  const key = messageKey(normalized);
-  if (chatMessages.some((item) => messageKey(item) === key)) {
-    return;
-  }
-  chatMessages.push(normalized);
-  chatMessages.sort((a, b) => (a.timestamp || '').localeCompare(b.timestamp || ''));
-  renderChatMessages();
-}
-function renderChatMessages() {
-  chatMessagesEl.innerHTML = '';
-  chatMessages.forEach((message) => {
-    const row = document.createElement('div');
-    row.className = 'chat-message';
-    row.innerHTML = '<div class="chat-meta"><span class="chat-author">' +
-      escapeHtml(message.author || '') + '</span><span>' +
-      escapeHtml((message.timestamp || '').replace('_', ':').slice(11, 16)) +
-      '</span></div><div>' + escapeHtml(message.content || '') + '</div>';
-    chatMessagesEl.appendChild(row);
-  });
-  chatMessagesEl.scrollTop = chatMessagesEl.scrollHeight;
-}
-function playMediaElement(element) {
-  if (!element || typeof element.play !== 'function') {
-    return;
-  }
-  const playResult = element.play();
-  if (playResult && typeof playResult.catch === 'function') {
-    playResult.catch(function() {});
-  }
-}
-function stopLocalAudioCapture() {
-  if (localStream) {
-    localStream.getTracks().forEach(function(track) { track.stop(); });
-    localStream = null;
-  }
-  muted = false;
-  muteBtn.textContent = 'Mute';
-  muteBtn.classList.remove('muted');
-}
-function removeLocalAudioSenders() {
-  if (!hostPc || typeof hostPc.getSenders !== 'function') {
-    return;
-  }
-  hostPc.getSenders().forEach(function(sender) {
-    if (sender.track && sender.track.kind === 'audio') {
-      try {
-        hostPc.removeTrack(sender);
-      } catch (_) {}
-    }
-  });
-}
-async function ensureLocalAudioCapture() {
-  if (localStream) {
-    return true;
-  }
-  try {
-    localStream = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-      video: false
-    });
-    if (muted) {
-      localStream.getAudioTracks().forEach(function(track) {
-        track.enabled = false;
-      });
-    }
-    return true;
-  } catch (_) {
-    setStatus('Microphone access denied');
-    return false;
-  }
-}
-async function applyLocalRole(newRole) {
-  myRole = newRole;
-  participants[myCallsign] = participants[myCallsign] || {
-    role: newRole,
-    connected: true,
-    mediaState: 'In room',
-    screenSharing: false
-  };
-  participants[myCallsign].role = newRole;
-  participants[myCallsign].connected = true;
-  participants[myCallsign].mediaState = 'In room';
-
-  if (newRole === 'speaker') {
-    const hadStream = !!localStream;
-    const audioReady = await ensureLocalAudioCapture();
-    if (audioReady && hostPc && !hadStream) {
-      localStream.getAudioTracks().forEach(function(track) {
-        hostPc.addTrack(track, localStream);
-      });
-    }
-  } else {
-    removeLocalAudioSenders();
-    stopLocalAudioCapture();
-  }
-
-  syncSelfControls();
-  updateParticipants();
-}
-function scheduleLegacyHelloFallback() {
-  if (helloFallbackTimer) {
-    clearTimeout(helloFallbackTimer);
-  }
-  helloFallbackTimer = setTimeout(function() {
-    if (!helloSent && ws && ws.readyState === WebSocket.OPEN) {
-      sendHello(null);
-    }
-  }, 1200);
-}
-async function sendHello(challengeNonce) {
-  if (!ws || ws.readyState !== WebSocket.OPEN || helloSent) {
-    return;
-  }
-  helloSent = true;
-  if (helloFallbackTimer) {
-    clearTimeout(helloFallbackTimer);
-    helloFallbackTimer = null;
-  }
-
-  const tags = [
-    ['callsign', myCallsign],
-    ['platform', 'Web']
-  ];
-  const nickname = getPreferredNickname();
-  if (nickname) {
-    tags.push(['nickname', nickname]);
-  }
-  if (challengeNonce) {
-    tags.push(['challenge', challengeNonce]);
-  }
-
-  setStatus(challengeNonce ? 'Authenticating with station...' : 'Authenticating...');
-  try {
-    const helloEvent = await window.nostr.signEvent({
-      kind: 0,
-      created_at: Math.floor(Date.now() / 1000),
-      tags: tags,
-      content: 'Geogram Web'
-    });
-    ws.send(JSON.stringify({
-      type: 'hello',
-      protocol: challengeNonce ? 2 : 1,
-      event: helloEvent
-    }));
-  } catch (error) {
-    helloSent = false;
-    setStatus('Authentication failed: ' + (error && error.message ? error.message : error));
-    enableJoinButtons();
-    closeSocket();
-  }
-}
-function scheduleScreenReconnect() {
-  clearScreenReconnectTimer();
-  if (
-    !activeScreenSharer ||
-    !hostPc ||
-    !ws ||
-    ws.readyState !== WebSocket.OPEN ||
-    !(hostPc.remoteDescription || hostPc.currentRemoteDescription)
-  ) {
-    return;
-  }
-  if (
-    screenVideoEl.srcObject &&
-    screenVideoEl.srcObject.getVideoTracks &&
-    screenVideoEl.srcObject.getVideoTracks().length > 0
-  ) {
-    return;
-  }
-  screenReconnectTimer = setTimeout(function() {
-    if (
-      activeScreenSharer &&
-      hostPc &&
-      hostPc.signalingState === 'stable' &&
-      ws &&
-      ws.readyState === WebSocket.OPEN
-    ) {
-      renegotiateWithHost();
-    }
-  }, 1600);
-}
-
-// Show join form once Nostr identity is connected
-document.addEventListener('nostr-connected', function(e) {
-  syncJoinGate();
-  setStatus('Ready to join');
-  var nick = getPreferredNickname();
-  if (nick && !nicknameInput.value) nicknameInput.value = nick;
-});
-
-joinListenerBtn.addEventListener('click', function() { joinConference('listener'); });
-joinSpeakerBtn.addEventListener('click', function() { joinConference('speaker'); });
-leaveBtn.addEventListener('click', leaveConference);
-muteBtn.addEventListener('click', toggleMute);
-requestSpeakerBtn.addEventListener('click', requestSpeaker);
-sendChatBtn.addEventListener('click', sendChat);
-chatInput.addEventListener('keydown', function(ev) {
-  if (ev.key === 'Enter' && !ev.shiftKey) {
-    ev.preventDefault();
-    sendChat();
-  }
-});
-fullscreenBtn.addEventListener('click', async function() {
-  if (!screenVideoEl.srcObject) return;
-  if (screenVideoEl.requestFullscreen) {
-    await screenVideoEl.requestFullscreen();
-  } else if (screenVideoEl.webkitRequestFullscreen) {
-    screenVideoEl.webkitRequestFullscreen();
-  }
-});
-
-async function joinConference(role) {
-  if (!isNostrReady()) {
-    setStatus('Connect with Nostr before joining');
-    return;
-  }
-
-  myRole = role;
-  myCallsign = window.GeogramNostr.callsign || '';
-  helloSent = false;
-  joinRequested = false;
-  enableJoinButtons();
-  joinListenerBtn.disabled = true;
-  joinSpeakerBtn.disabled = true;
-
-  if (!myCallsign) {
-    setStatus('Missing Nostr callsign');
-    enableJoinButtons();
-    return;
-  }
-
-  if (role === 'speaker') {
-    setStatus('Requesting microphone...');
-    const audioReady = await ensureLocalAudioCapture();
-    if (!audioReady) {
-      enableJoinButtons();
-      return;
-    }
-  }
-
-  setStatus('Connecting to station...');
-  ws = new WebSocket(stationWsUrl);
-  const activeSocket = ws;
-
-  activeSocket.onopen = function() {
-    setStatus('Waiting for station challenge...');
-    scheduleLegacyHelloFallback();
-  };
-
-  activeSocket.onmessage = async function(ev) {
-    let msg;
-    try {
-      msg = JSON.parse(ev.data);
-    } catch (_) {
-      return;
-    }
-    if (ws !== activeSocket) {
-      return;
-    }
-    await handleMessage(msg);
-  };
-
-  activeSocket.onclose = function() {
-    if (ws !== activeSocket) {
-      return;
-    }
-    ws = null;
-    cleanup('Disconnected');
-  };
-
-  activeSocket.onerror = function() {
-    setStatus('Connection failed');
-    enableJoinButtons();
-  };
-}
-
-async function handleMessage(msg) {
-  switch (msg.type) {
-    case 'challenge':
-      await sendHello(msg.nonce || null);
-      break;
-
-    case 'hello_ack':
-      if (msg.success === false) {
-        cleanup('Authentication failed: ' + (msg.message || msg.error || 'unknown'));
-        return;
-      }
-      if (joinRequested || !ws || ws.readyState !== WebSocket.OPEN) {
-        break;
-      }
-      joinRequested = true;
-      ws.send(JSON.stringify({
-        type: 'conference_join',
-        room_id: CONFIG.roomId,
-        role: myRole
-      }));
-      setStatus('Joining conference...');
-      break;
-
-    case 'conference_welcome':
-      joinForm.style.display = 'none';
-      callUi.style.display = 'block';
-      setStatus('In conference: ' + (msg.room_name || CONFIG.roomName));
-      Object.keys(participants).forEach(function(key) { delete participants[key]; });
-      participants[CONFIG.hostCallsign] = {
-        role: 'speaker',
-        connected: true,
-        mediaState: CONFIG.hostCallsign === myCallsign ? 'In room' : 'Joining media',
-        screenSharing: false
-      };
-      (msg.participants || []).forEach(function(cs) {
-        if (!participants[cs]) {
-          participants[cs] = {
-            role: 'listener',
-            connected: true,
-            mediaState: cs === CONFIG.hostCallsign ? 'Joining media' : 'In room',
-            screenSharing: false
-          };
-        }
-      });
-      (msg.speakers || []).forEach(function(cs) {
-        participants[cs] = participants[cs] || {};
-        participants[cs].role = 'speaker';
-      });
-      await applyLocalRole(
-        Array.isArray(msg.speakers) && msg.speakers.indexOf(myCallsign) !== -1
-          ? 'speaker'
-          : 'listener'
-      );
-      participants[myCallsign] = participants[myCallsign] || {
-        role: myRole,
-        connected: true,
-        mediaState: 'In room',
-        screenSharing: false
-      };
-      participants[myCallsign].connected = true;
-      participants[myCallsign].mediaState = 'In room';
-      requestSpeakerBtn.disabled = false;
-      setActiveScreenSharer(msg.active_screen_sharer || null);
-      updateParticipants();
-      syncSelfControls();
-      if (CONFIG.hostCallsign && CONFIG.hostCallsign !== myCallsign) {
-        await connectToHost();
-      }
-      scheduleScreenReconnect();
-      break;
-
-    case 'conference_participant_joined':
-      if (msg.callsign === myCallsign) {
-        break;
-      }
-      participants[msg.callsign] = {
-        role: msg.role || 'listener',
-        connected: true,
-        mediaState: msg.callsign === CONFIG.hostCallsign ? 'Joining media' : 'In room',
-        screenSharing: activeScreenSharer === msg.callsign
-      };
-      updateParticipants();
-      break;
-
-    case 'conference_participant_left':
-      if (msg.callsign === myCallsign) {
-        break;
-      }
-      if (activeScreenSharer === msg.callsign) {
-        screenVideoEl.srcObject = null;
-        setActiveScreenSharer(null);
-      }
-      delete participants[msg.callsign];
-      if (msg.callsign === CONFIG.hostCallsign && hostPc) {
-        hostPc.close();
-        hostPc = null;
-      }
-      updateParticipants();
-      break;
-
-    case 'conference_role_change':
-      participants[msg.callsign] = participants[msg.callsign] || {};
-      participants[msg.callsign].role = msg.role || 'listener';
-      if (msg.callsign === myCallsign) {
-        requestSpeakerBtn.disabled = false;
-        await handleMyRoleChange(msg.role || 'listener');
-      }
-      updateParticipants();
-      break;
-
-    case 'conference_screen_share_state':
-      if (msg.active) {
-        setActiveScreenSharer(msg.callsign || CONFIG.hostCallsign);
-        scheduleScreenReconnect();
-      } else {
-        screenVideoEl.srcObject = null;
-        screenPlaceholderEl.style.display = 'flex';
-        setActiveScreenSharer(null);
-      }
-      break;
-
-    case 'conference_chat_history':
-      (msg.messages || []).forEach(function(message) {
-        appendChatMessage(message, msg.from_callsign || CONFIG.hostCallsign);
-      });
-      break;
-
-    case 'conference_chat_message':
-      if (msg.message) {
-        appendChatMessage(msg.message, msg.from_callsign || '');
-      }
-      break;
-
-    case 'conference_end':
-      cleanup('Conference ended by host');
-      break;
-
-    case 'conference_error':
-      setStatus('Error: ' + (msg.message || msg.error || 'unknown'));
-      enableJoinButtons();
-      break;
-
-    case 'conference_signal':
-      await handleSignal(msg);
-      break;
-  }
-  syncSelfControls();
-}
-
-async function handleSignal(msg) {
-  switch (msg.signal_type) {
-    case 'webrtc_offer':
-      await handleOffer(msg);
-      break;
-    case 'webrtc_answer':
-      await handleAnswer(msg);
-      break;
-    case 'webrtc_ice':
-      await handleIce(msg);
-      break;
-    case 'webrtc_bye':
-      if (hostPc) {
-        hostPc.close();
-        hostPc = null;
-      }
-      updateParticipants();
-      break;
-  }
-}
-
-// ── WebRTC ───────────────────────────────────────────────────────
-
-function createPeerConnection() {
-  var pc = new RTCPeerConnection({
-    iceServers: [
-      { urls: 'stun:stun.l.google.com:19302' },
-      { urls: 'stun:stun1.l.google.com:19302' }
-    ]
-  });
-
-  if (localStream) {
-    localStream.getTracks().forEach(function(t) { pc.addTrack(t, localStream); });
-  } else {
-    pc.addTransceiver('audio', { direction: 'recvonly' });
-  }
-  pc.addTransceiver('video', { direction: 'recvonly' });
-
-  pc.onicecandidate = function(ev) {
-    if (ev.candidate) {
-      sendSignal({
-        type: 'webrtc_ice',
-        to_callsign: CONFIG.hostCallsign,
-        candidate: {
-          candidate: ev.candidate.candidate,
-          sdpMid: ev.candidate.sdpMid,
-          sdpMLineIndex: ev.candidate.sdpMLineIndex
-        }
-      });
-    }
-  };
-
-  pc.ontrack = function(ev) {
-    if (ev.streams && ev.streams[0]) {
-      var stream = ev.streams[0];
-      if (ev.track && ev.track.kind === 'video') {
-        screenVideoEl.srcObject = stream;
-        playMediaElement(screenVideoEl);
-        screenPlaceholderEl.style.display = 'none';
-        if (!activeScreenSharer) {
-          setActiveScreenSharer(CONFIG.hostCallsign);
-        }
-        clearScreenReconnectTimer();
-        updateScreenState();
-      } else {
-        var audio = audioElements[stream.id];
-        if (!audio) {
-          audio = new Audio();
-          audio.autoplay = true;
-          audio.playsInline = true;
-          audioElements[stream.id] = audio;
-        }
-        audio.srcObject = stream;
-        playMediaElement(audio);
-      }
-    }
-  };
-
-  pc.onconnectionstatechange = function() {
-    participants[CONFIG.hostCallsign] = participants[CONFIG.hostCallsign] || {
-      role: 'speaker',
-      connected: true,
-      screenSharing: false
-    };
-    participants[CONFIG.hostCallsign].connected = true;
-    if (pc.connectionState === 'connected') {
-      participants[CONFIG.hostCallsign].mediaState = 'Media connected';
-      scheduleScreenReconnect();
-    } else if (pc.connectionState === 'connecting') {
-      participants[CONFIG.hostCallsign].mediaState = 'Joining media';
-    } else if (pc.connectionState === 'disconnected') {
-      participants[CONFIG.hostCallsign].mediaState = 'Reconnecting media';
-    } else if (pc.connectionState === 'failed') {
-      participants[CONFIG.hostCallsign].mediaState = 'Media failed';
-    }
-    updateParticipants();
-  };
-
-  return pc;
-}
-
-async function renegotiateWithHost() {
-  if (!hostPc || !ws || ws.readyState !== WebSocket.OPEN) {
-    return;
-  }
-  if (hostPc.signalingState && hostPc.signalingState !== 'stable') {
-    return;
-  }
-  var offer = await hostPc.createOffer({
-    offerToReceiveAudio: true,
-    offerToReceiveVideo: true
-  });
-  await hostPc.setLocalDescription(offer);
-  sendSignal({
-    type: 'webrtc_offer',
-    to_callsign: CONFIG.hostCallsign,
-    session_id: makeSessionId(),
-    role: myRole,
-    sdp: { type: offer.type, sdp: offer.sdp }
-  });
-}
-
-async function connectToHost() {
-  hostPc = createPeerConnection();
-  await renegotiateWithHost();
-}
-
-async function handleOffer(msg) {
-  if (!hostPc) {
-    hostPc = createPeerConnection();
-  }
-  var pc = hostPc;
-  await pc.setRemoteDescription(new RTCSessionDescription({ type: msg.sdp.type, sdp: msg.sdp.sdp }));
-  while (pendingIce.length) {
-    await pc.addIceCandidate(new RTCIceCandidate(pendingIce.shift()));
-  }
-  var answer = await pc.createAnswer({ offerToReceiveAudio: true, offerToReceiveVideo: true });
-  await pc.setLocalDescription(answer);
-  sendSignal({
-    type: 'webrtc_answer',
-    to_callsign: msg.from_callsign || CONFIG.hostCallsign,
-    session_id: msg.session_id,
-    sdp: { type: answer.type, sdp: answer.sdp }
-  });
-  scheduleScreenReconnect();
-}
-
-async function handleAnswer(msg) {
-  if (!hostPc) return;
-  await hostPc.setRemoteDescription(new RTCSessionDescription({ type: msg.sdp.type, sdp: msg.sdp.sdp }));
-  while (pendingIce.length) {
-    await hostPc.addIceCandidate(new RTCIceCandidate(pendingIce.shift()));
-  }
-  scheduleScreenReconnect();
-}
-
-async function handleIce(msg) {
-  var candidate = msg.candidate;
-  if (!candidate) return;
-  if (hostPc && hostPc.remoteDescription) {
-    await hostPc.addIceCandidate(new RTCIceCandidate(candidate));
-  } else {
-    pendingIce.push(candidate);
-  }
-}
-
-function sendSignal(msg) {
-  if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({
-      type: 'conference_signal',
-      signal_type: msg.type,
-      room_id: CONFIG.roomId,
-      from_callsign: myCallsign,
-      to_callsign: msg.to_callsign,
-      role: msg.role,
-      session_id: msg.session_id,
-      sdp: msg.sdp,
-      candidate: msg.candidate
-    }));
-  }
-}
-
-async function handleMyRoleChange(newRole) {
-  await applyLocalRole(newRole);
-}
-
-function toggleMute() {
-  muted = !muted;
-  if (localStream) {
-    localStream.getAudioTracks().forEach(function(t) { t.enabled = !muted; });
-  }
-  muteBtn.textContent = muted ? 'Unmute' : 'Mute';
-  muteBtn.classList.toggle('muted', muted);
-}
-
-function requestSpeaker() {
-  if (!ws || ws.readyState !== WebSocket.OPEN) return;
-  requestSpeakerBtn.disabled = true;
-  ws.send(JSON.stringify({
-    type: 'conference_speaker_request',
-    room_id: CONFIG.roomId,
-    callsign: myCallsign
-  }));
-  setStatus('Speaker request sent');
-}
-
-function sendChat() {
-  if (!ws || ws.readyState !== WebSocket.OPEN) return;
-  var content = chatInput.value.trim();
-  if (!content) return;
-  var message = {
-    author: myCallsign,
-    timestamp: asTimestamp(new Date()),
-    content: content,
-    metadata: {
-      conference_id: Date.now().toString(36) + '-' + Math.random().toString(16).slice(2),
-      room_id: CONFIG.roomId
-    },
-    reactions: {}
-  };
-  ws.send(JSON.stringify({
-    type: 'conference_chat_message',
-    room_id: CONFIG.roomId,
-    message: message
-  }));
-  appendChatMessage(message);
-  chatInput.value = '';
-}
-
-function leaveConference() {
-  if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({ type: 'conference_leave', room_id: CONFIG.roomId }));
-  }
-  cleanup('Left conference');
-}
-
-function cleanup(statusMessage) {
-  if (helloFallbackTimer) {
-    clearTimeout(helloFallbackTimer);
-    helloFallbackTimer = null;
-  }
-  clearScreenReconnectTimer();
-  closeSocket();
-  Object.keys(audioElements).forEach(function(key) {
-    audioElements[key].srcObject = null;
-    delete audioElements[key];
-  });
-  if (hostPc) {
-    hostPc.close();
-    hostPc = null;
-  }
-  pendingIce = [];
-  stopLocalAudioCapture();
-  screenVideoEl.srcObject = null;
-  helloSent = false;
-  joinRequested = false;
-  myRole = 'listener';
-  myCallsign = '';
-  Object.keys(participants).forEach(function(key) { delete participants[key]; });
-  chatMessages.splice(0, chatMessages.length);
-  setActiveScreenSharer(null);
-  renderChatMessages();
-  updateParticipants();
-  syncSelfControls();
-  callUi.style.display = 'none';
-  syncJoinGate();
-  enableJoinButtons();
-  requestSpeakerBtn.disabled = false;
-  setStatus(statusMessage || (isNostrReady() ? 'Ready to join' : 'Connect with Nostr to join'));
-}
-syncJoinGate();
-syncSelfControls();
-</script>
-</body>
-</html>''';
+    return shelf.Response.ok(assets.html, headers: htmlHeaders);
   }
 
   String _meetNotFoundHtml(String code) {
@@ -2167,15 +1019,67 @@ syncSelfControls();
       'room_id': room.roomId,
       'room_name': room.roomName,
       'host_callsign': room.hostCallsign,
+      'signaling_mode': room.signalingMode.name,
       'signaling_port': conf.signalingPort,
       'participant_count': room.participants.length,
       'max_participants': room.maxSpeakers,
+      'station_meet_url': conf.stationMeetUrl,
     };
 
     return shelf.Response.ok(
       jsonEncode(response),
       headers: headers,
     );
+  }
+
+  Future<shelf.Response> _handleThemeStylesRequest(
+    Map<String, String> headers, {
+    String? appType,
+  }) async {
+    try {
+      final themeService = WebThemeService();
+      await themeService.init();
+      final content = appType == null
+          ? (await themeService.getGlobalStyles() ?? '')
+          : (await themeService.getAppStyles(appType) ?? '');
+      return shelf.Response.ok(
+        content,
+        headers: {
+          ...headers,
+          'Content-Type': 'text/css; charset=utf-8',
+        },
+      );
+    } catch (e) {
+      return shelf.Response.internalServerError(
+        body: '/* Failed to load theme styles: $e */',
+        headers: {
+          ...headers,
+          'Content-Type': 'text/css; charset=utf-8',
+        },
+      );
+    }
+  }
+
+  shelf.Response _handleNostrBundleRequest(Map<String, String> headers) {
+    return shelf.Response.ok(
+      getNostrBundleJs(),
+      headers: {
+        ...headers,
+        'Content-Type': 'application/javascript; charset=utf-8',
+        'Cache-Control': 'public, max-age=86400',
+      },
+    );
+  }
+
+  String? _lanSignalingWsUrl(shelf.Request request, ConferenceService conf) {
+    final signalingPort = conf.signalingPort;
+    if (signalingPort == null) {
+      return null;
+    }
+    final requestedUri = request.requestedUri;
+    final scheme = requestedUri.scheme == 'https' ? 'wss' : 'ws';
+    final authority = requestedUri.host.isNotEmpty ? requestedUri.host : 'localhost';
+    return '$scheme://$authority:$signalingPort/meet/ws';
   }
 
   Future<shelf.Response> _handleLogRequest(

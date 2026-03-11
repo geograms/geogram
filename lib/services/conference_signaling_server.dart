@@ -20,6 +20,7 @@ import 'dart:io';
 import 'dart:math';
 
 import 'log_service.dart';
+import '../util/nostr_bundle.dart';
 
 /// A participant connected to the signaling server via WebSocket.
 class SignalingParticipant {
@@ -52,6 +53,8 @@ class ConferenceSignalingServer {
   final int maxSpeakers;
   String? _activeScreenSharerCallsign;
   String? _webClientHtml;
+  String _webClientGlobalStyles = '';
+  String _webClientAppStyles = '';
   void Function(Map<String, dynamic> message)? onHostMessage;
 
   int? get port => _httpServer?.port;
@@ -118,9 +121,15 @@ class ConferenceSignalingServer {
     LogService().log('Conference signaling server stopped');
   }
 
-  /// Set the HTML content served at /meet/{code}.
-  void setWebClientHtml(String html) {
+  /// Set the browser client assets served by the LAN signaling server.
+  void setWebClientAssets({
+    required String html,
+    String globalStyles = '',
+    String appStyles = '',
+  }) {
     _webClientHtml = html;
+    _webClientGlobalStyles = globalStyles;
+    _webClientAppStyles = appStyles;
   }
 
   // ── Request routing ──────────────────────────────────────────────
@@ -128,8 +137,16 @@ class ConferenceSignalingServer {
   void _handleRequest(HttpRequest request) {
     final path = request.uri.path;
     switch (path) {
+      case '/styles.css':
+        _handleStyles(request, _webClientGlobalStyles);
       case '/meet/info':
         _handleInfo(request);
+      case '/meet/active':
+        _handleActive(request);
+      case '/meet/styles.css':
+        _handleStyles(request, _webClientAppStyles);
+      case '/lib/nostr.bundle.js':
+        _handleNostrBundle(request);
       case '/meet/ws':
         _handleWebSocket(request);
       default:
@@ -163,6 +180,47 @@ class ConferenceSignalingServer {
       ..statusCode = HttpStatus.ok
       ..headers.contentType = ContentType.json
       ..write(jsonEncode(info))
+      ..close();
+  }
+
+  // ── GET /meet/active ───────────────────────────────────────────
+
+  void _handleActive(HttpRequest request) {
+    final info = {
+      'room_id': roomId,
+      'room_name': roomName,
+      'host_callsign': hostCallsign,
+      'signaling_mode': 'lan',
+      'signaling_port': _httpServer?.port,
+      'participant_count': participantCount,
+      'max_participants': maxSpeakers,
+      'active_screen_sharer': _activeScreenSharerCallsign,
+    };
+    request.response
+      ..statusCode = HttpStatus.ok
+      ..headers.contentType = ContentType.json
+      ..write(jsonEncode(info))
+      ..close();
+  }
+
+  void _handleStyles(HttpRequest request, String content) {
+    request.response
+      ..statusCode = HttpStatus.ok
+      ..headers.contentType = ContentType('text', 'css', charset: 'utf-8')
+      ..write(content)
+      ..close();
+  }
+
+  void _handleNostrBundle(HttpRequest request) {
+    request.response
+      ..statusCode = HttpStatus.ok
+      ..headers.contentType = ContentType(
+        'application',
+        'javascript',
+        charset: 'utf-8',
+      )
+      ..headers.set(HttpHeaders.cacheControlHeader, 'public, max-age=86400')
+      ..write(getNostrBundleJs())
       ..close();
   }
 

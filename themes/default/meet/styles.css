@@ -1,0 +1,231 @@
+/* Meetings page - extends global Terminimal theme */
+
+.meet-page .container {
+  max-width: 1100px;
+}
+
+.meeting-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.meeting-card,
+.stage-panel,
+.sidebar-panel {
+  border: 1px solid var(--border-color);
+  border-radius: 14px;
+  padding: 18px;
+  background: rgba(0, 0, 0, 0.08);
+}
+
+.meeting-title {
+  margin: 0 0 6px 0;
+  font-size: 1.4rem;
+}
+
+.meeting-subtitle,
+#status,
+#nostr-gate-msg,
+.participant-role,
+.chat-meta {
+  color: var(--accent-alpha-70);
+}
+
+#status {
+  font-size: 0.95rem;
+  margin-bottom: 14px;
+}
+
+#nostr-gate-msg {
+  margin-bottom: 16px;
+}
+
+#join-form {
+  display: none;
+  gap: 12px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+#join-form input,
+#chat-input {
+  min-width: 240px;
+  flex: 1;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: transparent;
+  color: inherit;
+  padding: 12px 14px;
+  font: inherit;
+}
+
+.button-row,
+.meeting-controls,
+.chat-input-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+button {
+  border: 1px solid var(--border-color);
+  background: transparent;
+  color: inherit;
+  padding: 10px 14px;
+  font: inherit;
+  cursor: pointer;
+  border-radius: 10px;
+}
+
+button:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+#btn-join-speaker,
+#btn-request-speaker,
+#btn-send-chat {
+  border-color: var(--accent);
+}
+
+#btn-leave {
+  border-color: #d90429;
+  color: #d90429;
+}
+
+#btn-mute.muted,
+#btn-leave:hover {
+  background: #d90429;
+  color: #fff;
+}
+
+#call-ui {
+  display: none;
+}
+
+.meeting-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.9fr) minmax(280px, 0.9fr);
+  gap: 18px;
+}
+
+.stage {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.stage-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+#screen-share-shell {
+  display: none;
+}
+
+#screen-share-shell.active {
+  display: block;
+}
+
+#screen-share-video,
+#screen-share-placeholder {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border-radius: 12px;
+}
+
+#screen-share-video {
+  background: #000;
+  object-fit: contain;
+}
+
+#screen-share-placeholder {
+  border: 1px dashed var(--border-color);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.15);
+}
+
+.sidebar-title {
+  margin-bottom: 8px;
+  color: var(--accent);
+  font-weight: bold;
+}
+
+#participants {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 18px 0;
+}
+
+#participants li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--border-color);
+}
+
+#participants li:last-child {
+  border-bottom: 0;
+}
+
+.participant-state {
+  text-align: right;
+}
+
+#chat-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 320px;
+}
+
+#chat-messages {
+  flex: 1;
+  min-height: 180px;
+  max-height: 320px;
+  overflow-y: auto;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 10px;
+  background: rgba(0, 0, 0, 0.08);
+}
+
+.chat-message {
+  padding: 8px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.chat-message:last-child {
+  border-bottom: 0;
+}
+
+.chat-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 0.82rem;
+}
+
+.chat-author {
+  color: var(--accent);
+  font-weight: bold;
+}
+
+@media (max-width: 900px) {
+  .meeting-layout {
+    grid-template-columns: 1fr;
+  }
+}

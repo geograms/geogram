@@ -832,6 +832,13 @@ class WebSocketService {
         return;
       }
 
+      // Forward dynamic Meetings pages and metadata to LogApiService so the
+      // device, station proxy, and local browser all reuse the same route.
+      if (path.startsWith('/meet/')) {
+        await _forwardToLocalApi(requestId, method, path, headersJson, body);
+        return;
+      }
+
       // Handle blog HTML requests with device identifier prefix
       // Path format: /{callsign}/blog/{filename}.html (from _handleBlogRequest)
       if (path.contains('/blog/') && path.endsWith('.html') && !path.startsWith('/blog/')) {

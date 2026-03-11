@@ -6835,7 +6835,7 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, EmailHandlerMixin,
     final kind = match.group(2)!;
     final remainingPath = match.group(3)!;
     final apiPath = kind == 'meet'
-        ? '/api/meet/$remainingPath'
+        ? '/meet/$remainingPath'
         : '/api/$remainingPath';
 
     // Find the client by callsign (case-insensitive)

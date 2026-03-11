@@ -20,12 +20,14 @@ import 'package:flutter_webrtc/flutter_webrtc.dart';
 
 import '../models/chat_message.dart';
 import '../models/conference_archive_entry.dart';
+import 'app_args.dart';
 import 'conference_archive_service.dart';
 import 'conference_host_peer_manager.dart';
 import 'conference_participant_peer_manager.dart';
 import 'conference_peer_manager.dart';
 import 'conference_recording_service.dart';
 import 'conference_signaling_server.dart';
+import 'conference_web_page_service.dart';
 import 'devices_service.dart';
 import 'log_service.dart';
 import 'profile_service.dart';
@@ -315,7 +317,7 @@ class ConferenceService {
   /// Get shareable LAN meet URLs (one per local IP).
   Future<List<String>> getMeetUrls() async {
     if (_signalingServer == null || !_signalingServer!.isRunning) return [];
-    final port = _signalingServer!.port;
+    final port = AppArgs().port;
     final code = roomCode ?? '';
     final ips = await _getLocalIPs();
     return ips.map((ip) => 'http://$ip:$port/meet/$code').toList();
@@ -588,16 +590,33 @@ class ConferenceService {
         if (response.statusCode == 200) {
           final data = jsonDecode(response.body) as Map<String, dynamic>;
           final activeRoomId = data['room_id'] as String?;
+          final signalingMode = data['signaling_mode'] as String? ?? 'lan';
           final sigPort = data['signaling_port'] as int?;
+          final stationMeetUrl = data['station_meet_url'] as String?;
 
-          if (activeRoomId == roomId && sigPort != null) {
-            final host = Uri.parse(baseUrl).host;
-            final wsUrl = 'ws://$host:$sigPort/meet/ws';
-            LogService().log(
-              'ConferenceService: Found meeting via LAN at $wsUrl',
-            );
-            await joinLan(wsUrl, participantRole: participantRole);
-            return;
+          if (activeRoomId == roomId) {
+            if (signalingMode == ConferenceSignalingMode.station.name &&
+                stationMeetUrl != null &&
+                stationMeetUrl.isNotEmpty) {
+              LogService().log(
+                'ConferenceService: Found meeting via device API and joining '
+                'through station at $stationMeetUrl',
+              );
+              await joinStationMeetUrl(
+                Uri.parse(stationMeetUrl),
+                participantRole: participantRole,
+              );
+              return;
+            }
+            if (sigPort != null) {
+              final host = Uri.parse(baseUrl).host;
+              final wsUrl = 'ws://$host:$sigPort/meet/ws';
+              LogService().log(
+                'ConferenceService: Found meeting via LAN at $wsUrl',
+              );
+              await joinLan(wsUrl, participantRole: participantRole);
+              return;
+            }
           }
         }
       } catch (e) {
@@ -1103,14 +1122,27 @@ class ConferenceService {
       maxSpeakers: maxSpeakers,
     );
 
-    // Load and set web client HTML
     try {
-      final htmlFile = File('assets/conference/index.html');
-      if (await htmlFile.exists()) {
-        _signalingServer!.setWebClientHtml(await htmlFile.readAsString());
-      }
+      final assets = await ConferenceWebPageService().buildJoinPage(
+        ConferenceWebPageConfig(
+          roomId: roomId,
+          roomName: roomName,
+          hostCallsign: callsign,
+          participantCount: 1,
+          maxParticipants: maxSpeakers,
+          transportMode: ConferenceSignalingMode.lan.name,
+          logoText: roomName,
+        ),
+      );
+      _signalingServer!.setWebClientAssets(
+        html: assets.html,
+        globalStyles: assets.globalStyles,
+        appStyles: assets.appStyles,
+      );
     } catch (e) {
-      LogService().log('ConferenceService: Web client HTML not found: $e');
+      LogService().log(
+        'ConferenceService: Failed to build LAN web client assets: $e',
+      );
     }
 
     final port = await _signalingServer!.start();

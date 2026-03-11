@@ -33,8 +33,10 @@ VISITOR_TMPDIR=""
 HOST_CALLSIGN=""
 ATTENDEE_CALLSIGN=""
 ROOM_ID=""
+ROOM_CODE=""
 ROOM_NAME="Regression Meeting"
 SIGNALING_PORT=""
+LAN_MEET_URL=""
 CRASH_BASELINE_LINES=0
 HOST_ARCHIVE_PATH=""
 HOST_TRANSCRIPT_PATH=""
@@ -209,7 +211,9 @@ echo ""
 echo "[3] Hosting a LAN meeting from the isolated visitor instance..."
 HOST_RESPONSE="$(post "$VISITOR_API" "{\"action\":\"conference_host\",\"room_name\":\"${ROOM_NAME}\",\"max_speakers\":4}")"
 ROOM_ID="$(echo "$HOST_RESPONSE" | json_field "data['room']['room_id']")"
+ROOM_CODE="${ROOM_ID%@*}"
 HOST_MODE="$(echo "$HOST_RESPONSE" | json_field "data['room']['signaling_mode']")"
+LAN_MEET_URL="$(echo "$HOST_RESPONSE" | json_field "(data.get('meet_urls') or [''])[0]")"
 if [ "$HOST_MODE" = "lan" ]; then
   ok "visitor hosted meeting in LAN mode"
 else
@@ -227,7 +231,85 @@ else
 fi
 
 echo ""
-echo "[4] Starting direct screen sharing from the host before join..."
+echo "[4] Verifying the device-hosted and signaling-hosted meeting pages..."
+LAN_MEET_PAGE=""
+LAN_MEET_ACTIVE=""
+LAN_SIGNAL_PAGE=""
+LAN_SIGNAL_STYLES=""
+if [ -n "$LAN_MEET_URL" ] && [ "$LAN_MEET_URL" != "None" ]; then
+  LAN_MEET_PAGE="$(curl -sf "http://127.0.0.1:${VISITOR_PORT}/meet/${ROOM_CODE}" 2>/dev/null || true)"
+fi
+LAN_MEET_ACTIVE="$(curl -sf "http://127.0.0.1:${VISITOR_PORT}/meet/active" 2>/dev/null || true)"
+LAN_SIGNAL_PAGE="$(curl -sf "http://127.0.0.1:${SIGNALING_PORT}/meet/${ROOM_CODE}" 2>/dev/null || true)"
+LAN_SIGNAL_STYLES="$(curl -sf "http://127.0.0.1:${SIGNALING_PORT}/meet/styles.css" 2>/dev/null || true)"
+if LAN_MEET_URL="$LAN_MEET_URL" \
+   LAN_MEET_PAGE="$LAN_MEET_PAGE" \
+   LAN_MEET_ACTIVE="$LAN_MEET_ACTIVE" \
+   LAN_SIGNAL_PAGE="$LAN_SIGNAL_PAGE" \
+   LAN_SIGNAL_STYLES="$LAN_SIGNAL_STYLES" \
+   ROOM_NAME="$ROOM_NAME" \
+   ROOM_ID="$ROOM_ID" \
+   ROOM_CODE="$ROOM_CODE" \
+   SIGNALING_PORT="$SIGNALING_PORT" \
+   VISITOR_PORT="$VISITOR_PORT" \
+   python3 - <<'PY'
+import json
+import os
+import sys
+from urllib.parse import urlparse
+
+meet_url = os.environ['LAN_MEET_URL']
+page = os.environ['LAN_MEET_PAGE']
+active = json.loads(os.environ['LAN_MEET_ACTIVE'])
+signal_page = os.environ['LAN_SIGNAL_PAGE']
+signal_styles = os.environ['LAN_SIGNAL_STYLES']
+parsed = urlparse(meet_url)
+if parsed.port != int(os.environ['VISITOR_PORT']):
+    sys.exit(1)
+if parsed.path != f"/meet/{os.environ['ROOM_CODE']}":
+    sys.exit(1)
+required_snippets = [
+    f"<title>{os.environ['ROOM_NAME']}</title>",
+    'nostr-header-connect',
+    'Join as Listener',
+    '/styles.css',
+    'styles.css?v=1',
+]
+for snippet in required_snippets:
+    if snippet not in page:
+        sys.exit(1)
+if 'Geogram Meeting' in page:
+    sys.exit(1)
+if active.get('room_id') != os.environ['ROOM_ID']:
+    sys.exit(1)
+if active.get('room_name') != os.environ['ROOM_NAME']:
+    sys.exit(1)
+if active.get('signaling_mode') != 'lan':
+    sys.exit(1)
+if str(active.get('signaling_port')) != os.environ['SIGNALING_PORT']:
+    sys.exit(1)
+if os.environ['ROOM_NAME'] not in signal_page or 'nostr-header-connect' not in signal_page:
+    sys.exit(1)
+if '.meeting-shell' not in signal_styles:
+    sys.exit(1)
+PY
+then
+  ok "LAN meeting pages use the themed Meetings web client on both device and signaling hosts"
+else
+  fail "LAN meeting page hosting/regression checks failed"
+  echo "Host response: $HOST_RESPONSE"
+  echo "LAN meet URL: $LAN_MEET_URL"
+  echo "LAN page excerpt:"
+  printf '%s\n' "$LAN_MEET_PAGE" | head -n 40
+  echo "LAN /meet/active: $LAN_MEET_ACTIVE"
+  echo "Signal page excerpt:"
+  printf '%s\n' "$LAN_SIGNAL_PAGE" | head -n 20
+  echo "Signal styles excerpt:"
+  printf '%s\n' "$LAN_SIGNAL_STYLES" | head -n 20
+fi
+
+echo ""
+echo "[5] Starting direct screen sharing from the host before join..."
 HOST_SCREEN_RESPONSE="$(post "$VISITOR_API" '{"action":"conference_start_screen_share"}')"
 if echo "$HOST_SCREEN_RESPONSE" | json_field "data['success']" | grep -qx "True"; then
   ok "host started screen sharing before the attendee joined"
@@ -237,7 +319,7 @@ else
 fi
 
 echo ""
-echo "[5] Joining the host meeting from the main desktop instance..."
+echo "[6] Joining the host meeting from the main desktop instance..."
 JOIN_URL="ws://127.0.0.1:${SIGNALING_PORT}/meet/ws"
 JOIN_RESPONSE="$(post "$MAIN_API" "{\"action\":\"conference_join\",\"url\":\"${JOIN_URL}\",\"role\":\"listener\"}")"
 if echo "$JOIN_RESPONSE" | json_field "data['success']" | grep -qx "True"; then
@@ -248,7 +330,7 @@ else
 fi
 
 echo ""
-echo "[6] Waiting for both conference participants to appear and receive the active host screen share..."
+echo "[7] Waiting for both conference participants to appear and receive the active host screen share..."
 JOINED=0
 HOST_STATUS=""
 ATTENDEE_STATUS=""
@@ -338,7 +420,7 @@ else
 fi
 
 echo ""
-echo "[7] Stopping the pre-join host screen share and waiting for cleanup..."
+echo "[8] Stopping the pre-join host screen share and waiting for cleanup..."
 post "$VISITOR_API" '{"action":"conference_stop_screen_share"}' >/dev/null || true
 PREJOIN_HOST_SCREEN_STOPPED=0
 for _ in $(seq 1 30); do
@@ -376,7 +458,7 @@ else
 fi
 
 echo ""
-echo "[8] Requesting speaker access from the attendee..."
+echo "[9] Requesting speaker access from the attendee..."
 REQUEST_RESPONSE="$(post "$MAIN_API" '{"action":"conference_request_speaker"}')"
 if echo "$REQUEST_RESPONSE" | json_field "data['success']" | grep -qx "True"; then
   ok "attendee requested speaker access"
@@ -386,7 +468,7 @@ else
 fi
 
 echo ""
-echo "[9] Waiting for the host to see the speaker request..."
+echo "[10] Waiting for the host to see the speaker request..."
 REQUESTED=0
 for _ in $(seq 1 20); do
   HOST_STATUS="$(post "$VISITOR_API" '{"action":"conference_status"}')"
@@ -416,7 +498,7 @@ else
 fi
 
 echo ""
-echo "[10] Promoting the attendee to speaker..."
+echo "[11] Promoting the attendee to speaker..."
 PROMOTE_RESPONSE="$(post "$VISITOR_API" "{\"action\":\"conference_promote\",\"callsign\":\"${ATTENDEE_CALLSIGN}\"}")"
 if echo "$PROMOTE_RESPONSE" | json_field "data['success']" | grep -qx "True"; then
   ok "host promoted the attendee to speaker"
@@ -426,7 +508,7 @@ else
 fi
 
 echo ""
-echo "[11] Waiting for both sides to reflect the new speaker role..."
+echo "[12] Waiting for both sides to reflect the new speaker role..."
 PROMOTED=0
 for _ in $(seq 1 20); do
   HOST_STATUS="$(post "$VISITOR_API" '{"action":"conference_status"}')"
@@ -478,7 +560,7 @@ else
 fi
 
 echo ""
-echo "[12] Sending a meeting chat message from the attendee..."
+echo "[13] Sending a meeting chat message from the attendee..."
 CHAT_TEXT="LAN regression chat"
 CHAT_RESPONSE="$(post "$MAIN_API" "{\"action\":\"conference_send_chat\",\"content\":\"${CHAT_TEXT}\"}")"
 if echo "$CHAT_RESPONSE" | json_field "data['success']" | grep -qx "True"; then
@@ -489,7 +571,7 @@ else
 fi
 
 echo ""
-echo "[13] Waiting for the host transcript to persist the chat message..."
+echo "[14] Waiting for the host transcript to persist the chat message..."
 CHAT_SYNCED=0
 TRANSCRIPT_PATH=""
 for _ in $(seq 1 20); do

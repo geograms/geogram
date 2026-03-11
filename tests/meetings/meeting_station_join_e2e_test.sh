@@ -32,6 +32,7 @@ GUEST_STATUS_URL=""
 GUEST_CALLSIGN=""
 
 ROOM_ID=""
+ROOM_CODE=""
 ROOM_NAME="Station Regression Meeting"
 STATION_PORT=""
 CRASH_BASELINE_LINES=0
@@ -299,6 +300,7 @@ echo ""
 echo "[4] Hosting a station-relayed meeting from the temporary host..."
 HOST_RESPONSE="$(post "$HOST_API" "{\"action\":\"conference_host\",\"room_name\":\"${ROOM_NAME}\",\"max_speakers\":4}")"
 ROOM_ID="$(echo "$HOST_RESPONSE" | json_field "data['room']['room_id']")"
+ROOM_CODE="${ROOM_ID%@*}"
 HOST_MODE="$(echo "$HOST_RESPONSE" | json_field "data['room']['signaling_mode']")"
 STATION_MEET_URL="$(echo "$HOST_RESPONSE" | json_field "data.get('station_meet_url')")"
 if [ "$HOST_MODE" = "station" ]; then
@@ -309,18 +311,22 @@ else
 fi
 
 echo ""
-echo "[4b] Verifying the generated station meeting URL and proxy path..."
+echo "[4b] Verifying the generated station meeting URL, themed page, and preserved /meet proxy..."
 STATION_MEET_PAGE=""
-STATION_PROXY_INFO=""
+STATION_PROXY_ACTIVE=""
+STATION_PROXY_STYLES=""
 if [ -n "$STATION_MEET_URL" ] && [ "$STATION_MEET_URL" != "None" ]; then
   STATION_MEET_PAGE="$(curl -sfL "$STATION_MEET_URL" 2>/dev/null || true)"
-  STATION_PROXY_INFO="$(curl -sf "http://127.0.0.1:${STATION_PORT}/${HOST_CALLSIGN}/api/meet/info" 2>/dev/null || true)"
+  STATION_PROXY_ACTIVE="$(curl -sf "http://127.0.0.1:${STATION_PORT}/${HOST_CALLSIGN}/meet/active" 2>/dev/null || true)"
+  STATION_PROXY_STYLES="$(curl -sf "http://127.0.0.1:${STATION_PORT}/${HOST_CALLSIGN}/meet/styles.css" 2>/dev/null || true)"
 fi
 if STATION_MEET_URL="$STATION_MEET_URL" \
    STATION_MEET_PAGE="$STATION_MEET_PAGE" \
-   STATION_PROXY_INFO="$STATION_PROXY_INFO" \
+   STATION_PROXY_ACTIVE="$STATION_PROXY_ACTIVE" \
+   STATION_PROXY_STYLES="$STATION_PROXY_STYLES" \
    HOST_CALLSIGN="$HOST_CALLSIGN" \
    ROOM_ID="$ROOM_ID" \
+   ROOM_CODE="$ROOM_CODE" \
    ROOM_NAME="$ROOM_NAME" \
    STATION_PORT="$STATION_PORT" \
    python3 - <<'PY'
@@ -331,32 +337,51 @@ from urllib.parse import urlparse
 
 url = os.environ['STATION_MEET_URL']
 page = os.environ['STATION_MEET_PAGE']
-proxy_info_raw = os.environ['STATION_PROXY_INFO']
+proxy_active_raw = os.environ['STATION_PROXY_ACTIVE']
+proxy_styles = os.environ['STATION_PROXY_STYLES']
 parsed = urlparse(url)
-expected_path = f"/{os.environ['HOST_CALLSIGN']}/meet/{os.environ['ROOM_ID'].split('@', 1)[0]}"
+expected_path = f"/{os.environ['HOST_CALLSIGN']}/meet/{os.environ['ROOM_CODE']}"
 if not parsed.scheme.startswith('http'):
     sys.exit(1)
 if parsed.netloc != f"127.0.0.1:{os.environ['STATION_PORT']}":
     sys.exit(1)
 if parsed.path != expected_path:
     sys.exit(1)
-if os.environ['ROOM_NAME'] not in page or 'Join as Listener' not in page:
+required_snippets = [
+    f"<title>{os.environ['ROOM_NAME']}</title>",
+    'nostr-header-connect',
+    'Join as Listener',
+    '/styles.css',
+    'styles.css?v=1',
+]
+for snippet in required_snippets:
+    if snippet not in page:
+        sys.exit(1)
+if 'Geogram Meeting' in page:
     sys.exit(1)
-proxy_info = json.loads(proxy_info_raw)
-if proxy_info.get('room_id') != os.environ['ROOM_ID']:
+proxy_active = json.loads(proxy_active_raw)
+if proxy_active.get('room_id') != os.environ['ROOM_ID']:
     sys.exit(1)
-if proxy_info.get('room_name') != os.environ['ROOM_NAME']:
+if proxy_active.get('room_name') != os.environ['ROOM_NAME']:
+    sys.exit(1)
+if proxy_active.get('signaling_mode') != 'station':
+    sys.exit(1)
+if proxy_active.get('station_meet_url') != os.environ['STATION_MEET_URL']:
+    sys.exit(1)
+if '.meeting-shell' not in proxy_styles:
     sys.exit(1)
 PY
 then
-  ok "generated station meeting URL and proxy /api/meet/info path both worked"
+  ok "generated station meeting URL and preserved /meet proxy both served the themed Meetings page"
 else
-  fail "generated station meeting URL or proxy /api/meet/info path failed"
+  fail "generated station meeting URL or preserved /meet proxy failed"
   echo "Host response: $HOST_RESPONSE"
   echo "Station meet URL: $STATION_MEET_URL"
   echo "Station meet page excerpt:"
   printf '%s\n' "$STATION_MEET_PAGE" | head -n 40
-  echo "Station proxy info: $STATION_PROXY_INFO"
+  echo "Station proxy active: $STATION_PROXY_ACTIVE"
+  echo "Station proxy styles excerpt:"
+  printf '%s\n' "$STATION_PROXY_STYLES" | head -n 20
 fi
 
 echo ""

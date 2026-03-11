@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en" class="meet-page">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1">
+  <title>{{TITLE}}</title>
+  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="styles.css?v=1">
+  {{NOSTR_STYLES}}
+</head>
+<body>
+<div class="container">
+  <header class="header">
+    <div class="header__inner">
+      <div class="header__logo">
+        <div class="logo">{{LOGO_TEXT}}</div>
+      </div>
+      {{NOSTR_HEADER}}
+    </div>
+  </header>
+
+  <main class="main">
+    <div class="meeting-shell">
+      <section class="meeting-card">
+        <h1 class="meeting-title">{{ROOM_TITLE}}</h1>
+        <div class="meeting-subtitle">{{ROOM_SUBTITLE}}</div>
+        <div id="status">{{STATUS_TEXT}}</div>
+        <div id="nostr-gate-msg">Use the identity button above to authenticate before joining the meeting.</div>
+        <div id="join-form">
+          <input id="nickname" type="text" placeholder="Nickname (optional)" maxlength="20" autofocus>
+          <div class="button-row">
+            <button id="btn-join-listener" type="button">Join as Listener</button>
+            <button id="btn-join-speaker" type="button">Join as Speaker</button>
+          </div>
+        </div>
+      </section>
+
+      <section id="call-ui">
+        <div class="meeting-layout">
+          <div class="stage">
+            <div class="stage-panel" id="screen-share-shell">
+              <div class="stage-label">
+                <div id="screen-share-label">Shared screen</div>
+                <button id="btn-screen-fullscreen" type="button">Full screen</button>
+              </div>
+              <video id="screen-share-video" autoplay playsinline muted></video>
+              <div id="screen-share-placeholder">No screen is being shared right now.</div>
+            </div>
+
+            <div class="stage-panel">
+              <div class="meeting-controls">
+                <button id="btn-mute" type="button" style="display:none;">Mute</button>
+                <button id="btn-request-speaker" type="button" style="display:none;">Request Mic</button>
+                <button id="btn-leave" type="button">Leave</button>
+              </div>
+            </div>
+          </div>
+
+          <aside class="sidebar-panel">
+            <div class="sidebar-title">People</div>
+            <ul id="participants"></ul>
+
+            <div id="chat-shell">
+              <div class="sidebar-title">Chat</div>
+              <div id="chat-messages"></div>
+              <div class="chat-input-row">
+                <input id="chat-input" type="text" placeholder="Type a message..." maxlength="500">
+                <button id="btn-send-chat" type="button">Send</button>
+              </div>
+            </div>
+          </aside>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <footer class="footer">
+    <div class="footer__inner">
+      <div class="copyright">
+        <span>powered by geogram</span>
+      </div>
+    </div>
+  </footer>
+</div>
+
+<script>
+  window.GEOGRAM_MEETING = {{DATA_JSON}};
+  {{SCRIPTS}}
+</script>
+</body>
+</html>

@@ -9463,6 +9463,9 @@ Station-side conference signaling relay (SFU star topology), shared by both `Sta
 Lightweight HTTP + WebSocket server run by the host for LAN-mode SFU signaling. Tracks speaker/listener roles per participant, relays host approval for screen sharing, and keeps the current active screen sharer in room state. Speakers limited by `maxSpeakers`; listeners unlimited.
 
 **Endpoints:**
+- `GET /styles.css` — global theme CSS for the LAN browser client
+- `GET /meet/styles.css` — Meetings app CSS for the LAN browser client
+- `GET /meet/active` — active room JSON with signaling port
 - `GET /meet/info` — room info JSON (speakers, listeners, counts)
 - `WS /meet/ws` — WebSocket signaling relay
 - `GET /meet/{code}` — serves browser web client
@@ -9475,7 +9478,11 @@ final server = ConferenceSignalingServer(
   hostCallsign: 'MYCALL',
   maxSpeakers: 6,
 );
-server.setWebClientHtml(htmlString);
+server.setWebClientAssets(
+  html: htmlString,
+  globalStyles: globalCss,
+  appStyles: meetCss,
+);
 final port = await server.start();
 await server.stop();
 ```
@@ -9483,6 +9490,19 @@ await server.stop();
 **Extra host helpers:**
 - `relayFromHost(message)` — relay a host-originated WebRTC signal to one participant
 - `sendRoomMessageFromHost(message, {toCallsign})` — broadcast or direct-send room control/chat messages from the host
+
+### ConferenceWebPageService
+
+**File:** `lib/services/conference_web_page_service.dart`
+
+Shared browser page builder for Meetings. Generates the themed HTML shell, injects the reusable NOSTR login component, and emits the browser-side meeting client used by the device web server, the station proxy path, and the LAN signaling server fallback.
+
+**Key types:**
+- `ConferenceWebPageConfig` — input describing room metadata, transport mode, and optional explicit signaling URL
+- `ConferenceWebPageAssets` — generated `html`, `globalStyles`, and `appStyles`
+
+**Key method:**
+- `buildJoinPage(config)` — returns a themed browser client for `/meet/{code}` hosting paths
 
 ### ConferenceArchiveService
 

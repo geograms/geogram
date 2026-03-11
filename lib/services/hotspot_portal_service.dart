@@ -83,6 +83,11 @@ class HotspotPortalService {
       return null;
     }
 
+    // Meetings pages are served dynamically by LogApiService.
+    if (path.startsWith('/meet/')) {
+      return null;
+    }
+
     // Map URL paths to device content paths
     final devicePath = _mapToDevicePath(path);
     if (devicePath == null) {

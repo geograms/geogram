@@ -6203,9 +6203,10 @@ h2 { font-size: 1.2rem; margin: 0 0 20px 0; }
     }
 
     final targetCallsign = parts[0].toUpperCase();
-    // Rewrite /meet/* to /api/meet/* so the client's LogApiService handles it
+    // Preserve /meet/* so the client can serve its regular Meetings web page
+    // and related assets through the same hosted route as the local browser.
     final apiPath = parts[1] == 'meet'
-        ? '/api/${parts.sublist(1).join('/')}'
+        ? '/${parts.sublist(1).join('/')}'
         : '/${parts.sublist(1).join('/')}'; // /api/{endpoint}
 
     LogService().log('Device proxy request: $method $path -> $targetCallsign $apiPath');

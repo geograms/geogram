@@ -4,8 +4,10 @@
 library;
 
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 
 import '../services/conference_service.dart';
 import 'conference_call_page.dart';
@@ -55,16 +57,8 @@ class _ConferenceJoinPageState extends State<ConferenceJoinPage> {
         final uri = Uri.parse(input);
         final segments = uri.pathSegments;
 
-        if (segments.length == 2 && segments[0] == 'meet') {
-          final wsScheme = uri.scheme == 'https' ? 'wss' : 'ws';
-          final wsUrl = '$wsScheme://${uri.host}:${uri.port}/meet/ws';
-          await _conferenceService.joinLan(wsUrl, participantRole: _joinRole);
-        } else if (segments.length >= 3 &&
-            segments[segments.length - 2] == 'meet') {
-          await _conferenceService.joinStationMeetUrl(
-            uri,
-            participantRole: _joinRole,
-          );
+        if (segments.length >= 2 && segments[segments.length - 2] == 'meet') {
+          await _joinFromMeetUrl(uri);
         } else {
           throw ArgumentError('Unrecognized URL format: $input');
         }
@@ -89,6 +83,67 @@ class _ConferenceJoinPageState extends State<ConferenceJoinPage> {
         _error = msg;
       });
     }
+  }
+
+  Future<void> _joinFromMeetUrl(Uri meetUri) async {
+    final activeUri = meetUri.resolve('active');
+    try {
+      final response = await http
+          .get(activeUri)
+          .timeout(const Duration(seconds: 5));
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body) as Map<String, dynamic>;
+        final roomId = data['room_id'] as String?;
+        final signalingMode = data['signaling_mode'] as String? ?? 'lan';
+        final stationMeetUrl = data['station_meet_url'] as String?;
+        int? signalingPort;
+        final signalingPortValue = data['signaling_port'];
+        if (signalingPortValue is int) {
+          signalingPort = signalingPortValue;
+        } else if (signalingPortValue is String) {
+          signalingPort = int.tryParse(signalingPortValue);
+        }
+
+        if (signalingMode == ConferenceSignalingMode.station.name) {
+          if (stationMeetUrl != null && stationMeetUrl.isNotEmpty) {
+            await _conferenceService.joinStationMeetUrl(
+              Uri.parse(stationMeetUrl),
+              participantRole: _joinRole,
+            );
+            return;
+          }
+          if (roomId != null && roomId.isNotEmpty) {
+            await _conferenceService.joinStation(
+              roomId,
+              participantRole: _joinRole,
+            );
+            return;
+          }
+        } else if (signalingPort != null) {
+          final wsScheme = meetUri.scheme == 'https' ? 'wss' : 'ws';
+          final wsUrl = Uri(
+            scheme: wsScheme,
+            host: meetUri.host,
+            port: signalingPort,
+            path: '/meet/ws',
+          ).toString();
+          await _conferenceService.joinLan(
+            wsUrl,
+            participantRole: _joinRole,
+          );
+          return;
+        }
+      }
+    } catch (_) {}
+
+    final wsScheme = meetUri.scheme == 'https' ? 'wss' : 'ws';
+    final wsUrl = Uri(
+      scheme: wsScheme,
+      host: meetUri.host,
+      port: meetUri.hasPort ? meetUri.port : null,
+      path: '/meet/ws',
+    ).toString();
+    await _conferenceService.joinLan(wsUrl, participantRole: _joinRole);
   }
 
   @override
