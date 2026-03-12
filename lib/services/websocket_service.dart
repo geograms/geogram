@@ -130,6 +130,8 @@ class WebSocketService {
         LogService().log('✓ WebSocket ready (connection established)');
         _recordHeartbeat('socket_connected', connected: true);
         _consecutivePingMisses = 0;
+        _lastPingAt = null;
+        _lastPongAt = null;
       } catch (e) {
         LogService().log('WebSocket ready failed: $e');
         _channel = null;
@@ -228,7 +230,13 @@ class WebSocketService {
             final data = decoded as Map<String, dynamic>;
             LogService().log('Message type: ${data['type']}');
 
-            if (data['type'] == 'PONG') {
+            if (data['type'] == 'PING') {
+              // Station heartbeat — respond with PONG to stay alive
+              _channel?.sink.add(jsonEncode({
+                'type': 'PONG',
+                'timestamp': DateTime.now().millisecondsSinceEpoch,
+              }));
+            } else if (data['type'] == 'PONG') {
               // Heartbeat response - connection is alive
               LogService().log('✓ PONG received from station');
               _lastPongAt = DateTime.now();
@@ -1695,8 +1703,8 @@ class WebSocketService {
   /// Start heartbeat ping timer
   void _startPingTimer() {
     _pingTimer?.cancel();
-    // Send PING every 60 seconds (well before the 5-minute idle timeout)
-    _pingTimer = Timer.periodic(const Duration(seconds: 60), (timer) {
+    // Send PING every 30 seconds (matches station heartbeat interval)
+    _pingTimer = Timer.periodic(const Duration(seconds: 30), (timer) {
       _sendPing();
     });
   }
@@ -1731,9 +1739,9 @@ class WebSocketService {
       final pongAge = _lastPongAt != null ? now.difference(_lastPongAt!) : null;
       final pingAge = _lastPingAt != null ? now.difference(_lastPingAt!) : null;
 
-      if ((pongAge == null || pongAge > const Duration(seconds: 120)) &&
+      if ((pongAge == null || pongAge > const Duration(seconds: 90)) &&
           pingAge != null &&
-          pingAge > const Duration(seconds: 60)) {
+          pingAge > const Duration(seconds: 30)) {
         _consecutivePingMisses++;
         LogService().log('WebSocket: Missing PONG (${_consecutivePingMisses}x) - checking connection health');
         _recordHeartbeat('ping_miss', message: 'Missing PONG (${_consecutivePingMisses})', connected: true);

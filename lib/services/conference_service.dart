@@ -93,6 +93,7 @@ class ConferenceRoom {
   final String chatRoomId;
   int maxSpeakers;
   String? activeScreenSharerCallsign;
+  final String? description;
 
   ConferenceRoom({
     required this.roomId,
@@ -100,6 +101,7 @@ class ConferenceRoom {
     required this.hostCallsign,
     required this.signalingMode,
     this.maxSpeakers = 6,
+    this.description,
   }) : chatRoomId = roomId.replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '_'),
        startTime = DateTime.now();
 
@@ -124,6 +126,7 @@ class ConferenceRoom {
     'max_speakers': maxSpeakers,
     'active_screen_sharer': activeScreenSharerCallsign,
     'start_time': startTime.toIso8601String(),
+    if (description != null) 'description': description,
   };
 }
 
@@ -260,6 +263,7 @@ class ConferenceService {
     required String roomName,
     int maxSpeakers = 6,
     String? roomIdOverride,
+    String? description,
   }) async {
     if (_state != ConferenceState.idle) {
       throw StateError('Conference already active');
@@ -272,18 +276,25 @@ class ConferenceService {
     await _ensureStationConnectionForHosting();
 
     final roomId = roomIdOverride ?? _generateRoomId();
+    final code = _roomCodeFromRoomId(roomId);
+    final effectiveName = roomName.isEmpty ? code : roomName;
     final callsign = _myCallsign;
     final wsService = WebSocketService();
     final mode = wsService.isConnected
         ? ConferenceSignalingMode.station
         : ConferenceSignalingMode.lan;
 
+    final effectiveDescription =
+        description != null && description.trim().isNotEmpty
+            ? description.trim()
+            : null;
     _room = ConferenceRoom(
       roomId: roomId,
-      roomName: roomName,
+      roomName: effectiveName,
       hostCallsign: callsign,
       signalingMode: mode,
       maxSpeakers: maxSpeakers,
+      description: effectiveDescription,
     );
     _room!.participants[callsign] = ConferenceParticipant(
       callsign: callsign,
@@ -346,10 +357,7 @@ class ConferenceService {
     if (room == null) {
       return null;
     }
-    if (room.signalingMode != ConferenceSignalingMode.station &&
-        !WebSocketService().isConnected) {
-      return null;
-    }
+
     try {
       return _buildMeetUrlFromStationUrl(
         StationService().getPreferredStation()?.url,
@@ -361,7 +369,7 @@ class ConferenceService {
   }
 
   String? get shareableStationMeetUrl =>
-      stationMeetUrl ?? preferredStationMeetUrl;
+      preferredStationMeetUrl ?? stationMeetUrl;
 
   String? _buildMeetUrlFromStationUrl(String? stationUrl, ConferenceRoom room) {
     if (stationUrl == null || stationUrl.trim().isEmpty) {
@@ -369,7 +377,7 @@ class ConferenceService {
     }
     try {
       final uri = Uri.parse(stationUrl);
-      final scheme = uri.scheme == 'wss' ? 'https' : 'http';
+      final scheme = (uri.scheme == 'wss' || uri.scheme == 'https') ? 'https' : 'http';
       final code = _roomCodeFromRoomId(room.roomId);
       final preservedPathSegments = uri.pathSegments.where((segment) {
         if (segment.isEmpty) {
@@ -398,24 +406,33 @@ class ConferenceService {
     required String roomName,
     int maxSpeakers = 6,
     DateTime? scheduledAt,
+    String? description,
   }) async {
     await _ensureStationConnectionForHosting();
     final roomId = _generateRoomId();
+    final code = _roomCodeFromRoomId(roomId);
+    final effectiveName = roomName.isEmpty ? code : roomName;
+    final effectiveDescription =
+        description != null && description.trim().isNotEmpty
+            ? description.trim()
+            : null;
     final tempRoom = ConferenceRoom(
       roomId: roomId,
-      roomName: roomName,
+      roomName: effectiveName,
       hostCallsign: _myCallsign,
       signalingMode: WebSocketService().isConnected
           ? ConferenceSignalingMode.station
           : ConferenceSignalingMode.lan,
       maxSpeakers: maxSpeakers,
+      description: effectiveDescription,
     );
     final entry = await _scheduleService.createSchedule(
       roomId: roomId,
-      roomName: roomName,
+      roomName: effectiveName,
       hostCallsign: _myCallsign,
       maxSpeakers: maxSpeakers,
       scheduledAt: scheduledAt,
+      description: effectiveDescription,
       stationMeetUrl: _buildMeetUrlFromStationUrl(
         WebSocketService().connectedUrl ??
             (() {
@@ -441,6 +458,7 @@ class ConferenceService {
       roomName: schedule.roomName,
       maxSpeakers: schedule.maxSpeakers,
       roomIdOverride: schedule.roomId,
+      description: schedule.description,
     );
   }
 
@@ -459,7 +477,7 @@ class ConferenceService {
     }
 
     final callsign = segments[segments.length - 3];
-    final code = segments.last;
+    final code = segments.last.toLowerCase();
     final roomId = '$code@$callsign';
     final targetStationUri = _stationUriFromMeetUri(meetUri);
     final currentStationUrl = WebSocketService().connectedUrl;
@@ -686,7 +704,7 @@ class ConferenceService {
           final sigPort = data['signaling_port'] as int?;
           final stationMeetUrl = data['station_meet_url'] as String?;
 
-          if (activeRoomId == roomId) {
+          if (activeRoomId?.toLowerCase() == roomId.toLowerCase()) {
             if (signalingMode == ConferenceSignalingMode.station.name &&
                 stationMeetUrl != null &&
                 stationMeetUrl.isNotEmpty) {
@@ -1236,6 +1254,7 @@ class ConferenceService {
           maxParticipants: maxSpeakers,
           transportMode: ConferenceSignalingMode.lan.name,
           logoText: roomName,
+          description: _room?.description,
         ),
       );
       _signalingServer!.setWebClientAssets(
@@ -2218,12 +2237,105 @@ class ConferenceService {
 
   String _generateRoomId() {
     final r = Random();
-    final letters = String.fromCharCodes(
-      List.generate(4, (_) => r.nextInt(26) + 65),
-    );
+    final word = _meetingCodeWords[r.nextInt(_meetingCodeWords.length)];
     final callsign = _myCallsign;
-    return '$letters@$callsign';
+    return '${word.toLowerCase()}@$callsign';
   }
+
+  /// Short English words used as human-readable meeting codes.
+  /// 4-letter words first, then 3- and 5-letter words.
+  /// Falls back to random letters when the list is exhausted via
+  /// the caller (currently unlimited since codes are per-session).
+  static const List<String> _meetingCodeWords = [
+    // ── 4-letter words ──────────────────────────────────────────
+    'able', 'arch', 'atom', 'axle',
+    'band', 'bark', 'beam', 'bell', 'bird', 'blip', 'bloc', 'blue',
+    'bold', 'bolt', 'bond', 'bone', 'book', 'boss', 'bulb', 'bump',
+    'cafe', 'cage', 'cake', 'calm', 'camp', 'cape', 'card', 'cart',
+    'cave', 'chip', 'clam', 'clan', 'clay', 'clip', 'club', 'clue',
+    'coal', 'code', 'coil', 'coin', 'cold', 'cone', 'cook', 'cool',
+    'cope', 'cord', 'core', 'cork', 'crew', 'crop', 'crow', 'cube',
+    'curl', 'damp', 'dare', 'dart', 'dawn', 'dear', 'deck', 'deft',
+    'demo', 'desk', 'dime', 'disc', 'dock', 'dome', 'door', 'dose',
+    'dove', 'drum', 'dual', 'dune', 'dusk', 'dust',
+    'earl', 'earn', 'ease', 'east', 'echo', 'edge', 'epic', 'even',
+    'fawn', 'fern', 'film', 'fire', 'firm', 'fish', 'flag', 'flat',
+    'flex', 'flip', 'flow', 'foam', 'fold', 'folk', 'fond', 'font',
+    'fork', 'fort', 'fuel', 'fuse',
+    'gale', 'game', 'gate', 'gear', 'glow', 'gold', 'golf', 'grit',
+    'grip', 'grow', 'gulf',
+    'halo', 'hare', 'harp', 'haul', 'hawk', 'haze', 'heal', 'heap',
+    'helm', 'herb', 'hero', 'hike', 'hill', 'hive', 'hold', 'home',
+    'hook', 'hope', 'hull',
+    'icon', 'idea', 'inch', 'iron', 'isle',
+    'jade', 'jazz', 'jest', 'jewl', 'jolt', 'jump',
+    'keel', 'keen', 'kelp', 'kite', 'knob', 'knot',
+    'lace', 'lake', 'lamp', 'lane', 'lark', 'lava', 'lawn', 'lead',
+    'leaf', 'lean', 'leap', 'lens', 'lime', 'line', 'link', 'lion',
+    'lock', 'loft', 'logo', 'loom', 'loop', 'lore', 'lush', 'lynx',
+    'malt', 'mane', 'many', 'maps', 'mare', 'mark', 'mast', 'maze',
+    'mesa', 'mild', 'mile', 'mill', 'mine', 'mint', 'mist', 'moat',
+    'mode', 'moon', 'moor', 'moss', 'mule', 'muse',
+    'navy', 'nest', 'node', 'noon', 'note', 'nova',
+    'oaks', 'opal', 'orca', 'oryx', 'oval', 'oven',
+    'pace', 'pack', 'palm', 'pane', 'park', 'path', 'peak', 'pear',
+    'pier', 'pike', 'pine', 'plan', 'plot', 'plum', 'poem', 'polo',
+    'pond', 'pool', 'port', 'pose', 'pour', 'pulp',
+    'quay', 'quiz',
+    'raft', 'rail', 'rain', 'rake', 'reed', 'reef', 'reel', 'rice',
+    'ride', 'rift', 'ring', 'rise', 'road', 'roam', 'rock', 'role',
+    'roof', 'room', 'rope', 'rose', 'ruby', 'rune', 'rush',
+    'sage', 'sail', 'salt', 'sand', 'seal', 'seed', 'silk', 'silo',
+    'skid', 'skin', 'slab', 'slid', 'slim', 'slot', 'snap', 'snow',
+    'soar', 'soil', 'sole', 'song', 'soul', 'span', 'spar', 'spin',
+    'spot', 'star', 'stem', 'step', 'surf', 'swan',
+    'tack', 'tale', 'tank', 'tape', 'tarn', 'teak', 'team', 'tide',
+    'tile', 'toll', 'tone', 'tool', 'tour', 'town', 'trap', 'tray',
+    'tree', 'trek', 'trim', 'trio', 'trot', 'tube', 'tuck', 'tulp',
+    'tune', 'turf', 'tusk', 'twin',
+    'unit', 'upon',
+    'vale', 'vane', 'vast', 'veil', 'vend', 'vent', 'vest', 'view',
+    'vine', 'void', 'volt',
+    'wade', 'wake', 'walk', 'wall', 'wand', 'ward', 'warm', 'warp',
+    'wave', 'weld', 'well', 'west', 'wick', 'wild', 'wilt', 'wind',
+    'wine', 'wing', 'wire', 'wise', 'wolf', 'wood', 'wool', 'word',
+    'wren',
+    'yard', 'yarn', 'yawl', 'yoke',
+    'zeal', 'zero', 'zinc', 'zone',
+    // ── 3-letter words ──────────────────────────────────────────
+    'ace', 'aim', 'air', 'arc', 'ark', 'arm', 'ash', 'axe',
+    'bay', 'bee', 'bow', 'bud', 'bus',
+    'cap', 'cog', 'cow', 'cub', 'cup', 'cut',
+    'dam', 'den', 'dew', 'dig', 'dip', 'dot', 'dry', 'dye',
+    'ear', 'eel', 'egg', 'elk', 'elm', 'emu', 'era', 'eve', 'ewe',
+    'fan', 'fig', 'fin', 'fir', 'fit', 'fix', 'fly', 'fog', 'fox',
+    'fur',
+    'gap', 'gem', 'gin', 'gnu',
+    'ham', 'hat', 'hay', 'hen', 'hew', 'hex', 'hop', 'hub', 'hue',
+    'hum', 'hut',
+    'ice', 'imp', 'ink', 'inn', 'ion', 'ivy',
+    'jam', 'jar', 'jaw', 'jay', 'jet', 'jig', 'jot', 'joy', 'jug',
+    'keg', 'key', 'kid', 'kin', 'kit',
+    'lab', 'lap', 'law', 'lay', 'log', 'lot', 'low',
+    'map', 'mat', 'mix', 'mob', 'mop', 'mud', 'mug',
+    'net', 'nib', 'nod', 'nut',
+    'oak', 'oar', 'oat', 'odd', 'oil', 'old', 'one', 'ore', 'owl',
+    'pad', 'pan', 'paw', 'pea', 'pen', 'pet', 'pie', 'pig', 'pin',
+    'pit', 'pod', 'pot', 'pry', 'pub', 'pun', 'pup',
+    'ram', 'rat', 'raw', 'ray', 'red', 'rib', 'rid', 'rig', 'rim',
+    'rod', 'rot', 'row', 'rug', 'rum', 'run', 'rut', 'rye',
+    'sap', 'saw', 'sea', 'set', 'sip', 'sit', 'six', 'ski', 'sky',
+    'sly', 'sob', 'sod', 'sow', 'spa', 'spy', 'sub', 'sum', 'sun',
+    'tab', 'tag', 'tan', 'tap', 'tar', 'tea', 'ten', 'the', 'tie',
+    'tin', 'tip', 'toe', 'ton', 'top', 'tow', 'toy', 'try', 'tub',
+    'tug', 'two',
+    'urn', 'use',
+    'van', 'vat', 'vet', 'vow',
+    'wag', 'war', 'wax', 'way', 'web', 'wet', 'wig', 'win', 'wit',
+    'woe', 'wok', 'won', 'wow',
+    'yak', 'yam', 'yap', 'yaw', 'yew',
+    'zap', 'zen', 'zip', 'zoo',
+  ];
 
   String _roomCodeFromRoomId(String roomId) {
     final at = roomId.indexOf('@');

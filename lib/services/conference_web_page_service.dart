@@ -13,6 +13,7 @@ class ConferenceWebPageConfig {
   final String? signalingWsUrl;
   final String logoText;
   final String pageMode;
+  final String? description;
   final String? statusText;
   final String? sessionStateUrl;
   final String? stationMeetUrl;
@@ -32,6 +33,7 @@ class ConferenceWebPageConfig {
     required this.transportMode,
     required this.logoText,
     this.pageMode = 'active',
+    this.description,
     this.statusText,
     this.sessionStateUrl,
     this.stationMeetUrl,
@@ -97,17 +99,24 @@ class ConferenceWebPageService {
     final html = themeService.processTemplate(template, {
       'TITLE': _escape(config.roomName),
       'LOGO_TEXT': _escape(config.logoText),
-      'ROOM_TITLE': _escape(config.roomName),
       'ROOM_SUBTITLE': _escape(
         'Hosted by ${config.hostCallsign} · '
         '${config.participantCount} participant${config.participantCount == 1 ? '' : 's'} · '
         'up to ${config.maxParticipants} speakers',
       ),
+      'ROOM_DESCRIPTION': config.description != null
+          ? _escape(config.description!)
+          : '',
+      'ROOM_DESCRIPTION_ATTR': config.description == null
+          ? ' style="display:none"'
+          : '',
       'STATUS_TEXT': config.statusText ?? 'Connect with Nostr to join',
       'DATA_JSON': dataJson,
       'SCRIPTS': '${getNostrLoginScripts()}\n$_meetingScripts',
       'NOSTR_STYLES': getNostrLoginStyles(),
       'NOSTR_HEADER': getNostrLoginHeaderHtml(),
+      'GLOBAL_STYLES': globalStyles,
+      'APP_STYLES': appStyles,
     });
 
     return ConferenceWebPageAssets(
@@ -130,8 +139,8 @@ class ConferenceWebPageService {
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1">
   <title>{{TITLE}}</title>
-  <link rel="stylesheet" href="/styles.css">
-  <link rel="stylesheet" href="styles.css?v=1">
+  <style>{{GLOBAL_STYLES}}</style>
+  <style>{{APP_STYLES}}</style>
   {{NOSTR_STYLES}}
 </head>
 <body>
@@ -147,16 +156,16 @@ class ConferenceWebPageService {
   <main class="main">
     <div class="meeting-shell">
       <section class="meeting-card">
-        <h1 class="meeting-title">{{ROOM_TITLE}}</h1>
+        <div class="meeting-description"{{ROOM_DESCRIPTION_ATTR}}>{{ROOM_DESCRIPTION}}</div>
         <div class="meeting-subtitle">{{ROOM_SUBTITLE}}</div>
         <div id="status">{{STATUS_TEXT}}</div>
         <div id="meeting-note" class="meeting-note"></div>
         <div id="nostr-gate-msg">Use the identity button above to authenticate before joining the meeting.</div>
         <div id="join-form">
-          <input id="nickname" type="text" placeholder="Nickname (optional)" maxlength="20" autofocus>
+          <label for="nickname" class="nickname-label">Enter your name to join</label>
+          <input id="nickname" type="text" placeholder="Your name" maxlength="20" autofocus>
           <div class="button-row">
-            <button id="btn-join-listener" type="button">Join as Listener</button>
-            <button id="btn-join-speaker" type="button">Join as Speaker</button>
+            <button id="btn-join" type="button">Join</button>
           </div>
         </div>
       </section>
@@ -240,8 +249,7 @@ const screenVideoEl = document.getElementById('screen-share-video');
 const screenPlaceholderEl = document.getElementById('screen-share-placeholder');
 const muteBtn = document.getElementById('btn-mute');
 const requestSpeakerBtn = document.getElementById('btn-request-speaker');
-const joinListenerBtn = document.getElementById('btn-join-listener');
-const joinSpeakerBtn = document.getElementById('btn-join-speaker');
+const joinBtn = document.getElementById('btn-join');
 const nostrGateMsg = document.getElementById('nostr-gate-msg');
 const nicknameInput = document.getElementById('nickname');
 const leaveBtn = document.getElementById('btn-leave');
@@ -319,8 +327,7 @@ function formatDateTimeLabel(value) {
 }
 
 function enableJoinButtons() {
-  joinListenerBtn.disabled = false;
-  joinSpeakerBtn.disabled = false;
+  joinBtn.disabled = false;
 }
 
 function syncJoinGate() {
@@ -849,8 +856,7 @@ document.addEventListener('nostr-connected', function() {
   }
 });
 
-joinListenerBtn.addEventListener('click', function() { joinConference('listener'); });
-joinSpeakerBtn.addEventListener('click', function() { joinConference('speaker'); });
+joinBtn.addEventListener('click', function() { joinConference('listener'); });
 leaveBtn.addEventListener('click', leaveConference);
 muteBtn.addEventListener('click', toggleMute);
 requestSpeakerBtn.addEventListener('click', requestSpeaker);
@@ -884,8 +890,7 @@ async function joinConference(role) {
   helloSent = false;
   joinRequested = false;
   enableJoinButtons();
-  joinListenerBtn.disabled = true;
-  joinSpeakerBtn.disabled = true;
+  joinBtn.disabled = true;
 
   if (!myCallsign) {
     setStatus('Missing Nostr callsign');

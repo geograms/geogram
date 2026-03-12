@@ -19,6 +19,7 @@ class ConferenceScheduleService {
     required int maxSpeakers,
     DateTime? scheduledAt,
     String? stationMeetUrl,
+    String? description,
   }) async {
     final existing = await findScheduleByRoomId(roomId);
     final created = existing ??
@@ -30,6 +31,7 @@ class ConferenceScheduleService {
           createdAt: DateTime.now().toLocal(),
           scheduledAt: scheduledAt?.toLocal(),
           stationMeetUrl: stationMeetUrl,
+          description: description,
         );
     final entry = created.copyWith(
       roomName: roomName,

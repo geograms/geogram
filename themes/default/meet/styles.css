@@ -19,11 +19,6 @@
   background: rgba(0, 0, 0, 0.08);
 }
 
-.meeting-title {
-  margin: 0 0 6px 0;
-  font-size: 1.4rem;
-}
-
 .meeting-subtitle,
 #status,
 #meeting-note,
@@ -31,6 +26,12 @@
 .participant-role,
 .chat-meta {
   color: var(--accent-alpha-70);
+}
+
+.meeting-description {
+  margin: 0 0 6px 0;
+  font-size: 1.1rem;
+  font-style: italic;
 }
 
 #status {
@@ -51,6 +52,12 @@
   gap: 12px;
   flex-wrap: wrap;
   align-items: center;
+}
+
+.nickname-label {
+  width: 100%;
+  font-size: 0.9em;
+  opacity: 0.8;
 }
 
 #join-form input,
@@ -93,7 +100,7 @@ button:disabled {
   cursor: default;
 }
 
-#btn-join-speaker,
+#btn-join,
 #btn-request-speaker,
 #btn-send-chat {
   border-color: var(--accent);

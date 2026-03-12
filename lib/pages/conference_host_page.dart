@@ -16,7 +16,8 @@ class ConferenceHostPage extends StatefulWidget {
 }
 
 class _ConferenceHostPageState extends State<ConferenceHostPage> {
-  final _nameController = TextEditingController(text: 'My Meeting');
+  final _nameController = TextEditingController();
+  final _descriptionController = TextEditingController();
   final _conferenceService = ConferenceService();
   bool _starting = false;
   bool _scheduling = false;
@@ -27,12 +28,12 @@ class _ConferenceHostPageState extends State<ConferenceHostPage> {
   @override
   void dispose() {
     _nameController.dispose();
+    _descriptionController.dispose();
     super.dispose();
   }
 
   Future<void> _startConference() async {
     final name = _nameController.text.trim();
-    if (name.isEmpty) return;
 
     setState(() {
       _starting = true;
@@ -43,6 +44,7 @@ class _ConferenceHostPageState extends State<ConferenceHostPage> {
       await _conferenceService.hostConference(
         roomName: name,
         maxSpeakers: _maxSpeakers,
+        description: _descriptionController.text.trim(),
       );
       if (!mounted) return;
 
@@ -61,7 +63,6 @@ class _ConferenceHostPageState extends State<ConferenceHostPage> {
 
   Future<void> _scheduleConference() async {
     final name = _nameController.text.trim();
-    if (name.isEmpty) return;
 
     setState(() {
       _scheduling = true;
@@ -73,6 +74,7 @@ class _ConferenceHostPageState extends State<ConferenceHostPage> {
         roomName: name,
         maxSpeakers: _maxSpeakers,
         scheduledAt: _scheduledAt,
+        description: _descriptionController.text.trim(),
       );
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -169,11 +171,25 @@ class _ConferenceHostPageState extends State<ConferenceHostPage> {
             TextField(
               controller: _nameController,
               decoration: const InputDecoration(
-                labelText: 'Meeting name',
+                labelText: 'Meeting name (optional)',
+                hintText: 'Leave empty to use the meeting code',
                 border: OutlineInputBorder(),
                 prefixIcon: Icon(Icons.label),
               ),
               textCapitalization: TextCapitalization.sentences,
+              enabled: !_starting && !_scheduling,
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _descriptionController,
+              decoration: const InputDecoration(
+                labelText: 'Description (optional)',
+                hintText: 'What is this meeting about?',
+                border: OutlineInputBorder(),
+                prefixIcon: Icon(Icons.notes),
+              ),
+              textCapitalization: TextCapitalization.sentences,
+              maxLines: 2,
               enabled: !_starting && !_scheduling,
             ),
             const SizedBox(height: 16),

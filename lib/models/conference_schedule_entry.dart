@@ -10,6 +10,7 @@ class ConferenceScheduleEntry {
   final DateTime? startedAt;
   final DateTime? endedAt;
   final String? stationMeetUrl;
+  final String? description;
   final String status;
 
   const ConferenceScheduleEntry({
@@ -22,6 +23,7 @@ class ConferenceScheduleEntry {
     this.startedAt,
     this.endedAt,
     this.stationMeetUrl,
+    this.description,
     this.status = 'scheduled',
   });
 
@@ -40,6 +42,7 @@ class ConferenceScheduleEntry {
     'started_at': startedAt?.toIso8601String(),
     'ended_at': endedAt?.toIso8601String(),
     'station_meet_url': stationMeetUrl,
+    'description': description,
     'status': status,
   };
 
@@ -55,6 +58,7 @@ class ConferenceScheduleEntry {
       startedAt: _parseDateTime(json['started_at']),
       endedAt: _parseDateTime(json['ended_at']),
       stationMeetUrl: json['station_meet_url'] as String?,
+      description: json['description'] as String?,
       status: json['status'] as String? ?? 'scheduled',
     );
   }
@@ -73,6 +77,8 @@ class ConferenceScheduleEntry {
     bool clearEndedAt = false,
     String? stationMeetUrl,
     bool clearStationMeetUrl = false,
+    String? description,
+    bool clearDescription = false,
     String? status,
   }) {
     return ConferenceScheduleEntry(
@@ -87,6 +93,9 @@ class ConferenceScheduleEntry {
       stationMeetUrl: clearStationMeetUrl
           ? null
           : (stationMeetUrl ?? this.stationMeetUrl),
+      description: clearDescription
+          ? null
+          : (description ?? this.description),
       status: status ?? this.status,
     );
   }

@@ -58,6 +58,7 @@ import 'server/mixins/console_command_mixin.dart';
 import 'server/mixins/chat_moderation_mixin.dart';
 import 'server/mixins/chat_nip05_mixin.dart';
 import 'server/mixins/conference_mixin.dart';
+import 'server/mixins/heartbeat_mixin.dart';
 import 'server/mixins/karma_mixin.dart';
 import 'server/karma/karma_engine.dart';
 import 'cli/themes_embedded.dart';
@@ -619,7 +620,7 @@ class PureTileCache {
 }
 
 /// Unified station server for CLI and Android modes
-class StationServer with RateLimitMixin, HealthWatchdogMixin, EmailHandlerMixin, BlogHandlerMixin, ConsoleCommandMixin, ChatNip05Mixin, ChatModerationMixin, ConferenceMixin, XmppServerMixin, KarmaMixin
+class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, EmailHandlerMixin, BlogHandlerMixin, ConsoleCommandMixin, ChatNip05Mixin, ChatModerationMixin, ConferenceMixin, XmppServerMixin, KarmaMixin
     implements StationCommandInterface {
   HttpServer? _httpServer;
   HttpServer? _httpsServer;
@@ -660,10 +661,17 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, EmailHandlerMixin,
   // Supertonic TTS model mirror state
   Set<String> _availableSupertonicModels = {};
 
-  // Heartbeat and connection stability
-  Timer? _heartbeatTimer;
-  static const int _heartbeatIntervalSeconds = 30;  // Send PING every 30s
-  static const int _staleClientTimeoutSeconds = 120; // Remove client if no activity for 120s
+  // HeartbeatMixin bridge
+  @override
+  Map<String, dynamic> get heartbeatClients => _clients;
+  @override
+  void heartbeatLog(String level, String message) => _log(level, message);
+  @override
+  bool heartbeatSend(dynamic client, String data) => _safeSocketSend(client as PureConnectedClient, data);
+  @override
+  void heartbeatRemoveClient(String clientId, {String reason = 'disconnected'}) => _removeClient(clientId, reason: reason);
+  @override
+  void heartbeatCleanup() => cleanupExpiredBans();
 
   // Shared alert API handlers
   AlertHandler? _alertApi;
@@ -1746,7 +1754,7 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, EmailHandlerMixin,
       _startUpdatePolling();
 
       // Start heartbeat timer for connection stability
-      _startHeartbeat();
+      startHeartbeat();
 
       // Start health watchdog for auto-recovery
       startHealthWatchdog();
@@ -1951,7 +1959,7 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, EmailHandlerMixin,
     if (!_running) return;
 
     // Stop heartbeat timer
-    _stopHeartbeat();
+    stopHeartbeat();
 
     // Stop health watchdog
     stopHealthWatchdog();
@@ -2050,60 +2058,7 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, EmailHandlerMixin,
     _log('INFO', 'Broadcast sent to ${_clients.length} clients');
   }
 
-  /// Start heartbeat timer for connection stability
-  /// Sends PING to all clients periodically and removes stale connections
-  void _startHeartbeat() {
-    _heartbeatTimer?.cancel();
-    _heartbeatTimer = Timer.periodic(
-      Duration(seconds: _heartbeatIntervalSeconds),
-      (_) => _performHeartbeat(),
-    );
-    _log('INFO', 'Heartbeat started (interval: ${_heartbeatIntervalSeconds}s, timeout: ${_staleClientTimeoutSeconds}s)');
-  }
-
-  /// Stop heartbeat timer
-  void _stopHeartbeat() {
-    _heartbeatTimer?.cancel();
-    _heartbeatTimer = null;
-  }
-
-  /// Perform heartbeat: ping clients and remove stale connections
-  void _performHeartbeat() {
-    final now = DateTime.now();
-    final staleThreshold = now.subtract(Duration(seconds: _staleClientTimeoutSeconds));
-    final clientsToRemove = <String>[];
-
-    // Send PING to each client and check for stale connections
-    for (final entry in _clients.entries) {
-      final clientId = entry.key;
-      final client = entry.value;
-
-      // Check if client is stale (no activity for too long)
-      if (client.lastActivity.isBefore(staleThreshold)) {
-        _log('WARN', 'Stale client detected: ${client.callsign ?? clientId} (last activity: ${client.lastActivity})');
-        clientsToRemove.add(clientId);
-        continue;
-      }
-
-      // Send PING to active clients
-      _safeSocketSend(client, jsonEncode({
-        'type': 'PING',
-        'timestamp': now.millisecondsSinceEpoch,
-      }));
-    }
-
-    // Remove stale clients
-    for (final clientId in clientsToRemove) {
-      _removeClient(clientId, reason: 'stale connection');
-    }
-
-    if (clientsToRemove.isNotEmpty) {
-      _log('INFO', 'Removed ${clientsToRemove.length} stale client(s). Active clients: ${_clients.length}');
-    }
-
-    // Cleanup expired bans and stale rate limit entries
-    cleanupExpiredBans();
-  }
+  // Heartbeat methods provided by HeartbeatMixin
 
   // Health watchdog methods (startHealthWatchdog, stopHealthWatchdog, etc.) are now
   // provided by HealthWatchdogMixin - the mixin calls autoRecover() which delegates to _autoRecover()
@@ -2924,24 +2879,14 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, EmailHandlerMixin,
               }
             }
 
-            // SECURITY: Check for NIP-05 nickname collision if different from callsign
+            // NIP-05: Log nickname collision but do NOT disconnect — nicknames are
+            // display names, not identity anchors.  Multiple npubs may share one.
             if (nickname != null && nickname.toLowerCase() != callsign?.toLowerCase()) {
               final registry = Nip05RegistryService();
               final conflictingNpub = registry.checkCollision(nickname, npub);
               if (conflictingNpub != null) {
-                final response = {
-                  'type': 'hello_ack',
-                  'success': false,
-                  'error': 'nickname_npub_mismatch',
-                  'message': 'Nickname "$nickname" is registered to a different identity',
-                  'station_id': _settings.callsign,
-                };
-                client.socket.add(jsonEncode(response));
-                _log('SECURITY', 'HELLO rejected: nickname "$nickname" collision - '
-                    'attempting npub ${npub.substring(0, 20)}... but registered to '
-                    '${conflictingNpub.substring(0, 20)}...');
-                _removeClient(client.id, reason: 'nickname_npub_mismatch');
-                break;
+                _log('INFO', 'NIP-05: nickname "$nickname" already registered to '
+                    '${conflictingNpub.substring(0, 20)}... — skipping nickname registration for ${npub.substring(0, 20)}...');
               }
             }
 
@@ -3252,6 +3197,14 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, EmailHandlerMixin,
           case 'conference_end':
           case 'conference_signal':
           case 'conference_list':
+          case 'conference_role_change':
+          case 'conference_speaker_request':
+          case 'conference_chat_message':
+          case 'conference_chat_history':
+          case 'conference_screen_share_request':
+          case 'conference_screen_share_permission':
+          case 'conference_screen_share_state':
+          case 'conference_screen_share_stop':
             handleConferenceMessage(client.id, message);
             break;
 
@@ -9446,7 +9399,7 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, EmailHandlerMixin,
     _running = false;
 
     // Close heartbeat timer
-    _stopHeartbeat();
+    stopHeartbeat();
 
     // Close all client connections
     for (final client in _clients.values) {

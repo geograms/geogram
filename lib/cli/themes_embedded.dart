@@ -2347,8 +2347,8 @@ class ThemesEmbedded {
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1">
   <title>{{TITLE}}</title>
-  <link rel="stylesheet" href="/styles.css">
-  <link rel="stylesheet" href="styles.css?v=1">
+  <style>{{GLOBAL_STYLES}}</style>
+  <style>{{APP_STYLES}}</style>
   {{NOSTR_STYLES}}
 </head>
 <body>
@@ -2367,14 +2367,15 @@ class ThemesEmbedded {
       <section class="meeting-card">
         <h1 class="meeting-title">{{ROOM_TITLE}}</h1>
         <div class="meeting-subtitle">{{ROOM_SUBTITLE}}</div>
+        <div class="meeting-description"{{ROOM_DESCRIPTION_ATTR}}>{{ROOM_DESCRIPTION}}</div>
         <div id="status">{{STATUS_TEXT}}</div>
         <div id="meeting-note" class="meeting-note"></div>
         <div id="nostr-gate-msg">Use the identity button above to authenticate before joining the meeting.</div>
         <div id="join-form">
-          <input id="nickname" type="text" placeholder="Nickname (optional)" maxlength="20" autofocus>
+          <label for="nickname" class="nickname-label">Enter your name to join</label>
+          <input id="nickname" type="text" placeholder="Your name" maxlength="20" autofocus>
           <div class="button-row">
-            <button id="btn-join-listener" type="button">Join as Listener</button>
-            <button id="btn-join-speaker" type="button">Join as Speaker</button>
+            <button id="btn-join" type="button">Join</button>
           </div>
         </div>
       </section>
@@ -2468,12 +2469,18 @@ class ThemesEmbedded {
 }
 
 .meeting-subtitle,
+.meeting-description,
 #status,
 #meeting-note,
 #nostr-gate-msg,
 .participant-role,
 .chat-meta {
   color: var(--accent-alpha-70);
+}
+
+.meeting-description {
+  margin: 6px 0 2px 0;
+  font-style: italic;
 }
 
 #status {
@@ -2494,6 +2501,12 @@ class ThemesEmbedded {
   gap: 12px;
   flex-wrap: wrap;
   align-items: center;
+}
+
+.nickname-label {
+  width: 100%;
+  font-size: 0.9em;
+  opacity: 0.8;
 }
 
 #join-form input,
@@ -2536,7 +2549,7 @@ button:disabled {
   cursor: default;
 }
 
-#btn-join-speaker,
+#btn-join,
 #btn-request-speaker,
 #btn-send-chat {
   border-color: var(--accent);

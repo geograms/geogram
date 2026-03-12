@@ -1194,7 +1194,7 @@ class DebugController {
         'action': 'conference_host',
         'description': 'Host a new SFU audio conference (LAN or station mode)',
         'params': {
-          'room_name': '(optional) Meeting name (default: "Test Meeting")',
+          'room_name': '(optional) Meeting name (default: meeting code)',
           'max_speakers': '(optional) Max speakers including host (default: 6)',
         },
       },
@@ -1217,7 +1217,7 @@ class DebugController {
         'action': 'conference_schedule',
         'description': 'Create a scheduled meeting without starting it',
         'params': {
-          'room_name': '(optional) Meeting name (default: "Test Meeting")',
+          'room_name': '(optional) Meeting name (default: meeting code)',
           'max_speakers': '(optional) Max speakers including host (default: 6)',
           'scheduled_at':
               '(optional) ISO-8601 timestamp for automatic start',
@@ -2175,7 +2175,7 @@ class DebugController {
     Map<String, dynamic> params,
   ) async {
     try {
-      final roomName = params['room_name'] as String? ?? 'Test Meeting';
+      final roomName = params['room_name'] as String? ?? '';
       final maxSpeakers = params['max_speakers'] as int? ?? 6;
       final room = await ConferenceService().hostConference(
         roomName: roomName,
@@ -2226,7 +2226,7 @@ class DebugController {
     Map<String, dynamic> params,
   ) async {
     try {
-      final roomName = params['room_name'] as String? ?? 'Test Meeting';
+      final roomName = params['room_name'] as String? ?? '';
       final maxSpeakers = params['max_speakers'] as int? ?? 6;
       DateTime? scheduledAt;
       final scheduledAtRaw = params['scheduled_at'] as String?;

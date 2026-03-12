@@ -1146,6 +1146,7 @@ class LogApiService with ChatModificationMixin {
         pageMode: 'active',
         sessionStateUrl: '$code/state.json',
         stationMeetUrl: conf.shareableStationMeetUrl,
+        description: room.description,
       );
     } else if (snapshot.state == 'scheduled') {
       final schedule = snapshot.schedule!;
@@ -1163,6 +1164,7 @@ class LogApiService with ChatModificationMixin {
         sessionStateUrl: '$code/state.json',
         stationMeetUrl: schedule.stationMeetUrl,
         scheduledAt: schedule.scheduledAt,
+        description: schedule.description,
         statusText: schedule.scheduledAt == null
             ? 'Meeting scheduled. The host will start it when ready.'
             : 'Meeting scheduled for ${schedule.scheduledAt!.toLocal()}',

@@ -1,0 +1,32 @@
+{
+  "registrations": [
+    {
+      "callsign": "x1su86",
+      "nickname": "brito",
+      "npub": "npub1su86v2rxjf2tnf6tdm4s8zk9w4r7swj0p3d9702xdr6ff25pdl6q9jzprx",
+      "registeredAt": "2026-03-11T22:41:21.132181",
+      "expiresAt": "2027-03-11T22:41:21.132181"
+    },
+    {
+      "callsign": "x1h7gs",
+      "nickname": "stationhost",
+      "npub": "npub1h7gsrztvkgejnvdwk43rma50prq4kcduaurzrey68yw9p4jwewksdsamml",
+      "registeredAt": "2026-03-11T10:14:54.797396",
+      "expiresAt": "2027-03-11T10:14:54.797396"
+    },
+    {
+      "callsign": "x10pde",
+      "nickname": "stationguest",
+      "npub": "npub10pde4sd6k6g8w5rjat52ee6qyqpapujja75sanyljp82nzj09phqwh979e",
+      "registeredAt": "2026-03-11T10:15:01.908668",
+      "expiresAt": "2027-03-11T10:15:01.908668"
+    },
+    {
+      "callsign": "x176ga",
+      "nickname": "proxyhost",
+      "npub": "npub176gagd84wjt4kvy08fn0e8449mcsf8ru9xku7nzs4nmq9khqfwtqymsydt",
+      "registeredAt": "2026-03-11T19:40:50.904485",
+      "expiresAt": "2027-03-11T19:40:50.904485"
+    }
+  ]
+}
