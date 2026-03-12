@@ -207,6 +207,14 @@ Geogram's builds are designed to be independently verifiable. The Flutter SDK ve
 
 ---
 
+## Contributing
+
+Download the [dev VM](https://p2p.radio/vm/geogram-vm-linux.tar.gz), extract, double-click `vm_launcher`, click Start VM. Everything is pre-installed — Flutter, Rust, compilers, and AI coding assistants (Claude Code, opencode, Codex). No build tools or internet required on your machine. See [SETUP.md](SETUP.md).
+
+For workflow rules, commit conventions, and CI requirements, see [AGENTS.md](AGENTS.md).
+
+---
+
 ## Download
 
 Grab the latest release from the [releases page](https://github.com/geograms/geogram/releases).

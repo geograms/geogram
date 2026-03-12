@@ -130,3 +130,17 @@ esp32/dependencies.lock
 CLAUDE.local.md
 memory/
 linux/tdlib/
+
+# Dev VM (binary assets — scripts are tracked, binaries are not)
+vm/bin/
+vm/*.qcow2
+vm/debian-*
+vm/geogram-vm-*.tar.gz
+vm/geogram-vm-*.zip
+vm/data/
+vm/lib/
+vm/vm_launcher
+vm/.seed.iso
+vm/.meta-data
+vm/.user-data
+vm/.provision.sh
