@@ -5,9 +5,11 @@
  * Shared Places API handlers for station servers.
  */
 
+import 'dart:convert';
 import 'dart:io';
 import 'package:path/path.dart' as p;
 import '../../models/place.dart';
+import '../../util/event_bus.dart';
 import '../../util/place_parser.dart';
 import '../common/file_tree_builder.dart';
 import '../common/geometry_utils.dart';
@@ -286,5 +288,183 @@ class PlaceHandler {
     json['photoCount'] = photoCount;
 
     return json;
+  }
+
+  // --- Place file upload/serve (moved from station files) ---
+
+  /// Check if path matches place file upload/serve pattern.
+  bool isFileUploadPath(String path) {
+    return _parsePlaceFileRequest(path) != null;
+  }
+
+  /// Handle POST /{callsign}/api/places/files/{path} - upload place file
+  Future<void> uploadFile(HttpRequest request) async {
+    try {
+      final pathValue = request.uri.path;
+      final parsed = _parsePlaceFileRequest(pathValue);
+      if (parsed == null) {
+        request.response.statusCode = 400;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'Invalid path format'}));
+        return;
+      }
+
+      final callsign = parsed.callsign;
+      final relativePath = _normalizePlaceRelativePath(parsed.relativePath);
+
+      if (_isInvalidRelativePath(relativePath)) {
+        request.response.statusCode = 400;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'Invalid path'}));
+        return;
+      }
+
+      final bytes = await request.fold<List<int>>(
+        <int>[],
+        (previous, element) => previous..addAll(element),
+      );
+
+      if (bytes.isEmpty) {
+        request.response.statusCode = 400;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'Empty file'}));
+        return;
+      }
+
+      final placesRoot = p.join(dataDir, 'devices', callsign, 'places');
+      final filePath = p.join(placesRoot, relativePath);
+      final parentDir = Directory(p.dirname(filePath));
+      if (!await parentDir.exists()) {
+        await parentDir.create(recursive: true);
+      }
+
+      final file = File(filePath);
+      await file.writeAsBytes(bytes, flush: true);
+
+      // Fire PlaceCreatedEvent when place.txt is uploaded
+      if (relativePath.endsWith('/place.txt') || relativePath == 'place.txt') {
+        final parts = relativePath.split('/');
+        final folderName = parts.length > 1 ? parts[parts.length - 2] : relativePath;
+        EventBus().fire(PlaceCreatedEvent(
+          placeId: folderName,
+          author: callsign,
+          name: folderName,
+        ));
+      }
+
+      request.response.statusCode = 201;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({
+        'success': true,
+        'path': '/$callsign/places/$relativePath',
+        'size': bytes.length,
+      }));
+    } catch (e) {
+      _log('ERROR', 'Error handling place file upload: $e');
+      request.response.statusCode = 500;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({'error': 'Internal server error', 'message': e.toString()}));
+    }
+  }
+
+  /// Handle GET /{callsign}/api/places/files/{path} - serve place file
+  Future<void> serveFile(HttpRequest request) async {
+    try {
+      final pathValue = request.uri.path;
+      final parsed = _parsePlaceFileRequest(pathValue);
+      if (parsed == null) {
+        request.response.statusCode = 400;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'Invalid path format'}));
+        return;
+      }
+
+      final callsign = parsed.callsign;
+      final relativePath = parsed.relativePath;
+
+      if (_isInvalidRelativePath(relativePath)) {
+        request.response.statusCode = 400;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'Invalid path'}));
+        return;
+      }
+
+      final placesRoot = p.join(dataDir, 'devices', callsign, 'places');
+      final filePath = p.join(placesRoot, relativePath);
+      final file = File(filePath);
+
+      if (!await file.exists()) {
+        request.response.statusCode = 404;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'File not found'}));
+        return;
+      }
+
+      final ext = p.extension(filePath).toLowerCase();
+      String contentType = 'application/octet-stream';
+      if (ext == '.jpg' || ext == '.jpeg') {
+        contentType = 'image/jpeg';
+      } else if (ext == '.png') {
+        contentType = 'image/png';
+      } else if (ext == '.gif') {
+        contentType = 'image/gif';
+      } else if (ext == '.webp') {
+        contentType = 'image/webp';
+      } else if (ext == '.txt') {
+        contentType = 'text/plain';
+      }
+
+      final bytes = await file.readAsBytes();
+      request.response.headers.set('Content-Type', contentType);
+      request.response.headers.set('Content-Length', bytes.length.toString());
+      request.response.add(bytes);
+    } catch (e) {
+      _log('ERROR', 'Error serving place file: $e');
+      request.response.statusCode = 500;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({'error': 'Internal server error', 'message': e.toString()}));
+    }
+  }
+
+  ({String callsign, String relativePath})? _parsePlaceFileRequest(String path) {
+    final parts = path.split('/').where((p) => p.isNotEmpty).toList();
+    if (parts.length < 5) return null;
+    if (parts[1] != 'api' || parts[2] != 'places') return null;
+
+    final callsign = parts[0].toUpperCase();
+
+    if (parts[3] == 'files') {
+      if (parts.length < 5) return null;
+      return (callsign: callsign, relativePath: parts.sublist(4).join('/'));
+    }
+
+    final filesIndex = parts.indexOf('files');
+    if (filesIndex <= 3 || filesIndex == parts.length - 1) return null;
+
+    final placePath = parts.sublist(3, filesIndex).join('/');
+    final filePath = parts.sublist(filesIndex + 1).join('/');
+    if (placePath.isEmpty || filePath.isEmpty) return null;
+
+    return (callsign: callsign, relativePath: '$placePath/$filePath');
+  }
+
+  String _normalizePlaceRelativePath(String relativePath) {
+    final segments = relativePath
+        .split('/')
+        .where((segment) => segment.isNotEmpty)
+        .toList();
+    if (segments.length > 1 && segments.first == 'places') {
+      return segments.sublist(1).join('/');
+    }
+    return relativePath;
+  }
+
+  bool _isInvalidRelativePath(String relativePath) {
+    if (relativePath.isEmpty) return true;
+    if (relativePath.contains('\\')) return true;
+    final normalized = p.normalize(relativePath);
+    if (p.isAbsolute(normalized)) return true;
+    final segments = normalized.split(p.separator);
+    return segments.any((segment) => segment == '..');
   }
 }

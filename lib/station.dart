@@ -60,7 +60,6 @@ import 'server/mixins/chat_nip05_mixin.dart';
 import 'server/mixins/conference_mixin.dart';
 import 'server/mixins/heartbeat_mixin.dart';
 import 'server/mixins/karma_mixin.dart';
-import 'server/karma/karma_engine.dart';
 import 'cli/themes_embedded.dart';
 
 /// App version - use central version.dart for consistency
@@ -1854,23 +1853,15 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
       // Listen for content creation events and broadcast to connected clients
       EventBus().on<BlogPostPublishedEvent>((event) {
         _broadcastUpdate('UPDATE:${event.author}/blog/${event.postId}');
-        karmaRecord(callsign: event.author, action: 'blog_published',
-            meta: {'post_id': event.postId});
       });
       EventBus().on<EventCreatedEvent>((event) {
         _broadcastUpdate('UPDATE:${event.author}/events/${event.eventId}');
-        karmaRecord(callsign: event.author, action: 'event_created',
-            meta: {'event_id': event.eventId});
       });
       EventBus().on<PlaceCreatedEvent>((event) {
         _broadcastUpdate('UPDATE:${event.author}/places/${event.placeId}');
-        karmaRecord(callsign: event.author, action: 'place_created',
-            meta: {'place_id': event.placeId});
       });
       EventBus().on<AlertCreatedEvent>((event) {
         _broadcastUpdate('UPDATE:${event.author}/alerts/${event.alertId}');
-        karmaRecord(callsign: event.author, action: 'alert_created',
-            meta: {'alert_id': event.alertId});
       });
 
       // Start karma service
@@ -2389,16 +2380,11 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
     ));
 
     // Record chat message karma (with anti-gaming validation)
-    final content = msg.content;
-    final cs = msg.senderCallsign;
-    if (content.isNotEmpty) {
-      final prev = karmaPreviousChatMessage(cs);
-      if (KarmaEngine.isValidChatMessage(content, prev)) {
-        karmaSetPreviousChatMessage(cs, content);
-        karmaRecord(callsign: cs, action: 'chat_message',
-            meta: {'room_id': msg.roomId, 'msg_length': content.length});
-      }
-    }
+    karmaRecordChatMessage(
+      callsign: msg.senderCallsign,
+      content: msg.content,
+      roomId: msg.roomId,
+    );
   }
 
   List<ChatMessage> getChatHistory(String roomId, {int limit = 20, String? before}) {
@@ -2622,12 +2608,12 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
       } else if (_isAlertFileUploadPath(path) && method == 'GET') {
         // /{callsign}/api/alerts/{alertId}/files/{filename} - serve alert photo
         await _handleAlertFileServe(request);
-      } else if (_isPlaceFileUploadPath(path) && method == 'POST') {
+      } else if (placeApi.isFileUploadPath(path) && method == 'POST') {
         // /{callsign}/api/places/files/{path} - upload place file
-        await _handlePlaceFileUpload(request);
-      } else if (_isPlaceFileUploadPath(path) && method == 'GET') {
+        await placeApi.uploadFile(request);
+      } else if (placeApi.isFileUploadPath(path) && method == 'GET') {
         // /{callsign}/api/places/files/{path} - serve place file
-        await _handlePlaceFileServe(request);
+        await placeApi.serveFile(request);
       } else if (_isAlertDetailsPath(path) && method == 'GET') {
         // /{callsign}/api/alerts/{alertId} - serve local alert details with photos list
         await _handleAlertDetails(request);
@@ -5456,7 +5442,7 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
         }
         // Record karma for successful feedback actions
         if (result['success'] == true) {
-          _recordFeedbackKarma(action, contentType, contentId, jsonBody, callsign);
+          recordFeedbackKarma(action, contentType, contentId, jsonBody, callsign);
         }
       } else {
         request.response.statusCode = 405;
@@ -5484,51 +5470,6 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
         'error': 'Internal server error',
         'message': e.toString(),
       }));
-    }
-  }
-
-  /// Record karma for feedback actions (likes, comments, verifications).
-  void _recordFeedbackKarma(
-    String action,
-    String contentType,
-    String contentId,
-    Map<String, dynamic> body,
-    String? ownerCallsign,
-  ) {
-    // Get the actor's callsign from the NOSTR event in the body
-    String? actorNpub;
-    try {
-      final pubkey = body['pubkey'] as String?;
-      if (pubkey != null && pubkey.isNotEmpty) {
-        actorNpub = NostrCrypto.encodeNpub(pubkey);
-      }
-    } catch (_) {}
-
-    String? actorCallsign;
-    if (actorNpub != null) {
-      actorCallsign = Nip05RegistryService().getRegistrationByNpub(actorNpub)?.callsign;
-    }
-    if (actorCallsign == null) return;
-
-    // Block self-interaction
-    if (ownerCallsign != null && KarmaEngine.isSelfInteraction(actorCallsign, ownerCallsign)) {
-      return;
-    }
-
-    // Award karma to the actor
-    final giverAction = KarmaEngine.feedbackToKarmaAction(action, isGiver: true);
-    if (giverAction != null) {
-      karmaRecord(callsign: actorCallsign, action: giverAction,
-          meta: {'content_type': contentType, 'content_id': contentId});
-    }
-
-    // Award karma to the content owner
-    if (ownerCallsign != null) {
-      final receiverAction = KarmaEngine.feedbackToKarmaAction(action, isGiver: false);
-      if (receiverAction != null) {
-        karmaRecord(callsign: ownerCallsign, action: receiverAction,
-            meta: {'content_type': contentType, 'content_id': contentId, 'from': actorCallsign});
-      }
     }
   }
 
@@ -6221,11 +6162,6 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
 
   /// Check if path matches place file upload/download patterns.
   /// Patterns:
-  /// - /{callsign}/api/places/files/{path}
-  /// - /{callsign}/api/places/{placePath}/files/{path}
-  bool _isPlaceFileUploadPath(String path) {
-    return _parsePlaceFileRequest(path) != null;
-  }
 
   /// Check if path matches /{callsign}/api/alerts/{alertId} pattern for alert details
   /// This should NOT match paths with /files/ (those are handled by _isAlertFileUploadPath)
@@ -6434,65 +6370,6 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
     }
   }
 
-  /// Handle POST /{callsign}/api/places/files/{path} - upload place file
-  Future<void> _handlePlaceFileUpload(HttpRequest request) async {
-    try {
-      final pathValue = request.uri.path;
-      final parsed = _parsePlaceFileRequest(pathValue);
-      if (parsed == null) {
-        request.response.statusCode = 400;
-        request.response.headers.contentType = ContentType.json;
-        request.response.write(jsonEncode({'error': 'Invalid path format'}));
-        return;
-      }
-
-      final callsign = parsed.callsign;
-      final relativePath = _normalizePlaceRelativePath(parsed.relativePath);
-
-      if (_isInvalidRelativePath(relativePath)) {
-        request.response.statusCode = 400;
-        request.response.headers.contentType = ContentType.json;
-        request.response.write(jsonEncode({'error': 'Invalid path'}));
-        return;
-      }
-
-      final bytes = await request.fold<List<int>>(
-        <int>[],
-        (previous, element) => previous..addAll(element),
-      );
-
-      if (bytes.isEmpty) {
-        request.response.statusCode = 400;
-        request.response.headers.contentType = ContentType.json;
-        request.response.write(jsonEncode({'error': 'Empty file'}));
-        return;
-      }
-
-      final placesRoot = path.join(_dataDir!, 'devices', callsign, 'places');
-      final filePath = path.join(placesRoot, relativePath);
-      final parentDir = Directory(path.dirname(filePath));
-      if (!await parentDir.exists()) {
-        await parentDir.create(recursive: true);
-      }
-
-      final file = File(filePath);
-      await file.writeAsBytes(bytes, flush: true);
-
-      request.response.statusCode = 201;
-      request.response.headers.contentType = ContentType.json;
-      request.response.write(jsonEncode({
-        'success': true,
-        'path': '/$callsign/places/$relativePath',
-        'size': bytes.length,
-      }));
-    } catch (e) {
-      _log('ERROR', 'Error handling place file upload: $e');
-      request.response.statusCode = 500;
-      request.response.headers.contentType = ContentType.json;
-      request.response.write(jsonEncode({'error': 'Internal server error', 'message': e.toString()}));
-    }
-  }
-
   /// Handle GET /{callsign}/api/alerts/{alertId}/files/{filename} - serve alert photo
   /// Also handles: /{callsign}/api/alerts/{alertId}/files/images/{filename}
   Future<void> _handleAlertFileServe(HttpRequest request) async {
@@ -6638,98 +6515,6 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
     }
   }
 
-  /// Handle GET /{callsign}/api/places/files/{path} - serve place file
-  Future<void> _handlePlaceFileServe(HttpRequest request) async {
-    try {
-      final pathValue = request.uri.path;
-      final parsed = _parsePlaceFileRequest(pathValue);
-      if (parsed == null) {
-        request.response.statusCode = 400;
-        request.response.headers.contentType = ContentType.json;
-        request.response.write(jsonEncode({'error': 'Invalid path format'}));
-        return;
-      }
-
-      final callsign = parsed.callsign;
-      final relativePath = parsed.relativePath;
-
-      if (_isInvalidRelativePath(relativePath)) {
-        request.response.statusCode = 400;
-        request.response.headers.contentType = ContentType.json;
-        request.response.write(jsonEncode({'error': 'Invalid path'}));
-        return;
-      }
-
-      final placesRoot = path.join(_dataDir!, 'devices', callsign, 'places');
-      final filePath = path.join(placesRoot, relativePath);
-      final file = File(filePath);
-
-      if (!await file.exists()) {
-        request.response.statusCode = 404;
-        request.response.headers.contentType = ContentType.json;
-        request.response.write(jsonEncode({'error': 'File not found'}));
-        return;
-      }
-
-      final ext = path.extension(filePath).toLowerCase();
-      String contentType = 'application/octet-stream';
-      if (ext == '.jpg' || ext == '.jpeg') {
-        contentType = 'image/jpeg';
-      } else if (ext == '.png') {
-        contentType = 'image/png';
-      } else if (ext == '.gif') {
-        contentType = 'image/gif';
-      } else if (ext == '.webp') {
-        contentType = 'image/webp';
-      } else if (ext == '.txt') {
-        contentType = 'text/plain';
-      }
-
-      final bytes = await file.readAsBytes();
-      request.response.headers.set('Content-Type', contentType);
-      request.response.headers.set('Content-Length', bytes.length.toString());
-      request.response.add(bytes);
-    } catch (e) {
-      _log('ERROR', 'Error serving place file: $e');
-      request.response.statusCode = 500;
-      request.response.headers.contentType = ContentType.json;
-      request.response.write(jsonEncode({'error': 'Internal server error', 'message': e.toString()}));
-    }
-  }
-
-  ({String callsign, String relativePath})? _parsePlaceFileRequest(String path) {
-    final parts = path.split('/').where((p) => p.isNotEmpty).toList();
-    if (parts.length < 5) return null;
-    if (parts[1] != 'api' || parts[2] != 'places') return null;
-
-    final callsign = parts[0].toUpperCase();
-
-    if (parts[3] == 'files') {
-      if (parts.length < 5) return null;
-      return (callsign: callsign, relativePath: parts.sublist(4).join('/'));
-    }
-
-    final filesIndex = parts.indexOf('files');
-    if (filesIndex <= 3 || filesIndex == parts.length - 1) return null;
-
-    final placePath = parts.sublist(3, filesIndex).join('/');
-    final filePath = parts.sublist(filesIndex + 1).join('/');
-    if (placePath.isEmpty || filePath.isEmpty) return null;
-
-    return (callsign: callsign, relativePath: '$placePath/$filePath');
-  }
-
-  String _normalizePlaceRelativePath(String relativePath) {
-    final segments = relativePath
-        .split('/')
-        .where((segment) => segment.isNotEmpty)
-        .toList();
-    if (segments.length > 1 && segments.first == 'places') {
-      return segments.sublist(1).join('/');
-    }
-    return relativePath;
-  }
-
   ({String callsign, String folderName})? _parsePlaceDetailsRequest(String path) {
     final parts = path.split('/').where((p) => p.isNotEmpty).toList();
     if (parts.length < 3) return null;
@@ -6745,15 +6530,6 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
     }
 
     return null;
-  }
-
-  bool _isInvalidRelativePath(String relativePath) {
-    if (relativePath.isEmpty) return true;
-    if (relativePath.contains('\\')) return true;
-    final normalized = path.normalize(relativePath);
-    if (path.isAbsolute(normalized)) return true;
-    final segments = normalized.split(path.separator);
-    return segments.any((segment) => segment == '..');
   }
 
   /// Check if path matches /{callsign}/api/* pattern
@@ -8150,6 +7926,12 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
     room.messages[index] = updated;
 
     await _saveRoomMessages(roomId, targetCallsign);
+
+    // Record chat reaction karma
+    karmaRecord(
+        callsign: actorCallsign,
+        action: 'chat_reaction',
+        meta: {'room_id': roomId});
 
     request.response.headers.contentType = ContentType.json;
     request.response.write(jsonEncode({

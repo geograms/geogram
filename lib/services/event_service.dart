@@ -339,9 +339,8 @@ class EventService {
         eventId: folderName,
         author: author,
         title: title,
+        eventRecord: event,
       ));
-
-      await onEventCreated?.call(event);
 
       return event;
     } catch (e) {
