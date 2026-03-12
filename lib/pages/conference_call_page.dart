@@ -981,21 +981,20 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
                                 : _requestScreenShare)),
                 compact: compactControls,
               ),
-              if (isHost)
-                _CallButton(
-                  icon: isRecording
-                      ? Icons.stop_circle
-                      : Icons.fiber_manual_record,
-                  label: isRecording ? 'Stop Rec' : 'Record',
-                  color: isRecording
-                      ? theme.colorScheme.error
-                      : theme.colorScheme.secondaryContainer,
-                  iconColor: isRecording
-                      ? Colors.white
-                      : theme.colorScheme.onSecondaryContainer,
-                  onPressed: _toggleRecording,
-                  compact: compactControls,
-                ),
+              _CallButton(
+                icon: isRecording
+                    ? Icons.stop_circle
+                    : Icons.fiber_manual_record,
+                label: isRecording ? 'Stop Rec' : 'Record',
+                color: isRecording
+                    ? theme.colorScheme.error
+                    : theme.colorScheme.secondaryContainer,
+                iconColor: isRecording
+                    ? Colors.white
+                    : theme.colorScheme.onSecondaryContainer,
+                onPressed: _toggleRecording,
+                compact: compactControls,
+              ),
               _CallButton(
                 icon: Icons.call_end,
                 label: isHost ? 'End' : 'Leave',

@@ -419,13 +419,13 @@ class LogApiService with ChatModificationMixin {
       }
     }
     if (urlPath.startsWith('api/meet/') && request.method == 'GET') {
-      final code = urlPath.substring('api/meet/'.length);
-      if (code.isNotEmpty &&
-          code != 'active' &&
-          code != 'info' &&
-          code != 'styles.css' &&
-          !code.startsWith('session/')) {
-        return await _handleMeetJoinPage(request, code, headers);
+      final response = await _handleMeetRoute(
+        request,
+        urlPath.substring('api/'.length),
+        headers,
+      );
+      if (response != null) {
+        return response;
       }
     }
 
@@ -975,7 +975,7 @@ class LogApiService with ChatModificationMixin {
     }
 
     final relativeFilePath = segments.sublist(1).join('/');
-    return _handleMeetArchiveAssetRequest(code, relativeFilePath, headers);
+    return _handleMeetArchiveAssetRequest(request, code, relativeFilePath, headers);
   }
 
   String _meetRoomId(String code) {
@@ -1060,6 +1060,7 @@ class LogApiService with ChatModificationMixin {
   }
 
   Future<shelf.Response> _handleMeetArchiveAssetRequest(
+    shelf.Request request,
     String code,
     String relativeFilePath,
     Map<String, String> headers,
@@ -1095,15 +1096,19 @@ class LogApiService with ChatModificationMixin {
       );
     }
 
+    final isInline = request.url.queryParameters['inline'] == '1';
     final contentType =
         lookupMimeType(relativeFilePath, headerBytes: bytes) ??
         'application/octet-stream';
+    final filename = relativeFilePath.split('/').last;
     return shelf.Response.ok(
       bytes,
       headers: {
         ...headers,
         'Content-Type': contentType,
         'Content-Length': bytes.length.toString(),
+        if (!isInline)
+          'Content-Disposition': 'attachment; filename="$filename"',
       },
     );
   }

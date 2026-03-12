@@ -50,6 +50,7 @@ class ConferenceArchiveEntry {
   final List<ConferenceArchiveAsset> files;
   final List<ConferenceArchiveAsset> recordings;
   final int messageCount;
+  final List<String> tags;
 
   const ConferenceArchiveEntry({
     required this.relativePath,
@@ -71,6 +72,7 @@ class ConferenceArchiveEntry {
     this.files = const <ConferenceArchiveAsset>[],
     this.recordings = const <ConferenceArchiveAsset>[],
     this.messageCount = 0,
+    this.tags = const <String>[],
   });
 
   bool get isActive => endedAt == null;
@@ -97,6 +99,7 @@ class ConferenceArchiveEntry {
     'files': files.map((asset) => asset.toJson()).toList(),
     'recordings': recordings.map((asset) => asset.toJson()).toList(),
     'message_count': messageCount,
+    'tags': tags,
   };
 
   factory ConferenceArchiveEntry.fromJson(Map<String, dynamic> json) {
@@ -132,6 +135,9 @@ class ConferenceArchiveEntry {
           .map(ConferenceArchiveAsset.fromJson)
           .toList(),
       messageCount: (json['message_count'] as num?)?.toInt() ?? 0,
+      tags: (json['tags'] as List<dynamic>? ?? const [])
+          .map((value) => value.toString())
+          .toList(),
     );
   }
 
@@ -157,6 +163,7 @@ class ConferenceArchiveEntry {
     List<ConferenceArchiveAsset>? files,
     List<ConferenceArchiveAsset>? recordings,
     int? messageCount,
+    List<String>? tags,
   }) {
     return ConferenceArchiveEntry(
       relativePath: relativePath ?? this.relativePath,
@@ -182,6 +189,7 @@ class ConferenceArchiveEntry {
       recordings:
           recordings ?? List<ConferenceArchiveAsset>.from(this.recordings),
       messageCount: messageCount ?? this.messageCount,
+      tags: tags ?? List<String>.from(this.tags),
     );
   }
 }

@@ -164,6 +164,7 @@ class ConferenceService {
   Future<void>? _screenShareStartOperation;
   bool _screenShareApproved = false;
 
+
   final _stateController = StreamController<ConferenceState>.broadcast();
   final _eventController = StreamController<ConferenceEvent>.broadcast();
 
@@ -325,6 +326,10 @@ class ConferenceService {
     LogService().log(
       'ConferenceService: Hosting "$roomName" ($mode) as $callsign',
     );
+
+    // Auto-start recording so the archive has a replay
+    unawaited(_autoStartRecording());
+
     return _room!;
   }
 
@@ -942,9 +947,6 @@ class ConferenceService {
   }
 
   Future<void> startRecording() async {
-    if (_role != ConferenceRole.host) {
-      throw StateError('Only the host can record a meeting');
-    }
     if (_archiveEntry == null) {
       throw StateError('Meeting archive is not ready');
     }
@@ -956,10 +958,6 @@ class ConferenceService {
   }
 
   Future<void> stopRecording() async {
-    if (_role != ConferenceRole.host) {
-      throw StateError('Only the host can record a meeting');
-    }
-
     final outputPath = await _recordingService.stop();
     final archiveEntry = _archiveEntry;
     if (archiveEntry != null &&
@@ -975,9 +973,21 @@ class ConferenceService {
     if (_archiveEntry != null) {
       await _syncArchiveMetadata();
     }
+
     _eventController.add(
       ConferenceEvent('recording_stopped', _myCallsign, recordingStatus.toJson()),
     );
+  }
+
+  Future<void> _autoStartRecording() async {
+    try {
+      await startRecording();
+      LogService().log('ConferenceService: Auto-recording started');
+    } catch (e) {
+      LogService().log(
+        'ConferenceService: Auto-recording not available: $e',
+      );
+    }
   }
 
   Future<void> sendChatMessage(String content) async {
@@ -1123,9 +1133,8 @@ class ConferenceService {
     final wasHost = _role == ConferenceRole.host;
 
     try {
-      if (_role == ConferenceRole.host &&
-          (_recordingService.isRecording ||
-              _recordingService.status.tempOutputPath != null)) {
+      if (_recordingService.isRecording ||
+          _recordingService.status.tempOutputPath != null) {
         try {
           await stopRecording();
         } catch (e) {

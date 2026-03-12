@@ -4,9 +4,11 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:dbus/dbus.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:path/path.dart' as p;
 
+import 'android_screen_recorder_service.dart';
 import 'log_service.dart';
 
 enum ConferenceRecordingState { idle, starting, recording, stopping, failed }
@@ -45,6 +47,14 @@ class ConferenceRecordingService {
   String? _lastError;
   ConferenceRecordingState _state = ConferenceRecordingState.idle;
   Future<bool>? _availabilityCheck;
+  AndroidScreenRecorderService? _androidRecorder;
+
+  // Wayland: GNOME Screencast produces video, separate ffmpeg captures audio
+  bool _isWaylandRecording = false;
+  String? _screencastVideoPath;
+  DBusClient? _dbusClient; // Native D-Bus connection for GNOME Screencast
+  Process? _audioProcess;
+  String? _audioOutputPath;
 
   Stream<ConferenceRecordingStatus> get statusStream => _statusController.stream;
 
@@ -56,6 +66,8 @@ class ConferenceRecordingService {
   );
 
   bool get isRecording => _state == ConferenceRecordingState.recording;
+
+  bool get isWayland => Platform.isLinux && _isWayland();
 
   Future<bool> isSupported() {
     final pending = _availabilityCheck;
@@ -90,20 +102,34 @@ class ConferenceRecordingService {
       );
       final timestamp = DateTime.now().toIso8601String().replaceAll(':', '-');
       final outputPath = p.join(tempDir.path, 'meeting_$timestamp.mp4');
-      final command = await _buildLinuxFfmpegCommand(outputPath);
-      final process = await Process.start(
-        'ffmpeg',
-        command,
-        runInShell: false,
-      );
 
       _tempDir = tempDir;
       _tempOutputPath = outputPath;
-      _process = process;
       _startedAt = DateTime.now();
 
-      unawaited(_logProcessOutput(process.stderr));
-      unawaited(_logProcessOutput(process.stdout));
+      if (Platform.isAndroid) {
+        _androidRecorder = AndroidScreenRecorderService();
+        await _androidRecorder!.start(outputPath);
+      } else if (Platform.isLinux && _isWayland()) {
+        await _startWaylandRecording(tempDir.path, outputPath);
+      } else {
+        final command = Platform.isWindows
+            ? await _buildWindowsFfmpegCommand(outputPath)
+            : await _buildLinuxFfmpegCommand(outputPath);
+        LogService().log(
+          'ConferenceRecordingService: ffmpeg ${command.join(' ')}',
+        );
+        final process = await Process.start(
+          'ffmpeg',
+          command,
+          runInShell: false,
+        );
+
+        _process = process;
+
+        unawaited(_logProcessOutput(process.stderr));
+        unawaited(_logProcessOutput(process.stdout));
+      }
 
       _setState(ConferenceRecordingState.recording);
       LogService().log(
@@ -118,13 +144,34 @@ class ConferenceRecordingService {
   }
 
   Future<String?> stop() async {
-    final process = _process;
-    if (process == null) {
-      return _tempOutputPath;
-    }
-
     _setState(ConferenceRecordingState.stopping);
     final outputPath = _tempOutputPath;
+
+    if (Platform.isAndroid && _androidRecorder != null) {
+      try {
+        final result = await _androidRecorder!.stop();
+        _androidRecorder = null;
+        final path = result ?? outputPath;
+        _setState(ConferenceRecordingState.idle);
+        return path;
+      } catch (error) {
+        _lastError = '$error';
+        _androidRecorder = null;
+        _setState(ConferenceRecordingState.failed);
+        return outputPath;
+      }
+    }
+
+    if (_isWaylandRecording) {
+      return _stopWaylandRecording(outputPath);
+    }
+
+    final process = _process;
+    if (process == null) {
+      _setState(ConferenceRecordingState.idle);
+      return outputPath;
+    }
+
     try {
       process.stdin.writeln('q');
       final exitCode = await process.exitCode.timeout(
@@ -150,11 +197,13 @@ class ConferenceRecordingService {
             : ConferenceRecordingState.failed,
       );
     }
+
+    _checkOutputFile(outputPath);
     return outputPath;
   }
 
   Future<void> dispose() async {
-    if (_process != null) {
+    if (_process != null || _isWaylandRecording) {
       await stop();
     }
     await _cleanupTempArtifacts();
@@ -169,30 +218,275 @@ class ConferenceRecordingService {
     _setState(ConferenceRecordingState.idle);
   }
 
+  // ---------------------------------------------------------------------------
+  // Availability
+  // ---------------------------------------------------------------------------
+
   Future<bool> _checkAvailability() async {
     if (kIsWeb) {
       _lastError = 'Meeting recording is not implemented for browser hosts yet';
       return false;
     }
-    if (!Platform.isLinux) {
-      _lastError = 'Meeting recording currently supports Linux desktop hosts only';
+
+    if (Platform.isAndroid) {
+      return true;
+    }
+
+    if (!Platform.isLinux && !Platform.isWindows) {
+      _lastError =
+          'Meeting recording supports Linux, Windows, and Android only';
       return false;
     }
 
-    final ffmpeg = await Process.run('which', ['ffmpeg']);
+    if (Platform.isLinux && _isWayland()) {
+      return _checkWaylandAvailability();
+    }
+
+    final whichCmd = Platform.isWindows ? 'where' : 'which';
+    final ffmpeg = await Process.run(whichCmd, ['ffmpeg']);
     if (ffmpeg.exitCode != 0) {
       _lastError = 'ffmpeg is not installed on this system';
       return false;
     }
 
-    final display = Platform.environment['DISPLAY'];
-    if (display == null || display.isEmpty) {
-      _lastError = 'DISPLAY is not available for desktop capture';
-      return false;
+    if (Platform.isLinux) {
+      final display = Platform.environment['DISPLAY'];
+      if (display == null || display.isEmpty) {
+        _lastError = 'DISPLAY is not available for desktop capture';
+        return false;
+      }
     }
 
     return true;
   }
+
+  bool _isWayland() {
+    final sessionType = Platform.environment['XDG_SESSION_TYPE'];
+    if (sessionType == 'wayland') return true;
+    final waylandDisplay = Platform.environment['WAYLAND_DISPLAY'];
+    return waylandDisplay != null && waylandDisplay.isNotEmpty;
+  }
+
+  Future<bool> _checkWaylandAvailability() async {
+    // Check for GNOME Shell Screencast D-Bus interface
+    final result = await Process.run('gdbus', [
+      'introspect',
+      '--session',
+      '--dest',
+      'org.gnome.Shell.Screencast',
+      '--object-path',
+      '/org/gnome/Shell/Screencast',
+    ]);
+    if (result.exitCode == 0) {
+      // Also need ffmpeg for audio capture + merge
+      final ffmpeg = await Process.run('which', ['ffmpeg']);
+      if (ffmpeg.exitCode != 0) {
+        _lastError = 'ffmpeg is required for audio capture';
+        return false;
+      }
+      return true;
+    }
+
+    _lastError = 'Wayland screen recording requires GNOME Shell '
+        '(org.gnome.Shell.Screencast not found)';
+    return false;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Wayland (GNOME Screencast) backend
+  // ---------------------------------------------------------------------------
+
+  Future<void> _startWaylandRecording(
+    String tempDirPath,
+    String finalOutputPath,
+  ) async {
+    _isWaylandRecording = true;
+
+    // Connect to session bus — stays alive to keep GNOME Screencast running.
+    // GNOME kills the recording if the D-Bus sender disconnects.
+    _dbusClient = DBusClient.session();
+    final screencast = DBusRemoteObject(
+      _dbusClient!,
+      name: 'org.gnome.Shell.Screencast',
+      path: DBusObjectPath('/org/gnome/Shell/Screencast'),
+    );
+
+    // Start GNOME Shell Screencast via D-Bus
+    // Pass filename without extension — GNOME 46+ adds its own
+    final videoTemplate = p.join(tempDirPath, 'screencast');
+    _screencastVideoPath = videoTemplate;
+
+    final result = await screencast.callMethod(
+      'org.gnome.Shell.Screencast',
+      'Screencast',
+      [
+        DBusString(videoTemplate),
+        DBusDict.stringVariant({'framerate': DBusUint32(12)}),
+      ],
+    );
+
+    final success = result.values[0].asBoolean();
+    final filename = result.values[1].asString();
+
+    if (!success) {
+      _isWaylandRecording = false;
+      await _dbusClient?.close();
+      _dbusClient = null;
+      throw StateError('GNOME Screencast failed: $filename');
+    }
+
+    _screencastVideoPath = filename;
+    LogService().log(
+      'ConferenceRecordingService: GNOME Screencast → $filename',
+    );
+
+    // Audio: ffmpeg capturing PulseAudio (works on Wayland via PipeWire-pulse)
+    final pulseSources = await _detectPulseSources();
+    final audioSource = pulseSources.monitorSource ?? 'default';
+    final audioPath = p.join(tempDirPath, 'audio.m4a');
+    _audioOutputPath = audioPath;
+
+    final audioArgs = <String>[
+      '-y',
+      '-f',
+      'pulse',
+      '-i',
+      audioSource,
+      '-c:a',
+      'aac',
+      '-b:a',
+      '128k',
+      audioPath,
+    ];
+
+    // Also capture mic and mix if available
+    if (pulseSources.micSource != null &&
+        pulseSources.micSource!.isNotEmpty &&
+        pulseSources.micSource != pulseSources.monitorSource) {
+      audioArgs.clear();
+      audioArgs.addAll([
+        '-y',
+        '-f', 'pulse', '-i', audioSource,
+        '-f', 'pulse', '-i', pulseSources.micSource!,
+        '-filter_complex',
+        '[0:a][1:a]amix=inputs=2:duration=longest:dropout_transition=2[aout]',
+        '-map', '[aout]',
+        '-c:a', 'aac', '-b:a', '128k',
+        audioPath,
+      ]);
+    }
+
+    LogService().log(
+      'ConferenceRecordingService: audio ffmpeg ${audioArgs.join(' ')}',
+    );
+    _audioProcess = await Process.start('ffmpeg', audioArgs);
+    unawaited(_logProcessOutput(_audioProcess!.stderr));
+    unawaited(_logProcessOutput(_audioProcess!.stdout));
+  }
+
+  Future<String?> _stopWaylandRecording(String? finalOutputPath) async {
+    // Stop GNOME Screencast via D-Bus
+    final client = _dbusClient;
+    if (client != null) {
+      try {
+        final screencast = DBusRemoteObject(
+          client,
+          name: 'org.gnome.Shell.Screencast',
+          path: DBusObjectPath('/org/gnome/Shell/Screencast'),
+        );
+        await screencast
+            .callMethod(
+              'org.gnome.Shell.Screencast',
+              'StopScreencast',
+              [],
+            )
+            .timeout(const Duration(seconds: 5));
+      } catch (e) {
+        LogService().log(
+          'ConferenceRecordingService: Error stopping screencast: $e',
+        );
+      }
+      await client.close();
+      _dbusClient = null;
+    }
+
+    // Stop audio ffmpeg
+    final audioProc = _audioProcess;
+    if (audioProc != null) {
+      try {
+        audioProc.stdin.writeln('q');
+        await audioProc.exitCode.timeout(
+          const Duration(seconds: 5),
+          onTimeout: () {
+            audioProc.kill(ProcessSignal.sigint);
+            return audioProc.exitCode;
+          },
+        );
+      } catch (_) {
+        audioProc.kill(ProcessSignal.sigint);
+      }
+      _audioProcess = null;
+    }
+
+    // Brief pause to let files finalize
+    await Future<void>.delayed(const Duration(milliseconds: 500));
+
+    // Merge video + audio into final MP4
+    final videoPath = _screencastVideoPath;
+    final audioPath = _audioOutputPath;
+    _isWaylandRecording = false;
+    _screencastVideoPath = null;
+    _audioOutputPath = null;
+
+    if (finalOutputPath != null &&
+        videoPath != null &&
+        await File(videoPath).exists()) {
+      final hasAudio =
+          audioPath != null && await File(audioPath).exists() &&
+          await File(audioPath).length() > 100;
+
+      if (hasAudio) {
+        // Merge video + audio
+        LogService().log(
+          'ConferenceRecordingService: Merging video + audio',
+        );
+        final merge = await Process.run('ffmpeg', [
+          '-y',
+          '-i', videoPath,
+          '-i', audioPath,
+          '-c:v', 'copy',
+          '-c:a', 'copy',
+          '-map', '0:v',
+          '-map', '1:a',
+          '-movflags', '+faststart',
+          finalOutputPath,
+        ]);
+        if (merge.exitCode != 0) {
+          LogService().log(
+            'ConferenceRecordingService: Merge failed '
+            '(${merge.stderr}), using video-only',
+          );
+          await File(videoPath).copy(finalOutputPath);
+        }
+      } else {
+        // Video only
+        await File(videoPath).copy(finalOutputPath);
+      }
+    }
+
+    _checkOutputFile(finalOutputPath);
+
+    _setState(
+      _lastError == null
+          ? ConferenceRecordingState.idle
+          : ConferenceRecordingState.failed,
+    );
+    return finalOutputPath;
+  }
+
+  // ---------------------------------------------------------------------------
+  // X11 (ffmpeg x11grab) backend
+  // ---------------------------------------------------------------------------
 
   Future<List<String>> _buildLinuxFfmpegCommand(String outputPath) async {
     final display = Platform.environment['DISPLAY'] ?? ':0';
@@ -286,6 +580,117 @@ class ConferenceRecordingService {
     return args;
   }
 
+  // ---------------------------------------------------------------------------
+  // Windows (ffmpeg gdigrab) backend
+  // ---------------------------------------------------------------------------
+
+  Future<List<String>> _buildWindowsFfmpegCommand(String outputPath) async {
+    final audioDevice = await _detectWindowsAudioDevice();
+
+    final args = <String>[
+      '-y',
+      '-f',
+      'gdigrab',
+      '-framerate',
+      '12',
+      '-i',
+      'desktop',
+    ];
+
+    final audioInputs = <String>[];
+    if (audioDevice != null && audioDevice.isNotEmpty) {
+      args.addAll([
+        '-f',
+        'dshow',
+        '-i',
+        'audio=$audioDevice',
+      ]);
+      audioInputs.add(audioDevice);
+    }
+
+    if (audioInputs.isNotEmpty) {
+      args.addAll(['-map', '0:v', '-map', '1:a']);
+    } else {
+      args.addAll(['-map', '0:v']);
+    }
+
+    args.addAll([
+      '-c:v',
+      'libx264',
+      '-preset',
+      'ultrafast',
+      '-pix_fmt',
+      'yuv420p',
+      '-crf',
+      '28',
+    ]);
+
+    if (audioInputs.isNotEmpty) {
+      args.addAll([
+        '-c:a',
+        'aac',
+        '-b:a',
+        '128k',
+      ]);
+    }
+
+    args.addAll([
+      '-movflags',
+      '+faststart',
+      outputPath,
+    ]);
+    return args;
+  }
+
+  Future<String?> _detectWindowsAudioDevice() async {
+    try {
+      final result = await Process.run('ffmpeg', [
+        '-hide_banner',
+        '-list_devices',
+        'true',
+        '-f',
+        'dshow',
+        '-i',
+        'dummy',
+      ]);
+      final output = [
+        result.stdout as String? ?? '',
+        result.stderr as String? ?? '',
+      ].join('\n');
+
+      // Look for audio devices: lines containing "(audio)" with a quoted name
+      for (final line in const LineSplitter().convert(output)) {
+        if (!line.contains('(audio)')) continue;
+        final match = RegExp(r'"([^"]+)"').firstMatch(line);
+        if (match != null) {
+          final name = match.group(1);
+          if (name != null && name.isNotEmpty) {
+            // Prefer Stereo Mix / virtual audio cable for system audio
+            if (name.toLowerCase().contains('stereo mix') ||
+                name.toLowerCase().contains('virtual') ||
+                name.toLowerCase().contains('loopback')) {
+              return name;
+            }
+          }
+        }
+      }
+
+      // Fallback: return first audio device found
+      for (final line in const LineSplitter().convert(output)) {
+        if (!line.contains('(audio)')) continue;
+        final match = RegExp(r'"([^"]+)"').firstMatch(line);
+        if (match != null) {
+          return match.group(1);
+        }
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Shared helpers
+  // ---------------------------------------------------------------------------
+
   Future<String?> _detectScreenSize() async {
     try {
       final result = await Process.run('sh', [
@@ -354,14 +759,47 @@ class ConferenceRecordingService {
     try {
       await for (final chunk in stream.transform(utf8.decoder)) {
         final text = chunk.trim();
-        if (text.isNotEmpty) {
-          LogService().log('ConferenceRecordingService: $text');
+        if (text.isEmpty) continue;
+        LogService().log('ConferenceRecordingService: $text');
+        // Detect ffmpeg errors
+        if (RegExp(r'Error|Permission denied|No such|Cannot|Failed',
+                caseSensitive: false)
+            .hasMatch(text)) {
+          _lastError = text.length > 200 ? text.substring(0, 200) : text;
         }
       }
     } catch (_) {}
   }
 
+  void _checkOutputFile(String? outputPath) {
+    if (outputPath == null) return;
+    try {
+      final file = File(outputPath);
+      if (file.existsSync()) {
+        final size = file.lengthSync();
+        if (size < 1024) {
+          LogService().log(
+            'ConferenceRecordingService: WARNING output file is only '
+            '$size bytes — recording likely failed',
+          );
+        }
+      } else {
+        LogService().log(
+          'ConferenceRecordingService: WARNING output file does not exist',
+        );
+      }
+    } catch (_) {}
+  }
+
   Future<void> _cleanupTempArtifacts() async {
+    _isWaylandRecording = false;
+    _screencastVideoPath = null;
+    _audioOutputPath = null;
+    _audioProcess = null;
+    try {
+      await _dbusClient?.close();
+    } catch (_) {}
+    _dbusClient = null;
     final tempDir = _tempDir;
     _tempDir = null;
     _tempOutputPath = null;

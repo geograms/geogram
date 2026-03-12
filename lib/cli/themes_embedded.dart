@@ -2474,7 +2474,6 @@ class ThemesEmbedded {
 .meeting-description {
   margin: 0 0 6px 0;
   font-size: 1.1rem;
-  font-style: italic;
 }
 
 #status {

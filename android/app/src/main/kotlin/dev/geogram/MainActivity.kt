@@ -33,6 +33,7 @@ class MainActivity : FlutterActivity() {
     private var wifiDirectPlugin: WifiDirectPlugin? = null
     private var usbSerialPlugin: UsbSerialPlugin? = null
     private var usbAoaPlugin: UsbAoaPlugin? = null
+    private var screenRecorderPlugin: ScreenRecorderPlugin? = null
     private var usbMethodChannel: MethodChannel? = null
     private var fileViewerMethodChannel: MethodChannel? = null
     private var recentFilesMethodChannel: MethodChannel? = null
@@ -84,6 +85,10 @@ class MainActivity : FlutterActivity() {
         // Initialize USB AOA plugin for device-to-device communication
         usbAoaPlugin = UsbAoaPlugin(this, flutterEngine)
         usbAoaPlugin?.initialize()
+
+        // Initialize screen recorder plugin for meeting recording
+        screenRecorderPlugin = ScreenRecorderPlugin(this, flutterEngine)
+        screenRecorderPlugin?.initialize()
 
         // Initialize USB attachment channel for auto-detection
         usbMethodChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, USB_CHANNEL)
@@ -375,6 +380,16 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    @Deprecated("Deprecated in Java")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        if (requestCode == ScreenRecorderPlugin.REQUEST_MEDIA_PROJECTION) {
+            screenRecorderPlugin?.onProjectionResult(resultCode, data)
+            return
+        }
+        @Suppress("DEPRECATION")
+        super.onActivityResult(requestCode, resultCode, data)
+    }
+
     /**
      * Handle USB attachment, file view, or boot launch when app is already running (warm start)
      */
@@ -529,6 +544,8 @@ class MainActivity : FlutterActivity() {
         usbSerialPlugin = null
         usbAoaPlugin?.dispose()
         usbAoaPlugin = null
+        screenRecorderPlugin?.dispose()
+        screenRecorderPlugin = null
         usbMethodChannel = null
         fileViewerMethodChannel = null
         recentFilesMethodChannel = null

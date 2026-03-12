@@ -80,6 +80,7 @@ class ConferenceArchiveService {
     await storage.createDirectory('$relativePath/$filesDirectoryName');
     await storage.createDirectory('$relativePath/$recordingsDirectoryName');
 
+    final yearTag = startedAt.toLocal().year.toString();
     final entry = ConferenceArchiveEntry(
       roomId: roomId,
       roomName: roomName,
@@ -99,6 +100,7 @@ class ConferenceArchiveService {
       transcriptRelativePath:
           '$relativePath/$chatDirectoryName/$transcriptFileName',
       messageCount: 0,
+      tags: [yearTag],
     );
 
     await _writeEntry(entry);
@@ -231,6 +233,34 @@ class ConferenceArchiveService {
     return _archiveStorage(entry).listDirectory(recordingsDirectoryName);
   }
 
+  Future<void> deleteArchive(ConferenceArchiveEntry entry) async {
+    final storage = _rootStorage();
+    _activeArchivePathsByRoom.remove(entry.roomId);
+    await storage.deleteDirectory(entry.relativePath, recursive: true);
+  }
+
+  Future<ConferenceArchiveEntry> updateTags(
+    ConferenceArchiveEntry entry,
+    List<String> tags,
+  ) async {
+    final updated = entry.copyWith(
+      tags: _sortedUnique(tags),
+      updatedAt: DateTime.now().toLocal(),
+    );
+    await _writeEntry(updated);
+    return updated;
+  }
+
+  Future<List<String>> listAllTags() async {
+    final archives = await listArchives();
+    final tags = <String>{};
+    for (final entry in archives) {
+      tags.addAll(entry.tags);
+    }
+    final sorted = tags.toList()..sort();
+    return sorted;
+  }
+
   Future<ConferenceArchiveEntry> refreshArchive(ConferenceArchiveEntry entry) {
     return _recalculateCounts(entry);
   }
@@ -352,9 +382,12 @@ class ConferenceArchiveService {
   Future<ConferenceArchiveEntry> _recalculateCounts(
     ConferenceArchiveEntry entry,
   ) async {
-    final files = await listArchiveFiles(entry);
-    final recordings = await listArchiveRecordings(entry);
-    final messages = await loadMessages(entry, limit: 1 << 20);
+    // Re-read from disk to pick up any out-of-band changes (e.g. tags)
+    final fresh = await _loadEntry(entry.relativePath);
+    final base = fresh ?? entry;
+    final files = await listArchiveFiles(base);
+    final recordings = await listArchiveRecordings(base);
+    final messages = await loadMessages(base, limit: 1 << 20);
     final fileAssets = files
         .where((file) => !file.isDirectory)
         .map(
@@ -377,7 +410,7 @@ class ConferenceArchiveService {
           ),
         )
         .toList();
-    return entry.copyWith(
+    return base.copyWith(
       messageCount: messages.length,
       files: fileAssets,
       recordings: recordingAssets,

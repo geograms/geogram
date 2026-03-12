@@ -44,6 +44,8 @@ class LanTransport extends Transport with TransportMixin {
   /// HTTP timeout for reachability checks
   final Duration reachabilityTimeout;
 
+  final http.Client _client = http.Client();
+
   LanTransport({
     this.timeout = const Duration(seconds: 5),
     this.reachabilityTimeout = const Duration(seconds: 3),
@@ -59,6 +61,7 @@ class LanTransport extends Transport with TransportMixin {
   @override
   Future<void> dispose() async {
     LogService().log('LanTransport: Disposing...');
+    _client.close();
     await disposeMixin();
     LogService().log('LanTransport: Disposed');
   }
@@ -73,7 +76,7 @@ class LanTransport extends Transport with TransportMixin {
 
     try {
       final uri = Uri.parse('${deviceInfo.url}/api/status');
-      final response = await http.get(uri).timeout(reachabilityTimeout);
+      final response = await _client.get(uri).timeout(reachabilityTimeout);
       return response.statusCode == 200;
     } catch (e) {
       return false;
@@ -172,16 +175,16 @@ class LanTransport extends Transport with TransportMixin {
     http.Response response;
     switch (method) {
       case 'POST':
-        response = await http.post(uri, headers: headers, body: body).timeout(timeout);
+        response = await _client.post(uri, headers: headers, body: body).timeout(timeout);
         break;
       case 'PUT':
-        response = await http.put(uri, headers: headers, body: body).timeout(timeout);
+        response = await _client.put(uri, headers: headers, body: body).timeout(timeout);
         break;
       case 'DELETE':
-        response = await http.delete(uri, headers: headers).timeout(timeout);
+        response = await _client.delete(uri, headers: headers).timeout(timeout);
         break;
       default: // GET
-        response = await http.get(uri, headers: headers).timeout(timeout);
+        response = await _client.get(uri, headers: headers).timeout(timeout);
     }
 
     stopwatch.stop();
@@ -235,7 +238,7 @@ class LanTransport extends Transport with TransportMixin {
 
     LogService().log('LanTransport: POST $path to ${message.targetCallsign}');
 
-    final response = await http.post(
+    final response = await _client.post(
       uri,
       headers: {'Content-Type': 'application/json'},
       body: body,
@@ -291,7 +294,7 @@ class LanTransport extends Transport with TransportMixin {
 
     LogService().log('LanTransport: GET sync from $targetCallsign');
 
-    final response = await http.get(
+    final response = await _client.get(
       uri,
       headers: {'Content-Type': 'application/json'},
     ).timeout(timeout);

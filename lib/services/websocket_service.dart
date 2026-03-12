@@ -1623,11 +1623,11 @@ class WebSocketService {
         body: body,
       );
 
-      // Send response back through WebSocket to station
+      // Send response back through WebSocket to station (preserve all headers)
       _sendHttpResponse(
         requestId,
         response.statusCode,
-        {'Content-Type': response.headers['Content-Type'] ?? 'application/json'},
+        response.headers,
         response.body,
         isBase64: response.isBase64,
       );

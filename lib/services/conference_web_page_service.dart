@@ -341,7 +341,8 @@ function formatDateTimeLabel(value) {
   var d = String(date.getDate()).padStart(2, '0');
   var h = String(date.getHours()).padStart(2, '0');
   var min = String(date.getMinutes()).padStart(2, '0');
-  return y + '-' + m + '-' + d + ' ' + h + ':' + min;
+  var sec = String(date.getSeconds()).padStart(2, '0');
+  return y + '-' + m + '-' + d + ' ' + h + ':' + min + ':' + sec;
 }
 
 function enableJoinButtons() {
@@ -523,6 +524,20 @@ function renderArchiveAssets() {
   }
   const recordings = Array.isArray(CONFIG.archiveRecordings) ? CONFIG.archiveRecordings : [];
   const files = Array.isArray(CONFIG.archiveFiles) ? CONFIG.archiveFiles : [];
+
+  // Auto-play first recording in the stage area
+  if (recordings.length > 0 && screenShellEl && screenVideoEl) {
+    const first = recordings[0];
+    screenShellEl.classList.add('active');
+    screenShellEl.style.display = 'block';
+    screenVideoEl.muted = true;
+    screenVideoEl.controls = true;
+    screenVideoEl.src = (first.url || '') + '?inline=1';
+    screenVideoEl.play().catch(function() {});
+    if (screenLabelEl) screenLabelEl.textContent = first.name || 'Recording';
+    if (screenPlaceholderEl) screenPlaceholderEl.style.display = 'none';
+  }
+
   const assets = recordings.map(function(item) {
     return Object.assign({ kind: 'Recording' }, item);
   }).concat(files.map(function(item) {
@@ -538,16 +553,14 @@ function renderArchiveAssets() {
   archiveAssetsShellEl.style.display = 'block';
   archiveAssetsEl.innerHTML = '';
   assets.forEach(function(asset) {
+    const sizeLabel = asset.size ? Math.max(1, Math.round(asset.size / 1024)) + ' KB' : '';
     const row = document.createElement('a');
     row.className = 'archive-asset';
     row.href = asset.url || '#';
-    row.target = '_blank';
-    row.rel = 'noopener';
-    const sizeLabel = asset.size ? Math.max(1, Math.round(asset.size / 1024)) + ' KB' : '';
     row.innerHTML =
       '<div><div class="archive-asset-title">' + escapeHtml(asset.name || asset.path || asset.kind) +
-      '</div><div class="participant-role">' + escapeHtml(asset.kind) + '</div></div>' +
-      '<div class="participant-role participant-state">' + escapeHtml(sizeLabel) + '</div>';
+      '</div><div class="participant-role">' + escapeHtml(asset.kind) +
+      (sizeLabel ? ' \u00b7 ' + escapeHtml(sizeLabel) : '') + '</div></div>';
     archiveAssetsEl.appendChild(row);
   });
 }
@@ -608,7 +621,6 @@ function applyStaticMode() {
     nostrGateMsg.style.display = 'none';
     joinForm.style.display = 'none';
     callUi.style.display = 'block';
-    if (screenShellEl) screenShellEl.style.display = 'none';
     if (muteBtn) muteBtn.style.display = 'none';
     if (requestSpeakerBtn) requestSpeakerBtn.style.display = 'none';
     if (leaveBtn) leaveBtn.style.display = 'none';

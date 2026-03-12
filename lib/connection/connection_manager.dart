@@ -64,6 +64,9 @@ class ConnectionManager {
   /// Timer for processing queued messages
   Timer? _queueProcessTimer;
 
+  /// Shared HTTP client for P2P forwarding (to localhost)
+  final http.Client _httpClient = http.Client();
+
   /// Power-aware subscription
   StreamSubscription<PowerMode>? _powerSubscription;
 
@@ -118,6 +121,7 @@ class ConnectionManager {
       }
     }
 
+    _httpClient.close();
     await _incomingGroup?.close();
     await _incomingController.close();
 
@@ -482,19 +486,19 @@ class ConnectionManager {
       http.Response response;
       switch (method.toUpperCase()) {
         case 'GET':
-          response = await http.get(uri, headers: headers).timeout(const Duration(seconds: 25));
+          response = await _httpClient.get(uri, headers: headers).timeout(const Duration(seconds: 25));
           break;
         case 'POST':
-          response = await http.post(uri, headers: headers, body: body).timeout(const Duration(seconds: 25));
+          response = await _httpClient.post(uri, headers: headers, body: body).timeout(const Duration(seconds: 25));
           break;
         case 'PUT':
-          response = await http.put(uri, headers: headers, body: body).timeout(const Duration(seconds: 25));
+          response = await _httpClient.put(uri, headers: headers, body: body).timeout(const Duration(seconds: 25));
           break;
         case 'DELETE':
-          response = await http.delete(uri, headers: headers).timeout(const Duration(seconds: 25));
+          response = await _httpClient.delete(uri, headers: headers).timeout(const Duration(seconds: 25));
           break;
         default:
-          response = await http.get(uri, headers: headers).timeout(const Duration(seconds: 25));
+          response = await _httpClient.get(uri, headers: headers).timeout(const Duration(seconds: 25));
       }
 
       statusCode = response.statusCode;
@@ -634,7 +638,7 @@ class ConnectionManager {
 
       LogService().log('ConnectionManager: Forwarding DM to local API: POST $path');
 
-      final response = await http.post(
+      final response = await _httpClient.post(
         uri,
         headers: {'Content-Type': 'application/json'},
         body: body,

@@ -107,11 +107,127 @@ class _ConferenceArchiveDetailPageState
     }
   }
 
+  Future<void> _editTags() async {
+    final controller = TextEditingController();
+    final currentTags = List<String>.from(_currentEntry.tags);
+    final result = await showDialog<List<String>>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Edit tags'),
+          content: SizedBox(
+            width: 300,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (currentTags.isNotEmpty)
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 6,
+                    children: currentTags
+                        .map(
+                          (tag) => InputChip(
+                            label: Text(tag),
+                            onDeleted: () => setDialogState(
+                              () => currentTags.remove(tag),
+                            ),
+                          ),
+                        )
+                        .toList(),
+                  ),
+                if (currentTags.isNotEmpty) const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: controller,
+                        decoration: const InputDecoration(
+                          hintText: 'Add a tag',
+                          isDense: true,
+                        ),
+                        onSubmitted: (value) {
+                          final tag = value.trim().toLowerCase();
+                          if (tag.isNotEmpty && !currentTags.contains(tag)) {
+                            setDialogState(() => currentTags.add(tag));
+                            controller.clear();
+                          }
+                        },
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    IconButton(
+                      icon: const Icon(Icons.add),
+                      onPressed: () {
+                        final tag = controller.text.trim().toLowerCase();
+                        if (tag.isNotEmpty && !currentTags.contains(tag)) {
+                          setDialogState(() => currentTags.add(tag));
+                          controller.clear();
+                        }
+                      },
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(null),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(currentTags),
+              child: const Text('Save'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (result == null || !mounted) return;
+    try {
+      final updated = await _archiveService.updateTags(_currentEntry, result);
+      if (!mounted) return;
+      setState(() => _entry = updated);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Failed to update tags: $e')));
+    }
+  }
+
   Widget _buildSummaryTab(ThemeData theme) {
     final entry = _currentEntry;
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
+        _InfoCard(
+          title: 'Tags',
+          children: [
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: [
+                ...entry.tags.map(
+                  (tag) => Chip(
+                    label: Text(tag),
+                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    visualDensity: VisualDensity.compact,
+                  ),
+                ),
+                ActionChip(
+                  avatar: const Icon(Icons.edit, size: 16),
+                  label: Text(
+                    entry.tags.isEmpty ? 'Add tags' : 'Edit',
+                  ),
+                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  visualDensity: VisualDensity.compact,
+                  onPressed: _editTags,
+                ),
+              ],
+            ),
+          ],
+        ),
         _InfoCard(
           title: 'Meeting',
           children: [

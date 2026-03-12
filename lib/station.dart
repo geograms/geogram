@@ -6563,9 +6563,11 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
     final callsign = match.group(1)!;
     final kind = match.group(2)!;
     final remainingPath = match.group(3)!;
-    final apiPath = kind == 'meet'
+    final query = request.uri.query;
+    final basePath = kind == 'meet'
         ? '/meet/$remainingPath'
         : '/api/$remainingPath';
+    final apiPath = query.isEmpty ? basePath : '$basePath?$query';
 
     // Find the client by callsign (case-insensitive)
     PureConnectedClient? foundClient;
@@ -6633,16 +6635,27 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
       if (response['responseHeaders'] != null) {
         try {
           final headers = jsonDecode(response['responseHeaders'] as String) as Map<String, dynamic>;
+          const skipHeaders = {'transfer-encoding', 'content-length', 'connection'};
           headers.forEach((key, value) {
-            if (key.toLowerCase() == 'content-type') {
+            final lk = key.toLowerCase();
+            if (skipHeaders.contains(lk)) return;
+            if (lk == 'content-type') {
               final ct = value.toString();
-              if (ct.contains('json')) {
-                request.response.headers.contentType = ContentType.json;
-              } else if (ct.contains('html')) {
-                request.response.headers.contentType = ContentType.html;
-              } else if (ct.contains('text')) {
-                request.response.headers.contentType = ContentType.text;
+              final parts = ct.split(';');
+              final mimeType = parts.first.trim();
+              final mimeParts = mimeType.split('/');
+              if (mimeParts.length == 2) {
+                final charset = ct.contains('charset=')
+                    ? ct.split('charset=').last.split(';').first.trim()
+                    : null;
+                request.response.headers.contentType = ContentType(
+                  mimeParts[0], mimeParts[1], charset: charset,
+                );
               }
+            } else {
+              try {
+                request.response.headers.set(key, value.toString());
+              } catch (_) {}
             }
           });
         } catch (_) {}
