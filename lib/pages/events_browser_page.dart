@@ -6,7 +6,6 @@
 import 'package:flutter/material.dart';
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'dart:convert';
-import 'package:file_picker/file_picker.dart';
 import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as path;
 import '../models/event.dart';
@@ -20,6 +19,7 @@ import '../services/i18n_service.dart';
 import '../services/log_service.dart';
 import '../widgets/event_tile_widget.dart';
 import '../widgets/event_detail_widget.dart';
+import '../widgets/file_folder_picker.dart';
 import 'event_detail_page.dart';
 import 'new_event_page.dart';
 import '../dialogs/new_update_dialog.dart';
@@ -655,13 +655,14 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
     if (_selectedEvent == null) return;
 
     try {
-      final result = await FilePicker.platform.pickFiles(
-        allowMultiple: true,
-        type: FileType.any,
-        dialogTitle: _i18n.t('select_files_to_add'),
+      final paths = await FileFolderPicker.show(
+        context,
+        title: _i18n.t('select_files_to_add'),
+        allowMultiSelect: true,
+        profileStorage: AppService().profileStorage,
       );
 
-      if (result != null && result.files.isNotEmpty && mounted) {
+      if (paths != null && paths.isNotEmpty && mounted) {
         final year = _selectedEvent!.id.substring(0, 4);
         final eventPath = '${widget.appPath}/$year/${_selectedEvent!.id}';
 
@@ -669,29 +670,28 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
         final existingFlyers = List<String>.from(_selectedEvent!.flyers);
 
         int copiedCount = 0;
-        for (var file in result.files) {
-          if (file.path != null) {
-            final sourceFile = File(file.path!);
-            final ext = path.extension(file.name).replaceFirst('.', '').toLowerCase();
-            final isImage = const ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg']
-                .contains(ext);
+        for (var filePath in paths) {
+          final fileName = path.basename(filePath);
+          final sourceFile = File(filePath);
+          final ext = path.extension(fileName).replaceFirst('.', '').toLowerCase();
+          final isImage = const ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg']
+              .contains(ext);
 
-            String targetName;
-            if (isImage) {
-              targetName = EventService.nextFlyerName(existingFlyers, ext);
-              existingFlyers.add(targetName);
-            } else {
-              targetName = file.name;
-            }
+          String targetName;
+          if (isImage) {
+            targetName = EventService.nextFlyerName(existingFlyers, ext);
+            existingFlyers.add(targetName);
+          } else {
+            targetName = fileName;
+          }
 
-            final targetPath = '$eventPath/$targetName';
+          final targetPath = '$eventPath/$targetName';
 
-            try {
-              await sourceFile.copy(targetPath);
-              copiedCount++;
-            } catch (e) {
-              print('Error copying file ${file.name}: $e');
-            }
+          try {
+            await sourceFile.copy(targetPath);
+            copiedCount++;
+          } catch (e) {
+            print('Error copying file $fileName: $e');
           }
         }
 

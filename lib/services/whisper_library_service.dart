@@ -13,6 +13,7 @@ import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as p;
 import 'package:whisper_flutter_new/whisper_flutter_new.dart';
 
+import '../util/managed_http_client.dart';
 import 'log_service.dart';
 import 'storage_config.dart';
 
@@ -139,8 +140,7 @@ class WhisperLibraryService {
 
     LogService().log('WhisperLibraryService: Downloading from $downloadUrl');
 
-    final client = http.Client();
-    try {
+    return await withHttpClient((client) async {
       final request = http.Request('GET', Uri.parse(downloadUrl));
       final response = await client.send(request);
 
@@ -170,9 +170,7 @@ class WhisperLibraryService {
       Whisper.setLibraryPath(destPath);
 
       return destPath;
-    } finally {
-      client.close();
-    }
+    });
   }
 
   /// Initialize whisper with the downloaded library if not bundled

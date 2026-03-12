@@ -13,6 +13,7 @@ import 'package:html/parser.dart' as html_parser;
 import 'package:http/http.dart' as http;
 import 'package:webview_flutter/webview_flutter.dart';
 
+import '../../util/managed_http_client.dart';
 import '../../pages/photo_viewer_page.dart';
 import '../../services/i18n_service.dart';
 import '../../services/log_service.dart';
@@ -347,8 +348,7 @@ class _WebSnapshotViewerPageState extends State<WebSnapshotViewerPage> {
 
     try {
       // Fetch the content
-      final client = http.Client();
-      try {
+      await withHttpClient((client) async {
         final response = await client.get(
           Uri.parse(url),
           headers: {
@@ -414,9 +414,7 @@ class _WebSnapshotViewerPageState extends State<WebSnapshotViewerPage> {
             ),
           );
         }
-      } finally {
-        client.close();
-      }
+      });
     } catch (e) {
       LogService().log('WebSnapshotViewerPage: Download failed: $e');
       if (mounted) {
@@ -443,7 +441,7 @@ class _WebSnapshotViewerPageState extends State<WebSnapshotViewerPage> {
     String localPath,
     http.Client client,
   ) async {
-    final snapshotService = WebSnapshotService(httpClient: client);
+    final snapshotService = WebSnapshotService(httpClient: client as http.BaseClient);
 
     // Read current settings from the NDF
     final content = await _ndfService.readWebSnapshotContent(widget.filePath);

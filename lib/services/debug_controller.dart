@@ -2131,6 +2131,21 @@ class DebugController {
       case 'conference_approve_screen_share':
         return _conferenceApproveScreenShare(params);
 
+      case 'conference_kick':
+        return _conferenceKick(params);
+
+      case 'conference_delete_chat':
+        return _conferenceDeleteChat(params);
+
+      case 'conference_approve_join':
+        return _conferenceApproveJoin(params);
+
+      case 'conference_deny_join':
+        return _conferenceDenyJoin(params);
+
+      case 'conference_update_settings':
+        return _conferenceUpdateSettings(params);
+
       case 'create_app':
         return _createApp(params);
 
@@ -2177,9 +2192,13 @@ class DebugController {
     try {
       final roomName = params['room_name'] as String? ?? '';
       final maxSpeakers = params['max_speakers'] as int? ?? 6;
+      final password = params['password'] as String?;
+      final approvalRequired = params['approval_required'] == true;
       final room = await ConferenceService().hostConference(
         roomName: roomName,
         maxSpeakers: maxSpeakers,
+        password: password,
+        approvalRequired: approvalRequired,
       );
       final meetUrls = await ConferenceService().getMeetUrls();
       return {
@@ -2201,14 +2220,23 @@ class DebugController {
       final wsUrl = params['url'] as String?;
       final roomId = params['room_id'] as String?;
       final roleStr = params['role'] as String? ?? 'listener';
+      final password = params['password'] as String?;
       final role = roleStr == 'speaker'
           ? ConferenceParticipantRole.speaker
           : ConferenceParticipantRole.listener;
 
       if (wsUrl != null) {
-        await ConferenceService().joinLan(wsUrl, participantRole: role);
+        await ConferenceService().joinLan(
+          wsUrl,
+          participantRole: role,
+          password: password,
+        );
       } else if (roomId != null) {
-        await ConferenceService().joinStation(roomId, participantRole: role);
+        await ConferenceService().joinStation(
+          roomId,
+          participantRole: role,
+          password: password,
+        );
       } else {
         return {'success': false, 'error': 'Provide url or room_id'};
       }
@@ -2298,6 +2326,12 @@ class DebugController {
       'archive_path': cs.archiveEntry?.relativePath,
       'pending_speaker_requests': cs.pendingSpeakerRequests,
       'pending_screen_share_requests': cs.pendingScreenShareRequests,
+      'pending_join_requests':
+          cs.room?.pendingJoinRequests.keys.toList() ?? [],
+      'banned_callsigns':
+          cs.room?.bannedCallsigns.toList() ?? [],
+      'has_password': cs.room?.password != null,
+      'approval_required': cs.room?.approvalRequired ?? false,
       'chat_messages': cs.chatMessages
           .map(
             (message) => {
@@ -2487,6 +2521,106 @@ class DebugController {
       return {
         'success': true,
         'message': '$callsign approved for screen sharing',
+        'room': ConferenceService().room?.toJson(),
+      };
+    } catch (e) {
+      return {'success': false, 'error': e.toString()};
+    }
+  }
+
+  Future<Map<String, dynamic>> _conferenceKick(
+    Map<String, dynamic> params,
+  ) async {
+    try {
+      final callsign = params['callsign'] as String?;
+      if (callsign == null) {
+        return {'success': false, 'error': 'Missing callsign parameter'};
+      }
+      final ban = params['ban'] == true;
+      await ConferenceService().kickParticipant(callsign, ban: ban);
+      return {
+        'success': true,
+        'message': '$callsign kicked${ban ? ' and banned' : ''}',
+        'room': ConferenceService().room?.toJson(),
+      };
+    } catch (e) {
+      return {'success': false, 'error': e.toString()};
+    }
+  }
+
+  Map<String, dynamic> _conferenceDeleteChat(Map<String, dynamic> params) {
+    try {
+      final conferenceId = params['conference_id'] as String?;
+      if (conferenceId == null) {
+        return {'success': false, 'error': 'Missing conference_id parameter'};
+      }
+      ConferenceService().deleteChatMessage(conferenceId);
+      return {
+        'success': true,
+        'message': 'Chat message deleted',
+        'chat_messages': ConferenceService().chatMessages
+            .map(
+              (message) => {
+                'author': message.author,
+                'timestamp': message.timestamp,
+                'content': message.content,
+                'metadata': message.metadata,
+              },
+            )
+            .toList(),
+      };
+    } catch (e) {
+      return {'success': false, 'error': e.toString()};
+    }
+  }
+
+  Map<String, dynamic> _conferenceApproveJoin(Map<String, dynamic> params) {
+    try {
+      final callsign = params['callsign'] as String?;
+      if (callsign == null) {
+        return {'success': false, 'error': 'Missing callsign parameter'};
+      }
+      ConferenceService().approveJoinRequest(callsign);
+      return {
+        'success': true,
+        'message': '$callsign approved to join',
+        'room': ConferenceService().room?.toJson(),
+      };
+    } catch (e) {
+      return {'success': false, 'error': e.toString()};
+    }
+  }
+
+  Map<String, dynamic> _conferenceDenyJoin(Map<String, dynamic> params) {
+    try {
+      final callsign = params['callsign'] as String?;
+      if (callsign == null) {
+        return {'success': false, 'error': 'Missing callsign parameter'};
+      }
+      ConferenceService().denyJoinRequest(callsign);
+      return {
+        'success': true,
+        'message': '$callsign denied',
+        'room': ConferenceService().room?.toJson(),
+      };
+    } catch (e) {
+      return {'success': false, 'error': e.toString()};
+    }
+  }
+
+  Map<String, dynamic> _conferenceUpdateSettings(Map<String, dynamic> params) {
+    try {
+      final approvalRequired = params['approval_required'] as bool?;
+      final password = params['password'] as String?;
+      final clearPassword = params['clear_password'] == true;
+      ConferenceService().updateModerationSettings(
+        approvalRequired: approvalRequired,
+        password: password,
+        clearPassword: clearPassword,
+      );
+      return {
+        'success': true,
+        'message': 'Settings updated',
         'room': ConferenceService().room?.toJson(),
       };
     } catch (e) {

@@ -94,6 +94,10 @@ class ConferenceRoom {
   int maxSpeakers;
   String? activeScreenSharerCallsign;
   final String? description;
+  final Set<String> bannedCallsigns = {};
+  String? password;
+  bool approvalRequired;
+  final Map<String, DateTime> pendingJoinRequests = {};
 
   ConferenceRoom({
     required this.roomId,
@@ -102,6 +106,8 @@ class ConferenceRoom {
     required this.signalingMode,
     this.maxSpeakers = 6,
     this.description,
+    this.password,
+    this.approvalRequired = false,
   }) : chatRoomId = roomId.replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '_'),
        startTime = DateTime.now();
 
@@ -265,6 +271,8 @@ class ConferenceService {
     int maxSpeakers = 6,
     String? roomIdOverride,
     String? description,
+    String? password,
+    bool approvalRequired = false,
   }) async {
     if (_state != ConferenceState.idle) {
       throw StateError('Conference already active');
@@ -289,6 +297,8 @@ class ConferenceService {
         description != null && description.trim().isNotEmpty
             ? description.trim()
             : null;
+    final effectivePassword =
+        password != null && password.trim().isNotEmpty ? password.trim() : null;
     _room = ConferenceRoom(
       roomId: roomId,
       roomName: effectiveName,
@@ -296,6 +306,8 @@ class ConferenceService {
       signalingMode: mode,
       maxSpeakers: maxSpeakers,
       description: effectiveDescription,
+      password: effectivePassword,
+      approvalRequired: approvalRequired,
     );
     _room!.participants[callsign] = ConferenceParticipant(
       callsign: callsign,
@@ -317,9 +329,17 @@ class ConferenceService {
     _listenHostPeerEvents();
 
     if (mode == ConferenceSignalingMode.lan) {
-      await _startLanSignaling(roomId, roomName, callsign, maxSpeakers);
+      await _startLanSignaling(
+        roomId, roomName, callsign, maxSpeakers,
+        password: effectivePassword,
+        approvalRequired: approvalRequired,
+      );
     } else {
-      await _startStationSignaling(roomId, roomName, maxSpeakers);
+      await _startStationSignaling(
+        roomId, roomName, maxSpeakers,
+        password: effectivePassword,
+        approvalRequired: approvalRequired,
+      );
     }
 
     _setState(ConferenceState.active);
@@ -546,6 +566,7 @@ class ConferenceService {
     String wsUrl, {
     ConferenceParticipantRole participantRole =
         ConferenceParticipantRole.listener,
+    String? password,
   }) async {
     if (_state != ConferenceState.idle) {
       throw StateError('Conference already active');
@@ -599,6 +620,7 @@ class ConferenceService {
         'type': 'conference_hello',
         'callsign': _myCallsign,
         'role': participantRole.name,
+        if (password != null) 'password': password,
       }),
     );
 
@@ -613,6 +635,7 @@ class ConferenceService {
     String roomId, {
     ConferenceParticipantRole participantRole =
         ConferenceParticipantRole.listener,
+    String? password,
   }) async {
     if (_state != ConferenceState.idle) {
       throw StateError('Conference already active');
@@ -661,6 +684,7 @@ class ConferenceService {
       'type': 'conference_join',
       'room_id': roomId,
       'role': participantRole.name,
+      if (password != null) 'password': password,
     });
 
     LogService().log(
@@ -1106,6 +1130,178 @@ class ConferenceService {
     );
   }
 
+  // ── Kick / Ban (host only) ──────────────────────────────────────
+
+  /// Kick a participant from the conference. Optionally ban them from rejoining.
+  Future<void> kickParticipant(String callsign, {bool ban = false}) async {
+    if (_role != ConferenceRole.host) {
+      throw StateError('Only the host can kick participants');
+    }
+    final room = _room;
+    if (room == null) return;
+    if (callsign == room.hostCallsign) {
+      throw StateError('Cannot kick the host');
+    }
+
+    // Disconnect WebRTC
+    await _hostPeerManager?.removePeer(callsign);
+
+    // Remove from room
+    room.participants.remove(callsign);
+    if (ban) {
+      room.bannedCallsigns.add(callsign.toUpperCase());
+    }
+
+    // Clear screen share if the kicked user was sharing
+    if (room.activeScreenSharerCallsign?.toUpperCase() ==
+        callsign.toUpperCase()) {
+      _setActiveScreenSharer(null);
+      _broadcastScreenShareState(callsign, active: false);
+    }
+
+    // Send kick signal
+    if (room.signalingMode == ConferenceSignalingMode.lan) {
+      _signalingServer?.kickParticipant(callsign, ban: ban);
+    } else {
+      WebSocketService().send({
+        'type': 'conference_kick',
+        'room_id': room.roomId,
+        'callsign': callsign,
+        'ban': ban,
+      });
+    }
+
+    _eventController.add(ConferenceEvent('participant_kicked', callsign));
+    LogService().log(
+      'ConferenceService: Kicked $callsign${ban ? ' (banned)' : ''}',
+    );
+  }
+
+  // ── Delete chat message (host only) ────────────────────────────
+
+  /// Delete a chat message by its conference_id. Host-only operation.
+  void deleteChatMessage(String conferenceId) {
+    if (_role != ConferenceRole.host) {
+      throw StateError('Only the host can delete messages');
+    }
+    final room = _room;
+    if (room == null) return;
+
+    _chatMessages.removeWhere(
+      (m) => m.getMeta('conference_id') == conferenceId,
+    );
+    _chatMessageIds.remove(conferenceId);
+
+    if (room.signalingMode == ConferenceSignalingMode.lan) {
+      _signalingServer?.deleteChatMessage(conferenceId);
+    } else {
+      WebSocketService().send({
+        'type': 'conference_chat_delete',
+        'room_id': room.roomId,
+        'conference_id': conferenceId,
+      });
+    }
+
+    _eventController.add(
+      ConferenceEvent('conference_chat_deleted', conferenceId),
+    );
+  }
+
+  // ── Approval mode (host only) ─────────────────────────────────
+
+  /// Approve a pending join request. Host-only.
+  void approveJoinRequest(String callsign) {
+    if (_role != ConferenceRole.host) {
+      throw StateError('Only the host can approve join requests');
+    }
+    final room = _room;
+    if (room == null) return;
+
+    room.pendingJoinRequests.remove(callsign);
+
+    if (room.signalingMode == ConferenceSignalingMode.lan) {
+      _signalingServer?.handleJoinResponse(callsign, approved: true);
+    } else {
+      WebSocketService().send({
+        'type': 'conference_join_response',
+        'room_id': room.roomId,
+        'callsign': callsign,
+        'approved': true,
+      });
+    }
+
+    _eventController.add(
+      ConferenceEvent('join_request_resolved', callsign, true),
+    );
+  }
+
+  /// Deny a pending join request. Host-only.
+  void denyJoinRequest(String callsign) {
+    if (_role != ConferenceRole.host) {
+      throw StateError('Only the host can deny join requests');
+    }
+    final room = _room;
+    if (room == null) return;
+
+    room.pendingJoinRequests.remove(callsign);
+
+    if (room.signalingMode == ConferenceSignalingMode.lan) {
+      _signalingServer?.handleJoinResponse(callsign, approved: false);
+    } else {
+      WebSocketService().send({
+        'type': 'conference_join_response',
+        'room_id': room.roomId,
+        'callsign': callsign,
+        'approved': false,
+      });
+    }
+
+    _eventController.add(
+      ConferenceEvent('join_request_resolved', callsign, false),
+    );
+  }
+
+  /// Update moderation settings at runtime. Host-only.
+  void updateModerationSettings({
+    bool? approvalRequired,
+    String? password,
+    bool clearPassword = false,
+  }) {
+    if (_role != ConferenceRole.host) {
+      throw StateError('Only the host can update moderation settings');
+    }
+    final room = _room;
+    if (room == null) return;
+
+    if (approvalRequired != null) {
+      room.approvalRequired = approvalRequired;
+    }
+    if (clearPassword) {
+      room.password = null;
+    } else if (password != null) {
+      room.password = password.isEmpty ? null : password;
+    }
+
+    if (room.signalingMode == ConferenceSignalingMode.lan) {
+      _signalingServer?.updateSettings(
+        approvalRequired: room.approvalRequired,
+        password: room.password,
+      );
+    } else {
+      WebSocketService().send({
+        'type': 'conference_settings_update',
+        'room_id': room.roomId,
+        'approval_required': room.approvalRequired,
+        if (room.password != null) 'password': room.password,
+        'has_password': room.password != null,
+      });
+    }
+
+    _eventController.add(
+      ConferenceEvent('settings_updated', _myCallsign),
+    );
+  }
+
   void _sendRoleChange(String callsign, String newRole) {
     final msg = {
       'type': 'conference_role_change',
@@ -1244,13 +1440,17 @@ class ConferenceService {
     String roomId,
     String roomName,
     String callsign,
-    int maxSpeakers,
-  ) async {
+    int maxSpeakers, {
+    String? password,
+    bool approvalRequired = false,
+  }) async {
     _signalingServer = ConferenceSignalingServer(
       roomId: roomId,
       roomName: roomName,
       hostCallsign: callsign,
       maxSpeakers: maxSpeakers,
+      password: password,
+      approvalRequired: approvalRequired,
     );
 
     try {
@@ -1297,8 +1497,10 @@ class ConferenceService {
   Future<void> _startStationSignaling(
     String roomId,
     String roomName,
-    int maxSpeakers,
-  ) async {
+    int maxSpeakers, {
+    String? password,
+    bool approvalRequired = false,
+  }) async {
     // Subscribe to station messages
     _stationSubscription = WebSocketService().messages.listen((msg) {
       final type = msg['type'] as String?;
@@ -1323,6 +1525,8 @@ class ConferenceService {
       'room_id': roomId,
       'room_name': roomName,
       'max_speakers': maxSpeakers,
+      if (password != null) 'password': password,
+      'approval_required': approvalRequired,
     });
   }
 
@@ -1368,8 +1572,18 @@ class ConferenceService {
         await _handleConferenceChatMessage(msg);
       case 'conference_chat_history':
         await _handleConferenceChatHistory(msg);
+      case 'conference_kicked':
+        _handleKicked(msg);
+      case 'conference_chat_delete':
+        _handleChatDelete(msg);
+      case 'conference_join_request':
+        _handleJoinRequest(msg);
+      case 'conference_join_pending':
+        _handleJoinPending(msg);
+      case 'conference_settings_update':
+        _handleSettingsUpdate(msg);
       case 'conference_error':
-        LogService().log('ConferenceService: Error: ${msg['error']}');
+        _handleConferenceError(msg);
       // WebRTC signals
       case 'webrtc_offer':
         await _handleWebRTCOffer(msg);
@@ -1417,8 +1631,18 @@ class ConferenceService {
         await _handleConferenceChatMessage(msg);
       case 'conference_chat_history':
         await _handleConferenceChatHistory(msg);
+      case 'conference_kicked':
+        _handleKicked(msg);
+      case 'conference_chat_delete':
+        _handleChatDelete(msg);
+      case 'conference_join_request':
+        _handleJoinRequest(msg);
+      case 'conference_join_pending':
+        _handleJoinPending(msg);
+      case 'conference_settings_update':
+        _handleSettingsUpdate(msg);
       case 'conference_error':
-        LogService().log('ConferenceService: Station error: ${msg['error']}');
+        _handleConferenceError(msg);
       case 'conference_signal':
         // Unwrap the inner signal type
         final signalType = msg['signal_type'] as String?;
@@ -1454,6 +1678,7 @@ class ConferenceService {
           ? ConferenceSignalingMode.lan
           : ConferenceSignalingMode.station,
       maxSpeakers: msg['max_speakers'] as int? ?? 6,
+      approvalRequired: msg['approval_required'] == true,
     );
 
     // Add existing participants with their roles
@@ -1769,6 +1994,77 @@ class ConferenceService {
 
     for (final message in messages) {
       await _storeIncomingChatMessage(message);
+    }
+  }
+
+  // ── Moderation handlers ─────────────────────────────────────────
+
+  void _handleKicked(Map<String, dynamic> msg) {
+    final ban = msg['ban'] == true;
+    final reason = msg['reason'] as String?;
+    LogService().log(
+      'ConferenceService: Kicked from meeting${ban ? ' (banned)' : ''}'
+      '${reason != null ? ': $reason' : ''}',
+    );
+    _eventController.add(ConferenceEvent('kicked', _myCallsign, {
+      'ban': ban,
+      if (reason != null) 'reason': reason,
+    }));
+    unawaited(endConference());
+  }
+
+  void _handleChatDelete(Map<String, dynamic> msg) {
+    final conferenceId = msg['conference_id'] as String?;
+    if (conferenceId == null) return;
+
+    _chatMessages.removeWhere(
+      (m) => m.getMeta('conference_id') == conferenceId,
+    );
+    _chatMessageIds.remove(conferenceId);
+    _eventController.add(
+      ConferenceEvent('conference_chat_deleted', conferenceId),
+    );
+  }
+
+  void _handleJoinRequest(Map<String, dynamic> msg) {
+    final callsign = msg['callsign'] as String?;
+    if (callsign == null || _role != ConferenceRole.host) return;
+
+    _room?.pendingJoinRequests[callsign] = DateTime.now();
+    _eventController.add(ConferenceEvent('join_request', callsign));
+    LogService().log('ConferenceService: Join request from $callsign');
+  }
+
+  void _handleJoinPending(Map<String, dynamic> msg) {
+    _eventController.add(ConferenceEvent('join_pending', _myCallsign));
+    LogService().log('ConferenceService: Waiting for host approval');
+  }
+
+  void _handleSettingsUpdate(Map<String, dynamic> msg) {
+    final room = _room;
+    if (room == null) return;
+
+    if (msg.containsKey('approval_required')) {
+      room.approvalRequired = msg['approval_required'] == true;
+    }
+    if (msg.containsKey('has_password')) {
+      // Joiners don't know the actual password, just whether one is set
+    }
+
+    _eventController.add(ConferenceEvent('settings_updated', ''));
+  }
+
+  void _handleConferenceError(Map<String, dynamic> msg) {
+    final error = msg['error'] as String?;
+    LogService().log('ConferenceService: Error: $error');
+
+    if (error == 'invalid_password') {
+      _eventController.add(
+        ConferenceEvent('password_required', _myCallsign),
+      );
+    } else if (error == 'banned') {
+      _eventController.add(ConferenceEvent('banned', _myCallsign));
+      unawaited(endConference());
     }
   }
 

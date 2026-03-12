@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 
+import '../util/managed_http_client.dart';
 import '../models/update_settings.dart';
 import '../services/app_args.dart';
 import '../services/config_service.dart';
@@ -1182,9 +1183,7 @@ class UpdateService {
       }
 
       // Create HTTP client for better connection management
-      final client = http.Client();
-
-      try {
+      return await withHttpClient((client) async {
         // Build request with Range header for resume
         final request = http.Request('GET', Uri.parse(downloadUrl));
         request.headers['User-Agent'] = 'Geogram-Desktop-Updater';
@@ -1275,9 +1274,7 @@ class UpdateService {
 
         LogService().log('Downloaded $downloaded bytes to $tempFilePath');
         return tempFilePath;
-      } finally {
-        client.close();
-      }
+      });
     } catch (e) {
       LogService().log('Error downloading update: $e');
       // Don't delete partial file on error - allow resume next time

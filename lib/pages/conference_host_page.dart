@@ -18,17 +18,20 @@ class ConferenceHostPage extends StatefulWidget {
 class _ConferenceHostPageState extends State<ConferenceHostPage> {
   final _nameController = TextEditingController();
   final _descriptionController = TextEditingController();
+  final _passwordController = TextEditingController();
   final _conferenceService = ConferenceService();
   bool _starting = false;
   bool _scheduling = false;
   String? _error;
   int _maxSpeakers = 6;
   DateTime? _scheduledAt;
+  bool _approvalRequired = false;
 
   @override
   void dispose() {
     _nameController.dispose();
     _descriptionController.dispose();
+    _passwordController.dispose();
     super.dispose();
   }
 
@@ -45,6 +48,10 @@ class _ConferenceHostPageState extends State<ConferenceHostPage> {
         roomName: name,
         maxSpeakers: _maxSpeakers,
         description: _descriptionController.text.trim(),
+        password: _passwordController.text.trim().isEmpty
+            ? null
+            : _passwordController.text.trim(),
+        approvalRequired: _approvalRequired,
       );
       if (!mounted) return;
 
@@ -222,6 +229,28 @@ class _ConferenceHostPageState extends State<ConferenceHostPage> {
                 color: theme.colorScheme.onSurfaceVariant,
               ),
               textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: _passwordController,
+              decoration: const InputDecoration(
+                labelText: 'Meeting password (optional)',
+                hintText: 'Leave empty for open access',
+                border: OutlineInputBorder(),
+                prefixIcon: Icon(Icons.lock_outline),
+              ),
+              obscureText: true,
+              enabled: !_starting && !_scheduling,
+            ),
+            const SizedBox(height: 8),
+            SwitchListTile(
+              title: const Text('Require approval to join'),
+              subtitle: const Text('Participants wait until you approve them'),
+              secondary: const Icon(Icons.front_hand),
+              value: _approvalRequired,
+              onChanged: (_starting || _scheduling)
+                  ? null
+                  : (v) => setState(() => _approvalRequired = v),
             ),
             const SizedBox(height: 24),
             Card(

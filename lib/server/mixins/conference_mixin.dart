@@ -32,6 +32,10 @@ class ConferenceRoomInfo {
   final Set<String> participantCallsigns = {};
   final Set<String> speakerCallsigns = {};
   String? activeScreenSharerCallsign;
+  final Set<String> bannedCallsigns = {};
+  String? password;
+  bool approvalRequired;
+  final Map<String, String> pendingJoinClientIds = {}; // callsign → clientId
 
   ConferenceRoomInfo({
     required this.roomId,
@@ -39,6 +43,8 @@ class ConferenceRoomInfo {
     required this.hostCallsign,
     required this.hostClientId,
     this.maxSpeakers = 6,
+    this.password,
+    this.approvalRequired = false,
   }) : createdAt = DateTime.now() {
     // Host is a participant and a speaker
     participantCallsigns.add(hostCallsign);
@@ -123,6 +129,18 @@ mixin ConferenceMixin {
       case 'conference_screen_share_stop':
         _handleScreenShareStop(clientId, message);
         return true;
+      case 'conference_kick':
+        _handleKick(clientId, message);
+        return true;
+      case 'conference_chat_delete':
+        _handleChatDelete(clientId, message);
+        return true;
+      case 'conference_join_response':
+        _handleJoinResponse(clientId, message);
+        return true;
+      case 'conference_settings_update':
+        _handleSettingsUpdate(clientId, message);
+        return true;
       case 'conference_list':
         _handleList(clientId);
         return true;
@@ -202,6 +220,8 @@ mixin ConferenceMixin {
       hostCallsign: hostCallsign,
       hostClientId: clientId,
       maxSpeakers: maxSpeakers,
+      password: message['password'] as String?,
+      approvalRequired: message['approval_required'] == true,
     );
     _conferenceRooms[roomId] = room;
 
@@ -242,7 +262,68 @@ mixin ConferenceMixin {
       return;
     }
 
-    // Determine actual role (enforce speaker limit)
+    // 1. Check ban
+    if (room.bannedCallsigns.contains(callsign.toUpperCase())) {
+      conferenceSendToClient(
+        clientId,
+        jsonEncode({
+          'type': 'conference_error',
+          'error': 'banned',
+          'room_id': roomId,
+        }),
+      );
+      return;
+    }
+
+    // 2. Check password
+    if (room.password != null && room.password!.isNotEmpty) {
+      final provided = message['password'] as String?;
+      if (provided != room.password) {
+        conferenceSendToClient(
+          clientId,
+          jsonEncode({
+            'type': 'conference_error',
+            'error': 'invalid_password',
+            'room_id': roomId,
+          }),
+        );
+        return;
+      }
+    }
+
+    // 3. Approval required — park in waiting room
+    if (room.approvalRequired) {
+      room.pendingJoinClientIds[callsign] = clientId;
+      conferenceSendToClient(
+        clientId,
+        jsonEncode({
+          'type': 'conference_join_pending',
+          'room_id': roomId,
+        }),
+      );
+      conferenceSendToClient(
+        room.hostClientId,
+        jsonEncode({
+          'type': 'conference_join_request',
+          'room_id': roomId,
+          'callsign': callsign,
+        }),
+      );
+      conferenceLog('INFO', 'Conference $roomId: $callsign parked in waiting room');
+      return;
+    }
+
+    _admitJoiner(room, roomId, clientId, callsign, requestedRole);
+  }
+
+  void _admitJoiner(
+    ConferenceRoomInfo room,
+    String roomId,
+    String clientId,
+    String callsign,
+    String requestedRole,
+  ) {
+    // 4. Determine actual role (enforce speaker limit)
     String actualRole = requestedRole;
     if (requestedRole == 'speaker' &&
         room.speakerCallsigns.length >= room.maxSpeakers) {
@@ -254,10 +335,15 @@ mixin ConferenceMixin {
       room.speakerCallsigns.add(callsign);
     }
 
-    // Send welcome with speaker info
+    // 5. Send welcome with speaker info
     conferenceSendToClient(
       clientId,
-      jsonEncode({'type': 'conference_welcome', ...room.toJson()}),
+      jsonEncode({
+        'type': 'conference_welcome',
+        ...room.toJson(),
+        'approval_required': room.approvalRequired,
+        'has_password': room.password != null && room.password!.isNotEmpty,
+      }),
     );
 
     // Notify existing participants
@@ -335,6 +421,9 @@ mixin ConferenceMixin {
 
     final room = _conferenceRooms[roomId];
     if (room == null) return;
+
+    // Silently drop if sender is banned
+    if (room.bannedCallsigns.contains(fromCallsign.toUpperCase())) return;
 
     if (!room.participantCallsigns.contains(fromCallsign) ||
         !room.participantCallsigns.contains(toCallsign)) {
@@ -463,6 +552,9 @@ mixin ConferenceMixin {
       return;
     }
 
+    // Silently drop if sender is banned
+    if (room.bannedCallsigns.contains(fromCallsign.toUpperCase())) return;
+
     _broadcastToRoom(roomId, {
       'type': 'conference_chat_message',
       'room_id': roomId,
@@ -495,6 +587,123 @@ mixin ConferenceMixin {
         'from_callsign': room.hostCallsign,
       }),
     );
+  }
+
+  void _handleKick(String clientId, Map<String, dynamic> message) {
+    final roomId = message['room_id'] as String?;
+    final targetCallsign = message['callsign'] as String?;
+    final ban = message['ban'] == true;
+    if (roomId == null || targetCallsign == null) return;
+
+    final room = _conferenceRooms[roomId];
+    if (room == null || room.hostClientId != clientId) return;
+
+    // Add to ban list
+    if (ban) {
+      room.bannedCallsigns.add(targetCallsign.toUpperCase());
+    }
+
+    // Send kicked notification to target
+    final targetClientId = conferenceFindClientId(targetCallsign);
+    if (targetClientId != null) {
+      conferenceSendToClient(
+        targetClientId,
+        jsonEncode({
+          'type': 'conference_kicked',
+          'room_id': roomId,
+          'ban': ban,
+        }),
+      );
+    }
+
+    // Remove from room
+    room.participantCallsigns.remove(targetCallsign);
+    room.speakerCallsigns.remove(targetCallsign);
+    if (room.activeScreenSharerCallsign?.toUpperCase() ==
+        targetCallsign.toUpperCase()) {
+      room.activeScreenSharerCallsign = null;
+    }
+
+    // Broadcast departure
+    _broadcastToRoom(roomId, {
+      'type': 'conference_participant_left',
+      'callsign': targetCallsign,
+      'room_id': roomId,
+      'reason': 'kicked',
+    });
+
+    conferenceLog('INFO', 'Conference $roomId: Kicked $targetCallsign${ban ? ' (banned)' : ''}');
+  }
+
+  void _handleChatDelete(String clientId, Map<String, dynamic> message) {
+    final roomId = message['room_id'] as String?;
+    final conferenceId = message['conference_id'] as String?;
+    if (roomId == null || conferenceId == null) return;
+
+    final room = _conferenceRooms[roomId];
+    if (room == null || room.hostClientId != clientId) return;
+
+    _broadcastToRoom(roomId, {
+      'type': 'conference_chat_delete',
+      'room_id': roomId,
+      'conference_id': conferenceId,
+    }, excludeCallsign: conferenceGetClientCallsign(clientId));
+  }
+
+  void _handleJoinResponse(String clientId, Map<String, dynamic> message) {
+    final roomId = message['room_id'] as String?;
+    final callsign = message['callsign'] as String?;
+    final approved = message['approved'] == true;
+    if (roomId == null || callsign == null) return;
+
+    final room = _conferenceRooms[roomId];
+    if (room == null || room.hostClientId != clientId) return;
+
+    final pendingClientId = room.pendingJoinClientIds.remove(callsign);
+    if (pendingClientId == null) return;
+
+    if (approved) {
+      _admitJoiner(room, roomId, pendingClientId, callsign, 'listener');
+      conferenceLog('INFO', 'Conference $roomId: Approved $callsign from waiting room');
+    } else {
+      conferenceSendToClient(
+        pendingClientId,
+        jsonEncode({
+          'type': 'conference_error',
+          'error': 'join_denied',
+          'room_id': roomId,
+        }),
+      );
+      conferenceLog('INFO', 'Conference $roomId: Denied $callsign from waiting room');
+    }
+  }
+
+  void _handleSettingsUpdate(String clientId, Map<String, dynamic> message) {
+    final roomId = message['room_id'] as String?;
+    if (roomId == null) return;
+
+    final room = _conferenceRooms[roomId];
+    if (room == null || room.hostClientId != clientId) return;
+
+    if (message.containsKey('approval_required')) {
+      room.approvalRequired = message['approval_required'] == true;
+    }
+    if (message.containsKey('password')) {
+      final pw = message['password'] as String?;
+      room.password = (pw != null && pw.isNotEmpty) ? pw : null;
+    }
+    if (message.containsKey('has_password') && message['has_password'] == false) {
+      room.password = null;
+    }
+
+    _broadcastToRoom(roomId, {
+      'type': 'conference_settings_update',
+      'room_id': roomId,
+      'approval_required': room.approvalRequired,
+      'has_password': room.password != null && room.password!.isNotEmpty,
+    }, excludeCallsign: conferenceGetClientCallsign(clientId));
+
+    conferenceLog('INFO', 'Conference $roomId: Settings updated');
   }
 
   void _handleList(String clientId) {

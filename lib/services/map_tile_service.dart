@@ -13,6 +13,7 @@ import 'package:flutter/painting.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_map_tile_caching/flutter_map_tile_caching.dart' as fmtc;
 import 'package:http/http.dart' as http;
+import '../util/managed_http_client.dart';
 import 'profile_service.dart';
 import 'storage_config.dart';
 import 'station_service.dart';
@@ -138,7 +139,7 @@ class MapTileService {
   static const int _highZoomMaxZoom = 18;
 
   /// Shared HTTP client for all tile fetches (prevents "too many open files")
-  final http.Client httpClient = http.Client();
+  final ManagedHttpClient httpClient = ManagedHttpClient();
 
   /// Notifier for tile loading status (loading count, failed count)
   final ValueNotifier<TileLoadingStatus> statusNotifier =

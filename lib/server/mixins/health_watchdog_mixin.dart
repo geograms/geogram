@@ -6,6 +6,7 @@ import 'dart:io';
 mixin HealthWatchdogMixin {
   // Health check state
   Timer? _healthWatchdogTimer;
+  HttpClient? _healthCheckClient;
   int _consecutiveFailures = 0;
   int _requestsThisMinute = 0;
   int _errorsThisMinute = 0;
@@ -41,6 +42,8 @@ mixin HealthWatchdogMixin {
   void stopHealthWatchdog() {
     _healthWatchdogTimer?.cancel();
     _healthWatchdogTimer = null;
+    _healthCheckClient?.close(force: true);
+    _healthCheckClient = null;
   }
 
   /// Record a request for attack detection metrics
@@ -102,10 +105,10 @@ mixin HealthWatchdogMixin {
 
   /// Perform self-health check by making request to own /api/status endpoint
   Future<bool> _performHealthCheck() async {
-    final client = HttpClient();
-    client.connectionTimeout = Duration(seconds: healthCheckTimeoutSeconds);
+    _healthCheckClient ??= HttpClient()
+      ..connectionTimeout = Duration(seconds: healthCheckTimeoutSeconds);
     try {
-      final request = await client.getUrl(
+      final request = await _healthCheckClient!.getUrl(
         Uri.parse('http://127.0.0.1:$httpPort/api/status'),
       );
       final response = await request.close()
@@ -115,8 +118,6 @@ mixin HealthWatchdogMixin {
     } catch (e) {
       log('WARN', 'Health check failed: $e');
       return false;
-    } finally {
-      client.close();
     }
   }
 

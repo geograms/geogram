@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 
+import '../../util/managed_http_client.dart';
 import '../models/device_definition.dart';
 import '../models/flash_progress.dart';
 import '../protocols/esptool_protocol.dart';
@@ -89,8 +90,7 @@ class FlasherService {
     void Function(double progress)? onProgress,
   }) async {
     final request = http.Request('GET', Uri.parse(url));
-    final client = http.Client();
-    try {
+    return await withHttpClient((client) async {
       final response = await client.send(request);
 
       if (response.statusCode != 200) {
@@ -111,9 +111,7 @@ class FlasherService {
       }
 
       return Uint8List.fromList(bytes);
-    } finally {
-      client.close();
-    }
+    });
   }
 
   /// Load firmware from file

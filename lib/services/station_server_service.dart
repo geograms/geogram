@@ -11,6 +11,7 @@ import 'package:mime/mime.dart';
 import 'package:path/path.dart' as path;
 
 
+import '../util/managed_http_client.dart';
 import '../services/log_service.dart';
 import '../services/config_service.dart';
 import '../services/profile_service.dart';
@@ -3799,8 +3800,7 @@ h2 { font-size: 1.2rem; margin: 0 0 20px 0; }
     final request = http.Request('GET', Uri.parse(url));
     request.headers['User-Agent'] = 'Geogram-Desktop-Station/$appVersion';
 
-    final client = http.Client();
-    try {
+    await withHttpClient((client) async {
       final response = await client.send(request);
 
       if (response.statusCode != 200) {
@@ -3820,9 +3820,7 @@ h2 { font-size: 1.2rem; margin: 0 0 20px 0; }
 
       // Move temp file to final location
       await tempFile.rename(targetPath);
-    } finally {
-      client.close();
-    }
+    });
   }
 
   /// Download all music models at station startup (offline-first pattern)

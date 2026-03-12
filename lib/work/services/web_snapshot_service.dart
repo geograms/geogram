@@ -11,6 +11,7 @@ import 'package:html/parser.dart' as html_parser;
 import 'package:html/dom.dart' as dom;
 import 'package:http/http.dart' as http;
 
+import '../../util/managed_http_client.dart';
 import '../../services/log_service.dart';
 import '../models/websnapshot_content.dart';
 
@@ -47,11 +48,11 @@ class CaptureProgress {
 
 /// Service for capturing websites
 class WebSnapshotService {
-  final http.Client _httpClient;
+  final http.BaseClient _httpClient;
   bool _isCancelled = false;
 
-  WebSnapshotService({http.Client? httpClient})
-      : _httpClient = httpClient ?? http.Client();
+  WebSnapshotService({http.BaseClient? httpClient})
+      : _httpClient = httpClient ?? ManagedHttpClient();
 
   /// Cancel the current capture operation
   void cancel() {

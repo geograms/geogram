@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as p;
+import '../util/managed_http_client.dart';
 import '../connection/connection_manager.dart';
 import 'station_cache_service.dart';
 import '../models/station.dart';
@@ -61,7 +62,7 @@ class StationService {
   final WebSocketService _wsService = WebSocketService();
 
   /// Shared HTTP client for connection pooling (avoids creating a new socket per request)
-  final http.Client _httpClient = http.Client();
+  final ManagedHttpClient _httpClient = ManagedHttpClient();
 
   /// Default stations
   static final List<Station> _defaultStations = [

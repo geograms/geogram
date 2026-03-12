@@ -15,93 +15,10 @@ RepoType: git
 Repo: https://github.com/geograms/geogram.git
 
 Builds:
-  - versionName: 1.6.101
-    versionCode: 4
-    commit: a38826fa245fe6e4c0be2e9a39169b170027b93b
-    output: build/app/outputs/flutter-apk/app-release.apk
-    srclibs:
-      - flutter@stable
-    rm:
-      - ios
-      - macos
-      - windows
-      - linux
-      - web
-      - geogram-cli
-      - bin
-      - android/tinyemu
-      - android/app/src/main/jniLibs
-      - third_party/flutter_webrtc/third_party/libwebrtc/lib
-    prebuild:
-      - export flutter_version=$(cat .flutter-version)
-      - git -C $$flutter$$ fetch --tags
-      - git -C $$flutter$$ checkout -f $flutter_version
-      - export PUB_CACHE=$(pwd)/.pub-cache
-      - sed -i -e '/tinyemu/d' -e '/flutter_map_tile_caching/d' pubspec.yaml
-      - sed -i -e "/import 'package:flutter_map_tile_caching/d" -e 's/fmtc\.FMTCStore?/Object?/g'
-        -e '/FMTCObjectBoxBackend/,/);/d' -e '/_tileStore = fmtc\./d' -e '/_tileStore!\.manage/d'
-        lib/services/map_tile_service.dart
-      - $$flutter$$/bin/flutter config --no-analytics
-      - $$flutter$$/bin/flutter pub get
-      - cd $PUB_CACHE/hosted/pub.dev/geolocator_android-*/android
-      - sed -i -e '/gms/d' build.gradle
-      - cd src/main/java/com/baseflow/geolocator/location
-      - rm FusedLocationClient.java
-      - sed -i -e '/if (forceAndroidLocationManager) {/,/^  }/c return new LocationManagerClient(context,
-        locationOptions);}' -e '/isGooglePlayServicesAvailable/,/^  }/d' -e '/gms/d'
-        GeolocationManager.java
-    scandelete:
-      - .pub-cache
-    build:
-      - export PUB_CACHE=$(pwd)/.pub-cache
-      - $$flutter$$/bin/flutter build apk --release
-
-  - versionName: 1.9.0
-    versionCode: 5
-    commit: 409e95a0d610d5ca98d838082fdb6163fa4be7c6
-    output: build/app/outputs/flutter-apk/app-release.apk
-    srclibs:
-      - flutter@stable
-    rm:
-      - ios
-      - macos
-      - windows
-      - linux
-      - web
-      - geogram-cli
-      - bin
-      - android/tinyemu
-      - android/app/src/main/jniLibs
-      - third_party/flutter_webrtc/third_party/libwebrtc/lib
-      - third_party/whisper_flutter_new/android/.cxx
-      - third_party/whisper_flutter_new/example
-    prebuild:
-      - export flutter_version=$(cat .flutter-version)
-      - git -C $$flutter$$ fetch --tags
-      - git -C $$flutter$$ checkout -f $flutter_version
-      - export PUB_CACHE=$(pwd)/.pub-cache
-      - sed -i -e '/tinyemu/d' -e '/flutter_map_tile_caching/d' pubspec.yaml
-      - sed -i -e "/import 'package:flutter_map_tile_caching/d" -e 's/fmtc\.FMTCStore?/Object?/g'
-        -e '/FMTCObjectBoxBackend/,/);/d' -e '/_tileStore = fmtc\./d' -e '/_tileStore!\.manage/d'
-        lib/services/map_tile_service.dart
-      - $$flutter$$/bin/flutter config --no-analytics
-      - $$flutter$$/bin/flutter pub get
-      - cd $PUB_CACHE/hosted/pub.dev/geolocator_android-*/android
-      - sed -i -e '/gms/d' build.gradle
-      - cd src/main/java/com/baseflow/geolocator/location
-      - rm FusedLocationClient.java
-      - sed -i -e '/if (forceAndroidLocationManager) {/,/^  }/c return new LocationManagerClient(context,
-        locationOptions);}' -e '/isGooglePlayServicesAvailable/,/^  }/d' -e '/gms/d'
-        GeolocationManager.java
-    scandelete:
-      - .pub-cache
-    build:
-      - export PUB_CACHE=$(pwd)/.pub-cache
-      - $$flutter$$/bin/flutter build apk --release --build-number=5
-
   - versionName: 1.31.0
     versionCode: 6
     commit: 328a85fa8b96b9894dc261a9c121b8f8a6831f43
+    timeout: 10800
     sudo:
       - apt-get update
       - apt-get install -y gcc-multilib libc-dev make automake pkg-config libtool
@@ -145,9 +62,9 @@ Builds:
       - $$flutter$$/bin/flutter pub get
       - export file=$(ls .pub-cache/hosted/pub.dev/media_kit_libs_android_video-*/android/build.gradle)
       - export tag=$(sed -n -E 's|.*download/(v[0-9.]+)/.*|\1|p' $file | head -n 1)
-      - '[[ $tag == "v1.1.7" ]] || exit 1'
+      - '[[ $tag == "v1.1.7" ]]'
       - sed -i -e '/downloadDependencies/,/dependsOn/d' $file
-      - printf 'org.gradle.jvmargs=-Xmx2048m\norg.gradle.workers.max=2\norg.gradle.parallel=false\n'
+      - printf 'org.gradle.jvmargs=-Xmx4g -XX:+UseSerialGC\norg.gradle.daemon=false\norg.gradle.parallel=false\n'
         >> android/gradle.properties
       - cd $$media-kit-libmpv-android-video-build$$/buildscripts
       - mkdir -p deps
@@ -186,8 +103,8 @@ Builds:
       - cp $$media-kit-libmpv-android-video-build$$/output/default-arm64-v8a.jar build/media_kit_libs_android_video/output
       - export PUB_CACHE=$(pwd)/.pub-cache
       - $$flutter$$/bin/flutter build apk --release --target-platform="android-arm64"
-        --build-number=6
-    ndk: 25.2.9519653
+        --build-number=$$VERCODE$$
+    ndk: 27.3.13750724
 
 AutoUpdateMode: None
 UpdateCheckMode: None

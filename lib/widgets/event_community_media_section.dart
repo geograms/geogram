@@ -6,7 +6,6 @@
 import 'dart:convert';
 import 'dart:io' as io;
 
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
@@ -15,10 +14,12 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../connection/connection_manager.dart';
 import '../models/event.dart';
+import '../services/app_service.dart';
 import '../services/i18n_service.dart';
 import '../services/station_service.dart';
 import '../platform/file_image_helper.dart' as file_helper;
 import '../pages/photo_viewer_page.dart';
+import 'file_folder_picker.dart';
 
 class EventCommunityMediaSection extends StatefulWidget {
   final Event event;
@@ -655,13 +656,14 @@ class _EventCommunityMediaSectionState extends State<EventCommunityMediaSection>
       }
     }
 
-    final result = await FilePicker.platform.pickFiles(
-      allowMultiple: true,
-      type: FileType.any,
-      dialogTitle: _i18n.t('add_contribution'),
+    final paths = await FileFolderPicker.show(
+      context,
+      title: _i18n.t('add_contribution'),
+      allowMultiSelect: true,
+      profileStorage: AppService().profileStorage,
     );
 
-    if (result == null || result.files.isEmpty) return;
+    if (paths == null || paths.isEmpty) return;
 
     setState(() => _isUploading = true);
     try {
@@ -671,14 +673,13 @@ class _EventCommunityMediaSectionState extends State<EventCommunityMediaSection>
       var nextIndex = await _nextMediaIndex(contributorDir);
       int copiedCount = 0;
 
-      for (final file in result.files) {
-        final sourcePath = file.path;
-        if (sourcePath == null || sourcePath.isEmpty) continue;
-        final ext = _normalizeExtension(file.name);
+      for (final filePath in paths) {
+        final fileName = path.basename(filePath);
+        final ext = _normalizeExtension(fileName);
         final targetName = 'media$nextIndex.$ext';
         nextIndex++;
 
-        final sourceFile = io.File(sourcePath);
+        final sourceFile = io.File(filePath);
         if (!await sourceFile.exists()) continue;
         await sourceFile.copy('${contributorDir.path}/$targetName');
         copiedCount++;
@@ -715,25 +716,25 @@ class _EventCommunityMediaSectionState extends State<EventCommunityMediaSection>
       return;
     }
 
-    final result = await FilePicker.platform.pickFiles(
-      allowMultiple: true,
-      type: FileType.any,
-      dialogTitle: _i18n.t('add_contribution'),
+    final paths = await FileFolderPicker.show(
+      context,
+      title: _i18n.t('add_contribution'),
+      allowMultiSelect: true,
+      profileStorage: AppService().profileStorage,
     );
 
-    if (result == null || result.files.isEmpty) return;
+    if (paths == null || paths.isEmpty) return;
 
     setState(() => _isUploading = true);
     try {
       int uploaded = 0;
 
-      for (final file in result.files) {
-        final sourcePath = file.path;
-        if (sourcePath == null || sourcePath.isEmpty) continue;
-        final sourceFile = io.File(sourcePath);
+      for (final filePath in paths) {
+        final sourceFile = io.File(filePath);
         if (!await sourceFile.exists()) continue;
 
-        final ext = _normalizeExtension(file.name);
+        final fileName = path.basename(filePath);
+        final ext = _normalizeExtension(fileName);
         final uploadName = 'upload.$ext';
 
         final bytes = await sourceFile.readAsBytes();

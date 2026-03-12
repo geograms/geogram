@@ -79,12 +79,20 @@ class ConferenceSignalingServer {
 
   int get speakerCount => speakerCallsigns.length;
 
+  String? _password;
+  bool _approvalRequired;
+  final Set<String> _bannedCallsigns = {};
+  final Map<String, SignalingParticipant> _pendingParticipants = {};
+
   ConferenceSignalingServer({
     required this.roomId,
     required this.roomName,
     required this.hostCallsign,
     this.maxSpeakers = 6,
-  });
+    String? password,
+    bool approvalRequired = false,
+  }) : _password = password,
+       _approvalRequired = approvalRequired;
 
   /// Start listening on all interfaces at a random available port.
   Future<int> start() async {
@@ -108,13 +116,22 @@ class ConferenceSignalingServer {
   Future<void> stop() async {
     // Notify participants before closing
     final bye = jsonEncode({'type': 'conference_end', 'room_id': roomId});
-    for (final p in _participants.values) {
+    final allParticipants = _participants.values.toList();
+    _participants.clear();
+    for (final p in allParticipants) {
       try {
         p.socket.add(bye);
         await p.socket.close();
       } catch (_) {}
     }
-    _participants.clear();
+    final allPending = _pendingParticipants.values.toList();
+    _pendingParticipants.clear();
+    for (final p in allPending) {
+      try {
+        p.socket.add(bye);
+        await p.socket.close();
+      } catch (_) {}
+    }
 
     await _httpServer?.close(force: true);
     _httpServer = null;
@@ -175,6 +192,7 @@ class ConferenceSignalingServer {
       'participants': participantCallsigns,
       'max_speakers': maxSpeakers,
       'active_screen_sharer': _activeScreenSharerCallsign,
+      'has_password': _password != null && _password!.isNotEmpty,
     };
     request.response
       ..statusCode = HttpStatus.ok
@@ -306,6 +324,8 @@ class ConferenceSignalingServer {
         _relaySignal(sender, message);
       case 'conference_role_change':
         _handleRoleChange(sender, message);
+      case 'conference_join_response':
+        _handleJoinResponse(sender, message);
       case 'conference_leave':
         _removeParticipant(sender.id);
     }
@@ -315,9 +335,67 @@ class ConferenceSignalingServer {
     final callsign = message['callsign'] as String?;
     if (callsign == null || callsign.isEmpty) return;
 
+    sender.callsign = callsign;
+
+    // 1. Check ban
+    if (_bannedCallsigns.contains(callsign.toUpperCase())) {
+      sender.socket.add(jsonEncode({
+        'type': 'conference_error',
+        'error': 'banned',
+        'room_id': roomId,
+      }));
+      try { sender.socket.close(); } catch (_) {}
+      _participants.remove(sender.id);
+      LogService().log('Conference: Rejected banned user $callsign');
+      return;
+    }
+
+    // 2. Check password
+    if (_password != null && _password!.isNotEmpty) {
+      final provided = message['password'] as String?;
+      if (provided != _password) {
+        sender.socket.add(jsonEncode({
+          'type': 'conference_error',
+          'error': 'invalid_password',
+          'room_id': roomId,
+        }));
+        try { sender.socket.close(); } catch (_) {}
+        _participants.remove(sender.id);
+        LogService().log('Conference: Rejected $callsign (wrong password)');
+        return;
+      }
+    }
+
+    // 3. Approval required — park in waiting room
+    if (_approvalRequired) {
+      _pendingParticipants[sender.id] = sender;
+      _participants.remove(sender.id);
+      sender.socket.add(jsonEncode({
+        'type': 'conference_join_pending',
+        'room_id': roomId,
+      }));
+      onHostMessage?.call({
+        'type': 'conference_join_request',
+        'room_id': roomId,
+        'callsign': callsign,
+      });
+      LogService().log('Conference: $callsign parked in waiting room');
+      return;
+    }
+
+    _admitParticipant(sender, message);
+  }
+
+  void _admitParticipant(
+    SignalingParticipant sender,
+    Map<String, dynamic> message,
+  ) {
+    final callsign = sender.callsign;
+    if (callsign == null) return;
+
     final requestedRole = message['role'] as String? ?? 'listener';
 
-    // Enforce speaker limit (only for speakers, listeners are unlimited)
+    // 4. Enforce speaker limit (only for speakers, listeners are unlimited)
     if (requestedRole == 'speaker' && speakerCount >= maxSpeakers) {
       // Downgrade to listener instead of rejecting
       sender.role = 'listener';
@@ -328,12 +406,11 @@ class ConferenceSignalingServer {
       sender.role = requestedRole;
     }
 
-    sender.callsign = callsign;
     LogService().log(
       'Conference participant identified: $callsign (${sender.role})',
     );
 
-    // Send the current participant list to the new joiner
+    // 5. Send welcome with room state
     final existing = <String>{
       hostCallsign,
       ..._participants.values
@@ -359,6 +436,8 @@ class ConferenceSignalingServer {
         'listener_count': listenerCount,
         'max_speakers': maxSpeakers,
         'active_screen_sharer': _activeScreenSharerCallsign,
+        'approval_required': _approvalRequired,
+        'has_password': _password != null && _password!.isNotEmpty,
       }),
     );
 
@@ -698,6 +777,119 @@ class ConferenceSignalingServer {
     };
     _broadcast(jsonEncode(payload));
     onHostMessage?.call(payload);
+  }
+
+  // ── Moderation methods ────────────────────────────────────────
+
+  /// Kick a participant. Optionally ban them from rejoining.
+  void kickParticipant(String callsign, {bool ban = false}) {
+    final target = _participants.values
+        .cast<SignalingParticipant?>()
+        .firstWhere(
+          (p) => p!.callsign?.toUpperCase() == callsign.toUpperCase(),
+          orElse: () => null,
+        );
+
+    if (ban) {
+      _bannedCallsigns.add(callsign.toUpperCase());
+    }
+
+    if (target != null) {
+      target.socket.add(jsonEncode({
+        'type': 'conference_kicked',
+        'room_id': roomId,
+        'ban': ban,
+      }));
+      try { target.socket.close(); } catch (_) {}
+      _participants.remove(target.id);
+    }
+
+    // Broadcast departure
+    _broadcast(jsonEncode({
+      'type': 'conference_participant_left',
+      'callsign': callsign,
+      'reason': 'kicked',
+    }));
+    onHostMessage?.call({
+      'type': 'conference_participant_left',
+      'callsign': callsign,
+      'reason': 'kicked',
+    });
+
+    if (_activeScreenSharerCallsign?.toUpperCase() ==
+        callsign.toUpperCase()) {
+      _activeScreenSharerCallsign = null;
+    }
+
+    LogService().log(
+      'Conference: Kicked $callsign${ban ? ' (banned)' : ''}',
+    );
+  }
+
+  /// Delete a chat message by conference_id.
+  void deleteChatMessage(String conferenceId) {
+    _broadcast(jsonEncode({
+      'type': 'conference_chat_delete',
+      'room_id': roomId,
+      'conference_id': conferenceId,
+    }));
+  }
+
+  /// Handle host's response to a join request (approve/deny).
+  void handleJoinResponse(String callsign, {required bool approved}) {
+    final entry = _pendingParticipants.entries
+        .cast<MapEntry<String, SignalingParticipant>?>()
+        .firstWhere(
+          (e) => e!.value.callsign?.toUpperCase() == callsign.toUpperCase(),
+          orElse: () => null,
+        );
+
+    if (entry == null) return;
+
+    final sender = entry.value;
+    _pendingParticipants.remove(entry.key);
+
+    if (approved) {
+      // Re-add to participants and run normal welcome
+      _participants[sender.id] = sender;
+      _admitParticipant(sender, {'role': 'listener'});
+      LogService().log('Conference: Approved $callsign from waiting room');
+    } else {
+      sender.socket.add(jsonEncode({
+        'type': 'conference_error',
+        'error': 'join_denied',
+        'room_id': roomId,
+      }));
+      try { sender.socket.close(); } catch (_) {}
+      LogService().log('Conference: Denied $callsign from waiting room');
+    }
+  }
+
+  void _handleJoinResponse(
+    SignalingParticipant sender,
+    Map<String, dynamic> message,
+  ) {
+    // Only host can respond
+    if (sender.callsign != hostCallsign) return;
+
+    final callsign = message['callsign'] as String?;
+    final approved = message['approved'] == true;
+    if (callsign == null) return;
+
+    handleJoinResponse(callsign, approved: approved);
+  }
+
+  /// Update moderation settings at runtime.
+  void updateSettings({
+    bool? approvalRequired,
+    String? password,
+  }) {
+    if (approvalRequired != null) {
+      _approvalRequired = approvalRequired;
+    }
+    if (password != null) {
+      _password = password.isEmpty ? null : password;
+    }
   }
 
   void _broadcast(String data, {String? excludeId}) {

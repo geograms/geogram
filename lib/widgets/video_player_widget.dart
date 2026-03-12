@@ -281,6 +281,14 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget> {
     return '${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
   }
 
+  void _handleKeyEvent(KeyEvent event) {
+    if (event is KeyDownEvent &&
+        event.logicalKey == LogicalKeyboardKey.escape &&
+        _isFullscreen) {
+      _toggleFullscreen();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -293,23 +301,28 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget> {
       return _buildLoadingState(theme);
     }
 
-    return MouseRegion(
-      onHover: (_) => _onUserInteraction(),
-      onEnter: (_) => _onUserInteraction(),
-      child: GestureDetector(
-        onTap: _onUserInteraction,
-        onPanDown: (_) => _onUserInteraction(),
-        child: Stack(
-          alignment: Alignment.center,
-          children: [
-            // Video
-            Video(
-              controller: _controller!,
-              controls: NoVideoControls,
-            ),
-            // Controls overlay
-            if (widget.showControls && _showOverlay) _buildControlsOverlay(theme),
-          ],
+    return KeyboardListener(
+      focusNode: FocusNode(),
+      autofocus: _isFullscreen,
+      onKeyEvent: _handleKeyEvent,
+      child: MouseRegion(
+        onHover: (_) => _onUserInteraction(),
+        onEnter: (_) => _onUserInteraction(),
+        child: GestureDetector(
+          onTap: _onUserInteraction,
+          onPanDown: (_) => _onUserInteraction(),
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              // Video
+              Video(
+                controller: _controller!,
+                controls: NoVideoControls,
+              ),
+              // Controls overlay
+              if (widget.showControls && _showOverlay) _buildControlsOverlay(theme),
+            ],
+          ),
         ),
       ),
     );
@@ -462,6 +475,18 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget> {
                         ),
                       ),
                     ),
+                    const SizedBox(width: 4),
+                    // Fullscreen button
+                    IconButton(
+                      icon: const Icon(
+                        Icons.fullscreen,
+                        color: Colors.white,
+                        size: 22,
+                      ),
+                      onPressed: _toggleFullscreen,
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(),
+                    ),
                   ],
                 ),
               ],
@@ -472,20 +497,103 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget> {
     );
   }
 
-  /// Minimal overlay for fullscreen mode - only exit button
+  /// Fullscreen overlay with full controls and exit button
   Widget _buildFullscreenOverlay() {
-    return Align(
-      alignment: Alignment.topRight,
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: IconButton(
-          icon: const Icon(
-            Icons.fullscreen_exit,
-            color: Colors.white,
-            size: 32,
+    final theme = Theme.of(context);
+    return Container(
+      color: Colors.black.withValues(alpha: 0.4),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          // Top bar with exit fullscreen
+          Align(
+            alignment: Alignment.topRight,
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: IconButton(
+                icon: const Icon(
+                  Icons.fullscreen_exit,
+                  color: Colors.white,
+                  size: 32,
+                ),
+                onPressed: _toggleFullscreen,
+              ),
+            ),
           ),
-          onPressed: _toggleFullscreen,
-        ),
+          // Center play/pause area
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              IconButton(
+                icon: const Icon(Icons.replay_10, color: Colors.white, size: 36),
+                onPressed: _seekBackward,
+              ),
+              const SizedBox(width: 24),
+              IconButton(
+                icon: Icon(
+                  _isPlaying ? Icons.pause_circle_filled : Icons.play_circle_filled,
+                  color: Colors.white,
+                  size: 64,
+                ),
+                onPressed: _togglePlayPause,
+              ),
+              const SizedBox(width: 24),
+              IconButton(
+                icon: const Icon(Icons.forward_10, color: Colors.white, size: 36),
+                onPressed: _seekForward,
+              ),
+            ],
+          ),
+          // Bottom bar (progress, time, exit fullscreen)
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: Column(
+              children: [
+                SliderTheme(
+                  data: SliderTheme.of(context).copyWith(
+                    trackHeight: 4,
+                    thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
+                    overlayShape: const RoundSliderOverlayShape(overlayRadius: 12),
+                    activeTrackColor: theme.colorScheme.primary,
+                    inactiveTrackColor: Colors.white.withValues(alpha: 0.3),
+                    thumbColor: theme.colorScheme.primary,
+                  ),
+                  child: Slider(
+                    value: _duration.inMilliseconds > 0
+                        ? (_position.inMilliseconds / _duration.inMilliseconds)
+                            .clamp(0.0, 1.0)
+                        : 0,
+                    onChanged: (value) {
+                      final newPosition = Duration(
+                        milliseconds: (value * _duration.inMilliseconds).round(),
+                      );
+                      _seekTo(newPosition);
+                    },
+                  ),
+                ),
+                Row(
+                  children: [
+                    Text(
+                      '${_formatDuration(_position)} / ${_formatDuration(_duration)}',
+                      style: const TextStyle(color: Colors.white, fontSize: 12),
+                    ),
+                    const Spacer(),
+                    IconButton(
+                      icon: const Icon(
+                        Icons.fullscreen_exit,
+                        color: Colors.white,
+                        size: 22,
+                      ),
+                      onPressed: _toggleFullscreen,
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }

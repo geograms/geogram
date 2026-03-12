@@ -19,6 +19,7 @@ import '../models/station_activity_event.dart';
 import '../services/event_service.dart';
 import '../services/profile_storage.dart';
 import '../util/app_constants.dart';
+import '../util/managed_http_client.dart';
 import '../api/handlers/alert_handler.dart';
 import '../api/handlers/activity_handler.dart';
 import '../api/handlers/apps_handler.dart';
@@ -9396,43 +9397,42 @@ class PureStationServer with HeartbeatMixin, EmailHandlerMixin, BlogHandlerMixin
     final tempFile = File(tempPath);
     await tempFile.parent.create(recursive: true);
 
-    final client = http.Client();
-    try {
-      final upstream = await client.send(http.Request('GET', Uri.parse(url)));
-      if (upstream.statusCode < 200 || upstream.statusCode >= 300) {
-        throw Exception('HTTP ${upstream.statusCode}');
-      }
+    await withHttpClient((client) async {
+      try {
+        final upstream = await client.send(http.Request('GET', Uri.parse(url)));
+        if (upstream.statusCode < 200 || upstream.statusCode >= 300) {
+          throw Exception('HTTP ${upstream.statusCode}');
+        }
 
-      response.headers.contentType =
-          ContentType('application', 'octet-stream');
-      if (upstream.contentLength != null && upstream.contentLength! > 0) {
-        response.headers.contentLength = upstream.contentLength!;
-      }
-      response.headers.add(
-          'Content-Disposition', 'attachment; filename="$filename"');
+        response.headers.contentType =
+            ContentType('application', 'octet-stream');
+        if (upstream.contentLength != null && upstream.contentLength! > 0) {
+          response.headers.contentLength = upstream.contentLength!;
+        }
+        response.headers.add(
+            'Content-Disposition', 'attachment; filename="$filename"');
 
-      final sink = tempFile.openWrite();
-      var totalBytes = 0;
-      await for (final chunk in upstream.stream) {
-        response.add(chunk);
-        sink.add(chunk);
-        totalBytes += chunk.length;
-      }
+        final sink = tempFile.openWrite();
+        var totalBytes = 0;
+        await for (final chunk in upstream.stream) {
+          response.add(chunk);
+          sink.add(chunk);
+          totalBytes += chunk.length;
+        }
 
-      await sink.close();
-      await tempFile.rename(targetPath);
-      _log('INFO',
-          'Cached bot model $filename (${_formatBytes(totalBytes)})');
-    } catch (e) {
-      if (await tempFile.exists()) {
-        try {
-          await tempFile.delete();
-        } catch (_) {}
+        await sink.close();
+        await tempFile.rename(targetPath);
+        _log('INFO',
+            'Cached bot model $filename (${_formatBytes(totalBytes)})');
+      } catch (e) {
+        if (await tempFile.exists()) {
+          try {
+            await tempFile.delete();
+          } catch (_) {}
+        }
+        rethrow;
       }
-      rethrow;
-    } finally {
-      client.close();
-    }
+    });
   }
 
   /// Handle Console VM file requests
@@ -10385,38 +10385,37 @@ class PureStationServer with HeartbeatMixin, EmailHandlerMixin, BlogHandlerMixin
       }
 
       // Download the model using streaming to avoid memory issues
-      final client = http.Client();
-      try {
-        _log('INFO', 'Downloading whisper model: $filename...');
-        final request = http.Request('GET', Uri.parse(url));
-        request.headers['User-Agent'] = 'Geogram-Station-Updater';
+      await withHttpClient((client) async {
+        try {
+          _log('INFO', 'Downloading whisper model: $filename...');
+          final request = http.Request('GET', Uri.parse(url));
+          request.headers['User-Agent'] = 'Geogram-Station-Updater';
 
-        final streamedResponse = await client.send(request).timeout(const Duration(minutes: 60));
+          final streamedResponse = await client.send(request).timeout(const Duration(minutes: 60));
 
-        if (streamedResponse.statusCode == 200) {
-          final sink = file.openWrite();
-          int bytesReceived = 0;
+          if (streamedResponse.statusCode == 200) {
+            final sink = file.openWrite();
+            int bytesReceived = 0;
 
-          await for (final chunk in streamedResponse.stream) {
-            sink.add(chunk);
-            bytesReceived += chunk.length;
+            await for (final chunk in streamedResponse.stream) {
+              sink.add(chunk);
+              bytesReceived += chunk.length;
+            }
+
+            await sink.flush();
+            await sink.close();
+
+            final sizeMb = (bytesReceived / (1024 * 1024)).toStringAsFixed(1);
+            _log('INFO', 'Downloaded whisper model $filename: ${sizeMb}MB');
+            _availableWhisperModels.add(filename);
+            downloaded++;
+          } else {
+            _log('ERROR', 'Failed to download whisper model $filename: ${streamedResponse.statusCode}');
           }
-
-          await sink.flush();
-          await sink.close();
-
-          final sizeMb = (bytesReceived / (1024 * 1024)).toStringAsFixed(1);
-          _log('INFO', 'Downloaded whisper model $filename: ${sizeMb}MB');
-          _availableWhisperModels.add(filename);
-          downloaded++;
-        } else {
-          _log('ERROR', 'Failed to download whisper model $filename: ${streamedResponse.statusCode}');
+        } catch (e) {
+          _log('ERROR', 'Error downloading whisper model $filename: $e');
         }
-      } catch (e) {
-        _log('ERROR', 'Error downloading whisper model $filename: $e');
-      } finally {
-        client.close();
-      }
+      });
     }
 
     _log('INFO', 'Whisper model sync: $downloaded new, $existed existing, ${_availableWhisperModels.length} total');
@@ -10627,38 +10626,37 @@ class PureStationServer with HeartbeatMixin, EmailHandlerMixin, BlogHandlerMixin
         await parentDir.create(recursive: true);
       }
 
-      final client = http.Client();
-      try {
-        _log('INFO', 'Downloading Supertonic model: $filename...');
-        final request = http.Request('GET', Uri.parse(url));
-        request.headers['User-Agent'] = 'Geogram-Station-Updater';
+      await withHttpClient((client) async {
+        try {
+          _log('INFO', 'Downloading Supertonic model: $filename...');
+          final request = http.Request('GET', Uri.parse(url));
+          request.headers['User-Agent'] = 'Geogram-Station-Updater';
 
-        final streamedResponse = await client.send(request).timeout(const Duration(minutes: 60));
+          final streamedResponse = await client.send(request).timeout(const Duration(minutes: 60));
 
-        if (streamedResponse.statusCode == 200) {
-          final sink = file.openWrite();
-          int bytesReceived = 0;
+          if (streamedResponse.statusCode == 200) {
+            final sink = file.openWrite();
+            int bytesReceived = 0;
 
-          await for (final chunk in streamedResponse.stream) {
-            sink.add(chunk);
-            bytesReceived += chunk.length;
+            await for (final chunk in streamedResponse.stream) {
+              sink.add(chunk);
+              bytesReceived += chunk.length;
+            }
+
+            await sink.flush();
+            await sink.close();
+
+            final sizeMb = (bytesReceived / (1024 * 1024)).toStringAsFixed(1);
+            _log('INFO', 'Downloaded Supertonic model $filename: ${sizeMb}MB');
+            _availableSupertonicModels.add(filename);
+            downloaded++;
+          } else {
+            _log('ERROR', 'Failed to download Supertonic model $filename: ${streamedResponse.statusCode}');
           }
-
-          await sink.flush();
-          await sink.close();
-
-          final sizeMb = (bytesReceived / (1024 * 1024)).toStringAsFixed(1);
-          _log('INFO', 'Downloaded Supertonic model $filename: ${sizeMb}MB');
-          _availableSupertonicModels.add(filename);
-          downloaded++;
-        } else {
-          _log('ERROR', 'Failed to download Supertonic model $filename: ${streamedResponse.statusCode}');
+        } catch (e) {
+          _log('ERROR', 'Error downloading Supertonic model $filename: $e');
         }
-      } catch (e) {
-        _log('ERROR', 'Error downloading Supertonic model $filename: $e');
-      } finally {
-        client.close();
-      }
+      });
     }
 
     _log('INFO', 'Supertonic model sync: $downloaded new, $existed existing, ${_availableSupertonicModels.length} total');

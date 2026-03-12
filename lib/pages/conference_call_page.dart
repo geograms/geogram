@@ -32,6 +32,7 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
   Future<void> _screenSyncQueue = Future<void>.value();
   String? _screenRendererStreamId;
   bool _isExitingToHome = false;
+  bool _isWaitingForApproval = false;
 
   @override
   void initState() {
@@ -43,12 +44,38 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
         _returnToConferenceHome();
         return;
       }
+      if (state == ConferenceState.active) {
+        _isWaitingForApproval = false;
+      }
       setState(() {});
     });
 
-    _eventSubscription = _conferenceService.events.listen((_) {
+    _eventSubscription = _conferenceService.events.listen((event) {
       unawaited(_syncRemoteAudio());
       _queueScreenShareSync();
+
+      if (event.type == 'kicked' && mounted) {
+        final data = event.data as Map<String, dynamic>?;
+        final reason = data?['reason'] as String?;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              reason != null && reason.isNotEmpty
+                  ? 'You have been removed from the meeting: $reason'
+                  : 'You have been removed from the meeting',
+            ),
+          ),
+        );
+      } else if (event.type == 'join_pending' && mounted) {
+        setState(() => _isWaitingForApproval = true);
+      } else if (event.type == 'password_required' && mounted) {
+        _showPasswordDialog();
+      } else if (event.type == 'banned' && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('You are banned from this meeting')),
+        );
+      }
+
       if (mounted) setState(() {});
     });
 
@@ -199,6 +226,225 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
     await _conferenceService.sendChatMessage(content);
     if (!mounted) return;
     setState(() {});
+  }
+
+  Future<void> _kickParticipant(String callsign, {bool ban = false}) async {
+    try {
+      await _conferenceService.kickParticipant(callsign, ban: ban);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('$e')),
+        );
+      }
+    }
+  }
+
+  void _showPasswordDialog() {
+    final controller = TextEditingController();
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Meeting Password Required'),
+        content: TextField(
+          controller: controller,
+          obscureText: true,
+          autofocus: true,
+          decoration: const InputDecoration(
+            labelText: 'Password',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              _conferenceService.endConference();
+            },
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              // TODO: retry join with password — requires storing join params
+            },
+            child: const Text('Join'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showHostSettingsSheet() {
+    final room = _conferenceService.room;
+    if (room == null) return;
+
+    var approvalRequired = room.approvalRequired;
+    final passwordController = TextEditingController(
+      text: room.password ?? '',
+    );
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheetState) => Padding(
+          padding: EdgeInsets.fromLTRB(
+            24, 24, 24,
+            MediaQuery.of(ctx).viewInsets.bottom + 24,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                'Meeting Settings',
+                style: Theme.of(ctx).textTheme.titleLarge,
+              ),
+              const SizedBox(height: 20),
+              TextField(
+                controller: passwordController,
+                obscureText: true,
+                decoration: const InputDecoration(
+                  labelText: 'Meeting password',
+                  hintText: 'Leave empty for open access',
+                  border: OutlineInputBorder(),
+                  prefixIcon: Icon(Icons.lock_outline),
+                ),
+              ),
+              const SizedBox(height: 12),
+              SwitchListTile(
+                title: const Text('Require approval to join'),
+                subtitle: const Text(
+                  'New participants wait until you approve',
+                ),
+                value: approvalRequired,
+                onChanged: (v) => setSheetState(
+                  () => approvalRequired = v,
+                ),
+              ),
+              const SizedBox(height: 16),
+              FilledButton(
+                onPressed: () {
+                  final pw = passwordController.text.trim();
+                  _conferenceService.updateModerationSettings(
+                    approvalRequired: approvalRequired,
+                    password: pw.isEmpty ? null : pw,
+                    clearPassword: pw.isEmpty,
+                  );
+                  Navigator.pop(ctx);
+                },
+                child: const Text('Apply'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPeopleList(
+    ThemeData theme,
+    ConferenceRoom? room,
+    List<ConferenceParticipant> participants,
+    bool isHost,
+    String myCallsign,
+  ) {
+    final pendingRequests = room?.pendingJoinRequests ?? {};
+    return ListView(
+      padding: const EdgeInsets.all(8),
+      children: [
+        // Waiting room section (host only)
+        if (isHost && pendingRequests.isNotEmpty) ...[
+          Padding(
+            padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
+            child: Text(
+              'Waiting Room (${pendingRequests.length})',
+              style: theme.textTheme.titleSmall?.copyWith(
+                color: theme.colorScheme.primary,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+          for (final callsign in pendingRequests.keys)
+            Card(
+              margin: const EdgeInsets.symmetric(vertical: 4),
+              child: ListTile(
+                leading: CircleAvatar(
+                  backgroundColor: theme.colorScheme.tertiaryContainer,
+                  child: Icon(
+                    Icons.front_hand,
+                    color: theme.colorScheme.onTertiaryContainer,
+                  ),
+                ),
+                title: Text(callsign),
+                subtitle: Text(
+                  'Waiting for approval',
+                  style: TextStyle(
+                    color: theme.colorScheme.onSurfaceVariant,
+                    fontSize: 12,
+                  ),
+                ),
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    IconButton(
+                      icon: Icon(
+                        Icons.check_circle,
+                        color: theme.colorScheme.primary,
+                      ),
+                      onPressed: () =>
+                          _conferenceService.approveJoinRequest(callsign),
+                      tooltip: 'Approve',
+                    ),
+                    IconButton(
+                      icon: Icon(
+                        Icons.cancel,
+                        color: theme.colorScheme.error,
+                      ),
+                      onPressed: () =>
+                          _conferenceService.denyJoinRequest(callsign),
+                      tooltip: 'Deny',
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          const Divider(),
+        ],
+        // Participant list
+        for (final p in participants) ...[
+          () {
+            final isSelf = p.callsign == myCallsign;
+            final isRelayPresenceOnly =
+                !isHost && !isSelf && p.callsign != room?.hostCallsign;
+            final statusLabel = isRelayPresenceOnly
+                ? 'In room'
+                : (p.isConnected ? 'Connected' : 'Connecting...');
+            return _ParticipantTile(
+              callsign: p.callsign,
+              statusLabel: statusLabel,
+              isConnected: p.isConnected || isRelayPresenceOnly,
+              isMuted: p.isMuted,
+              isSpeaker: p.isSpeaker,
+              hasPendingSpeakerRequest: p.hasPendingSpeakerRequest,
+              hasPendingScreenShareRequest: p.hasPendingScreenShareRequest,
+              isScreenSharing: p.isScreenSharing,
+              isHost: p.callsign == room?.hostCallsign,
+              isMe: isSelf,
+              canManage:
+                  isHost && p.callsign != room?.hostCallsign && !isSelf,
+              onPromote: () => _promoteParticipant(p.callsign),
+              onDemote: () => _demoteParticipant(p.callsign),
+              onApproveScreenShare: () => _approveScreenShare(p.callsign),
+              onKick: () => _kickParticipant(p.callsign),
+              onBan: () => _kickParticipant(p.callsign, ban: true),
+            );
+          }(),
+        ],
+      ],
+    );
   }
 
   Future<void> _syncRemoteAudio() async {
@@ -557,6 +803,12 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
         actions: [
           if (isHost)
             IconButton(
+              icon: const Icon(Icons.settings),
+              onPressed: _showHostSettingsSheet,
+              tooltip: 'Meeting settings',
+            ),
+          if (isHost)
+            IconButton(
               icon: const Icon(Icons.share),
               onPressed: _showShareSheet,
               tooltip: 'Share meeting',
@@ -826,7 +1078,7 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
                     children: [
                       TabBar(
                         tabs: [
-                          Tab(text: 'People (${participants.length})'),
+                          Tab(text: 'People (${participants.length}${isHost && (room?.pendingJoinRequests.isNotEmpty ?? false) ? '+${room!.pendingJoinRequests.length}' : ''})'),
                           Tab(
                             text:
                                 'Chat (${_conferenceService.chatMessages.length})',
@@ -836,7 +1088,26 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
                       Expanded(
                         child: TabBarView(
                           children: [
-                            participants.isEmpty
+                            _isWaitingForApproval
+                                ? Center(
+                                    child: Column(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        const CircularProgressIndicator(),
+                                        const SizedBox(height: 16),
+                                        Text(
+                                          'Waiting for host approval...',
+                                          style: theme.textTheme.bodyLarge
+                                              ?.copyWith(
+                                                color: theme
+                                                    .colorScheme
+                                                    .onSurfaceVariant,
+                                              ),
+                                        ),
+                                      ],
+                                    ),
+                                  )
+                                : participants.isEmpty
                                 ? Center(
                                     child: Text(
                                       'Waiting for participants...',
@@ -848,49 +1119,9 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
                                           ),
                                     ),
                                   )
-                                : ListView.builder(
-                                    padding: const EdgeInsets.all(8),
-                                    itemCount: participants.length,
-                                    itemBuilder: (context, index) {
-                                      final p = participants[index];
-                                      final isSelf = p.callsign == myCallsign;
-                                      final isRelayPresenceOnly =
-                                          !isHost &&
-                                          !isSelf &&
-                                          p.callsign != room?.hostCallsign;
-                                      final statusLabel = isRelayPresenceOnly
-                                          ? 'In room'
-                                          : (p.isConnected
-                                                ? 'Connected'
-                                                : 'Connecting...');
-                                      return _ParticipantTile(
-                                        callsign: p.callsign,
-                                        statusLabel: statusLabel,
-                                        isConnected:
-                                            p.isConnected ||
-                                            isRelayPresenceOnly,
-                                        isMuted: p.isMuted,
-                                        isSpeaker: p.isSpeaker,
-                                        hasPendingSpeakerRequest:
-                                            p.hasPendingSpeakerRequest,
-                                        hasPendingScreenShareRequest:
-                                            p.hasPendingScreenShareRequest,
-                                        isScreenSharing: p.isScreenSharing,
-                                        isHost:
-                                            p.callsign == room?.hostCallsign,
-                                        isMe: isSelf,
-                                        canManage:
-                                            isHost &&
-                                            p.callsign != room?.hostCallsign &&
-                                            !isSelf,
-                                        onPromote: () =>
-                                            _promoteParticipant(p.callsign),
-                                        onDemote: () =>
-                                            _demoteParticipant(p.callsign),
-                                        onApproveScreenShare: () =>
-                                            _approveScreenShare(p.callsign),
-                                      );
-                                    },
+                                : _buildPeopleList(
+                                    theme, room, participants,
+                                    isHost, myCallsign,
                                   ),
                             Column(
                               children: [
@@ -898,6 +1129,20 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
                                   child: MessageListWidget(
                                     messages: _conferenceService.chatMessages,
                                     isGroupChat: true,
+                                    canDeleteMessage: isHost
+                                        ? (_) => true
+                                        : null,
+                                    onMessageDelete: isHost
+                                        ? (msg) {
+                                            final confId = msg.getMeta(
+                                              'conference_id',
+                                            );
+                                            if (confId != null) {
+                                              _conferenceService
+                                                  .deleteChatMessage(confId);
+                                            }
+                                          }
+                                        : null,
                                   ),
                                 ),
                                 MessageInputWidget(
@@ -1026,6 +1271,8 @@ class _ParticipantTile extends StatelessWidget {
   final VoidCallback? onPromote;
   final VoidCallback? onDemote;
   final VoidCallback? onApproveScreenShare;
+  final VoidCallback? onKick;
+  final VoidCallback? onBan;
 
   const _ParticipantTile({
     required this.callsign,
@@ -1042,6 +1289,8 @@ class _ParticipantTile extends StatelessWidget {
     this.onPromote,
     this.onDemote,
     this.onApproveScreenShare,
+    this.onKick,
+    this.onBan,
   });
 
   @override
@@ -1124,6 +1373,39 @@ class _ParticipantTile extends StatelessWidget {
                     minWidth: 36,
                     minHeight: 36,
                   ),
+                ),
+              if (!isHost)
+                PopupMenuButton<String>(
+                  icon: const Icon(Icons.more_vert, size: 20),
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(
+                    minWidth: 36,
+                    minHeight: 36,
+                  ),
+                  onSelected: (value) {
+                    if (value == 'kick') onKick?.call();
+                    if (value == 'ban') onBan?.call();
+                  },
+                  itemBuilder: (_) => [
+                    const PopupMenuItem(
+                      value: 'kick',
+                      child: ListTile(
+                        leading: Icon(Icons.person_remove),
+                        title: Text('Kick'),
+                        dense: true,
+                        contentPadding: EdgeInsets.zero,
+                      ),
+                    ),
+                    const PopupMenuItem(
+                      value: 'ban',
+                      child: ListTile(
+                        leading: Icon(Icons.block),
+                        title: Text('Kick & Ban'),
+                        dense: true,
+                        contentPadding: EdgeInsets.zero,
+                      ),
+                    ),
+                  ],
                 ),
             ],
           ],

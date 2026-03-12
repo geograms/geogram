@@ -6,6 +6,7 @@ import 'dart:convert';
 import '../models/station.dart';
 import '../services/station_service.dart';
 import '../services/log_service.dart';
+import '../util/managed_http_client.dart';
 import '../services/app_args.dart';
 import '../services/devices_service.dart';
 
@@ -529,8 +530,7 @@ class StationDiscoveryService {
     int port,
     int timeoutMs,
   ) async {
-    final client = http.Client();
-    try {
+    return await withHttpClient((client) async {
       final timeout = Duration(milliseconds: timeoutMs);
 
       try {
@@ -635,13 +635,9 @@ class StationDiscoveryService {
       } catch (_) {
         // Not a geogram device
       }
-    } catch (_) {
-      // Connection failed
-    } finally {
-      client.close();
-    }
 
-    return null;
+      return null;
+    });
   }
 
   /// Check if a callsign indicates a station (X3 prefix)

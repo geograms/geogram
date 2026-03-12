@@ -80,10 +80,20 @@ class FileSystemItem {
 /// }
 /// ```
 class FileFolderPicker extends StatefulWidget {
+  /// Common image file extensions.
+  static const imageExtensions = {'jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg'};
+
+  /// Common video file extensions.
+  static const videoExtensions = {'mp4', 'avi', 'mkv', 'mov', 'wmv', 'flv', 'webm'};
+
   final String? initialDirectory;
   final String title;
   final bool allowMultiSelect;
   final bool showHiddenFiles;
+
+  /// When set, only files with these extensions (lowercase, no dot) can be selected.
+  /// Directories are always navigable regardless of this filter.
+  final Set<String>? allowedExtensions;
 
   /// When provided, tapping a file calls this instead of toggling selection.
   /// Used for explorer mode where files are opened directly.
@@ -119,6 +129,7 @@ class FileFolderPicker extends StatefulWidget {
     this.title = 'Select files or folders',
     this.allowMultiSelect = true,
     this.showHiddenFiles = false,
+    this.allowedExtensions,
     this.onFileOpen,
     this.explorerMode = false,
     this.extraLocations,
@@ -135,6 +146,8 @@ class FileFolderPicker extends StatefulWidget {
     String title = 'Select files or folders',
     bool allowMultiSelect = true,
     bool showHiddenFiles = false,
+    Set<String>? allowedExtensions,
+    ProfileStorage? profileStorage,
   }) {
     return Navigator.of(context).push<List<String>>(
       MaterialPageRoute(
@@ -143,6 +156,8 @@ class FileFolderPicker extends StatefulWidget {
           title: title,
           allowMultiSelect: allowMultiSelect,
           showHiddenFiles: showHiddenFiles,
+          allowedExtensions: allowedExtensions,
+          profileStorage: profileStorage,
         ),
       ),
     );
@@ -784,7 +799,15 @@ class FileFolderPickerState extends State<FileFolderPicker> {
     }
   }
 
+  bool _isFileAllowed(FileSystemItem item) {
+    if (item.isDirectory) return true;
+    if (widget.allowedExtensions == null) return true;
+    final ext = p.extension(item.name).replaceFirst('.', '').toLowerCase();
+    return widget.allowedExtensions!.contains(ext);
+  }
+
   void _toggleSelection(FileSystemItem item) {
+    if (!_isFileAllowed(item)) return;
     setState(() {
       if (_selectedPaths.contains(item.path)) {
         _selectedPaths.remove(item.path);
@@ -799,7 +822,9 @@ class FileFolderPickerState extends State<FileFolderPicker> {
 
   void _selectAll() {
     setState(() {
-      _selectedPaths.addAll(_items.map((e) => e.path));
+      _selectedPaths.addAll(
+        _items.where(_isFileAllowed).map((e) => e.path),
+      );
     });
   }
 
@@ -1677,6 +1702,9 @@ class FileFolderPickerState extends State<FileFolderPicker> {
         Widget itemWidget = _buildListItem(item, theme,
           isDropTarget: item.isDirectory && _dragTargetPath == item.path,
         );
+        if (!_isFileAllowed(item)) {
+          itemWidget = Opacity(opacity: 0.4, child: itemWidget);
+        }
         itemWidget = _wrapWithDrag(itemWidget, item, theme);
         if (item.isDirectory) {
           itemWidget = _wrapWithDropTarget(itemWidget, item.path);
@@ -1708,6 +1736,9 @@ class FileFolderPickerState extends State<FileFolderPicker> {
         Widget itemWidget = _buildGridItem(item, theme,
           isDropTarget: item.isDirectory && _dragTargetPath == item.path,
         );
+        if (!_isFileAllowed(item)) {
+          itemWidget = Opacity(opacity: 0.4, child: itemWidget);
+        }
         itemWidget = _wrapWithDrag(itemWidget, item, theme);
         if (item.isDirectory) {
           itemWidget = _wrapWithDropTarget(itemWidget, item.path);

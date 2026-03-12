@@ -9,6 +9,7 @@ import 'package:html/parser.dart' as html_parser;
 import 'package:html/dom.dart';
 import 'package:http/http.dart' as http;
 
+import '../../util/managed_http_client.dart';
 import '../models/manga_extension.dart';
 import '../../services/log_service.dart';
 
@@ -26,7 +27,7 @@ class MangaScraper {
   factory MangaScraper() => _instance;
   MangaScraper._internal();
 
-  final _client = http.Client();
+  final _client = ManagedHttpClient();
 
   /// Track last request time per extension for rate limiting
   final Map<String, DateTime> _lastRequestTime = {};

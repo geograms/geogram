@@ -6,8 +6,7 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:http/http.dart' as http;
-
+import '../util/managed_http_client.dart';
 import '../models/conference_archive_entry.dart';
 import '../models/conference_schedule_entry.dart';
 import '../services/conference_archive_service.dart';
@@ -41,6 +40,7 @@ class _ConferenceHomePageState extends State<ConferenceHomePage> {
   List<Map<String, dynamic>> _nearbyMeetings = [];
   bool _scanning = false;
   Timer? _scanTimer;
+  final ManagedHttpClient _scanClient = ManagedHttpClient();
   List<ConferenceArchiveEntry> _historyEntries =
       const <ConferenceArchiveEntry>[];
   List<ConferenceScheduleEntry> _scheduledEntries =
@@ -79,11 +79,13 @@ class _ConferenceHomePageState extends State<ConferenceHomePage> {
   void dispose() {
     _stateSub?.cancel();
     _scanTimer?.cancel();
+    _scanClient.close();
     super.dispose();
   }
 
   Future<void> _scanForMeetings() async {
     if (_scanning) return;
+
     setState(() => _scanning = true);
 
     final devices = DevicesService().getAllDevices();
@@ -108,31 +110,26 @@ class _ConferenceHomePageState extends State<ConferenceHomePage> {
       debugPrint('MEET_SCAN:   ${d.callsign} url=${d.url}');
     }
 
-    final client = http.Client();
-    try {
-      await Future.wait(
-        candidates.map((d) async {
-          try {
-            final url = '${d.url}/api/meet/active';
-            debugPrint('MEET_SCAN: Checking $url');
-            final resp = await client
-                .get(Uri.parse(url))
-                .timeout(const Duration(seconds: 3));
-            debugPrint('MEET_SCAN:   ${d.callsign} -> ${resp.statusCode}');
-            if (resp.statusCode == 200) {
-              final data = jsonDecode(resp.body) as Map<String, dynamic>;
-              data['device_nickname'] = d.nickname ?? d.name;
-              data['device_url'] = d.url;
-              results.add(data);
-            }
-          } catch (e) {
-            debugPrint('MEET_SCAN:   ${d.callsign} -> ERROR: $e');
+    await Future.wait(
+      candidates.map((d) async {
+        try {
+          final url = '${d.url}/api/meet/active';
+          debugPrint('MEET_SCAN: Checking $url');
+          final resp = await _scanClient
+              .get(Uri.parse(url))
+              .timeout(const Duration(seconds: 3));
+          debugPrint('MEET_SCAN:   ${d.callsign} -> ${resp.statusCode}');
+          if (resp.statusCode == 200) {
+            final data = jsonDecode(resp.body) as Map<String, dynamic>;
+            data['device_nickname'] = d.nickname ?? d.name;
+            data['device_url'] = d.url;
+            results.add(data);
           }
-        }),
-      );
-    } finally {
-      client.close();
-    }
+        } catch (e) {
+          debugPrint('MEET_SCAN:   ${d.callsign} -> ERROR: $e');
+        }
+      }),
+    );
 
     if (mounted) {
       setState(() {

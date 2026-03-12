@@ -7,6 +7,7 @@ import '../models/conference_archive_entry.dart';
 import '../services/conference_archive_service.dart';
 import '../services/file_launcher_service.dart';
 import '../widgets/message_list_widget.dart';
+import '../widgets/video_player_widget.dart';
 
 class ConferenceArchiveDetailPage extends StatefulWidget {
   final ConferenceArchiveEntry entry;
@@ -28,6 +29,10 @@ class _ConferenceArchiveDetailPageState
   bool _loading = true;
   bool _openingAsset = false;
   String? _error;
+
+  ConferenceArchiveAsset? _playingRecording;
+  String? _playingRecordingPath;
+  bool _isFullscreen = false;
 
   ConferenceArchiveEntry get _currentEntry => _entry ?? widget.entry;
 
@@ -56,6 +61,9 @@ class _ConferenceArchiveDetailPageState
         _messages = messages;
         _loading = false;
       });
+      if (refreshed.recordings.isNotEmpty && _playingRecording == null) {
+        _playRecording(refreshed.recordings.first);
+      }
     } catch (error) {
       if (!mounted) {
         return;
@@ -105,6 +113,43 @@ class _ConferenceArchiveDetailPageState
         setState(() => _openingAsset = false);
       }
     }
+  }
+
+  Future<void> _playRecording(ConferenceArchiveAsset asset) async {
+    if (_openingAsset) return;
+
+    setState(() => _openingAsset = true);
+    try {
+      final path = await _archiveService.exportArchiveFileToTemporaryPath(
+        _currentEntry,
+        asset.relativePath,
+      );
+      if (!mounted) return;
+      if (path == null) {
+        throw StateError('Unable to export ${asset.name}');
+      }
+      setState(() {
+        _playingRecording = asset;
+        _playingRecordingPath = path;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Unable to play ${asset.name}: $error')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _openingAsset = false);
+      }
+    }
+  }
+
+  void _stopPlayback() {
+    setState(() {
+      _playingRecording = null;
+      _playingRecordingPath = null;
+      _isFullscreen = false;
+    });
   }
 
   Future<void> _editTags() async {
@@ -201,6 +246,58 @@ class _ConferenceArchiveDetailPageState
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
+        if (_playingRecording != null && _playingRecordingPath != null)
+          Card(
+            clipBehavior: Clip.antiAlias,
+            margin: const EdgeInsets.only(bottom: 16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 8, 0),
+                  child: Row(
+                    children: [
+                      Icon(Icons.play_arrow,
+                          size: 18, color: theme.colorScheme.primary),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          _playingRecording!.name,
+                          style: theme.textTheme.titleSmall,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.close),
+                        tooltip: 'Stop playback',
+                        onPressed: _stopPlayback,
+                      ),
+                    ],
+                  ),
+                ),
+                AspectRatio(
+                  aspectRatio: 16 / 9,
+                  child: VideoPlayerWidget(
+                    videoPath: _playingRecordingPath!,
+                    autoPlay: true,
+                    onFullscreenToggle: () {
+                      setState(() => _isFullscreen = !_isFullscreen);
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+        if (entry.recordings.isNotEmpty)
+          _AssetSection(
+            title: 'Recordings',
+            icon: Icons.fiber_manual_record,
+            assets: entry.recordings,
+            emptyLabel: '',
+            openingDisabled: _openingAsset,
+            onOpenAsset: _playRecording,
+            isRecording: true,
+          ),
         _InfoCard(
           title: 'Tags',
           children: [
@@ -312,25 +409,16 @@ class _ConferenceArchiveDetailPageState
     return MessageListWidget(messages: _messages, isGroupChat: true);
   }
 
-  Widget _buildAssetsTab(ThemeData theme) {
+  Widget _buildFilesTab(ThemeData theme) {
     final entry = _currentEntry;
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
         _AssetSection(
-          title: 'Recordings',
-          icon: Icons.fiber_manual_record,
-          assets: entry.recordings,
-          emptyLabel: 'No recordings archived for this meeting',
-          openingDisabled: _openingAsset,
-          onOpenAsset: _openAsset,
-        ),
-        const SizedBox(height: 16),
-        _AssetSection(
           title: 'Files',
           icon: Icons.attach_file,
           assets: entry.files,
-          emptyLabel: 'No files archived for this meeting',
+          emptyLabel: 'No files shared in this meeting',
           openingDisabled: _openingAsset,
           onOpenAsset: _openAsset,
         ),
@@ -343,6 +431,32 @@ class _ConferenceArchiveDetailPageState
     final theme = Theme.of(context);
     final entry = _currentEntry;
 
+    if (_isFullscreen && _playingRecordingPath != null) {
+      return Scaffold(
+        body: VideoPlayerWidget(
+          videoPath: _playingRecordingPath!,
+          autoPlay: true,
+          onFullscreenToggle: () {
+            setState(() => _isFullscreen = !_isFullscreen);
+          },
+        ),
+      );
+    }
+
+    final hasChat = _messages.isNotEmpty;
+    final hasFiles = entry.files.isNotEmpty;
+
+    final tabs = <Tab>[
+      const Tab(text: 'Summary'),
+      if (hasChat) const Tab(text: 'Chat'),
+      if (hasFiles) const Tab(text: 'Files'),
+    ];
+    final tabViews = <Widget>[
+      _buildSummaryTab(theme),
+      if (hasChat) _buildChatTab(theme),
+      if (hasFiles) _buildFilesTab(theme),
+    ];
+
     return Scaffold(
       appBar: AppBar(
         title: Text(entry.roomName),
@@ -354,29 +468,18 @@ class _ConferenceArchiveDetailPageState
           ),
         ],
       ),
-      body: DefaultTabController(
-        length: 3,
-        child: Column(
-          children: [
-            const TabBar(
-              tabs: [
-                Tab(text: 'Summary'),
-                Tab(text: 'Chat'),
-                Tab(text: 'Archive'),
-              ],
-            ),
-            Expanded(
-              child: TabBarView(
+      body: tabs.length == 1
+          ? _buildSummaryTab(theme)
+          : DefaultTabController(
+              key: ValueKey(tabs.length),
+              length: tabs.length,
+              child: Column(
                 children: [
-                  _buildSummaryTab(theme),
-                  _buildChatTab(theme),
-                  _buildAssetsTab(theme),
+                  TabBar(tabs: tabs),
+                  Expanded(child: TabBarView(children: tabViews)),
                 ],
               ),
             ),
-          ],
-        ),
-      ),
     );
   }
 }
@@ -388,6 +491,7 @@ class _AssetSection extends StatelessWidget {
   final String emptyLabel;
   final bool openingDisabled;
   final Future<void> Function(ConferenceArchiveAsset asset) onOpenAsset;
+  final bool isRecording;
 
   const _AssetSection({
     required this.title,
@@ -396,6 +500,7 @@ class _AssetSection extends StatelessWidget {
     required this.emptyLabel,
     required this.openingDisabled,
     required this.onOpenAsset,
+    this.isRecording = false,
   });
 
   @override
@@ -432,14 +537,17 @@ class _AssetSection extends StatelessWidget {
                 (asset) => ListTile(
                   contentPadding: EdgeInsets.zero,
                   leading: Icon(
-                    Icons.insert_drive_file,
+                    isRecording
+                        ? Icons.videocam
+                        : Icons.insert_drive_file,
                     color: theme.colorScheme.onSurfaceVariant,
                   ),
                   title: Text(asset.name),
                   subtitle: Text(_formatAssetSubtitle(asset)),
                   trailing: IconButton(
-                    icon: const Icon(Icons.open_in_new),
-                    tooltip: 'Open file',
+                    icon: Icon(
+                        isRecording ? Icons.play_arrow : Icons.open_in_new),
+                    tooltip: isRecording ? 'Play recording' : 'Open file',
                     onPressed: openingDisabled
                         ? null
                         : () => onOpenAsset(asset),

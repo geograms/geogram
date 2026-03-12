@@ -25,6 +25,10 @@ This document catalogs reusable UI components available in the Geogram codebase.
 - [RouteResult](#routeresult) - Route calculation result (polyline, distance, duration)
 - [MapTileService.getStationBaseUrl](#maptileservicegetstationbaseurl) - Station HTTP base URL (reusable for tiles and road data)
 
+### HTTP Client Utilities
+- [ManagedHttpClient](#managedhttpclient) - Persistent HTTP client with circuit breaker (drop-in `http.Client` replacement)
+- [withHttpClient](#withhttpclient) - One-shot HTTP client with guaranteed cleanup
+
 ### Cache & File System
 - [CacheServiceBase](#cacheservicebase) - Shared relay cache logic for Desktop and CLI stations
 - [FileSystemService path utilities](#filesystemservice-path-utilities) - Cross-platform path handling (Windows `\` + Unix `/`)
@@ -46,7 +50,7 @@ This document catalogs reusable UI components available in the Geogram codebase.
 - [ConferenceHostPeerManager](#conferencehostpeermanager) - Host-side SFU WebRTC manager (one connection per participant, track forwarding)
 - [ConferenceParticipantPeerManager](#conferenceparticipantpeermanager) - Participant-side SFU WebRTC manager (single connection to host)
 - [ConferencePeerManager](#conferencepeermanager) - Legacy audio WebRTC mesh peer connections (deprecated)
-- [ConferenceService](#conferenceservice) - Orchestration (SFU topology, host/join, role management, promote/demote)
+- [ConferenceService](#conferenceservice) - Orchestration (SFU topology, host/join, role management, promote/demote, kick/ban, password, approval mode, chat delete)
 
 ### Karma Gamification
 - [KarmaMixin](#karmamixin) - Station mixin: `karmaRecord()`, API handlers, periodic leaderboard recomputation
@@ -486,6 +490,7 @@ if (selected != null && selected.isNotEmpty) {
 | `title` | String | No | 'Select files or folders' | Dialog title |
 | `allowMultiSelect` | bool | No | true | Enable multi-selection |
 | `showHiddenFiles` | bool | No | false | Show hidden files initially |
+| `allowedExtensions` | Set\<String\>? | No | null | Only allow selecting files with these extensions (lowercase, no dot). Non-matching files are dimmed. Directories always navigable. |
 | `explorerMode` | bool | No | false | Hide selection UI; files opened via `onFileOpen` |
 | `onFileOpen` | ValueChanged\<String\>? | No | null | Called when a file is tapped in explorer mode |
 | `extraLocations` | List\<StorageLocation\>? | No | null | Additional storage shortcuts in the location bar |
@@ -507,6 +512,22 @@ FileFolderPicker(
     ),
   ],
 )
+```
+
+**Extension filter constants:**
+| Constant | Extensions |
+|----------|-----------|
+| `FileFolderPicker.imageExtensions` | jpg, jpeg, png, gif, webp, bmp, svg |
+| `FileFolderPicker.videoExtensions` | mp4, avi, mkv, mov, wmv, flv, webm |
+
+**Filtered picker example:**
+```dart
+final photos = await FileFolderPicker.show(
+  context,
+  title: 'Select photos',
+  allowMultiSelect: true,
+  allowedExtensions: FileFolderPicker.imageExtensions,
+);
 ```
 
 ---
@@ -10890,3 +10911,54 @@ final name = FileSystemService.instance.fileName(path);  // Works everywhere
 ```
 
 **Used in**: All code that extracts names from filesystem paths
+
+---
+
+## ManagedHttpClient
+
+**File**: `lib/util/managed_http_client.dart`
+
+Drop-in replacement for `http.Client` with a built-in circuit breaker. Extends `http.BaseClient` so all standard methods (`.get()`, `.post()`, `.put()`, `.delete()`, `.send()`) work identically.
+
+Use for **persistent** HTTP clients in services that make repeated requests. The circuit breaker tracks consecutive failures and short-circuits requests when the threshold is reached, preventing FD exhaustion cascades.
+
+```dart
+import '../util/managed_http_client.dart';
+
+class MyService {
+  final ManagedHttpClient _client = ManagedHttpClient();
+
+  Future<void> fetchData() async {
+    final resp = await _client.get(Uri.parse(url)).timeout(Duration(seconds: 5));
+    // ...
+  }
+
+  void dispose() => _client.close();
+}
+```
+
+**Properties**: `isCircuitOpen`, `consecutiveErrors`, `resetCircuit()`
+**Constructor**: `ManagedHttpClient({int circuitBreakerThreshold = 5})`
+
+**Used in**: `ConnectionManager`, `LanTransport`, `MapTileService`, `StationService`, `ConferenceHomePage`, `MangaScraper`, `WebSnapshotService`
+
+---
+
+## withHttpClient
+
+**File**: `lib/util/managed_http_client.dart`
+
+One-shot HTTP client wrapper that guarantees cleanup. Use for infrequent/one-off requests where a persistent client is unnecessary.
+
+```dart
+import '../util/managed_http_client.dart';
+
+final bytes = await withHttpClient((client) async {
+  final resp = await client.get(Uri.parse(url)).timeout(Duration(seconds: 10));
+  return resp.bodyBytes;
+});
+```
+
+The client is always closed in a `finally` block after the callback completes or fails.
+
+**Used in**: `TransferWorker`, `FlasherService`, `StationServer`, `PureStationServer`, `WhisperLibraryService`, `UpdateService`, `StationServerService`, `StationDiscoveryService`, `WebSnapshotViewerPage`

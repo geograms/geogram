@@ -5,6 +5,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:http/http.dart' as http;
+import '../../util/managed_http_client.dart';
 import '../../services/log_service.dart';
 import '../../services/app_args.dart';
 import '../../services/security_service.dart';
@@ -44,7 +45,7 @@ class LanTransport extends Transport with TransportMixin {
   /// HTTP timeout for reachability checks
   final Duration reachabilityTimeout;
 
-  final http.Client _client = http.Client();
+  final ManagedHttpClient _client = ManagedHttpClient();
 
   LanTransport({
     this.timeout = const Duration(seconds: 5),

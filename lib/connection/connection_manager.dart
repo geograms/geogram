@@ -6,6 +6,7 @@ import 'dart:collection';
 import 'dart:convert';
 import 'package:async/async.dart';
 import 'package:http/http.dart' as http;
+import '../util/managed_http_client.dart';
 import '../services/log_service.dart';
 import '../services/log_api_service.dart';
 import '../services/power_aware_service.dart';
@@ -65,7 +66,7 @@ class ConnectionManager {
   Timer? _queueProcessTimer;
 
   /// Shared HTTP client for P2P forwarding (to localhost)
-  final http.Client _httpClient = http.Client();
+  final ManagedHttpClient _httpClient = ManagedHttpClient();
 
   /// Power-aware subscription
   StreamSubscription<PowerMode>? _powerSubscription;

@@ -5,7 +5,6 @@
 
 import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:file_picker/file_picker.dart';
 import 'package:path/path.dart' as path;
 import 'package:latlong2/latlong.dart';
 
@@ -23,6 +22,7 @@ import '../services/profile_service.dart';
 import '../services/profile_storage.dart';
 import '../services/i18n_service.dart';
 import '../services/location_service.dart';
+import '../widgets/file_folder_picker.dart';
 import '../widgets/transcribe_button_widget.dart';
 import 'contact_picker_page.dart';
 import 'location_picker_page.dart';
@@ -411,13 +411,17 @@ class _NewEventPageState extends State<NewEventPage>
   }
 
   Future<void> _selectTrailer() async {
-    final result = await FilePicker.platform.pickFiles(
-      type: FileType.video,
-      dialogTitle: _i18n.t('select_trailer_video'),
+    final paths = await FileFolderPicker.show(
+      context,
+      title: _i18n.t('select_trailer_video'),
+      allowMultiSelect: false,
+      allowedExtensions: FileFolderPicker.videoExtensions,
+      profileStorage: AppService().profileStorage,
     );
 
-    if (result != null && result.files.single.path != null) {
-      final originalFileName = result.files.single.name;
+    if (paths != null && paths.isNotEmpty) {
+      final filePath = paths.first;
+      final originalFileName = path.basename(filePath);
       final extension = path.extension(originalFileName).replaceFirst('.', '').toLowerCase();
       final trailerFileName = extension.isNotEmpty
           ? 'trailer.$extension'
@@ -425,7 +429,7 @@ class _NewEventPageState extends State<NewEventPage>
 
       setState(() {
         _trailer = _PendingFile(
-          path: result.files.single.path!,
+          path: filePath,
           name: originalFileName,
           targetName: trailerFileName,
         );
@@ -440,13 +444,17 @@ class _NewEventPageState extends State<NewEventPage>
   }
 
   Future<void> _selectFlyer() async {
-    final result = await FilePicker.platform.pickFiles(
-      type: FileType.image,
-      dialogTitle: _i18n.t('select_flyer_image'),
+    final paths = await FileFolderPicker.show(
+      context,
+      title: _i18n.t('select_flyer_image'),
+      allowMultiSelect: false,
+      allowedExtensions: FileFolderPicker.imageExtensions,
+      profileStorage: AppService().profileStorage,
     );
 
-    if (result != null && result.files.single.path != null) {
-      final originalFileName = result.files.single.name;
+    if (paths != null && paths.isNotEmpty) {
+      final filePath = paths.first;
+      final originalFileName = path.basename(filePath);
       final extension = path.extension(originalFileName).replaceFirst('.', '').toLowerCase();
 
       String flyerFileName;
@@ -468,7 +476,7 @@ class _NewEventPageState extends State<NewEventPage>
       setState(() {
         _flyers.add(
           _PendingFile(
-            path: result.files.single.path!,
+            path: filePath,
             name: originalFileName,
             targetName: flyerFileName,
           ),
@@ -484,21 +492,23 @@ class _NewEventPageState extends State<NewEventPage>
   }
 
   Future<void> _selectMediaFiles() async {
-    final result = await FilePicker.platform.pickFiles(
-      allowMultiple: true,
-      dialogTitle: _i18n.t('add_files'),
+    final paths = await FileFolderPicker.show(
+      context,
+      title: _i18n.t('add_files'),
+      allowMultiSelect: true,
+      profileStorage: AppService().profileStorage,
     );
 
-    if (result == null) return;
+    if (paths == null || paths.isEmpty) return;
 
     final pending = <_PendingFile>[];
-    for (final file in result.files) {
-      if (file.path == null) continue;
+    for (final filePath in paths) {
+      final fileName = path.basename(filePath);
       pending.add(
         _PendingFile(
-          path: file.path!,
-          name: file.name,
-          targetName: file.name,
+          path: filePath,
+          name: fileName,
+          targetName: fileName,
         ),
       );
     }
@@ -1257,18 +1267,19 @@ class _NewEventPageState extends State<NewEventPage>
   }
 
   Future<void> _selectPhotos() async {
-    final result = await FilePicker.platform.pickFiles(
-      type: FileType.image,
-      allowMultiple: true,
-      dialogTitle: _i18n.t('select_photos'),
+    final paths = await FileFolderPicker.show(
+      context,
+      title: _i18n.t('select_photos'),
+      allowMultiSelect: true,
+      allowedExtensions: FileFolderPicker.imageExtensions,
+      profileStorage: AppService().profileStorage,
     );
 
-    if (result == null || result.files.isEmpty) return;
+    if (paths == null || paths.isEmpty) return;
 
     setState(() {
-      for (final file in result.files) {
-        if (file.path == null) continue;
-        final originalFileName = file.name;
+      for (final filePath in paths) {
+        final originalFileName = path.basename(filePath);
         final extension = path.extension(originalFileName).replaceFirst('.', '').toLowerCase();
 
         final existingNames = _flyers.map((f) => f.targetName).toList();
@@ -1276,7 +1287,7 @@ class _NewEventPageState extends State<NewEventPage>
 
         _flyers.add(
           _PendingFile(
-            path: file.path!,
+            path: filePath,
             name: originalFileName,
             targetName: flyerFileName,
           ),

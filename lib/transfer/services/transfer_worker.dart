@@ -10,6 +10,7 @@ import 'package:path/path.dart' as path;
 import '../../connection/connection_manager.dart';
 import '../../services/log_service.dart';
 import '../../util/event_bus.dart';
+import '../../util/managed_http_client.dart';
 import '../models/transfer_models.dart';
 
 /// Callback for transfer progress updates
@@ -141,8 +142,7 @@ class TransferWorker {
       if (isHttpUrl) {
         transfer.transportUsed = 'internet_http';
         final uri = Uri.parse(transfer.remoteUrl!);
-        final client = http.Client();
-        try {
+        await withHttpClient((client) async {
           final request = http.Request('GET', uri);
           // Apply custom headers from metadata (used by manga downloads, etc.)
           final customHeaders =
@@ -181,9 +181,7 @@ class TransferWorker {
           await sink.close();
           bytesWritten = received;
           transfer.bytesTransferred = bytesWritten;
-        } finally {
-          client.close();
-        }
+        });
       } else if (isBotModelPath && transfer.sourceStationUrl != null) {
         transfer.transportUsed = 'station_http';
         bytesWritten = await _streamDownloadFromStation(
@@ -330,8 +328,7 @@ class TransferWorker {
     final baseUri = Uri.parse(httpBase);
     final uri = baseUri.resolve(requestPath);
 
-    final client = http.Client();
-    try {
+    return await withHttpClient((client) async {
       final request = http.Request('GET', uri);
       final response = await client.send(request).timeout(timeout);
 
@@ -361,9 +358,7 @@ class TransferWorker {
 
       await sink.close();
       return bytesWritten;
-    } finally {
-      client.close();
-    }
+    });
   }
 
   String _resolveHttpBase(String stationUrl) {
