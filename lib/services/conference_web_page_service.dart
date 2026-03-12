@@ -7,6 +7,7 @@ class ConferenceWebPageConfig {
   final String roomId;
   final String roomName;
   final String hostCallsign;
+  final String? hostNickname;
   final int participantCount;
   final int maxParticipants;
   final String transportMode;
@@ -28,6 +29,7 @@ class ConferenceWebPageConfig {
     required this.roomId,
     required this.roomName,
     required this.hostCallsign,
+    this.hostNickname,
     required this.participantCount,
     required this.maxParticipants,
     required this.transportMode,
@@ -77,10 +79,16 @@ class ConferenceWebPageService {
     final globalStyles = await themeService.getGlobalStyles() ?? '';
     final appStyles = await themeService.getAppStyles('meet') ?? '';
 
+    final hostDisplay = config.hostNickname != null &&
+            config.hostNickname!.isNotEmpty
+        ? '${config.hostNickname} (${config.hostCallsign})'
+        : config.hostCallsign;
+
     final dataJson = _jsonForScript({
       'roomId': config.roomId,
       'roomName': config.roomName,
       'hostCallsign': config.hostCallsign,
+      'hostDisplay': hostDisplay,
       'participantCount': config.participantCount,
       'maxParticipants': config.maxParticipants,
       'transportMode': config.transportMode,
@@ -100,7 +108,7 @@ class ConferenceWebPageService {
       'TITLE': _escape(config.roomName),
       'LOGO_TEXT': _escape(config.logoText),
       'ROOM_SUBTITLE': _escape(
-        'Hosted by ${config.hostCallsign} · '
+        'Hosted by $hostDisplay · '
         '${config.participantCount} participant${config.participantCount == 1 ? '' : 's'} · '
         'up to ${config.maxParticipants} speakers',
       ),
@@ -293,6 +301,17 @@ function escapeHtml(value) {
     .replace(/'/g, '&#39;');
 }
 
+function friendlyError(code) {
+  var messages = {
+    'room_not_found': 'This meeting is not active right now.',
+    'invalid_request': 'The request could not be processed.',
+    'room_full': 'The meeting has reached its maximum number of speakers.',
+    'not_authorized': 'You are not authorized to perform this action.',
+    'already_joined': 'You are already in this meeting.'
+  };
+  return messages[code] || code;
+}
+
 function getPreferredNickname() {
   return nicknameInput.value.trim() ||
     getStoredNickname() ||
@@ -317,13 +336,12 @@ function formatDateTimeLabel(value) {
   if (Number.isNaN(date.getTime())) {
     return value;
   }
-  return date.toLocaleString([], {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit'
-  });
+  var y = date.getFullYear();
+  var m = String(date.getMonth() + 1).padStart(2, '0');
+  var d = String(date.getDate()).padStart(2, '0');
+  var h = String(date.getHours()).padStart(2, '0');
+  var min = String(date.getMinutes()).padStart(2, '0');
+  return y + '-' + m + '-' + d + ' ' + h + ':' + min;
 }
 
 function enableJoinButtons() {
@@ -540,11 +558,10 @@ function renderArchiveSummary() {
   }
   participantsEl.innerHTML = '';
   const items = [];
-  if (CONFIG.hostCallsign) items.push(['Host', CONFIG.hostCallsign]);
+  if (CONFIG.hostCallsign) items.push(['Host', CONFIG.hostDisplay || CONFIG.hostCallsign]);
   if (CONFIG.scheduledAt) items.push(['Scheduled', formatDateTimeLabel(CONFIG.scheduledAt)]);
   if (CONFIG.startedAt) items.push(['Started', formatDateTimeLabel(CONFIG.startedAt)]);
   if (CONFIG.endedAt) items.push(['Ended', formatDateTimeLabel(CONFIG.endedAt)]);
-  if (CONFIG.stationMeetUrl) items.push(['Link', CONFIG.stationMeetUrl]);
   items.forEach(function(item) {
     const li = document.createElement('li');
     li.innerHTML =
@@ -1093,7 +1110,7 @@ async function handleMessage(message) {
       break;
 
     case 'conference_error':
-      setStatus('Error: ' + (message.message || message.error || 'unknown'));
+      setStatus(friendlyError(message.message || message.error || 'unknown'));
       enableJoinButtons();
       break;
 

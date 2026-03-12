@@ -1250,6 +1250,7 @@ class ConferenceService {
           roomId: roomId,
           roomName: roomName,
           hostCallsign: callsign,
+          hostNickname: ProfileService().getProfile().nickname,
           participantCount: 1,
           maxParticipants: maxSpeakers,
           transportMode: ConferenceSignalingMode.lan.name,

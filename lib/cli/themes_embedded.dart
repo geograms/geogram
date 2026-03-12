@@ -2365,9 +2365,8 @@ class ThemesEmbedded {
   <main class="main">
     <div class="meeting-shell">
       <section class="meeting-card">
-        <h1 class="meeting-title">{{ROOM_TITLE}}</h1>
-        <div class="meeting-subtitle">{{ROOM_SUBTITLE}}</div>
         <div class="meeting-description"{{ROOM_DESCRIPTION_ATTR}}>{{ROOM_DESCRIPTION}}</div>
+        <div class="meeting-subtitle">{{ROOM_SUBTITLE}}</div>
         <div id="status">{{STATUS_TEXT}}</div>
         <div id="meeting-note" class="meeting-note"></div>
         <div id="nostr-gate-msg">Use the identity button above to authenticate before joining the meeting.</div>
@@ -2463,13 +2462,7 @@ class ThemesEmbedded {
   background: rgba(0, 0, 0, 0.08);
 }
 
-.meeting-title {
-  margin: 0 0 6px 0;
-  font-size: 1.4rem;
-}
-
 .meeting-subtitle,
-.meeting-description,
 #status,
 #meeting-note,
 #nostr-gate-msg,
@@ -2479,7 +2472,8 @@ class ThemesEmbedded {
 }
 
 .meeting-description {
-  margin: 6px 0 2px 0;
+  margin: 0 0 6px 0;
+  font-size: 1.1rem;
   font-style: italic;
 }
 

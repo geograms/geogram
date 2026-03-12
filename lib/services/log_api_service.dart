@@ -1126,6 +1126,7 @@ class LogApiService with ChatModificationMixin {
 
     final htmlHeaders = Map<String, String>.from(headers);
     htmlHeaders['Content-Type'] = 'text/html; charset=utf-8';
+    final hostNickname = ProfileService().getProfile().nickname;
     late final ConferenceWebPageConfig config;
 
     if (snapshot.state == 'active') {
@@ -1138,6 +1139,7 @@ class LogApiService with ChatModificationMixin {
         roomId: room.roomId,
         roomName: room.roomName,
         hostCallsign: room.hostCallsign,
+        hostNickname: hostNickname,
         participantCount: room.participants.length,
         maxParticipants: room.maxSpeakers,
         transportMode: room.signalingMode.name,
@@ -1154,6 +1156,7 @@ class LogApiService with ChatModificationMixin {
         roomId: schedule.roomId,
         roomName: schedule.roomName,
         hostCallsign: schedule.hostCallsign,
+        hostNickname: hostNickname,
         participantCount: 0,
         maxParticipants: schedule.maxSpeakers,
         transportMode: schedule.stationMeetUrl?.isNotEmpty == true
@@ -1176,6 +1179,7 @@ class LogApiService with ChatModificationMixin {
         roomId: archive.roomId,
         roomName: archive.roomName,
         hostCallsign: archive.hostCallsign,
+        hostNickname: hostNickname,
         participantCount: archive.participants.length,
         maxParticipants: archive.speakers.length,
         transportMode: archive.signalingMode,
