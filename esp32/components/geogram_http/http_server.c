@@ -75,7 +75,7 @@ static void aprs_tx_queue_init(void)
     if (s_aprs_tx_queue == NULL) {
         s_aprs_tx_queue = xQueueCreate(4, sizeof(aprs_tx_item_t));
         if (s_aprs_tx_queue) {
-            xTaskCreatePinnedToCore(aprs_tx_task, "aprs_tx", 8192, NULL, 5, NULL, 1);
+            xTaskCreatePinnedToCore(aprs_tx_task, "aprs_tx", 6144, NULL, 5, NULL, 1);
         }
     }
 }
@@ -175,7 +175,7 @@ static const char *APRS_PAGE_HTML =
     "if(m.id>lastId)lastId=m.id;"
     "var div=document.createElement('div');"
     "div.className='msg'+(m.outgoing?' tx':'');"
-    "var t=m.timestamp||0;var ts=Math.floor(t/60)+':'+(t%60<10?'0':'')+t%60;"
+    "var t=m.timestamp||0;var dt=new Date(t*1000);var ts=('0'+dt.getHours()).slice(-2)+':'+('0'+dt.getMinutes()).slice(-2);"
     "div.innerHTML='<span class=\"ts\">'+esc(ts)+'</span> '+"
     "'<span class=\"from\">'+esc(m.from||'?')+'</span> &rarr; '+"
     "'<span class=\"to\">'+esc(m.to||'?')+'</span><br>'+"
@@ -749,7 +749,7 @@ static esp_err_t api_aprs_get_handler(httpd_req_t *req)
         }
     }
 
-    const size_t buffer_size = 8192;
+    const size_t buffer_size = 2048;
     char *buffer = malloc(buffer_size);
     if (!buffer) {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Out of memory");
@@ -827,16 +827,12 @@ static esp_err_t api_aprs_post_handler(httpd_req_t *req)
 
     free(content);
 
+    // Store in APRS history immediately (always, even if radio offline)
+    aprs_store_add_tx(from, to, message);
+
     // Queue TX for background task (don't block HTTP handler)
     sa818_radio_handle_t radio = model_get_sa818_radio();
-    if (!radio || !s_aprs_tx_queue) {
-        httpd_resp_set_type(req, "application/json");
-        httpd_resp_set_hdr(req, "Connection", "close");
-        httpd_resp_send(req, "{\"ok\":false,\"error\":\"Radio not available\"}", -1);
-        return ESP_OK;
-    }
-
-    {
+    if (radio && s_aprs_tx_queue) {
         aprs_tx_item_t item;
         strncpy(item.from, from, sizeof(item.from) - 1);
         item.from[sizeof(item.from) - 1] = '\0';
@@ -846,15 +842,9 @@ static esp_err_t api_aprs_post_handler(httpd_req_t *req)
         item.message[sizeof(item.message) - 1] = '\0';
 
         if (xQueueSend(s_aprs_tx_queue, &item, 0) != pdTRUE) {
-            httpd_resp_set_type(req, "application/json");
-            httpd_resp_set_hdr(req, "Connection", "close");
-            httpd_resp_send(req, "{\"ok\":false,\"error\":\"TX queue full\"}", -1);
-            return ESP_OK;
+            ESP_LOGW(TAG, "APRS TX queue full, message stored but not transmitted");
         }
     }
-
-    // Store in APRS history immediately (TX task handles radio)
-    aprs_store_add_tx(from, to, message);
 
     httpd_resp_set_type(req, "application/json");
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
@@ -1266,6 +1256,57 @@ static const httpd_uri_t uri_api_aprs_status = {
     .user_ctx = NULL
 };
 
+static esp_err_t api_aprs_rx_stats_handler(httpd_req_t *req)
+{
+    char buf[256];
+    sa818_radio_handle_t radio = model_get_sa818_radio();
+    sa818_aprs_rx_stats_t stats = {0};
+    if (radio) {
+        sa818_radio_get_aprs_rx_stats(radio, &stats);
+    }
+    int len = snprintf(buf, sizeof(buf),
+        "{\"nrzi_bits\":%lu,\"flags\":%lu,\"frames\":%lu,"
+        "\"crc_ok\":%lu,\"crc_fail\":%lu,\"fifo_overflow\":%lu}",
+        (unsigned long)stats.nrzi_bits, (unsigned long)stats.flag_seen,
+        (unsigned long)stats.frame_candidates,
+        (unsigned long)stats.crc_ok, (unsigned long)stats.crc_fail,
+        (unsigned long)stats.fifo_overflow);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_set_hdr(req, "Connection", "close");
+    httpd_resp_send(req, buf, len);
+    return ESP_OK;
+}
+
+static const httpd_uri_t uri_api_aprs_rx_stats = {
+    .uri = "/api/aprs/rx_stats",
+    .method = HTTP_GET,
+    .handler = api_aprs_rx_stats_handler,
+    .user_ctx = NULL
+};
+
+static esp_err_t api_aprs_audio_handler(httpd_req_t *req)
+{
+    /* Return last 500 centered ADC samples as comma-separated int16 values.
+       500 samples at ~10kHz = 50ms of audio — enough for several AFSK cycles. */
+    static int16_t samples[500];
+    size_t n = 0;
+    sa818_radio_get_audio_capture(samples, &n);
+    /* Return as raw binary int16 LE. */
+    httpd_resp_set_type(req, "application/octet-stream");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_set_hdr(req, "Connection", "close");
+    httpd_resp_send(req, (const char *)samples, n * sizeof(int16_t));
+    return ESP_OK;
+}
+
+static const httpd_uri_t uri_api_aprs_audio = {
+    .uri = "/api/aprs/audio",
+    .method = HTTP_GET,
+    .handler = api_aprs_audio_handler,
+    .user_ctx = NULL
+};
+
 static const httpd_uri_t uri_api_radio_diag = {
     .uri = "/api/radio/diag",
     .method = HTTP_GET,
@@ -1371,9 +1412,9 @@ esp_err_t http_server_start_ex(wifi_config_callback_t callback, bool enable_stat
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.lru_purge_enable = true;
-    config.stack_size = 12288;
-    config.max_uri_handlers = 18;
-    config.max_open_sockets = 5;
+    config.stack_size = 10240;
+    config.max_uri_handlers = 20;
+    config.max_open_sockets = 3;
     config.recv_wait_timeout = 5;
     config.send_wait_timeout = 5;
 
@@ -1410,6 +1451,8 @@ esp_err_t http_server_start_ex(wifi_config_callback_t callback, bool enable_stat
         httpd_register_uri_handler(s_server, &uri_api_aprs);
         httpd_register_uri_handler(s_server, &uri_api_aprs_send);
         httpd_register_uri_handler(s_server, &uri_api_aprs_status);
+        httpd_register_uri_handler(s_server, &uri_api_aprs_rx_stats);
+        httpd_register_uri_handler(s_server, &uri_api_aprs_audio);
         httpd_register_uri_handler(s_server, &uri_api_radio_diag);
         httpd_register_uri_handler(s_server, &uri_api_radio_retry);
         ESP_LOGI(TAG, "APRS API endpoints registered");

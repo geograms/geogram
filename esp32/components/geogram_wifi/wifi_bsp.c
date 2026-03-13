@@ -9,6 +9,7 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "esp_timer.h"
 
 static const char *TAG = "wifi_bsp";
 
@@ -23,6 +24,13 @@ static bool s_ap_active = false;
 static bool s_sta_connecting = false;  // True when STA mode is active and should reconnect
 static int s_retry_count = 0;
 static const int MAX_RETRY_COUNT = 10;  // Max retries before giving up
+static esp_timer_handle_t s_reconnect_timer = NULL;
+
+static void reconnect_timer_cb(void *arg)
+{
+    (void)arg;
+    esp_wifi_connect();
+}
 
 static void wifi_event_handler(void *arg, esp_event_base_t event_base,
                                int32_t event_id, void *event_data)
@@ -54,18 +62,27 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
 
                 // Auto-reconnect if we were in STA mode and haven't exceeded retries
                 if (s_sta_connecting) {
-                    s_retry_count++;
-                    if (s_retry_count <= MAX_RETRY_COUNT) {
-                        ESP_LOGI(TAG, "Reconnecting... (attempt %d/%d)", s_retry_count, MAX_RETRY_COUNT);
-                        // Small delay before reconnect to avoid rapid retries
-                        vTaskDelay(pdMS_TO_TICKS(1000));
-                        esp_wifi_connect();
-                    } else {
-                        ESP_LOGE(TAG, "Max retry attempts reached, giving up");
+                    // Reason 201 = NO_AP_FOUND — network not in range, don't retry
+                    if (event->reason == 201) {
+                        ESP_LOGW(TAG, "Network not found (reason 201), giving up STA");
                         s_sta_connecting = false;
-                        // Notify callback only after all retries exhausted
                         if (s_sta_callback) {
                             s_sta_callback(GEOGRAM_WIFI_STATUS_DISCONNECTED, event_data);
+                        }
+                    } else {
+                        s_retry_count++;
+                        if (s_retry_count <= MAX_RETRY_COUNT) {
+                            ESP_LOGI(TAG, "Reconnecting... (attempt %d/%d)", s_retry_count, MAX_RETRY_COUNT);
+                            // Schedule reconnect via timer — never block the event handler
+                            if (s_reconnect_timer) {
+                                esp_timer_start_once(s_reconnect_timer, 1000000); // 1s
+                            }
+                        } else {
+                            ESP_LOGE(TAG, "Max retry attempts reached, giving up");
+                            s_sta_connecting = false;
+                            if (s_sta_callback) {
+                                s_sta_callback(GEOGRAM_WIFI_STATUS_DISCONNECTED, event_data);
+                            }
                         }
                     }
                 } else {
@@ -177,6 +194,13 @@ esp_err_t geogram_wifi_init(void)
                                                         &wifi_event_handler, NULL, NULL));
     ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP,
                                                         &wifi_event_handler, NULL, NULL));
+
+    // Create one-shot timer for non-blocking STA reconnect
+    const esp_timer_create_args_t timer_args = {
+        .callback = reconnect_timer_cb,
+        .name = "wifi_reconn",
+    };
+    esp_timer_create(&timer_args, &s_reconnect_timer);
 
     s_initialized = true;
     ESP_LOGI(TAG, "WiFi initialized");
@@ -303,8 +327,12 @@ esp_err_t geogram_wifi_start_ap(const geogram_wifi_ap_config_t *config)
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &wifi_config));
     ESP_ERROR_CHECK(esp_wifi_start());
 
-    ESP_LOGI(TAG, "WiFi AP started - SSID: %s, Channel: %d",
-             config->ssid, wifi_config.ap.channel);
+    // Set maximum TX power (80 = 20 dBm in 0.25 dBm units)
+    esp_wifi_set_max_tx_power(80);
+    int8_t actual_power = 0;
+    esp_wifi_get_max_tx_power(&actual_power);
+    ESP_LOGI(TAG, "WiFi AP started - SSID: %s, Channel: %d, TX power: %.1f dBm",
+             config->ssid, wifi_config.ap.channel, actual_power * 0.25f);
 
     return ESP_OK;
 }
@@ -417,18 +445,25 @@ esp_err_t geogram_wifi_connect_sta(const char *ssid, const char *password)
 
     ESP_LOGI(TAG, "Connecting STA to %s (keeping AP active)", ssid);
 
-    // Disconnect and stop WiFi driver cleanly
+    // Disconnect any active STA connection (no-op if not connected)
     esp_wifi_disconnect();
-    esp_wifi_stop();
 
-    // Set AP+STA mode and configure STA interface
-    esp_err_t err = esp_wifi_set_mode(WIFI_MODE_APSTA);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to set APSTA mode: %s", esp_err_to_name(err));
-        // Try to restart in AP-only mode so portal stays up
-        esp_wifi_set_mode(WIFI_MODE_AP);
-        esp_wifi_start();
-        return err;
+    // Switch to APSTA mode without stopping the driver — this keeps the AP
+    // and its DHCP server running uninterrupted.
+    wifi_mode_t current_mode;
+    esp_wifi_get_mode(&current_mode);
+    if (current_mode != WIFI_MODE_APSTA) {
+        esp_err_t err = esp_wifi_set_mode(WIFI_MODE_APSTA);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to set APSTA mode: %s", esp_err_to_name(err));
+            return err;
+        }
+        // Restart DHCP server — mode switch can leave it in a bad state
+        if (s_ap_netif) {
+            esp_netif_dhcps_stop(s_ap_netif);
+            esp_netif_dhcps_start(s_ap_netif);
+            ESP_LOGI(TAG, "DHCP server restarted after APSTA switch");
+        }
     }
 
     wifi_config_t sta_cfg = {0};
@@ -437,11 +472,9 @@ esp_err_t geogram_wifi_connect_sta(const char *ssid, const char *password)
         strncpy((char *)sta_cfg.sta.password, password, sizeof(sta_cfg.sta.password) - 1);
     }
 
-    err = esp_wifi_set_config(WIFI_IF_STA, &sta_cfg);
+    esp_err_t err = esp_wifi_set_config(WIFI_IF_STA, &sta_cfg);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to set STA config: %s", esp_err_to_name(err));
-        esp_wifi_set_mode(WIFI_MODE_AP);
-        esp_wifi_start();
         return err;
     }
 
@@ -449,13 +482,16 @@ esp_err_t geogram_wifi_connect_sta(const char *ssid, const char *password)
     s_sta_connecting = true;
     s_retry_count = 0;
 
-    // Restart driver — AP config is retained by ESP-IDF across stop/start.
-    // WIFI_EVENT_STA_START will fire, and the event handler calls esp_wifi_connect().
-    err = esp_wifi_start();
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to start WiFi: %s", esp_err_to_name(err));
-        s_sta_connecting = false;
-        return err;
+    // If the mode changed (AP → APSTA), WIFI_EVENT_STA_START fires and the
+    // event handler calls esp_wifi_connect().  If we were already in APSTA
+    // mode, STA_START won't fire so we must connect explicitly.
+    if (current_mode == WIFI_MODE_APSTA) {
+        err = esp_wifi_connect();
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to connect: %s", esp_err_to_name(err));
+            s_sta_connecting = false;
+            return err;
+        }
     }
 
     return ESP_OK;

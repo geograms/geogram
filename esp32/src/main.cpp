@@ -999,12 +999,16 @@ extern "C" void app_main(void)
         if (ret == ESP_OK) {
             ESP_LOGI(TAG, "WiFi AP started: geogram");
 
-            // Try to auto-connect STA with saved WiFi credentials
+            // Try to auto-connect STA with saved WiFi credentials.
+            // Delay 5 s so the AP and DHCP server are fully stable before STA
+            // scanning disrupts the radio.
             {
                 char saved_ssid[33] = {0};
                 char saved_pass[65] = {0};
                 if (geogram_wifi_load_credentials(saved_ssid, saved_pass) == ESP_OK
                     && strlen(saved_ssid) > 0) {
+                    ESP_LOGI(TAG, "Will auto-connect to saved WiFi in 5 s: %s", saved_ssid);
+                    vTaskDelay(pdMS_TO_TICKS(5000));
                     ESP_LOGI(TAG, "Auto-connecting to saved WiFi: %s", saved_ssid);
                     geogram_wifi_connect_sta(saved_ssid, saved_pass);
                 }

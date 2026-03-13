@@ -17,6 +17,9 @@
 #endif
 #include "driver/gpio.h"
 #include "esp_adc/adc_oneshot.h"
+#if CONFIG_IDF_TARGET_ESP32
+#include "driver/adc.h"  // Legacy API for adc1_config_channel_atten (I2S ADC mode)
+#endif
 #include "esp_idf_version.h"
 #include "esp_log.h"
 #include "esp_rom_sys.h"
@@ -32,7 +35,7 @@ static const char *TAG = "sa818_radio";
 #endif
 
 #define SA818_RADIO_CMD_TIMEOUT_MS      1500
-#define SA818_RADIO_RX_TASK_STACK       4096
+#define SA818_RADIO_RX_TASK_STACK       6144
 #define SA818_RADIO_RX_TASK_PRIO        4
 #define SA818_RADIO_AUDIO_BLOCK_SAMPLES 160
 #define SA818_RADIO_RX_STATS_LOG        0
@@ -43,7 +46,7 @@ static const char *TAG = "sa818_radio";
 #define APRS_AX25_CRC_CORRECT           0xF0B8U
 #define APRS_RX_FIFO_SIZE               768U
 
-#define APRS_SAMPLE_RATE_HZ             9600U
+#define APRS_SAMPLE_RATE_HZ             10000U
 #define APRS_SAMPLES_PER_BIT            (APRS_SAMPLE_RATE_HZ / APRS_BITRATE_BPS)
 #define APRS_MARK_FREQ_HZ               1200.0f
 #define APRS_SPACE_FREQ_HZ              2200.0f
@@ -51,11 +54,11 @@ static const char *TAG = "sa818_radio";
 #define APRS_DEMOD_DELAY_SAMPLES        ((APRS_SAMPLE_RATE_HZ + APRS_BITRATE_BPS) / (2U * APRS_BITRATE_BPS))
 #define APRS_FIR_TAPS                   31U
 #define APRS_PHASE_BITS                 8
-#define APRS_PHASE_INC                  1
-#define APRS_PHASE_MAX                  ((APRS_SAMPLE_RATE_HZ / APRS_BITRATE_BPS) * APRS_PHASE_BITS)
+#define APRS_PHASE_INC                  6
+#define APRS_PHASE_MAX                  ((APRS_SAMPLE_RATE_HZ * APRS_PHASE_BITS + APRS_BITRATE_BPS / 2U) / APRS_BITRATE_BPS)
 #define APRS_PHASE_THRESHOLD            (APRS_PHASE_MAX / 2)
-#define APRS_PREAMBLE_FLAGS             350U
-#define APRS_TAIL_FLAGS                 50U
+#define APRS_PREAMBLE_FLAGS             50U
+#define APRS_TAIL_FLAGS                 5U
 #define APRS_TX_LEAD_MS                 250U
 #define APRS_TX_TAIL_MS                 120U
 #define APRS_MAX_FRAME_BYTES            330U
@@ -73,7 +76,26 @@ static const char *TAG = "sa818_radio";
 #define APRS_I2S_RF_LEVEL_OFFSET        10000U
 #define APRS_I2S_PHASE_MARK_INC         ((uint16_t)(((APRS_I2S_SIN_LEN * APRS_MARK_FREQ_HZ) / APRS_I2S_SAMPLE_RATE_HZ) + 0.5f))
 #define APRS_I2S_PHASE_SPACE_INC        ((uint16_t)(((APRS_I2S_SIN_LEN * APRS_SPACE_FREQ_HZ) / APRS_I2S_SAMPLE_RATE_HZ) + 0.5f))
+#define APRS_I2S_ADC_BLOCK_SAMPLES      768U  /* Match DMA buffer length for efficient reads */
 #endif
+
+// --------------------------------------------------------------------------
+// Audio capture ring buffer for diagnostics (GET /api/aprs/audio).
+// --------------------------------------------------------------------------
+#define APRS_CAPTURE_LEN  500U
+static int16_t s_aprs_capture_buf[APRS_CAPTURE_LEN];
+static volatile uint32_t s_aprs_capture_wr = 0;
+
+void sa818_radio_get_audio_capture(int16_t *out, size_t *out_len)
+{
+    uint32_t wr = s_aprs_capture_wr;
+    size_t n = (wr < APRS_CAPTURE_LEN) ? (size_t)wr : APRS_CAPTURE_LEN;
+    uint32_t start = (wr >= APRS_CAPTURE_LEN) ? (wr % APRS_CAPTURE_LEN) : 0;
+    for (size_t i = 0; i < n; i++) {
+        out[i] = s_aprs_capture_buf[(start + i) % APRS_CAPTURE_LEN];
+    }
+    *out_len = n;
+}
 
 #if CONFIG_IDF_TARGET_ESP32
 // Quarter-wave table adapted from APRS-ESP LibAPRS_ESP32 (Afsk sin LUT path).
@@ -159,6 +181,7 @@ struct sa818_radio_dev {
 #endif
 #if CONFIG_IDF_TARGET_ESP32
     bool i2s_tx_ready;
+    bool i2s_adc_enabled;
 #endif
 
     volatile bool rx_task_running;
@@ -420,8 +443,13 @@ static esp_err_t sa818_radio_configure_i2s_tx(sa818_radio_handle_t handle)
                                     ? I2S_CHANNEL_FMT_ALL_RIGHT
                                     : I2S_CHANNEL_FMT_ALL_LEFT;
 
+    i2s_mode_t i2s_mode = I2S_MODE_MASTER | I2S_MODE_TX | I2S_MODE_DAC_BUILT_IN;
+    if (handle->adc_ready) {
+        i2s_mode |= I2S_MODE_RX | I2S_MODE_ADC_BUILT_IN;
+    }
+
     i2s_config_t i2s_cfg = {
-        .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX | I2S_MODE_DAC_BUILT_IN),
+        .mode = (i2s_mode_t)i2s_mode,
         .sample_rate = APRS_I2S_SAMPLE_RATE_HZ,
         .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT,
         .channel_format = channel_fmt,
@@ -463,6 +491,16 @@ static esp_err_t sa818_radio_configure_i2s_tx(sa818_radio_handle_t handle)
     }
 
     dac_i2s_enable();
+
+    if (handle->adc_ready) {
+        ret = i2s_set_adc_mode(ADC_UNIT_1, (adc1_channel_t)handle->adc_channel);
+        if (ret == ESP_OK) {
+            ESP_LOGI(TAG, "I2S ADC mode configured for ADC1 channel %d (GPIO%d)",
+                     (int)handle->adc_channel, handle->cfg.audio_in_pin);
+        } else {
+            ESP_LOGW(TAG, "I2S ADC mode setup failed: %s", esp_err_to_name(ret));
+        }
+    }
 
     handle->i2s_tx_ready = true;
     ESP_LOGI(TAG, "APRS TX using I2S+DAC on GPIO%d @ %u Hz", handle->cfg.audio_out_pin, APRS_I2S_SAMPLE_RATE_HZ);
@@ -928,20 +966,63 @@ static void aprs_decoder_feed_sample(sa818_radio_handle_t handle, int16_t sample
     aprs_decoder_process_nrzi_bit(handle, nrzi_bit);
 }
 
+// --------------------------------------------------------------------------
+// Process one ADC sample: DC removal, demod feed, stats, audio callback.
+// --------------------------------------------------------------------------
+static inline void sa818_radio_rx_process_sample(
+    sa818_radio_handle_t handle,
+    int raw,
+    int32_t *dc_estimate_q8,
+    bool *dc_initialized,
+#if SA818_RADIO_RX_STATS_LOG
+    uint32_t *samples_this_second,
+    int16_t *min_demod_sample,
+    int16_t *max_demod_sample,
+#endif
+    int16_t *block,
+    size_t *block_fill)
+{
+    if (!*dc_initialized) {
+        *dc_estimate_q8 = ((int32_t)raw << 8);
+        *dc_initialized = true;
+    }
+    int32_t raw_q8 = (int32_t)raw << 8;
+    *dc_estimate_q8 += (raw_q8 - *dc_estimate_q8) >> 7;
+
+    int centered = raw - (int)(*dc_estimate_q8 >> 8);
+    int16_t demod_sample = (int16_t)centered;
+    s_aprs_capture_buf[s_aprs_capture_wr % APRS_CAPTURE_LEN] = demod_sample;
+    s_aprs_capture_wr++;
+    aprs_decoder_feed_sample(handle, demod_sample);
+
+#if SA818_RADIO_RX_STATS_LOG
+    (*samples_this_second)++;
+    if (demod_sample < *min_demod_sample) *min_demod_sample = demod_sample;
+    if (demod_sample > *max_demod_sample) *max_demod_sample = demod_sample;
+#endif
+
+    sa818_radio_audio_rx_cb_t cb = handle->audio_rx_cb;
+    if (cb != NULL) {
+        int audio_scaled = centered << 4;
+        if (audio_scaled > 32767) audio_scaled = 32767;
+        else if (audio_scaled < -32768) audio_scaled = -32768;
+        block[*block_fill] = (int16_t)audio_scaled;
+        (*block_fill)++;
+        if (*block_fill >= SA818_RADIO_AUDIO_BLOCK_SAMPLES) {
+            cb(block, *block_fill, handle->audio_rx_ctx);
+            *block_fill = 0;
+        }
+    }
+}
+
 static void sa818_radio_rx_task(void *arg)
 {
     sa818_radio_handle_t handle = (sa818_radio_handle_t)arg;
-    const uint32_t sample_rate = handle->cfg.audio_sample_rate_hz;
-    const uint32_t base_interval_us = (sample_rate > 0U) ? (1000000U / sample_rate) : 0U;
-    const uint32_t interval_remainder = (sample_rate > 0U) ? (1000000U % sample_rate) : 0U;
-    uint32_t interval_err = 0U;
-    int64_t next_sample_us = esp_timer_get_time();
-    int64_t idle_yield_at_us = next_sample_us + SA818_RADIO_IDLE_YIELD_US;
-#if SA818_RADIO_RX_STATS_LOG
-    int64_t stats_next_us = next_sample_us + 1000000LL;
 
     int32_t dc_estimate_q8 = 0;
     bool dc_initialized = false;
+#if SA818_RADIO_RX_STATS_LOG
+    int64_t stats_next_us = esp_timer_get_time() + 1000000LL;
     uint32_t samples_this_second = 0U;
     int16_t min_demod_sample = INT16_MAX;
     int16_t max_demod_sample = INT16_MIN;
@@ -951,53 +1032,122 @@ static void sa818_radio_rx_task(void *arg)
     uint32_t prev_crc_ok = 0U;
     uint32_t prev_crc_fail = 0U;
     uint32_t prev_fifo_overflow = 0U;
-#else
-    int32_t dc_estimate_q8 = 0;
-    bool dc_initialized = false;
 #endif
 
     int16_t block[SA818_RADIO_AUDIO_BLOCK_SAMPLES];
     size_t block_fill = 0;
 
+#if CONFIG_IDF_TARGET_ESP32
+    // ---------------------------------------------------------------
+    // I2S ADC DMA path — hardware-timed sampling eliminates jitter.
+    // Reads at 48 kHz, decimates 5:1 to 9600 Hz for the demodulator.
+    // ---------------------------------------------------------------
+    if (handle->i2s_adc_enabled) {
+        uint16_t i2s_buf[APRS_I2S_ADC_BLOCK_SAMPLES];
+        uint32_t decimate_acc = 0;
+        uint32_t decimate_count = 0;
+#if SA818_RADIO_RX_STATS_LOG
+        uint32_t raw_values_this_second = 0U;
+        uint32_t i2s_reads_this_second = 0U;
+#endif
+
+        while (handle->rx_task_running) {
+            size_t bytes_read = 0;
+            esp_err_t ret = i2s_read(I2S_NUM_0, i2s_buf, sizeof(i2s_buf),
+                                     &bytes_read, pdMS_TO_TICKS(100));
+            if (ret != ESP_OK || bytes_read == 0) {
+                continue;
+            }
+
+            size_t samples = bytes_read / sizeof(uint16_t);
+#if SA818_RADIO_RX_STATS_LOG
+            raw_values_this_second += (uint32_t)samples;
+            i2s_reads_this_second++;
+#endif
+            // Process all I2S ADC values. With ADC_ATTEN_DB_6, both stereo
+            // slots carry valid ADC data.  Decimate 4:1 from ~40000 raw
+            // values/sec to ~10000 sps for the demodulator.
+            for (size_t i = 0; i < samples; i++) {
+                int raw = (int)(i2s_buf[i] & 0x0FFFU);
+                decimate_acc += (uint32_t)raw;
+                decimate_count++;
+                if (decimate_count >= 4U) {
+                    int decimated = (int)(decimate_acc / 4U);
+                    sa818_radio_rx_process_sample(
+                        handle, decimated,
+                        &dc_estimate_q8, &dc_initialized,
+#if SA818_RADIO_RX_STATS_LOG
+                        &samples_this_second, &min_demod_sample, &max_demod_sample,
+#endif
+                        block, &block_fill);
+                    decimate_acc = 0;
+                    decimate_count = 0;
+                }
+            }
+
+#if SA818_RADIO_RX_STATS_LOG
+            int64_t now_us = esp_timer_get_time();
+            if (now_us >= stats_next_us) {
+                aprs_decoder_state_t *dec = &handle->aprs_dec;
+                ESP_LOGI(TAG, "APRS RX[DMA] %u sps (raw %u vals, %u reads) demod=[%d,%d] dc=%d bits=%u flags=%u frames=%u ok=%u fail=%u ovf=%u",
+                         (unsigned)samples_this_second,
+                         (unsigned)raw_values_this_second,
+                         (unsigned)i2s_reads_this_second,
+                         (int)min_demod_sample, (int)max_demod_sample,
+                         (int)(dc_estimate_q8 >> 8),
+                         (unsigned)(dec->nrzi_bits - prev_nrzi_bits),
+                         (unsigned)(dec->flag_seen - prev_flags),
+                         (unsigned)(dec->frame_candidates - prev_frames),
+                         (unsigned)(dec->crc_ok - prev_crc_ok),
+                         (unsigned)(dec->crc_fail - prev_crc_fail),
+                         (unsigned)(dec->fifo_overflow - prev_fifo_overflow));
+                prev_nrzi_bits = dec->nrzi_bits;
+                prev_flags = dec->flag_seen;
+                prev_frames = dec->frame_candidates;
+                prev_crc_ok = dec->crc_ok;
+                prev_crc_fail = dec->crc_fail;
+                prev_fifo_overflow = dec->fifo_overflow;
+                samples_this_second = 0U;
+                raw_values_this_second = 0U;
+                i2s_reads_this_second = 0U;
+                min_demod_sample = INT16_MAX;
+                max_demod_sample = INT16_MIN;
+                stats_next_us = now_us + 1000000LL;
+            }
+#endif
+        }
+
+        handle->rx_task = NULL;
+        vTaskDelete(NULL);
+        return;
+    }
+#endif
+
+    // ---------------------------------------------------------------
+    // Fallback: ADC oneshot polling (software-timed, used on non-ESP32
+    // or when I2S ADC setup failed).
+    // ---------------------------------------------------------------
+    const uint32_t sample_rate = handle->cfg.audio_sample_rate_hz;
+    const uint32_t base_interval_us = (sample_rate > 0U) ? (1000000U / sample_rate) : 0U;
+    const uint32_t interval_remainder = (sample_rate > 0U) ? (1000000U % sample_rate) : 0U;
+    uint32_t interval_err = 0U;
+    int64_t next_sample_us = esp_timer_get_time();
+    int64_t idle_yield_at_us = next_sample_us + SA818_RADIO_IDLE_YIELD_US;
+#if SA818_RADIO_RX_STATS_LOG
+    stats_next_us = next_sample_us + 1000000LL;
+#endif
+
     while (handle->rx_task_running) {
         int raw = 0;
         esp_err_t ret = adc_oneshot_read(handle->adc_unit, handle->adc_channel, &raw);
         if (ret == ESP_OK) {
-            if (!dc_initialized) {
-                dc_estimate_q8 = ((int32_t)raw << 8);
-                dc_initialized = true;
-            }
-            int32_t raw_q8 = (int32_t)raw << 8;
-            dc_estimate_q8 += (raw_q8 - dc_estimate_q8) >> 7;
-
-            int centered = raw - (int)(dc_estimate_q8 >> 8);
-            int16_t demod_sample = (int16_t)centered;
-            int audio_scaled = centered << 4;
-            if (audio_scaled > 32767) {
-                audio_scaled = 32767;
-            } else if (audio_scaled < -32768) {
-                audio_scaled = -32768;
-            }
-            int16_t audio_sample = (int16_t)audio_scaled;
-            aprs_decoder_feed_sample(handle, demod_sample);
+            sa818_radio_rx_process_sample(
+                handle, raw,
+                &dc_estimate_q8, &dc_initialized,
 #if SA818_RADIO_RX_STATS_LOG
-            samples_this_second++;
-            if (demod_sample < min_demod_sample) {
-                min_demod_sample = demod_sample;
-            }
-            if (demod_sample > max_demod_sample) {
-                max_demod_sample = demod_sample;
-            }
+                &samples_this_second, &min_demod_sample, &max_demod_sample,
 #endif
-
-            sa818_radio_audio_rx_cb_t cb = handle->audio_rx_cb;
-            if (cb != NULL) {
-                block[block_fill++] = audio_sample;
-                if (block_fill >= SA818_RADIO_AUDIO_BLOCK_SAMPLES) {
-                    cb(block, block_fill, handle->audio_rx_ctx);
-                    block_fill = 0;
-                }
-            }
+                block, &block_fill);
         }
 
         if (base_interval_us == 0U) {
@@ -1017,30 +1167,22 @@ static void sa818_radio_rx_task(void *arg)
 #if SA818_RADIO_RX_STATS_LOG
         if (now_us >= stats_next_us) {
             aprs_decoder_state_t *dec = &handle->aprs_dec;
-            uint32_t bits_delta = dec->nrzi_bits - prev_nrzi_bits;
-            uint32_t flags_delta = dec->flag_seen - prev_flags;
-            uint32_t frames_delta = dec->frame_candidates - prev_frames;
-            uint32_t crc_ok_delta = dec->crc_ok - prev_crc_ok;
-            uint32_t crc_fail_delta = dec->crc_fail - prev_crc_fail;
-            uint32_t fifo_overflow_delta = dec->fifo_overflow - prev_fifo_overflow;
+            ESP_LOGI(TAG, "APRS RX[poll] %u sps demod=[%d,%d] dc=%d bits=%u flags=%u frames=%u ok=%u fail=%u ovf=%u",
+                     (unsigned)samples_this_second,
+                     (int)min_demod_sample, (int)max_demod_sample,
+                     (int)(dc_estimate_q8 >> 8),
+                     (unsigned)(dec->nrzi_bits - prev_nrzi_bits),
+                     (unsigned)(dec->flag_seen - prev_flags),
+                     (unsigned)(dec->frame_candidates - prev_frames),
+                     (unsigned)(dec->crc_ok - prev_crc_ok),
+                     (unsigned)(dec->crc_fail - prev_crc_fail),
+                     (unsigned)(dec->fifo_overflow - prev_fifo_overflow));
             prev_nrzi_bits = dec->nrzi_bits;
             prev_flags = dec->flag_seen;
             prev_frames = dec->frame_candidates;
             prev_crc_ok = dec->crc_ok;
             prev_crc_fail = dec->crc_fail;
             prev_fifo_overflow = dec->fifo_overflow;
-
-            ESP_LOGI(TAG, "APRS RX stats: %u sps demod=[%d,%d] offset=%d bits=%u flags=%u frames=%u ok=%u fail=%u ovf=%u",
-                     (unsigned)samples_this_second,
-                     (int)min_demod_sample,
-                     (int)max_demod_sample,
-                     (int)(dc_estimate_q8 >> 8),
-                     (unsigned)bits_delta,
-                     (unsigned)flags_delta,
-                     (unsigned)frames_delta,
-                     (unsigned)crc_ok_delta,
-                     (unsigned)crc_fail_delta,
-                     (unsigned)fifo_overflow_delta);
             samples_this_second = 0U;
             min_demod_sample = INT16_MAX;
             max_demod_sample = INT16_MIN;
@@ -1051,14 +1193,11 @@ static void sa818_radio_rx_task(void *arg)
         if (next_sample_us > now_us) {
             esp_rom_delay_us((uint32_t)(next_sample_us - now_us));
         } else if ((now_us - next_sample_us) > 500000LL) {
-            // Recover from long scheduler stalls.
             next_sample_us = now_us;
         }
 
         if (now_us >= idle_yield_at_us) {
-            // Allow IDLE task to run so task watchdog does not trigger while
-            // we keep this high-rate sampling loop active.
-            vTaskDelay(pdMS_TO_TICKS(1));
+            taskYIELD();
             next_sample_us = esp_timer_get_time();
             idle_yield_at_us = next_sample_us + SA818_RADIO_IDLE_YIELD_US;
         }
@@ -1666,6 +1805,29 @@ esp_err_t sa818_radio_start_audio_rx(sa818_radio_handle_t handle,
 
     aprs_decoder_init_demod(&handle->aprs_dec);
 
+#if CONFIG_IDF_TARGET_ESP32
+    if (handle->i2s_tx_ready) {
+        // Release ADC oneshot driver — I2S ADC DMA takes over the ADC peripheral.
+        if (handle->adc_unit != NULL) {
+            adc_oneshot_del_unit(handle->adc_unit);
+            handle->adc_unit = NULL;
+        }
+        // Re-apply ADC attenuation via legacy API (oneshot deletion may clear it).
+        // Use ADC_ATTEN_DB_6 (0-1.75V) for better resolution on the small
+        // SA818 audio signal (~0.1-0.3V typical).
+        adc1_config_channel_atten((adc1_channel_t)handle->adc_channel, ADC_ATTEN_DB_6);
+        esp_err_t adc_ret = i2s_adc_enable(I2S_NUM_0);
+        if (adc_ret == ESP_OK) {
+            handle->i2s_adc_enabled = true;
+            ESP_LOGI(TAG, "APRS RX using I2S ADC DMA @ %u Hz (ADC_ATTEN_DB_6, decimate 4:1 -> ~%u Hz)",
+                     APRS_I2S_SAMPLE_RATE_HZ, APRS_SAMPLE_RATE_HZ);
+        } else {
+            ESP_LOGW(TAG, "I2S ADC enable failed (%s), falling back to ADC polling",
+                     esp_err_to_name(adc_ret));
+        }
+    }
+#endif
+
     handle->audio_rx_cb = callback;
     handle->audio_rx_ctx = user_ctx;
     handle->rx_task_running = true;
@@ -1709,6 +1871,13 @@ esp_err_t sa818_radio_stop_audio_rx(sa818_radio_handle_t handle)
         handle->rx_task = NULL;
     }
 
+#if CONFIG_IDF_TARGET_ESP32
+    if (handle->i2s_adc_enabled) {
+        i2s_adc_disable(I2S_NUM_0);
+        handle->i2s_adc_enabled = false;
+    }
+#endif
+
     handle->audio_rx_cb = NULL;
     handle->audio_rx_ctx = NULL;
     return ESP_OK;
@@ -1732,6 +1901,20 @@ esp_err_t sa818_radio_set_aprs_frequency(sa818_radio_handle_t handle, float aprs
 float sa818_radio_get_aprs_frequency(sa818_radio_handle_t handle)
 {
     return handle ? handle->aprs_freq_mhz : 0.0f;
+}
+
+void sa818_radio_get_aprs_rx_stats(sa818_radio_handle_t handle, sa818_aprs_rx_stats_t *out)
+{
+    if (!handle || !out) {
+        if (out) memset(out, 0, sizeof(*out));
+        return;
+    }
+    out->nrzi_bits = handle->aprs_dec.nrzi_bits;
+    out->flag_seen = handle->aprs_dec.flag_seen;
+    out->frame_candidates = handle->aprs_dec.frame_candidates;
+    out->crc_ok = handle->aprs_dec.crc_ok;
+    out->crc_fail = handle->aprs_dec.crc_fail;
+    out->fifo_overflow = handle->aprs_dec.fifo_overflow;
 }
 
 bool sa818_radio_is_aprs_tx_supported(sa818_radio_handle_t handle)

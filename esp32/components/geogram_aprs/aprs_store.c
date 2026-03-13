@@ -157,6 +157,10 @@ void aprs_store_add_rx(const char *from, const char *to,
         strncpy(slot->message, message, APRS_MAX_MESSAGE_LEN - 1);
         slot->message[APRS_MAX_MESSAGE_LEN - 1] = '\0';
     }
+    if (raw_tnc2) {
+        strncpy(slot->raw, raw_tnc2, APRS_MAX_RAW_LEN - 1);
+        slot->raw[APRS_MAX_RAW_LEN - 1] = '\0';
+    }
     ESP_LOGI(TAG, "RX: %s -> %s: %.40s%s",
              slot->from, slot->to, slot->message,
              strlen(slot->message) > 40 ? "..." : "");
@@ -302,6 +306,7 @@ size_t aprs_store_build_json(char *buffer, size_t size, uint32_t since_id)
     char esc_from[APRS_MAX_CALLSIGN_LEN * 2];
     char esc_to[APRS_MAX_CALLSIGN_LEN * 2];
     char esc_msg[APRS_MAX_MESSAGE_LEN * 2];
+    char esc_raw[APRS_MAX_RAW_LEN * 2];
 
     for (size_t i = 0; i < s_count; i++) {
         aprs_message_t *m = &s_messages[i];
@@ -310,11 +315,13 @@ size_t aprs_store_build_json(char *buffer, size_t size, uint32_t since_id)
         json_escape(esc_from, sizeof(esc_from), m->from);
         json_escape(esc_to, sizeof(esc_to), m->to);
         json_escape(esc_msg, sizeof(esc_msg), m->message);
+        json_escape(esc_raw, sizeof(esc_raw), m->raw);
 
         int n = snprintf(buffer + offset, size - offset,
             "%s{\"id\":%lu,\"timestamp\":%lu,"
             "\"from\":\"%s\",\"to\":\"%s\","
             "\"message\":\"%s\","
+            "\"raw\":\"%s\","
             "\"beacon\":%s,\"beacon_count\":%lu,"
             "\"outgoing\":%s}",
             first ? "" : ",",
@@ -322,6 +329,7 @@ size_t aprs_store_build_json(char *buffer, size_t size, uint32_t since_id)
             (unsigned long)m->timestamp,
             esc_from, esc_to,
             esc_msg,
+            esc_raw,
             m->is_beacon ? "true" : "false",
             (unsigned long)m->beacon_count,
             m->is_outgoing ? "true" : "false");

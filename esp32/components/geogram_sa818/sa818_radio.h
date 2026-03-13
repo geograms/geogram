@@ -82,6 +82,19 @@ esp_err_t sa818_radio_send_aprs_message(sa818_radio_handle_t handle,
                                         const char *to_callsign,
                                         const char *message_text);
 
+typedef struct {
+    uint32_t nrzi_bits;
+    uint32_t flag_seen;
+    uint32_t frame_candidates;
+    uint32_t crc_ok;
+    uint32_t crc_fail;
+    uint32_t fifo_overflow;
+} sa818_aprs_rx_stats_t;
+
+void sa818_radio_get_aprs_rx_stats(sa818_radio_handle_t handle, sa818_aprs_rx_stats_t *out);
+
+void sa818_radio_get_audio_capture(int16_t *out, size_t *out_len);
+
 #ifdef __cplusplus
 }
 #endif
