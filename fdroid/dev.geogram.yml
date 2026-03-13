@@ -64,7 +64,7 @@ Builds:
       - export tag=$(sed -n -E 's|.*download/(v[0-9.]+)/.*|\1|p' $file | head -n 1)
       - '[[ $tag == "v1.1.7" ]]'
       - sed -i -e '/downloadDependencies/,/dependsOn/d' $file
-      - printf 'org.gradle.jvmargs=-Xmx4g -XX:+UseSerialGC\norg.gradle.daemon=false\norg.gradle.parallel=false\n'
+      - printf 'org.gradle.jvmargs=-Xmx8g -XX:+UseSerialGC\norg.gradle.daemon=false\norg.gradle.parallel=false\n'
         >> android/gradle.properties
       - cd $$media-kit-libmpv-android-video-build$$/buildscripts
       - mkdir -p deps
@@ -106,7 +106,8 @@ Builds:
         --build-number=$$VERCODE$$
     ndk: 27.3.13750724
 
-AutoUpdateMode: None
-UpdateCheckMode: None
+AutoUpdateMode: Version
+UpdateCheckMode: Tags
+UpdateCheckData: pubspec.yaml|version:\s.+\+(\d+)|.|version:\s(.+)\+
 CurrentVersion: 1.31.0
 CurrentVersionCode: 6

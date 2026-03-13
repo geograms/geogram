@@ -33,6 +33,9 @@ This document catalogs reusable UI components available in the Geogram codebase.
 - [CacheServiceBase](#cacheservicebase) - Shared relay cache logic for Desktop and CLI stations
 - [FileSystemService path utilities](#filesystemservice-path-utilities) - Cross-platform path handling (Windows `\` + Unix `/`)
 
+### URL Utilities
+- [callsignForUrl](#callsignforurl) - Format callsign for URL path segments (lowercase)
+
 ### Cross-Platform Patterns
 - [Platform-Adaptive WebView](#platform-adaptive-webview) - Render local HTML with JS on all platforms
 - [URL-Linkified SelectableText](#url-linkified-selectabletext) - Make URLs clickable in text widgets
@@ -311,6 +314,11 @@ This document catalogs reusable UI components available in the Geogram codebase.
 - [EventsCollection](#eventscollection) - Events adapter (radio.geogram.events.entry)
 - [AlertsCollection](#alertscollection) - Alerts adapter (radio.geogram.alerts.report)
 - [CollectionSyncManager](#collectionsyncmanager) - Orchestrates idempotent sync of all collections
+
+### Meeting Transcription & NDF Components
+- [MeetingTranscriptionService](#meetingtranscriptionservice) - Post-meeting recording transcription with audio extraction, chunking, and Whisper STT
+- [MeetingContent / MeetingRecording](#meetingcontent--meetingrecording) - NDF meeting document model with recordings, transcripts, and settings
+- [NDF Meeting Service Methods](#ndf-meeting-service-methods) - Read/write meeting content, recordings, and video assets in NDF archives
 
 ### Stories App Components
 - [SceneEditorCanvas](#sceneeditorcanvas) - Interactive scene canvas for Story Studio
@@ -10962,3 +10970,107 @@ final bytes = await withHttpClient((client) async {
 The client is always closed in a `finally` block after the callback completes or fails.
 
 **Used in**: `TransferWorker`, `FlasherService`, `StationServer`, `PureStationServer`, `WhisperLibraryService`, `UpdateService`, `StationServerService`, `StationDiscoveryService`, `WebSnapshotViewerPage`
+
+---
+
+## callsignForUrl
+
+**File**: `lib/util/callsign_url.dart`
+
+Formats a callsign for use in URL path segments. Callsigns are stored/derived in uppercase (e.g. `X1SU86`) but URLs use lowercase for easier typing (`/x1su86/meet/emu`). The server accepts both cases, so this is purely cosmetic.
+
+```dart
+import 'package:geogram/util/callsign_url.dart';
+
+final url = 'https://p2p.radio/${callsignForUrl(callsign)}/meet/$code';
+```
+
+**Used in**: `ConferenceService`, `StationTransport`, `LanTransport`
+
+---
+
+## MeetingTranscriptionService
+
+**File**: `lib/services/meeting_transcription_service.dart`
+
+Post-meeting recording transcription service. Extracts audio from MP4 recordings via ffmpeg, splits long audio into 10-minute chunks, and transcribes each chunk with timestamped segments using Whisper.
+
+```dart
+import 'package:geogram/services/meeting_transcription_service.dart';
+
+final service = MeetingTranscriptionService();
+
+// Listen for progress updates (reuses TranscriptionState/TranscriptionProgress from voicememo service)
+service.progressStream.listen((progress) {
+  print('${progress.message} (${progress.progressPercent}%)');
+});
+
+// Transcribe a recording
+final result = await service.transcribeRecording(
+  mp4Path: '/tmp/recording.mp4',
+  recordingName: 'recording_001.mp4',
+);
+
+if (result.success) {
+  print(result.text); // [00:00:12 --> 00:00:18] Hello everyone...
+}
+```
+
+**Used in**: `ConferenceArchiveDetailPage`
+
+---
+
+## MeetingContent / MeetingRecording
+
+**File**: `lib/work/models/meeting_content.dart`
+
+NDF meeting document models following the `VoiceMemoContent` / `VoiceMemoClip` pattern:
+
+- `MeetingContent` - Main content with room metadata, participants, recording IDs, settings
+- `MeetingRecording` - Individual recording with video file reference, duration, optional transcript
+- `MeetingTranscript` - Full text + timestamped segments + model info
+- `MeetingTranscriptSegment` - Duration-based from/to/text segment
+- `MeetingSettings` - Display preferences (showTranscriptions)
+
+```dart
+import 'package:geogram/work/models/meeting_content.dart';
+
+final content = MeetingContent.create(title: 'Team Standup');
+content.roomId = 'room-xyz';
+content.addRecording('rec-001');
+
+final recording = MeetingRecording.create(
+  title: 'recording_001.mp4',
+  durationMs: 2580000,
+  videoFile: 'video/rec-001.mp4',
+);
+```
+
+**Used in**: `NdfService`, `ConferenceArchiveService.exportAsNdf()`
+
+---
+
+## NDF Meeting Service Methods
+
+**File**: `lib/work/services/ndf_service.dart`
+
+Meeting-specific methods in `NdfService` for reading/writing meeting NDF archives:
+
+```dart
+final ndf = NdfService();
+
+// Read
+final content = await ndf.readMeetingContent(filePath);
+final recording = await ndf.readMeetingRecording(filePath, recordingId);
+final recordings = await ndf.readMeetingRecordings(filePath, recordingIds);
+
+// Write
+await ndf.saveMeeting(filePath, content, recordings);
+await ndf.saveMeetingRecording(filePath, recording);
+
+// Video assets
+final videoBytes = await ndf.readRecordingVideo(filePath, videoFile);
+await ndf.saveRecordingVideo(filePath, recordingId, videoBytes);
+```
+
+**Used in**: `ConferenceArchiveService.exportAsNdf()`

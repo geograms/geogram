@@ -16,6 +16,33 @@ import '../models/whisper_model_info.dart';
 import 'whisper_model_manager.dart';
 import '../../services/log_service.dart';
 
+/// A timestamped segment of transcribed speech
+class TranscriptionSegment {
+  final Duration from;
+  final Duration to;
+  final String text;
+
+  const TranscriptionSegment({
+    required this.from,
+    required this.to,
+    required this.text,
+  });
+
+  Map<String, dynamic> toJson() => {
+    'from_ms': from.inMilliseconds,
+    'to_ms': to.inMilliseconds,
+    'text': text,
+  };
+
+  factory TranscriptionSegment.fromJson(Map<String, dynamic> json) {
+    return TranscriptionSegment(
+      from: Duration(milliseconds: json['from_ms'] as int),
+      to: Duration(milliseconds: json['to_ms'] as int),
+      text: json['text'] as String,
+    );
+  }
+}
+
 /// Result of a transcription operation
 class TranscriptionResult {
   /// The transcribed text
@@ -33,12 +60,16 @@ class TranscriptionResult {
   /// Error message if transcription failed
   final String? error;
 
+  /// Timestamped segments (present when transcribeWithTimestamps is used)
+  final List<TranscriptionSegment>? segments;
+
   const TranscriptionResult({
     required this.text,
     required this.transcriptionTimeMs,
     required this.modelUsed,
     required this.success,
     this.error,
+    this.segments,
   });
 
   /// Create a successful result
@@ -46,12 +77,14 @@ class TranscriptionResult {
     required String text,
     required int transcriptionTimeMs,
     required String modelUsed,
+    List<TranscriptionSegment>? segments,
   }) {
     return TranscriptionResult(
       text: text,
       transcriptionTimeMs: transcriptionTimeMs,
       modelUsed: modelUsed,
       success: true,
+      segments: segments,
     );
   }
 
@@ -471,6 +504,98 @@ class SpeechToTextService {
       );
     } catch (e) {
       LogService().log('SpeechToTextService: Transcription error: $e');
+      _setState(SpeechToTextState.error);
+
+      return TranscriptionResult.failure(
+        error: e.toString(),
+        modelUsed: _loadedModelId ?? '',
+      );
+    }
+  }
+
+  /// Transcribe an audio file with timestamped segments
+  ///
+  /// Same as [transcribe] but preserves Whisper's per-segment timestamps.
+  Future<TranscriptionResult> transcribeWithTimestamps(String audioFilePath) async {
+    if (!isSupported) {
+      return TranscriptionResult.failure(
+        error: 'Speech-to-text not supported on this platform',
+      );
+    }
+
+    if (!await isLibraryAvailable()) {
+      return TranscriptionResult.failure(
+        error: 'Whisper library not available. Please download from station.',
+      );
+    }
+
+    if (!isModelLoaded) {
+      return TranscriptionResult.failure(
+        error: 'No model loaded',
+      );
+    }
+
+    final audioFile = File(audioFilePath);
+    if (!await audioFile.exists()) {
+      return TranscriptionResult.failure(
+        error: 'Audio file not found',
+        modelUsed: _loadedModelId ?? '',
+      );
+    }
+
+    _setState(SpeechToTextState.transcribing);
+
+    try {
+      final stopwatch = Stopwatch()..start();
+
+      final cpuCores = Platform.numberOfProcessors;
+      final threads = cpuCores > 4 ? cpuCores - 2 : cpuCores;
+      final result = await _whisper!.transcribe(
+        transcribeRequest: TranscribeRequest(
+          audio: audioFilePath,
+          isTranslate: false,
+          isNoTimestamps: false,
+          splitOnWord: true,
+          threads: threads,
+          nProcessors: 1,
+          speedUp: false,
+        ),
+      );
+
+      stopwatch.stop();
+
+      _setState(SpeechToTextState.idle);
+
+      final transcribedText = result.text.trim();
+
+      LogService().log(
+          'SpeechToTextService: Transcribed with timestamps ${audioFilePath.split('/').last} '
+          'in ${stopwatch.elapsedMilliseconds}ms '
+          '(${result.segments?.length ?? 0} segments)');
+
+      if (transcribedText.isEmpty) {
+        return TranscriptionResult.failure(
+          error: 'No speech detected',
+          modelUsed: _loadedModelId ?? '',
+        );
+      }
+
+      final segments = result.segments?.map((seg) {
+        return TranscriptionSegment(
+          from: seg.fromTs,
+          to: seg.toTs,
+          text: seg.text.trim(),
+        );
+      }).where((seg) => seg.text.isNotEmpty).toList();
+
+      return TranscriptionResult.success(
+        text: transcribedText,
+        transcriptionTimeMs: stopwatch.elapsedMilliseconds,
+        modelUsed: _loadedModelId ?? '',
+        segments: segments,
+      );
+    } catch (e) {
+      LogService().log('SpeechToTextService: Transcription with timestamps error: $e');
       _setState(SpeechToTextState.error);
 
       return TranscriptionResult.failure(

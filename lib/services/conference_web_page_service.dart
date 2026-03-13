@@ -1117,6 +1117,18 @@ async function handleMessage(message) {
       }
       break;
 
+    case 'conference_chat_delete':
+      var deleteId = message.conference_id;
+      if (deleteId) {
+        for (var i = chatMessages.length - 1; i >= 0; i--) {
+          if (messageKey(chatMessages[i]) === deleteId) {
+            chatMessages.splice(i, 1);
+          }
+        }
+        renderChatMessages();
+      }
+      break;
+
     case 'conference_end':
       cleanup('Conference ended by host');
       break;

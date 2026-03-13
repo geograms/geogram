@@ -8,6 +8,10 @@ import 'package:path_provider/path_provider.dart';
 
 import '../models/chat_message.dart';
 import '../models/conference_archive_entry.dart';
+import '../work/models/meeting_content.dart';
+import '../work/models/ndf_document.dart';
+import '../work/models/ndf_permission.dart';
+import '../work/services/ndf_service.dart';
 import 'app_service.dart';
 import 'chat_service.dart';
 import 'profile_storage.dart';
@@ -25,6 +29,7 @@ class ConferenceArchiveService {
   static const String transcriptFileName = 'messages.txt';
   static const String filesDirectoryName = 'files';
   static const String recordingsDirectoryName = 'recordings';
+  static const String transcriptsDirectoryName = 'transcripts';
 
   final Map<String, String> _activeArchivePathsByRoom = {};
 
@@ -79,6 +84,7 @@ class ConferenceArchiveService {
     await storage.createDirectory('$relativePath/$chatDirectoryName');
     await storage.createDirectory('$relativePath/$filesDirectoryName');
     await storage.createDirectory('$relativePath/$recordingsDirectoryName');
+    await storage.createDirectory('$relativePath/$transcriptsDirectoryName');
 
     final yearTag = startedAt.toLocal().year.toString();
     final entry = ConferenceArchiveEntry(
@@ -362,6 +368,148 @@ class ConferenceArchiveService {
     return outputFile.path;
   }
 
+  Future<List<StorageEntry>> listArchiveTranscripts(
+    ConferenceArchiveEntry entry,
+  ) async {
+    final storage = _archiveStorage(entry);
+    if (!await storage.directoryExists(transcriptsDirectoryName)) {
+      return const <StorageEntry>[];
+    }
+    return storage.listDirectory(transcriptsDirectoryName);
+  }
+
+  Future<String?> readTranscriptForRecording(
+    ConferenceArchiveEntry entry,
+    String recordingName,
+  ) async {
+    final baseName = p.basenameWithoutExtension(recordingName);
+    return _archiveStorage(entry).readString(
+      '$transcriptsDirectoryName/$baseName.txt',
+    );
+  }
+
+  Future<void> writeTranscriptForRecording(
+    ConferenceArchiveEntry entry,
+    String recordingName,
+    String content,
+  ) async {
+    final storage = _archiveStorage(entry);
+    if (!await storage.directoryExists(transcriptsDirectoryName)) {
+      await storage.createDirectory(transcriptsDirectoryName);
+    }
+    final baseName = p.basenameWithoutExtension(recordingName);
+    await storage.writeString(
+      '$transcriptsDirectoryName/$baseName.txt',
+      content,
+    );
+  }
+
+  Future<String> exportAsNdf(
+    ConferenceArchiveEntry entry,
+    String outputPath,
+  ) async {
+    // Lazy-import to avoid circular deps at load time
+    final ndfService = _getNdfService();
+
+    final metadata = NdfDocument.create(
+      type: NdfDocumentType.meeting,
+      title: entry.roomName,
+      description:
+          'Meeting archive from ${_formatDate(entry.startedAt)}',
+    );
+
+    final permissions = NdfPermission.create(
+      documentId: metadata.id,
+      ownerNpub: '',
+      ownerCallsign: entry.localCallsign,
+    );
+
+    // Build MeetingContent from archive entry
+    final meetingContent = MeetingContent(
+      id: 'meeting-${entry.startedAt.millisecondsSinceEpoch.toRadixString(36)}',
+      title: entry.roomName,
+      created: entry.startedAt,
+      modified: entry.updatedAt,
+      roomId: entry.roomId,
+      hostCallsign: entry.hostCallsign,
+      localCallsign: entry.localCallsign,
+      signalingMode: entry.signalingMode,
+      participants: List.from(entry.participants),
+      speakers: List.from(entry.speakers),
+      tags: List.from(entry.tags),
+    );
+
+    // Create recordings list and collect video data
+    final recordings = <MeetingRecording>[];
+    final videoAssets = <String, Uint8List>{};
+
+    for (final rec in entry.recordings) {
+      final recId = 'rec-${rec.name.hashCode.toRadixString(36)}';
+      final recording = MeetingRecording(
+        id: recId,
+        title: rec.name,
+        recordedAt: rec.modifiedAt ?? entry.startedAt,
+        durationMs: 0,
+        videoFile: 'video/$recId.mp4',
+        fileSize: rec.size,
+      );
+
+      // Check for transcript
+      final transcript = await readTranscriptForRecording(entry, rec.name);
+      if (transcript != null) {
+        recording.transcript = MeetingTranscript(
+          text: transcript,
+          model: 'whisper',
+          transcribedAt: DateTime.now(),
+        );
+      }
+
+      recordings.add(recording);
+      meetingContent.addRecording(recId);
+
+      // Read video bytes
+      final videoBytes = await readArchiveFileBytes(entry, rec.relativePath);
+      if (videoBytes != null) {
+        videoAssets['assets/video/$recId.mp4'] = videoBytes;
+      }
+    }
+
+    // Create NDF document
+    await ndfService.createDocument(
+      outputPath: outputPath,
+      metadata: metadata,
+      permissions: permissions,
+      mainContent: meetingContent.toJson(),
+    );
+
+    // Add recording metadata files
+    final recordingFiles = <String, String>{};
+    for (final rec in recordings) {
+      recordingFiles['content/recordings/${rec.id}.json'] = rec.toJsonString();
+    }
+    if (recordingFiles.isNotEmpty) {
+      await ndfService.updateArchiveFilesPublic(outputPath, recordingFiles);
+    }
+
+    // Add video assets
+    if (videoAssets.isNotEmpty) {
+      await ndfService.updateArchiveFilesBytesPublic(outputPath, videoAssets);
+    }
+
+    return outputPath;
+  }
+
+  // Lazy NDF service getter to avoid import issues
+  NdfService? _ndfServiceCache;
+  NdfService _getNdfService() {
+    return _ndfServiceCache ??= NdfService();
+  }
+
+  static String _formatDate(DateTime dt) {
+    final local = dt.toLocal();
+    return '${local.year}-${local.month.toString().padLeft(2, '0')}-${local.day.toString().padLeft(2, '0')}';
+  }
+
   Future<ConferenceArchiveEntry?> _loadEntry(String relativePath) async {
     final json = await _rootStorage().readJson(
       '$relativePath/$metadataFileName',
@@ -387,6 +535,7 @@ class ConferenceArchiveService {
     final base = fresh ?? entry;
     final files = await listArchiveFiles(base);
     final recordings = await listArchiveRecordings(base);
+    final transcripts = await listArchiveTranscripts(base);
     final messages = await loadMessages(base, limit: 1 << 20);
     final fileAssets = files
         .where((file) => !file.isDirectory)
@@ -410,10 +559,22 @@ class ConferenceArchiveService {
           ),
         )
         .toList();
+    final transcriptAssets = transcripts
+        .where((file) => !file.isDirectory)
+        .map(
+          (file) => ConferenceArchiveAsset(
+            name: file.name,
+            relativePath: file.path,
+            size: file.size,
+            modifiedAt: file.modified,
+          ),
+        )
+        .toList();
     return base.copyWith(
       messageCount: messages.length,
       files: fileAssets,
       recordings: recordingAssets,
+      voiceTranscripts: transcriptAssets,
     );
   }
 

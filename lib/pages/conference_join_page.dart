@@ -57,7 +57,15 @@ class _ConferenceJoinPageState extends State<ConferenceJoinPage> {
         final uri = Uri.parse(input);
         final segments = uri.pathSegments;
 
-        if (segments.length >= 2 && segments[segments.length - 2] == 'meet') {
+        if (segments.length >= 3 && segments[segments.length - 2] == 'meet') {
+          // Station meet URL: https://p2p.radio/{callsign}/meet/{code}
+          await _conferenceService.joinStationMeetUrl(
+            uri,
+            participantRole: _joinRole,
+          );
+        } else if (segments.length >= 2 &&
+            segments[segments.length - 2] == 'meet') {
+          // LAN meet URL: http://192.168.x.x:port/meet/{code}
           await _joinFromMeetUrl(uri);
         } else {
           throw ArgumentError('Unrecognized URL format: $input');

@@ -1303,7 +1303,7 @@ class PureStationServer with HeartbeatMixin, EmailHandlerMixin, BlogHandlerMixin
   /// Returns null if path doesn't match the pattern
   String? _parseCallsignFromPath(String path) {
     // Match pattern: /{callsign}/api/...
-    final regex = RegExp(r'^/([A-Z0-9]+)/api/');
+    final regex = RegExp(r'^/([A-Za-z0-9]+)/api/');
     final match = regex.firstMatch(path);
     if (match != null) {
       return match.group(1);
@@ -3451,6 +3451,10 @@ class PureStationServer with HeartbeatMixin, EmailHandlerMixin, BlogHandlerMixin
           case 'conference_screen_share_permission':
           case 'conference_screen_share_state':
           case 'conference_screen_share_stop':
+          case 'conference_kick':
+          case 'conference_chat_delete':
+          case 'conference_join_response':
+          case 'conference_settings_update':
             handleConferenceMessage(client.id, message);
             break;
 
@@ -6964,8 +6968,8 @@ class PureStationServer with HeartbeatMixin, EmailHandlerMixin, BlogHandlerMixin
       request.response.headers.contentType = ContentType.json;
       request.response.write(jsonEncode({
         'error': 'Device not connected',
-        'callsign': callsign.toUpperCase(),
-        'message': 'The device ${callsign.toUpperCase()} is not currently connected to this station',
+        'callsign': callsign,
+        'message': 'The device $callsign is not currently connected to this station',
       }));
       return;
     }
@@ -7471,8 +7475,8 @@ class PureStationServer with HeartbeatMixin, EmailHandlerMixin, BlogHandlerMixin
       request.response.headers.contentType = ContentType.json;
       request.response.write(jsonEncode({
         'error': 'Device not connected',
-        'callsign': callsign.toUpperCase(),
-        'message': 'The device ${callsign.toUpperCase()} is not currently connected to this station',
+        'callsign': callsign,
+        'message': 'The device $callsign is not currently connected to this station',
       }));
       return;
     }

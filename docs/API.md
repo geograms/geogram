@@ -2738,6 +2738,8 @@ Triggers a debug action.
 | `conference_promote` | Promote a listener to speaker (host only) | `callsign` (required): Callsign of participant to promote |
 | `conference_demote` | Demote a speaker to listener (host only) | `callsign` (required): Callsign of participant to demote |
 | `conference_approve_screen_share` | Approve a participant screen-share request (host only) | `callsign` (required): Callsign of participant to approve |
+| `meeting_list_archives` | List all meeting archives with recording and transcript counts | None |
+| `meeting_transcribe` | Transcribe a recording from a meeting archive using Whisper | `archive_name` (required): Archive folder name (e.g., `2026-03-13_roof`), `recording_name` (optional): Recording filename (defaults to first recording) |
 | `atproto_status` | Get Teleport AT Proto bridge status | None |
 | `atproto_read_feed` | Read public Bluesky/AT feed for an actor | `actor` (required): Handle or DID, `limit` (optional): 1-100, `appview` (optional): Base URL override |
 | `atproto_sync_feed` | Trigger bridge-managed feed sync with fallback actor logic | None |

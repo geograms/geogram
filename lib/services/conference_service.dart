@@ -18,6 +18,8 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:http/http.dart' as http;
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 
+import '../util/callsign_url.dart';
+import '../util/event_bus.dart';
 import '../models/chat_message.dart';
 import '../models/conference_archive_entry.dart';
 import '../models/conference_schedule_entry.dart';
@@ -140,7 +142,16 @@ class ConferenceRoom {
 class ConferenceService {
   static final ConferenceService _instance = ConferenceService._internal();
   factory ConferenceService() => _instance;
-  ConferenceService._internal();
+  ConferenceService._internal() {
+    // Re-announce active conference when station reconnects so the station's
+    // in-memory conference room map is repopulated after a restart.
+    EventBus().on<ConnectionStateChangedEvent>((event) {
+      if (event.connectionType == ConnectionType.station &&
+          event.isConnected) {
+        _reannounceConferenceToStation();
+      }
+    });
+  }
 
   ConferenceRoom? _room;
   ConferenceRole? _role;
@@ -412,7 +423,7 @@ class ConferenceService {
       }).toList();
       final pathSegments = <String>[
         ...preservedPathSegments,
-        room.hostCallsign,
+        callsignForUrl(room.hostCallsign),
         'meet',
         code,
       ];
@@ -501,7 +512,7 @@ class ConferenceService {
       throw ArgumentError('Unrecognized meeting URL format: $meetUri');
     }
 
-    final callsign = segments[segments.length - 3];
+    final callsign = segments[segments.length - 3].toUpperCase();
     final code = segments.last.toLowerCase();
     final roomId = '$code@$callsign';
     final targetStationUri = _stationUriFromMeetUri(meetUri);
@@ -1527,6 +1538,31 @@ class ConferenceService {
       'max_speakers': maxSpeakers,
       if (password != null) 'password': password,
       'approval_required': approvalRequired,
+    });
+  }
+
+  /// Re-announce the active conference to the station after reconnection.
+  /// The station's in-memory room map is lost on restart, so the host must
+  /// re-send conference_create to restore it.
+  void _reannounceConferenceToStation() {
+    final room = _room;
+    if (room == null ||
+        _state != ConferenceState.active ||
+        _role != ConferenceRole.host ||
+        room.signalingMode != ConferenceSignalingMode.station) {
+      return;
+    }
+
+    LogService().log(
+      'ConferenceService: Re-announcing conference ${room.roomId} to station after reconnection',
+    );
+    WebSocketService().send({
+      'type': 'conference_create',
+      'room_id': room.roomId,
+      'room_name': room.roomName,
+      'max_speakers': room.maxSpeakers,
+      if (room.password != null) 'password': room.password,
+      'approval_required': room.approvalRequired,
     });
   }
 

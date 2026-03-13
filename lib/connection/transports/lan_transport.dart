@@ -5,6 +5,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:http/http.dart' as http;
+import '../../util/callsign_url.dart';
 import '../../util/managed_http_client.dart';
 import '../../services/log_service.dart';
 import '../../services/app_args.dart';
@@ -290,7 +291,7 @@ class LanTransport extends Transport with TransportMixin {
   ) async {
     // Sync requests go to /api/dm/sync/{callsign}
     // For LAN transport, send directly to device - no callsign prefix needed
-    final targetCallsign = message.targetCallsign.toUpperCase();
+    final targetCallsign = callsignForUrl(message.targetCallsign);
     final uri = Uri.parse('$baseUrl/api/dm/sync/$targetCallsign');
 
     LogService().log('LanTransport: GET sync from $targetCallsign');

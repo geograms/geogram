@@ -14,6 +14,7 @@ enum NdfDocumentType {
   todo,
   voicememo,
   websnapshot,
+  meeting,
 }
 
 /// Metadata for an NDF document (from ndf.json inside the archive)
@@ -151,6 +152,8 @@ class NdfDocument {
         return 'mic';
       case NdfDocumentType.websnapshot:
         return 'language';
+      case NdfDocumentType.meeting:
+        return 'groups';
     }
   }
 }

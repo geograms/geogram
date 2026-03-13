@@ -6,6 +6,33 @@
 /// Stub implementation for web platform where Whisper is not available
 import 'dart:async';
 
+/// A timestamped segment of transcribed speech
+class TranscriptionSegment {
+  final Duration from;
+  final Duration to;
+  final String text;
+
+  const TranscriptionSegment({
+    required this.from,
+    required this.to,
+    required this.text,
+  });
+
+  Map<String, dynamic> toJson() => {
+    'from_ms': from.inMilliseconds,
+    'to_ms': to.inMilliseconds,
+    'text': text,
+  };
+
+  factory TranscriptionSegment.fromJson(Map<String, dynamic> json) {
+    return TranscriptionSegment(
+      from: Duration(milliseconds: json['from_ms'] as int),
+      to: Duration(milliseconds: json['to_ms'] as int),
+      text: json['text'] as String,
+    );
+  }
+}
+
 /// Result of a transcription operation
 class TranscriptionResult {
   final String text;
@@ -13,6 +40,7 @@ class TranscriptionResult {
   final String modelUsed;
   final bool success;
   final String? error;
+  final List<TranscriptionSegment>? segments;
 
   const TranscriptionResult({
     required this.text,
@@ -20,18 +48,21 @@ class TranscriptionResult {
     required this.modelUsed,
     required this.success,
     this.error,
+    this.segments,
   });
 
   factory TranscriptionResult.success({
     required String text,
     required int transcriptionTimeMs,
     required String modelUsed,
+    List<TranscriptionSegment>? segments,
   }) {
     return TranscriptionResult(
       text: text,
       transcriptionTimeMs: transcriptionTimeMs,
       modelUsed: modelUsed,
       success: true,
+      segments: segments,
     );
   }
 
@@ -97,6 +128,12 @@ class SpeechToTextService {
   Future<bool> ensureModelWarm(String modelId) async => false;
 
   Future<TranscriptionResult> transcribe(String audioFilePath) async {
+    return TranscriptionResult.failure(
+      error: 'Speech-to-text not supported on web',
+    );
+  }
+
+  Future<TranscriptionResult> transcribeWithTimestamps(String audioFilePath) async {
     return TranscriptionResult.failure(
       error: 'Speech-to-text not supported on web',
     );

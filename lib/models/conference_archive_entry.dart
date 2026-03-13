@@ -49,6 +49,7 @@ class ConferenceArchiveEntry {
   final String transcriptRelativePath;
   final List<ConferenceArchiveAsset> files;
   final List<ConferenceArchiveAsset> recordings;
+  final List<ConferenceArchiveAsset> voiceTranscripts;
   final int messageCount;
   final List<String> tags;
 
@@ -71,6 +72,7 @@ class ConferenceArchiveEntry {
     this.meetUrls = const <String>[],
     this.files = const <ConferenceArchiveAsset>[],
     this.recordings = const <ConferenceArchiveAsset>[],
+    this.voiceTranscripts = const <ConferenceArchiveAsset>[],
     this.messageCount = 0,
     this.tags = const <String>[],
   });
@@ -98,6 +100,7 @@ class ConferenceArchiveEntry {
     'transcript_path': transcriptRelativePath,
     'files': files.map((asset) => asset.toJson()).toList(),
     'recordings': recordings.map((asset) => asset.toJson()).toList(),
+    'voice_transcripts': voiceTranscripts.map((asset) => asset.toJson()).toList(),
     'message_count': messageCount,
     'tags': tags,
   };
@@ -134,6 +137,10 @@ class ConferenceArchiveEntry {
           .whereType<Map<String, dynamic>>()
           .map(ConferenceArchiveAsset.fromJson)
           .toList(),
+      voiceTranscripts: (json['voice_transcripts'] as List<dynamic>? ?? const [])
+          .whereType<Map<String, dynamic>>()
+          .map(ConferenceArchiveAsset.fromJson)
+          .toList(),
       messageCount: (json['message_count'] as num?)?.toInt() ?? 0,
       tags: (json['tags'] as List<dynamic>? ?? const [])
           .map((value) => value.toString())
@@ -162,6 +169,7 @@ class ConferenceArchiveEntry {
     String? transcriptRelativePath,
     List<ConferenceArchiveAsset>? files,
     List<ConferenceArchiveAsset>? recordings,
+    List<ConferenceArchiveAsset>? voiceTranscripts,
     int? messageCount,
     List<String>? tags,
   }) {
@@ -188,6 +196,8 @@ class ConferenceArchiveEntry {
       files: files ?? List<ConferenceArchiveAsset>.from(this.files),
       recordings:
           recordings ?? List<ConferenceArchiveAsset>.from(this.recordings),
+      voiceTranscripts:
+          voiceTranscripts ?? List<ConferenceArchiveAsset>.from(this.voiceTranscripts),
       messageCount: messageCount ?? this.messageCount,
       tags: tags ?? List<String>.from(this.tags),
     );

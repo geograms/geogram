@@ -5,7 +5,6 @@
 
 import 'dart:async';
 
-import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 /// Exception thrown when the circuit breaker is open (too many consecutive errors).
@@ -57,7 +56,7 @@ class ManagedHttpClient extends http.BaseClient {
     if (isCircuitOpen) {
       // Gradually recover: decrement error count each rejected call
       _consecutiveErrors--;
-      debugPrint(
+      print(
         'ManagedHttpClient: circuit open, skipping ${request.url} '
         '(errors=$_consecutiveErrors)',
       );

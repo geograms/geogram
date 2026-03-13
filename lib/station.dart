@@ -3192,6 +3192,10 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
           case 'conference_screen_share_permission':
           case 'conference_screen_share_state':
           case 'conference_screen_share_stop':
+          case 'conference_kick':
+          case 'conference_chat_delete':
+          case 'conference_join_response':
+          case 'conference_settings_update':
             handleConferenceMessage(client.id, message);
             break;
 
@@ -6584,8 +6588,8 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
       request.response.headers.contentType = ContentType.json;
       request.response.write(jsonEncode({
         'error': 'Device not connected',
-        'callsign': callsign.toUpperCase(),
-        'message': 'The device ${callsign.toUpperCase()} is not currently connected to this station',
+        'callsign': callsign,
+        'message': 'The device $callsign is not currently connected to this station',
       }));
       return;
     }
@@ -7071,8 +7075,8 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
       request.response.headers.contentType = ContentType.json;
       request.response.write(jsonEncode({
         'error': 'Device not connected',
-        'callsign': callsign.toUpperCase(),
-        'message': 'The device ${callsign.toUpperCase()} is not currently connected to this station',
+        'callsign': callsign,
+        'message': 'The device $callsign is not currently connected to this station',
       }));
       return;
     }

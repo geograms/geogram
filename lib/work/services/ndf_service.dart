@@ -18,6 +18,7 @@ import '../models/form_content.dart';
 import '../models/presentation_content.dart';
 import '../models/todo_content.dart';
 import '../models/voicememo_content.dart';
+import '../models/meeting_content.dart';
 import '../models/websnapshot_content.dart';
 
 /// Service for reading and writing NDF (Nostr Data Format) documents
@@ -502,6 +503,9 @@ class NdfService {
           },
           'snapshots': [],
         };
+
+      case NdfDocumentType.meeting:
+        return MeetingContent.create(title: title).toJson();
     }
   }
 
@@ -1281,6 +1285,108 @@ class NdfService {
       LogService().log('NdfService: Error extracting snapshot to temp: $e');
       return null;
     }
+  }
+
+  // ============================================================
+  // MEETING CONTENT METHODS
+  // ============================================================
+
+  /// Read meeting main content
+  Future<MeetingContent?> readMeetingContent(String filePath) async {
+    final json = await readArchiveJson(filePath, 'content/main.json');
+    if (json == null) return null;
+    try {
+      return MeetingContent.fromJson(json);
+    } catch (e) {
+      LogService().log('NdfService: Error parsing meeting content: $e');
+      return null;
+    }
+  }
+
+  /// Read a meeting recording metadata
+  Future<MeetingRecording?> readMeetingRecording(String filePath, String recordingId) async {
+    final json = await readArchiveJson(filePath, 'content/recordings/$recordingId.json');
+    if (json == null) return null;
+    try {
+      return MeetingRecording.fromJson(json);
+    } catch (e) {
+      LogService().log('NdfService: Error parsing recording $recordingId: $e');
+      return null;
+    }
+  }
+
+  /// Read all meeting recordings
+  Future<List<MeetingRecording>> readMeetingRecordings(
+    String filePath,
+    List<String> recordingIds,
+  ) async {
+    final recordings = <MeetingRecording>[];
+    for (final id in recordingIds) {
+      final recording = await readMeetingRecording(filePath, id);
+      if (recording != null) {
+        recordings.add(recording);
+      }
+    }
+    return recordings;
+  }
+
+  /// Save meeting content and recordings
+  Future<void> saveMeeting(
+    String filePath,
+    MeetingContent content,
+    List<MeetingRecording> recordings,
+  ) async {
+    await _updateArchiveFiles(filePath, {
+      'content/main.json': content.toJsonString(),
+      for (final recording in recordings)
+        'content/recordings/${recording.id}.json': recording.toJsonString(),
+    });
+  }
+
+  /// Save a single meeting recording metadata
+  Future<void> saveMeetingRecording(
+    String filePath,
+    MeetingRecording recording,
+  ) async {
+    await _updateArchiveFiles(filePath, {
+      'content/recordings/${recording.id}.json': recording.toJsonString(),
+    });
+  }
+
+  /// Read recording video bytes from the archive
+  Future<Uint8List?> readRecordingVideo(String filePath, String videoFile) async {
+    return readArchiveFile(filePath, 'assets/$videoFile');
+  }
+
+  /// Save recording video to the archive
+  Future<void> saveRecordingVideo(
+    String filePath,
+    String recordingId,
+    Uint8List videoBytes,
+  ) async {
+    await _updateArchiveFilesBytes(filePath, {
+      'assets/video/$recordingId.mp4': videoBytes,
+    });
+  }
+
+  // ============================================================
+  // PUBLIC ARCHIVE HELPERS (for external service use)
+  // ============================================================
+
+  /// Update multiple text files in an archive (public wrapper)
+  Future<void> updateArchiveFilesPublic(
+    String filePath,
+    Map<String, String> files,
+  ) async {
+    await _updateArchiveFiles(filePath, files);
+  }
+
+  /// Update multiple binary files in an archive (public wrapper)
+  Future<void> updateArchiveFilesBytesPublic(
+    String filePath,
+    Map<String, Uint8List> files,
+  ) async {
+    await _updateArchiveFilesBytes(filePath, files);
   }
 
   // ============================================================

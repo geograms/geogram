@@ -26,6 +26,9 @@ Supported document types:
 - **Document** - Rich text with headings, lists, tables, images
 - **Presentation** - Slides with elements, themes, transitions
 - **Form** - Field definitions and signed responses
+- **Voice Memo** - Audio clips with transcriptions
+- **Web Snapshot** - Archived web pages with assets
+- **Meeting** - Conference recordings with transcriptions
 
 ## Data Structure
 
@@ -37,7 +40,8 @@ Supported document types:
 │   │   ├── workspace.json         # Workspace metadata
 │   │   ├── budget.ndf             # Spreadsheet document
 │   │   ├── proposal.ndf           # Rich text document
-│   │   └── survey.ndf             # Form document
+│   │   ├── survey.ndf             # Form document
+│   │   └── roof_2026-03-14.meeting.ndf   # Meeting document
 │   └── project-beta/
 │       └── ...
 └── sync/

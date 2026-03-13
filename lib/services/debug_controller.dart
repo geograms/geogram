@@ -23,6 +23,8 @@ import 'devices_service.dart';
 import 'log_service.dart';
 import 'usb_aoa_service.dart';
 import 'profile_storage.dart';
+import 'conference_archive_service.dart';
+import 'meeting_transcription_service.dart';
 import 'shared_folder_service.dart';
 import '../models/shared_folder.dart';
 import '../teleport/bitchat/bitchat_service.dart';
@@ -1298,6 +1300,22 @@ class DebugController {
         },
       },
       {
+        'action': 'meeting_transcribe',
+        'description':
+            'Transcribe a recording from a meeting archive using Whisper',
+        'params': {
+          'archive_name':
+              'Archive folder name, e.g. 2026-03-13_transcription_test (required)',
+          'recording_name':
+              '(optional) Recording filename. Defaults to first recording',
+        },
+      },
+      {
+        'action': 'meeting_list_archives',
+        'description': 'List all meeting archives',
+        'params': {},
+      },
+      {
         'action': 'create_app',
         'description': 'Create a new app/collection by type',
         'params': {
@@ -2146,6 +2164,12 @@ class DebugController {
       case 'conference_update_settings':
         return _conferenceUpdateSettings(params);
 
+      case 'meeting_transcribe':
+        return _meetingTranscribe(params);
+
+      case 'meeting_list_archives':
+        return _meetingListArchives();
+
       case 'create_app':
         return _createApp(params);
 
@@ -2891,6 +2915,111 @@ class DebugController {
       'success': true,
       'logLevel': level.name,
       'message': 'Log level set to ${level.name}',
+    };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Meeting transcription
+  // ---------------------------------------------------------------------------
+
+  Future<Map<String, dynamic>> _meetingListArchives() async {
+    final archiveService = ConferenceArchiveService();
+    final archives = await archiveService.listArchives();
+    return {
+      'success': true,
+      'count': archives.length,
+      'archives': archives.map((a) => {
+        'name': a.relativePath.split('/').last,
+        'room_name': a.roomName,
+        'recordings': a.recordings.length,
+        'voice_transcripts': a.voiceTranscripts.length,
+        'started_at': a.startedAt.toIso8601String(),
+      }).toList(),
+    };
+  }
+
+  Future<Map<String, dynamic>> _meetingTranscribe(
+      Map<String, dynamic> params) async {
+    final archiveName = params['archive_name'] as String?;
+    if (archiveName == null || archiveName.isEmpty) {
+      return {'success': false, 'error': 'archive_name is required'};
+    }
+
+    final archiveService = ConferenceArchiveService();
+    final archives = await archiveService.listArchives();
+    final entry = archives.where(
+      (a) => a.relativePath.endsWith(archiveName),
+    ).firstOrNull;
+
+    if (entry == null) {
+      return {
+        'success': false,
+        'error': 'Archive not found: $archiveName',
+        'available': archives.map((a) => a.relativePath.split('/').last).toList(),
+      };
+    }
+
+    if (entry.recordings.isEmpty) {
+      return {'success': false, 'error': 'Archive has no recordings'};
+    }
+
+    // Pick recording
+    final recordingName = params['recording_name'] as String? ??
+        entry.recordings.first.name;
+    final recording = entry.recordings.where(
+      (r) => r.name == recordingName,
+    ).firstOrNull;
+    if (recording == null) {
+      return {
+        'success': false,
+        'error': 'Recording not found: $recordingName',
+        'available': entry.recordings.map((r) => r.name).toList(),
+      };
+    }
+
+    // Export MP4 to temp path
+    final tempPath = await archiveService.exportArchiveFileToTemporaryPath(
+      entry, recording.relativePath,
+    );
+    if (tempPath == null) {
+      return {'success': false, 'error': 'Failed to export recording to temp'};
+    }
+
+    // Transcribe
+    final service = MeetingTranscriptionService();
+    final result = await service.transcribeRecording(
+      mp4Path: tempPath,
+      recordingName: recordingName,
+    );
+
+    // Clean up temp
+    try { await File(tempPath).delete(); } catch (_) {}
+
+    if (result.cancelled) {
+      return {'success': false, 'error': 'Transcription was cancelled'};
+    }
+
+    if (result.text == null) {
+      return {
+        'success': false,
+        'error': result.error ?? 'Transcription failed (no text)',
+        'cancelled': result.cancelled,
+      };
+    }
+
+    // Save transcript to archive
+    await archiveService.writeTranscriptForRecording(
+      entry, recordingName, result.text!,
+    );
+
+    return {
+      'success': true,
+      'recording': recordingName,
+      'model': result.model,
+      'segments': result.segments?.length ?? 0,
+      'transcript_preview': result.text!.length > 500
+          ? '${result.text!.substring(0, 500)}...'
+          : result.text!,
     };
   }
 

@@ -1,13 +1,22 @@
 library;
 
-import 'package:flutter/material.dart';
+import 'dart:async';
+import 'dart:io';
 
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
+
+import '../bot/services/speech_to_text_service.dart';
 import '../models/chat_message.dart';
 import '../models/conference_archive_entry.dart';
 import '../services/conference_archive_service.dart';
 import '../services/file_launcher_service.dart';
+import '../services/meeting_transcription_service.dart';
 import '../widgets/message_list_widget.dart';
 import '../widgets/video_player_widget.dart';
+import '../work/utils/voicememo_transcription_service.dart';
 
 class ConferenceArchiveDetailPage extends StatefulWidget {
   final ConferenceArchiveEntry entry;
@@ -23,23 +32,41 @@ class _ConferenceArchiveDetailPageState
     extends State<ConferenceArchiveDetailPage> {
   final _archiveService = ConferenceArchiveService();
   final _fileLauncher = FileLauncherService();
+  final _transcriptionService = MeetingTranscriptionService();
 
   ConferenceArchiveEntry? _entry;
   List<ChatMessage> _messages = const <ChatMessage>[];
   bool _loading = true;
   bool _openingAsset = false;
+  bool _exportingNdf = false;
   String? _error;
 
   ConferenceArchiveAsset? _playingRecording;
   String? _playingRecordingPath;
   bool _isFullscreen = false;
 
+  // Transcription state
+  StreamSubscription? _progressSub;
+  TranscriptionProgress? _transcriptionProgress;
+  String? _transcribingRecordingName;
+
   ConferenceArchiveEntry get _currentEntry => _entry ?? widget.entry;
 
   @override
   void initState() {
     super.initState();
+    _progressSub = _transcriptionService.progressStream.listen((progress) {
+      if (mounted) {
+        setState(() => _transcriptionProgress = progress);
+      }
+    });
     _loadArchive();
+  }
+
+  @override
+  void dispose() {
+    _progressSub?.cancel();
+    super.dispose();
   }
 
   Future<void> _loadArchive() async {
@@ -152,6 +179,125 @@ class _ConferenceArchiveDetailPageState
     });
   }
 
+  Future<void> _transcribeRecording(ConferenceArchiveAsset recording) async {
+    if (_transcriptionService.isBusy) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('A transcription is already in progress')),
+      );
+      return;
+    }
+
+    setState(() {
+      _transcribingRecordingName = recording.name;
+    });
+
+    try {
+      // Export MP4 to temp path
+      final mp4Path = await _archiveService.exportArchiveFileToTemporaryPath(
+        _currentEntry,
+        recording.relativePath,
+      );
+      if (mp4Path == null) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Unable to export recording')),
+        );
+        setState(() => _transcribingRecordingName = null);
+        return;
+      }
+
+      final result = await _transcriptionService.transcribeRecording(
+        mp4Path: mp4Path,
+        recordingName: recording.name,
+      );
+
+      if (!mounted) return;
+
+      if (result.cancelled) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Transcription cancelled')),
+        );
+      } else if (result.success && result.text != null) {
+        // Write transcript to archive
+        await _archiveService.writeTranscriptForRecording(
+          _currentEntry,
+          recording.name,
+          result.text!,
+        );
+        // Refresh archive to pick up new transcript
+        await _loadArchive();
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Transcription complete')),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Transcription failed: ${result.error ?? "Unknown error"}')),
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Transcription error: $e')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _transcribingRecordingName = null);
+      }
+    }
+  }
+
+  Future<void> _cancelTranscription() async {
+    await _transcriptionService.cancel();
+  }
+
+  Future<void> _exportAsNdf() async {
+    if (_exportingNdf) return;
+    setState(() => _exportingNdf = true);
+
+    try {
+      final tempDir = await getTemporaryDirectory();
+      final sanitizedName = _currentEntry.roomName
+          .replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '_')
+          .toLowerCase();
+      final date = _currentEntry.startedAt.toLocal();
+      final dateStr =
+          '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
+      final outputPath = p.join(
+        tempDir.path,
+        '${sanitizedName}_$dateStr.meeting.ndf',
+      );
+
+      await _archiveService.exportAsNdf(_currentEntry, outputPath);
+
+      if (!mounted) return;
+
+      final opened = await _fileLauncher.openFile(outputPath);
+      if (!mounted) return;
+      if (!opened) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('NDF exported to: $outputPath')),
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Export failed: $e')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _exportingNdf = false);
+      }
+    }
+  }
+
+  bool _hasTranscript(String recordingName) {
+    final baseName = p.basenameWithoutExtension(recordingName);
+    return _currentEntry.voiceTranscripts.any(
+      (t) => p.basenameWithoutExtension(t.name) == baseName,
+    );
+  }
+
   Future<void> _editTags() async {
     final controller = TextEditingController();
     final currentTags = List<String>.from(_currentEntry.tags);
@@ -241,11 +387,62 @@ class _ConferenceArchiveDetailPageState
     }
   }
 
+  Widget _buildTranscriptionProgressIndicator(ThemeData theme) {
+    final progress = _transcriptionProgress;
+    if (progress == null || progress.state == TranscriptionState.idle) {
+      return const SizedBox.shrink();
+    }
+
+    return Card(
+      margin: const EdgeInsets.only(bottom: 16),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.transcribe, size: 18, color: theme.colorScheme.primary),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Transcribing: ${_transcribingRecordingName ?? ""}',
+                    style: theme.textTheme.titleSmall,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                if (progress.state != TranscriptionState.cancelling)
+                  IconButton(
+                    icon: const Icon(Icons.close, size: 18),
+                    tooltip: 'Cancel transcription',
+                    onPressed: _cancelTranscription,
+                  ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            LinearProgressIndicator(
+              value: progress.progress > 0 ? progress.progress : null,
+            ),
+            const SizedBox(height: 4),
+            Text(
+              progress.message,
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildSummaryTab(ThemeData theme) {
     final entry = _currentEntry;
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
+        if (_transcribingRecordingName != null)
+          _buildTranscriptionProgressIndicator(theme),
         if (_playingRecording != null && _playingRecordingPath != null)
           Card(
             clipBehavior: Clip.antiAlias,
@@ -289,14 +486,15 @@ class _ConferenceArchiveDetailPageState
             ),
           ),
         if (entry.recordings.isNotEmpty)
-          _AssetSection(
-            title: 'Recordings',
-            icon: Icons.fiber_manual_record,
-            assets: entry.recordings,
-            emptyLabel: '',
+          _RecordingSection(
+            recordings: entry.recordings,
             openingDisabled: _openingAsset,
-            onOpenAsset: _playRecording,
-            isRecording: true,
+            onPlayRecording: _playRecording,
+            onTranscribeRecording: _transcribeRecording,
+            hasTranscript: _hasTranscript,
+            isTranscribing: _transcriptionService.isBusy,
+            transcribingName: _transcribingRecordingName,
+            sttSupported: SpeechToTextService.isSupported,
           ),
         _InfoCard(
           title: 'Tags',
@@ -376,6 +574,7 @@ class _ConferenceArchiveDetailPageState
             _InfoRow(label: 'Messages', value: '${entry.messageCount}'),
             _InfoRow(label: 'Files', value: '${entry.fileCount}'),
             _InfoRow(label: 'Recordings', value: '${entry.recordingCount}'),
+            _InfoRow(label: 'Transcripts', value: '${entry.voiceTranscripts.length}'),
             _InfoRow(label: 'Archive', value: entry.relativePath),
             if (entry.stationMeetUrl != null &&
                 entry.stationMeetUrl!.isNotEmpty)
@@ -426,6 +625,32 @@ class _ConferenceArchiveDetailPageState
     );
   }
 
+  Widget _buildTranscriptTab(ThemeData theme) {
+    final entry = _currentEntry;
+    if (entry.voiceTranscripts.isEmpty) {
+      return Center(
+        child: Text(
+          'No transcripts available',
+          style: theme.textTheme.bodyLarge?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
+        ),
+      );
+    }
+    return ListView.builder(
+      padding: const EdgeInsets.all(16),
+      itemCount: entry.voiceTranscripts.length,
+      itemBuilder: (context, index) {
+        final transcript = entry.voiceTranscripts[index];
+        return _TranscriptCard(
+          transcript: transcript,
+          archiveService: _archiveService,
+          entry: entry,
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -445,22 +670,37 @@ class _ConferenceArchiveDetailPageState
 
     final hasChat = _messages.isNotEmpty;
     final hasFiles = entry.files.isNotEmpty;
+    final hasTranscripts = entry.voiceTranscripts.isNotEmpty;
 
     final tabs = <Tab>[
       const Tab(text: 'Summary'),
       if (hasChat) const Tab(text: 'Chat'),
       if (hasFiles) const Tab(text: 'Files'),
+      if (hasTranscripts) const Tab(text: 'Transcripts'),
     ];
     final tabViews = <Widget>[
       _buildSummaryTab(theme),
       if (hasChat) _buildChatTab(theme),
       if (hasFiles) _buildFilesTab(theme),
+      if (hasTranscripts) _buildTranscriptTab(theme),
     ];
 
     return Scaffold(
       appBar: AppBar(
         title: Text(entry.roomName),
         actions: [
+          if (entry.recordings.isNotEmpty)
+            IconButton(
+              icon: _exportingNdf
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.archive_outlined),
+              tooltip: 'Export as NDF',
+              onPressed: _exportingNdf ? null : _exportAsNdf,
+            ),
           IconButton(
             icon: const Icon(Icons.refresh),
             tooltip: 'Refresh archive',
@@ -480,6 +720,209 @@ class _ConferenceArchiveDetailPageState
                 ],
               ),
             ),
+    );
+  }
+}
+
+class _RecordingSection extends StatelessWidget {
+  final List<ConferenceArchiveAsset> recordings;
+  final bool openingDisabled;
+  final Future<void> Function(ConferenceArchiveAsset) onPlayRecording;
+  final Future<void> Function(ConferenceArchiveAsset) onTranscribeRecording;
+  final bool Function(String) hasTranscript;
+  final bool isTranscribing;
+  final String? transcribingName;
+  final bool sttSupported;
+
+  const _RecordingSection({
+    required this.recordings,
+    required this.openingDisabled,
+    required this.onPlayRecording,
+    required this.onTranscribeRecording,
+    required this.hasTranscript,
+    required this.isTranscribing,
+    required this.transcribingName,
+    required this.sttSupported,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.fiber_manual_record,
+                    size: 18, color: theme.colorScheme.primary),
+                const SizedBox(width: 8),
+                Text(
+                  'Recordings',
+                  style: theme.textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            ...recordings.map((asset) {
+              final transcribed = hasTranscript(asset.name);
+              final currentlyTranscribing =
+                  isTranscribing && transcribingName == asset.name;
+              return ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: Icon(
+                  Icons.videocam,
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+                title: Text(asset.name),
+                subtitle: Text(_formatAssetSubtitle(asset)),
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (sttSupported) ...[
+                      if (currentlyTranscribing)
+                        const SizedBox(
+                          width: 24,
+                          height: 24,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      else if (transcribed)
+                        const Icon(Icons.check_circle, color: Colors.green, size: 20)
+                      else
+                        IconButton(
+                          icon: const Icon(Icons.transcribe),
+                          tooltip: 'Transcribe recording',
+                          onPressed: isTranscribing
+                              ? null
+                              : () => onTranscribeRecording(asset),
+                        ),
+                      const SizedBox(width: 4),
+                    ],
+                    IconButton(
+                      icon: const Icon(Icons.play_arrow),
+                      tooltip: 'Play recording',
+                      onPressed: openingDisabled
+                          ? null
+                          : () => onPlayRecording(asset),
+                    ),
+                  ],
+                ),
+                onTap: openingDisabled ? null : () => onPlayRecording(asset),
+              );
+            }),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _TranscriptCard extends StatefulWidget {
+  final ConferenceArchiveAsset transcript;
+  final ConferenceArchiveService archiveService;
+  final ConferenceArchiveEntry entry;
+
+  const _TranscriptCard({
+    required this.transcript,
+    required this.archiveService,
+    required this.entry,
+  });
+
+  @override
+  State<_TranscriptCard> createState() => _TranscriptCardState();
+}
+
+class _TranscriptCardState extends State<_TranscriptCard> {
+  String? _text;
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadTranscript();
+  }
+
+  Future<void> _loadTranscript() async {
+    try {
+      final text = await widget.archiveService.readTranscriptForRecording(
+        widget.entry,
+        widget.transcript.name,
+      );
+      if (mounted) {
+        setState(() {
+          _text = text;
+          _loading = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _text = 'Error loading transcript: $e';
+          _loading = false;
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Card(
+      margin: const EdgeInsets.only(bottom: 16),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.transcribe,
+                    size: 18, color: theme.colorScheme.primary),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    widget.transcript.name,
+                    style: theme.textTheme.titleSmall,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                if (_text != null)
+                  IconButton(
+                    icon: const Icon(Icons.copy, size: 18),
+                    tooltip: 'Copy to clipboard',
+                    onPressed: () {
+                      Clipboard.setData(ClipboardData(text: _text!));
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                            content: Text('Transcript copied to clipboard')),
+                      );
+                    },
+                  ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            if (_loading)
+              const Center(child: CircularProgressIndicator())
+            else if (_text != null)
+              Container(
+                constraints: const BoxConstraints(maxHeight: 400),
+                child: SingleChildScrollView(
+                  child: SelectableText(
+                    _text!,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      fontFamily: 'monospace',
+                      height: 1.6,
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -642,7 +1085,8 @@ String _formatDateTime(DateTime value) {
   final day = local.day.toString().padLeft(2, '0');
   final hour = local.hour.toString().padLeft(2, '0');
   final minute = local.minute.toString().padLeft(2, '0');
-  return '$year-$month-$day $hour:$minute';
+  final second = local.second.toString().padLeft(2, '0');
+  return '$year-$month-$day $hour:$minute:$second';
 }
 
 String _formatFileSize(int bytes) {

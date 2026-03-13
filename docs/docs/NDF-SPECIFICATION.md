@@ -6,7 +6,7 @@
 
 ## Overview
 
-NDF is a ZIP-based container format designed for offline-first, mesh-network-friendly document exchange. It supports spreadsheets, rich text documents, presentations, and forms with embedded binary assets, NOSTR-signed collaboration metadata, and social feedback.
+NDF is a ZIP-based container format designed for offline-first, mesh-network-friendly document exchange. It supports spreadsheets, rich text documents, presentations, forms, voice memos, web snapshots, and meetings with embedded binary assets, NOSTR-signed collaboration metadata, and social feedback.
 
 ## Design Principles
 
@@ -1324,6 +1324,76 @@ The `ndf` field in `ndf.json` indicates format version:
 
 ---
 
+### Meeting (type: "meeting")
+
+Meeting documents archive single-day conference events with recordings and transcriptions.
+
+**Naming convention:** Meeting NDF files use double extensions with a date stamp:
+`{title}_{YYYY-MM-DD}.meeting.ndf` — e.g., `roof_2026-03-14.meeting.ndf`
+
+**Archive layout:**
+```
+ndf.json                                  (NdfDocument, type: meeting)
+permissions.json                          (NdfPermission)
+content/
+  main.json                               (MeetingContent)
+  recordings/{recordingId}.json           (MeetingRecording per recording)
+assets/
+  video/{recordingId}.mp4                 (video files)
+  audio/{recordingId}.wav                 (extracted audio, if kept)
+  thumbnails/preview.png                  (optional)
+```
+
+**content/main.json** (schema: `ndf-meeting-1.0`):
+```json
+{
+  "type": "meeting",
+  "id": "meeting-abc123",
+  "schema": "ndf-meeting-1.0",
+  "title": "Team Standup",
+  "version": 1,
+  "created": "2026-03-14T10:00:00Z",
+  "modified": "2026-03-14T10:45:00Z",
+  "room_id": "room-xyz",
+  "host_callsign": "alice",
+  "local_callsign": "bob",
+  "signaling_mode": "station",
+  "participants": ["alice", "bob", "carol"],
+  "speakers": ["alice", "bob"],
+  "recordings": ["rec-001"],
+  "tags": ["standup", "2026"],
+  "settings": {
+    "show_transcriptions": true
+  }
+}
+```
+
+**content/recordings/{recordingId}.json**:
+```json
+{
+  "id": "rec-001",
+  "title": "recording_001.mp4",
+  "recorded_at": "2026-03-14T10:02:00Z",
+  "duration_ms": 2580000,
+  "video_file": "video/rec-001.mp4",
+  "file_size": 52428800,
+  "transcript": {
+    "text": "[00:00:12 --> 00:00:18] Hello everyone...",
+    "model": "whisper-base",
+    "transcribed_at": "2026-03-14T11:00:00Z",
+    "segments": [
+      {
+        "from_ms": 12000,
+        "to_ms": 18000,
+        "text": "Hello everyone"
+      }
+    ]
+  }
+}
+```
+
+---
+
 ## Reference Implementation Checklist
 
 - [ ] ZIP creation with ndf.json and permissions.json at root
@@ -1337,6 +1407,7 @@ The `ndf` field in `ndf.json` indicates format version:
 - [ ] Presentation parser/renderer
 - [ ] Form builder and renderer
 - [ ] Form response collection and signing
+- [ ] Meeting archive with recordings and transcription
 - [ ] Social features (reactions, comments)
 - [ ] Edit history with signatures and permission checks
 - [ ] Sync metadata

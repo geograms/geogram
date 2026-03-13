@@ -4,6 +4,7 @@ library;
 import 'dart:async';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
+import '../../util/callsign_url.dart';
 import '../../services/log_service.dart';
 import '../../services/station_service.dart';
 import '../../services/security_service.dart';
@@ -200,7 +201,7 @@ class StationTransport extends Transport with TransportMixin {
     Stopwatch stopwatch,
   ) async {
     final httpUrl = _getStationHttpUrl(stationUrl);
-    final targetCallsign = message.targetCallsign.toUpperCase();
+    final targetCallsign = callsignForUrl(message.targetCallsign);
 
     // Use the /{callsign}/api/* proxy format
     final uri = Uri.parse('$httpUrl/$targetCallsign${message.path}');
@@ -311,7 +312,7 @@ class StationTransport extends Transport with TransportMixin {
     }
 
     final httpUrl = _getStationHttpUrl(stationUrl);
-    final targetCallsign = message.targetCallsign.toUpperCase();
+    final targetCallsign = callsignForUrl(message.targetCallsign);
 
     // Use station HTTP proxy: /{targetCallsign}/api/chat/{senderCallsign}/messages
     final path = '/api/chat/$senderCallsign/messages';
@@ -444,7 +445,7 @@ class StationTransport extends Transport with TransportMixin {
     Stopwatch stopwatch,
   ) async {
     final httpUrl = _getStationHttpUrl(stationUrl);
-    final targetCallsign = message.targetCallsign.toUpperCase();
+    final targetCallsign = callsignForUrl(message.targetCallsign);
 
     // Use station proxy for sync
     final uri = Uri.parse(

@@ -1111,6 +1111,13 @@ class _WorkspaceDetailPageState extends State<WorkspaceDetailPage> {
           ),
         ).then((_) => onEditorClosed());
         break;
+
+      case NdfDocumentType.meeting:
+        // Meeting NDF documents are read-only archives opened from Meetings
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Meeting documents are opened from the Meetings archive')),
+        );
+        break;
     }
   }
 
@@ -1130,6 +1137,8 @@ class _WorkspaceDetailPageState extends State<WorkspaceDetailPage> {
         return _i18n.t('work_voicememo');
       case NdfDocumentType.websnapshot:
         return _i18n.t('work_websnapshot');
+      case NdfDocumentType.meeting:
+        return 'Meeting';
     }
   }
 
@@ -1149,6 +1158,8 @@ class _WorkspaceDetailPageState extends State<WorkspaceDetailPage> {
         return Icons.mic;
       case NdfDocumentType.websnapshot:
         return Icons.language;
+      case NdfDocumentType.meeting:
+        return Icons.groups;
     }
   }
 
@@ -1168,6 +1179,8 @@ class _WorkspaceDetailPageState extends State<WorkspaceDetailPage> {
         return Colors.deepOrange;
       case NdfDocumentType.websnapshot:
         return Colors.indigo;
+      case NdfDocumentType.meeting:
+        return Colors.blueGrey;
     }
   }
 
