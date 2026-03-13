@@ -32,6 +32,7 @@ This document catalogs reusable UI components available in the Geogram codebase.
 ### Cache & File System
 - [CacheServiceBase](#cacheservicebase) - Shared relay cache logic for Desktop and CLI stations
 - [FileSystemService path utilities](#filesystemservice-path-utilities) - Cross-platform path handling (Windows `\` + Unix `/`)
+- [ZipProfileStorage](#zipprofilestorage) - ProfileStorage backed by an in-memory ZIP archive (NDF files)
 
 ### URL Utilities
 - [callsignForUrl](#callsignforurl) - Format callsign for URL path segments (lowercase)
@@ -54,6 +55,8 @@ This document catalogs reusable UI components available in the Geogram codebase.
 - [ConferenceParticipantPeerManager](#conferenceparticipantpeermanager) - Participant-side SFU WebRTC manager (single connection to host)
 - [ConferencePeerManager](#conferencepeermanager) - Legacy audio WebRTC mesh peer connections (deprecated)
 - [ConferenceService](#conferenceservice) - Orchestration (SFU topology, host/join, role management, promote/demote, kick/ban, password, approval mode, chat delete)
+- [MeetingSession](#meetingsession) - Session tracking model for meeting resume/restart (in `meeting_content.dart`)
+- [ConferenceRecordingService audio-only mode](#conferencerecordingservice) - `start(includeScreen: false)` records audio only (privacy-safe default)
 
 ### Karma Gamification
 - [KarmaMixin](#karmamixin) - Station mixin: `karmaRecord()`, API handlers, periodic leaderboard recomputation
@@ -10919,6 +10922,33 @@ final name = FileSystemService.instance.fileName(path);  // Works everywhere
 ```
 
 **Used in**: All code that extracts names from filesystem paths
+
+---
+
+## ZipProfileStorage
+
+**File**: `lib/util/zip_storage.dart`
+
+`ProfileStorage` implementation backed by an in-memory ZIP archive. Keeps the decoded `Archive` in memory and provides filesystem-like CRUD (read/write/append/delete/list/copy). Call `flush()` to write the in-memory state back to the ZIP file on disk.
+
+Used for NDF meeting archives — meetings are stored natively as `.meeting.ndf` (ZIP) files from the moment they start. Follows the same patterns as `EncryptedProfileStorage`: `createDirectory()` is a no-op (directories are implicit), `directoryExists()` checks entry prefixes, `appendString()` does read-modify-write.
+
+```dart
+import '../util/zip_storage.dart';
+
+final storage = await ZipProfileStorage.open('/path/to/archive.ndf');
+await storage.writeString('content/main.json', jsonString);
+await storage.writeBytes('assets/video/rec-001.mp4', videoBytes);
+final data = await storage.readString('content/main.json');
+final entries = await storage.listDirectory('assets/video');
+await storage.flush();   // Write ZIP to disk
+await storage.close();   // Flush + release memory
+```
+
+**Key properties**: `isDirty`, `basePath`, `isEncrypted` (always false)
+**Constructor**: `ZipProfileStorage.open(String filePath)` (static async factory)
+
+**Used in**: `ConferenceArchiveService` for NDF-native meeting archives
 
 ---
 

@@ -1,5 +1,7 @@
 library;
 
+import '../work/models/meeting_content.dart' show MeetingSession;
+
 class ConferenceArchiveAsset {
   final String name;
   final String relativePath;
@@ -52,6 +54,8 @@ class ConferenceArchiveEntry {
   final List<ConferenceArchiveAsset> voiceTranscripts;
   final int messageCount;
   final List<String> tags;
+  final List<MeetingSession> sessions;
+  final Map<String, String> participantNicknames;
 
   const ConferenceArchiveEntry({
     required this.relativePath,
@@ -75,6 +79,8 @@ class ConferenceArchiveEntry {
     this.voiceTranscripts = const <ConferenceArchiveAsset>[],
     this.messageCount = 0,
     this.tags = const <String>[],
+    this.sessions = const <MeetingSession>[],
+    this.participantNicknames = const <String, String>{},
   });
 
   bool get isActive => endedAt == null;
@@ -103,6 +109,8 @@ class ConferenceArchiveEntry {
     'voice_transcripts': voiceTranscripts.map((asset) => asset.toJson()).toList(),
     'message_count': messageCount,
     'tags': tags,
+    if (sessions.isNotEmpty) 'sessions': sessions.map((s) => s.toJson()).toList(),
+    if (participantNicknames.isNotEmpty) 'participant_nicknames': participantNicknames,
   };
 
   factory ConferenceArchiveEntry.fromJson(Map<String, dynamic> json) {
@@ -145,6 +153,12 @@ class ConferenceArchiveEntry {
       tags: (json['tags'] as List<dynamic>? ?? const [])
           .map((value) => value.toString())
           .toList(),
+      sessions: (json['sessions'] as List<dynamic>? ?? const [])
+          .whereType<Map<String, dynamic>>()
+          .map(MeetingSession.fromJson)
+          .toList(),
+      participantNicknames: (json['participant_nicknames'] as Map<String, dynamic>?)
+          ?.map((k, v) => MapEntry(k, v.toString())) ?? const {},
     );
   }
 
@@ -172,6 +186,8 @@ class ConferenceArchiveEntry {
     List<ConferenceArchiveAsset>? voiceTranscripts,
     int? messageCount,
     List<String>? tags,
+    List<MeetingSession>? sessions,
+    Map<String, String>? participantNicknames,
   }) {
     return ConferenceArchiveEntry(
       relativePath: relativePath ?? this.relativePath,
@@ -200,6 +216,9 @@ class ConferenceArchiveEntry {
           voiceTranscripts ?? List<ConferenceArchiveAsset>.from(this.voiceTranscripts),
       messageCount: messageCount ?? this.messageCount,
       tags: tags ?? List<String>.from(this.tags),
+      sessions: sessions ?? List<MeetingSession>.from(this.sessions),
+      participantNicknames: participantNicknames ??
+          Map<String, String>.from(this.participantNicknames),
     );
   }
 }

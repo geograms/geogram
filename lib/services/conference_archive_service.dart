@@ -8,12 +8,13 @@ import 'package:path_provider/path_provider.dart';
 
 import '../models/chat_message.dart';
 import '../models/conference_archive_entry.dart';
+import '../util/zip_storage.dart';
 import '../work/models/meeting_content.dart';
 import '../work/models/ndf_document.dart';
 import '../work/models/ndf_permission.dart';
-import '../work/services/ndf_service.dart';
 import 'app_service.dart';
 import 'chat_service.dart';
+import 'log_service.dart';
 import 'profile_storage.dart';
 
 class ConferenceArchiveService {
@@ -30,8 +31,14 @@ class ConferenceArchiveService {
   static const String filesDirectoryName = 'files';
   static const String recordingsDirectoryName = 'recordings';
   static const String transcriptsDirectoryName = 'transcripts';
+  static const String _chatTranscriptPath =
+      '$chatDirectoryName/$transcriptFileName';
 
   final Map<String, String> _activeArchivePathsByRoom = {};
+  final Map<String, ZipProfileStorage> _activeNdfStorages = {};
+  final LogService _log = LogService();
+
+  // ============ Public API ============
 
   Future<ConferenceArchiveEntry> ensureArchive({
     required String roomId,
@@ -74,19 +81,70 @@ class ConferenceArchiveService {
     final storage = _rootStorage();
     await storage.createDirectory(archiveRoot);
 
-    final folderName = await _nextArchiveFolderName(
+    // Generate NDF filename
+    final fileName = await _nextArchiveFileName(
       storage,
       roomName: roomName,
       startedAt: startedAt,
     );
-    final relativePath = '$archiveRoot/$folderName';
-    await storage.createDirectory(relativePath);
-    await storage.createDirectory('$relativePath/$chatDirectoryName');
-    await storage.createDirectory('$relativePath/$filesDirectoryName');
-    await storage.createDirectory('$relativePath/$recordingsDirectoryName');
-    await storage.createDirectory('$relativePath/$transcriptsDirectoryName');
+    final relativePath = '$archiveRoot/$fileName';
+    final absolutePath = storage.getAbsolutePath(relativePath);
 
+    // Create ZipProfileStorage
+    final zipStorage = await ZipProfileStorage.open(absolutePath);
+
+    final resolvedMode =
+        signalingMode ?? (stationMeetUrl != null ? 'station' : 'lan');
     final yearTag = startedAt.toLocal().year.toString();
+
+    // Build MeetingContent
+    final meetingContent = MeetingContent(
+      id: 'meeting-${startedAt.millisecondsSinceEpoch.toRadixString(36)}',
+      title: roomName,
+      created: startedAt.toLocal(),
+      modified: DateTime.now().toLocal(),
+      roomId: roomId,
+      hostCallsign: hostCallsign,
+      localCallsign: localCallsign,
+      signalingMode: resolvedMode,
+      participants: _sortedUnique(participants),
+      speakers: _sortedUnique(speakers),
+      tags: [yearTag],
+      endedAt: null,
+      hostedByMe: hostedByMe,
+      activeScreenSharer: activeScreenSharer,
+      stationMeetUrl: stationMeetUrl,
+      meetUrls: _sortedUnique(meetUrls),
+    );
+
+    // Build NDF metadata
+    final metadata = NdfDocument.create(
+      type: NdfDocumentType.meeting,
+      title: roomName,
+      description: 'Meeting archive from ${_formatDate(startedAt)}',
+    );
+    final permissions = NdfPermission.create(
+      documentId: metadata.id,
+      ownerNpub: '',
+      ownerCallsign: localCallsign,
+    );
+
+    // Write NDF structure into ZIP
+    await zipStorage.writeString('ndf.json', metadata.toJsonString());
+    await zipStorage.writeString(
+      'permissions.json',
+      permissions.toJsonString(),
+    );
+    await zipStorage.writeString(
+      'content/main.json',
+      meetingContent.toJsonString(),
+    );
+
+    // Build ConferenceArchiveEntry (with initial session)
+    final initialSession = MeetingSession(
+      id: 'session-${startedAt.millisecondsSinceEpoch.toRadixString(36)}',
+      startedAt: startedAt.toLocal(),
+    );
     final entry = ConferenceArchiveEntry(
       roomId: roomId,
       roomName: roomName,
@@ -99,17 +157,20 @@ class ConferenceArchiveService {
       participants: _sortedUnique(participants),
       speakers: _sortedUnique(speakers),
       activeScreenSharer: activeScreenSharer,
-      signalingMode:
-          signalingMode ?? (stationMeetUrl != null ? 'station' : 'lan'),
+      signalingMode: resolvedMode,
       stationMeetUrl: stationMeetUrl,
       meetUrls: _sortedUnique(meetUrls),
-      transcriptRelativePath:
-          '$relativePath/$chatDirectoryName/$transcriptFileName',
+      transcriptRelativePath: _chatTranscriptPath,
       messageCount: 0,
       tags: [yearTag],
+      sessions: [initialSession],
     );
 
-    await _writeEntry(entry);
+    // Write meeting.json for fast loading
+    await zipStorage.writeJson(metadataFileName, entry.toJson());
+    await zipStorage.flush();
+
+    _activeNdfStorages[relativePath] = zipStorage;
     _activeArchivePathsByRoom[roomId] = relativePath;
     return entry;
   }
@@ -128,6 +189,7 @@ class ConferenceArchiveService {
     String? stationMeetUrl,
     List<String>? meetUrls,
     DateTime? endedAt,
+    Map<String, String>? participantNicknames,
   }) async {
     final refreshed = await _recalculateCounts(entry);
     final updated = refreshed.copyWith(
@@ -144,6 +206,7 @@ class ConferenceArchiveService {
       meetUrls: meetUrls == null ? null : _sortedUnique(meetUrls),
       updatedAt: DateTime.now().toLocal(),
       endedAt: endedAt,
+      participantNicknames: participantNicknames,
     );
     await _writeEntry(updated);
     _activeArchivePathsByRoom[updated.roomId] = updated.relativePath;
@@ -155,14 +218,33 @@ class ConferenceArchiveService {
     List<String>? participants,
     List<String>? speakers,
   }) async {
+    // End the current session
+    final sessions = List<MeetingSession>.from(entry.sessions);
+    if (sessions.isNotEmpty && sessions.last.endedAt == null) {
+      final last = sessions.last;
+      sessions[sessions.length - 1] = MeetingSession(
+        id: last.id,
+        startedAt: last.startedAt,
+        endedAt: DateTime.now().toLocal(),
+      );
+    }
     final updated = await updateArchive(
       entry,
       participants: participants,
       speakers: speakers,
       endedAt: DateTime.now().toLocal(),
     );
-    _activeArchivePathsByRoom.remove(updated.roomId);
-    return updated;
+    final withSessions = updated.copyWith(sessions: sessions);
+    await _writeEntry(withSessions);
+    _activeArchivePathsByRoom.remove(withSessions.roomId);
+
+    // Close and release the NDF storage
+    final storage = _activeNdfStorages.remove(withSessions.relativePath);
+    if (storage != null) {
+      await storage.close();
+    }
+
+    return withSessions;
   }
 
   Future<List<ConferenceArchiveEntry>> listArchives() async {
@@ -173,10 +255,13 @@ class ConferenceArchiveService {
 
     final entries = await storage.listDirectory(archiveRoot);
     final archives = <ConferenceArchiveEntry>[];
-    for (final entry in entries.where((entry) => entry.isDirectory)) {
-      final loaded = await _loadEntry('$archiveRoot/${entry.name}');
-      if (loaded != null) {
-        archives.add(await _recalculateCounts(loaded));
+
+    for (final entry in entries) {
+      if (!entry.isDirectory && entry.name.endsWith('.meeting.ndf')) {
+        final loaded = await _loadEntry('$archiveRoot/${entry.name}');
+        if (loaded != null) {
+          archives.add(await _recalculateCounts(loaded));
+        }
       }
     }
 
@@ -188,9 +273,8 @@ class ConferenceArchiveService {
     ConferenceArchiveEntry entry, {
     int limit = defaultTranscriptLimit,
   }) async {
-    final content = await _rootStorage().readString(
-      entry.transcriptRelativePath,
-    );
+    final storage = await _archiveStorage(entry);
+    final content = await storage.readString(_chatTranscriptPath);
     if (content == null || content.trim().isEmpty) {
       return const <ChatMessage>[];
     }
@@ -206,9 +290,8 @@ class ConferenceArchiveService {
     ConferenceArchiveEntry entry,
     ChatMessage message,
   ) async {
-    final storage = _rootStorage();
-    final transcriptPath = entry.transcriptRelativePath;
-    final transcriptExists = await storage.exists(transcriptPath);
+    final storage = await _archiveStorage(entry);
+    final transcriptExists = await storage.exists(_chatTranscriptPath);
 
     final buffer = StringBuffer();
     if (!transcriptExists) {
@@ -216,33 +299,44 @@ class ConferenceArchiveService {
     }
     buffer.writeln();
     buffer.writeln(message.exportAsText());
-    await storage.appendString(transcriptPath, buffer.toString());
+    await storage.appendString(_chatTranscriptPath, buffer.toString());
+    await _flushNdfStorage(entry.relativePath);
 
     return updateArchive(entry);
   }
 
   String transcriptAbsolutePath(ConferenceArchiveEntry entry) {
-    return _rootStorage().getAbsolutePath(entry.transcriptRelativePath);
+    final absPath = _rootStorage().getAbsolutePath(entry.relativePath);
+    return '$absPath!/$_chatTranscriptPath';
   }
 
   String archiveAbsolutePath(ConferenceArchiveEntry entry) {
     return _rootStorage().getAbsolutePath(entry.relativePath);
   }
 
-  Future<List<StorageEntry>> listArchiveFiles(ConferenceArchiveEntry entry) {
-    return _archiveStorage(entry).listDirectory(filesDirectoryName);
+  Future<List<StorageEntry>> listArchiveFiles(
+    ConferenceArchiveEntry entry,
+  ) async {
+    final storage = await _archiveStorage(entry);
+    return storage.listDirectory(filesDirectoryName);
   }
 
   Future<List<StorageEntry>> listArchiveRecordings(
     ConferenceArchiveEntry entry,
-  ) {
-    return _archiveStorage(entry).listDirectory(recordingsDirectoryName);
+  ) async {
+    final storage = await _archiveStorage(entry);
+    return storage.listDirectory(recordingsDirectoryName);
   }
 
   Future<void> deleteArchive(ConferenceArchiveEntry entry) async {
-    final storage = _rootStorage();
     _activeArchivePathsByRoom.remove(entry.roomId);
-    await storage.deleteDirectory(entry.relativePath, recursive: true);
+
+    final storage = _activeNdfStorages.remove(entry.relativePath);
+    if (storage != null) {
+      // Don't flush — we're deleting
+      storage.close().catchError((_) {});
+    }
+    await _rootStorage().delete(entry.relativePath);
   }
 
   Future<ConferenceArchiveEntry> updateTags(
@@ -271,6 +365,42 @@ class ConferenceArchiveService {
     return _recalculateCounts(entry);
   }
 
+  /// Resume a previously ended meeting by adding a new session and clearing
+  /// the endedAt timestamp. Returns the updated archive entry.
+  Future<ConferenceArchiveEntry> resumeSession(
+    ConferenceArchiveEntry entry,
+  ) async {
+    final session = MeetingSession.create();
+    final sessions = List<MeetingSession>.from(entry.sessions)..add(session);
+    final updated = entry.copyWith(
+      sessions: sessions,
+      clearEndedAt: true,
+      updatedAt: DateTime.now().toLocal(),
+    );
+    await _writeEntry(updated);
+    _activeArchivePathsByRoom[updated.roomId] = updated.relativePath;
+    return updated;
+  }
+
+  /// End the current session within a meeting archive.
+  Future<ConferenceArchiveEntry> endCurrentSession(
+    ConferenceArchiveEntry entry,
+  ) async {
+    if (entry.sessions.isEmpty) return entry;
+    final sessions = List<MeetingSession>.from(entry.sessions);
+    final last = sessions.last;
+    if (last.endedAt == null) {
+      sessions[sessions.length - 1] = MeetingSession(
+        id: last.id,
+        startedAt: last.startedAt,
+        endedAt: DateTime.now().toLocal(),
+      );
+    }
+    final updated = entry.copyWith(sessions: sessions);
+    await _writeEntry(updated);
+    return updated;
+  }
+
   Future<ConferenceArchiveEntry?> findArchiveByRoomId(String roomId) async {
     final path = await _latestArchivePathForRoom(roomId);
     if (path == null) {
@@ -288,7 +418,8 @@ class ConferenceArchiveService {
     if (entry == null) {
       return null;
     }
-    return _rootStorage().readString(entry.transcriptRelativePath);
+    final storage = await _archiveStorage(entry);
+    return storage.readString(_chatTranscriptPath);
   }
 
   Future<void> appendTranscript(
@@ -307,8 +438,9 @@ class ConferenceArchiveService {
           startedAt: DateTime.now().toLocal(),
           hostedByMe: false,
         );
-    final storage = _rootStorage();
-    await storage.appendString(entry.transcriptRelativePath, content);
+    final storage = await _archiveStorage(entry);
+    await storage.appendString(_chatTranscriptPath, content);
+    await _flushNdfStorage(entry.relativePath);
   }
 
   String? transcriptAbsolutePathForRoom(String roomId) {
@@ -316,9 +448,8 @@ class ConferenceArchiveService {
     if (relativePath == null) {
       return null;
     }
-    return _rootStorage().getAbsolutePath(
-      '$relativePath/$chatDirectoryName/$transcriptFileName',
-    );
+    final absPath = _rootStorage().getAbsolutePath(relativePath);
+    return '$absPath!/$_chatTranscriptPath';
   }
 
   Future<ConferenceArchiveEntry> importFileFromExternal(
@@ -330,22 +461,40 @@ class ConferenceArchiveService {
         ? recordingsDirectoryName
         : filesDirectoryName;
     final fileName = p.basename(externalPath);
+    final storage = await _archiveStorage(entry);
     final uniqueFileName = await _nextUniqueAssetName(
-      _archiveStorage(entry),
+      storage,
       directoryName,
       fileName,
     );
-    await _archiveStorage(
-      entry,
-    ).copyFromExternal(externalPath, '$directoryName/$uniqueFileName');
+    await storage.copyFromExternal(
+      externalPath,
+      '$directoryName/$uniqueFileName',
+    );
+    await _flushNdfStorage(entry.relativePath);
+
     return updateArchive(entry);
+  }
+
+  Future<NdfPermission?> loadPermissions(ConferenceArchiveEntry entry) async {
+    try {
+      final storage = await _archiveStorage(entry);
+      final json = await storage.readJson('permissions.json');
+      if (json == null) return null;
+      return NdfPermission.fromJson(json);
+    } catch (e) {
+      _log.log('ConferenceArchiveService: Error reading permissions for '
+          '${entry.relativePath}: $e');
+      return null;
+    }
   }
 
   Future<Uint8List?> readArchiveFileBytes(
     ConferenceArchiveEntry entry,
     String relativeFilePath,
-  ) {
-    return _archiveStorage(entry).readBytes(relativeFilePath);
+  ) async {
+    final storage = await _archiveStorage(entry);
+    return storage.readBytes(relativeFilePath);
   }
 
   Future<String?> exportArchiveFileToTemporaryPath(
@@ -371,7 +520,7 @@ class ConferenceArchiveService {
   Future<List<StorageEntry>> listArchiveTranscripts(
     ConferenceArchiveEntry entry,
   ) async {
-    final storage = _archiveStorage(entry);
+    final storage = await _archiveStorage(entry);
     if (!await storage.directoryExists(transcriptsDirectoryName)) {
       return const <StorageEntry>[];
     }
@@ -383,9 +532,8 @@ class ConferenceArchiveService {
     String recordingName,
   ) async {
     final baseName = p.basenameWithoutExtension(recordingName);
-    return _archiveStorage(entry).readString(
-      '$transcriptsDirectoryName/$baseName.txt',
-    );
+    final storage = await _archiveStorage(entry);
+    return storage.readString('$transcriptsDirectoryName/$baseName.txt');
   }
 
   Future<void> writeTranscriptForRecording(
@@ -393,7 +541,7 @@ class ConferenceArchiveService {
     String recordingName,
     String content,
   ) async {
-    final storage = _archiveStorage(entry);
+    final storage = await _archiveStorage(entry);
     if (!await storage.directoryExists(transcriptsDirectoryName)) {
       await storage.createDirectory(transcriptsDirectoryName);
     }
@@ -402,129 +550,73 @@ class ConferenceArchiveService {
       '$transcriptsDirectoryName/$baseName.txt',
       content,
     );
+    await _flushNdfStorage(entry.relativePath);
   }
 
   Future<String> exportAsNdf(
     ConferenceArchiveEntry entry,
     String outputPath,
   ) async {
-    // Lazy-import to avoid circular deps at load time
-    final ndfService = _getNdfService();
-
-    final metadata = NdfDocument.create(
-      type: NdfDocumentType.meeting,
-      title: entry.roomName,
-      description:
-          'Meeting archive from ${_formatDate(entry.startedAt)}',
-    );
-
-    final permissions = NdfPermission.create(
-      documentId: metadata.id,
-      ownerNpub: '',
-      ownerCallsign: entry.localCallsign,
-    );
-
-    // Build MeetingContent from archive entry
-    final meetingContent = MeetingContent(
-      id: 'meeting-${entry.startedAt.millisecondsSinceEpoch.toRadixString(36)}',
-      title: entry.roomName,
-      created: entry.startedAt,
-      modified: entry.updatedAt,
-      roomId: entry.roomId,
-      hostCallsign: entry.hostCallsign,
-      localCallsign: entry.localCallsign,
-      signalingMode: entry.signalingMode,
-      participants: List.from(entry.participants),
-      speakers: List.from(entry.speakers),
-      tags: List.from(entry.tags),
-    );
-
-    // Create recordings list and collect video data
-    final recordings = <MeetingRecording>[];
-    final videoAssets = <String, Uint8List>{};
-
-    for (final rec in entry.recordings) {
-      final recId = 'rec-${rec.name.hashCode.toRadixString(36)}';
-      final recording = MeetingRecording(
-        id: recId,
-        title: rec.name,
-        recordedAt: rec.modifiedAt ?? entry.startedAt,
-        durationMs: 0,
-        videoFile: 'video/$recId.mp4',
-        fileSize: rec.size,
-      );
-
-      // Check for transcript
-      final transcript = await readTranscriptForRecording(entry, rec.name);
-      if (transcript != null) {
-        recording.transcript = MeetingTranscript(
-          text: transcript,
-          model: 'whisper',
-          transcribedAt: DateTime.now(),
-        );
-      }
-
-      recordings.add(recording);
-      meetingContent.addRecording(recId);
-
-      // Read video bytes
-      final videoBytes = await readArchiveFileBytes(entry, rec.relativePath);
-      if (videoBytes != null) {
-        videoAssets['assets/video/$recId.mp4'] = videoBytes;
-      }
-    }
-
-    // Create NDF document
-    await ndfService.createDocument(
-      outputPath: outputPath,
-      metadata: metadata,
-      permissions: permissions,
-      mainContent: meetingContent.toJson(),
-    );
-
-    // Add recording metadata files
-    final recordingFiles = <String, String>{};
-    for (final rec in recordings) {
-      recordingFiles['content/recordings/${rec.id}.json'] = rec.toJsonString();
-    }
-    if (recordingFiles.isNotEmpty) {
-      await ndfService.updateArchiveFilesPublic(outputPath, recordingFiles);
-    }
-
-    // Add video assets
-    if (videoAssets.isNotEmpty) {
-      await ndfService.updateArchiveFilesBytesPublic(outputPath, videoAssets);
-    }
-
+    // Archive is already NDF — just copy the file
+    await _rootStorage().copyToExternal(entry.relativePath, outputPath);
     return outputPath;
   }
 
-  // Lazy NDF service getter to avoid import issues
-  NdfService? _ndfServiceCache;
-  NdfService _getNdfService() {
-    return _ndfServiceCache ??= NdfService();
+  // ============ Private ============
+
+  Future<ZipProfileStorage> _archiveStorage(
+    ConferenceArchiveEntry entry,
+  ) {
+    return _getNdfStorage(entry.relativePath);
   }
 
-  static String _formatDate(DateTime dt) {
-    final local = dt.toLocal();
-    return '${local.year}-${local.month.toString().padLeft(2, '0')}-${local.day.toString().padLeft(2, '0')}';
+  Future<ZipProfileStorage> _getNdfStorage(String relativePath) async {
+    var storage = _activeNdfStorages[relativePath];
+    if (storage != null) return storage;
+
+    final absPath = _rootStorage().getAbsolutePath(relativePath);
+    storage = await ZipProfileStorage.open(absPath);
+    _activeNdfStorages[relativePath] = storage;
+    return storage;
+  }
+
+  Future<void> _flushNdfStorage(String relativePath) async {
+    final storage = _activeNdfStorages[relativePath];
+    if (storage != null && storage.isDirty) {
+      await storage.flush();
+    }
   }
 
   Future<ConferenceArchiveEntry?> _loadEntry(String relativePath) async {
-    final json = await _rootStorage().readJson(
-      '$relativePath/$metadataFileName',
-    );
-    if (json == null) {
+    try {
+      final storage = await _getNdfStorage(relativePath);
+      final json = await storage.readJson(metadataFileName);
+      if (json == null) return null;
+      final entry = ConferenceArchiveEntry.fromJson(json);
+      return entry.copyWith(relativePath: relativePath);
+    } catch (e) {
+      _log.log('ConferenceArchiveService: Error loading NDF entry '
+          '$relativePath: $e');
       return null;
     }
-    return ConferenceArchiveEntry.fromJson(json);
   }
 
-  Future<void> _writeEntry(ConferenceArchiveEntry entry) {
-    return _rootStorage().writeJson(
-      '${entry.relativePath}/$metadataFileName',
-      entry.toJson(),
-    );
+  Future<void> _writeEntry(ConferenceArchiveEntry entry) async {
+    final storage = await _getNdfStorage(entry.relativePath);
+    await storage.writeJson(metadataFileName, entry.toJson());
+
+    // Also update content/main.json
+    final content = MeetingContent.fromArchiveEntry(entry);
+    // Preserve chatTranscript and recording IDs from existing content
+    final existingJson = await storage.readJson('content/main.json');
+    if (existingJson != null) {
+      final existing = MeetingContent.fromJson(existingJson);
+      content.chatTranscript = existing.chatTranscript;
+      content.recordings = existing.recordings;
+    }
+    content.touch();
+    await storage.writeJson('content/main.json', content.toJson());
+    await storage.flush();
   }
 
   Future<ConferenceArchiveEntry> _recalculateCounts(
@@ -533,10 +625,18 @@ class ConferenceArchiveService {
     // Re-read from disk to pick up any out-of-band changes (e.g. tags)
     final fresh = await _loadEntry(entry.relativePath);
     final base = fresh ?? entry;
-    final files = await listArchiveFiles(base);
-    final recordings = await listArchiveRecordings(base);
-    final transcripts = await listArchiveTranscripts(base);
+    final storage = await _archiveStorage(base);
+
+    final files = await storage.listDirectory(filesDirectoryName);
+    final recordings = await storage.listDirectory(recordingsDirectoryName);
+
+    List<StorageEntry> transcripts = const [];
+    if (await storage.directoryExists(transcriptsDirectoryName)) {
+      transcripts = await storage.listDirectory(transcriptsDirectoryName);
+    }
+
     final messages = await loadMessages(base, limit: 1 << 20);
+
     final fileAssets = files
         .where((file) => !file.isDirectory)
         .map(
@@ -593,7 +693,7 @@ class ConferenceArchiveService {
     return null;
   }
 
-  Future<String> _nextArchiveFolderName(
+  Future<String> _nextArchiveFileName(
     ProfileStorage storage, {
     required String roomName,
     required DateTime startedAt,
@@ -603,11 +703,11 @@ class ConferenceArchiveService {
         '${localStart.year.toString().padLeft(4, '0')}-'
         '${localStart.month.toString().padLeft(2, '0')}-'
         '${localStart.day.toString().padLeft(2, '0')}';
-    final baseName = _sanitizeFolderName(roomName);
-    var candidate = '${datePrefix}_$baseName';
+    final baseName = _sanitizeName(roomName);
+    var candidate = '${baseName}_$datePrefix.meeting.ndf';
     var suffix = 2;
-    while (await storage.directoryExists('$archiveRoot/$candidate')) {
-      candidate = '${datePrefix}_${baseName}_$suffix';
+    while (await storage.exists('$archiveRoot/$candidate')) {
+      candidate = '${baseName}_${datePrefix}_$suffix.meeting.ndf';
       suffix += 1;
     }
     return candidate;
@@ -637,8 +737,10 @@ class ConferenceArchiveService {
     return storage;
   }
 
-  ProfileStorage _archiveStorage(ConferenceArchiveEntry entry) {
-    return ScopedProfileStorage(_rootStorage(), entry.relativePath);
+  static String _formatDate(DateTime dt) {
+    final local = dt.toLocal();
+    return '${local.year}-${local.month.toString().padLeft(2, '0')}-'
+        '${local.day.toString().padLeft(2, '0')}';
   }
 }
 
@@ -652,7 +754,7 @@ List<String> _sortedUnique(Iterable<String> values) {
   return normalized;
 }
 
-String _sanitizeFolderName(String roomName) {
+String _sanitizeName(String roomName) {
   final sanitized = roomName
       .trim()
       .replaceAll(RegExp(r'[\\/:*?"<>|]+'), ' ')

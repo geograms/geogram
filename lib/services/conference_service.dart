@@ -54,6 +54,7 @@ enum ConferenceParticipantRole { speaker, listener }
 /// Participant info.
 class ConferenceParticipant {
   final String callsign;
+  String? nickname;
   bool isMuted;
   bool isConnected;
   ConferenceParticipantRole participantRole;
@@ -63,6 +64,7 @@ class ConferenceParticipant {
 
   ConferenceParticipant({
     required this.callsign,
+    this.nickname,
     this.isMuted = false,
     this.isConnected = false,
     this.participantRole = ConferenceParticipantRole.listener,
@@ -284,6 +286,7 @@ class ConferenceService {
     String? description,
     String? password,
     bool approvalRequired = false,
+    ConferenceArchiveEntry? resumeFromArchive,
   }) async {
     if (_state != ConferenceState.idle) {
       throw StateError('Conference already active');
@@ -326,7 +329,11 @@ class ConferenceService {
       participantRole:
           ConferenceParticipantRole.speaker, // Host is always a speaker
     );
-    await _ensureArchiveForRoom();
+    if (resumeFromArchive != null) {
+      _archiveEntry = await _archiveService.resumeSession(resumeFromArchive);
+    } else {
+      await _ensureArchiveForRoom();
+    }
     await _loadStoredChatMessages();
     await _scheduleService.markActive(
       roomId,
@@ -358,8 +365,11 @@ class ConferenceService {
       'ConferenceService: Hosting "$roomName" ($mode) as $callsign',
     );
 
-    // Auto-start recording so the archive has a replay
-    unawaited(_autoStartRecording());
+    // Start audio-only recording if mic is not muted (privacy: no screen
+    // capture by default — screen is included only while actively sharing).
+    if (!isLocalMuted) {
+      unawaited(_startRecordingForCurrentState());
+    }
 
     return _room!;
   }
@@ -625,12 +635,14 @@ class ConferenceService {
       _lanSocket?.add(jsonEncode(signal));
     };
 
-    // Announce ourselves with role
+    // Announce ourselves with role and nickname
+    final myNickname = ProfileService().getProfile().nickname;
     _lanSocket!.add(
       jsonEncode({
         'type': 'conference_hello',
         'callsign': _myCallsign,
         'role': participantRole.name,
+        if (myNickname.isNotEmpty) 'nickname': myNickname,
         if (password != null) 'password': password,
       }),
     );
@@ -690,11 +702,13 @@ class ConferenceService {
       }
     });
 
-    // Send join request with role
+    // Send join request with role and nickname
+    final myNick = ProfileService().getProfile().nickname;
     WebSocketService().send({
       'type': 'conference_join',
       'room_id': roomId,
       'role': participantRole.name,
+      if (myNick.isNotEmpty) 'nickname': myNick,
       if (password != null) 'password': password,
     });
 
@@ -793,11 +807,27 @@ class ConferenceService {
   void toggleMute() {
     _hostPeerManager?.toggleMute();
     _participantPeerManager?.toggleMute();
+    _onMuteStateChanged();
   }
 
   void setMuted(bool muted) {
     _hostPeerManager?.setMuted(muted);
     _participantPeerManager?.setMuted(muted);
+    _onMuteStateChanged();
+  }
+
+  /// Start/stop recording based on mute state. Recording only runs while
+  /// the user's mic is active, protecting privacy when muted.
+  void _onMuteStateChanged() {
+    if (isLocalMuted) {
+      if (_recordingService.isRecording) {
+        unawaited(stopRecording());
+      }
+    } else {
+      if (!_recordingService.isRecording && _archiveEntry != null) {
+        unawaited(_startRecordingForCurrentState());
+      }
+    }
   }
 
   Future<void> requestToSpeak() async {
@@ -930,6 +960,7 @@ class ConferenceService {
       _setActiveScreenSharer(_myCallsign);
       _broadcastScreenShareState(_myCallsign, active: true);
       LogService().log('ConferenceService: Host started screen sharing');
+      unawaited(_restartRecordingForScreenShareChange());
       return;
     }
 
@@ -950,6 +981,7 @@ class ConferenceService {
       ConferenceEvent('local_screen_share_started', _myCallsign, stream),
     );
     LogService().log('ConferenceService: Joiner started screen sharing');
+    unawaited(_restartRecordingForScreenShareChange());
   }
 
   Future<void> stopScreenShare() async {
@@ -968,6 +1000,7 @@ class ConferenceService {
       _setActiveScreenSharer(null);
       _broadcastScreenShareState(_myCallsign, active: false);
       LogService().log('ConferenceService: Host stopped screen sharing');
+      unawaited(_restartRecordingForScreenShareChange());
       return;
     }
 
@@ -979,6 +1012,7 @@ class ConferenceService {
       'callsign': _myCallsign,
     });
     LogService().log('ConferenceService: Joiner stopped screen sharing');
+    unawaited(_restartRecordingForScreenShareChange());
   }
 
   Future<void> startRecording() async {
@@ -986,7 +1020,7 @@ class ConferenceService {
       throw StateError('Meeting archive is not ready');
     }
 
-    await _recordingService.start();
+    await _recordingService.start(includeScreen: isLocalScreenSharing);
     _eventController.add(
       ConferenceEvent('recording_started', _myCallsign, recordingStatus.toJson()),
     );
@@ -1014,13 +1048,32 @@ class ConferenceService {
     );
   }
 
-  Future<void> _autoStartRecording() async {
+  /// Start recording with or without screen based on current sharing state.
+  Future<void> _startRecordingForCurrentState() async {
+    if (_archiveEntry == null) return;
     try {
-      await startRecording();
-      LogService().log('ConferenceService: Auto-recording started');
+      await _recordingService.start(includeScreen: isLocalScreenSharing);
+      _eventController.add(
+        ConferenceEvent(
+          'recording_started', _myCallsign, recordingStatus.toJson(),
+        ),
+      );
     } catch (e) {
       LogService().log(
-        'ConferenceService: Auto-recording not available: $e',
+        'ConferenceService: Recording start failed: $e',
+      );
+    }
+  }
+
+  /// Restart recording when screen-share state changes (while unmuted).
+  Future<void> _restartRecordingForScreenShareChange() async {
+    if (isLocalMuted || !_recordingService.isRecording) return;
+    try {
+      await stopRecording();
+      await _startRecordingForCurrentState();
+    } catch (e) {
+      LogService().log(
+        'ConferenceService: Recording restart for screen share change: $e',
       );
     }
   }
@@ -1765,12 +1818,14 @@ class ConferenceService {
     if (callsign == null || callsign == _myCallsign) return;
 
     final role = msg['role'] as String? ?? 'listener';
+    final nickname = msg['nickname'] as String?;
     final participantRole = role == 'speaker'
         ? ConferenceParticipantRole.speaker
         : ConferenceParticipantRole.listener;
 
     _room?.participants[callsign] = ConferenceParticipant(
       callsign: callsign,
+      nickname: nickname,
       participantRole: participantRole,
     );
     unawaited(_syncArchiveMetadata());
@@ -2498,6 +2553,20 @@ class ConferenceService {
         ? await getMeetUrls()
         : archiveEntry.meetUrls;
 
+    // Build nickname map from participant data + local profile
+    final nicknames = Map<String, String>.from(
+      archiveEntry.participantNicknames,
+    );
+    final myProfile = ProfileService().getProfile();
+    if (myProfile.nickname.isNotEmpty) {
+      nicknames[_myCallsign.toUpperCase()] = myProfile.nickname;
+    }
+    for (final p in room.participants.values) {
+      if (p.nickname != null && p.nickname!.isNotEmpty) {
+        nicknames[p.callsign.toUpperCase()] = p.nickname!;
+      }
+    }
+
     _archiveEntry = await _archiveService.updateArchive(
       archiveEntry,
       roomName: room.roomName,
@@ -2512,6 +2581,7 @@ class ConferenceService {
         archiveEntry.speakers,
         room.speakers.map((participant) => participant.callsign),
       ),
+      participantNicknames: nicknames,
       activeScreenSharer: room.activeScreenSharerCallsign,
       clearActiveScreenSharer: room.activeScreenSharerCallsign == null,
       signalingMode: room.signalingMode.name,

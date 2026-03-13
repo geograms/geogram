@@ -67,6 +67,7 @@ import '../util/chat_format.dart';
 import '../util/html_utils.dart';
 import '../util/nostr_event.dart';
 import '../util/nostr_crypto.dart';
+import '../work/models/ndf_permission.dart';
 import '../util/reaction_utils.dart';
 import '../util/nostr_bundle.dart';
 import '../util/feedback_folder_utils.dart';
@@ -962,7 +963,7 @@ class LogApiService with ChatModificationMixin {
     final rest = urlPath.substring('meet/'.length);
     final segments = rest.split('/').where((segment) => segment.isNotEmpty).toList();
     if (segments.isEmpty) {
-      return null;
+      return _handleMeetListingPage(request, headers);
     }
 
     final code = segments.first;
@@ -972,6 +973,10 @@ class LogApiService with ChatModificationMixin {
 
     if (segments.length == 2 && segments[1] == 'state.json') {
       return _handleMeetSessionStateRequest(code, headers);
+    }
+
+    if (segments.length == 2 && segments[1] == 'archive.ndf') {
+      return _handleMeetArchiveNdfDownload(code, headers);
     }
 
     final relativeFilePath = segments.sublist(1).join('/');
@@ -1113,6 +1118,42 @@ class LogApiService with ChatModificationMixin {
     );
   }
 
+  Future<shelf.Response> _handleMeetArchiveNdfDownload(
+    String code,
+    Map<String, String> headers,
+  ) async {
+    final archive = await ConferenceArchiveService().findArchiveByRoomId(
+      _meetRoomId(code),
+    );
+    if (archive == null) {
+      return shelf.Response.notFound(
+        jsonEncode({'error': 'Meeting archive not found'}),
+        headers: headers,
+      );
+    }
+
+    final bytes = await AppService().profileStorage!.readBytes(
+      archive.relativePath,
+    );
+    if (bytes == null) {
+      return shelf.Response.notFound(
+        jsonEncode({'error': 'Archive file not found'}),
+        headers: headers,
+      );
+    }
+
+    final sanitizedName = archive.roomName.replaceAll(RegExp(r'[^a-zA-Z0-9_-]'), '_');
+    return shelf.Response.ok(
+      bytes,
+      headers: {
+        ...headers,
+        'Content-Type': 'application/zip',
+        'Content-Disposition': 'attachment; filename="$sanitizedName.ndf"',
+        'Content-Length': bytes.length.toString(),
+      },
+    );
+  }
+
   /// Handle GET /api/meet/{code} — serves an HTML join page for the meeting.
   Future<shelf.Response> _handleMeetJoinPage(
     shelf.Request request,
@@ -1215,11 +1256,124 @@ class LogApiService with ChatModificationMixin {
               },
             )
             .toList(),
+        archiveNdfUrl: '$code/archive.ndf',
         statusText: 'Meeting archive',
       );
     }
 
     final assets = await ConferenceWebPageService().buildJoinPage(config);
+    return shelf.Response.ok(assets.html, headers: htmlHeaders);
+  }
+
+  /// Extract hex pubkey from geogram_nostr_pubkey cookie.
+  String? _extractNostrPubkeyFromCookie(shelf.Request request) {
+    final cookieHeader = request.headers['cookie'];
+    if (cookieHeader == null) return null;
+    for (final cookie in cookieHeader.split(';')) {
+      final parts = cookie.trim().split('=');
+      if (parts.length == 2 && parts[0].trim() == 'geogram_nostr_pubkey') {
+        final value = parts[1].trim();
+        if (value.length == 64 && RegExp(r'^[0-9a-fA-F]+$').hasMatch(value)) {
+          return value.toLowerCase();
+        }
+      }
+    }
+    return null;
+  }
+
+  Future<shelf.Response> _handleMeetListingPage(
+    shelf.Request request,
+    Map<String, String> headers,
+  ) async {
+    // 1. Identify viewer via cookie or Authorization header
+    String? userNpub;
+    final hexPubkey = _extractNostrPubkeyFromCookie(request);
+    if (hexPubkey != null) {
+      try {
+        userNpub = NostrCrypto.encodeNpub(hexPubkey);
+      } catch (_) {}
+    }
+    userNpub ??= _verifyNostrAuth(request);
+
+    // 2. Load archives, filter by NDF view permissions
+    final conf = ConferenceService();
+    final allArchives = await ConferenceArchiveService().listArchives();
+    final activeRoomId = (conf.isActive && conf.room != null)
+        ? conf.room!.roomId
+        : null;
+    final visible = <ConferenceArchiveEntry>[];
+    for (final entry in allArchives) {
+      if (activeRoomId != null && entry.roomId == activeRoomId) continue;
+      final perms = await ConferenceArchiveService().loadPermissions(entry);
+      if (perms == null) {
+        visible.add(entry);
+        continue;
+      }
+      if (userNpub != null &&
+          perms.hasPermission(userNpub, NdfPermissionAction.view)) {
+        visible.add(entry);
+      } else if (userNpub == null &&
+          perms.allowAnonymousView &&
+          perms.access[NdfPermissionAction.view]?.type ==
+              NdfAccessType.public) {
+        visible.add(entry);
+      }
+    }
+
+    // 3. Active meeting + schedules
+    Map<String, dynamic>? activeMeeting;
+    if (conf.isActive && conf.room != null) {
+      final room = conf.room!;
+      activeMeeting = {
+        'code': room.roomId.split('@').first,
+        'roomName': room.roomName,
+        'hostCallsign': room.hostCallsign,
+        'participantCount': room.participants.length,
+        'state': 'active',
+      };
+    }
+    final schedules = await ConferenceScheduleService()
+        .listSchedules(includeCompleted: false);
+
+    // 4. Build data payload
+    final data = <String, dynamic>{
+      'meetings': visible
+          .map((e) => <String, dynamic>{
+                'code': e.roomId.split('@').first,
+                'roomName': e.roomName,
+                'hostCallsign': e.hostCallsign,
+                'startedAt': e.startedAt.toIso8601String(),
+                'endedAt': e.endedAt?.toIso8601String(),
+                'participantCount': e.participants.length,
+                'messageCount': e.messageCount,
+                'fileCount': e.files.length,
+                'recordingCount': e.recordings.length,
+                'tags': e.tags,
+                'state': 'archive',
+              })
+          .toList(),
+      if (activeMeeting != null) 'active': activeMeeting,
+      'scheduled': schedules
+          .map((s) => <String, dynamic>{
+                'code': s.roomId.split('@').first,
+                'roomName': s.roomName,
+                'hostCallsign': s.hostCallsign,
+                'scheduledAt': s.scheduledAt?.toIso8601String(),
+                'state': 'scheduled',
+              })
+          .toList(),
+      'authenticated': userNpub != null,
+    };
+
+    // 5. Generate device menu and render listing page
+    final menuItems = await AppService().generateDeviceMenu(activeApp: 'meet');
+    final assets = await ConferenceWebPageService().buildListingPage(
+      data: data,
+      logoText: 'Meetings',
+      menuItems: menuItems,
+    );
+    final htmlHeaders = Map<String, String>.from(headers);
+    htmlHeaders['Content-Type'] = 'text/html; charset=utf-8';
     return shelf.Response.ok(assets.html, headers: htmlHeaders);
   }
 

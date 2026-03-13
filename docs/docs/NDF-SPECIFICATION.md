@@ -1335,9 +1335,15 @@ Meeting documents archive single-day conference events with recordings and trans
 ```
 ndf.json                                  (NdfDocument, type: meeting)
 permissions.json                          (NdfPermission)
+meeting.json                             (ConferenceArchiveEntry — fast-load cache)
 content/
   main.json                               (MeetingContent)
   recordings/{recordingId}.json           (MeetingRecording per recording)
+chat/
+  messages.txt                            (chat transcript in text format)
+files/                                    (shared files)
+recordings/                               (MP4 recordings)
+transcripts/                              (voice transcriptions)
 assets/
   video/{recordingId}.mp4                 (video files)
   audio/{recordingId}.wav                 (extracted audio, if kept)
@@ -1354,19 +1360,33 @@ assets/
   "version": 1,
   "created": "2026-03-14T10:00:00Z",
   "modified": "2026-03-14T10:45:00Z",
+  "ended_at": "2026-03-14T10:45:00Z",
   "room_id": "room-xyz",
   "host_callsign": "alice",
   "local_callsign": "bob",
   "signaling_mode": "station",
+  "hosted_by_me": false,
   "participants": ["alice", "bob", "carol"],
   "speakers": ["alice", "bob"],
   "recordings": ["rec-001"],
   "tags": ["standup", "2026"],
+  "active_screen_sharer": "alice",
+  "station_meet_url": "https://station.example.com/meet/room-xyz",
+  "meet_urls": ["https://station.example.com/meet/room-xyz"],
+  "chat_transcript": "# Transcript for Team Standup (room-xyz)\n\n[10:02] alice: Hello everyone\n",
   "settings": {
     "show_transcriptions": true
   }
 }
 ```
+
+Additional fields (all optional):
+- `ended_at` — ISO 8601 timestamp; null while meeting is active
+- `hosted_by_me` — boolean; whether the local user hosted this meeting
+- `active_screen_sharer` — callsign of the current screen sharer
+- `station_meet_url` — station-hosted meeting URL
+- `meet_urls` — list of meeting URLs
+- `chat_transcript` — full chat text from the meeting
 
 **content/recordings/{recordingId}.json**:
 ```json

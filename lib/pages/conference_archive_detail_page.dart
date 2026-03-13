@@ -1,22 +1,25 @@
 library;
 
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
 
 import '../bot/services/speech_to_text_service.dart';
 import '../models/chat_message.dart';
 import '../models/conference_archive_entry.dart';
 import '../services/conference_archive_service.dart';
+import '../services/conference_service.dart';
 import '../services/file_launcher_service.dart';
 import '../services/meeting_transcription_service.dart';
 import '../widgets/message_list_widget.dart';
 import '../widgets/video_player_widget.dart';
 import '../work/utils/voicememo_transcription_service.dart';
+import 'conference_call_page.dart';
 
 class ConferenceArchiveDetailPage extends StatefulWidget {
   final ConferenceArchiveEntry entry;
@@ -38,17 +41,20 @@ class _ConferenceArchiveDetailPageState
   List<ChatMessage> _messages = const <ChatMessage>[];
   bool _loading = true;
   bool _openingAsset = false;
-  bool _exportingNdf = false;
   String? _error;
 
   ConferenceArchiveAsset? _playingRecording;
   String? _playingRecordingPath;
   bool _isFullscreen = false;
+  final _playerKey = GlobalKey();
+
+  // Probed recording duration (ffprobe — authoritative)
+  Duration _totalRecordingDuration = Duration.zero;
 
   // Transcription state
   StreamSubscription? _progressSub;
+  StreamSubscription? _completionSub;
   TranscriptionProgress? _transcriptionProgress;
-  String? _transcribingRecordingName;
 
   ConferenceArchiveEntry get _currentEntry => _entry ?? widget.entry;
 
@@ -60,13 +66,52 @@ class _ConferenceArchiveDetailPageState
         setState(() => _transcriptionProgress = progress);
       }
     });
+    _completionSub = _transcriptionService.completionStream.listen((event) {
+      if (event.archiveRelativePath == _currentEntry.relativePath) {
+        if (event.success) {
+          _loadArchive();
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Transcription complete')),
+            );
+          }
+        } else if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Transcription failed: ${event.error}'),
+            ),
+          );
+        }
+      }
+    });
     _loadArchive();
   }
 
   @override
   void dispose() {
     _progressSub?.cancel();
+    _completionSub?.cancel();
     super.dispose();
+  }
+
+  Future<Duration?> _probeVideoDuration(String filePath) async {
+    try {
+      final result = await Process.run('ffprobe', [
+        '-v', 'quiet',
+        '-print_format', 'json',
+        '-show_format',
+        filePath,
+      ]);
+      if (result.exitCode != 0) return null;
+      final json = jsonDecode(result.stdout as String) as Map<String, dynamic>;
+      final format = json['format'] as Map<String, dynamic>?;
+      final durationStr = format?['duration'] as String?;
+      if (durationStr == null) return null;
+      final seconds = double.parse(durationStr);
+      return Duration(milliseconds: (seconds * 1000).round());
+    } catch (_) {
+      return null;
+    }
   }
 
   Future<void> _loadArchive() async {
@@ -83,13 +128,37 @@ class _ConferenceArchiveDetailPageState
       if (!mounted) {
         return;
       }
+
+      // Probe recording durations with ffprobe
+      var probedTotal = Duration.zero;
+      String? firstRecordingPath;
+      for (final rec in refreshed.recordings) {
+        final path = await _archiveService.exportArchiveFileToTemporaryPath(
+          refreshed, rec.relativePath);
+        if (path != null) {
+          firstRecordingPath ??= path;
+          final dur = await _probeVideoDuration(path);
+          if (dur != null) probedTotal += dur;
+        }
+      }
+      if (!mounted) return;
+
       setState(() {
         _entry = refreshed;
         _messages = messages;
+        _totalRecordingDuration = probedTotal;
         _loading = false;
       });
       if (refreshed.recordings.isNotEmpty && _playingRecording == null) {
-        _playRecording(refreshed.recordings.first);
+        // Reuse the already-extracted path for auto-play
+        if (firstRecordingPath != null) {
+          setState(() {
+            _playingRecording = refreshed.recordings.first;
+            _playingRecordingPath = firstRecordingPath;
+          });
+        } else {
+          _playRecording(refreshed.recordings.first);
+        }
       }
     } catch (error) {
       if (!mounted) {
@@ -171,13 +240,6 @@ class _ConferenceArchiveDetailPageState
     }
   }
 
-  void _stopPlayback() {
-    setState(() {
-      _playingRecording = null;
-      _playingRecordingPath = null;
-      _isFullscreen = false;
-    });
-  }
 
   Future<void> _transcribeRecording(ConferenceArchiveAsset recording) async {
     if (_transcriptionService.isBusy) {
@@ -187,63 +249,15 @@ class _ConferenceArchiveDetailPageState
       return;
     }
 
-    setState(() {
-      _transcribingRecordingName = recording.name;
-    });
+    final started = _transcriptionService.transcribeInBackground(
+      entry: _currentEntry,
+      recording: recording,
+    );
 
-    try {
-      // Export MP4 to temp path
-      final mp4Path = await _archiveService.exportArchiveFileToTemporaryPath(
-        _currentEntry,
-        recording.relativePath,
-      );
-      if (mp4Path == null) {
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Unable to export recording')),
-        );
-        setState(() => _transcribingRecordingName = null);
-        return;
-      }
-
-      final result = await _transcriptionService.transcribeRecording(
-        mp4Path: mp4Path,
-        recordingName: recording.name,
-      );
-
-      if (!mounted) return;
-
-      if (result.cancelled) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Transcription cancelled')),
-        );
-      } else if (result.success && result.text != null) {
-        // Write transcript to archive
-        await _archiveService.writeTranscriptForRecording(
-          _currentEntry,
-          recording.name,
-          result.text!,
-        );
-        // Refresh archive to pick up new transcript
-        await _loadArchive();
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Transcription complete')),
-        );
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Transcription failed: ${result.error ?? "Unknown error"}')),
-        );
-      }
-    } catch (e) {
-      if (!mounted) return;
+    if (!started && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Transcription error: $e')),
+        const SnackBar(content: Text('Unable to start transcription')),
       );
-    } finally {
-      if (mounted) {
-        setState(() => _transcribingRecordingName = null);
-      }
     }
   }
 
@@ -251,51 +265,190 @@ class _ConferenceArchiveDetailPageState
     await _transcriptionService.cancel();
   }
 
-  Future<void> _exportAsNdf() async {
-    if (_exportingNdf) return;
-    setState(() => _exportingNdf = true);
-
-    try {
-      final tempDir = await getTemporaryDirectory();
-      final sanitizedName = _currentEntry.roomName
-          .replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '_')
-          .toLowerCase();
-      final date = _currentEntry.startedAt.toLocal();
-      final dateStr =
-          '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
-      final outputPath = p.join(
-        tempDir.path,
-        '${sanitizedName}_$dateStr.meeting.ndf',
-      );
-
-      await _archiveService.exportAsNdf(_currentEntry, outputPath);
-
-      if (!mounted) return;
-
-      final opened = await _fileLauncher.openFile(outputPath);
-      if (!mounted) return;
-      if (!opened) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('NDF exported to: $outputPath')),
-        );
-      }
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Export failed: $e')),
-      );
-    } finally {
-      if (mounted) {
-        setState(() => _exportingNdf = false);
-      }
-    }
-  }
-
   bool _hasTranscript(String recordingName) {
     final baseName = p.basenameWithoutExtension(recordingName);
     return _currentEntry.voiceTranscripts.any(
       (t) => p.basenameWithoutExtension(t.name) == baseName,
     );
+  }
+
+  Future<void> _downloadNdf() async {
+    final entry = _currentEntry;
+    final fileName = '${entry.roomName}.ndf';
+
+    final savePath = await FilePicker.platform.saveFile(
+      dialogTitle: 'Save meeting archive',
+      fileName: fileName,
+    );
+    if (savePath == null || !mounted) return;
+
+    try {
+      await _archiveService.exportAsNdf(entry, savePath);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Archive saved')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to save: $e')),
+      );
+    }
+  }
+
+  Future<void> _deleteArchive() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete meeting'),
+        content: Text(
+          'Delete "${_currentEntry.roomName}" and all its recordings, '
+          'chat, and files? This cannot be undone.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(context).colorScheme.error,
+            ),
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    try {
+      await _archiveService.deleteArchive(_currentEntry);
+      if (!mounted) return;
+      Navigator.of(context).pop(true); // true = was deleted
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to delete: $e')),
+      );
+    }
+  }
+
+  Future<void> _resumeMeeting() async {
+    final entry = _currentEntry;
+    final conferenceService = ConferenceService();
+    if (conferenceService.isActive) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('A meeting is already active')),
+      );
+      return;
+    }
+
+    try {
+      await conferenceService.hostConference(
+        roomName: entry.roomName,
+        resumeFromArchive: entry,
+      );
+      if (!mounted) return;
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (_) => const ConferenceCallPage()),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to resume: $e')),
+      );
+    }
+  }
+
+  Future<void> _editName() async {
+    final controller = TextEditingController(text: _currentEntry.roomName);
+    final result = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Edit meeting name'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(labelText: 'Name'),
+          onSubmitted: (value) => Navigator.of(context).pop(value.trim()),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () =>
+                Navigator.of(context).pop(controller.text.trim()),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+    if (result == null || result.isEmpty || !mounted) return;
+    if (result == _currentEntry.roomName) return;
+    try {
+      final updated = await _archiveService.updateArchive(
+        _currentEntry,
+        roomName: result,
+      );
+      if (!mounted) return;
+      setState(() => _entry = updated);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to rename: $e')),
+      );
+    }
+  }
+
+  String _formatMeetingDuration(ConferenceArchiveEntry entry) {
+    // 1. Sessions sum
+    var sessionTotal = Duration.zero;
+    for (final s in entry.sessions) {
+      final end = s.endedAt ?? entry.updatedAt;
+      sessionTotal += end.difference(s.startedAt);
+    }
+
+    // 2. Entry-level span
+    final entryEnd = entry.endedAt ?? entry.updatedAt;
+    final entrySpan = entryEnd.difference(entry.startedAt);
+
+    // 3. Recording span: last recording modifiedAt minus meeting start
+    var recordingSpan = Duration.zero;
+    for (final r in entry.recordings) {
+      if (r.modifiedAt != null) {
+        final span = r.modifiedAt!.difference(entry.startedAt);
+        if (span > recordingSpan) recordingSpan = span;
+      }
+    }
+
+    // Use the longest (most reliable) duration
+    var total = sessionTotal;
+    if (entrySpan > total) total = entrySpan;
+    if (recordingSpan > total) total = recordingSpan;
+    // 4. Probed recording durations (ffprobe — authoritative)
+    if (_totalRecordingDuration > total) total = _totalRecordingDuration;
+    if (total.isNegative) total = Duration.zero;
+
+    // Format with full words
+    final hours = total.inHours;
+    final minutes = total.inMinutes.remainder(60);
+    final seconds = total.inSeconds.remainder(60);
+    if (hours > 0) {
+      return '$hours ${hours == 1 ? 'hour' : 'hours'} $minutes ${minutes == 1 ? 'minute' : 'minutes'}';
+    } else if (minutes > 0) {
+      return '$minutes ${minutes == 1 ? 'minute' : 'minutes'} $seconds ${seconds == 1 ? 'second' : 'seconds'}';
+    }
+    return '$seconds ${seconds == 1 ? 'second' : 'seconds'}';
+  }
+
+  String _formatParticipant(String callsign) {
+    final nick = _currentEntry.participantNicknames[callsign.toUpperCase()];
+    return nick != null ? '$nick ($callsign)' : callsign;
   }
 
   Future<void> _editTags() async {
@@ -387,6 +540,154 @@ class _ConferenceArchiveDetailPageState
     }
   }
 
+  // ── Player & Playlist (YouTube-like layout) ────────────────────────
+
+  /// Inline player — compact, constrained height, YouTube-like.
+  Widget _buildPlayer(ThemeData theme) {
+    if (_playingRecordingPath == null) {
+      return const SizedBox.shrink();
+    }
+
+    return Container(
+      color: Colors.black,
+      constraints: const BoxConstraints(maxHeight: 320),
+      child: Center(
+        child: AspectRatio(
+          aspectRatio: 16 / 9,
+          child: VideoPlayerWidget(
+            key: _playerKey,
+            videoPath: _playingRecordingPath!,
+            autoPlay: true,
+            onFullscreenToggle: () {
+              setState(() => _isFullscreen = !_isFullscreen);
+            },
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// YouTube playlist-style recording list — compact items with a
+  /// highlighted "now playing" indicator.
+  Widget _buildPlaylist(ThemeData theme) {
+    final entry = _currentEntry;
+    if (entry.recordings.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+          child: Text(
+            'Recordings (${entry.recordings.length})',
+            style: theme.textTheme.titleSmall?.copyWith(
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ),
+        Flexible(child: ListView(
+          shrinkWrap: true,
+          children: entry.recordings.asMap().entries.map((mapEntry) {
+          final index = mapEntry.key;
+          final asset = mapEntry.value;
+          final isPlaying = _playingRecording?.relativePath == asset.relativePath;
+          final transcribed = _hasTranscript(asset.name);
+          final currentlyTranscribing = _transcriptionService.isBusy &&
+              _transcriptionService.currentRecordingName == asset.name;
+
+          return Container(
+            color: isPlaying
+                ? theme.colorScheme.primaryContainer.withValues(alpha: 0.3)
+                : null,
+            child: InkWell(
+              onTap: _openingAsset ? null : () => _playRecording(asset),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                child: Row(
+                  children: [
+                    // Index or now-playing indicator
+                    SizedBox(
+                      width: 32,
+                      child: Center(
+                        child: isPlaying
+                            ? Icon(Icons.equalizer,
+                                size: 18, color: theme.colorScheme.primary)
+                            : Text(
+                                '${index + 1}',
+                                style: theme.textTheme.bodySmall?.copyWith(
+                                  color: theme.colorScheme.onSurfaceVariant,
+                                ),
+                              ),
+                      ),
+                    ),
+                    // Recording icon
+                    Icon(
+                      Icons.videocam,
+                      size: 18,
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                    const SizedBox(width: 8),
+                    // Name + subtitle
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            asset.name,
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              fontWeight: isPlaying ? FontWeight.w600 : null,
+                              color: isPlaying
+                                  ? theme.colorScheme.primary
+                                  : null,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          Text(
+                            _formatAssetSubtitle(asset),
+                            style: theme.textTheme.labelSmall?.copyWith(
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    // Transcription status
+                    if (SpeechToTextService.isSupported) ...[
+                      if (currentlyTranscribing)
+                        const SizedBox(
+                          width: 20, height: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      else if (transcribed)
+                        const Icon(Icons.check_circle, color: Colors.green, size: 18)
+                      else
+                        IconButton(
+                          icon: const Icon(Icons.transcribe, size: 18),
+                          tooltip: 'Transcribe',
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(),
+                          onPressed: _transcriptionService.isBusy
+                              ? null
+                              : () => _transcribeRecording(asset),
+                        ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+          );
+        }).toList(),
+        )),
+        const Divider(height: 1),
+      ],
+    );
+  }
+
   Widget _buildTranscriptionProgressIndicator(ThemeData theme) {
     final progress = _transcriptionProgress;
     if (progress == null || progress.state == TranscriptionState.idle) {
@@ -406,7 +707,7 @@ class _ConferenceArchiveDetailPageState
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    'Transcribing: ${_transcribingRecordingName ?? ""}',
+                    'Transcribing: ${_transcriptionService.currentRecordingName ?? ""}',
                     style: theme.textTheme.titleSmall,
                     overflow: TextOverflow.ellipsis,
                   ),
@@ -436,66 +737,37 @@ class _ConferenceArchiveDetailPageState
     );
   }
 
-  Widget _buildSummaryTab(ThemeData theme) {
+  // ── Session info ───────────────────────────────────────────────────
+
+  Widget _buildSessionsInfo(ThemeData theme) {
+    final sessions = _currentEntry.sessions;
+    if (sessions.length <= 1) return const SizedBox.shrink();
+
+    return _InfoCard(
+      title: 'Sessions (${sessions.length})',
+      children: [
+        ...sessions.asMap().entries.map((mapEntry) {
+          final i = mapEntry.key;
+          final s = mapEntry.value;
+          final label = 'Session ${i + 1}';
+          final value = s.endedAt != null
+              ? '${_formatDateTime(s.startedAt)} - ${_formatDateTime(s.endedAt!)}'
+              : '${_formatDateTime(s.startedAt)} (active)';
+          return _InfoRow(label: label, value: value);
+        }),
+      ],
+    );
+  }
+
+  // ── Tab content ────────────────────────────────────────────────────
+
+  Widget _buildInfoTab(ThemeData theme) {
     final entry = _currentEntry;
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
-        if (_transcribingRecordingName != null)
+        if (_transcriptionService.isBusy)
           _buildTranscriptionProgressIndicator(theme),
-        if (_playingRecording != null && _playingRecordingPath != null)
-          Card(
-            clipBehavior: Clip.antiAlias,
-            margin: const EdgeInsets.only(bottom: 16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 12, 8, 0),
-                  child: Row(
-                    children: [
-                      Icon(Icons.play_arrow,
-                          size: 18, color: theme.colorScheme.primary),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          _playingRecording!.name,
-                          style: theme.textTheme.titleSmall,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.close),
-                        tooltip: 'Stop playback',
-                        onPressed: _stopPlayback,
-                      ),
-                    ],
-                  ),
-                ),
-                AspectRatio(
-                  aspectRatio: 16 / 9,
-                  child: VideoPlayerWidget(
-                    videoPath: _playingRecordingPath!,
-                    autoPlay: true,
-                    onFullscreenToggle: () {
-                      setState(() => _isFullscreen = !_isFullscreen);
-                    },
-                  ),
-                ),
-              ],
-            ),
-          ),
-        if (entry.recordings.isNotEmpty)
-          _RecordingSection(
-            recordings: entry.recordings,
-            openingDisabled: _openingAsset,
-            onPlayRecording: _playRecording,
-            onTranscribeRecording: _transcribeRecording,
-            hasTranscript: _hasTranscript,
-            isTranscribing: _transcriptionService.isBusy,
-            transcribingName: _transcribingRecordingName,
-            sttSupported: SpeechToTextService.isSupported,
-          ),
         _InfoCard(
           title: 'Tags',
           children: [
@@ -526,7 +798,38 @@ class _ConferenceArchiveDetailPageState
         _InfoCard(
           title: 'Meeting',
           children: [
-            _InfoRow(label: 'Name', value: entry.roomName),
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SizedBox(
+                    width: 96,
+                    child: Text(
+                      'Name',
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                  Expanded(
+                    child: Text(
+                      entry.roomName,
+                      style: theme.textTheme.bodyMedium,
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.edit, size: 16),
+                    tooltip: 'Edit name',
+                    onPressed: _editName,
+                    visualDensity: VisualDensity.compact,
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(),
+                  ),
+                ],
+              ),
+            ),
             _InfoRow(
               label: 'Role',
               value: entry.hostedByMe ? 'Hosted by you' : 'Participated',
@@ -535,18 +838,13 @@ class _ConferenceArchiveDetailPageState
               label: 'Host',
               value: entry.hostCallsign.isEmpty
                   ? 'Unknown'
-                  : entry.hostCallsign,
+                  : _formatParticipant(entry.hostCallsign),
             ),
-            _InfoRow(label: 'Started', value: _formatDateTime(entry.startedAt)),
-            _InfoRow(
-              label: 'Ended',
-              value: entry.endedAt == null
-                  ? 'In progress'
-                  : _formatDateTime(entry.endedAt!),
-            ),
-            _InfoRow(label: 'Mode', value: entry.signalingMode.toUpperCase()),
+            _InfoRow(label: 'Date', value: _formatDateTime(entry.startedAt)),
+            _InfoRow(label: 'Duration', value: _formatMeetingDuration(entry)),
           ],
         ),
+        _buildSessionsInfo(theme),
         _InfoCard(
           title: 'Participants',
           children: [
@@ -554,17 +852,17 @@ class _ConferenceArchiveDetailPageState
               label: 'Participants',
               value: entry.participants.isEmpty
                   ? 'None'
-                  : entry.participants.join(', '),
+                  : entry.participants
+                      .map(_formatParticipant)
+                      .join(', '),
             ),
             _InfoRow(
               label: 'Speakers',
               value: entry.speakers.isEmpty
                   ? 'None'
-                  : entry.speakers.join(', '),
-            ),
-            _InfoRow(
-              label: 'Screen Share',
-              value: entry.activeScreenSharer ?? 'None',
+                  : entry.speakers
+                      .map(_formatParticipant)
+                      .join(', '),
             ),
           ],
         ),
@@ -659,6 +957,7 @@ class _ConferenceArchiveDetailPageState
     if (_isFullscreen && _playingRecordingPath != null) {
       return Scaffold(
         body: VideoPlayerWidget(
+          key: _playerKey,
           videoPath: _playingRecordingPath!,
           autoPlay: true,
           onFullscreenToggle: () {
@@ -673,13 +972,13 @@ class _ConferenceArchiveDetailPageState
     final hasTranscripts = entry.voiceTranscripts.isNotEmpty;
 
     final tabs = <Tab>[
-      const Tab(text: 'Summary'),
+      const Tab(text: 'Info'),
       if (hasChat) const Tab(text: 'Chat'),
       if (hasFiles) const Tab(text: 'Files'),
       if (hasTranscripts) const Tab(text: 'Transcripts'),
     ];
     final tabViews = <Widget>[
-      _buildSummaryTab(theme),
+      _buildInfoTab(theme),
       if (hasChat) _buildChatTab(theme),
       if (hasFiles) _buildFilesTab(theme),
       if (hasTranscripts) _buildTranscriptTab(theme),
@@ -689,133 +988,103 @@ class _ConferenceArchiveDetailPageState
       appBar: AppBar(
         title: Text(entry.roomName),
         actions: [
-          if (entry.recordings.isNotEmpty)
+          // Resume / restart meeting
+          if (entry.endedAt != null)
             IconButton(
-              icon: _exportingNdf
-                  ? const SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.archive_outlined),
-              tooltip: 'Export as NDF',
-              onPressed: _exportingNdf ? null : _exportAsNdf,
+              icon: const Icon(Icons.play_circle_outline),
+              tooltip: 'Resume meeting',
+              onPressed: _resumeMeeting,
             ),
+          // Download NDF
           IconButton(
-            icon: const Icon(Icons.refresh),
-            tooltip: 'Refresh archive',
-            onPressed: _loadArchive,
+            icon: const Icon(Icons.download),
+            tooltip: 'Download NDF',
+            onPressed: _downloadNdf,
+          ),
+          // Delete archive
+          IconButton(
+            icon: const Icon(Icons.delete_outline),
+            tooltip: 'Delete meeting',
+            onPressed: _deleteArchive,
           ),
         ],
       ),
-      body: tabs.length == 1
-          ? _buildSummaryTab(theme)
-          : DefaultTabController(
-              key: ValueKey(tabs.length),
-              length: tabs.length,
-              child: Column(
-                children: [
-                  TabBar(tabs: tabs),
-                  Expanded(child: TabBarView(children: tabViews)),
-                ],
-              ),
-            ),
-    );
-  }
-}
+      body: LayoutBuilder(
+        builder: (context, constraints) {
+          final isLandscape = constraints.maxWidth > constraints.maxHeight;
 
-class _RecordingSection extends StatelessWidget {
-  final List<ConferenceArchiveAsset> recordings;
-  final bool openingDisabled;
-  final Future<void> Function(ConferenceArchiveAsset) onPlayRecording;
-  final Future<void> Function(ConferenceArchiveAsset) onTranscribeRecording;
-  final bool Function(String) hasTranscript;
-  final bool isTranscribing;
-  final String? transcribingName;
-  final bool sttSupported;
+          if (isLandscape && _playingRecordingPath != null) {
+            // Right column tabs — everything except Chat
+            final rightTabs = <Tab>[
+              const Tab(text: 'Info'),
+              if (hasFiles) const Tab(text: 'Files'),
+              if (hasTranscripts) const Tab(text: 'Transcripts'),
+            ];
+            final rightViews = <Widget>[
+              _buildInfoTab(theme),
+              if (hasFiles) _buildFilesTab(theme),
+              if (hasTranscripts) _buildTranscriptTab(theme),
+            ];
 
-  const _RecordingSection({
-    required this.recordings,
-    required this.openingDisabled,
-    required this.onPlayRecording,
-    required this.onTranscribeRecording,
-    required this.hasTranscript,
-    required this.isTranscribing,
-    required this.transcribingName,
-    required this.sttSupported,
-  });
+            final rightContent = rightTabs.length == 1
+                ? _buildInfoTab(theme)
+                : DefaultTabController(
+                    key: ValueKey('right-${rightTabs.length}'),
+                    length: rightTabs.length,
+                    child: Column(
+                      children: [
+                        TabBar(tabs: rightTabs),
+                        Expanded(child: TabBarView(children: rightViews)),
+                      ],
+                    ),
+                  );
 
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
+            // Landscape: 2/3 video+playlist+chat | 1/3 details
+            return Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Icon(Icons.fiber_manual_record,
-                    size: 18, color: theme.colorScheme.primary),
-                const SizedBox(width: 8),
-                Text(
-                  'Recordings',
-                  style: theme.textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w700,
+                // Left column — player, playlist, chat
+                SizedBox(
+                  width: (constraints.maxWidth * 2 / 3).roundToDouble(),
+                  child: Column(
+                    children: [
+                      _buildPlayer(theme),
+                      _buildPlaylist(theme),
+                      if (hasChat) Expanded(child: _buildChatTab(theme)),
+                    ],
                   ),
                 ),
+                // Right column — info/files/transcripts
+                Expanded(child: rightContent),
               ],
-            ),
-            const SizedBox(height: 12),
-            ...recordings.map((asset) {
-              final transcribed = hasTranscript(asset.name);
-              final currentlyTranscribing =
-                  isTranscribing && transcribingName == asset.name;
-              return ListTile(
-                contentPadding: EdgeInsets.zero,
-                leading: Icon(
-                  Icons.videocam,
-                  color: theme.colorScheme.onSurfaceVariant,
-                ),
-                title: Text(asset.name),
-                subtitle: Text(_formatAssetSubtitle(asset)),
-                trailing: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    if (sttSupported) ...[
-                      if (currentlyTranscribing)
-                        const SizedBox(
-                          width: 24,
-                          height: 24,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      else if (transcribed)
-                        const Icon(Icons.check_circle, color: Colors.green, size: 20)
-                      else
-                        IconButton(
-                          icon: const Icon(Icons.transcribe),
-                          tooltip: 'Transcribe recording',
-                          onPressed: isTranscribing
-                              ? null
-                              : () => onTranscribeRecording(asset),
-                        ),
-                      const SizedBox(width: 4),
+            );
+          }
+
+          // Portrait (or no video playing): vertical stack with all tabs
+          final tabContent = tabs.length == 1
+              ? _buildInfoTab(theme)
+              : DefaultTabController(
+                  key: ValueKey(tabs.length),
+                  length: tabs.length,
+                  child: Column(
+                    children: [
+                      TabBar(tabs: tabs),
+                      Expanded(child: TabBarView(children: tabViews)),
                     ],
-                    IconButton(
-                      icon: const Icon(Icons.play_arrow),
-                      tooltip: 'Play recording',
-                      onPressed: openingDisabled
-                          ? null
-                          : () => onPlayRecording(asset),
-                    ),
-                  ],
-                ),
-                onTap: openingDisabled ? null : () => onPlayRecording(asset),
-              );
-            }),
-          ],
-        ),
+                  ),
+                );
+
+          return Column(
+            children: [
+              _buildPlayer(theme),
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxHeight: 200),
+                child: _buildPlaylist(theme),
+              ),
+              Expanded(child: tabContent),
+            ],
+          );
+        },
       ),
     );
   }
@@ -934,7 +1203,6 @@ class _AssetSection extends StatelessWidget {
   final String emptyLabel;
   final bool openingDisabled;
   final Future<void> Function(ConferenceArchiveAsset asset) onOpenAsset;
-  final bool isRecording;
 
   const _AssetSection({
     required this.title,
@@ -943,7 +1211,6 @@ class _AssetSection extends StatelessWidget {
     required this.emptyLabel,
     required this.openingDisabled,
     required this.onOpenAsset,
-    this.isRecording = false,
   });
 
   @override
@@ -980,17 +1247,14 @@ class _AssetSection extends StatelessWidget {
                 (asset) => ListTile(
                   contentPadding: EdgeInsets.zero,
                   leading: Icon(
-                    isRecording
-                        ? Icons.videocam
-                        : Icons.insert_drive_file,
+                    Icons.insert_drive_file,
                     color: theme.colorScheme.onSurfaceVariant,
                   ),
                   title: Text(asset.name),
                   subtitle: Text(_formatAssetSubtitle(asset)),
                   trailing: IconButton(
-                    icon: Icon(
-                        isRecording ? Icons.play_arrow : Icons.open_in_new),
-                    tooltip: isRecording ? 'Play recording' : 'Open file',
+                    icon: const Icon(Icons.open_in_new),
+                    tooltip: 'Open file',
                     onPressed: openingDisabled
                         ? null
                         : () => onOpenAsset(asset),

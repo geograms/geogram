@@ -23,6 +23,7 @@ class ThemesEmbedded {
     'default/home/index.html': _defaultHomeIndexHtml,
     'default/home/styles.css': _defaultHomeStylesCss,
     'default/meet/index.html': _defaultMeetIndexHtml,
+    'default/meet/listing.html': _defaultMeetListingHtml,
     'default/meet/styles.css': _defaultMeetStylesCss,
     'default/shared/directory.html': _defaultSharedDirectoryHtml,
     'default/shared/index.html': _defaultSharedIndexHtml,
@@ -2440,6 +2441,159 @@ class ThemesEmbedded {
 </html>
 ''';
 
+  static const String _defaultMeetListingHtml = r'''
+<!DOCTYPE html>
+<html lang="en" class="meet-page">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1">
+  <title>{{TITLE}}</title>
+  <style>{{GLOBAL_STYLES}}</style>
+  <style>{{APP_STYLES}}</style>
+  {{NOSTR_STYLES}}
+</head>
+<body>
+<div class="container">
+  <header class="header">
+    <div class="header__inner">
+      <div class="header__logo">
+        <div class="logo">{{LOGO_TEXT}}</div>
+      </div>
+      {{NOSTR_HEADER}}
+    </div>
+    <nav class="menu">
+      <ul class="menu__inner">
+        {{MENU_ITEMS}}
+      </ul>
+    </nav>
+  </header>
+
+  <main class="main">
+    <div class="meeting-shell">
+      <section class="meeting-card">
+        <div class="meeting-subtitle">Browse meetings hosted on this station</div>
+        <input id="listing-search" class="listing-search" type="text" placeholder="Search meetings..." autofocus>
+        <div id="meeting-list" class="meeting-list"></div>
+        <div id="listing-hint" class="listing-hint" style="display:none"></div>
+      </section>
+    </div>
+  </main>
+
+  <footer class="footer">
+    <div class="footer__inner">
+      <div class="copyright">
+        <span>powered by geogram</span>
+      </div>
+    </div>
+  </footer>
+</div>
+
+<script>
+  window.GEOGRAM_MEETINGS = {{DATA_JSON}};
+  {{SCRIPTS}}
+
+  'use strict';
+  (function() {
+    const data = window.GEOGRAM_MEETINGS || {};
+    const listEl = document.getElementById('meeting-list');
+    const hintEl = document.getElementById('listing-hint');
+    const searchEl = document.getElementById('listing-search');
+
+    const allItems = [];
+    if (data.active) allItems.push(data.active);
+    if (data.scheduled) data.scheduled.forEach(function(s) { allItems.push(s); });
+    if (data.meetings) data.meetings.forEach(function(m) { allItems.push(m); });
+
+    if (!data.authenticated) {
+      hintEl.textContent = 'Connect with Nostr to see private meetings';
+      hintEl.style.display = '';
+    }
+
+    function formatDate(iso) {
+      if (!iso) return '';
+      var d = new Date(iso);
+      return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+    }
+
+    function renderBadge(state) {
+      if (state === 'active') return '<span class="meeting-badge meeting-badge--live">LIVE</span>';
+      if (state === 'scheduled') return '<span class="meeting-badge meeting-badge--scheduled">Scheduled</span>';
+      return '';
+    }
+
+    function renderTags(tags) {
+      if (!tags || tags.length === 0) return '';
+      return '<div class="meeting-tags">' +
+        tags.map(function(t) { return '<span class="meeting-tag">' + esc(t) + '</span>'; }).join('') +
+        '</div>';
+    }
+
+    function esc(s) {
+      var el = document.createElement('span');
+      el.textContent = s || '';
+      return el.innerHTML;
+    }
+
+    function renderItem(item) {
+      var meta = [];
+      if (item.hostCallsign) meta.push('Host: ' + esc(item.hostCallsign));
+      if (item.state === 'active' || item.state === 'scheduled') {
+        if (item.participantCount != null) meta.push(item.participantCount + ' participant' + (item.participantCount === 1 ? '' : 's'));
+        if (item.scheduledAt) meta.push(formatDate(item.scheduledAt));
+      } else {
+        if (item.startedAt) {
+          var range = formatDate(item.startedAt);
+          if (item.endedAt) range += ' — ' + formatDate(item.endedAt);
+          meta.push(range);
+        }
+        var counts = [];
+        if (item.participantCount) counts.push(item.participantCount + ' participant' + (item.participantCount === 1 ? '' : 's'));
+        if (item.messageCount) counts.push(item.messageCount + ' message' + (item.messageCount === 1 ? '' : 's'));
+        if (item.fileCount) counts.push(item.fileCount + ' file' + (item.fileCount === 1 ? '' : 's'));
+        if (item.recordingCount) counts.push(item.recordingCount + ' recording' + (item.recordingCount === 1 ? '' : 's'));
+        if (counts.length) meta.push(counts.join(' · '));
+      }
+
+      return '<a class="meeting-list-item" href="' + esc(item.code) + '">' +
+        '<div class="meeting-list-header">' +
+          '<span class="meeting-list-title">' + esc(item.roomName || item.code) + '</span>' +
+          renderBadge(item.state) +
+        '</div>' +
+        '<div class="meeting-list-meta">' + meta.join(' · ') + '</div>' +
+        renderTags(item.tags) +
+      '</a>';
+    }
+
+    function render(filter) {
+      var filtered = allItems;
+      if (filter) {
+        var q = filter.toLowerCase();
+        filtered = allItems.filter(function(item) {
+          var haystack = (item.roomName || '') + ' ' + (item.hostCallsign || '') + ' ' + (item.tags || []).join(' ');
+          return haystack.toLowerCase().indexOf(q) !== -1;
+        });
+      }
+      if (filtered.length === 0) {
+        listEl.innerHTML = '<div class="listing-empty">' + (allItems.length === 0 ? 'No meetings yet' : 'No matches') + '</div>';
+      } else {
+        listEl.innerHTML = filtered.map(renderItem).join('');
+      }
+    }
+
+    render('');
+    searchEl.addEventListener('input', function() { render(searchEl.value); });
+
+    document.addEventListener('nostr-connected', function() {
+      if (!data.authenticated) {
+        window.location.reload();
+      }
+    });
+  })();
+</script>
+</body>
+</html>
+''';
+
   static const String _defaultMeetStylesCss = r'''
 /* Meetings page - extends global Terminimal theme */
 
@@ -2709,11 +2863,42 @@ button:disabled {
   font-weight: bold;
 }
 
+.archive-asset--download {
+  background: rgba(255, 255, 255, 0.03);
+  border-style: dashed;
+}
+
 @media (max-width: 900px) {
   .meeting-layout {
     grid-template-columns: 1fr;
   }
 }
+
+/* Meeting listing */
+.meeting-list { display: flex; flex-direction: column; gap: 12px; }
+
+.meeting-list-item {
+  display: block; text-decoration: none; color: inherit;
+  border: 1px solid var(--border-color); border-radius: 14px;
+  padding: 16px 18px; background: rgba(0, 0, 0, 0.08);
+}
+.meeting-list-item:hover { border-color: var(--accent); }
+
+.meeting-list-header { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.meeting-list-title { font-weight: bold; font-size: 1.1rem; }
+.meeting-list-meta { color: var(--accent-alpha-70); font-size: 0.85rem; margin-top: 6px; }
+
+.meeting-badge { display: inline-block; padding: 2px 10px; border-radius: 8px; font-size: 0.8rem; border: 1px solid var(--border-color); }
+.meeting-badge--live { background: var(--accent); color: var(--background); border-color: var(--accent); }
+.meeting-badge--scheduled { border-color: var(--accent); color: var(--accent); }
+
+.meeting-tags { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.meeting-tag { border: 1px solid var(--border-color); padding: 2px 8px; border-radius: 6px; font-size: 0.78rem; }
+
+.listing-search { width: 100%; border: 1px solid var(--border-color); border-radius: 10px; background: transparent; color: inherit; padding: 12px 14px; font: inherit; margin-bottom: 16px; box-sizing: border-box; }
+
+.listing-hint { text-align: center; color: var(--accent-alpha-70); padding: 12px 0; font-size: 0.9rem; }
+.listing-empty { text-align: center; padding: 40px 0; color: var(--accent-alpha-70); }
 ''';
 
   static const String _defaultSharedDirectoryHtml = r'''

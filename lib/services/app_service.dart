@@ -26,6 +26,8 @@ import 'profile_storage.dart';
 import 'storage_config.dart';
 import 'web_theme_service.dart';
 import 'blog_service.dart' hide ChatSecurity;
+import 'conference_service.dart';
+import 'conference_archive_service.dart';
 import 'event_service.dart';
 
 
@@ -744,6 +746,7 @@ class AppService {
       'files': false,
       'shared': false,
       'alerts': false,
+      'meet': false,
     };
 
     final effectiveStorage = storage ?? _profileStorage;
@@ -752,10 +755,21 @@ class AppService {
 
     try {
       for (final appType in result.keys) {
+        if (appType == 'meet') continue; // meet is handled separately below
         // Check directory exists and is not private
         if (!await _appIsPublic(appType, dirPath, effectiveStorage)) continue;
         // Check for actual content per app type
         result[appType] = await _appHasContent(appType, dirPath, effectiveStorage);
+      }
+    } catch (_) {}
+
+    // Meet: show if there's an active conference or archived meetings
+    try {
+      if (ConferenceService().isActive) {
+        result['meet'] = true;
+      } else {
+        final archives = await ConferenceArchiveService().listArchives();
+        result['meet'] = archives.isNotEmpty;
       }
     } catch (_) {}
 
@@ -851,13 +865,20 @@ class AppService {
   }) async {
     final apps = await getPublicApps(appsPath: appsPath, storage: storage);
 
-    // Check if download page should be shown (updates directory has content)
+    // Check if download page should be shown (updates directory has version subdirs with files)
     bool hasDownload = false;
     try {
       final updatesDir = Directory('${StorageConfig().baseDir}/updates');
       if (await updatesDir.exists()) {
-        // Always show download — even if empty, it explains how updates work
-        hasDownload = true;
+        await for (final entity in updatesDir.list()) {
+          if (entity is Directory) {
+            final name = entity.path.split('/').last;
+            if (RegExp(r'^\d+\.\d+').hasMatch(name)) {
+              hasDownload = true;
+              break;
+            }
+          }
+        }
       }
     } catch (_) {}
 
@@ -869,6 +890,7 @@ class AppService {
       hasPlaces: apps['places']!,
       hasFiles: apps['files']!,
       hasShared: apps['shared']!,
+      hasMeet: apps['meet'] ?? false,
       hasAlerts: apps['alerts']!,
       hasDownload: hasDownload,
       isRootLevel: isRootLevel,

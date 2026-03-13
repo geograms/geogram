@@ -27,6 +27,7 @@ class SignalingParticipant {
   final String id;
   final WebSocket socket;
   String? callsign;
+  String? nickname;
   String role; // 'speaker' or 'listener'
   DateTime connectedAt;
 
@@ -34,6 +35,7 @@ class SignalingParticipant {
     required this.id,
     required this.socket,
     this.callsign,
+    this.nickname,
     this.role = 'listener',
   }) : connectedAt = DateTime.now();
 
@@ -336,6 +338,7 @@ class ConferenceSignalingServer {
     if (callsign == null || callsign.isEmpty) return;
 
     sender.callsign = callsign;
+    sender.nickname = message['nickname'] as String?;
 
     // 1. Check ban
     if (_bannedCallsigns.contains(callsign.toUpperCase())) {
@@ -447,6 +450,7 @@ class ConferenceSignalingServer {
         'type': 'conference_participant_joined',
         'callsign': callsign,
         'role': sender.role,
+        if (sender.nickname != null) 'nickname': sender.nickname,
       }),
       excludeId: sender.id,
     );
@@ -454,6 +458,7 @@ class ConferenceSignalingServer {
       'type': 'conference_participant_joined',
       'callsign': callsign,
       'role': sender.role,
+      if (sender.nickname != null) 'nickname': sender.nickname,
     });
   }
 

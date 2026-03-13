@@ -85,7 +85,10 @@ class ConferenceRecordingService {
     return check;
   }
 
-  Future<void> start() async {
+  /// Start recording. When [includeScreen] is false (default), only audio
+  /// is captured — no desktop/screen capture occurs, protecting user privacy.
+  /// Screen capture is only included when the user is actively screen-sharing.
+  Future<void> start({bool includeScreen = false}) async {
     if (isRecording) {
       return;
     }
@@ -108,14 +111,28 @@ class ConferenceRecordingService {
       _startedAt = DateTime.now();
 
       if (Platform.isAndroid) {
+        if (!includeScreen) {
+          // Android audio-only not yet supported; record silently
+          LogService().log(
+            'ConferenceRecordingService: Android audio-only not supported, skipping',
+          );
+          _setState(ConferenceRecordingState.idle);
+          return;
+        }
         _androidRecorder = AndroidScreenRecorderService();
         await _androidRecorder!.start(outputPath);
-      } else if (Platform.isLinux && _isWayland()) {
+      } else if (includeScreen && Platform.isLinux && _isWayland()) {
+        // Wayland screen+audio requires GNOME Screencast
         await _startWaylandRecording(tempDir.path, outputPath);
       } else {
-        final command = Platform.isWindows
-            ? await _buildWindowsFfmpegCommand(outputPath)
-            : await _buildLinuxFfmpegCommand(outputPath);
+        // Generic ffmpeg path: audio-only or X11/Windows screen+audio
+        final command = includeScreen
+            ? (Platform.isWindows
+                ? await _buildWindowsFfmpegCommand(outputPath)
+                : await _buildLinuxFfmpegCommand(outputPath))
+            : (Platform.isWindows
+                ? await _buildAudioOnlyWindowsCommand(outputPath)
+                : await _buildAudioOnlyLinuxCommand(outputPath));
         LogService().log(
           'ConferenceRecordingService: ffmpeg ${command.join(' ')}',
         );
@@ -133,7 +150,8 @@ class ConferenceRecordingService {
 
       _setState(ConferenceRecordingState.recording);
       LogService().log(
-        'ConferenceRecordingService: Recording started at $outputPath',
+        'ConferenceRecordingService: Recording started '
+        '(screen=${includeScreen ? "on" : "off"}) at $outputPath',
       );
     } catch (error) {
       _lastError = '$error';
@@ -685,6 +703,62 @@ class ConferenceRecordingService {
       }
     } catch (_) {}
     return null;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Audio-only backends (no screen capture — privacy-safe default)
+  // ---------------------------------------------------------------------------
+
+  Future<List<String>> _buildAudioOnlyLinuxCommand(String outputPath) async {
+    final pulseSources = await _detectPulseSources();
+    final args = <String>['-y'];
+
+    final audioInputs = <String>[];
+    if (pulseSources.monitorSource != null &&
+        pulseSources.monitorSource!.isNotEmpty) {
+      args.addAll([
+        '-thread_queue_size', '512',
+        '-f', 'pulse', '-i', pulseSources.monitorSource!,
+      ]);
+      audioInputs.add(pulseSources.monitorSource!);
+    }
+    if (pulseSources.micSource != null &&
+        pulseSources.micSource!.isNotEmpty &&
+        pulseSources.micSource != pulseSources.monitorSource) {
+      args.addAll([
+        '-thread_queue_size', '512',
+        '-f', 'pulse', '-i', pulseSources.micSource!,
+      ]);
+      audioInputs.add(pulseSources.micSource!);
+    }
+
+    if (audioInputs.length >= 2) {
+      args.addAll([
+        '-filter_complex',
+        '[0:a][1:a]amix=inputs=2:duration=longest:dropout_transition=2[aout]',
+        '-map', '[aout]',
+      ]);
+    } else if (audioInputs.isEmpty) {
+      // Fallback to default PulseAudio source
+      args.addAll(['-f', 'pulse', '-i', 'default']);
+    }
+
+    args.addAll(['-c:a', 'aac', '-b:a', '128k', outputPath]);
+    return args;
+  }
+
+  Future<List<String>> _buildAudioOnlyWindowsCommand(String outputPath) async {
+    final audioDevice = await _detectWindowsAudioDevice();
+    final args = <String>['-y'];
+
+    if (audioDevice != null && audioDevice.isNotEmpty) {
+      args.addAll(['-f', 'dshow', '-i', 'audio=$audioDevice']);
+    } else {
+      throw StateError('No audio device found for recording');
+    }
+
+    args.addAll(['-c:a', 'aac', '-b:a', '128k', outputPath]);
+    return args;
   }
 
   // ---------------------------------------------------------------------------

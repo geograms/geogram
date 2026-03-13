@@ -59,6 +59,7 @@ import 'server/mixins/console_command_mixin.dart';
 import 'server/mixins/chat_moderation_mixin.dart';
 import 'server/mixins/chat_nip05_mixin.dart';
 import 'server/mixins/conference_mixin.dart';
+import 'server/mixins/device_proxy_mixin.dart';
 import 'server/mixins/heartbeat_mixin.dart';
 import 'server/mixins/karma_mixin.dart';
 import 'cli/themes_embedded.dart';
@@ -425,10 +426,14 @@ class LogEntry implements LogEntryReadable {
 }
 
 /// Connected WebSocket client
-class PureConnectedClient implements EmailClient, BlogClient, ConnectedClientReadable {
+class PureConnectedClient implements EmailClient, BlogClient, ConnectedClientReadable, DeviceProxyClient {
+  @override
   final WebSocket socket;
+  @override
   final String id;
+  @override
   String? callsign;
+  @override
   String? nickname;
   String? color;
   String? deviceType;
@@ -447,10 +452,17 @@ class PureConnectedClient implements EmailClient, BlogClient, ConnectedClientRea
   bool verified = false;
 
   // Multi-device responsiveness tracking
+  @override
   int successCount = 0;
+  @override
   int failCount = 0;
 
+  // Device priority (lower = higher priority, 0 = no priority set)
+  @override
+  int priority = 0;
+
   /// Success rate for adaptive device ordering (0.0 to 1.0)
+  @override
   double get successRate {
     final total = successCount + failCount;
     if (total == 0) return 0.5;
@@ -491,6 +503,7 @@ class PureConnectedClient implements EmailClient, BlogClient, ConnectedClientRea
         'verified': verified,
         'success_count': successCount,
         'fail_count': failCount,
+        'priority': priority,
       };
 }
 
@@ -620,13 +633,21 @@ class PureTileCache {
 }
 
 /// Unified station server for CLI and Android modes
-class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, EmailHandlerMixin, BlogHandlerMixin, ConsoleCommandMixin, ChatNip05Mixin, ChatModerationMixin, ConferenceMixin, XmppServerMixin, KarmaMixin
+class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, EmailHandlerMixin, BlogHandlerMixin, ConsoleCommandMixin, ChatNip05Mixin, ChatModerationMixin, ConferenceMixin, XmppServerMixin, KarmaMixin, DeviceProxyMixin
     implements StationCommandInterface {
   HttpServer? _httpServer;
   HttpServer? _httpsServer;
   SMTPServer? _smtpServer;
   PureRelaySettings _settings = PureRelaySettings();
   final Map<String, PureConnectedClient> _clients = {};
+
+  // ── DeviceProxyMixin contract ─────────────────────────────────
+  @override
+  Map<String, DeviceProxyClient> get proxyClients => _clients;
+  @override
+  Map<String, Completer<Map<String, dynamic>>> get proxyPendingRequests => _pendingProxyRequests;
+  @override
+  void proxyLog(String level, String message) => _log(level, message);
 
   // Connection tolerance: preserve uptime for reconnects within 5 minutes
   // Maps callsign -> (disconnectTime, originalConnectTime)
@@ -741,10 +762,10 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
   String get blogConfigPath => PureStorageConfig().configPath;
   @override
   BlogClient? blogFindConnectedClientByIdentifier(String identifier) =>
-      _findConnectedClientByIdentifier(identifier);
+      findConnectedClientByIdentifier(identifier) as BlogClient?;
   @override
   List<BlogClient> blogFindAllClientsByIdentifier(String identifier) =>
-      _findAllClientsByIdentifier(identifier);
+      findAllClientsByIdentifier(identifier).cast<BlogClient>();
   @override
   Future<bool> blogProxyToClient(
       BlogClient client, HttpRequest request, String filename) async {
@@ -2621,13 +2642,15 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
       } else if (_isPlaceDetailsPath(path) && method == 'GET') {
         // /api/places/{callsign}/{folderName} - place details
         await _handlePlaceDetails(request);
-      } else if (_isCallsignApiPath(path) || _isCallsignMeetPath(path)) {
+      } else if (isCallsignApiPath(path) || isCallsignMeetPath(path)) {
         // /{callsign}/api/* or /{callsign}/meet/* - proxy to connected device
-        await _handleCallsignApiProxy(request);
+        await handleCallsignApiProxy(request);
       } else if (isBlogPath(path)) {
         await handleBlogRequest(request);
-      } else if (_isCallsignOrNicknamePath(path)) {
-        await _handleCallsignOrNicknameWww(request);
+      } else if (isCallsignDownloadPath(path)) {
+        await _handleDeviceDownloadPage(request);
+      } else if (isCallsignOrNicknamePath(path)) {
+        await handleCallsignOrNicknameWww(request);
       } else {
         request.response.statusCode = 404;
         request.response.write('Not Found');
@@ -2769,6 +2792,8 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
                       latitude = double.tryParse(tag[1].toString());
                     } else if (tag[0] == 'longitude') {
                       longitude = double.tryParse(tag[1].toString());
+                    } else if (tag[0] == 'priority') {
+                      client.priority = int.tryParse(tag[1].toString()) ?? 0;
                     }
                   }
                 }
@@ -6537,156 +6562,6 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
     return null;
   }
 
-  /// Check if path matches /{callsign}/api/* pattern
-  bool _isCallsignApiPath(String path) {
-    // Pattern: /{callsign}/api/{endpoint}
-    // Callsigns are alphanumeric (X1ABC, etc.) followed by /api/
-    final regex = RegExp(r'^/([A-Za-z0-9]+)/api/');
-    return regex.hasMatch(path);
-  }
-
-  bool _isCallsignMeetPath(String path) {
-    final regex = RegExp(r'^/([A-Za-z0-9]+)/meet/');
-    return regex.hasMatch(path);
-  }
-
-  /// Handle /{callsign}/api/* requests - proxy to connected device
-  Future<void> _handleCallsignApiProxy(HttpRequest request) async {
-    final path = request.uri.path;
-
-    // Parse path: /{callsign}/api/{endpoint} or /{callsign}/meet/{endpoint}
-    final regex = RegExp(r'^/([A-Za-z0-9]+)/(api|meet)/(.*)$');
-    final match = regex.firstMatch(path);
-
-    if (match == null) {
-      request.response.statusCode = 400;
-      request.response.headers.contentType = ContentType.json;
-      request.response.write(jsonEncode({'error': 'Invalid path format'}));
-      return;
-    }
-
-    final callsign = match.group(1)!;
-    final kind = match.group(2)!;
-    final remainingPath = match.group(3)!;
-    final query = request.uri.query;
-    final basePath = kind == 'meet'
-        ? '/meet/$remainingPath'
-        : '/api/$remainingPath';
-    final apiPath = query.isEmpty ? basePath : '$basePath?$query';
-
-    // Find the client by callsign (case-insensitive)
-    PureConnectedClient? foundClient;
-    for (final c in _clients.values) {
-      if (c.callsign?.toLowerCase() == callsign.toLowerCase()) {
-        foundClient = c;
-        break;
-      }
-    }
-
-    if (foundClient == null) {
-      request.response.statusCode = 404;
-      request.response.headers.contentType = ContentType.json;
-      request.response.write(jsonEncode({
-        'error': 'Device not connected',
-        'callsign': callsign,
-        'message': 'The device $callsign is not currently connected to this station',
-      }));
-      return;
-    }
-
-    final client = foundClient;
-    _log('INFO', 'Device proxy: ${request.method} $path -> ${client.callsign} $apiPath');
-
-    // Proxy request to device via WebSocket
-    final requestId = DateTime.now().millisecondsSinceEpoch.toString();
-    final proxyRequest = {
-      'type': 'HTTP_REQUEST',
-      'requestId': requestId,
-      'method': request.method,
-      'path': apiPath,
-      'headers': jsonEncode({}),
-      'body': '',
-    };
-
-    // Read request body if present
-    if (request.contentLength > 0) {
-      final body = await utf8.decodeStream(request);
-      proxyRequest['body'] = body;
-    }
-
-    // Send request to device and wait for response
-    final completer = Completer<Map<String, dynamic>>();
-    _pendingProxyRequests[requestId] = completer;
-
-    try {
-      client.socket.add(jsonEncode(proxyRequest));
-
-      // Wait for response with timeout
-      final response = await completer.future.timeout(
-        const Duration(seconds: 30),
-        onTimeout: () => {
-          'type': 'HTTP_RESPONSE',
-          'statusCode': 504,
-          'responseHeaders': '{"Content-Type": "application/json"}',
-          'responseBody': jsonEncode({
-            'error': 'Gateway Timeout',
-            'message': 'Device ${callsign.toUpperCase()} did not respond in time',
-          }),
-          'isBase64': false,
-        },
-      );
-
-      request.response.statusCode = response['statusCode'] ?? 500;
-      if (response['responseHeaders'] != null) {
-        try {
-          final headers = jsonDecode(response['responseHeaders'] as String) as Map<String, dynamic>;
-          const skipHeaders = {'transfer-encoding', 'content-length', 'connection'};
-          headers.forEach((key, value) {
-            final lk = key.toLowerCase();
-            if (skipHeaders.contains(lk)) return;
-            if (lk == 'content-type') {
-              final ct = value.toString();
-              final parts = ct.split(';');
-              final mimeType = parts.first.trim();
-              final mimeParts = mimeType.split('/');
-              if (mimeParts.length == 2) {
-                final charset = ct.contains('charset=')
-                    ? ct.split('charset=').last.split(';').first.trim()
-                    : null;
-                request.response.headers.contentType = ContentType(
-                  mimeParts[0], mimeParts[1], charset: charset,
-                );
-              }
-            } else {
-              try {
-                request.response.headers.set(key, value.toString());
-              } catch (_) {}
-            }
-          });
-        } catch (_) {}
-      }
-
-      final body = response['responseBody'] ?? '';
-      final isBase64 = response['isBase64'] == true;
-      if (isBase64) {
-        request.response.add(base64Decode(body));
-      } else {
-        request.response.write(body);
-      }
-
-      _log('INFO', 'Device proxy response: ${response['statusCode']} for ${client.callsign} $apiPath');
-    } catch (e) {
-      request.response.statusCode = 502;
-      request.response.headers.contentType = ContentType.json;
-      request.response.write(jsonEncode({
-        'error': 'Bad Gateway',
-        'message': e.toString(),
-      }));
-    } finally {
-      _pendingProxyRequests.remove(requestId);
-    }
-  }
-
   /// GET /search - Search across connected devices
   Future<void> _handleSearch(HttpRequest request) async {
     final query = request.uri.queryParameters['q'];
@@ -6836,26 +6711,6 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
     }
   }
 
-  /// Check if path looks like a callsign or nickname for WWW serving
-  /// Callsigns: X followed by numbers/letters (e.g., X1QVM3)
-  /// Nicknames: alphanumeric with - and _ (e.g., brito, my-site, user_123)
-  bool _isCallsignOrNicknamePath(String path) {
-    if (path.length < 2) return false;
-    final firstPart = path.substring(1).split('/').first;
-    if (firstPart.isEmpty) return false;
-
-    // Check if it's a callsign (X followed by alphanumeric)
-    final isCallsign = RegExp(r'^X[0-9][A-Z0-9]{3,}$', caseSensitive: false).hasMatch(firstPart);
-    if (isCallsign) return true;
-
-    // Check if it's a valid nickname (alphanumeric with - and _, 2+ chars)
-    // Must not conflict with reserved paths like /api, /ws, /tiles, /cli, /ssl, /acme
-    final reservedPaths = {'api', 'ws', 'tiles', 'cli', 'ssl', 'acme', '.well-known'};
-    if (reservedPaths.contains(firstPart.toLowerCase())) return false;
-
-    // Valid nickname: alphanumeric, -, _, at least 2 chars
-    return RegExp(r'^[a-zA-Z0-9][a-zA-Z0-9_-]+$').hasMatch(firstPart);
-  }
 
   /// Check if path is a chat files list request
   /// Accepts both: /api/chat/{roomId}/files and /api/chat/rooms/{roomId}/files
@@ -6881,260 +6736,10 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
     return RegExp(r'^(/[A-Z0-9]+)?/api/chat/(rooms/)?[^/]+/file/\d{4}/[^/]+$').hasMatch(path);
   }
 
-  /// Find a connected WebSocket client by nickname or callsign
-  PureConnectedClient? _findConnectedClientByIdentifier(String identifier) {
-    final lowerIdentifier = identifier.toLowerCase();
-
-    // First try to find by callsign
-    for (final client in _clients.values) {
-      if (client.callsign?.toLowerCase() == lowerIdentifier) {
-        return client;
-      }
-    }
-
-    // Then try to find by nickname
-    for (final client in _clients.values) {
-      if (client.nickname?.toLowerCase() == lowerIdentifier) {
-        return client;
-      }
-    }
-
-    return null;
-  }
-
-  /// GET /{identifier} or /{identifier}/* - Serve WWW collection from device
-  /// Supports both callsign (e.g., X1QVM3) and nickname (e.g., brito) lookups
-  Future<void> _handleCallsignOrNicknameWww(HttpRequest request) async {
-    final path = request.uri.path;
-    final parts = path.substring(1).split('/');
-    final identifier = parts.first.toLowerCase();
-
-    // Redirect /{identifier} to /{identifier}/ for proper relative path resolution
-    // This ensures that relative links like ./blog/ work correctly in the browser
-    if (parts.length == 1 && !path.endsWith('/')) {
-      request.response.statusCode = 301;
-      request.response.headers.add('Location', '$path/');
-      return;
-    }
-
-    // Get file path - filter out empty parts from trailing slashes
-    final subParts = parts.sublist(1).where((p) => p.isNotEmpty).toList();
-    final filePath = subParts.isNotEmpty ? subParts.join('/') : 'index.html';
-
-    // Check if any client matches this identifier
-    final clients = _findAllClientsByIdentifier(identifier);
-    if (clients.isEmpty) {
-      request.response.statusCode = 404;
-      request.response.write('Device not connected');
-      return;
-    }
-
-    // Route to the appropriate collection based on the first path segment
-    // Use centralized app types list from app_constants.dart
-    // Path format: /{app}/{rest} (e.g., /blog/index.html, /www/index.html)
-    String appPath;
-    if (subParts.isNotEmpty && knownAppTypesConst.contains(subParts.first.toLowerCase())) {
-      // Route to specific app collection: /{app}/{rest}
-      final app = subParts.first.toLowerCase();
-      final rest = subParts.length > 1 ? subParts.sublist(1).join('/') : '';
-      appPath = '/$app/${rest.isEmpty ? "index.html" : rest}';
-    } else {
-      // Default to www collection
-      appPath = '/www/$filePath';
-    }
-
-    // Try all devices sequentially (most responsive first)
-    final response = await _proxyToAnyDevice(identifier, 'GET', appPath);
-
-    if (response == null) {
-      request.response.statusCode = 504;
-      request.response.write('Gateway Timeout: No device responded');
-      return;
-    }
-
-    request.response.statusCode = response['statusCode'] ?? 500;
-    final body = response['responseBody'] ?? '';
-    final isBase64 = response['isBase64'] == true;
-
-    // Set content type based on file extension
-    final ext = appPath.split('.').last.toLowerCase();
-    final contentTypes = {
-      'html': 'text/html',
-      'htm': 'text/html',
-      'css': 'text/css',
-      'js': 'application/javascript',
-      'json': 'application/json',
-      'png': 'image/png',
-      'jpg': 'image/jpeg',
-      'jpeg': 'image/jpeg',
-      'gif': 'image/gif',
-      'svg': 'image/svg+xml',
-      'ico': 'image/x-icon',
-      'txt': 'text/plain',
-    };
-    final contentType = contentTypes[ext] ?? 'application/octet-stream';
-    request.response.headers.set('Content-Type', contentType);
-
-    if (isBase64) {
-      request.response.add(base64Decode(body));
-    } else {
-      request.response.write(body);
-    }
-  }
 
   /// Pending proxy requests waiting for device response
   final Map<String, Completer<Map<String, dynamic>>> _pendingProxyRequests = {};
 
-  /// Find ALL connected clients matching a callsign or nickname, sorted by responsiveness
-  List<PureConnectedClient> _findAllClientsByIdentifier(String identifier) {
-    final lower = identifier.toLowerCase();
-    final matches = _clients.values.where((c) =>
-      c.callsign?.toLowerCase() == lower ||
-      (c.nickname != null && c.nickname!.toLowerCase() == lower)
-    ).toList();
-    matches.sort((a, b) => b.successRate.compareTo(a.successRate));
-    return matches;
-  }
-
-  /// Proxy a request to a single device. Returns the response map without writing to HttpResponse.
-  /// Updates successCount/failCount on the client.
-  Future<Map<String, dynamic>?> _proxySingleDevice(
-    PureConnectedClient client,
-    String method,
-    String path,
-    String headers,
-    String body,
-  ) async {
-    final requestId = '${DateTime.now().millisecondsSinceEpoch}_${client.id}';
-    final proxyRequest = {
-      'type': 'HTTP_REQUEST',
-      'requestId': requestId,
-      'method': method,
-      'path': path,
-      'headers': headers,
-      'body': body,
-    };
-
-    final completer = Completer<Map<String, dynamic>>();
-    _pendingProxyRequests[requestId] = completer;
-
-    try {
-      client.socket.add(jsonEncode(proxyRequest));
-      final response = await completer.future.timeout(const Duration(seconds: 5));
-      final statusCode = response['statusCode'] as int? ?? 500;
-      if (statusCode >= 200 && statusCode < 400) {
-        client.successCount++;
-      } else if (statusCode == 404) {
-        // 404 is not the device's fault, don't penalize
-      } else {
-        client.failCount++;
-      }
-      return response;
-    } on TimeoutException {
-      client.failCount++;
-      return null;
-    } catch (e) {
-      client.failCount++;
-      return null;
-    } finally {
-      _pendingProxyRequests.remove(requestId);
-    }
-  }
-
-  /// Try all devices for a callsign/nickname sequentially (most responsive first).
-  /// Returns the first 200 response, or last non-null response, or null.
-  Future<Map<String, dynamic>?> _proxyToAnyDevice(
-    String identifier,
-    String method,
-    String path, {
-    String headers = '',
-    String body = '',
-  }) async {
-    final clients = _findAllClientsByIdentifier(identifier);
-    if (clients.isEmpty) return null;
-
-    Map<String, dynamic>? lastResponse;
-    for (final client in clients) {
-      final response = await _proxySingleDevice(client, method, path, headers, body);
-      if (response != null) {
-        lastResponse = response;
-        final statusCode = response['statusCode'] as int? ?? 500;
-        if (statusCode >= 200 && statusCode < 400) {
-          return response; // Success, return immediately
-        }
-      }
-    }
-    return lastResponse;
-  }
-
-  /// Proxy an HTTP request to a connected device via WebSocket (multi-device aware)
-  Future<void> _proxyRequestToDevice(HttpRequest request, String callsign, String apiPath) async {
-    final clients = _findAllClientsByIdentifier(callsign);
-    if (clients.isEmpty) {
-      request.response.statusCode = 404;
-      request.response.headers.contentType = ContentType.json;
-      request.response.write(jsonEncode({
-        'error': 'Device not connected',
-        'callsign': callsign,
-        'message': 'The device $callsign is not currently connected to this station',
-      }));
-      return;
-    }
-
-    _log('INFO', 'Device proxy: ${request.method} -> $callsign $apiPath (${clients.length} device(s))');
-
-    // Read request body first (can only be read once)
-    String requestBody = '';
-    if (request.contentLength > 0) {
-      requestBody = await utf8.decodeStream(request);
-    }
-
-    // Try all devices sequentially
-    final response = await _proxyToAnyDevice(
-      callsign, request.method, apiPath,
-      headers: jsonEncode({}),
-      body: requestBody,
-    );
-
-    if (response == null) {
-      request.response.statusCode = 504;
-      request.response.headers.contentType = ContentType.json;
-      request.response.write(jsonEncode({
-        'error': 'Gateway Timeout',
-        'message': 'No device responded for ${callsign.toUpperCase()}',
-      }));
-      return;
-    }
-
-    request.response.statusCode = response['statusCode'] ?? 500;
-    if (response['responseHeaders'] != null) {
-      try {
-        final headers = jsonDecode(response['responseHeaders'] as String) as Map<String, dynamic>;
-        headers.forEach((key, value) {
-          if (key.toLowerCase() == 'content-type') {
-            final ct = value.toString();
-            if (ct.contains('json')) {
-              request.response.headers.contentType = ContentType.json;
-            } else if (ct.contains('html')) {
-              request.response.headers.contentType = ContentType.html;
-            } else if (ct.contains('text')) {
-              request.response.headers.contentType = ContentType.text;
-            }
-          }
-        });
-      } catch (_) {}
-    }
-
-    final body = response['responseBody'] ?? '';
-    final isBase64 = response['isBase64'] == true;
-    if (isBase64) {
-      request.response.add(base64Decode(body));
-    } else {
-      request.response.write(body);
-    }
-
-    _log('INFO', 'Device proxy response: ${response['statusCode']} for $callsign $apiPath');
-  }
 
   /// Handle /.well-known/nostr.json endpoint for NIP-05 verification
   Future<void> _handleWellKnownNostr(HttpRequest request) async {
@@ -7173,6 +6778,74 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
       releaseVersion: _cachedRelease?['version'] as String?,
       releaseNotes: _cachedRelease?['body'] as String?,
     ));
+  }
+
+  /// Handle /{identifier}/download/ — station serves download page in device context
+  Future<void> _handleDeviceDownloadPage(HttpRequest request) async {
+    final path = request.uri.path;
+    final identifier = path.substring(1).split('/').first;
+
+    // Validate device is connected
+    final clients = findAllClientsByIdentifier(identifier);
+    if (clients.isEmpty) {
+      request.response.statusCode = 404;
+      request.response.write('Device not connected');
+      return;
+    }
+
+    final callsign = clients.first.callsign ?? identifier;
+    final devicesDir = PureStorageConfig().devicesDir;
+    final devicePath = '$devicesDir/$callsign';
+
+    // Scan device directory for available app subdirectories
+    bool hasBlog = false, hasChat = false, hasEvents = false,
+        hasPlaces = false, hasFiles = false, hasShared = false,
+        hasMeet = false, hasAlerts = false;
+    try {
+      final dir = Directory(devicePath);
+      if (await dir.exists()) {
+        await for (final entity in dir.list()) {
+          if (entity is Directory) {
+            final name = entity.path.split('/').last.toLowerCase();
+            switch (name) {
+              case 'blog': hasBlog = true;
+              case 'chat': hasChat = true;
+              case 'events': hasEvents = true;
+              case 'places': hasPlaces = true;
+              case 'files': hasFiles = true;
+              case 'shared': hasShared = true;
+              case 'meet': hasMeet = true;
+              case 'alerts': hasAlerts = true;
+            }
+          }
+        }
+      }
+    } catch (_) {}
+
+    final menuItems = WebNavigation.generateDeviceMenuItems(
+      activeApp: 'download',
+      hasBlog: hasBlog,
+      hasChat: hasChat,
+      hasEvents: hasEvents,
+      hasPlaces: hasPlaces,
+      hasFiles: hasFiles,
+      hasShared: hasShared,
+      hasMeet: hasMeet,
+      hasAlerts: hasAlerts,
+      hasDownload: _downloadedAssets.isNotEmpty,
+    );
+
+    final stationName = _settings.name ?? 'geogram Station';
+    request.response.headers.contentType = ContentType.html;
+    final html = StationHtmlTemplates.buildDownloadPage(
+      stationName: stationName,
+      menuItems: menuItems,
+      availableAssets: _downloadedAssets,
+      availableWhisperModels: getAvailableWhisperModels(),
+      releaseVersion: _cachedRelease?['version'] as String?,
+      releaseNotes: _cachedRelease?['body'] as String?,
+    );
+    request.response.add(utf8.encode(html));
   }
 
   Future<void> _handleRoot(HttpRequest request) async {
@@ -7545,7 +7218,7 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
   Future<void> _handleChatRooms(HttpRequest request, String targetCallsign) async {
     // If targeting a remote device, proxy the request
     if (targetCallsign.toUpperCase() != _settings.callsign.toUpperCase()) {
-      await _proxyRequestToDevice(request, targetCallsign, '/api/chat/rooms');
+      await proxyRequestToDevice(request, targetCallsign, '/api/chat/rooms');
       return;
     }
 
@@ -7597,7 +7270,7 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
 
     // If targeting a remote device, proxy the request
     if (targetCallsign.toUpperCase() != _settings.callsign.toUpperCase()) {
-      await _proxyRequestToDevice(request, targetCallsign, ChatApi.roomCrudPath(roomId));
+      await proxyRequestToDevice(request, targetCallsign, ChatApi.roomCrudPath(roomId));
       return;
     }
 
@@ -7664,7 +7337,7 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
 
     // If targeting a remote device, proxy the request
     if (targetCallsign.toUpperCase() != _settings.callsign.toUpperCase()) {
-      await _proxyRequestToDevice(request, targetCallsign, ChatApi.messagesPath(roomId));
+      await proxyRequestToDevice(request, targetCallsign, ChatApi.messagesPath(roomId));
       return;
     }
 
@@ -8103,7 +7776,7 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
 
     // If targeting a remote device, proxy the request
     if (targetCallsign.toUpperCase() != _settings.callsign.toUpperCase()) {
-      await _proxyRequestToDevice(request, targetCallsign, ChatApi.filesPath(roomId));
+      await proxyRequestToDevice(request, targetCallsign, ChatApi.filesPath(roomId));
       return;
     }
 
@@ -8177,7 +7850,7 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
 
     // If targeting a remote device, proxy the request
     if (targetCallsign.toUpperCase() != _settings.callsign.toUpperCase()) {
-      await _proxyRequestToDevice(request, targetCallsign, ChatApi.filesPath(roomId));
+      await proxyRequestToDevice(request, targetCallsign, ChatApi.filesPath(roomId));
       return;
     }
 
@@ -8292,7 +7965,7 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
 
     // If targeting a remote device, proxy the request
     if (targetCallsign.toUpperCase() != _settings.callsign.toUpperCase()) {
-      await _proxyRequestToDevice(request, targetCallsign, ChatApi.fileDownloadPath(roomId, filename));
+      await proxyRequestToDevice(request, targetCallsign, ChatApi.fileDownloadPath(roomId, filename));
       return;
     }
 
@@ -8377,7 +8050,7 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
 
     // If targeting a remote device, proxy the request
     if (targetCallsign.toUpperCase() != _settings.callsign.toUpperCase()) {
-      await _proxyRequestToDevice(request, targetCallsign, '/api/chat/$roomId/file/$year/$filename');
+      await proxyRequestToDevice(request, targetCallsign, '/api/chat/$roomId/file/$year/$filename');
       return;
     }
 

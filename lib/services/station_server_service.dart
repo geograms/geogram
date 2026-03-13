@@ -4143,9 +4143,14 @@ h2 { font-size: 1.2rem; margin: 0 0 20px 0; }
   /// Check if path is a device proxy path (/{callsign}/api/* or /{callsign}/meet/*)
   bool _isDeviceProxyPath(String path) {
     // Pattern: /{callsign}/api/{endpoint} or /{callsign}/meet/{something}
-    // Must have at least 3 segments
+    // meet/ with no further segments is the listing page
     final parts = path.split('/').where((p) => p.isNotEmpty).toList();
-    return parts.length >= 3 && (parts[1] == 'api' || parts[1] == 'meet');
+    if (parts.length >= 3 && (parts[1] == 'api' || parts[1] == 'meet')) {
+      return true;
+    }
+    // Allow /{callsign}/meet/ (listing page, 2 segments)
+    if (parts.length == 2 && parts[1] == 'meet') return true;
+    return false;
   }
 
   /// Check if path is a callsign root path without trailing slash (/{callsign})
@@ -6194,7 +6199,7 @@ h2 { font-size: 1.2rem; margin: 0 0 20px 0; }
 
     // Parse path: /{callsign}/api/{endpoint} or /{callsign}/meet/{something}
     final parts = path.split('/').where((p) => p.isNotEmpty).toList();
-    if (parts.length < 3 || (parts[1] != 'api' && parts[1] != 'meet')) {
+    if (parts.length < 2 || (parts[1] != 'api' && parts[1] != 'meet')) {
       request.response.statusCode = 400;
       request.response.write('Invalid device proxy path');
       return;
@@ -6243,13 +6248,20 @@ h2 { font-size: 1.2rem; margin: 0 0 20px 0; }
     _pendingHttpRequests[requestId] = completer;
 
     try {
+      // Forward auth-relevant headers to the device
+      final forwardedHeaders = <String, String>{};
+      final cookie = request.headers.value('cookie');
+      if (cookie != null) forwardedHeaders['cookie'] = cookie;
+      final authorization = request.headers.value('authorization');
+      if (authorization != null) forwardedHeaders['authorization'] = authorization;
+
       // Send HTTP_REQUEST to the target client via WebSocket
       final httpRequestMessage = {
         'type': 'HTTP_REQUEST',
         'requestId': requestId,
         'method': method,
         'path': apiPath,
-        'headers': jsonEncode({}),
+        'headers': jsonEncode(forwardedHeaders),
         'body': bodyContent,
       };
 

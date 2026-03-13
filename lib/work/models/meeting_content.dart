@@ -5,6 +5,8 @@
 
 import 'dart:convert';
 
+import '../../models/conference_archive_entry.dart';
+
 /// Settings for meeting document
 class MeetingSettings {
   final bool showTranscriptions;
@@ -192,6 +194,43 @@ class MeetingRecording {
   }
 }
 
+/// A session within a meeting (each resume creates a new session)
+class MeetingSession {
+  final String id;
+  final DateTime startedAt;
+  DateTime? endedAt;
+
+  MeetingSession({
+    required this.id,
+    required this.startedAt,
+    this.endedAt,
+  });
+
+  factory MeetingSession.create() {
+    final now = DateTime.now();
+    return MeetingSession(
+      id: 'session-${now.millisecondsSinceEpoch.toRadixString(36)}',
+      startedAt: now,
+    );
+  }
+
+  factory MeetingSession.fromJson(Map<String, dynamic> json) {
+    return MeetingSession(
+      id: json['id'] as String,
+      startedAt: DateTime.parse(json['started_at'] as String),
+      endedAt: json['ended_at'] != null
+          ? DateTime.tryParse(json['ended_at'] as String)
+          : null,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'started_at': startedAt.toIso8601String(),
+    if (endedAt != null) 'ended_at': endedAt!.toIso8601String(),
+  };
+}
+
 /// Main meeting document content (stored in content/main.json)
 class MeetingContent {
   final String id;
@@ -209,6 +248,13 @@ class MeetingContent {
   List<String> recordings; // List of MeetingRecording IDs
   List<String> tags;
   MeetingSettings settings;
+  DateTime? endedAt;
+  bool hostedByMe;
+  String? activeScreenSharer;
+  String? stationMeetUrl;
+  List<String> meetUrls;
+  String chatTranscript;
+  List<MeetingSession> sessions;
 
   MeetingContent({
     required this.id,
@@ -226,11 +272,20 @@ class MeetingContent {
     List<String>? recordings,
     List<String>? tags,
     MeetingSettings? settings,
+    this.endedAt,
+    this.hostedByMe = false,
+    this.activeScreenSharer,
+    this.stationMeetUrl,
+    List<String>? meetUrls,
+    this.chatTranscript = '',
+    List<MeetingSession>? sessions,
   }) : participants = participants ?? [],
        speakers = speakers ?? [],
        recordings = recordings ?? [],
        tags = tags ?? [],
-       settings = settings ?? MeetingSettings();
+       settings = settings ?? MeetingSettings(),
+       meetUrls = meetUrls ?? [],
+       sessions = sessions ?? [];
 
   factory MeetingContent.create({required String title}) {
     final now = DateTime.now();
@@ -258,6 +313,8 @@ class MeetingContent {
       settings = MeetingSettings.fromJson(settingsJson);
     }
 
+    final endedAtStr = json['ended_at'] as String?;
+
     return MeetingContent(
       id: id,
       schema: json['schema'] as String? ?? 'ndf-meeting-1.0',
@@ -282,6 +339,17 @@ class MeetingContent {
           ?.map((t) => t as String)
           .toList() ?? [],
       settings: settings,
+      endedAt: endedAtStr != null ? DateTime.tryParse(endedAtStr) : null,
+      hostedByMe: json['hosted_by_me'] == true,
+      activeScreenSharer: json['active_screen_sharer'] as String?,
+      stationMeetUrl: json['station_meet_url'] as String?,
+      meetUrls: (json['meet_urls'] as List<dynamic>?)
+          ?.map((u) => u as String)
+          .toList() ?? [],
+      chatTranscript: json['chat_transcript'] as String? ?? '',
+      sessions: (json['sessions'] as List<dynamic>?)
+          ?.map((s) => MeetingSession.fromJson(s as Map<String, dynamic>))
+          .toList() ?? [],
     );
   }
 
@@ -293,14 +361,21 @@ class MeetingContent {
     'version': version,
     'created': created.toIso8601String(),
     'modified': modified.toIso8601String(),
+    if (endedAt != null) 'ended_at': endedAt!.toIso8601String(),
     'room_id': roomId,
     'host_callsign': hostCallsign,
     'local_callsign': localCallsign,
     'signaling_mode': signalingMode,
+    'hosted_by_me': hostedByMe,
     if (participants.isNotEmpty) 'participants': participants,
     if (speakers.isNotEmpty) 'speakers': speakers,
     'recordings': recordings,
     if (tags.isNotEmpty) 'tags': tags,
+    if (activeScreenSharer != null) 'active_screen_sharer': activeScreenSharer,
+    if (stationMeetUrl != null) 'station_meet_url': stationMeetUrl,
+    if (meetUrls.isNotEmpty) 'meet_urls': meetUrls,
+    if (chatTranscript.isNotEmpty) 'chat_transcript': chatTranscript,
+    if (sessions.isNotEmpty) 'sessions': sessions.map((s) => s.toJson()).toList(),
     'settings': settings.toJson(),
   };
 
@@ -322,5 +397,63 @@ class MeetingContent {
   void removeRecording(String recordingId) {
     recordings.remove(recordingId);
     touch();
+  }
+
+  /// Create a MeetingContent from a ConferenceArchiveEntry.
+  factory MeetingContent.fromArchiveEntry(ConferenceArchiveEntry entry) {
+    return MeetingContent(
+      id: 'meeting-${entry.startedAt.millisecondsSinceEpoch.toRadixString(36)}',
+      title: entry.roomName,
+      created: entry.startedAt,
+      modified: entry.updatedAt,
+      roomId: entry.roomId,
+      hostCallsign: entry.hostCallsign,
+      localCallsign: entry.localCallsign,
+      signalingMode: entry.signalingMode,
+      participants: List.from(entry.participants),
+      speakers: List.from(entry.speakers),
+      tags: List.from(entry.tags),
+      endedAt: entry.endedAt,
+      hostedByMe: entry.hostedByMe,
+      activeScreenSharer: entry.activeScreenSharer,
+      stationMeetUrl: entry.stationMeetUrl,
+      meetUrls: List.from(entry.meetUrls),
+      sessions: List.from(entry.sessions),
+    );
+  }
+
+  /// Convert this content back to a ConferenceArchiveEntry.
+  ConferenceArchiveEntry toArchiveEntry({
+    required String relativePath,
+    required String transcriptRelativePath,
+    List<ConferenceArchiveAsset> files = const [],
+    List<ConferenceArchiveAsset> recordings = const [],
+    List<ConferenceArchiveAsset> voiceTranscripts = const [],
+    int messageCount = 0,
+  }) {
+    return ConferenceArchiveEntry(
+      relativePath: relativePath,
+      roomId: roomId,
+      roomName: title,
+      hostCallsign: hostCallsign,
+      localCallsign: localCallsign,
+      hostedByMe: hostedByMe,
+      signalingMode: signalingMode,
+      startedAt: created,
+      updatedAt: modified,
+      endedAt: endedAt,
+      participants: List.from(participants),
+      speakers: List.from(speakers),
+      activeScreenSharer: activeScreenSharer,
+      stationMeetUrl: stationMeetUrl,
+      meetUrls: List.from(meetUrls),
+      transcriptRelativePath: transcriptRelativePath,
+      files: files,
+      recordings: recordings,
+      voiceTranscripts: voiceTranscripts,
+      messageCount: messageCount,
+      tags: List.from(tags),
+      sessions: List.from(sessions),
+    );
   }
 }

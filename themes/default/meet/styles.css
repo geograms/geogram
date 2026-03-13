@@ -266,8 +266,39 @@ button:disabled {
   font-weight: bold;
 }
 
+.archive-asset--download {
+  background: rgba(255, 255, 255, 0.03);
+  border-style: dashed;
+}
+
 @media (max-width: 900px) {
   .meeting-layout {
     grid-template-columns: 1fr;
   }
 }
+
+/* Meeting listing */
+.meeting-list { display: flex; flex-direction: column; gap: 12px; }
+
+.meeting-list-item {
+  display: block; text-decoration: none; color: inherit;
+  border: 1px solid var(--border-color); border-radius: 14px;
+  padding: 16px 18px; background: rgba(0, 0, 0, 0.08);
+}
+.meeting-list-item:hover { border-color: var(--accent); }
+
+.meeting-list-header { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.meeting-list-title { font-weight: bold; font-size: 1.1rem; }
+.meeting-list-meta { color: var(--accent-alpha-70); font-size: 0.85rem; margin-top: 6px; }
+
+.meeting-badge { display: inline-block; padding: 2px 10px; border-radius: 8px; font-size: 0.8rem; border: 1px solid var(--border-color); }
+.meeting-badge--live { background: var(--accent); color: var(--background); border-color: var(--accent); }
+.meeting-badge--scheduled { border-color: var(--accent); color: var(--accent); }
+
+.meeting-tags { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.meeting-tag { border: 1px solid var(--border-color); padding: 2px 8px; border-radius: 6px; font-size: 0.78rem; }
+
+.listing-search { width: 100%; border: 1px solid var(--border-color); border-radius: 10px; background: transparent; color: inherit; padding: 12px 14px; font: inherit; margin-bottom: 16px; box-sizing: border-box; }
+
+.listing-hint { text-align: center; color: var(--accent-alpha-70); padding: 12px 0; font-size: 0.9rem; }
+.listing-empty { text-align: center; padding: 40px 0; color: var(--accent-alpha-70); }

@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en" class="meet-page">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1">
+  <title>{{TITLE}}</title>
+  <style>{{GLOBAL_STYLES}}</style>
+  <style>{{APP_STYLES}}</style>
+  {{NOSTR_STYLES}}
+</head>
+<body>
+<div class="container">
+  <header class="header">
+    <div class="header__inner">
+      <div class="header__logo">
+        <div class="logo">{{LOGO_TEXT}}</div>
+      </div>
+      {{NOSTR_HEADER}}
+    </div>
+    <nav class="menu">
+      <ul class="menu__inner">
+        {{MENU_ITEMS}}
+      </ul>
+    </nav>
+  </header>
+
+  <main class="main">
+    <div class="meeting-shell">
+      <section class="meeting-card">
+        <div class="meeting-subtitle">Browse meetings hosted on this station</div>
+        <input id="listing-search" class="listing-search" type="text" placeholder="Search meetings..." autofocus>
+        <div id="meeting-list" class="meeting-list"></div>
+        <div id="listing-hint" class="listing-hint" style="display:none"></div>
+      </section>
+    </div>
+  </main>
+
+  <footer class="footer">
+    <div class="footer__inner">
+      <div class="copyright">
+        <span>powered by geogram</span>
+      </div>
+    </div>
+  </footer>
+</div>
+
+<script>
+  window.GEOGRAM_MEETINGS = {{DATA_JSON}};
+  {{SCRIPTS}}
+
+  'use strict';
+  (function() {
+    const data = window.GEOGRAM_MEETINGS || {};
+    const listEl = document.getElementById('meeting-list');
+    const hintEl = document.getElementById('listing-hint');
+    const searchEl = document.getElementById('listing-search');
+
+    const allItems = [];
+    if (data.active) allItems.push(data.active);
+    if (data.scheduled) data.scheduled.forEach(function(s) { allItems.push(s); });
+    if (data.meetings) data.meetings.forEach(function(m) { allItems.push(m); });
+
+    if (!data.authenticated) {
+      hintEl.textContent = 'Connect with Nostr to see private meetings';
+      hintEl.style.display = '';
+    }
+
+    function formatDate(iso) {
+      if (!iso) return '';
+      var d = new Date(iso);
+      return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+    }
+
+    function renderBadge(state) {
+      if (state === 'active') return '<span class="meeting-badge meeting-badge--live">LIVE</span>';
+      if (state === 'scheduled') return '<span class="meeting-badge meeting-badge--scheduled">Scheduled</span>';
+      return '';
+    }
+
+    function renderTags(tags) {
+      if (!tags || tags.length === 0) return '';
+      return '<div class="meeting-tags">' +
+        tags.map(function(t) { return '<span class="meeting-tag">' + esc(t) + '</span>'; }).join('') +
+        '</div>';
+    }
+
+    function esc(s) {
+      var el = document.createElement('span');
+      el.textContent = s || '';
+      return el.innerHTML;
+    }
+
+    function renderItem(item) {
+      var meta = [];
+      if (item.hostCallsign) meta.push('Host: ' + esc(item.hostCallsign));
+      if (item.state === 'active' || item.state === 'scheduled') {
+        if (item.participantCount != null) meta.push(item.participantCount + ' participant' + (item.participantCount === 1 ? '' : 's'));
+        if (item.scheduledAt) meta.push(formatDate(item.scheduledAt));
+      } else {
+        if (item.startedAt) {
+          var range = formatDate(item.startedAt);
+          if (item.endedAt) range += ' — ' + formatDate(item.endedAt);
+          meta.push(range);
+        }
+        var counts = [];
+        if (item.participantCount) counts.push(item.participantCount + ' participant' + (item.participantCount === 1 ? '' : 's'));
+        if (item.messageCount) counts.push(item.messageCount + ' message' + (item.messageCount === 1 ? '' : 's'));
+        if (item.fileCount) counts.push(item.fileCount + ' file' + (item.fileCount === 1 ? '' : 's'));
+        if (item.recordingCount) counts.push(item.recordingCount + ' recording' + (item.recordingCount === 1 ? '' : 's'));
+        if (counts.length) meta.push(counts.join(' · '));
+      }
+
+      return '<a class="meeting-list-item" href="' + esc(item.code) + '">' +
+        '<div class="meeting-list-header">' +
+          '<span class="meeting-list-title">' + esc(item.roomName || item.code) + '</span>' +
+          renderBadge(item.state) +
+        '</div>' +
+        '<div class="meeting-list-meta">' + meta.join(' · ') + '</div>' +
+        renderTags(item.tags) +
+      '</a>';
+    }
+
+    function render(filter) {
+      var filtered = allItems;
+      if (filter) {
+        var q = filter.toLowerCase();
+        filtered = allItems.filter(function(item) {
+          var haystack = (item.roomName || '') + ' ' + (item.hostCallsign || '') + ' ' + (item.tags || []).join(' ');
+          return haystack.toLowerCase().indexOf(q) !== -1;
+        });
+      }
+      if (filtered.length === 0) {
+        listEl.innerHTML = '<div class="listing-empty">' + (allItems.length === 0 ? 'No meetings yet' : 'No matches') + '</div>';
+      } else {
+        listEl.innerHTML = filtered.map(renderItem).join('');
+      }
+    }
+
+    render('');
+    searchEl.addEventListener('input', function() { render(searchEl.value); });
+
+    document.addEventListener('nostr-connected', function() {
+      if (!data.authenticated) {
+        window.location.reload();
+      }
+    });
+  })();
+</script>
+</body>
+</html>

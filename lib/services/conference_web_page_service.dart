@@ -24,6 +24,7 @@ class ConferenceWebPageConfig {
   final List<Map<String, dynamic>> initialMessages;
   final List<Map<String, dynamic>> archiveFiles;
   final List<Map<String, dynamic>> archiveRecordings;
+  final String? archiveNdfUrl;
 
   const ConferenceWebPageConfig({
     required this.roomId,
@@ -45,6 +46,7 @@ class ConferenceWebPageConfig {
     this.initialMessages = const <Map<String, dynamic>>[],
     this.archiveFiles = const <Map<String, dynamic>>[],
     this.archiveRecordings = const <Map<String, dynamic>>[],
+    this.archiveNdfUrl,
     this.signalingWsUrl,
   });
 }
@@ -102,6 +104,7 @@ class ConferenceWebPageService {
       'initialMessages': config.initialMessages,
       'archiveFiles': config.archiveFiles,
       'archiveRecordings': config.archiveRecordings,
+      'archiveNdfUrl': config.archiveNdfUrl,
     });
 
     final html = themeService.processTemplate(template, {
@@ -125,6 +128,40 @@ class ConferenceWebPageService {
       'NOSTR_HEADER': getNostrLoginHeaderHtml(),
       'GLOBAL_STYLES': globalStyles,
       'APP_STYLES': appStyles,
+    });
+
+    return ConferenceWebPageAssets(
+      html: html,
+      globalStyles: globalStyles,
+      appStyles: appStyles,
+    );
+  }
+
+  Future<ConferenceWebPageAssets> buildListingPage({
+    required Map<String, dynamic> data,
+    required String logoText,
+    String menuItems = '',
+  }) async {
+    final themeService = WebThemeService();
+    await themeService.init();
+
+    final template =
+        await themeService.getNamedTemplate('meet', 'listing.html') ??
+            _fallbackListingTemplate;
+    final globalStyles = await themeService.getGlobalStyles() ?? '';
+    final appStyles = await themeService.getAppStyles('meet') ?? '';
+    final dataJson = _jsonForScript(data);
+
+    final html = themeService.processTemplate(template, {
+      'TITLE': 'Meetings',
+      'LOGO_TEXT': _escape(logoText),
+      'DATA_JSON': dataJson,
+      'MENU_ITEMS': menuItems,
+      'NOSTR_STYLES': getNostrLoginStyles(),
+      'NOSTR_HEADER': getNostrLoginHeaderHtml(),
+      'GLOBAL_STYLES': globalStyles,
+      'APP_STYLES': appStyles,
+      'SCRIPTS': getNostrLoginScripts(),
     });
 
     return ConferenceWebPageAssets(
@@ -544,7 +581,7 @@ function renderArchiveAssets() {
     return Object.assign({ kind: 'File' }, item);
   }));
 
-  if (!assets.length) {
+  if (!assets.length && !CONFIG.archiveNdfUrl) {
     archiveAssetsShellEl.style.display = 'none';
     archiveAssetsEl.innerHTML = '';
     return;
@@ -563,6 +600,17 @@ function renderArchiveAssets() {
       (sizeLabel ? ' \u00b7 ' + escapeHtml(sizeLabel) : '') + '</div></div>';
     archiveAssetsEl.appendChild(row);
   });
+
+  if (CONFIG.archiveNdfUrl) {
+    var ndfLink = document.createElement('a');
+    ndfLink.className = 'archive-asset archive-asset--download';
+    ndfLink.href = CONFIG.archiveNdfUrl;
+    ndfLink.innerHTML =
+      '<div><div class="archive-asset-title">' +
+      escapeHtml(CONFIG.roomName || 'Meeting') + '.ndf' +
+      '</div><div class="participant-role">Download full archive</div></div>';
+    archiveAssetsEl.appendChild(ndfLink);
+  }
 }
 
 function renderArchiveSummary() {
@@ -1466,5 +1514,43 @@ function cleanup(statusMessage) {
 applyStaticMode();
 syncJoinGate();
 syncSelfControls();
+''';
+
+  static const String _fallbackListingTemplate = '''
+<!DOCTYPE html>
+<html lang="en" class="meet-page">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1">
+  <title>{{TITLE}}</title>
+  <style>{{GLOBAL_STYLES}}</style>
+  <style>{{APP_STYLES}}</style>
+  {{NOSTR_STYLES}}
+</head>
+<body>
+<div class="container">
+  <header class="header">
+    <div class="header__inner">
+      <div class="header__logo">
+        <div class="logo">{{LOGO_TEXT}}</div>
+      </div>
+      {{NOSTR_HEADER}}
+    </div>
+  </header>
+  <main class="main">
+    <div class="meeting-shell">
+      <section class="meeting-card">
+        <div class="meeting-subtitle">Browse meetings hosted on this station</div>
+        <div id="meeting-list" class="meeting-list"></div>
+      </section>
+    </div>
+  </main>
+</div>
+<script>
+window.GEOGRAM_MEETINGS = {{DATA_JSON}};
+{{SCRIPTS}}
+</script>
+</body>
+</html>
 ''';
 }
