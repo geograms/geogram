@@ -35,6 +35,7 @@ import 'conference_web_page_service.dart';
 import 'devices_service.dart';
 import 'log_service.dart';
 import 'profile_service.dart';
+import 'signing_service.dart';
 import 'station_service.dart';
 import 'websocket_service.dart';
 import 'webrtc_config.dart';
@@ -1096,13 +1097,32 @@ class ConferenceService {
       return;
     }
 
+    final metadata = <String, String>{
+      'conference_id': _generateChatMessageId(),
+      'room_id': room.roomId,
+    };
+
+    // Sign with NOSTR if available (same pattern as ChatService)
+    final profile = ProfileService().getProfile();
+    final signingService = SigningService();
+    if (signingService.canSign(profile)) {
+      final signedEvent = await signingService.generateSignedEvent(
+        trimmed,
+        {'room': room.roomId, 'callsign': _myCallsign},
+        profile,
+      );
+      if (signedEvent != null) {
+        final npub = profile.npub;
+        metadata['npub'] = npub;
+        if (signedEvent.sig != null) metadata['signature'] = signedEvent.sig!;
+        metadata['created_at'] = signedEvent.createdAt.toString();
+      }
+    }
+
     final message = ChatMessage.now(
       author: _myCallsign,
       content: trimmed,
-      metadata: {
-        'conference_id': _generateChatMessageId(),
-        'room_id': room.roomId,
-      },
+      metadata: metadata,
     );
 
     await _storeIncomingChatMessage(message);
@@ -2439,6 +2459,14 @@ class ConferenceService {
     final key = _chatMessageKey(message);
     if (!_chatMessageIds.add(key)) {
       return;
+    }
+
+    // Verify NOSTR signature if present (same pattern as ChatService)
+    if (message.isSigned) {
+      SigningService().verifyMessageSignature(
+        message,
+        roomId: archiveEntry.roomId,
+      );
     }
 
     _chatMessages.add(message);

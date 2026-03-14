@@ -1665,6 +1665,7 @@ async function sendChat() {
   if (signed) {
     metadata.npub = signed.npub;
     metadata.signature = signed.signature;
+    metadata.created_at = String(signed.created_at);
   }
 
   const message = {

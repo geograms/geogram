@@ -19,6 +19,7 @@ import 'app_service.dart';
 import 'chat_service.dart';
 import 'log_service.dart';
 import 'profile_storage.dart';
+import 'signing_service.dart';
 
 class ConferenceArchiveService {
   static final ConferenceArchiveService _instance =
@@ -291,6 +292,14 @@ class ConferenceArchiveService {
     if (messages.length > limit) {
       messages = messages.sublist(messages.length - limit);
     }
+
+    // Verify NOSTR signatures (same pattern as ChatService.loadMessages)
+    for (final msg in messages) {
+      if (msg.isSigned) {
+        SigningService().verifyMessageSignature(msg, roomId: entry.roomId);
+      }
+    }
+
     return messages;
   }
 
