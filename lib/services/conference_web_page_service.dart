@@ -764,9 +764,13 @@ function stopSessionStatePolling() {
 }
 
 function startSessionStatePolling() {
-  if (!CONFIG.sessionStateUrl || PAGE_MODE !== 'scheduled' || sessionStateTimer) {
+  if (!CONFIG.sessionStateUrl || sessionStateTimer) {
     return;
   }
+  // Poll for state transitions: scheduled→active/archive, archive→active
+  const expectTransitionTo = PAGE_MODE === 'archive' ? 'active' : null;
+  if (PAGE_MODE !== 'scheduled' && PAGE_MODE !== 'archive') return;
+
   sessionStateTimer = setInterval(async function() {
     try {
       const response = await fetch(CONFIG.sessionStateUrl, { cache: 'no-store' });
@@ -774,7 +778,9 @@ function startSessionStatePolling() {
         return;
       }
       const data = await response.json();
-      if (data.state === 'active' || data.state === 'archive') {
+      if (PAGE_MODE === 'scheduled' && (data.state === 'active' || data.state === 'archive')) {
+        window.location.reload();
+      } else if (PAGE_MODE === 'archive' && data.state === 'active') {
         window.location.reload();
       }
     } catch (_) {}
@@ -806,6 +812,7 @@ function applyStaticMode() {
       appendChatMessage(message, message.author || CONFIG.hostCallsign || '');
     });
     renderArchiveAssets();
+    startSessionStatePolling();
     return;
   }
 
@@ -1126,11 +1133,8 @@ function scheduleScreenReconnect() {
 document.addEventListener('nostr-connected', function() {
   syncJoinGate();
   if (PAGE_MODE === 'active') {
-    setStatus('Ready to join');
-  }
-  const nick = getPreferredNickname();
-  if (nick && !nicknameInput.value) {
-    nicknameInput.value = nick;
+    // Auto-join as listener when NOSTR identity becomes available
+    joinConference('listener');
   }
 });
 
@@ -1379,7 +1383,9 @@ async function handleMessage(message) {
       break;
 
     case 'conference_end':
-      cleanup('Conference ended by host');
+      // Clean up WebRTC/audio resources, then reload into archive view
+      cleanup('Meeting ended — loading archive...');
+      setTimeout(function() { window.location.reload(); }, 1500);
       break;
 
     case 'conference_error':
@@ -1736,6 +1742,11 @@ function cleanup(statusMessage) {
 applyStaticMode();
 syncJoinGate();
 syncSelfControls();
+
+// Auto-join if NOSTR is already authenticated (e.g. page reloaded into active mode)
+if (PAGE_MODE === 'active' && isNostrReady()) {
+  joinConference('listener');
+}
 ''';
 
   static const String _fallbackListingTemplate = '''
