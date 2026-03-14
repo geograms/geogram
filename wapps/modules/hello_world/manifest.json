@@ -1,0 +1,19 @@
+{
+  "id": "radio.geogram.hello-world",
+  "version": "1.0.0",
+  "kind": "app",
+  "description": "Hello world — logs platform info, ticks, echoes messages",
+  "tags": ["system", "demo"],
+  "tick_interval_ms": 5000,
+  "provides": {
+    "functions": [],
+    "events": [],
+    "variables": []
+  },
+  "requires": {
+    "hal": ["log", "platform", "msg"],
+    "events": [],
+    "libraries": [],
+    "variables": []
+  }
+}
