@@ -13614,6 +13614,7 @@ class LogApiService with ChatModificationMixin {
       likesCount: post.likesCount,
       likedHexPubkeys: likedHexPubkeys,
       commentsHtml: commentsHtml,
+      showSignedBadge: post.isSigned,
       globalStyles: StationHtmlTemplates.getBaseStyles(),
       appStyles: '',
       backUrl: './',

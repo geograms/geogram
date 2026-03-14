@@ -54,7 +54,6 @@ import 'cli/commands/service_interfaces.dart';
 import 'server/mixins/rate_limit_mixin.dart';
 import 'server/mixins/health_watchdog_mixin.dart';
 import 'server/mixins/email_handler_mixin.dart';
-import 'server/mixins/blog_handler_mixin.dart';
 import 'server/mixins/console_command_mixin.dart';
 import 'server/mixins/chat_moderation_mixin.dart';
 import 'server/mixins/chat_nip05_mixin.dart';
@@ -426,7 +425,7 @@ class LogEntry implements LogEntryReadable {
 }
 
 /// Connected WebSocket client
-class PureConnectedClient implements EmailClient, BlogClient, ConnectedClientReadable, DeviceProxyClient {
+class PureConnectedClient implements EmailClient, ConnectedClientReadable, DeviceProxyClient {
   @override
   final WebSocket socket;
   @override
@@ -633,7 +632,7 @@ class PureTileCache {
 }
 
 /// Unified station server for CLI and Android modes
-class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, EmailHandlerMixin, BlogHandlerMixin, ConsoleCommandMixin, ChatNip05Mixin, ChatModerationMixin, ConferenceMixin, XmppServerMixin, KarmaMixin, DeviceProxyMixin
+class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, EmailHandlerMixin, ConsoleCommandMixin, ChatNip05Mixin, ChatModerationMixin, ConferenceMixin, XmppServerMixin, KarmaMixin, DeviceProxyMixin
     implements StationCommandInterface {
   HttpServer? _httpServer;
   HttpServer? _httpsServer;
@@ -751,74 +750,6 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
   @override
   String? conferenceGetClientCallsign(String clientId) {
     return _clients[clientId]?.callsign;
-  }
-
-  // ── BlogHandlerMixin interface ──────────────────────────────────
-  @override
-  void blogLog(String level, String message) => _log(level, message);
-  @override
-  String get blogDevicesDir => PureStorageConfig().devicesDir;
-  @override
-  String get blogConfigPath => PureStorageConfig().configPath;
-  @override
-  BlogClient? blogFindConnectedClientByIdentifier(String identifier) =>
-      findConnectedClientByIdentifier(identifier) as BlogClient?;
-  @override
-  List<BlogClient> blogFindAllClientsByIdentifier(String identifier) =>
-      findAllClientsByIdentifier(identifier).cast<BlogClient>();
-  @override
-  Future<bool> blogProxyToClient(
-      BlogClient client, HttpRequest request, String filename) async {
-    if (client is! PureConnectedClient) return false;
-    final targetCallsign = client.callsign ?? '';
-    final blogApiPath = '/$targetCallsign/blog/$filename.html';
-    final requestId = DateTime.now().millisecondsSinceEpoch.toString();
-    final proxyRequest = {
-      'type': 'HTTP_REQUEST',
-      'requestId': requestId,
-      'method': 'GET',
-      'path': blogApiPath,
-      'headers': jsonEncode({'X-Device-Callsign': targetCallsign}),
-      'body': '',
-    };
-    final completer = Completer<Map<String, dynamic>>();
-    _pendingProxyRequests[requestId] = completer;
-    try {
-      client.socket.add(jsonEncode(proxyRequest));
-      final response = await completer.future.timeout(
-        const Duration(seconds: 30),
-        onTimeout: () => {
-              'type': 'HTTP_RESPONSE',
-              'statusCode': 504,
-              'responseBody': 'Gateway Timeout - client did not respond',
-            },
-      );
-      request.response.statusCode = response['statusCode'] ?? 500;
-      if (response['responseHeaders'] != null) {
-        try {
-          final headers = jsonDecode(response['responseHeaders'] as String)
-              as Map<String, dynamic>;
-          headers.forEach((key, value) {
-            request.response.headers.add(key, value.toString());
-          });
-        } catch (_) {}
-      }
-      final body = response['responseBody'] ?? '';
-      final isBase64 = response['isBase64'] == true;
-      if (isBase64) {
-        request.response.add(base64Decode(body));
-      } else {
-        request.response.write(body);
-      }
-      return true;
-    } catch (e) {
-      _log('ERROR', 'Error proxying blog request: $e');
-      request.response.statusCode = 502;
-      request.response.write('Bad Gateway: $e');
-      return true;
-    } finally {
-      _pendingProxyRequests.remove(requestId);
-    }
   }
 
   // NOSTR relay + Blossom
@@ -2642,15 +2573,9 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
       } else if (_isPlaceDetailsPath(path) && method == 'GET') {
         // /api/places/{callsign}/{folderName} - place details
         await _handlePlaceDetails(request);
-      } else if (isCallsignApiPath(path) || isCallsignMeetPath(path)) {
-        // /{callsign}/api/* or /{callsign}/meet/* - proxy to connected device
-        await handleCallsignApiProxy(request);
-      } else if (isBlogPath(path)) {
-        await handleBlogRequest(request);
-      } else if (isCallsignDownloadPath(path)) {
-        await _handleDeviceDownloadPage(request);
-      } else if (isCallsignOrNicknamePath(path)) {
-        await handleCallsignOrNicknameWww(request);
+      } else if (isDevicePath(path)) {
+        // /{identifier}/* — pure proxy to connected device
+        await handleGenericDeviceProxy(request);
       } else {
         request.response.statusCode = 404;
         request.response.write('Not Found');

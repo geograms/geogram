@@ -6,7 +6,6 @@ import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:http/http.dart' as http;
-import 'package:markdown/markdown.dart' as md;
 import 'package:mime/mime.dart';
 import 'package:path/path.dart' as path;
 
@@ -34,8 +33,6 @@ import '../util/nostr_key_generator.dart';
 import '../bot/services/vision_model_manager.dart';
 import '../bot/models/vision_model_info.dart';
 import '../bot/models/music_model_info.dart';
-import '../models/blog_post.dart';
-import '../server/mixins/blog_handler_mixin.dart';
 import '../models/chat_channel.dart';
 import '../models/chat_message.dart';
 import '../models/event.dart';
@@ -264,7 +261,7 @@ enum ConnectionType {
 }
 
 /// Connected WebSocket client
-class ConnectedClient implements BlogClient {
+class ConnectedClient {
   final WebSocket socket;
   final String id;
   String? callsign;
@@ -420,7 +417,7 @@ class _BackupProviderEntry {
 }
 
 /// Station server service for CLI mode
-class StationServerService with KarmaMixin, ConferenceMixin, BlogHandlerMixin {
+class StationServerService with KarmaMixin, ConferenceMixin {
   static final StationServerService _instance = StationServerService._internal();
   factory StationServerService() => _instance;
   StationServerService._internal();
@@ -464,77 +461,6 @@ class StationServerService with KarmaMixin, ConferenceMixin, BlogHandlerMixin {
   NostrRelayStorage? _nostrStorage;
   NostrRelayService? _nostrRelay;
   NostrBlossomService? _blossom;
-
-  // ── BlogHandlerMixin interface ──────────────────────────────────
-  @override
-  void blogLog(String level, String message) => LogService().log('Blog: [$level] $message');
-  @override
-  String get blogDevicesDir => StorageConfig().devicesDir;
-  @override
-  String get blogConfigPath => StorageConfig().configPath;
-  @override
-  BlogClient? blogFindConnectedClientByIdentifier(String identifier) {
-    for (final client in _clients.values) {
-      if ((client.callsign != null && client.callsign!.toLowerCase() == identifier.toLowerCase()) ||
-          (client.nickname != null && client.nickname!.toLowerCase() == identifier.toLowerCase())) {
-        return client;
-      }
-    }
-    return null;
-  }
-  @override
-  List<BlogClient> blogFindAllClientsByIdentifier(String identifier) {
-    return _clients.values.where((client) =>
-        (client.callsign != null && client.callsign!.toLowerCase() == identifier.toLowerCase()) ||
-        (client.nickname != null && client.nickname!.toLowerCase() == identifier.toLowerCase())
-    ).toList();
-  }
-  @override
-  Future<bool> blogProxyToClient(
-      BlogClient client, HttpRequest request, String filename) async {
-    if (client is! ConnectedClient) return false;
-    final targetCallsign = client.callsign ?? '';
-    final blogApiPath = '/$targetCallsign/blog/$filename.html';
-    final requestId = '${DateTime.now().millisecondsSinceEpoch}-blog-${targetCallsign.hashCode}';
-    final completer = Completer<Map<String, dynamic>>();
-    _pendingHttpRequests[requestId] = completer;
-    try {
-      final httpRequestMessage = {
-        'type': 'HTTP_REQUEST',
-        'requestId': requestId,
-        'method': 'GET',
-        'path': blogApiPath,
-        'headers': jsonEncode({'X-Device-Callsign': targetCallsign}),
-        'body': null,
-      };
-      client.socket.add(jsonEncode(httpRequestMessage));
-      LogService().log('Blog proxy: Sent HTTP_REQUEST to $targetCallsign (requestId: $requestId)');
-      final response = await completer.future.timeout(
-        const Duration(seconds: 30),
-        onTimeout: () {
-          LogService().log('Blog proxy: Timeout for $targetCallsign $filename');
-          return {
-            'statusCode': 504,
-            'responseHeaders': '{"Content-Type": "text/plain"}',
-            'responseBody': 'Gateway Timeout - Device did not respond',
-            'isBase64': false,
-          };
-        },
-      );
-      request.response.statusCode = response['statusCode'] as int? ?? 500;
-      request.response.headers.contentType = ContentType.html;
-      request.response.write(response['responseBody'] as String? ?? '');
-      LogService().log('Blog proxy: Response from $targetCallsign: ${response['statusCode']}');
-      return true;
-    } catch (e) {
-      LogService().log('Blog proxy error: $e');
-      request.response.statusCode = 500;
-      request.response.write('Proxy error: $e');
-      return true;
-    } finally {
-      _pendingHttpRequests.remove(requestId);
-    }
-  }
 
   /// Get the shared alert API handlers (lazy initialization)
   AlertHandler get alertApi {
@@ -920,8 +846,6 @@ class StationServerService with KarmaMixin, ConferenceMixin, BlogHandlerMixin {
         await _handleConsoleVmRequest(request);
       } else if (path == '/api/cli' && method == 'POST') {
         await _handleCliCommand(request);
-      } else if (isBlogPath(path)) {
-        await handleBlogRequest(request);
       } else if (path.contains('/api/dm/')) {
         await _handleDMRequest(request);
       } else if (_isAlertFileUploadPath(path, request.method)) {
@@ -4231,8 +4155,6 @@ h2 { font-size: 1.2rem; margin: 0 0 20px 0; }
     if (!RegExp(r'^[A-Za-z0-9]+$').hasMatch(parts[0])) return false;
     // Exclude API and meet paths (handled by _isDeviceProxyPath)
     if (parts.length >= 2 && (parts[1] == 'api' || parts[1] == 'meet')) return false;
-    // Exclude blog HTML paths (handled by isBlogPath from BlogHandlerMixin)
-    if (path.contains('/blog/') && path.endsWith('.html')) return false;
     return true;
   }
 

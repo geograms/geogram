@@ -50,6 +50,7 @@ This document catalogs reusable UI components available in the Geogram codebase.
 - [ChatModificationMixin](#chatmodificationmixin) - Shared NOSTR auth verification for chat message edit/delete (NIP-09 + legacy)
 - [ChatNip05Mixin](#chatnip05mixin) - Shared NIP-05 registration for chat message senders
 - [Nip05RegistryService.buildNostrJsonResponse](#nip05registryservicebuildnostrjsonresponse) - Build NIP-05 nostr.json response (used by all station handlers)
+- [DeviceProxyMixin](#deviceproxymixin) - Pure proxy bridge: forwards any `/{identifier}/*` request to connected device via WebSocket
 
 ### Conference Components (SFU Star Topology)
 - [ConferenceMixin](#conferencemixin) - Station-side conference signaling relay (shared mixin)
@@ -9213,6 +9214,29 @@ class _DesktopDataProvider implements NavigationDataProvider { ... }
 // Station server (via ConsoleCommandMixin)
 class _ConsoleDataProvider implements NavigationDataProvider { ... }
 ```
+
+## DeviceProxyMixin
+
+**Location**: `lib/server/mixins/device_proxy_mixin.dart`
+
+Pure proxy bridge shared by `StationServer` and `PureStationServer`. Any HTTP request matching `/{identifier}/*` (where identifier is a callsign or nickname) is forwarded as-is to the connected device via WebSocket. The device handles all its own routing — blog, meet, API, static files, downloads, themes.
+
+### Key Methods
+
+| Method | Description |
+|--------|-------------|
+| `isDevicePath(path)` | Single check: is first path segment a callsign or nickname (not a reserved station path)? |
+| `handleGenericDeviceProxy(request)` | Pure proxy: strips identifier, forwards method/headers/body/query to device, writes response back |
+| `proxyToAnyDevice(identifier, method, path)` | Multi-device failover (priority + success rate ordering) |
+| `proxySingleDevice(client, method, path, headers, body)` | Send to one device, track success/fail stats |
+| `findAllClientsByIdentifier(identifier)` | Find all connected clients for a callsign/nickname |
+
+### Reserved Station Paths
+
+These first-segment values are NOT proxied (handled by the station itself):
+`api`, `ws`, `tiles`, `cli`, `ssl`, `acme`, `.well-known`, `blossom`, `bot`, `console`, `device`, `search`, `updates`, `download`, `chat`, `web`, `station`, `status`, `alerts`
+
+---
 
 ## ConsoleCommandMixin
 

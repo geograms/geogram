@@ -3,17 +3,14 @@
 /// Shared by both `StationServer` (Desktop) and `PureStationServer` (CLI).
 /// The station proxies HTTP requests to connected devices via WebSocket.
 ///
-/// Fixes applied:
-///   1. UTF-8 encoding for response bodies (fixes Latin-1 500 errors)
-///   2. Multi-device failover for API/meet routes
-///   3. Priority-based device ordering
+/// Architecture: The station is a pure proxy. ANY request to /{identifier}/*
+/// is forwarded to the connected device as-is. The device handles all its own
+/// routing (blog, meet, API, static files, downloads, themes).
 library;
 
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-
-import '../../util/app_constants.dart';
 
 /// Interface that PureConnectedClient must satisfy for the proxy mixin.
 /// Both station implementations already have these fields on their
@@ -46,36 +43,29 @@ mixin DeviceProxyMixin {
 
   // ── Path detection ───────────────────────────────────────────────
 
-  /// Check if path is a callsign API path: /{callsign}/api/*
-  bool isCallsignApiPath(String path) {
-    return RegExp(r'^/([A-Za-z0-9]+)/api/').hasMatch(path);
-  }
+  /// Reserved station paths that must NOT be proxied to devices.
+  static const _reservedPaths = {
+    'api', 'ws', 'tiles', 'cli', 'ssl', 'acme', '.well-known',
+    'blossom', 'bot', 'console', 'device', 'search', 'updates',
+    'download', 'chat', 'web', 'station', 'status', 'alerts',
+  };
 
-  /// Check if path is a callsign meet path: /{callsign}/meet/*
-  bool isCallsignMeetPath(String path) {
-    return RegExp(r'^/([A-Za-z0-9]+)/meet/').hasMatch(path);
-  }
-
-  /// Check if path is a callsign download path: /{identifier}/download/
-  bool isCallsignDownloadPath(String path) {
-    return RegExp(r'^/([A-Za-z0-9_-]+)/download/?$').hasMatch(path);
-  }
-
-  /// Check if path looks like a callsign or nickname for WWW serving.
-  bool isCallsignOrNicknamePath(String path) {
+  /// Check if path targets a device (callsign or nickname as first segment).
+  /// This is the single catch-all check — replaces isCallsignApiPath,
+  /// isCallsignMeetPath, isCallsignDownloadPath, and isCallsignOrNicknamePath.
+  bool isDevicePath(String path) {
     if (path.length < 2) return false;
     final firstPart = path.substring(1).split('/').first;
     if (firstPart.isEmpty) return false;
 
-    // Check if it's a callsign (X followed by alphanumeric)
+    // Check if it's a callsign (X followed by digit then alphanumeric)
     final isCallsign =
         RegExp(r'^X[0-9][A-Z0-9]{3,}$', caseSensitive: false).hasMatch(firstPart);
     if (isCallsign) return true;
 
     // Check if it's a valid nickname (alphanumeric with - and _, 2+ chars)
-    // Must not conflict with reserved paths
-    const reservedPaths = {'api', 'ws', 'tiles', 'cli', 'ssl', 'acme', '.well-known'};
-    if (reservedPaths.contains(firstPart.toLowerCase())) return false;
+    // Must not conflict with reserved station paths
+    if (_reservedPaths.contains(firstPart.toLowerCase())) return false;
 
     return RegExp(r'^[a-zA-Z0-9][a-zA-Z0-9_-]+$').hasMatch(firstPart);
   }
@@ -188,209 +178,10 @@ mixin DeviceProxyMixin {
     return lastResponse;
   }
 
-  // ── API/Meet proxy handler ───────────────────────────────────────
+  // ── Targeted device proxy ───────────────────────────────────────
 
-  /// Handle /{callsign}/api/* or /{callsign}/meet/* requests.
-  /// Uses multi-device failover (Fix 2) and forwards auth headers.
-  Future<void> handleCallsignApiProxy(HttpRequest request) async {
-    final path = request.uri.path;
-
-    // Parse path: /{callsign}/api/{endpoint} or /{callsign}/meet/{endpoint}
-    final regex = RegExp(r'^/([A-Za-z0-9]+)(/(?:api|meet)/.*)$');
-    final match = regex.firstMatch(path);
-
-    if (match == null) {
-      request.response.statusCode = 400;
-      request.response.headers.contentType = ContentType.json;
-      request.response.write(jsonEncode({'error': 'Invalid path format'}));
-      return;
-    }
-
-    final callsign = match.group(1)!;
-    final query = request.uri.query;
-    final apiPath = query.isEmpty
-        ? match.group(2)!
-        : '${match.group(2)!}?$query';
-
-    // Check if any device is connected for this callsign
-    final clients = findAllClientsByIdentifier(callsign);
-    if (clients.isEmpty) {
-      request.response.statusCode = 404;
-      request.response.headers.contentType = ContentType.json;
-      request.response.write(jsonEncode({
-        'error': 'Device not connected',
-        'callsign': callsign,
-        'message': 'The device $callsign is not currently connected to this station',
-      }));
-      return;
-    }
-
-    proxyLog('INFO',
-        'Device proxy: ${request.method} $path -> $callsign $apiPath (${clients.length} device(s))');
-
-    // Forward auth-relevant and content-negotiation headers to the device
-    final forwardedHeaders = <String, String>{};
-    final cookie = request.headers.value('cookie');
-    if (cookie != null) forwardedHeaders['cookie'] = cookie;
-    final authorization = request.headers.value('authorization');
-    if (authorization != null) forwardedHeaders['authorization'] = authorization;
-    final range = request.headers.value('range');
-    if (range != null) forwardedHeaders['range'] = range;
-
-    // Read request body once
-    String requestBody = '';
-    if (request.contentLength > 0) {
-      requestBody = await utf8.decodeStream(request);
-    }
-
-    // Multi-device failover (5s per device, sorted by priority+successRate)
-    final response = await proxyToAnyDevice(
-      callsign,
-      request.method,
-      apiPath,
-      headers: jsonEncode(forwardedHeaders),
-      body: requestBody,
-    );
-
-    if (response == null) {
-      request.response.statusCode = 504;
-      request.response.headers.contentType = ContentType.json;
-      request.response.write(jsonEncode({
-        'error': 'Gateway Timeout',
-        'message': 'No device responded for ${callsign.toUpperCase()}',
-      }));
-      return;
-    }
-
-    request.response.statusCode = response['statusCode'] ?? 500;
-    if (response['responseHeaders'] != null) {
-      try {
-        final headers =
-            jsonDecode(response['responseHeaders'] as String) as Map<String, dynamic>;
-        const skipHeaders = {'transfer-encoding', 'content-length', 'connection'};
-        headers.forEach((key, value) {
-          final lk = key.toLowerCase();
-          if (skipHeaders.contains(lk)) return;
-          if (lk == 'content-type') {
-            final ct = value.toString();
-            final parts = ct.split(';');
-            final mimeType = parts.first.trim();
-            final mimeParts = mimeType.split('/');
-            if (mimeParts.length == 2) {
-              final charset = ct.contains('charset=')
-                  ? ct.split('charset=').last.split(';').first.trim()
-                  : null;
-              request.response.headers.contentType =
-                  ContentType(mimeParts[0], mimeParts[1], charset: charset);
-            }
-          } else {
-            try {
-              request.response.headers.set(key, value.toString());
-            } catch (_) {}
-          }
-        });
-      } catch (_) {}
-    }
-
-    _writeResponseBody(request, response);
-
-    proxyLog('INFO',
-        'Device proxy response: ${response['statusCode']} for $callsign $apiPath');
-  }
-
-  // ── WWW proxy handler ────────────────────────────────────────────
-
-  /// Handle /{identifier}/* — serve WWW/app collection from device.
-  /// Uses UTF-8 encoding (Fix 1) and multi-device failover.
-  Future<void> handleCallsignOrNicknameWww(HttpRequest request) async {
-    final path = request.uri.path;
-    final parts = path.substring(1).split('/');
-    final identifier = parts.first.toLowerCase();
-
-    // Redirect /{identifier} to /{identifier}/ for proper relative path resolution
-    if (parts.length == 1 && !path.endsWith('/')) {
-      request.response.statusCode = 301;
-      request.response.headers.add('Location', '$path/');
-      return;
-    }
-
-    // Get file path - filter out empty parts from trailing slashes
-    final subParts = parts.sublist(1).where((p) => p.isNotEmpty).toList();
-    final filePath = subParts.isNotEmpty ? subParts.join('/') : 'index.html';
-
-    // Check if any client matches this identifier
-    final clients = findAllClientsByIdentifier(identifier);
-    if (clients.isEmpty) {
-      request.response.statusCode = 404;
-      request.response.write('Device not connected');
-      return;
-    }
-
-    // Route to the appropriate collection based on the first path segment
-    String appPath;
-    if (subParts.isNotEmpty && knownAppTypesConst.contains(subParts.first.toLowerCase())) {
-      final app = subParts.first.toLowerCase();
-      final rest = subParts.length > 1 ? subParts.sublist(1).join('/') : '';
-      appPath = '/$app/${rest.isEmpty ? "index.html" : rest}';
-    } else {
-      appPath = '/www/$filePath';
-    }
-
-    // Try all devices sequentially (priority + most responsive first)
-    final response = await proxyToAnyDevice(identifier, 'GET', appPath);
-
-    if (response == null) {
-      request.response.statusCode = 504;
-      request.response.write('Gateway Timeout: No device responded');
-      return;
-    }
-
-    request.response.statusCode = response['statusCode'] ?? 500;
-
-    // Use Content-Type from device response headers if available
-    String? contentType;
-    if (response['responseHeaders'] != null) {
-      try {
-        final headers =
-            jsonDecode(response['responseHeaders'] as String) as Map<String, dynamic>;
-        headers.forEach((key, value) {
-          if (key.toLowerCase() == 'content-type') {
-            contentType = value.toString();
-          }
-        });
-      } catch (_) {}
-    }
-    if (contentType == null) {
-      final ext = appPath.split('.').last.toLowerCase();
-      const contentTypes = {
-        'html': 'text/html',
-        'htm': 'text/html',
-        'css': 'text/css',
-        'js': 'application/javascript',
-        'json': 'application/json',
-        'png': 'image/png',
-        'jpg': 'image/jpeg',
-        'jpeg': 'image/jpeg',
-        'gif': 'image/gif',
-        'svg': 'image/svg+xml',
-        'ico': 'image/x-icon',
-        'txt': 'text/plain',
-      };
-      contentType = contentTypes[ext] ?? 'application/octet-stream';
-    }
-
-    // Fix 1: Ensure charset=utf-8 for text content types
-    if (contentType!.startsWith('text/') && !contentType!.contains('charset')) {
-      contentType = '$contentType; charset=utf-8';
-    }
-    request.response.headers.set('Content-Type', contentType!);
-
-    _writeResponseBody(request, response);
-  }
-
-  // ── Generic request-to-device proxy ──────────────────────────────
-
-  /// Proxy an HTTP request to a connected device via WebSocket (multi-device aware).
+  /// Proxy an HTTP request to a specific device's API path.
+  /// Used by station-local routes (chat, etc.) that know which device to target.
   Future<void> proxyRequestToDevice(
       HttpRequest request, String callsign, String apiPath) async {
     final clients = findAllClientsByIdentifier(callsign);
@@ -438,16 +229,26 @@ mixin DeviceProxyMixin {
       try {
         final headers =
             jsonDecode(response['responseHeaders'] as String) as Map<String, dynamic>;
+        const skipHeaders = {'transfer-encoding', 'content-length', 'connection'};
         headers.forEach((key, value) {
-          if (key.toLowerCase() == 'content-type') {
+          final lk = key.toLowerCase();
+          if (skipHeaders.contains(lk)) return;
+          if (lk == 'content-type') {
             final ct = value.toString();
-            if (ct.contains('json')) {
-              request.response.headers.contentType = ContentType.json;
-            } else if (ct.contains('html')) {
-              request.response.headers.contentType = ContentType.html;
-            } else if (ct.contains('text')) {
-              request.response.headers.contentType = ContentType.text;
+            final ctParts = ct.split(';');
+            final mimeType = ctParts.first.trim();
+            final mimeParts = mimeType.split('/');
+            if (mimeParts.length == 2) {
+              final charset = ct.contains('charset=')
+                  ? ct.split('charset=').last.split(';').first.trim()
+                  : null;
+              request.response.headers.contentType =
+                  ContentType(mimeParts[0], mimeParts[1], charset: charset);
             }
+          } else {
+            try {
+              request.response.headers.set(key, value.toString());
+            } catch (_) {}
           }
         });
       } catch (_) {}
@@ -459,16 +260,127 @@ mixin DeviceProxyMixin {
         'Device proxy response: ${response['statusCode']} for $callsign $apiPath');
   }
 
+  // ── Generic device proxy (pure bridge) ─────────────────────────
+
+  /// Handle ANY /{identifier}/* request — pure proxy to device.
+  /// The device handles all routing (blog, meet, API, static, downloads).
+  /// Forwards actual HTTP method, auth headers, query strings, and body.
+  Future<void> handleGenericDeviceProxy(HttpRequest request) async {
+    final path = request.uri.path;
+    final parts = path.substring(1).split('/');
+    final identifier = parts.first;
+
+    // Redirect /{identifier} to /{identifier}/ for proper relative path resolution
+    if (parts.length == 1 && !path.endsWith('/')) {
+      request.response.statusCode = 301;
+      request.response.headers.add('Location', '$path/');
+      return;
+    }
+
+    // Check if any device is connected for this identifier
+    final clients = findAllClientsByIdentifier(identifier);
+    if (clients.isEmpty) {
+      request.response.statusCode = 404;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({
+        'error': 'Device not connected',
+        'identifier': identifier,
+        'message': 'The device $identifier is not currently connected to this station',
+      }));
+      return;
+    }
+
+    // Strip identifier prefix, keep everything after as the sub-path
+    final subPath = parts.length > 1 ? '/${parts.sublist(1).join('/')}' : '/';
+    final query = request.uri.query;
+    final devicePath = query.isEmpty ? subPath : '$subPath?$query';
+
+    proxyLog('INFO',
+        'Device proxy: ${request.method} $path -> $identifier $devicePath (${clients.length} device(s))');
+
+    // Forward auth-relevant and content-negotiation headers to the device
+    final forwardedHeaders = <String, String>{};
+    final cookie = request.headers.value('cookie');
+    if (cookie != null) forwardedHeaders['cookie'] = cookie;
+    final authorization = request.headers.value('authorization');
+    if (authorization != null) forwardedHeaders['authorization'] = authorization;
+    final range = request.headers.value('range');
+    if (range != null) forwardedHeaders['range'] = range;
+    final contentType = request.headers.value('content-type');
+    if (contentType != null) forwardedHeaders['content-type'] = contentType;
+
+    // Read request body for POST/PUT/PATCH
+    String requestBody = '';
+    if (request.contentLength > 0) {
+      requestBody = await utf8.decodeStream(request);
+    }
+
+    // Multi-device failover (5s per device, sorted by priority+successRate)
+    final response = await proxyToAnyDevice(
+      identifier,
+      request.method,
+      devicePath,
+      headers: jsonEncode(forwardedHeaders),
+      body: requestBody,
+    );
+
+    if (response == null) {
+      request.response.statusCode = 504;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({
+        'error': 'Gateway Timeout',
+        'message': 'No device responded for $identifier',
+      }));
+      return;
+    }
+
+    // Write response status and headers
+    request.response.statusCode = response['statusCode'] ?? 500;
+    if (response['responseHeaders'] != null) {
+      try {
+        final headers =
+            jsonDecode(response['responseHeaders'] as String) as Map<String, dynamic>;
+        const skipHeaders = {'transfer-encoding', 'content-length', 'connection'};
+        headers.forEach((key, value) {
+          final lk = key.toLowerCase();
+          if (skipHeaders.contains(lk)) return;
+          if (lk == 'content-type') {
+            final ct = value.toString();
+            final ctParts = ct.split(';');
+            final mimeType = ctParts.first.trim();
+            final mimeParts = mimeType.split('/');
+            if (mimeParts.length == 2) {
+              final charset = ct.contains('charset=')
+                  ? ct.split('charset=').last.split(';').first.trim()
+                  : null;
+              request.response.headers.contentType =
+                  ContentType(mimeParts[0], mimeParts[1], charset: charset);
+            }
+          } else {
+            try {
+              request.response.headers.set(key, value.toString());
+            } catch (_) {}
+          }
+        });
+      } catch (_) {}
+    }
+
+    _writeResponseBody(request, response);
+
+    proxyLog('INFO',
+        'Device proxy response: ${response['statusCode']} for $identifier $devicePath');
+  }
+
   // ── Helpers ──────────────────────────────────────────────────────
 
-  /// Write response body using UTF-8 encoding (Fix 1: avoids Latin-1 errors).
+  /// Write response body using UTF-8 encoding (avoids Latin-1 errors).
   void _writeResponseBody(HttpRequest request, Map<String, dynamic> response) {
     final body = response['responseBody'] ?? '';
     final isBase64 = response['isBase64'] == true;
     if (isBase64) {
       request.response.add(base64Decode(body));
     } else {
-      // Fix 1: Use utf8.encode instead of write() to avoid Latin-1 encoding errors
+      // Use utf8.encode instead of write() to avoid Latin-1 encoding errors
       // with characters like → (U+2192)
       request.response.add(utf8.encode(body));
     }

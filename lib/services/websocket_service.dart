@@ -834,37 +834,10 @@ class WebSocketService {
     try {
       LogService().log('Station proxy HTTP request: $method $path');
 
-      // Forward ALL /api/* requests (except blog rendering) to LogApiService
-      if (path.startsWith('/api/') && !(path.startsWith('/api/blog/') && path.endsWith('.html'))) {
-        await _forwardToLocalApi(requestId, method, path, headersJson, body);
-        return;
-      }
-
-      // Forward dynamic Meetings pages and metadata to LogApiService so the
-      // device, station proxy, and local browser all reuse the same route.
-      if (path.startsWith('/meet/')) {
-        await _forwardToLocalApi(requestId, method, path, headersJson, body);
-        return;
-      }
-
-      // Handle blog HTML requests with device identifier prefix
-      // Path format: /{callsign}/blog/{filename}.html (from _handleBlogRequest)
-      if (path.contains('/blog/') && path.endsWith('.html') && !path.startsWith('/blog/')) {
-        await _forwardToLocalApi(requestId, method, path, headersJson, body);
-        return;
-      }
-
-      // Delegate to the shared local handler
-      final result = await handleLocalHttpRequest(method, path, headersJson: headersJson);
-
-      // Send result back via WebSocket
-      if (result.contentType.startsWith('text/')) {
-        _sendHttpResponse(requestId, result.statusCode, {'Content-Type': result.contentType}, utf8.decode(result.body));
-      } else {
-        _sendHttpResponse(requestId, result.statusCode, {'Content-Type': result.contentType}, base64Encode(result.body), isBase64: true);
-      }
-
-      LogService().log('Sent HTTP response: ${result.statusCode} (${result.body.length} bytes)');
+      // Forward ALL proxied requests to LogApiService pipeline.
+      // The device handles its own routing — blog, meet, API, static files,
+      // downloads, themes — all go through the same path.
+      await _forwardToLocalApi(requestId, method, path, headersJson, body);
     } catch (e) {
       LogService().log('Error handling HTTP request: $e');
       _sendHttpResponse(requestId, 500, {'Content-Type': 'text/plain'}, 'Internal Server Error: $e');

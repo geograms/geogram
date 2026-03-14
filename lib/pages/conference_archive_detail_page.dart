@@ -58,6 +58,10 @@ class _ConferenceArchiveDetailPageState
   StreamSubscription? _completionSub;
   TranscriptionProgress? _transcriptionProgress;
 
+  // Inline transcript expansion
+  final Set<String> _expandedTranscripts = {};
+  final Map<String, String?> _transcriptTexts = {};
+
   ConferenceArchiveEntry get _currentEntry => _entry ?? widget.entry;
 
   @override
@@ -910,8 +914,20 @@ class _ConferenceArchiveDetailPageState
                         child: CircularProgressIndicator(strokeWidth: 2),
                       )
                     else if (transcribed)
-                      const Icon(Icons.check_circle,
-                          color: Colors.green, size: 18)
+                      IconButton(
+                        icon: Icon(
+                          _expandedTranscripts.contains(asset.name)
+                              ? Icons.check_circle
+                              : Icons.check_circle_outline,
+                          color: Colors.green, size: 18,
+                        ),
+                        tooltip: _expandedTranscripts.contains(asset.name)
+                            ? 'Hide transcript'
+                            : 'Show transcript',
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(),
+                        onPressed: () => _toggleInlineTranscript(asset.name),
+                      )
                     else
                       IconButton(
                         icon: const Icon(Icons.transcribe, size: 18),
@@ -937,7 +953,90 @@ class _ConferenceArchiveDetailPageState
           ),
         ),
         _buildRecordingReactionsRow(theme, asset),
+        if (_expandedTranscripts.contains(asset.name))
+          _buildInlineTranscript(theme, asset.name),
       ],
+    );
+  }
+
+  void _toggleInlineTranscript(String recordingName) {
+    setState(() {
+      if (_expandedTranscripts.contains(recordingName)) {
+        _expandedTranscripts.remove(recordingName);
+      } else {
+        _expandedTranscripts.add(recordingName);
+        if (!_transcriptTexts.containsKey(recordingName)) {
+          _loadInlineTranscript(recordingName);
+        }
+      }
+    });
+  }
+
+  Future<void> _loadInlineTranscript(String recordingName) async {
+    try {
+      final text = await _archiveService.readTranscriptForRecording(
+        _currentEntry,
+        recordingName,
+      );
+      if (mounted) {
+        setState(() => _transcriptTexts[recordingName] = text);
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() =>
+            _transcriptTexts[recordingName] = 'Error loading transcript: $e');
+      }
+    }
+  }
+
+  Widget _buildInlineTranscript(ThemeData theme, String recordingName) {
+    final text = _transcriptTexts[recordingName];
+    return Padding(
+      padding: const EdgeInsets.only(left: 40, right: 8, bottom: 8),
+      child: text == null
+          ? const Padding(
+              padding: EdgeInsets.symmetric(vertical: 8),
+              child: Center(
+                child: SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+              ),
+            )
+          : Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  constraints: const BoxConstraints(maxHeight: 300),
+                  child: SingleChildScrollView(
+                    child: SelectableText(
+                      text,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        fontFamily: 'monospace',
+                        height: 1.6,
+                      ),
+                    ),
+                  ),
+                ),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: IconButton(
+                    icon: const Icon(Icons.copy, size: 16),
+                    tooltip: 'Copy to clipboard',
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(),
+                    onPressed: () {
+                      Clipboard.setData(ClipboardData(text: text));
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                            content: Text('Transcript copied to clipboard')),
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
     );
   }
 

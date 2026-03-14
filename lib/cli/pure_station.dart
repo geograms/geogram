@@ -59,7 +59,6 @@ import '../services/nostr_storage_paths.dart';
 import '../services/station_activity_store.dart';
 import '../services/station_group_access_service.dart';
 import '../server/mixins/email_handler_mixin.dart';
-import '../server/mixins/blog_handler_mixin.dart';
 import '../server/mixins/console_command_mixin.dart';
 import '../server/mixins/conference_mixin.dart';
 import '../server/mixins/device_proxy_mixin.dart';
@@ -602,7 +601,7 @@ class ChatMessage implements ChatMessageReadable {
 }
 
 /// Connected WebSocket client
-class PureConnectedClient implements EmailClient, BlogClient, ConnectedClientReadable, DeviceProxyClient {
+class PureConnectedClient implements EmailClient, ConnectedClientReadable, DeviceProxyClient {
   @override
   final WebSocket socket;
   @override
@@ -810,7 +809,7 @@ class PureTileCache {
 }
 
 /// Pure Dart station server for CLI mode
-class PureStationServer with HeartbeatMixin, EmailHandlerMixin, BlogHandlerMixin, ConsoleCommandMixin, ChatModificationMixin, ChatNip05Mixin, ChatModerationMixin, ConferenceMixin, XmppServerMixin, KarmaMixin, DeviceProxyMixin
+class PureStationServer with HeartbeatMixin, EmailHandlerMixin, ConsoleCommandMixin, ChatModificationMixin, ChatNip05Mixin, ChatModerationMixin, ConferenceMixin, XmppServerMixin, KarmaMixin, DeviceProxyMixin
     implements StationCommandInterface {
   HttpServer? _httpServer;
   HttpServer? _httpsServer;
@@ -946,74 +945,6 @@ class PureStationServer with HeartbeatMixin, EmailHandlerMixin, BlogHandlerMixin
           client.socket.add(payload);
         } catch (_) {}
       }
-    }
-  }
-
-  // ── BlogHandlerMixin interface ──────────────────────────────────
-  @override
-  void blogLog(String level, String message) => _log(level, message);
-  @override
-  String get blogDevicesDir => PureStorageConfig().devicesDir;
-  @override
-  String get blogConfigPath => PureStorageConfig().configPath;
-  @override
-  BlogClient? blogFindConnectedClientByIdentifier(String identifier) =>
-      findConnectedClientByIdentifier(identifier) as BlogClient?;
-  @override
-  List<BlogClient> blogFindAllClientsByIdentifier(String identifier) =>
-      findAllClientsByIdentifier(identifier).cast<BlogClient>();
-  @override
-  Future<bool> blogProxyToClient(
-      BlogClient client, HttpRequest request, String filename) async {
-    if (client is! PureConnectedClient) return false;
-    final targetCallsign = client.callsign ?? '';
-    final blogApiPath = '/$targetCallsign/blog/$filename.html';
-    final requestId = DateTime.now().millisecondsSinceEpoch.toString();
-    final proxyRequest = {
-      'type': 'HTTP_REQUEST',
-      'requestId': requestId,
-      'method': 'GET',
-      'path': blogApiPath,
-      'headers': jsonEncode({'X-Device-Callsign': targetCallsign}),
-      'body': '',
-    };
-    final completer = Completer<Map<String, dynamic>>();
-    _pendingProxyRequests[requestId] = completer;
-    try {
-      client.socket.add(jsonEncode(proxyRequest));
-      final response = await completer.future.timeout(
-        const Duration(seconds: 30),
-        onTimeout: () => {
-              'type': 'HTTP_RESPONSE',
-              'statusCode': 504,
-              'responseBody': 'Gateway Timeout - client did not respond',
-            },
-      );
-      request.response.statusCode = response['statusCode'] ?? 500;
-      if (response['responseHeaders'] != null) {
-        try {
-          final headers = jsonDecode(response['responseHeaders'] as String)
-              as Map<String, dynamic>;
-          headers.forEach((key, value) {
-            request.response.headers.add(key, value.toString());
-          });
-        } catch (_) {}
-      }
-      final body = response['responseBody'] ?? '';
-      final isBase64 = response['isBase64'] == true;
-      if (isBase64) {
-        request.response.add(base64Decode(body));
-      } else {
-        request.response.write(body);
-      }
-      return true;
-    } catch (e) {
-      _log('ERROR', 'Error proxying blog request: $e');
-      request.response.statusCode = 502;
-      request.response.write('Bad Gateway: $e');
-      return true;
-    } finally {
-      _pendingProxyRequests.remove(requestId);
     }
   }
 
@@ -2701,7 +2632,7 @@ class PureStationServer with HeartbeatMixin, EmailHandlerMixin, BlogHandlerMixin
       // - Tile requests (map tiles, high volume by nature)
       // - Root page and static web assets
       // - Public API status/karma endpoints
-      final isExemptPath = isCallsignMeetPath(path) ||
+      final isExemptPath = isDevicePath(path) ||
           path.startsWith('/tiles/') ||
           path == '/' ||
           path.startsWith('/web/') ||
@@ -2912,15 +2843,9 @@ class PureStationServer with HeartbeatMixin, EmailHandlerMixin, BlogHandlerMixin
       } else if (_isPlaceDetailsPath(path) && method == 'GET') {
         // /api/places/{callsign}/{folderName} - place details
         await _handlePlaceDetails(request);
-      } else if (isCallsignMeetPath(path) || isCallsignApiPath(path)) {
-        // /{callsign}/api/* or /{callsign}/meet/* - proxy to connected device
-        await handleCallsignApiProxy(request);
-      } else if (isBlogPath(path)) {
-        await handleBlogRequest(request);
-      } else if (isCallsignDownloadPath(path)) {
-        await _handleDeviceDownloadPage(request);
-      } else if (isCallsignOrNicknamePath(path)) {
-        await handleCallsignOrNicknameWww(request);
+      } else if (isDevicePath(path)) {
+        // /{identifier}/* — pure proxy to connected device
+        await handleGenericDeviceProxy(request);
       } else {
         request.response.statusCode = 404;
         request.response.write('Not Found');

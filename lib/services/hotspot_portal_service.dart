@@ -168,6 +168,12 @@ class HotspotPortalService {
       return path;
     }
 
+    // Blog HTML with identifier prefix: /{identifier}/blog/{filename}.html
+    // Handled by LogApiService._handleBlogHtmlRequest, not the portal
+    if (path.contains('/blog/') && path.endsWith('.html') && !path.startsWith('/blog/')) {
+      return null;
+    }
+
     // Any other /{app}/{file} path — pass through directly
     // (e.g., /blog/styles.css, /chat/styles.css, /www/some-file.png)
     final parts = path.split('/').where((p) => p.isNotEmpty).toList();
