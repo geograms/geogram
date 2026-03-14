@@ -1332,12 +1332,16 @@ static esp_err_t aprs_tx_symbol(sa818_radio_handle_t handle,
 #if CONFIG_IDF_TARGET_ESP32
     if (handle->i2s_tx_ready) {
         if (mark_tone) s_mark_count++; else s_space_count++;
-        const uint16_t phase_inc = mark_tone ? APRS_PDM_PHASE_MARK_INC : APRS_PDM_PHASE_SPACE_INC;
+        // Float phase for exact tone frequencies (no integer rounding error).
+        // phase is 0..1 representing one full sine cycle.
+        const float freq = mark_tone ? APRS_MARK_FREQ_HZ : APRS_SPACE_FREQ_HZ;
+        const float step = freq / (float)APRS_PDM_SAMPLE_RATE_HZ;
         for (size_t i = 0; i < APRS_PDM_SAMPLES_PER_BIT; i++) {
-            uint8_t lut = aprs_sin_sample(stream->phase_acc);
-            stream->phase_acc = (uint16_t)((stream->phase_acc + phase_inc) % APRS_PDM_SIN_LEN);
+            uint16_t lut_phase = (uint16_t)(stream->phase * APRS_PDM_SIN_LEN) % APRS_PDM_SIN_LEN;
+            uint8_t lut = aprs_sin_sample(lut_phase);
+            stream->phase += step;
+            if (stream->phase >= 1.0f) stream->phase -= 1.0f;
             // I2S DAC TX: unsigned 16-bit, MSB-aligned (top 8 bits → 8-bit DAC).
-            // Scale sine (0-255) around midpoint 128 with controlled amplitude.
             int dac_val = 128 + ((int)lut - 128) * APRS_DAC_AMPLITUDE / 128;
             uint16_t sample = (uint16_t)(dac_val << 8);
             stream->pcm_block[stream->pcm_fill++] = sample;  // L
@@ -2063,21 +2067,22 @@ esp_err_t sa818_radio_test_tone(sa818_radio_handle_t handle)
         if (rx_was_running) handle->rx_paused = false;
         return ESP_ERR_NO_MEM;
     }
-    uint16_t phase = 0;
-    const uint16_t freqs[] = {APRS_PDM_PHASE_MARK_INC, APRS_PDM_PHASE_SPACE_INC,
-                              APRS_PDM_PHASE_MARK_INC, APRS_PDM_PHASE_SPACE_INC};
+    float phase = 0.0f;
+    const float tone_freqs[] = {1200.0f, 2200.0f, 1200.0f, 2200.0f};
     const char *names[] = {"1200", "2200", "1200", "2200"};
 
     for (int seg = 0; seg < 4; seg++) {
-        uint16_t inc = freqs[seg];
+        float step = tone_freqs[seg] / (float)APRS_PDM_SAMPLE_RATE_HZ;
         int total_samples = (int)(APRS_PDM_SAMPLE_RATE_HZ / 2);  // 500ms
         int written = 0;
-        ESP_LOGI(TAG, "Test tone: %s Hz (phase_inc=%u)", names[seg], (unsigned)inc);
+        ESP_LOGI(TAG, "Test tone: %s Hz", names[seg]);
         while (written < total_samples) {
             int fill = 0;
             while (fill < 1280 && written < total_samples) {
-                uint8_t s = aprs_sin_sample(phase);
-                phase = (uint16_t)((phase + inc) % APRS_PDM_SIN_LEN);
+                uint16_t lut_phase = (uint16_t)(phase * APRS_PDM_SIN_LEN) % APRS_PDM_SIN_LEN;
+                uint8_t s = aprs_sin_sample(lut_phase);
+                phase += step;
+                if (phase >= 1.0f) phase -= 1.0f;
                 int dac_val = 128 + ((int)s - 128) * APRS_DAC_AMPLITUDE / 128;
                 uint16_t sample = (uint16_t)(dac_val << 8);
                 buf[fill++] = sample;  // L
