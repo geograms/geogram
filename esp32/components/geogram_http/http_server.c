@@ -59,12 +59,18 @@ static void aprs_tx_task(void *arg)
     aprs_tx_item_t item;
     while (true) {
         if (xQueueReceive(s_aprs_tx_queue, &item, portMAX_DELAY) == pdTRUE) {
+            ESP_LOGI(TAG, "aprs_tx_task: dequeued %s -> %s", item.from, item.to);
             sa818_radio_handle_t radio = model_get_sa818_radio();
-            if (radio) {
-                esp_err_t err = sa818_radio_send_aprs_message(radio, item.from, item.to, item.message);
-                if (err != ESP_OK) {
-                    ESP_LOGW(TAG, "APRS TX failed: %s", esp_err_to_name(err));
-                }
+            if (!radio) {
+                ESP_LOGW(TAG, "aprs_tx_task: radio handle is NULL");
+                continue;
+            }
+            ESP_LOGI(TAG, "aprs_tx_task: calling send_aprs_message");
+            esp_err_t err = sa818_radio_send_aprs_message(radio, item.from, item.to, item.message);
+            if (err != ESP_OK) {
+                ESP_LOGW(TAG, "APRS TX failed: %s", esp_err_to_name(err));
+            } else {
+                ESP_LOGI(TAG, "aprs_tx_task: TX complete OK");
             }
         }
     }
@@ -75,7 +81,7 @@ static void aprs_tx_queue_init(void)
     if (s_aprs_tx_queue == NULL) {
         s_aprs_tx_queue = xQueueCreate(4, sizeof(aprs_tx_item_t));
         if (s_aprs_tx_queue) {
-            xTaskCreatePinnedToCore(aprs_tx_task, "aprs_tx", 6144, NULL, 5, NULL, 1);
+            xTaskCreatePinnedToCore(aprs_tx_task, "aprs_tx", 8192, NULL, 5, NULL, 1);
         }
     }
 }
@@ -1307,6 +1313,35 @@ static const httpd_uri_t uri_api_aprs_audio = {
     .user_ctx = NULL
 };
 
+static esp_err_t api_aprs_test_tone_handler(httpd_req_t *req)
+{
+#if CONFIG_IDF_TARGET_ESP32
+    sa818_radio_handle_t radio = model_get_sa818_radio();
+    if (!radio) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no radio");
+        return ESP_FAIL;
+    }
+    esp_err_t err = sa818_radio_test_tone(radio);
+    if (err != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, esp_err_to_name(err));
+        return ESP_FAIL;
+    }
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"ok\":true}");
+    return ESP_OK;
+#else
+    httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "not supported");
+    return ESP_FAIL;
+#endif
+}
+
+static const httpd_uri_t uri_api_aprs_test_tone = {
+    .uri = "/api/aprs/test_tone",
+    .method = HTTP_POST,
+    .handler = api_aprs_test_tone_handler,
+    .user_ctx = NULL
+};
+
 static const httpd_uri_t uri_api_radio_diag = {
     .uri = "/api/radio/diag",
     .method = HTTP_GET,
@@ -1412,7 +1447,7 @@ esp_err_t http_server_start_ex(wifi_config_callback_t callback, bool enable_stat
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.lru_purge_enable = true;
-    config.stack_size = 10240;
+    config.stack_size = 8192;
     config.max_uri_handlers = 20;
     config.max_open_sockets = 3;
     config.recv_wait_timeout = 5;
@@ -1453,6 +1488,7 @@ esp_err_t http_server_start_ex(wifi_config_callback_t callback, bool enable_stat
         httpd_register_uri_handler(s_server, &uri_api_aprs_status);
         httpd_register_uri_handler(s_server, &uri_api_aprs_rx_stats);
         httpd_register_uri_handler(s_server, &uri_api_aprs_audio);
+        httpd_register_uri_handler(s_server, &uri_api_aprs_test_tone);
         httpd_register_uri_handler(s_server, &uri_api_radio_diag);
         httpd_register_uri_handler(s_server, &uri_api_radio_retry);
         ESP_LOGI(TAG, "APRS API endpoints registered");

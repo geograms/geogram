@@ -67,16 +67,25 @@ static const char *TAG = "sa818_radio";
 #define APRS_MAX_MESSAGE_SEQ            999U
 
 #if CONFIG_IDF_TARGET_ESP32
-#define APRS_I2S_SAMPLE_RATE_HZ         48000U
-#define APRS_I2S_BITS_PER_SAMPLE        16
-#define APRS_I2S_SAMPLES_PER_BIT        (APRS_I2S_SAMPLE_RATE_HZ / 1200U)
-#define APRS_I2S_SIN_LEN                512U
-#define APRS_I2S_TX_BLOCK_SAMPLES       320U
-#define APRS_I2S_RF_LEVEL_SHIFT         7U
-#define APRS_I2S_RF_LEVEL_OFFSET        10000U
-#define APRS_I2S_PHASE_MARK_INC         ((uint16_t)(((APRS_I2S_SIN_LEN * APRS_MARK_FREQ_HZ) / APRS_I2S_SAMPLE_RATE_HZ) + 0.5f))
-#define APRS_I2S_PHASE_SPACE_INC        ((uint16_t)(((APRS_I2S_SIN_LEN * APRS_SPACE_FREQ_HZ) / APRS_I2S_SAMPLE_RATE_HZ) + 0.5f))
-#define APRS_I2S_ADC_BLOCK_SAMPLES      768U  /* Match DMA buffer length for efficient reads */
+// PDM TX sample rate — KV4P-HT uses 48 kHz; for APRS AFSK we use the same.
+#define APRS_PDM_SAMPLE_RATE_HZ         48000U
+#define APRS_PDM_SAMPLES_PER_BIT        (APRS_PDM_SAMPLE_RATE_HZ / 1200U)  /* 40 */
+#define APRS_PDM_TX_BLOCK_SAMPLES       640U
+#define APRS_PDM_SIN_LEN                512U
+#define APRS_PDM_PHASE_MARK_INC         ((uint16_t)(((APRS_PDM_SIN_LEN * APRS_MARK_FREQ_HZ) / APRS_PDM_SAMPLE_RATE_HZ) + 0.5f))
+#define APRS_PDM_PHASE_SPACE_INC        ((uint16_t)(((APRS_PDM_SIN_LEN * APRS_SPACE_FREQ_HZ) / APRS_PDM_SAMPLE_RATE_HZ) + 0.5f))
+// Amplitude for PDM: 16-bit signed, ~60% of full scale
+#define APRS_PDM_AMPLITUDE              19000
+// Amplitude for I2S DAC TX: 0-127 range, scales sine around midpoint (128).
+// Max range for maximum FM deviation on SA818 mic input.
+#define APRS_DAC_AMPLITUDE              127
+// ADC/RX still uses I2S built-in ADC at this rate
+#define APRS_I2S_SAMPLE_RATE_HZ         38400U
+#define APRS_I2S_SIN_LEN                APRS_PDM_SIN_LEN
+#define APRS_I2S_ADC_BLOCK_SAMPLES      768U
+// Legacy aliases for RX demod code (unchanged)
+#define APRS_I2S_PHASE_MARK_INC         APRS_PDM_PHASE_MARK_INC
+#define APRS_I2S_PHASE_SPACE_INC        APRS_PDM_PHASE_SPACE_INC
 #endif
 
 // --------------------------------------------------------------------------
@@ -185,6 +194,7 @@ struct sa818_radio_dev {
 #endif
 
     volatile bool rx_task_running;
+    volatile bool rx_paused;      // TX sets this to pause RX I2S reads
     TaskHandle_t rx_task;
     sa818_radio_audio_rx_cb_t audio_rx_cb;
     void *audio_rx_ctx;
@@ -428,38 +438,22 @@ static esp_err_t sa818_radio_configure_adc(sa818_radio_handle_t handle)
 }
 
 #if CONFIG_IDF_TARGET_ESP32
-static esp_err_t sa818_radio_configure_i2s_tx(sa818_radio_handle_t handle)
+// Configure I2S for RX (ADC) only — used during normal receive.
+// TX uses a separate PDM configuration (installed/uninstalled per TX burst).
+static esp_err_t sa818_radio_configure_i2s_rx(sa818_radio_handle_t handle)
 {
     if (!handle) {
         return ESP_ERR_INVALID_ARG;
     }
-    if (handle->cfg.audio_out_pin != 25 && handle->cfg.audio_out_pin != 26) {
-        return ESP_ERR_NOT_SUPPORTED;
-    }
-
-    // Match APRS-ESP behavior: keep I2S in stereo framing and mirror the same
-    // sample on both channels, while enabling only the target DAC channel.
-    i2s_channel_fmt_t channel_fmt = (handle->cfg.audio_out_pin == 25)
-                                    ? I2S_CHANNEL_FMT_ALL_RIGHT
-                                    : I2S_CHANNEL_FMT_ALL_LEFT;
-
-    i2s_mode_t i2s_mode = I2S_MODE_MASTER | I2S_MODE_TX | I2S_MODE_DAC_BUILT_IN;
-    if (handle->adc_ready) {
-        i2s_mode |= I2S_MODE_RX | I2S_MODE_ADC_BUILT_IN;
-    }
 
     i2s_config_t i2s_cfg = {
-        .mode = (i2s_mode_t)i2s_mode,
+        .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX | I2S_MODE_ADC_BUILT_IN),
         .sample_rate = APRS_I2S_SAMPLE_RATE_HZ,
         .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT,
-        .channel_format = channel_fmt,
-#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(4, 2, 0)
+        .channel_format = I2S_CHANNEL_FMT_ALL_LEFT,
         .communication_format = I2S_COMM_FORMAT_STAND_MSB,
-#else
-        .communication_format = I2S_COMM_FORMAT_I2S_MSB,
-#endif
-        .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
-        .dma_buf_count = 2,
+        .intr_alloc_flags = 0,
+        .dma_buf_count = 5,
         .dma_buf_len = 768,
         .use_apll = false,
         .tx_desc_auto_clear = true,
@@ -471,39 +465,104 @@ static esp_err_t sa818_radio_configure_i2s_tx(sa818_radio_handle_t handle)
         return ret;
     }
 
-    ret = i2s_set_pin(I2S_NUM_0, NULL);
+    if (handle->adc_ready) {
+        i2s_set_adc_mode(ADC_UNIT_1, (adc1_channel_t)handle->adc_channel);
+        ESP_LOGI(TAG, "I2S ADC RX configured for ADC1 ch%d (GPIO%d)",
+                 (int)handle->adc_channel, handle->cfg.audio_in_pin);
+    }
+
+    i2s_set_pin(I2S_NUM_0, NULL);
+    i2s_zero_dma_buffer(I2S_NUM_0);
+
+    // Inject ADC bias voltage on GPIO26 (DAC_CHANNEL_2) matching KV4P-HT pattern.
+    dac_output_enable(DAC_CHANNEL_2);
+    dac_output_voltage(DAC_CHANNEL_2, (uint8_t)((255.0f / 3.3f) * 1.75f));
+
+    handle->i2s_tx_ready = true;  // Marks I2S as available (PDM TX installed on demand)
+    ESP_LOGI(TAG, "I2S RX (ADC) configured @ %u Hz; PDM TX on GPIO25 available",
+             APRS_I2S_SAMPLE_RATE_HZ);
+    return ESP_OK;
+}
+
+// Install I2S in PDM TX mode on GPIO25 (KV4P-HT audio path to SA818 MIC).
+// Must be called with I2S_NUM_0 driver uninstalled.
+static esp_err_t sa818_radio_start_pdm_tx(void)
+{
+    // Use I2S DAC mode: built-in DAC on GPIO25 (DAC_CHANNEL_1 = RIGHT channel).
+    // Data format: unsigned 16-bit, MSB-aligned (top 8 bits → 8-bit DAC).
+    i2s_config_t i2s_cfg = {
+        .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX | I2S_MODE_DAC_BUILT_IN),
+        .sample_rate = APRS_PDM_SAMPLE_RATE_HZ,
+        .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT,
+        .channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT,
+        .communication_format = I2S_COMM_FORMAT_STAND_MSB,
+        .intr_alloc_flags = 0,
+        .dma_buf_count = 5,
+        .dma_buf_len = 640,
+        .use_apll = true,
+        .tx_desc_auto_clear = true,
+        .fixed_mclk = 0,
+    };
+
+    esp_err_t ret = i2s_driver_install(I2S_NUM_0, &i2s_cfg, 0, NULL);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "DAC TX i2s_driver_install failed: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    // Enable DAC on RIGHT channel = GPIO25 (DAC_CHANNEL_1)
+    ret = i2s_set_dac_mode(I2S_DAC_CHANNEL_RIGHT_EN);
     if (ret != ESP_OK) {
         i2s_driver_uninstall(I2S_NUM_0);
         return ret;
     }
 
-    i2s_dac_mode_t dac_mode = (handle->cfg.audio_out_pin == 25) ? I2S_DAC_CHANNEL_RIGHT_EN : I2S_DAC_CHANNEL_LEFT_EN;
-    ret = i2s_set_dac_mode(dac_mode);
+    i2s_zero_dma_buffer(I2S_NUM_0);
+    ESP_LOGI(TAG, "DAC TX started on GPIO25 @ %u Hz", APRS_PDM_SAMPLE_RATE_HZ);
+    return ESP_OK;
+}
+
+// Stop PDM TX and reinstall I2S RX (ADC) for receive.
+static esp_err_t sa818_radio_stop_pdm_tx(sa818_radio_handle_t handle)
+{
+    // Disable DAC output, then set GPIO25 to input (high-Z) — prevents DC pop.
+    i2s_set_dac_mode(I2S_DAC_CHANNEL_DISABLE);
+    gpio_set_direction(GPIO_NUM_25, GPIO_MODE_INPUT);
+
+    i2s_driver_uninstall(I2S_NUM_0);
+
+    // Reinstall RX I2S
+    i2s_config_t i2s_cfg = {
+        .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX | I2S_MODE_ADC_BUILT_IN),
+        .sample_rate = APRS_I2S_SAMPLE_RATE_HZ,
+        .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT,
+        .channel_format = I2S_CHANNEL_FMT_ALL_LEFT,
+        .communication_format = I2S_COMM_FORMAT_STAND_MSB,
+        .intr_alloc_flags = 0,
+        .dma_buf_count = 5,
+        .dma_buf_len = 768,
+        .use_apll = false,
+        .tx_desc_auto_clear = true,
+        .fixed_mclk = 0,
+    };
+
+    esp_err_t ret = i2s_driver_install(I2S_NUM_0, &i2s_cfg, 0, NULL);
     if (ret != ESP_OK) {
-        i2s_driver_uninstall(I2S_NUM_0);
+        ESP_LOGE(TAG, "RX I2S reinstall failed: %s", esp_err_to_name(ret));
         return ret;
     }
-
-    ret = i2s_zero_dma_buffer(I2S_NUM_0);
-    if (ret != ESP_OK) {
-        i2s_driver_uninstall(I2S_NUM_0);
-        return ret;
-    }
-
-    dac_i2s_enable();
 
     if (handle->adc_ready) {
-        ret = i2s_set_adc_mode(ADC_UNIT_1, (adc1_channel_t)handle->adc_channel);
-        if (ret == ESP_OK) {
-            ESP_LOGI(TAG, "I2S ADC mode configured for ADC1 channel %d (GPIO%d)",
-                     (int)handle->adc_channel, handle->cfg.audio_in_pin);
-        } else {
-            ESP_LOGW(TAG, "I2S ADC mode setup failed: %s", esp_err_to_name(ret));
-        }
+        i2s_set_adc_mode(ADC_UNIT_1, (adc1_channel_t)handle->adc_channel);
     }
+    i2s_set_pin(I2S_NUM_0, NULL);
+    i2s_zero_dma_buffer(I2S_NUM_0);
 
-    handle->i2s_tx_ready = true;
-    ESP_LOGI(TAG, "APRS TX using I2S+DAC on GPIO%d @ %u Hz", handle->cfg.audio_out_pin, APRS_I2S_SAMPLE_RATE_HZ);
+    // Re-inject ADC bias
+    dac_output_enable(DAC_CHANNEL_2);
+    dac_output_voltage(DAC_CHANNEL_2, (uint8_t)((255.0f / 3.3f) * 1.75f));
+
+    ESP_LOGI(TAG, "PDM TX stopped, RX I2S restored");
     return ESP_OK;
 }
 #endif
@@ -535,11 +594,14 @@ static esp_err_t sa818_radio_configure_dac(sa818_radio_handle_t handle)
     };
     esp_err_t ret = dac_oneshot_new_channel(&cfg, &handle->dac_handle);
     if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "DAC oneshot channel init failed: %s (channel=%d, pin=%d)",
+                 esp_err_to_name(ret), (int)channel, handle->cfg.audio_out_pin);
         return ret;
     }
 
     handle->dac_ready = true;
     dac_oneshot_output_voltage(handle->dac_handle, 128);
+    ESP_LOGI(TAG, "DAC oneshot ready on GPIO%d", handle->cfg.audio_out_pin);
     return ESP_OK;
 }
 #endif
@@ -1052,6 +1114,11 @@ static void sa818_radio_rx_task(void *arg)
 #endif
 
         while (handle->rx_task_running) {
+            // TX pauses RX to take over the I2S peripheral.
+            if (handle->rx_paused) {
+                vTaskDelay(pdMS_TO_TICKS(20));
+                continue;
+            }
             size_t bytes_read = 0;
             esp_err_t ret = i2s_read(I2S_NUM_0, i2s_buf, sizeof(i2s_buf),
                                      &bytes_read, pdMS_TO_TICKS(100));
@@ -1210,7 +1277,7 @@ static void sa818_radio_rx_task(void *arg)
 typedef struct {
 #if CONFIG_IDF_TARGET_ESP32
     uint16_t phase_acc;
-    uint16_t pcm_block[APRS_I2S_TX_BLOCK_SAMPLES];
+    uint16_t pcm_block[APRS_PDM_TX_BLOCK_SAMPLES * 2]; // stereo: L+R per sample
     size_t pcm_fill;
     size_t i2s_bytes_written;
 #endif
@@ -1256,22 +1323,26 @@ static void aprs_tx_stream_init(sa818_radio_handle_t handle, aprs_tx_stream_t *s
     stream->next_sample_us = esp_timer_get_time();
 }
 
+static size_t s_mark_count = 0, s_space_count = 0;
+
 static esp_err_t aprs_tx_symbol(sa818_radio_handle_t handle,
                                 bool mark_tone,
                                 aprs_tx_stream_t *stream)
 {
 #if CONFIG_IDF_TARGET_ESP32
     if (handle->i2s_tx_ready) {
-        const uint16_t phase_inc = mark_tone ? APRS_I2S_PHASE_MARK_INC : APRS_I2S_PHASE_SPACE_INC;
-        for (size_t i = 0; i < APRS_I2S_SAMPLES_PER_BIT; i++) {
-            uint8_t sample = aprs_sin_sample(stream->phase_acc);
-            stream->phase_acc = (uint16_t)((stream->phase_acc + phase_inc) % APRS_I2S_SIN_LEN);
-            // Match APRS-ESP RF scaling: avoid overdriving SA818 mic input.
-            uint16_t pcm = (uint16_t)(((uint16_t)sample << APRS_I2S_RF_LEVEL_SHIFT) + APRS_I2S_RF_LEVEL_OFFSET);
-            // In stereo-framed I2S mode, duplicate the sample across both slots.
-            stream->pcm_block[stream->pcm_fill++] = pcm;
-            stream->pcm_block[stream->pcm_fill++] = pcm;
-            if (stream->pcm_fill >= APRS_I2S_TX_BLOCK_SAMPLES - 1U) {
+        if (mark_tone) s_mark_count++; else s_space_count++;
+        const uint16_t phase_inc = mark_tone ? APRS_PDM_PHASE_MARK_INC : APRS_PDM_PHASE_SPACE_INC;
+        for (size_t i = 0; i < APRS_PDM_SAMPLES_PER_BIT; i++) {
+            uint8_t lut = aprs_sin_sample(stream->phase_acc);
+            stream->phase_acc = (uint16_t)((stream->phase_acc + phase_inc) % APRS_PDM_SIN_LEN);
+            // I2S DAC TX: unsigned 16-bit, MSB-aligned (top 8 bits → 8-bit DAC).
+            // Scale sine (0-255) around midpoint 128 with controlled amplitude.
+            int dac_val = 128 + ((int)lut - 128) * APRS_DAC_AMPLITUDE / 128;
+            uint16_t sample = (uint16_t)(dac_val << 8);
+            stream->pcm_block[stream->pcm_fill++] = sample;  // L
+            stream->pcm_block[stream->pcm_fill++] = sample;  // R
+            if (stream->pcm_fill >= APRS_PDM_TX_BLOCK_SAMPLES * 2) {
                 esp_err_t ret = aprs_tx_stream_flush(handle, stream);
                 if (ret != ESP_OK) {
                     return ret;
@@ -1283,16 +1354,26 @@ static esp_err_t aprs_tx_symbol(sa818_radio_handle_t handle,
 #endif
 
 #if SOC_DAC_SUPPORTED
-    const float freq = mark_tone ? APRS_MARK_FREQ_HZ : APRS_SPACE_FREQ_HZ;
-    const float step = (float)(2.0 * M_PI * freq / (double)APRS_SAMPLE_RATE_HZ);
+    // DAC oneshot TX: use quarter-wave LUT (faster than sinf) at a sample
+    // rate the ESP32 DAC can sustain.  dac_oneshot_output_voltage() takes
+    // ~30-50 µs, so 9600 sps (104 µs interval) is achievable.
+    // 9600 / 1200 = 8 samples per bit.
+    #define DAC_TX_SAMPLE_RATE  9600U
+    #define DAC_TX_SPB          (DAC_TX_SAMPLE_RATE / 1200U)  /* 8 */
+    #define DAC_TX_AMPLITUDE    20   /* 0-127; ~260mV pk on SA818 mic input */
 
-    for (size_t i = 0; i < APRS_SAMPLES_PER_BIT; i++) {
-        int sample = 128 + (int)(38.0f * sinf(stream->phase));
-        if (sample < 0) {
-            sample = 0;
-        } else if (sample > 255) {
-            sample = 255;
-        }
+    const float freq = mark_tone ? APRS_MARK_FREQ_HZ : APRS_SPACE_FREQ_HZ;
+    const float step = freq / (float)DAC_TX_SAMPLE_RATE;
+    const uint32_t sample_period_us = 1000000U / DAC_TX_SAMPLE_RATE;
+
+    for (size_t i = 0; i < DAC_TX_SPB; i++) {
+        // Fast sine via quarter-wave LUT (already have s_aprs_sin_q[129])
+        // phase is 0..1 representing one full cycle
+        float ph = stream->phase;
+        // Map to 0..512 (SIN_LEN)
+        uint16_t qphase = (uint16_t)(ph * APRS_I2S_SIN_LEN) % APRS_I2S_SIN_LEN;
+        uint8_t lut_val = aprs_sin_sample(qphase);  // 0..255
+        int sample = 128 + (((int)lut_val - 128) * DAC_TX_AMPLITUDE / 128);
 
         esp_err_t ret = dac_oneshot_output_voltage(handle->dac_handle, (uint8_t)sample);
         if (ret != ESP_OK) {
@@ -1300,16 +1381,14 @@ static esp_err_t aprs_tx_symbol(sa818_radio_handle_t handle,
         }
 
         stream->phase += step;
-        if (stream->phase >= (float)(2.0 * M_PI)) {
-            stream->phase -= (float)(2.0 * M_PI);
+        if (stream->phase >= 1.0f) {
+            stream->phase -= 1.0f;
         }
 
-        stream->next_sample_us += (1000000U / APRS_SAMPLE_RATE_HZ);
+        stream->next_sample_us += sample_period_us;
         int64_t now_us = esp_timer_get_time();
         if (stream->next_sample_us > now_us) {
             esp_rom_delay_us((uint32_t)(stream->next_sample_us - now_us));
-        } else {
-            stream->next_sample_us = now_us;
         }
     }
 
@@ -1509,22 +1588,9 @@ esp_err_t sa818_radio_create(const sa818_radio_config_t *config, sa818_radio_han
     }
 
 #if CONFIG_IDF_TARGET_ESP32
-    ret = sa818_radio_configure_i2s_tx(dev);
-    if (ret != ESP_OK && dev->cfg.audio_out_pin >= 0) {
-        ESP_LOGW(TAG, "I2S APRS TX unavailable, falling back to DAC oneshot: %s", esp_err_to_name(ret));
-    }
-#endif
-
-#if SOC_DAC_SUPPORTED
-    if (
-#if CONFIG_IDF_TARGET_ESP32
-        !dev->i2s_tx_ready &&
-#endif
-        dev->cfg.audio_out_pin >= 0) {
-        ret = sa818_radio_configure_dac(dev);
-        if (ret != ESP_OK) {
-            ESP_LOGW(TAG, "APRS AFSK TX disabled: %s", esp_err_to_name(ret));
-        }
+    ret = sa818_radio_configure_i2s_rx(dev);
+    if (ret != ESP_OK && dev->cfg.audio_in_pin >= 0) {
+        ESP_LOGW(TAG, "I2S RX unavailable: %s", esp_err_to_name(ret));
     }
 #endif
 
@@ -1956,6 +2022,94 @@ esp_err_t sa818_radio_set_aprs_rx_callback(sa818_radio_handle_t handle,
     return ESP_OK;
 }
 
+#if CONFIG_IDF_TARGET_ESP32
+esp_err_t sa818_radio_test_tone(sa818_radio_handle_t handle)
+{
+    if (!handle || !handle->i2s_tx_ready) {
+        return ESP_ERR_NOT_SUPPORTED;
+    }
+
+    // Pause RX
+    bool rx_was_running = handle->rx_task_running;
+    if (rx_was_running) {
+        handle->rx_paused = true;
+        vTaskDelay(pdMS_TO_TICKS(200));
+    }
+
+    if (!handle->powered) {
+        sa818_radio_power(handle, true);
+    }
+
+    sa818_radio_set_frequency(handle, handle->aprs_freq_mhz, handle->aprs_freq_mhz);
+
+    // Switch to PDM TX mode
+    i2s_driver_uninstall(I2S_NUM_0);
+    esp_err_t err = sa818_radio_start_pdm_tx();
+    if (err != ESP_OK) {
+        if (rx_was_running) handle->rx_paused = false;
+        return err;
+    }
+
+    // PTT on
+    sa818_radio_set_ptt(handle, true);
+    vTaskDelay(pdMS_TO_TICKS(100));
+
+    // Generate 2 seconds of alternating 1200/2200 Hz, 500ms each
+    // I2S DAC TX uses stereo frames (L+R), unsigned 16-bit MSB-aligned
+    uint16_t *buf = (uint16_t *)malloc(1280 * sizeof(uint16_t));
+    if (!buf) {
+        sa818_radio_set_ptt(handle, false);
+        sa818_radio_stop_pdm_tx(handle);
+        if (rx_was_running) handle->rx_paused = false;
+        return ESP_ERR_NO_MEM;
+    }
+    uint16_t phase = 0;
+    const uint16_t freqs[] = {APRS_PDM_PHASE_MARK_INC, APRS_PDM_PHASE_SPACE_INC,
+                              APRS_PDM_PHASE_MARK_INC, APRS_PDM_PHASE_SPACE_INC};
+    const char *names[] = {"1200", "2200", "1200", "2200"};
+
+    for (int seg = 0; seg < 4; seg++) {
+        uint16_t inc = freqs[seg];
+        int total_samples = (int)(APRS_PDM_SAMPLE_RATE_HZ / 2);  // 500ms
+        int written = 0;
+        ESP_LOGI(TAG, "Test tone: %s Hz (phase_inc=%u)", names[seg], (unsigned)inc);
+        while (written < total_samples) {
+            int fill = 0;
+            while (fill < 1280 && written < total_samples) {
+                uint8_t s = aprs_sin_sample(phase);
+                phase = (uint16_t)((phase + inc) % APRS_PDM_SIN_LEN);
+                int dac_val = 128 + ((int)s - 128) * APRS_DAC_AMPLITUDE / 128;
+                uint16_t sample = (uint16_t)(dac_val << 8);
+                buf[fill++] = sample;  // L
+                buf[fill++] = sample;  // R
+                written++;
+            }
+            size_t bw = 0;
+            i2s_write(I2S_NUM_0, buf, fill * sizeof(uint16_t), &bw, portMAX_DELAY);
+        }
+    }
+
+    // Flush silence (DAC midpoint = 0x8000, not zero)
+    for (int j = 0; j < 1280; j++) buf[j] = 0x8000;
+    for (int i = 0; i < 5; i++) {
+        size_t bw = 0;
+        i2s_write(I2S_NUM_0, buf, 1280 * sizeof(uint16_t), &bw, portMAX_DELAY);
+    }
+
+    free(buf);
+
+    vTaskDelay(pdMS_TO_TICKS(100));
+    sa818_radio_set_ptt(handle, false);
+    sa818_radio_stop_pdm_tx(handle);
+
+    if (rx_was_running) {
+        handle->rx_paused = false;
+    }
+
+    return ESP_OK;
+}
+#endif
+
 esp_err_t sa818_radio_send_aprs_message(sa818_radio_handle_t handle,
                                         const char *from_callsign,
                                         const char *to_callsign,
@@ -1966,6 +2120,16 @@ esp_err_t sa818_radio_send_aprs_message(sa818_radio_handle_t handle,
     }
     if (!sa818_radio_is_aprs_tx_supported(handle)) {
         return ESP_ERR_NOT_SUPPORTED;
+    }
+
+    // Pause RX task so TX can use I2S write (DAC) without interference.
+    // I2S is configured with combined TX+DAC and RX+ADC (matching APRS-ESP).
+    // TX: dac_i2s_enable() → i2s_write() → dac_i2s_disable().
+    bool rx_was_running = handle->rx_task_running;
+    if (rx_was_running) {
+        ESP_LOGI(TAG, "APRS TX: pausing RX");
+        handle->rx_paused = true;
+        vTaskDelay(pdMS_TO_TICKS(200));  // Wait for in-flight i2s_read to complete
     }
 
     if (!handle->powered) {
@@ -1990,14 +2154,20 @@ esp_err_t sa818_radio_send_aprs_message(sa818_radio_handle_t handle,
         return ret;
     }
 
+    // Switch I2S from RX (ADC) to TX (PDM) mode — KV4P-HT audio path.
 #if CONFIG_IDF_TARGET_ESP32
     if (handle->i2s_tx_ready) {
-        i2s_zero_dma_buffer(I2S_NUM_0);
+        i2s_driver_uninstall(I2S_NUM_0);
+        ret = sa818_radio_start_pdm_tx();
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "PDM TX setup failed: %s", esp_err_to_name(ret));
+            if (rx_was_running) handle->rx_paused = false;
+            return ret;
+        }
     }
 #endif
 
-    ESP_LOGI(TAG, "APRS TX backend: %s",
-             sa818_radio_is_aprs_tx_i2s(handle) ? "I2S+DAC" : "DAC oneshot");
+    ESP_LOGI(TAG, "APRS TX backend: I2S DAC on GPIO25");
 
     ret = sa818_radio_set_ptt(handle, true);
     if (ret != ESP_OK) {
@@ -2009,6 +2179,8 @@ esp_err_t sa818_radio_send_aprs_message(sa818_radio_handle_t handle,
     bool mark_state = true;
     aprs_tx_stream_t stream;
     aprs_tx_stream_init(handle, &stream);
+
+    size_t mark_symbols = 0, space_symbols = 0;
 
     for (size_t i = 0; i < APRS_PREAMBLE_FLAGS; i++) {
         ret = aprs_tx_flag(handle, &mark_state, &stream);
@@ -2034,35 +2206,37 @@ esp_err_t sa818_radio_send_aprs_message(sa818_radio_handle_t handle,
         ret = aprs_tx_stream_flush(handle, &stream);
     }
 
-#if CONFIG_IDF_TARGET_ESP32
-    if (ret == ESP_OK && handle->i2s_tx_ready) {
-        uint16_t zeros[APRS_I2S_TX_BLOCK_SAMPLES];
-        memset(zeros, 0, sizeof(zeros));
-        for (int i = 0; i < 4; i++) {
-            size_t bytes_written = 0;
-            esp_err_t wr = i2s_write(I2S_NUM_0,
-                                     (const char *)zeros,
-                                     sizeof(zeros),
-                                     &bytes_written,
-                                     portMAX_DELAY);
-            if (wr != ESP_OK) {
-                ret = wr;
-                break;
-            }
-        }
-    }
-    if (handle->i2s_tx_ready) {
-        ESP_LOGI(TAG, "APRS TX I2S bytes written: %u", (unsigned)stream.i2s_bytes_written);
-    }
-#endif
+    ESP_LOGI(TAG, "APRS TX done: %u bytes I2S, mark_symbols=%u space_symbols=%u, phase_inc mark=%u space=%u",
+             (unsigned)stream.i2s_bytes_written,
+             (unsigned)s_mark_count, (unsigned)s_space_count,
+             (unsigned)APRS_I2S_PHASE_MARK_INC,
+             (unsigned)APRS_I2S_PHASE_SPACE_INC);
+    s_mark_count = 0;
+    s_space_count = 0;
 
-#if SOC_DAC_SUPPORTED
-    if (handle->dac_ready) {
-        dac_oneshot_output_voltage(handle->dac_handle, 128);
+    // Flush silence (DAC midpoint = 0x8000), then switch back to RX (ADC) mode.
+#if CONFIG_IDF_TARGET_ESP32
+    if (handle->i2s_tx_ready) {
+        uint16_t *silence = (uint16_t *)malloc(1280 * sizeof(uint16_t));
+        if (silence) {
+            for (int j = 0; j < 1280; j++) silence[j] = 0x8000;
+            size_t bw = 0;
+            for (int i = 0; i < 5; i++) {
+                i2s_write(I2S_NUM_0, silence, 1280 * sizeof(uint16_t), &bw, portMAX_DELAY);
+            }
+            free(silence);
+        }
+        sa818_radio_stop_pdm_tx(handle);
     }
 #endif
     vTaskDelay(pdMS_TO_TICKS(APRS_TX_TAIL_MS));
     sa818_radio_set_ptt(handle, false);
+
+    // Unpause RX — let the RX task resume I2S reads.
+    if (rx_was_running) {
+        handle->rx_paused = false;
+        ESP_LOGI(TAG, "APRS TX: RX resumed");
+    }
 
     return ret;
 }
