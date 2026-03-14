@@ -20,6 +20,7 @@ class VideoPlayerWidget extends StatefulWidget {
   final bool autoPlay;
   final bool showControls;
   final VoidCallback? onFullscreenToggle;
+  final Uint8List? coverImageBytes;
 
   const VideoPlayerWidget({
     super.key,
@@ -27,6 +28,7 @@ class VideoPlayerWidget extends StatefulWidget {
     this.autoPlay = false,
     this.showControls = true,
     this.onFullscreenToggle,
+    this.coverImageBytes,
   });
 
   @override
@@ -48,6 +50,7 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget> {
   Timer? _hideOverlayTimer;
   static const _overlayHideDelay = Duration(seconds: 5);
   late final FocusNode _focusNode;
+  bool _hasVideoTrack = true; // default true so Video shows during load
 
   final List<StreamSubscription> _subscriptions = [];
 
@@ -99,6 +102,7 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget> {
         sub.cancel();
       }
       _subscriptions.clear();
+      _hasVideoTrack = true; // reset for new media
       _initializePlayer();
     }
   }
@@ -164,8 +168,20 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget> {
         }),
       );
 
+      // Detect audio-only: media_kit emits width > 0 for video, null/0 for audio-only
+      _subscriptions.add(
+        _player!.stream.width.listen((width) {
+          if (mounted && width != null && width > 0) {
+            setState(() => _hasVideoTrack = true);
+          }
+        }),
+      );
+
       // Open the media file
-      await _player!.open(Media(widget.videoPath));
+      await _player!.open(
+        Media(widget.videoPath),
+        play: widget.autoPlay,
+      );
 
       if (!mounted) return;
 
@@ -174,8 +190,11 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget> {
         _errorMessage = null;
       });
 
-      if (widget.autoPlay) {
-        _player?.play();
+      // After media opens, give media_kit time to emit width for video tracks.
+      // If width was never > 0, this is audio-only — hide the opaque Video widget.
+      await Future.delayed(const Duration(milliseconds: 500));
+      if (mounted && _player!.state.width == null) {
+        setState(() => _hasVideoTrack = false);
       }
     } catch (e) {
       if (!mounted) return;
@@ -319,11 +338,24 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget> {
           child: Stack(
             alignment: Alignment.center,
             children: [
-              // Video
-              Video(
-                controller: _controller!,
-                controls: NoVideoControls,
-              ),
+              // Show video surface only if media has video frames;
+              // otherwise show cover image (audio-only recordings)
+              if (_hasVideoTrack)
+                Video(
+                  controller: _controller!,
+                  controls: NoVideoControls,
+                )
+              else if (widget.coverImageBytes != null)
+                Positioned.fill(
+                  child: Image.memory(
+                    widget.coverImageBytes!,
+                    fit: BoxFit.cover,
+                  ),
+                )
+              else
+                Positioned.fill(
+                  child: Container(color: Colors.black),
+                ),
               // Tap/hover overlay (play/pause/skip) — fades in/out
               if (widget.showControls && _showOverlay) _buildControlsOverlay(theme),
               // Bottom bar (progress + time + volume) — always visible

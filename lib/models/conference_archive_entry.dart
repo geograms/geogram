@@ -7,19 +7,46 @@ class ConferenceArchiveAsset {
   final String relativePath;
   final int? size;
   final DateTime? modifiedAt;
+  final Map<String, List<String>> reactions;
+  final int viewCount;
 
   const ConferenceArchiveAsset({
     required this.name,
     required this.relativePath,
     this.size,
     this.modifiedAt,
+    this.reactions = const {},
+    this.viewCount = 0,
   });
+
+  ConferenceArchiveAsset copyWith({
+    String? name,
+    String? relativePath,
+    int? size,
+    DateTime? modifiedAt,
+    Map<String, List<String>>? reactions,
+    int? viewCount,
+  }) {
+    return ConferenceArchiveAsset(
+      name: name ?? this.name,
+      relativePath: relativePath ?? this.relativePath,
+      size: size ?? this.size,
+      modifiedAt: modifiedAt ?? this.modifiedAt,
+      reactions: reactions ??
+          Map<String, List<String>>.from(
+            this.reactions.map((k, v) => MapEntry(k, List<String>.from(v))),
+          ),
+      viewCount: viewCount ?? this.viewCount,
+    );
+  }
 
   Map<String, dynamic> toJson() => {
     'name': name,
     'path': relativePath,
     'size': size,
     'modified_at': modifiedAt?.toIso8601String(),
+    if (reactions.isNotEmpty) 'reactions': reactions,
+    if (viewCount > 0) 'view_count': viewCount,
   };
 
   factory ConferenceArchiveAsset.fromJson(Map<String, dynamic> json) {
@@ -28,6 +55,8 @@ class ConferenceArchiveAsset {
       relativePath: json['path'] as String? ?? '',
       size: (json['size'] as num?)?.toInt(),
       modifiedAt: _parseDateTime(json['modified_at']),
+      reactions: _parseReactions(json['reactions']),
+      viewCount: (json['view_count'] as num?)?.toInt() ?? 0,
     );
   }
 }
@@ -56,6 +85,7 @@ class ConferenceArchiveEntry {
   final List<String> tags;
   final List<MeetingSession> sessions;
   final Map<String, String> participantNicknames;
+  final String? coverImagePath;
 
   const ConferenceArchiveEntry({
     required this.relativePath,
@@ -81,11 +111,13 @@ class ConferenceArchiveEntry {
     this.tags = const <String>[],
     this.sessions = const <MeetingSession>[],
     this.participantNicknames = const <String, String>{},
+    this.coverImagePath,
   });
 
   bool get isActive => endedAt == null;
   int get fileCount => files.length;
   int get recordingCount => recordings.length;
+  int get totalViewCount => recordings.fold(0, (sum, r) => sum + r.viewCount);
 
   Map<String, dynamic> toJson() => {
     'relative_path': relativePath,
@@ -111,6 +143,7 @@ class ConferenceArchiveEntry {
     'tags': tags,
     if (sessions.isNotEmpty) 'sessions': sessions.map((s) => s.toJson()).toList(),
     if (participantNicknames.isNotEmpty) 'participant_nicknames': participantNicknames,
+    if (coverImagePath != null) 'cover_image_path': coverImagePath,
   };
 
   factory ConferenceArchiveEntry.fromJson(Map<String, dynamic> json) {
@@ -159,6 +192,7 @@ class ConferenceArchiveEntry {
           .toList(),
       participantNicknames: (json['participant_nicknames'] as Map<String, dynamic>?)
           ?.map((k, v) => MapEntry(k, v.toString())) ?? const {},
+      coverImagePath: json['cover_image_path'] as String?,
     );
   }
 
@@ -188,6 +222,8 @@ class ConferenceArchiveEntry {
     List<String>? tags,
     List<MeetingSession>? sessions,
     Map<String, String>? participantNicknames,
+    String? coverImagePath,
+    bool clearCoverImagePath = false,
   }) {
     return ConferenceArchiveEntry(
       relativePath: relativePath ?? this.relativePath,
@@ -219,6 +255,9 @@ class ConferenceArchiveEntry {
       sessions: sessions ?? List<MeetingSession>.from(this.sessions),
       participantNicknames: participantNicknames ??
           Map<String, String>.from(this.participantNicknames),
+      coverImagePath: clearCoverImagePath
+          ? null
+          : (coverImagePath ?? this.coverImagePath),
     );
   }
 }
@@ -228,4 +267,14 @@ DateTime? _parseDateTime(Object? value) {
     return null;
   }
   return DateTime.tryParse(value)?.toLocal();
+}
+
+Map<String, List<String>> _parseReactions(Object? value) {
+  if (value is! Map<String, dynamic>) return const {};
+  return value.map(
+    (k, v) => MapEntry(
+      k,
+      (v as List<dynamic>?)?.map((e) => e.toString()).toList() ?? <String>[],
+    ),
+  );
 }

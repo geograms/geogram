@@ -15,7 +15,7 @@ This document catalogs reusable UI components available in the Geogram codebase.
 - [Notification Tap Handling Pattern](#notification-tap-handling-pattern) - Handle notification taps
 
 ### Web Components
-- [NostrLoginComponent](#nostrlogincomponent) - Reusable Nostr login with NIP-07 extension + client-side key generation
+- [NostrLoginComponent](#nostrlogincomponent) - Reusable Nostr login with NIP-07 extension + client-side key generation + `signChatContent()` for authenticated messages
 - [NostrToolsBundle](#nostrtoolsbundle) - Embedded nostr-tools JS bundle for client-side signing
 
 ### Map & Navigation
@@ -37,6 +37,9 @@ This document catalogs reusable UI components available in the Geogram codebase.
 ### URL Utilities
 - [callsignForUrl](#callsignforurl) - Format callsign for URL path segments (lowercase)
 
+### App Metadata Parsing
+- [AppJsUtils.parseAppJsContent](#appjsutilsparseappjscontent) - Extract JSON from `window.APP_DATA = {...};` JavaScript format
+
 ### Cross-Platform Patterns
 - [Platform-Adaptive WebView](#platform-adaptive-webview) - Render local HTML with JS on all platforms
 - [URL-Linkified SelectableText](#url-linkified-selectabletext) - Make URLs clickable in text widgets
@@ -57,6 +60,12 @@ This document catalogs reusable UI components available in the Geogram codebase.
 - [ConferenceService](#conferenceservice) - Orchestration (SFU topology, host/join, role management, promote/demote, kick/ban, password, approval mode, chat delete)
 - [MeetingSession](#meetingsession) - Session tracking model for meeting resume/restart (in `meeting_content.dart`)
 - [ConferenceRecordingService audio-only mode](#conferencerecordingservice) - `start(includeScreen: false)` records audio only (privacy-safe default)
+- [AudioLevelBar](#audiolevelbar) - SoundCloud-inspired animated volume bar widget
+- [Range Request Support](#range-request-support) - HTTP 206 Partial Content for media seeking (reusable pattern for any binary file endpoint)
+- [Cover Image Pattern](#cover-image-pattern) - Archive cover image stored in NDF, served via asset endpoint, shown in both Flutter and HTML
+- [Recording Reactions & View Count](#recording-reactions--view-count) - Per-asset metadata (reactions map, view counter) on `ConferenceArchiveAsset`
+- [Archive Chat Parity](#archive-chat-parity) - Wire `MessageListWidget` callbacks for NDF-backed chat (reactions, nicknames, attachments)
+- [Reaction Picker Pattern](#reaction-picker-pattern) - Bottom-sheet emoji picker + chips row reuse (`ReactionUtils` + `reactionEmojiMap`)
 
 ### Karma Gamification
 - [KarmaMixin](#karmamixin) - Station mixin: `karmaRecord()`, API handlers, periodic leaderboard recomputation
@@ -9401,6 +9410,22 @@ Reusable Nostr login component for web pages served by station servers. Supports
 { pubkey: string|null, callsign: string|null, connected: boolean }
 ```
 
+### Reusable Chat Signing: `signChatContent(content, roomId)`
+
+Signs a chat message using the authenticated NOSTR identity. Returns a promise resolving to `{ pubkey, npub, callsign, event_id, signature, created_at }` or `null` if not authenticated.
+
+```js
+const signed = await window.GeogramNostr.signChatContent('Hello!', 'room-42');
+if (signed) {
+  // Use signed.npub, signed.signature in message metadata
+  // Use signed.callsign as verified author
+}
+```
+
+Used by:
+- Chat page (`chat_scripts.dart`) for HTTP POST messages
+- Meeting page (`conference_web_page_service.dart`) for WebSocket chat messages
+
 ### Events
 
 - **`nostr-connected`** — Dispatched on `document` when user connects. Detail: `{ pubkey, callsign }`
@@ -9651,6 +9676,79 @@ await ConferenceService().requestToShareScreen();
 - `events` — ConferenceEvent stream (peer connected/disconnected/role_changed)
 - `isLocalMuted`, `toggleMute()`, `endConference()`
 - `activeScreenSharer`, `activeScreenStream`, `pendingScreenShareRequests`
+
+### AudioLevelBar
+
+**File:** `lib/widgets/audio_level_bar.dart`
+
+SoundCloud-inspired animated volume bar widget. Displays a row of thin vertical bars that scroll left, with new amplitude values appended on the right. Used in conference calls to show live audio activity.
+
+**Parameters:**
+- `amplitude` (double, required) — 0.0 (silence) to 1.0 (max)
+- `barCount` (int, default 24) — number of bars
+- `height` (double, default 24.0) — total bar area height
+- `color` (Color?, default theme primary) — bar color
+
+**Usage:**
+```dart
+AudioLevelBar(amplitude: currentLevel) // basic
+AudioLevelBar(amplitude: level, barCount: 16, height: 32, color: Colors.green)
+```
+
+---
+
+### Recording Reactions & View Count
+
+**File:** `lib/models/conference_archive_entry.dart`
+
+`ConferenceArchiveAsset` carries per-recording metadata that persists inside the NDF archive:
+
+- `Map<String, List<String>> reactions` — reactionKey → list of callsigns (empty by default, omitted from JSON when empty)
+- `int viewCount` — play counter (0 by default, omitted from JSON when zero)
+- `copyWith()` — clone with optional overrides for any field including reactions and viewCount
+
+`ConferenceArchiveEntry.totalViewCount` — computed getter summing all recording view counts.
+
+**Service methods** (`lib/services/conference_archive_service.dart`):
+- `toggleRecordingReaction(entry, recordingRelativePath, reactionKey, callsign)` — toggle callsign in/out of reaction list
+- `incrementViewCount(entry, recordingRelativePath)` — increment play counter
+
+**Backward compat:** Older archives without `reactions`/`view_count` JSON keys default to empty/zero gracefully.
+
+---
+
+### Archive Chat Parity
+
+**File:** `lib/pages/conference_archive_detail_page.dart`
+
+Pattern for wiring `MessageListWidget` callbacks so archive chat has the same UX as live chat rooms:
+
+```dart
+MessageListWidget(
+  messages: _messages,
+  isGroupChat: true,
+  onMessageReact: _toggleArchiveChatReaction,    // reactions
+  nicknameMap: _currentEntry.participantNicknames, // display names
+  getAttachmentData: _resolveArchiveAttachment,    // file previews from NDF
+  onImageOpen: _openArchiveImage,                  // open images from NDF
+)
+```
+
+**Service method:** `ConferenceArchiveService.toggleChatReaction(entry, timestamp, author, reactionKey, callsign)` — reads chat messages from NDF, toggles reaction, rewrites `chat/messages.txt`. Same algorithm as `ChatService.toggleReaction()`.
+
+---
+
+### Reaction Picker Pattern
+
+Reusable bottom-sheet emoji picker using the 11 standard reactions from `MessageBubbleWidget.reactionEmojiMap` (`lib/widgets/message_bubble_widget.dart:25`).
+
+**Components:**
+- `ReactionUtils.normalizeReactionKey()` (`lib/util/reaction_utils.dart`) — normalize input to canonical key
+- `MessageBubbleWidget.reactionEmojiMap` — static const `Map<String, String>` mapping keys to emoji
+- Picker: `showModalBottomSheet` with a `Wrap` of tappable emoji entries
+- Chips row: `Wrap` of small containers showing emoji + count, highlighted if current user reacted, tap to toggle
+
+Used in: recording reactions (archive detail page), chat reactions (via `MessageBubbleWidget` internally).
 
 ---
 
@@ -11016,6 +11114,25 @@ final url = 'https://p2p.radio/${callsignForUrl(callsign)}/meet/$code';
 ```
 
 **Used in**: `ConferenceService`, `StationTransport`, `LanTransport`
+
+---
+
+## AppJsUtils.parseAppJsContent
+
+**File**: `lib/util/app_js_utils.dart`
+
+Extracts and parses the JSON object from `app.js` files. These files use JavaScript format (`window.APP_DATA = {...};`), not pure JSON, so `jsonDecode()` fails on the raw content. This utility uses the same `RegExp` approach as `shared_folder_service.dart`.
+
+```dart
+import 'package:geogram/util/app_js_utils.dart';
+
+final content = await File('app.js').readAsString();
+final appData = AppJsUtils.parseAppJsContent(content);
+// appData = {"app": {"type": "blog", "title": "My Blog", ...}}
+final type = appData?['app']?['type']; // "blog"
+```
+
+**Used in**: `BlogHandlerMixin`, `SharedFolderService` (candidate for migration)
 
 ---
 

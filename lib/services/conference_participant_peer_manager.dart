@@ -45,6 +45,9 @@ class ConferenceParticipantPeerManager {
   List<String> get connectedPeers =>
       _hostPeer?.isConnected == true ? [_hostPeer!.callsign] : [];
 
+  List<RTCPeerConnection> get activePeerConnections =>
+      _hostPeer?.peerConnection != null ? [_hostPeer!.peerConnection!] : [];
+
   ConferenceParticipantPeerManager({
     WebRTCConfig? config,
     SfuParticipantRole role = SfuParticipantRole.listener,

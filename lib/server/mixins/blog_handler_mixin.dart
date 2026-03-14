@@ -8,6 +8,10 @@ import 'package:markdown/markdown.dart' as md;
 
 import '../../models/blog_post.dart';
 import '../../services/nip05_registry_service.dart';
+import '../../services/profile_storage.dart';
+import '../../util/app_js_utils.dart';
+import '../../util/feedback_folder_utils.dart';
+import '../../util/nostr_crypto.dart';
 import '../../util/nostr_key_generator.dart';
 import '../../util/station_html_templates.dart';
 
@@ -96,10 +100,12 @@ mixin BlogHandlerMixin {
       final year = yearMatch.group(1)!;
 
       // Build path to the blog markdown file
-      final blogDir = Directory('$blogDevicesDir/$callsign');
+      final devicesDir = blogDevicesDir;
+      final blogDir = Directory('$devicesDir/$callsign');
 
       // Find blog post in any collection
       BlogPost? foundPost;
+      String? appFolderName;
 
       if (await blogDir.exists()) {
         await for (final entity in blogDir.list()) {
@@ -107,13 +113,13 @@ mixin BlogHandlerMixin {
             // Check if this is a blog collection by looking for app.js
             final appFile = File('${entity.path}/app.js');
             if (await appFile.exists()) {
-              try {
-                final appJson = await appFile.readAsString();
-                final appData = jsonDecode(appJson) as Map<String, dynamic>;
-                if (appData['type'] != 'blog') continue;
-              } catch (_) {
-                continue;
-              }
+              final appContent = await appFile.readAsString();
+              final appData = AppJsUtils.parseAppJsContent(appContent);
+              if (appData == null) continue;
+              // app.js has nested structure: {"app": {"type": "blog"}}
+              final appInfo = appData['app'] as Map<String, dynamic>?;
+              final type = appInfo?['type'] ?? appData['type'];
+              if (type != 'blog') continue;
             }
 
             // Blog structure: {collection}/{year}/{postId}/post.md
@@ -123,6 +129,7 @@ mixin BlogHandlerMixin {
               try {
                 final content = await blogFile.readAsString();
                 foundPost = BlogPost.fromText(content, filename);
+                appFolderName = entity.path.split('/').last;
                 break;
               } catch (e) {
                 blogLog('ERROR', 'Error parsing blog file: $e');
@@ -145,6 +152,32 @@ mixin BlogHandlerMixin {
         return;
       }
 
+      // Load feedback counts
+      final blogPath = '$devicesDir/$callsign/$appFolderName/$year/$filename';
+      final blogFeedbackStorage = FilesystemProfileStorage('$devicesDir/$callsign');
+      final feedbackCounts = await FeedbackFolderUtils.getAllFeedbackCounts(
+        blogPath,
+        storage: blogFeedbackStorage,
+      );
+      foundPost = foundPost.copyWith(
+        likesCount: feedbackCounts[FeedbackFolderUtils.feedbackTypeLikes] ?? 0,
+        dislikesCount: feedbackCounts[FeedbackFolderUtils.feedbackTypeDislikes] ?? 0,
+        pointsCount: feedbackCounts[FeedbackFolderUtils.feedbackTypePoints] ?? 0,
+      );
+
+      // Read liked npubs and convert to hex pubkeys for client-side checking
+      final likedNpubs = await FeedbackFolderUtils.readFeedbackFile(
+        blogPath,
+        FeedbackFolderUtils.feedbackTypeLikes,
+        storage: blogFeedbackStorage,
+      );
+      final likedHexPubkeys = <String>[];
+      for (final npub in likedNpubs) {
+        try {
+          likedHexPubkeys.add(NostrCrypto.decodeNpub(npub));
+        } catch (_) {}
+      }
+
       // Convert markdown content to HTML
       final htmlContent = md.markdownToHtml(
         foundPost.content,
@@ -155,10 +188,16 @@ mixin BlogHandlerMixin {
       final html = StationHtmlTemplates.buildBlogPostPage(
         postTitle: foundPost.title,
         postDate: foundPost.displayDate,
-        author: identifier,
+        postTime: foundPost.displayTime,
+        author: foundPost.author.isNotEmpty ? foundPost.author : identifier,
         htmlContent: htmlContent,
         description: foundPost.description,
         tags: foundPost.tags,
+        postId: foundPost.id,
+        npub: foundPost.npub,
+        likesCount: foundPost.likesCount,
+        likedHexPubkeys: likedHexPubkeys,
+        showSignedBadge: foundPost.isSigned,
         globalStyles: StationHtmlTemplates.getBaseStyles(),
         appStyles: '',
       );

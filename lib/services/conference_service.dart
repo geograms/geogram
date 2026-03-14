@@ -267,6 +267,16 @@ class ConferenceService {
     return false;
   }
 
+  List<RTCPeerConnection> get peerConnections {
+    if (_hostPeerManager != null) {
+      return _hostPeerManager!.activePeerConnections;
+    }
+    if (_participantPeerManager != null) {
+      return _participantPeerManager!.activePeerConnections;
+    }
+    return const [];
+  }
+
   int? get signalingPort => _signalingServer?.port;
 
   Stream<ConferenceState> get stateStream => _stateController.stream;
@@ -453,9 +463,10 @@ class ConferenceService {
     int maxSpeakers = 6,
     DateTime? scheduledAt,
     String? description,
+    String? roomIdOverride,
   }) async {
     await _ensureStationConnectionForHosting();
-    final roomId = _generateRoomId();
+    final roomId = roomIdOverride ?? _generateRoomId();
     final code = _roomCodeFromRoomId(roomId);
     final effectiveName = roomName.isEmpty ? code : roomName;
     final effectiveDescription =
@@ -2646,6 +2657,16 @@ class ConferenceService {
     }
     return const WebRTCConfig();
   }
+
+  /// Return a random meeting keyword from the built-in word list.
+  static String randomMeetingKeyword() {
+    final r = Random();
+    return _meetingCodeWords[r.nextInt(_meetingCodeWords.length)].toLowerCase();
+  }
+
+  /// Build a full room ID from a keyword and the local callsign.
+  String roomIdFromKeyword(String keyword) =>
+      '${keyword.toLowerCase()}@$_myCallsign';
 
   String _generateRoomId() {
     final r = Random();

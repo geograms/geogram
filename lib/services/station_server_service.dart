@@ -35,6 +35,7 @@ import '../bot/services/vision_model_manager.dart';
 import '../bot/models/vision_model_info.dart';
 import '../bot/models/music_model_info.dart';
 import '../models/blog_post.dart';
+import '../server/mixins/blog_handler_mixin.dart';
 import '../models/chat_channel.dart';
 import '../models/chat_message.dart';
 import '../models/event.dart';
@@ -263,7 +264,7 @@ enum ConnectionType {
 }
 
 /// Connected WebSocket client
-class ConnectedClient {
+class ConnectedClient implements BlogClient {
   final WebSocket socket;
   final String id;
   String? callsign;
@@ -419,7 +420,7 @@ class _BackupProviderEntry {
 }
 
 /// Station server service for CLI mode
-class StationServerService with KarmaMixin, ConferenceMixin {
+class StationServerService with KarmaMixin, ConferenceMixin, BlogHandlerMixin {
   static final StationServerService _instance = StationServerService._internal();
   factory StationServerService() => _instance;
   StationServerService._internal();
@@ -463,6 +464,77 @@ class StationServerService with KarmaMixin, ConferenceMixin {
   NostrRelayStorage? _nostrStorage;
   NostrRelayService? _nostrRelay;
   NostrBlossomService? _blossom;
+
+  // ── BlogHandlerMixin interface ──────────────────────────────────
+  @override
+  void blogLog(String level, String message) => LogService().log('Blog: [$level] $message');
+  @override
+  String get blogDevicesDir => StorageConfig().devicesDir;
+  @override
+  String get blogConfigPath => StorageConfig().configPath;
+  @override
+  BlogClient? blogFindConnectedClientByIdentifier(String identifier) {
+    for (final client in _clients.values) {
+      if ((client.callsign != null && client.callsign!.toLowerCase() == identifier.toLowerCase()) ||
+          (client.nickname != null && client.nickname!.toLowerCase() == identifier.toLowerCase())) {
+        return client;
+      }
+    }
+    return null;
+  }
+  @override
+  List<BlogClient> blogFindAllClientsByIdentifier(String identifier) {
+    return _clients.values.where((client) =>
+        (client.callsign != null && client.callsign!.toLowerCase() == identifier.toLowerCase()) ||
+        (client.nickname != null && client.nickname!.toLowerCase() == identifier.toLowerCase())
+    ).toList();
+  }
+  @override
+  Future<bool> blogProxyToClient(
+      BlogClient client, HttpRequest request, String filename) async {
+    if (client is! ConnectedClient) return false;
+    final targetCallsign = client.callsign ?? '';
+    final blogApiPath = '/$targetCallsign/blog/$filename.html';
+    final requestId = '${DateTime.now().millisecondsSinceEpoch}-blog-${targetCallsign.hashCode}';
+    final completer = Completer<Map<String, dynamic>>();
+    _pendingHttpRequests[requestId] = completer;
+    try {
+      final httpRequestMessage = {
+        'type': 'HTTP_REQUEST',
+        'requestId': requestId,
+        'method': 'GET',
+        'path': blogApiPath,
+        'headers': jsonEncode({'X-Device-Callsign': targetCallsign}),
+        'body': null,
+      };
+      client.socket.add(jsonEncode(httpRequestMessage));
+      LogService().log('Blog proxy: Sent HTTP_REQUEST to $targetCallsign (requestId: $requestId)');
+      final response = await completer.future.timeout(
+        const Duration(seconds: 30),
+        onTimeout: () {
+          LogService().log('Blog proxy: Timeout for $targetCallsign $filename');
+          return {
+            'statusCode': 504,
+            'responseHeaders': '{"Content-Type": "text/plain"}',
+            'responseBody': 'Gateway Timeout - Device did not respond',
+            'isBase64': false,
+          };
+        },
+      );
+      request.response.statusCode = response['statusCode'] as int? ?? 500;
+      request.response.headers.contentType = ContentType.html;
+      request.response.write(response['responseBody'] as String? ?? '');
+      LogService().log('Blog proxy: Response from $targetCallsign: ${response['statusCode']}');
+      return true;
+    } catch (e) {
+      LogService().log('Blog proxy error: $e');
+      request.response.statusCode = 500;
+      request.response.write('Proxy error: $e');
+      return true;
+    } finally {
+      _pendingHttpRequests.remove(requestId);
+    }
+  }
 
   /// Get the shared alert API handlers (lazy initialization)
   AlertHandler get alertApi {
@@ -848,8 +920,8 @@ class StationServerService with KarmaMixin, ConferenceMixin {
         await _handleConsoleVmRequest(request);
       } else if (path == '/api/cli' && method == 'POST') {
         await _handleCliCommand(request);
-      } else if (_isBlogPath(path)) {
-        await _handleBlogRequest(request);
+      } else if (isBlogPath(path)) {
+        await handleBlogRequest(request);
       } else if (path.contains('/api/dm/')) {
         await _handleDMRequest(request);
       } else if (_isAlertFileUploadPath(path, request.method)) {
@@ -4129,17 +4201,6 @@ h2 { font-size: 1.2rem; margin: 0 0 20px 0; }
   /// Minimum free space buffer to maintain (1 GB)
   static const int _minFreeSpaceBuffer = 1024 * 1024 * 1024;
 
-  /// Check if path is a blog URL (/{callsign}/blog/{filename}.html)
-  bool _isBlogPath(String path) {
-    // Pattern: /{identifier}/blog/{filename}.html
-    final regex = RegExp(r'^/([^/]+)/blog/([^/]+)\.html$');
-    final matches = regex.hasMatch(path);
-    if (path.contains('/blog/')) {
-      LogService().log('_isBlogPath check: path="$path", matches=$matches');
-    }
-    return matches;
-  }
-
   /// Check if path is a device proxy path (/{callsign}/api/* or /{callsign}/meet/*)
   bool _isDeviceProxyPath(String path) {
     // Pattern: /{callsign}/api/{endpoint} or /{callsign}/meet/{something}
@@ -4170,7 +4231,7 @@ h2 { font-size: 1.2rem; margin: 0 0 20px 0; }
     if (!RegExp(r'^[A-Za-z0-9]+$').hasMatch(parts[0])) return false;
     // Exclude API and meet paths (handled by _isDeviceProxyPath)
     if (parts.length >= 2 && (parts[1] == 'api' || parts[1] == 'meet')) return false;
-    // Exclude blog HTML paths (handled by _isBlogPath)
+    // Exclude blog HTML paths (handled by isBlogPath from BlogHandlerMixin)
     if (path.contains('/blog/') && path.endsWith('.html')) return false;
     return true;
   }
@@ -6460,338 +6521,6 @@ h2 { font-size: 1.2rem; margin: 0 0 20px 0; }
 
     LogService().log('Received HTTP_RESPONSE for requestId: $requestId');
     completer.complete(message);
-  }
-
-  /// Handle blog post request - serves markdown as HTML
-  Future<void> _handleBlogRequest(HttpRequest request) async {
-    final path = request.uri.path;
-    LogService().log('Blog handler: Processing request for path: $path');
-    final regex = RegExp(r'^/([^/]+)/blog/([^/]+)\.html$');
-    final match = regex.firstMatch(path);
-
-    if (match == null) {
-      request.response.statusCode = 400;
-      request.response.write('Invalid blog URL');
-      return;
-    }
-
-    final identifier = match.group(1)!; // nickname or callsign
-    final filename = match.group(2)!;   // blog filename without .html
-
-    try {
-      // Check if identifier matches a connected client first - if so, proxy immediately
-      // This ensures we serve live content from connected devices rather than stale cache
-      LogService().log('Blog handler: Looking for connected client matching: $identifier');
-      LogService().log('Blog handler: Currently connected clients: ${_clients.length}');
-      for (final client in _clients.values) {
-        LogService().log('Blog handler: Checking client ${client.callsign}/${client.nickname}');
-        if ((client.callsign != null && client.callsign!.toLowerCase() == identifier.toLowerCase()) ||
-            (client.nickname != null && client.nickname!.toLowerCase() == identifier.toLowerCase())) {
-          LogService().log('Blog handler: Found matching client, proxying to ${client.callsign}');
-          final proxyResult = await _proxyBlogRequest(request, identifier, filename);
-          LogService().log('Blog handler: Proxy result: $proxyResult');
-          if (proxyResult) {
-            return; // Proxy handled the response
-          }
-          // If proxy failed, fall through to local search as fallback
-          break;
-        }
-      }
-      LogService().log('Blog handler: No matching connected client found');
-
-      // Find the callsign for this identifier (could be nickname or callsign)
-      final callsign = await _findCallsignByIdentifier(identifier);
-      if (callsign == null) {
-        // No local user found and no connected client - 404
-        request.response.statusCode = 404;
-        request.response.write('User not found');
-        return;
-      }
-
-      // Extract year from filename (format: YYYY-MM-DD_title)
-      final yearMatch = RegExp(r'^(\d{4})-').firstMatch(filename);
-      if (yearMatch == null) {
-        request.response.statusCode = 400;
-        request.response.write('Invalid blog filename format');
-        return;
-      }
-      final year = yearMatch.group(1)!;
-
-      // Build path to the blog markdown file
-      final devicesDir = StorageConfig().devicesDir;
-      final blogDir = Directory('$devicesDir/$callsign');
-
-      // Find blog collection with posts
-      BlogPost? foundPost;
-      String? appFolderName;
-
-      if (await blogDir.exists()) {
-        await for (final entity in blogDir.list()) {
-          if (entity is Directory) {
-            // Check if this is a blog collection by looking for app.js
-            final appFile = File('${entity.path}/app.js');
-            if (await appFile.exists()) {
-              try {
-                final appJson = await appFile.readAsString();
-                final appData = jsonDecode(appJson) as Map<String, dynamic>;
-                if (appData['type'] != 'blog') continue;
-              } catch (_) {
-                continue;
-              }
-            }
-
-            // Blog structure: {appPath}/{year}/{postId}/post.md
-            final blogPath = '${entity.path}/$year/$filename/post.md';
-            final blogFile = File(blogPath);
-            if (await blogFile.exists()) {
-              try {
-                final content = await blogFile.readAsString();
-                foundPost = BlogPost.fromText(content, filename);
-                appFolderName = entity.path.split('/').last;
-                break;
-              } catch (e) {
-                LogService().log('Error parsing blog file: $e');
-              }
-            }
-          }
-        }
-      }
-
-      if (foundPost == null) {
-        // Blog not found locally - try to proxy to connected client
-        final proxyResult = await _proxyBlogRequest(request, identifier, filename);
-        if (proxyResult) {
-          return; // Proxy handled the response
-        }
-        request.response.statusCode = 404;
-        request.response.write('Blog post not found');
-        return;
-      }
-
-      // Load feedback counts
-      final blogPath = '$devicesDir/$callsign/$appFolderName/$year/$filename';
-      final blogFeedbackStorage = FilesystemProfileStorage('$devicesDir/$callsign');
-      final feedbackCounts = await FeedbackFolderUtils.getAllFeedbackCounts(blogPath, storage: blogFeedbackStorage);
-      foundPost = foundPost.copyWith(
-        likesCount: feedbackCounts[FeedbackFolderUtils.feedbackTypeLikes] ?? 0,
-        dislikesCount: feedbackCounts[FeedbackFolderUtils.feedbackTypeDislikes] ?? 0,
-        pointsCount: feedbackCounts[FeedbackFolderUtils.feedbackTypePoints] ?? 0,
-      );
-
-      // Read liked npubs and convert to hex pubkeys for client-side checking
-      final likedNpubs = await FeedbackFolderUtils.readFeedbackFile(
-        blogPath,
-        FeedbackFolderUtils.feedbackTypeLikes,
-        storage: blogFeedbackStorage,
-      );
-      final likedHexPubkeys = <String>[];
-      for (final npub in likedNpubs) {
-        try {
-          likedHexPubkeys.add(NostrCrypto.decodeNpub(npub));
-        } catch (_) {}
-      }
-
-      // Only serve published posts
-      if (foundPost.isDraft) {
-        request.response.statusCode = 403;
-        request.response.write('This post is not published');
-        return;
-      }
-
-      // Convert markdown content to HTML
-      final htmlContent = md.markdownToHtml(
-        foundPost.content,
-        extensionSet: md.ExtensionSet.gitHubWeb,
-      );
-
-      // Build full HTML page
-      final html = _buildBlogHtmlPage(foundPost, htmlContent, identifier, likedHexPubkeys);
-
-      request.response.headers.contentType = ContentType.html;
-      request.response.write(html);
-    } catch (e) {
-      LogService().log('Error serving blog post: $e');
-      request.response.statusCode = 500;
-      request.response.write('Internal server error');
-    }
-  }
-
-  /// Find callsign by identifier (nickname or callsign)
-  Future<String?> _findCallsignByIdentifier(String identifier) async {
-    final storageConfig = StorageConfig();
-    final devicesDir = storageConfig.devicesDir;
-    final dir = Directory(devicesDir);
-
-    if (!await dir.exists()) return null;
-
-    // First check if it's a direct callsign match (case-insensitive)
-    await for (final entity in dir.list()) {
-      if (entity is Directory) {
-        final callsign = entity.path.split('/').last;
-        if (callsign.toLowerCase() == identifier.toLowerCase()) {
-          return callsign;
-        }
-      }
-    }
-
-    // Search for nickname in config.json profiles
-    final configPath = storageConfig.configPath;
-    final configFile = File(configPath);
-    if (await configFile.exists()) {
-      try {
-        final content = await configFile.readAsString();
-        final config = jsonDecode(content) as Map<String, dynamic>;
-        final profiles = config['profiles'] as List<dynamic>?;
-        if (profiles != null) {
-          for (final profile in profiles) {
-            if (profile is Map<String, dynamic>) {
-              final nickname = profile['nickname'] as String?;
-              final callsign = profile['callsign'] as String?;
-              if (nickname != null &&
-                  callsign != null &&
-                  nickname.toLowerCase() == identifier.toLowerCase()) {
-                // Verify the callsign directory exists
-                final callsignDir = Directory('$devicesDir/$callsign');
-                if (await callsignDir.exists()) {
-                  return callsign;
-                }
-              }
-            }
-          }
-        }
-      } catch (e) {
-        LogService().log('Error reading config.json: $e');
-      }
-    }
-
-    // 3. NIP-05 registry lookup (nickname → npub → callsign)
-    // Don't require directory to exist — the callsign is still valid for
-    // proxying to a connected client, and disk lookup will naturally 404.
-    final registration = Nip05RegistryService().getRegistration(identifier);
-    if (registration != null) {
-      try {
-        return NostrKeyGenerator.deriveCallsign(registration.npub);
-      } catch (e) {
-        LogService().log('Error deriving callsign from NIP-05 registry: $e');
-      }
-    }
-
-    return null;
-  }
-
-  /// Proxy blog request to a connected client
-  /// Returns true if the request was handled (success or error), false if no client found
-  Future<bool> _proxyBlogRequest(HttpRequest request, String identifier, String filename) async {
-    LogService().log('_proxyBlogRequest: Called with identifier=$identifier, filename=$filename');
-    LogService().log('_proxyBlogRequest: Connected clients count: ${_clients.length}');
-
-    // Find connected client by callsign or nickname
-    ConnectedClient? targetClient;
-
-    for (final client in _clients.values) {
-      LogService().log('_proxyBlogRequest: Checking client callsign=${client.callsign}, nickname=${client.nickname}');
-      // Check callsign match (case-insensitive)
-      if (client.callsign != null &&
-          client.callsign!.toLowerCase() == identifier.toLowerCase()) {
-        targetClient = client;
-        LogService().log('_proxyBlogRequest: Found match by callsign!');
-        break;
-      }
-      // Check nickname match (case-insensitive)
-      if (client.nickname != null &&
-          client.nickname!.toLowerCase() == identifier.toLowerCase()) {
-        targetClient = client;
-        LogService().log('_proxyBlogRequest: Found match by nickname!');
-        break;
-      }
-    }
-
-    if (targetClient == null) {
-      LogService().log('Blog proxy: No connected client found for identifier: $identifier');
-      return false;
-    }
-
-    final targetCallsign = targetClient.callsign ?? identifier;
-    LogService().log('Blog proxy: Forwarding request to $targetCallsign for $filename');
-
-    // Generate unique request ID
-    final requestId = '${DateTime.now().millisecondsSinceEpoch}-blog-${targetCallsign.hashCode}';
-
-    // Create completer for the response
-    final completer = Completer<Map<String, dynamic>>();
-    _pendingHttpRequests[requestId] = completer;
-
-    try {
-      // Send HTTP_REQUEST to the target client via WebSocket
-      // Request the blog as HTML from the client's local API
-      // Use the full path format that routes to LogApiService _handleBlogHtmlRequest
-      final blogApiPath = '/$targetCallsign/blog/$filename.html';
-      final httpRequestMessage = {
-        'type': 'HTTP_REQUEST',
-        'requestId': requestId,
-        'method': 'GET',
-        'path': blogApiPath,
-        'headers': jsonEncode({
-          'X-Device-Callsign': targetCallsign,
-        }),
-        'body': null,
-      };
-
-      targetClient.socket.add(jsonEncode(httpRequestMessage));
-      LogService().log('Blog proxy: Sent HTTP_REQUEST to $targetCallsign (requestId: $requestId)');
-
-      // Wait for response with timeout
-      final response = await completer.future.timeout(
-        const Duration(seconds: 30),
-        onTimeout: () {
-          LogService().log('Blog proxy: Timeout for $targetCallsign $filename');
-          return {
-            'statusCode': 504,
-            'responseHeaders': '{"Content-Type": "text/plain"}',
-            'responseBody': 'Gateway Timeout - Device did not respond',
-            'isBase64': false,
-          };
-        },
-      );
-
-      // Forward the response to the HTTP caller
-      final statusCode = response['statusCode'] as int? ?? 500;
-      final responseBody = response['responseBody'] as String? ?? '';
-
-      request.response.statusCode = statusCode;
-      request.response.headers.contentType = ContentType.html;
-      request.response.write(responseBody);
-
-      LogService().log('Blog proxy: Response from $targetCallsign: $statusCode');
-      return true;
-    } catch (e) {
-      LogService().log('Blog proxy error: $e');
-      request.response.statusCode = 500;
-      request.response.write('Proxy error: $e');
-      return true;
-    } finally {
-      _pendingHttpRequests.remove(requestId);
-    }
-  }
-
-  /// Build HTML page for blog post
-  String _buildBlogHtmlPage(BlogPost post, String htmlContent, String author, [List<String> likedHexPubkeys = const []]) {
-    return StationHtmlTemplates.buildBlogPostPage(
-      postTitle: post.title,
-      postDate: post.displayDate,
-      postTime: post.displayTime,
-      author: post.author,
-      htmlContent: htmlContent,
-      description: post.description,
-      tags: post.tags,
-      postId: post.id,
-      npub: post.npub,
-      likesCount: post.likesCount,
-      likedHexPubkeys: likedHexPubkeys,
-      showSignedBadge: post.isSigned,
-      globalStyles: StationHtmlTemplates.getBaseStyles(),
-      appStyles: '',
-    );
   }
 
   /// Handle DM sync API requests

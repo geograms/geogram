@@ -199,11 +199,13 @@ class MeetingSession {
   final String id;
   final DateTime startedAt;
   DateTime? endedAt;
+  String? name;
 
   MeetingSession({
     required this.id,
     required this.startedAt,
     this.endedAt,
+    this.name,
   });
 
   factory MeetingSession.create() {
@@ -221,6 +223,7 @@ class MeetingSession {
       endedAt: json['ended_at'] != null
           ? DateTime.tryParse(json['ended_at'] as String)
           : null,
+      name: json['name'] as String?,
     );
   }
 
@@ -228,6 +231,7 @@ class MeetingSession {
     'id': id,
     'started_at': startedAt.toIso8601String(),
     if (endedAt != null) 'ended_at': endedAt!.toIso8601String(),
+    if (name != null) 'name': name,
   };
 }
 

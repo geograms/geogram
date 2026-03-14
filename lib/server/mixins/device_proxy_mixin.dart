@@ -228,12 +228,14 @@ mixin DeviceProxyMixin {
     proxyLog('INFO',
         'Device proxy: ${request.method} $path -> $callsign $apiPath (${clients.length} device(s))');
 
-    // Forward auth-relevant headers to the device
+    // Forward auth-relevant and content-negotiation headers to the device
     final forwardedHeaders = <String, String>{};
     final cookie = request.headers.value('cookie');
     if (cookie != null) forwardedHeaders['cookie'] = cookie;
     final authorization = request.headers.value('authorization');
     if (authorization != null) forwardedHeaders['authorization'] = authorization;
+    final range = request.headers.value('range');
+    if (range != null) forwardedHeaders['range'] = range;
 
     // Read request body once
     String requestBody = '';

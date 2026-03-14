@@ -1070,10 +1070,12 @@ class LogApiService with ChatModificationMixin {
     String relativeFilePath,
     Map<String, String> headers,
   ) async {
+    final isCoverImage = relativeFilePath.startsWith('cover.');
     if (relativeFilePath.isEmpty ||
         relativeFilePath.contains('..') ||
         (!relativeFilePath.startsWith('files/') &&
-            !relativeFilePath.startsWith('recordings/'))) {
+            !relativeFilePath.startsWith('recordings/') &&
+            !isCoverImage)) {
       return shelf.Response.notFound(
         jsonEncode({'error': 'Asset not found'}),
         headers: headers,
@@ -1106,12 +1108,40 @@ class LogApiService with ChatModificationMixin {
         lookupMimeType(relativeFilePath, headerBytes: bytes) ??
         'application/octet-stream';
     final filename = relativeFilePath.split('/').last;
+    final total = bytes.length;
+
+    // Support Range requests (required for <video>/<audio> seeking & MP4 MOOV).
+    final rangeHeader = request.headers['range'];
+    if (rangeHeader != null && rangeHeader.startsWith('bytes=')) {
+      final spec = rangeHeader.substring(6); // "start-end"
+      final parts = spec.split('-');
+      final start = parts[0].isNotEmpty ? int.parse(parts[0]) : 0;
+      final end = (parts.length > 1 && parts[1].isNotEmpty)
+          ? int.parse(parts[1])
+          : total - 1;
+      final length = end - start + 1;
+      return shelf.Response(
+        206,
+        body: bytes.sublist(start, end + 1),
+        headers: {
+          ...headers,
+          'Content-Type': contentType,
+          'Content-Length': length.toString(),
+          'Content-Range': 'bytes $start-$end/$total',
+          'Accept-Ranges': 'bytes',
+          if (!isInline)
+            'Content-Disposition': 'attachment; filename="$filename"',
+        },
+      );
+    }
+
     return shelf.Response.ok(
       bytes,
       headers: {
         ...headers,
         'Content-Type': contentType,
-        'Content-Length': bytes.length.toString(),
+        'Content-Length': total.toString(),
+        'Accept-Ranges': 'bytes',
         if (!isInline)
           'Content-Disposition': 'attachment; filename="$filename"',
       },
@@ -1256,7 +1286,13 @@ class LogApiService with ChatModificationMixin {
               },
             )
             .toList(),
+        archiveSessions: archive.sessions
+            .map((s) => s.toJson())
+            .toList(),
         archiveNdfUrl: '$code/archive.ndf',
+        archiveCoverImageUrl: archive.coverImagePath != null
+            ? '$code/${archive.coverImagePath}?inline=1'
+            : null,
         statusText: 'Meeting archive',
       );
     }
@@ -1403,6 +1439,82 @@ class LogApiService with ChatModificationMixin {
   </div>
 </body>
 </html>''';
+  }
+
+  /// Handle POST /api/debug {"action": "meet_set_cover", "code": "old", "path": "/tmp/cover.jpg"}
+  Future<shelf.Response> _handleMeetAction(
+    String action,
+    Map<String, dynamic> params,
+    Map<String, String> headers,
+  ) async {
+    if (action == 'meet_set_cover') {
+      final code = params['code'] as String?;
+      final imagePath = params['path'] as String?;
+      if (code == null || imagePath == null) {
+        return shelf.Response.badRequest(
+          body: jsonEncode({'error': 'Missing code or path'}),
+          headers: headers,
+        );
+      }
+      final archive = await ConferenceArchiveService().findArchiveByRoomId(
+        _meetRoomId(code),
+      );
+      if (archive == null) {
+        return shelf.Response.notFound(
+          jsonEncode({'error': 'Archive not found'}),
+          headers: headers,
+        );
+      }
+      final updated =
+          await ConferenceArchiveService().setCoverImage(archive, imagePath);
+      return shelf.Response.ok(
+        jsonEncode({
+          'success': true,
+          'cover_image_path': updated.coverImagePath,
+        }),
+        headers: headers,
+      );
+    }
+    if (action == 'meet_generate_cover') {
+      final code = params['code'] as String?;
+      if (code == null) {
+        return shelf.Response.badRequest(
+          body: jsonEncode({'error': 'Missing code'}),
+          headers: headers,
+        );
+      }
+      final archive = await ConferenceArchiveService().findArchiveByRoomId(
+        _meetRoomId(code),
+      );
+      if (archive == null) {
+        return shelf.Response.notFound(
+          jsonEncode({'error': 'Archive not found'}),
+          headers: headers,
+        );
+      }
+      final coverBytes = ConferenceArchiveService.generateCoverImage(
+        roomName: archive.roomName,
+        startedAt: archive.startedAt,
+        hostCallsign: archive.hostCallsign,
+      );
+      final tempDir = await io.Directory.systemTemp.createTemp('cover_');
+      final tempFile = io.File('${tempDir.path}/cover.jpg');
+      await tempFile.writeAsBytes(coverBytes);
+      final updated =
+          await ConferenceArchiveService().setCoverImage(archive, tempFile.path);
+      await tempDir.delete(recursive: true);
+      return shelf.Response.ok(
+        jsonEncode({
+          'success': true,
+          'cover_image_path': updated.coverImagePath,
+        }),
+        headers: headers,
+      );
+    }
+    return shelf.Response.notFound(
+      jsonEncode({'error': 'Unknown meet action: $action'}),
+      headers: headers,
+    );
   }
 
   /// Handle GET /api/meet/active — returns active meeting info or 404.
@@ -2079,6 +2191,11 @@ class LogApiService with ChatModificationMixin {
       // Handle bot actions separately (they are async)
       if (action.toLowerCase().startsWith('bot_')) {
         return await _handleBotAction(action.toLowerCase(), params, headers);
+      }
+
+      // Handle meet actions separately (they are async)
+      if (action.toLowerCase().startsWith('meet_')) {
+        return await _handleMeetAction(action.toLowerCase(), params, headers);
       }
 
       // Handle power mode simulation (for testing battery saving on desktop)

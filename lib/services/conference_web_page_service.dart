@@ -24,7 +24,9 @@ class ConferenceWebPageConfig {
   final List<Map<String, dynamic>> initialMessages;
   final List<Map<String, dynamic>> archiveFiles;
   final List<Map<String, dynamic>> archiveRecordings;
+  final List<Map<String, dynamic>> archiveSessions;
   final String? archiveNdfUrl;
+  final String? archiveCoverImageUrl;
 
   const ConferenceWebPageConfig({
     required this.roomId,
@@ -46,7 +48,9 @@ class ConferenceWebPageConfig {
     this.initialMessages = const <Map<String, dynamic>>[],
     this.archiveFiles = const <Map<String, dynamic>>[],
     this.archiveRecordings = const <Map<String, dynamic>>[],
+    this.archiveSessions = const <Map<String, dynamic>>[],
     this.archiveNdfUrl,
+    this.archiveCoverImageUrl,
     this.signalingWsUrl,
   });
 }
@@ -104,7 +108,9 @@ class ConferenceWebPageService {
       'initialMessages': config.initialMessages,
       'archiveFiles': config.archiveFiles,
       'archiveRecordings': config.archiveRecordings,
+      'archiveSessions': config.archiveSessions,
       'archiveNdfUrl': config.archiveNdfUrl,
+      'archiveCoverImageUrl': config.archiveCoverImageUrl,
     });
 
     final html = themeService.processTemplate(template, {
@@ -225,6 +231,10 @@ class ConferenceWebPageService {
               <video id="screen-share-video" autoplay playsinline muted></video>
               <div id="screen-share-placeholder">No screen is being shared right now.</div>
             </div>
+            <div id="archive-assets-shell">
+              <div class="sidebar-title" id="archive-assets-title">Recordings</div>
+              <div id="archive-assets"></div>
+            </div>
             <div class="stage-panel">
               <div class="meeting-controls">
                 <button id="btn-mute" type="button" style="display:none;">Mute</button>
@@ -243,10 +253,6 @@ class ConferenceWebPageService {
                 <input id="chat-input" type="text" placeholder="Type a message..." maxlength="500">
                 <button id="btn-send-chat" type="button">Send</button>
               </div>
-            </div>
-            <div id="archive-assets-shell">
-              <div class="sidebar-title">Archive</div>
-              <div id="archive-assets"></div>
             </div>
           </aside>
         </div>
@@ -283,6 +289,12 @@ let activeScreenSharer = null;
 const audioElements = {};
 const participants = {};
 const chatMessages = [];
+
+// Volume meter state
+let audioContext = null;
+let localAnalyser = null;
+let remoteAnalysers = [];
+let meterTimer = null;
 
 const statusEl = document.getElementById('status');
 const joinForm = document.getElementById('join-form');
@@ -555,33 +567,34 @@ function renderChatMessages() {
   chatMessagesEl.scrollTop = chatMessagesEl.scrollHeight;
 }
 
+function playRecording(rec) {
+  if (!screenShellEl || !screenVideoEl) return;
+  screenShellEl.classList.add('active');
+  screenShellEl.style.display = 'block';
+  // Hide cover image, show video
+  var coverImg = document.getElementById('archive-cover-img');
+  if (coverImg) coverImg.style.display = 'none';
+  screenVideoEl.style.display = '';
+  screenVideoEl.controls = true;
+  screenVideoEl.src = (rec.url || '') + '?inline=1';
+  screenVideoEl.play().catch(function() {});
+  if (screenLabelEl) screenLabelEl.textContent = rec.name || 'Recording';
+  if (screenPlaceholderEl) screenPlaceholderEl.style.display = 'none';
+  // Highlight active item
+  document.querySelectorAll('.archive-asset--recording').forEach(function(el) {
+    el.classList.toggle('archive-asset--active', el.dataset.path === rec.path);
+  });
+}
+
 function renderArchiveAssets() {
   if (!archiveAssetsShellEl || !archiveAssetsEl) {
     return;
   }
   const recordings = Array.isArray(CONFIG.archiveRecordings) ? CONFIG.archiveRecordings : [];
   const files = Array.isArray(CONFIG.archiveFiles) ? CONFIG.archiveFiles : [];
+  const sessions = Array.isArray(CONFIG.archiveSessions) ? CONFIG.archiveSessions : [];
 
-  // Auto-play first recording in the stage area
-  if (recordings.length > 0 && screenShellEl && screenVideoEl) {
-    const first = recordings[0];
-    screenShellEl.classList.add('active');
-    screenShellEl.style.display = 'block';
-    screenVideoEl.muted = true;
-    screenVideoEl.controls = true;
-    screenVideoEl.src = (first.url || '') + '?inline=1';
-    screenVideoEl.play().catch(function() {});
-    if (screenLabelEl) screenLabelEl.textContent = first.name || 'Recording';
-    if (screenPlaceholderEl) screenPlaceholderEl.style.display = 'none';
-  }
-
-  const assets = recordings.map(function(item) {
-    return Object.assign({ kind: 'Recording' }, item);
-  }).concat(files.map(function(item) {
-    return Object.assign({ kind: 'File' }, item);
-  }));
-
-  if (!assets.length && !CONFIG.archiveNdfUrl) {
+  if (!recordings.length && !files.length && !CONFIG.archiveNdfUrl) {
     archiveAssetsShellEl.style.display = 'none';
     archiveAssetsEl.innerHTML = '';
     return;
@@ -589,17 +602,128 @@ function renderArchiveAssets() {
 
   archiveAssetsShellEl.style.display = 'block';
   archiveAssetsEl.innerHTML = '';
-  assets.forEach(function(asset) {
-    const sizeLabel = asset.size ? Math.max(1, Math.round(asset.size / 1024)) + ' KB' : '';
-    const row = document.createElement('a');
-    row.className = 'archive-asset';
-    row.href = asset.url || '#';
-    row.innerHTML =
-      '<div><div class="archive-asset-title">' + escapeHtml(asset.name || asset.path || asset.kind) +
-      '</div><div class="participant-role">' + escapeHtml(asset.kind) +
-      (sizeLabel ? ' \u00b7 ' + escapeHtml(sizeLabel) : '') + '</div></div>';
-    archiveAssetsEl.appendChild(row);
+
+  // Build session-id to index map
+  const sessionMap = {};
+  sessions.forEach(function(s, i) { sessionMap[s.id] = i; });
+  const multipleSessions = sessions.length > 1;
+
+  // Update section title
+  var titleEl = document.getElementById('archive-assets-title');
+  if (titleEl) {
+    titleEl.textContent = multipleSessions
+      ? 'Sessions & Recordings'
+      : 'Recordings (' + recordings.length + ')';
+  }
+
+  // Group recordings by session folder
+  const grouped = {};
+  recordings.forEach(function(rec) {
+    var parts = (rec.path || '').split('/');
+    var sessionId = parts.length >= 3 ? parts[1] : null;
+    var idx = sessionId && sessionMap[sessionId] != null ? sessionMap[sessionId] : sessions.length - 1;
+    if (idx < 0) idx = 0;
+    if (!grouped[idx]) grouped[idx] = [];
+    grouped[idx].push(rec);
   });
+
+  // Show cover image or auto-load first recording
+  var coverUrl = CONFIG.archiveCoverImageUrl || null;
+  if (coverUrl && screenShellEl && screenPlaceholderEl) {
+    screenShellEl.classList.add('active');
+    screenShellEl.style.display = 'block';
+    screenPlaceholderEl.style.display = 'none';
+    screenVideoEl.style.display = 'none';
+    screenVideoEl.controls = true;
+    // Insert cover image before the video element
+    var coverImg = document.getElementById('archive-cover-img');
+    if (!coverImg) {
+      coverImg = document.createElement('img');
+      coverImg.id = 'archive-cover-img';
+      coverImg.style.cssText = 'width:100%;aspect-ratio:16/9;object-fit:cover;border-radius:12px;display:block';
+      screenVideoEl.parentNode.insertBefore(coverImg, screenVideoEl);
+    }
+    coverImg.src = coverUrl;
+    if (screenLabelEl) screenLabelEl.textContent = CONFIG.roomName || 'Meeting';
+  } else if (recordings.length > 0 && screenShellEl && screenVideoEl) {
+    var first = recordings[0];
+    screenShellEl.classList.add('active');
+    screenShellEl.style.display = 'block';
+    screenVideoEl.controls = true;
+    screenVideoEl.src = (first.url || '') + '?inline=1';
+    if (screenLabelEl) screenLabelEl.textContent = first.name || 'Recording';
+    if (screenPlaceholderEl) screenPlaceholderEl.style.display = 'none';
+  }
+
+  function formatTime(isoStr) {
+    if (!isoStr) return '';
+    var d = new Date(isoStr);
+    return d.getHours().toString().padStart(2, '0') + ':' +
+           d.getMinutes().toString().padStart(2, '0');
+  }
+
+  function addRecordingRow(rec, index) {
+    var sizeLabel = rec.size ? Math.max(1, Math.round(rec.size / 1024)) + ' KB' : '';
+    var row = document.createElement('a');
+    row.className = 'archive-asset archive-asset--recording';
+    row.href = '#';
+    row.dataset.path = rec.path || '';
+    row.innerHTML =
+      '<div><div class="archive-asset-title">' +
+      escapeHtml(rec.name || rec.path || 'Recording') +
+      '</div><div class="participant-role">Recording' +
+      (sizeLabel ? ' \u00b7 ' + escapeHtml(sizeLabel) : '') +
+      '</div></div>';
+    row.addEventListener('click', function(e) {
+      e.preventDefault();
+      playRecording(rec);
+    });
+    archiveAssetsEl.appendChild(row);
+  }
+
+  if (multipleSessions) {
+    sessions.forEach(function(s, i) {
+      var label = s.name || ('Session ' + (i + 1));
+      var timeRange = formatTime(s.started_at);
+      if (s.ended_at) timeRange += ' \u2013 ' + formatTime(s.ended_at);
+      var header = document.createElement('div');
+      header.className = 'archive-session-header';
+      header.innerHTML =
+        '<span class="archive-session-label">' + escapeHtml(label) + '</span>' +
+        '<span class="archive-session-time">' + escapeHtml(timeRange) + '</span>';
+      archiveAssetsEl.appendChild(header);
+
+      var recs = grouped[i] || [];
+      if (recs.length === 0) {
+        var empty = document.createElement('div');
+        empty.className = 'archive-session-empty';
+        empty.textContent = 'No recordings';
+        archiveAssetsEl.appendChild(empty);
+      }
+      recs.forEach(addRecordingRow);
+    });
+  } else {
+    recordings.forEach(addRecordingRow);
+  }
+
+  // Files section
+  if (files.length > 0) {
+    var filesHeader = document.createElement('div');
+    filesHeader.className = 'archive-session-header';
+    filesHeader.innerHTML = '<span class="archive-session-label">Files</span>';
+    archiveAssetsEl.appendChild(filesHeader);
+    files.forEach(function(asset) {
+      var sizeLabel = asset.size ? Math.max(1, Math.round(asset.size / 1024)) + ' KB' : '';
+      var row = document.createElement('a');
+      row.className = 'archive-asset';
+      row.href = asset.url || '#';
+      row.innerHTML =
+        '<div><div class="archive-asset-title">' + escapeHtml(asset.name || asset.path || 'File') +
+        '</div><div class="participant-role">File' +
+        (sizeLabel ? ' \u00b7 ' + escapeHtml(sizeLabel) : '') + '</div></div>';
+      archiveAssetsEl.appendChild(row);
+    });
+  }
 
   if (CONFIG.archiveNdfUrl) {
     var ndfLink = document.createElement('a');
@@ -758,6 +882,81 @@ function attachRemoteScreenStream(stream, track) {
   updateScreenState();
 }
 
+// ── Volume meter ─────────────────────────────────────────────────
+function setupAudioMeter(stream) {
+  if (!audioContext) audioContext = new (window.AudioContext || window.webkitAudioContext)();
+  var source = audioContext.createMediaStreamSource(stream);
+  var analyser = audioContext.createAnalyser();
+  analyser.fftSize = 256;
+  analyser.smoothingTimeConstant = 0.5;
+  source.connect(analyser);
+  return { analyser: analyser, dataArray: new Uint8Array(analyser.frequencyBinCount) };
+}
+
+function computeLevel(entry) {
+  entry.analyser.getByteTimeDomainData(entry.dataArray);
+  var sum = 0;
+  for (var i = 0; i < entry.dataArray.length; i++) {
+    var s = (entry.dataArray[i] - 128) / 128;
+    sum += s * s;
+  }
+  return Math.min(1.0, Math.sqrt(sum / entry.dataArray.length) * 3);
+}
+
+function createMeterElement() {
+  var existing = document.getElementById('volume-meter');
+  if (existing) return;
+  var meter = document.createElement('div');
+  meter.id = 'volume-meter';
+  meter.className = 'volume-meter';
+  for (var i = 0; i < 24; i++) {
+    var bar = document.createElement('div');
+    bar.className = 'bar';
+    meter.appendChild(bar);
+  }
+  var controls = document.querySelector('.meeting-controls');
+  if (controls) controls.parentNode.insertBefore(meter, controls);
+}
+
+function updateMeterBars(level) {
+  var meter = document.getElementById('volume-meter');
+  if (!meter) return;
+  var bars = meter.children;
+  for (var i = 0; i < bars.length - 1; i++) {
+    bars[i].style.height = bars[i + 1].style.height;
+    bars[i].style.opacity = bars[i + 1].style.opacity;
+  }
+  var v = Math.random() * 0.15 - 0.075;
+  var h = Math.max(0.05, Math.min(1.0, level + v));
+  var last = bars[bars.length - 1];
+  last.style.height = Math.max(2, h * 24) + 'px';
+  last.style.opacity = String(0.3 + h * 0.7);
+}
+
+function startMeterPolling() {
+  if (meterTimer) return;
+  createMeterElement();
+  meterTimer = setInterval(function() {
+    var level = 0;
+    if (localAnalyser && !muted) level = Math.max(level, computeLevel(localAnalyser));
+    remoteAnalysers.forEach(function(a) { level = Math.max(level, computeLevel(a)); });
+    updateMeterBars(level);
+  }, 200);
+}
+
+function stopMeterPolling() {
+  if (meterTimer) { clearInterval(meterTimer); meterTimer = null; }
+  if (audioContext) {
+    try { audioContext.close(); } catch (_) {}
+    audioContext = null;
+  }
+  localAnalyser = null;
+  remoteAnalysers = [];
+  var meter = document.getElementById('volume-meter');
+  if (meter) meter.remove();
+}
+// ── End volume meter ─────────────────────────────────────────────
+
 function stopLocalAudioCapture() {
   if (localStream) {
     localStream.getTracks().forEach(function(track) { track.stop(); });
@@ -799,6 +998,8 @@ async function ensureLocalAudioCapture() {
         track.enabled = false;
       });
     }
+    localAnalyser = setupAudioMeter(localStream);
+    startMeterPolling();
     return true;
   } catch (_) {
     setStatus('Microphone access denied');
@@ -1280,6 +1481,12 @@ function createPeerConnection() {
     }
     audio.srcObject = stream;
     playMediaElement(audio);
+    if (event.track.kind === 'audio') {
+      try {
+        remoteAnalysers.push(setupAudioMeter(stream));
+        startMeterPolling();
+      } catch (_) {}
+    }
   };
 
   pc.onconnectionstatechange = function() {
@@ -1440,18 +1647,31 @@ function requestSpeaker() {
   setStatus('Speaker request sent');
 }
 
-function sendChat() {
+async function sendChat() {
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
   const content = chatInput.value.trim();
-  if (!content) return;
+  if (!content || !myCallsign) return;
+
+  // Sign with NOSTR using shared signChatContent()
+  const nostr = window.GeogramNostr || {};
+  const signed = nostr.signChatContent
+    ? await nostr.signChatContent(content, CONFIG.roomId)
+    : null;
+
+  const metadata = {
+    conference_id: Date.now().toString(36) + '-' + Math.random().toString(16).slice(2),
+    room_id: CONFIG.roomId
+  };
+  if (signed) {
+    metadata.npub = signed.npub;
+    metadata.signature = signed.signature;
+  }
+
   const message = {
     author: myCallsign,
     timestamp: asTimestamp(new Date()),
     content: content,
-    metadata: {
-      conference_id: Date.now().toString(36) + '-' + Math.random().toString(16).slice(2),
-      room_id: CONFIG.roomId
-    },
+    metadata: metadata,
     reactions: {}
   };
   ws.send(JSON.stringify({
@@ -1480,6 +1700,7 @@ function cleanup(statusMessage) {
   }
   clearScreenReconnectTimer();
   stopSessionStatePolling();
+  stopMeterPolling();
   closeSocket();
   Object.keys(audioElements).forEach(function(key) {
     audioElements[key].srcObject = null;

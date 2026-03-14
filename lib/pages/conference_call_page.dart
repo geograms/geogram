@@ -2,6 +2,7 @@
 library;
 
 import 'dart:async';
+import 'dart:io' show Platform;
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -9,8 +10,13 @@ import 'package:flutter/services.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
+import '../models/conference_archive_entry.dart';
+import '../services/alsa_recorder.dart';
+import '../services/conference_archive_service.dart';
 import '../services/conference_service.dart';
 import '../services/profile_service.dart';
+import '../widgets/audio_level_bar.dart';
+import 'conference_archive_detail_page.dart';
 import 'conference_home_page.dart';
 import '../widgets/message_input_widget.dart';
 import '../widgets/message_list_widget.dart';
@@ -33,6 +39,10 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
   String? _screenRendererStreamId;
   bool _isExitingToHome = false;
   bool _isWaitingForApproval = false;
+  double _audioLevel = 0.0;
+  Timer? _audioLevelTimer;
+  AlsaRecorder? _alsaMonitor;
+  ConferenceArchiveEntry? _lastArchiveEntry;
 
   @override
   void initState() {
@@ -40,8 +50,10 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
 
     _stateSubscription = _conferenceService.stateStream.listen((state) {
       if (!mounted) return;
+      // Capture archive entry while conference is still active
+      _lastArchiveEntry = _conferenceService.archiveEntry ?? _lastArchiveEntry;
       if (state == ConferenceState.idle) {
-        _returnToConferenceHome();
+        _navigateToArchiveOrHome();
         return;
       }
       if (state == ConferenceState.active) {
@@ -82,6 +94,75 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
     unawaited(_syncRemoteAudio());
     _queueScreenShareSync();
     _loadMeetUrls();
+
+    unawaited(_startAudioMonitor());
+  }
+
+  Future<void> _startAudioMonitor() async {
+    if (Platform.isLinux && AlsaRecorder.isAvailable) {
+      try {
+        _alsaMonitor = AlsaRecorder(sampleRate: 8000, channels: 1);
+        _alsaMonitor!.initialize();
+        final ok = await _alsaMonitor!.startRecording('monitor');
+        if (!ok) {
+          _alsaMonitor = null;
+        }
+      } catch (e) {
+        _alsaMonitor = null;
+      }
+    }
+
+    _audioLevelTimer = Timer.periodic(
+      const Duration(milliseconds: 200),
+      (_) {
+        if (!mounted) return;
+        _pollAudioLevel();
+      },
+    );
+  }
+
+  void _pollAudioLevel() {
+    // Show zero when muted
+    if (_conferenceService.isLocalMuted) {
+      if (_audioLevel != 0.0 && mounted) setState(() => _audioLevel = 0.0);
+      // Still drain ALSA buffer so it doesn't accumulate
+      _alsaMonitor?.readFrames(1600);
+      return;
+    }
+
+    if (_alsaMonitor != null && _alsaMonitor!.isRecording) {
+      // Read 200ms worth of frames at 8kHz = 1600 frames
+      final frames = _alsaMonitor!.readFrames(1600);
+      if (frames != null && frames.isNotEmpty) {
+        double sumSquares = 0;
+        for (final sample in frames) {
+          sumSquares += sample * sample;
+        }
+        final rms = sumSquares / frames.length;
+        final normalized = (rms / (32767 * 32767)).clamp(0.0, 1.0);
+        final amplitude = (normalized * 10).clamp(0.0, 1.0);
+        if (mounted) setState(() => _audioLevel = amplitude);
+      }
+      return;
+    }
+
+    // Fallback: try WebRTC stats (works on Android/iOS with peers)
+    _pollAudioLevelFromStats();
+  }
+
+  Future<void> _pollAudioLevelFromStats() async {
+    double maxLevel = 0.0;
+    final pcs = _conferenceService.peerConnections;
+    for (final pc in pcs) {
+      try {
+        final stats = await pc.getStats();
+        for (final report in stats) {
+          final level = report.values['audioLevel'];
+          if (level is num && level > maxLevel) maxLevel = level.toDouble();
+        }
+      } catch (_) {}
+    }
+    if (mounted) setState(() => _audioLevel = maxLevel);
   }
 
   Future<void> _loadMeetUrls() async {
@@ -94,6 +175,8 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
 
   @override
   void dispose() {
+    _audioLevelTimer?.cancel();
+    _alsaMonitor?.stopRecording();
     _stateSubscription?.cancel();
     _eventSubscription?.cancel();
     unawaited(_disposeAudioRenderers());
@@ -102,10 +185,30 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
   }
 
   Future<void> _endCall() async {
+    _lastArchiveEntry = _conferenceService.archiveEntry ?? _lastArchiveEntry;
     await _conferenceService.endConference();
-    if (mounted) {
-      _returnToConferenceHome();
+    if (!mounted) return;
+    await _navigateToArchiveOrHome();
+  }
+
+  Future<void> _navigateToArchiveOrHome() async {
+    if (!mounted || _isExitingToHome) return;
+    final entry = _lastArchiveEntry;
+    if (entry != null) {
+      try {
+        final refreshed =
+            await ConferenceArchiveService().refreshArchive(entry);
+        if (!mounted) return;
+        _isExitingToHome = true;
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(
+            builder: (_) => ConferenceArchiveDetailPage(entry: refreshed),
+          ),
+        );
+        return;
+      } catch (_) {}
     }
+    _returnToConferenceHome();
   }
 
   void _toggleMute() {
@@ -1167,12 +1270,17 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
       bottomNavigationBar: SafeArea(
         child: Container(
           padding: EdgeInsets.all(compactControls ? 10 : 16),
-          child: Wrap(
-            alignment: WrapAlignment.spaceEvenly,
-            crossAxisAlignment: WrapCrossAlignment.center,
-            spacing: compactControls ? 12 : 18,
-            runSpacing: compactControls ? 8 : 12,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
             children: [
+              AudioLevelBar(amplitude: _audioLevel),
+              const SizedBox(height: 8),
+              Wrap(
+                alignment: WrapAlignment.spaceEvenly,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                spacing: compactControls ? 12 : 18,
+                runSpacing: compactControls ? 8 : 12,
+                children: [
               _CallButton(
                 icon: isMuted ? Icons.mic_off : Icons.mic,
                 label: isMuted ? 'Unmute' : 'Mute',
@@ -1248,6 +1356,8 @@ class _ConferenceCallPageState extends State<ConferenceCallPage> {
                 onPressed: _endCall,
                 compact: compactControls,
               ),
+            ],
+          ),
             ],
           ),
         ),

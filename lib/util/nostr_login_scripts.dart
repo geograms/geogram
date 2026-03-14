@@ -429,6 +429,37 @@ String getNostrLoginScripts() {
   window.GeogramNostr.publishKind0 = publishKind0;
   window.GeogramNostr.queryKind0 = queryKind0;
 
+  /// Sign a chat message content with NOSTR.
+  /// Returns { pubkey, npub, callsign, event_id, signature, created_at } or null.
+  /// Reused by chat pages and meeting pages for authenticated messages.
+  window.GeogramNostr.signChatContent = async function(content, roomId) {
+    var nostr = window.GeogramNostr || {};
+    if (!nostr.pubkey || !nostr.connected || !window.nostr || typeof window.nostr.signEvent !== 'function') {
+      return null;
+    }
+    try {
+      var createdAt = Math.floor(Date.now() / 1000);
+      var unsignedEvent = {
+        kind: 1,
+        created_at: createdAt,
+        tags: [['t', 'chat'], ['room', roomId || ''], ['callsign', nostr.callsign || '']],
+        content: content || '',
+      };
+      var signedEvent = await window.nostr.signEvent(unsignedEvent);
+      return {
+        pubkey: signedEvent.pubkey,
+        npub: hexToNpub(signedEvent.pubkey),
+        callsign: nostr.callsign,
+        event_id: signedEvent.id,
+        signature: signedEvent.sig,
+        created_at: signedEvent.created_at,
+      };
+    } catch (e) {
+      console.error('GeogramNostr.signChatContent error:', e);
+      return null;
+    }
+  };
+
   // --- npub/nsec helpers ---
 
   function hexToNpub(hex) {

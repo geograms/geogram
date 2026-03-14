@@ -590,11 +590,17 @@ class ConferenceSignalingServer {
     final callsign = sender.callsign;
     if (callsign == null) return;
 
+    // Enforce author from verified WebSocket identity — prevents spoofing
+    final msg = message['message'];
+    if (msg is Map<String, dynamic>) {
+      msg['author'] = callsign;
+    }
+
     final payload = {
       'type': 'conference_chat_message',
       'room_id': roomId,
       'from_callsign': callsign,
-      'message': message['message'],
+      'message': msg,
     };
 
     if (callsign.toLowerCase() != hostCallsign.toLowerCase()) {

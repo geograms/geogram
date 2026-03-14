@@ -51,6 +51,7 @@ class _ConferenceHomePageState extends State<ConferenceHomePage> {
   String? _historyError;
   List<String> _allTags = const <String>[];
   String? _selectedTag;
+  final Map<String, Uint8List?> _coverThumbnails = {};
 
   @override
   void initState() {
@@ -160,12 +161,14 @@ class _ConferenceHomePageState extends State<ConferenceHomePage> {
         _historyEntries = entries;
         _allTags = sortedTags;
         _historyLoading = false;
+        _coverThumbnails.clear();
         _historyError = null;
         // Clear filter if selected tag no longer exists
         if (_selectedTag != null && !tags.contains(_selectedTag)) {
           _selectedTag = null;
         }
       });
+      unawaited(_loadThumbnails(entries));
     } catch (error) {
       if (!mounted) {
         return;
@@ -174,6 +177,19 @@ class _ConferenceHomePageState extends State<ConferenceHomePage> {
         _historyLoading = false;
         _historyError = '$error';
       });
+    }
+  }
+
+  Future<void> _loadThumbnails(List<ConferenceArchiveEntry> entries) async {
+    for (final entry in entries) {
+      if (!mounted) return;
+      try {
+        final bytes = await _archiveService.loadCoverImageBytes(entry);
+        if (!mounted) return;
+        setState(() => _coverThumbnails[entry.relativePath] = bytes);
+      } catch (_) {
+        // Skip failed thumbnails silently
+      }
     }
   }
 
@@ -1083,9 +1099,24 @@ class _ConferenceHomePageState extends State<ConferenceHomePage> {
             padding: const EdgeInsets.all(12),
             child: Row(
               children: [
-                Icon(
-                  entry.hostedByMe ? Icons.podcasts : Icons.headphones,
-                  color: roleColor,
+                SizedBox(
+                  width: 56,
+                  height: 40,
+                  child: _coverThumbnails.containsKey(entry.relativePath) &&
+                          _coverThumbnails[entry.relativePath] != null
+                      ? ClipRRect(
+                          borderRadius: BorderRadius.circular(4),
+                          child: Image.memory(
+                            _coverThumbnails[entry.relativePath]!,
+                            fit: BoxFit.cover,
+                            width: 56,
+                            height: 40,
+                          ),
+                        )
+                      : Icon(
+                          entry.hostedByMe ? Icons.podcasts : Icons.headphones,
+                          color: roleColor,
+                        ),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
@@ -1181,6 +1212,21 @@ class _ConferenceHomePageState extends State<ConferenceHomePage> {
                             const SizedBox(width: 2),
                             Text(
                               '${entry.recordingCount}',
+                              style: theme.textTheme.labelSmall?.copyWith(
+                                color: theme.colorScheme.onSurfaceVariant,
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                          ],
+                          if (entry.totalViewCount > 0) ...[
+                            Icon(
+                              Icons.visibility_outlined,
+                              size: 12,
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                            const SizedBox(width: 2),
+                            Text(
+                              '${entry.totalViewCount}',
                               style: theme.textTheme.labelSmall?.copyWith(
                                 color: theme.colorScheme.onSurfaceVariant,
                               ),

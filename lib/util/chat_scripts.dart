@@ -451,23 +451,22 @@ String getChatPageScripts() {
         sendBtn.disabled = true;
 
         try {
-          const createdAt = Math.floor(Date.now() / 1000);
-          const unsignedEvent = {
-            kind: 1,
-            created_at: createdAt,
-            tags: [['t', 'chat'], ['room', currentRoom], ['callsign', nostr.callsign]],
-            content: content,
-          };
-
-          const signedEvent = await window.nostr.signEvent(unsignedEvent);
+          // Use shared GeogramNostr.signChatContent() for NOSTR signing
+          const signed = nostr.signChatContent
+            ? await nostr.signChatContent(content, currentRoom)
+            : null;
+          if (!signed) {
+            showChatError('Failed to sign message — reconnect with Nostr');
+            return;
+          }
 
           const body = {
-            callsign: nostr.callsign,
+            callsign: signed.callsign,
             content: content,
-            pubkey: signedEvent.pubkey,
-            event_id: signedEvent.id,
-            signature: signedEvent.sig,
-            created_at: signedEvent.created_at,
+            pubkey: signed.pubkey,
+            event_id: signed.event_id,
+            signature: signed.signature,
+            created_at: signed.created_at,
           };
 
           const url = data.apiBasePath + '/' + encodeURIComponent(currentRoom) + '/messages';
@@ -482,7 +481,7 @@ String getChatPageScripts() {
             const now = new Date();
             const pad = (n) => n.toString().padStart(2, '0');
             const ts = now.getFullYear() + '-' + pad(now.getMonth()+1) + '-' + pad(now.getDate()) + ' ' + pad(now.getHours()) + ':' + pad(now.getMinutes()) + '_' + pad(now.getSeconds());
-            const newMsg = { timestamp: ts, author: nostr.callsign, pubkey: nostr.pubkey, content: content };
+            const newMsg = { timestamp: ts, author: signed.callsign, pubkey: signed.pubkey, content: content };
             appendMessage(newMsg);
             cacheAppend(currentRoom, [newMsg]);
             scrollToBottom(true);

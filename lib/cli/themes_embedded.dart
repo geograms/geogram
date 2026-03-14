@@ -2392,6 +2392,11 @@ class ThemesEmbedded {
               <div id="screen-share-placeholder">No screen is being shared right now.</div>
             </div>
 
+            <div id="archive-assets-shell">
+              <div class="sidebar-title" id="archive-assets-title">Recordings</div>
+              <div id="archive-assets"></div>
+            </div>
+
             <div class="stage-panel">
               <div class="meeting-controls">
                 <button id="btn-mute" type="button" style="display:none;">Mute</button>
@@ -2412,11 +2417,6 @@ class ThemesEmbedded {
                 <input id="chat-input" type="text" placeholder="Type a message..." maxlength="500">
                 <button id="btn-send-chat" type="button">Send</button>
               </div>
-            </div>
-
-            <div id="archive-assets-shell">
-              <div class="sidebar-title">Archive</div>
-              <div id="archive-assets"></div>
             </div>
           </aside>
         </div>
@@ -2676,6 +2676,24 @@ class ThemesEmbedded {
   flex-wrap: wrap;
 }
 
+.volume-meter {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 24px;
+  width: 100%;
+  margin-bottom: 10px;
+}
+.volume-meter .bar {
+  flex: 1;
+  min-width: 2px;
+  height: 2px;
+  background: var(--accent);
+  border-radius: 1px;
+  opacity: 0.3;
+  transition: height 80ms ease-out, opacity 80ms ease-out;
+}
+
 button {
   border: 1px solid var(--border-color);
   background: transparent;
@@ -2802,7 +2820,6 @@ button:disabled {
 
 #archive-assets-shell {
   display: none;
-  margin-top: 18px;
 }
 
 #chat-messages {
@@ -2861,6 +2878,44 @@ button:disabled {
 
 .archive-asset-title {
   font-weight: bold;
+}
+
+.archive-asset--recording {
+  cursor: pointer;
+}
+
+.archive-asset--active {
+  border-color: var(--accent);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.archive-session-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 0;
+  margin-top: 8px;
+}
+
+.archive-session-header:first-child {
+  margin-top: 0;
+}
+
+.archive-session-label {
+  font-weight: bold;
+  color: var(--accent);
+}
+
+.archive-session-time {
+  font-size: 0.85rem;
+  color: var(--accent-alpha-70);
+}
+
+.archive-session-empty {
+  font-size: 0.85rem;
+  color: var(--accent-alpha-70);
+  padding: 4px 12px;
 }
 
 .archive-asset--download {

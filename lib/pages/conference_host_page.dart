@@ -26,6 +26,13 @@ class _ConferenceHostPageState extends State<ConferenceHostPage> {
   int _maxSpeakers = 6;
   DateTime? _scheduledAt;
   bool _approvalRequired = false;
+  late String _meetingKeyword;
+
+  @override
+  void initState() {
+    super.initState();
+    _meetingKeyword = ConferenceService.randomMeetingKeyword();
+  }
 
   @override
   void dispose() {
@@ -47,6 +54,7 @@ class _ConferenceHostPageState extends State<ConferenceHostPage> {
       await _conferenceService.hostConference(
         roomName: name,
         maxSpeakers: _maxSpeakers,
+        roomIdOverride: _conferenceService.roomIdFromKeyword(_meetingKeyword),
         description: _descriptionController.text.trim(),
         password: _passwordController.text.trim().isEmpty
             ? null
@@ -82,6 +90,7 @@ class _ConferenceHostPageState extends State<ConferenceHostPage> {
         maxSpeakers: _maxSpeakers,
         scheduledAt: _scheduledAt,
         description: _descriptionController.text.trim(),
+        roomIdOverride: _conferenceService.roomIdFromKeyword(_meetingKeyword),
       );
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -185,6 +194,33 @@ class _ConferenceHostPageState extends State<ConferenceHostPage> {
               ),
               textCapitalization: TextCapitalization.sentences,
               enabled: !_starting && !_scheduling,
+            ),
+            const SizedBox(height: 12),
+            // Meeting code keyword
+            Row(
+              children: [
+                Icon(Icons.tag, size: 18, color: theme.colorScheme.onSurfaceVariant),
+                const SizedBox(width: 8),
+                Text('Meeting code: ', style: theme.textTheme.bodyMedium),
+                Text(
+                  _meetingKeyword,
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    fontWeight: FontWeight.w600,
+                    color: theme.colorScheme.primary,
+                  ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.refresh, size: 20),
+                  tooltip: 'Pick another keyword',
+                  visualDensity: VisualDensity.compact,
+                  onPressed: (_starting || _scheduling)
+                      ? null
+                      : () => setState(() {
+                            _meetingKeyword =
+                                ConferenceService.randomMeetingKeyword();
+                          }),
+                ),
+              ],
             ),
             const SizedBox(height: 12),
             TextField(

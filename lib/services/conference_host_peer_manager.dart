@@ -56,6 +56,11 @@ class ConferenceHostPeerManager {
   List<String> get connectedPeers =>
       _peers.values.where((p) => p.isConnected).map((p) => p.callsign).toList();
 
+  List<RTCPeerConnection> get activePeerConnections => _peers.values
+      .where((p) => p.peerConnection != null)
+      .map((p) => p.peerConnection!)
+      .toList();
+
   List<String> get speakerCallsigns => _roles.entries
       .where((e) => e.value == SfuParticipantRole.speaker)
       .map((e) => e.key)

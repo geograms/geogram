@@ -13,6 +13,12 @@ import 'package:path/path.dart' as p;
 import '../services/log_service.dart';
 import '../services/profile_storage.dart';
 
+/// DOS timestamps stored in ZIP files represent local time, but the `archive`
+/// package wraps them in [DateTime.utc].  Re-interpret as local time so that
+/// callers displaying `.toLocal()` don't double-apply the timezone offset.
+DateTime _dosToLocal(DateTime dt) =>
+    DateTime(dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second);
+
 /// ProfileStorage implementation backed by a ZIP archive on disk.
 ///
 /// Keeps the decoded [Archive] in memory and provides filesystem-like CRUD.
@@ -176,8 +182,7 @@ class ZipProfileStorage extends ProfileStorage {
             path: name,
             isDirectory: false,
             size: archiveEntry.size,
-            modified: DateTime.fromMillisecondsSinceEpoch(
-                archiveEntry.lastModTime * 1000),
+            modified: _dosToLocal(archiveEntry.lastModDateTime),
           ));
         }
       } else {
@@ -191,8 +196,7 @@ class ZipProfileStorage extends ProfileStorage {
               path: name,
               isDirectory: false,
               size: archiveEntry.size,
-              modified: DateTime.fromMillisecondsSinceEpoch(
-                archiveEntry.lastModTime * 1000),
+              modified: _dosToLocal(archiveEntry.lastModDateTime),
             ));
           }
         } else {
