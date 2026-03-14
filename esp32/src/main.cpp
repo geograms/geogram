@@ -317,6 +317,7 @@ static void start_mesh_mode(void)
     } else {
         ESP_LOGE(TAG, "Failed to start HTTP server: %s", esp_err_to_name(http_ret));
     }
+
 }
 #endif  // CONFIG_GEOGRAM_MESH_ENABLED
 
@@ -853,7 +854,7 @@ extern "C" void app_main(void)
         ESP_LOGI(TAG, "Serial console initialized");
     }
 
-#if BOARD_MODEL == MODEL_ESP32C3_MINI || BOARD_MODEL == MODEL_KV4P
+#if BOARD_MODEL == MODEL_ESP32C3_MINI
     // Ensure station identity is available for BLE handshakes.
     station_init();
 
@@ -866,6 +867,10 @@ extern "C" void app_main(void)
     } else {
         ESP_LOGW(TAG, "BLE init failed: %s", esp_err_to_name(ret));
     }
+#elif BOARD_MODEL == MODEL_KV4P
+    // KV4P: BLE disabled — heap too tight with WiFi APSTA + APRS I2S
+    station_init();
+    ESP_LOGI(TAG, "BLE disabled on KV4P (heap conservation)");
 #endif
 
 #ifdef CONFIG_GEOGRAM_MESH_ENABLED
@@ -1025,10 +1030,8 @@ extern "C" void app_main(void)
             http_server_start_ex(NULL, true);
             ESP_LOGI(TAG, "HTTP server started");
 
-            // Start Telnet server
-            if (telnet_server_start(TELNET_DEFAULT_PORT) == ESP_OK) {
-                ESP_LOGI(TAG, "Telnet server started on port %d", TELNET_DEFAULT_PORT);
-            }
+            // Telnet disabled on KV4P — heap too tight with BLE+WiFi APSTA+APRS
+            ESP_LOGI(TAG, "Telnet disabled on KV4P (use serial console)");
 
 #if HAS_LED
             led_set_state(LED_STATE_OK);
