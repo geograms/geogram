@@ -57,9 +57,9 @@ static const char *TAG = "sa818_radio";
 #define APRS_PHASE_INC                  6
 #define APRS_PHASE_MAX                  ((APRS_SAMPLE_RATE_HZ * APRS_PHASE_BITS + APRS_BITRATE_BPS / 2U) / APRS_BITRATE_BPS)
 #define APRS_PHASE_THRESHOLD            (APRS_PHASE_MAX / 2)
-#define APRS_PREAMBLE_FLAGS             50U
+#define APRS_PREAMBLE_FLAGS             100U
 #define APRS_TAIL_FLAGS                 5U
-#define APRS_TX_LEAD_MS                 250U
+#define APRS_TX_LEAD_MS                 500U
 #define APRS_TX_TAIL_MS                 120U
 #define APRS_MAX_FRAME_BYTES            330U
 #define APRS_MAX_RAW_BITS               (APRS_MAX_FRAME_BYTES * 12U)
@@ -203,6 +203,9 @@ struct sa818_radio_dev {
     void *aprs_rx_ctx;
     aprs_decoder_state_t aprs_dec;
     uint16_t aprs_message_seq;
+
+    float last_group_tx_freq;
+    float last_group_rx_freq;
 
     SemaphoreHandle_t lock;
 };
@@ -358,14 +361,19 @@ static esp_err_t sa818_radio_apply_group(sa818_radio_handle_t handle)
         return ESP_ERR_INVALID_ARG;
     }
 
-    return sa818_set_group(handle->modem,
-                           handle->bandwidth,
-                           handle->tx_freq_mhz,
-                           handle->rx_freq_mhz,
-                           "0000",
-                           handle->squelch,
-                           "0000",
-                           SA818_RADIO_CMD_TIMEOUT_MS);
+    esp_err_t ret = sa818_set_group(handle->modem,
+                                    handle->bandwidth,
+                                    handle->tx_freq_mhz,
+                                    handle->rx_freq_mhz,
+                                    "0000",
+                                    handle->squelch,
+                                    "0000",
+                                    SA818_RADIO_CMD_TIMEOUT_MS);
+    if (ret == ESP_OK) {
+        handle->last_group_tx_freq = handle->tx_freq_mhz;
+        handle->last_group_rx_freq = handle->rx_freq_mhz;
+    }
+    return ret;
 }
 
 static esp_err_t sa818_radio_configure_squelch_pin(sa818_radio_handle_t handle)
@@ -2154,14 +2162,22 @@ esp_err_t sa818_radio_send_aprs_message(sa818_radio_handle_t handle,
         return ret;
     }
 
-    ret = sa818_radio_set_frequency(handle, handle->aprs_freq_mhz, handle->aprs_freq_mhz);
-    if (ret != ESP_OK) {
-        return ret;
+    // Skip redundant AT+DMOSETGROUP if frequency hasn't changed — avoids
+    // forcing the SA818 VCO to retune, which causes transient frequency drift.
+    if (handle->last_group_tx_freq != handle->aprs_freq_mhz ||
+        handle->last_group_rx_freq != handle->aprs_freq_mhz) {
+        ret = sa818_radio_set_frequency(handle, handle->aprs_freq_mhz, handle->aprs_freq_mhz);
+        if (ret != ESP_OK) {
+            return ret;
+        }
     }
 
-    // Switch I2S from RX (ADC) to TX (PDM) mode — KV4P-HT audio path.
+    // Switch I2S from RX (ADC) to TX (DAC) mode — KV4P-HT audio path.
 #if CONFIG_IDF_TARGET_ESP32
     if (handle->i2s_tx_ready) {
+        // Disable GPIO26 DAC bias before I2S swap to prevent RF coupling
+        // with GPIO25 TX audio during the transition.
+        dac_output_disable(DAC_CHANNEL_2);
         i2s_driver_uninstall(I2S_NUM_0);
         ret = sa818_radio_start_pdm_tx();
         if (ret != ESP_OK) {

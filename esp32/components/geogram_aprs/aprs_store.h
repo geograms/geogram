@@ -19,7 +19,7 @@
 extern "C" {
 #endif
 
-#define APRS_STORE_MAX_MESSAGES  32
+#define APRS_STORE_MAX_MESSAGES  128
 #define APRS_MAX_CALLSIGN_LEN   10
 #define APRS_MAX_MESSAGE_LEN    68
 #define APRS_MAX_RAW_LEN        128   /**< TNC2 raw frame (from>to,path:info) */
@@ -100,6 +100,19 @@ uint32_t aprs_store_get_total_rx(void);
  * @brief Get total number of transmitted messages
  */
 uint32_t aprs_store_get_total_tx(void);
+
+/**
+ * @brief Get the epoch prefix letter (random A-Z, changes on each boot/reflash)
+ */
+char aprs_store_get_epoch(void);
+
+/**
+ * @brief Parse a prefixed ID string (e.g. "K5") into epoch char and numeric id.
+ * @param str    Input string like "K5" or "5"
+ * @param epoch  Output epoch character (or '\0' if none)
+ * @param id     Output numeric id
+ */
+void aprs_store_parse_id(const char *str, char *epoch, uint32_t *id);
 
 #ifdef __cplusplus
 }

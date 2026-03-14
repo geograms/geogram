@@ -8,6 +8,7 @@
 #include <time.h>
 #include "aprs_store.h"
 #include "esp_log.h"
+#include "esp_random.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 
@@ -19,6 +20,7 @@ static size_t s_head = 0;        // Next write position (circular)
 static uint32_t s_next_id = 1;   // Monotonic counter
 static uint32_t s_total_rx = 0;  // Total RX (including dedup'd beacons)
 static uint32_t s_total_tx = 0;  // Total TX
+static char s_epoch_prefix = 'A'; // Random letter chosen at init — changes on reflash
 static SemaphoreHandle_t s_mutex = NULL;
 
 /**
@@ -103,9 +105,10 @@ esp_err_t aprs_store_init(void)
     s_next_id = 1;
     s_total_rx = 0;
     s_total_tx = 0;
+    s_epoch_prefix = (char)('A' + (esp_random() % 26));
 
-    ESP_LOGI(TAG, "APRS store initialized (max %d messages, %u bytes)",
-             APRS_STORE_MAX_MESSAGES, (unsigned)alloc_size);
+    ESP_LOGI(TAG, "APRS store initialized (epoch %c, max %d messages, %u bytes)",
+             s_epoch_prefix, APRS_STORE_MAX_MESSAGES, (unsigned)alloc_size);
     return ESP_OK;
 }
 
@@ -294,7 +297,8 @@ size_t aprs_store_build_json(char *buffer, size_t size, uint32_t since_id)
     }
 
     int offset = snprintf(buffer, size,
-        "{\"latest_id\":%lu,\"count\":%d,\"messages\":[",
+        "{\"epoch\":\"%c\",\"latest_id\":\"%c%lu\",\"count\":%d,\"messages\":[",
+        s_epoch_prefix, s_epoch_prefix,
         (unsigned long)latest_id, (int)msg_count);
 
     if (offset < 0 || (size_t)offset >= size) {
@@ -318,14 +322,14 @@ size_t aprs_store_build_json(char *buffer, size_t size, uint32_t since_id)
         json_escape(esc_raw, sizeof(esc_raw), m->raw);
 
         int n = snprintf(buffer + offset, size - offset,
-            "%s{\"id\":%lu,\"timestamp\":%lu,"
+            "%s{\"id\":\"%c%lu\",\"timestamp\":%lu,"
             "\"from\":\"%s\",\"to\":\"%s\","
             "\"message\":\"%s\","
             "\"raw\":\"%s\","
             "\"beacon\":%s,\"beacon_count\":%lu,"
             "\"outgoing\":%s}",
             first ? "" : ",",
-            (unsigned long)m->id,
+            s_epoch_prefix, (unsigned long)m->id,
             (unsigned long)m->timestamp,
             esc_from, esc_to,
             esc_msg,
@@ -372,4 +376,23 @@ uint32_t aprs_store_get_total_tx(void)
     uint32_t val = s_total_tx;
     xSemaphoreGive(s_mutex);
     return val;
+}
+
+char aprs_store_get_epoch(void)
+{
+    return s_epoch_prefix;
+}
+
+void aprs_store_parse_id(const char *str, char *epoch, uint32_t *id)
+{
+    *epoch = '\0';
+    *id = 0;
+    if (!str || str[0] == '\0') return;
+
+    if (str[0] >= 'A' && str[0] <= 'Z') {
+        *epoch = str[0];
+        *id = (uint32_t)strtoul(str + 1, NULL, 10);
+    } else {
+        *id = (uint32_t)strtoul(str, NULL, 10);
+    }
 }

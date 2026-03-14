@@ -382,6 +382,20 @@ static int cmd_aprs_send(int argc, char **argv)
     return 0;
 }
 
+static int cmd_test_tone(int argc, char **argv)
+{
+    (void)argc; (void)argv;
+    sa818_radio_handle_t radio = get_radio_or_print_error();
+    if (!radio) return 1;
+    esp_err_t ret = sa818_radio_test_tone(radio);
+    if (ret != ESP_OK) {
+        printf("Error: %s\n", esp_err_to_name(ret));
+        return 1;
+    }
+    printf("Test tone complete\n");
+    return 0;
+}
+
 void register_radio_commands(void)
 {
     const esp_console_cmd_t radio_cmd = {
@@ -447,6 +461,14 @@ void register_radio_commands(void)
         .func = &cmd_aprs_send,
     };
     ESP_ERROR_CHECK(esp_console_cmd_register(&aprs_send_cmd));
+
+    const esp_console_cmd_t test_tone_cmd = {
+        .command = "test_tone",
+        .help = "Output alternating 1200/2200 Hz test tone via radio",
+        .hint = NULL,
+        .func = &cmd_test_tone,
+    };
+    ESP_ERROR_CHECK(esp_console_cmd_register(&test_tone_cmd));
 
     ESP_LOGI(TAG, "Radio/APRS commands registered");
 }

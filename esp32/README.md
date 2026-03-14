@@ -272,6 +272,14 @@ Default AP mode configuration (in `main.cpp`):
 | `geogram_tiles` | OSM map tile fetching/caching |
 | `geogram_updates` | GitHub release polling for OTA |
 
+### Radio Components (KV4P)
+
+| Component | Description |
+|-----------|-------------|
+| `geogram_sa818` | SA818 radio module driver — APRS TX/RX, PTT, I2S DAC/ADC |
+| `geogram_aprs` | APRS message store — 128-slot circular buffer with beacon dedup and epoch-prefixed IDs |
+| `geogram_model_kv4p` | KV4P board initialization (radio, APRS store, HTTP endpoints) |
+
 ### Board-Specific Components
 
 | Component | Description |

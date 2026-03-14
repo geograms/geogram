@@ -253,16 +253,17 @@ These endpoints are only available on the KV4P board, which has an SA818 radio m
 
 ### `GET /api/aprs?since=<id>`
 
-Returns APRS messages with id greater than `since`. Omit `since` or pass `0` to get all messages.
+Returns APRS messages with id greater than `since`. Omit `since` or pass `""` to get all messages.
 
 **Response:**
 ```json
 {
-  "latest_id": 42,
+  "epoch": "K",
+  "latest_id": "K42",
   "count": 3,
   "messages": [
     {
-      "id": 40,
+      "id": "K40",
       "timestamp": 1709312400,
       "from": "N0CALL",
       "to": "APRS",
@@ -276,22 +277,26 @@ Returns APRS messages with id greater than `since`. Omit `since` or pass `0` to 
 }
 ```
 
+**Epoch-prefixed IDs:** Each message ID is prefixed with a random uppercase letter (A-Z) chosen at boot. This letter is the "epoch" — it changes on every reboot or reflash. When a client polls with `since=K5` but the device epoch is now `M`, the server knows the index was reset and returns all messages. The `epoch` field in the response can also be used to detect resets.
+
 **Beacon deduplication:** Repeated position/status beacons from the same callsign with identical content are deduplicated. The `beacon_count` field shows how many times the beacon was received. The message's `id` is bumped on each repeat so it appears as "new" when polling with `since`.
+
+**Store capacity:** 128 messages in a circular buffer. When full, the oldest message is overwritten.
 
 **Example:**
 ```bash
 # Get all messages
 curl http://192.168.5.1/api/aprs
 
-# Poll for new messages since ID 42
-curl http://192.168.5.1/api/aprs?since=42
+# Poll for new messages since ID K42
+curl http://192.168.5.1/api/aprs?since=K42
 ```
 
 ---
 
 ### `POST /api/aprs`
 
-Send an APRS message via the SA818 radio.
+Send an APRS message via the SA818 radio. Messages longer than 67 characters are automatically split into multiple APRS frames with `[1/N]` prefix.
 
 **Content-Type:** `application/x-www-form-urlencoded`
 
@@ -300,11 +305,17 @@ Send an APRS message via the SA818 radio.
 |-----------|------|----------|-------------|
 | `from` | string | Yes | Sender callsign (max 16 chars) |
 | `to` | string | Yes | Destination callsign (max 16 chars) |
-| `message` | string | Yes | Message text (max 128 chars) |
+| `message` | string | Yes | Message text (max 500 chars) |
+
+**Multi-part splitting:**
+- Messages up to 67 chars are sent as a single APRS frame (no prefix).
+- Messages longer than 67 chars are split into parts of 61 chars each, prefixed with `[1/N] `, `[2/N] `, etc. (6-char prefix + 61-char payload = 67-char APRS limit).
+- Maximum 500 chars input = up to 9 parts.
+- Each part is stored and transmitted independently.
 
 **Response:**
 ```json
-{"ok": true}
+{"ok": true, "parts": 3, "queued": 3}
 ```
 
 **Error Response:**
@@ -314,8 +325,13 @@ Send an APRS message via the SA818 radio.
 
 **Example:**
 ```bash
+# Short message — single part
 curl -X POST http://192.168.5.1/api/aprs \
   -d "from=MYCALL&to=THEIRCALL&message=Hello"
+
+# Long message — automatically split into multiple parts
+curl -X POST http://192.168.5.1/api/aprs \
+  -d "from=MYCALL&to=THEIRCALL&message=This+is+a+long+message+that+exceeds+the+67+character+APRS+limit+and+will+be+split+into+multiple+parts"
 ```
 
 ---
