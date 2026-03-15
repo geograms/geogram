@@ -62,6 +62,8 @@ class EventTileWidget extends StatelessWidget {
                     child: Image.file(
                       File(thumbnailPath),
                       fit: BoxFit.cover,
+                      cacheWidth: 168,
+                      cacheHeight: 168,
                       errorBuilder: (_, __, ___) => Container(
                         color: theme.colorScheme.surfaceVariant,
                         child: Icon(

@@ -217,27 +217,43 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
       setState(() => _isLoading = true);
     }
 
-    final events = await _eventService.loadEvents(
+    final accumulated = <Event>[];
+    bool firstBatch = true;
+
+    await for (final batch in _eventService.loadEventSummariesStream(
       currentCallsign: _currentCallsign,
       currentUserNpub: _currentUserNpub,
-    );
+    )) {
+      accumulated.addAll(batch);
+      // Keep sorted by date (most recent first)
+      accumulated.sort((a, b) => b.dateTime.compareTo(a.dateTime));
 
-    setState(() {
-      _allEvents = events;
-      _filteredEvents = events;
-      _isLoading = false;
+      setState(() {
+        _allEvents = List.of(accumulated);
+        _isLoading = false;
 
-      // Expand most recent year by default
-      if (_allEvents.isNotEmpty && _expandedYears.isEmpty) {
-        _expandedYears.add(_allEvents.first.year);
+        // Expand most recent year on first batch
+        if (firstBatch && _allEvents.isNotEmpty && _expandedYears.isEmpty) {
+          _expandedYears.add(_allEvents.first.year);
+        }
+      });
+
+      _filterEvents();
+
+      // Auto-select the most recent event on first batch
+      if (firstBatch && _allEvents.isNotEmpty && _selectedEvent == null) {
+        _selectEvent(_allEvents.first);
       }
-    });
+      firstBatch = false;
+    }
 
-    _filterEvents();
-
-    // Auto-select the most recent event (first in the list)
-    if (_allEvents.isNotEmpty && _selectedEvent == null) {
-      await _selectEvent(_allEvents.first);
+    // Handle empty collection
+    if (accumulated.isEmpty) {
+      setState(() {
+        _allEvents = [];
+        _filteredEvents = [];
+        _isLoading = false;
+      });
     }
   }
 
@@ -922,78 +938,83 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
 
     final years = eventsByYear.keys.toList()..sort((a, b) => b.compareTo(a));
 
+    // Build flat item list: year headers + event entries for expanded years
+    // This avoids eagerly building all tiles for expanded years.
+    final flatItems = <_ListItem>[];
+    for (final year in years) {
+      final events = eventsByYear[year]!;
+      flatItems.add(_ListItem.header(year, events.length));
+      if (_expandedYears.contains(year)) {
+        for (final event in events) {
+          flatItems.add(_ListItem.event(event));
+        }
+      }
+    }
+
     return ListView.builder(
       physics: isMobileView ? const AlwaysScrollableScrollPhysics() : null,
-      itemCount: years.length,
+      itemCount: flatItems.length,
       itemBuilder: (context, index) {
-        final year = years[index];
-        final events = eventsByYear[year]!;
-        final isExpanded = _expandedYears.contains(year);
+        final item = flatItems[index];
 
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Year header
-            Material(
-              color: theme.colorScheme.surfaceVariant,
-              child: InkWell(
-                onTap: () => _toggleYear(year),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 12,
-                  ),
-                  child: Row(
-                    children: [
-                      Icon(
-                        isExpanded
-                            ? Icons.expand_more
-                            : Icons.chevron_right,
-                        size: 20,
+        if (item.isHeader) {
+          final isExpanded = _expandedYears.contains(item.year);
+          return Material(
+            color: theme.colorScheme.surfaceVariant,
+            child: InkWell(
+              onTap: () => _toggleYear(item.year!),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 12,
+                ),
+                child: Row(
+                  children: [
+                    Icon(
+                      isExpanded
+                          ? Icons.expand_more
+                          : Icons.chevron_right,
+                      size: 20,
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      item.year.toString(),
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.bold,
                       ),
-                      const SizedBox(width: 8),
-                      Text(
-                        year.toString(),
-                        style: theme.textTheme.titleMedium?.copyWith(
-                          fontWeight: FontWeight.bold,
-                        ),
+                    ),
+                    const Spacer(),
+                    Text(
+                      '${item.eventCount} ${item.eventCount == 1 ? _i18n.t('event') : _i18n.t('events')}',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
                       ),
-                      const Spacer(),
-                      Text(
-                        '${events.length} ${events.length == 1 ? _i18n.t('event') : _i18n.t('events')}',
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: theme.colorScheme.onSurfaceVariant,
-                        ),
-                      ),
-                    ],
-                  ),
+                    ),
+                  ],
                 ),
               ),
             ),
-            // Events for this year
-            if (isExpanded)
-              ...events.map((event) {
-                // Local events are always editable by the user (they own them)
-                // Remote events require author/admin check
-                final canModify = !widget.isRemoteDevice;
-                return EventTileWidget(
-                  event: event,
-                  isSelected: _selectedEvent?.id == event.id,
-                  appPath: widget.appPath,
-                  onTap: () {
-                    if (widget.isRemoteDevice) {
-                      _selectRemoteEvent(event);
-                    } else if (isMobileView) {
-                      _selectEventMobile(event);
-                    } else {
-                      _selectEvent(event);
-                    }
-                  },
-                  onEdit: canModify ? () => _editEventFromTile(event) : null,
-                  onDelete: canModify ? () => _deleteEventFromTile(event) : null,
-                );
-              }),
-          ],
+          );
+        }
+
+        // Event tile
+        final event = item.event!;
+        final canModify = !widget.isRemoteDevice;
+        return EventTileWidget(
+          event: event,
+          isSelected: _selectedEvent?.id == event.id,
+          appPath: widget.appPath,
+          onTap: () {
+            if (widget.isRemoteDevice) {
+              _selectRemoteEvent(event);
+            } else if (isMobileView) {
+              _selectEventMobile(event);
+            } else {
+              _selectEvent(event);
+            }
+          },
+          onEdit: canModify ? () => _editEventFromTile(event) : null,
+          onDelete: canModify ? () => _deleteEventFromTile(event) : null,
         );
       },
     );
@@ -1092,4 +1113,16 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
       });
     }
   }
+}
+
+/// Flat list item for year-grouped ListView.builder
+class _ListItem {
+  final int? year;
+  final int eventCount;
+  final Event? event;
+
+  bool get isHeader => year != null && event == null;
+
+  _ListItem.header(this.year, this.eventCount) : event = null;
+  _ListItem.event(this.event) : year = null, eventCount = 0;
 }

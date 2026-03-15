@@ -3,6 +3,7 @@
  * License: Apache-2.0
  */
 
+import 'dart:async';
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import '../models/event.dart';
 import '../models/event_comment.dart';
@@ -77,6 +78,7 @@ class EventService {
   }
 
   /// Load events for a specific year or all years
+  /// Uses lightweight summaries (only event.txt + flyer list) and parallel batches.
   Future<List<Event>> loadEvents({
     int? year,
     String? currentCallsign,
@@ -84,25 +86,33 @@ class EventService {
   }) async {
     if (_appPath == null) return [];
 
-    final events = <Event>[];
+    // Collect all event folder names across years
     final years = year != null ? [year] : await getYears();
+    final eventNames = <String>[];
 
     for (var y in years) {
       final entries = await _storage.listDirectory('$y');
       for (var entry in entries) {
-        if (entry.isDirectory) {
-          try {
-            // Event folders are like: 2025-07-15_summer-festival
-            if (RegExp(r'^\d{4}-\d{2}-\d{2}_').hasMatch(entry.name)) {
-              final event = await loadEvent(entry.name);
-              if (event != null) {
-                events.add(event);
-              }
-            }
-          } catch (e) {
-            print('EventService: Error loading event ${entry.name}: $e');
-          }
+        if (entry.isDirectory &&
+            RegExp(r'^\d{4}-\d{2}-\d{2}_').hasMatch(entry.name)) {
+          eventNames.add(entry.name);
         }
+      }
+    }
+
+    // Load summaries in parallel batches of 10
+    final events = <Event>[];
+    const batchSize = 10;
+    for (var i = 0; i < eventNames.length; i += batchSize) {
+      final batch = eventNames.sublist(
+        i,
+        i + batchSize > eventNames.length ? eventNames.length : i + batchSize,
+      );
+      final results = await Future.wait(
+        batch.map((name) => loadEventSummary(name)),
+      );
+      for (final event in results) {
+        if (event != null) events.add(event);
       }
     }
 
@@ -110,6 +120,67 @@ class EventService {
     events.sort((a, b) => b.dateTime.compareTo(a.dateTime));
 
     return events;
+  }
+
+  /// Load only the fields needed for the list tile: event.txt + primary flyer.
+  /// Skips reactions, feedback, updates, registration, links, trailer.
+  Future<Event?> loadEventSummary(String eventId) async {
+    if (_appPath == null) return null;
+
+    final year = eventId.substring(0, 4);
+    final eventRelativePath = '$year/$eventId';
+
+    if (!await _storage.directoryExists(eventRelativePath)) return null;
+
+    final content = await _storage.readString('$eventRelativePath/event.txt');
+    if (content == null) return null;
+
+    try {
+      final event = Event.fromText(content, eventId);
+
+      // Only scan for flyers (needed for thumbnail in list tile)
+      final flyers = await _loadFlyersStorage(eventRelativePath);
+
+      return event.copyWith(flyers: flyers);
+    } catch (e) {
+      print('EventService: Error loading event summary $eventId: $e');
+      return null;
+    }
+  }
+
+  /// Stream event summaries as they load — yields batches progressively.
+  /// UI can start rendering before all events are loaded.
+  Stream<List<Event>> loadEventSummariesStream({
+    String? currentCallsign,
+    String? currentUserNpub,
+  }) async* {
+    if (_appPath == null) return;
+
+    final years = await getYears();
+    final eventNames = <String>[];
+
+    for (var y in years) {
+      final entries = await _storage.listDirectory('$y');
+      for (var entry in entries) {
+        if (entry.isDirectory &&
+            RegExp(r'^\d{4}-\d{2}-\d{2}_').hasMatch(entry.name)) {
+          eventNames.add(entry.name);
+        }
+      }
+    }
+
+    const batchSize = 10;
+    for (var i = 0; i < eventNames.length; i += batchSize) {
+      final batch = eventNames.sublist(
+        i,
+        i + batchSize > eventNames.length ? eventNames.length : i + batchSize,
+      );
+      final results = await Future.wait(
+        batch.map((name) => loadEventSummary(name)),
+      );
+      final loaded = results.whereType<Event>().toList();
+      if (loaded.isNotEmpty) yield loaded;
+    }
   }
 
   /// Load full event with reactions and v1.2 features
@@ -584,12 +655,31 @@ class EventService {
         }
       }
 
-      // Sort: flyer-named files first (primary), then others alphabetically
+      // Sort: flyer.* first (cover), then photo-N.* in numeric order, then rest alphabetically
       flyers.sort((a, b) {
-        final aIsFlyer = a.toLowerCase().startsWith('flyer');
-        final bIsFlyer = b.toLowerCase().startsWith('flyer');
+        final aLower = a.toLowerCase();
+        final bLower = b.toLowerCase();
+        final aIsFlyer = aLower.startsWith('flyer.');
+        final bIsFlyer = bLower.startsWith('flyer.');
         if (aIsFlyer && !bIsFlyer) return -1;
         if (!aIsFlyer && bIsFlyer) return 1;
+
+        final photoNum = RegExp(r'^photo-(\d+)\.');
+        final aMatch = photoNum.firstMatch(aLower);
+        final bMatch = photoNum.firstMatch(bLower);
+        final aIsPhoto = aMatch != null;
+        final bIsPhoto = bMatch != null;
+        if (aIsPhoto && bIsPhoto) {
+          return int.parse(aMatch!.group(1)!).compareTo(int.parse(bMatch!.group(1)!));
+        }
+        if (aIsPhoto && !bIsPhoto) return aIsFlyer ? -1 : -1;
+        if (!aIsPhoto && bIsPhoto) return bIsFlyer ? 1 : 1;
+
+        // Legacy flyer-N names sort before other files
+        final aIsLegacyFlyer = aLower.startsWith('flyer');
+        final bIsLegacyFlyer = bLower.startsWith('flyer');
+        if (aIsLegacyFlyer && !bIsLegacyFlyer) return -1;
+        if (!aIsLegacyFlyer && bIsLegacyFlyer) return 1;
         return a.compareTo(b);
       });
       return flyers;
@@ -599,19 +689,20 @@ class EventService {
     }
   }
 
-  /// Generate the next flyer filename for an uploaded image.
-  /// [existingFlyers] is the list of current flyer filenames in the event dir.
+  /// Generate the next image filename for an uploaded image.
+  /// [existingFlyers] is the list of current image filenames in the event dir.
   /// [extension] is the file extension without dot (e.g. 'jpg', 'png').
+  /// First image becomes 'flyer.ext' (cover), subsequent become 'photo-N.ext'.
   static String nextFlyerName(List<String> existingFlyers, String extension) {
     final ext = extension.isNotEmpty ? extension : 'jpg';
     if (existingFlyers.isEmpty) {
       return 'flyer.$ext';
     }
-    int altNum = existingFlyers.length;
-    String candidate = 'flyer-$altNum.$ext';
+    int num = existingFlyers.length;
+    String candidate = 'photo-$num.$ext';
     while (existingFlyers.contains(candidate)) {
-      altNum++;
-      candidate = 'flyer-$altNum.$ext';
+      num++;
+      candidate = 'photo-$num.$ext';
     }
     return candidate;
   }
