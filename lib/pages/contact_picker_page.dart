@@ -3,6 +3,8 @@
  * License: Apache-2.0
  */
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import '../models/app.dart';
 import '../models/contact.dart';
@@ -77,6 +79,7 @@ class _ContactPickerPageState extends State<ContactPickerPage> {
   final Set<String> _selectedCallsigns = {};
   Set<String> _favoriteCallsigns = {};
   Map<String, int> _eventCounts = {};
+  Timer? _debounce;
 
   @override
   void initState() {
@@ -84,14 +87,20 @@ class _ContactPickerPageState extends State<ContactPickerPage> {
     if (widget.initialSelection != null) {
       _selectedCallsigns.addAll(widget.initialSelection!);
     }
-    _searchController.addListener(_applyFilter);
+    _searchController.addListener(_onSearchChanged);
     _loadContacts();
   }
 
   @override
   void dispose() {
+    _debounce?.cancel();
     _searchController.dispose();
     super.dispose();
+  }
+
+  void _onSearchChanged() {
+    _debounce?.cancel();
+    _debounce = Timer(const Duration(milliseconds: 300), _applyFilter);
   }
 
   Future<void> _loadContacts() async {
@@ -133,9 +142,19 @@ class _ContactPickerPageState extends State<ContactPickerPage> {
           }
         }
 
+        int count = 0;
         await for (final contact
             in contactService.loadAllContactsStreamFast()) {
+          if (!mounted) return;
           _contacts.add(_ContactWithApp(contact, collection.title));
+          count++;
+          if (count <= 10 || count % 20 == 0) {
+            _sortContacts();
+            setState(() {
+              _filtered = List.from(_contacts);
+              _isLoading = false;
+            });
+          }
         }
       }
 

@@ -6,7 +6,9 @@
 import 'dart:convert';
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:path/path.dart' as path;
 
 import '../dialogs/new_update_dialog.dart';
@@ -53,9 +55,12 @@ class EventDetailPage extends StatefulWidget {
 }
 
 class _EventDetailPageState extends State<EventDetailPage> {
+  final ImagePicker _imagePicker = ImagePicker();
   late Event _event;
   bool _hasChanges = false;
   int _filesRefreshKey = 0;
+
+  bool get _isMobile => !kIsWeb && (Platform.isAndroid || Platform.isIOS);
 
   @override
   void initState() {
@@ -156,14 +161,25 @@ class _EventDetailPageState extends State<EventDetailPage> {
   Future<void> _uploadFiles() async {
     if (widget.readOnly || widget.appPath.isEmpty) return;
     try {
-      final paths = await FileFolderPicker.show(
-        context,
-        title: widget.i18n.t('select_files_to_add'),
-        allowMultiSelect: true,
-        profileStorage: AppService().profileStorage,
-      );
+      List<String> paths;
 
-      if (paths != null && paths.isNotEmpty && mounted) {
+      if (_isMobile) {
+        final images = await _imagePicker.pickMultiImage(
+          imageQuality: 85,
+          maxWidth: 1920,
+          maxHeight: 1920,
+        );
+        paths = images.map((f) => f.path).toList();
+      } else {
+        paths = await FileFolderPicker.show(
+          context,
+          title: widget.i18n.t('select_files_to_add'),
+          allowMultiSelect: true,
+          profileStorage: AppService().profileStorage,
+        ) ?? [];
+      }
+
+      if (paths.isNotEmpty && mounted) {
         final year = _event.id.substring(0, 4);
         final eventPath = '${widget.appPath}/$year/${_event.id}';
 

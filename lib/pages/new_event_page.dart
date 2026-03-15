@@ -4,7 +4,9 @@
  */
 
 import 'dart:io';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:path/path.dart' as path;
 import 'package:latlong2/latlong.dart';
 
@@ -92,6 +94,9 @@ class _NewEventPageState extends State<NewEventPage>
     with SingleTickerProviderStateMixin {
   final _formKey = GlobalKey<FormState>();
   final _i18n = I18nService();
+  final ImagePicker _imagePicker = ImagePicker();
+
+  bool get _isMobile => !kIsWeb && (Platform.isAndroid || Platform.isIOS);
   late TabController _tabController;
 
   final _titleController = TextEditingController();
@@ -411,16 +416,23 @@ class _NewEventPageState extends State<NewEventPage>
   }
 
   Future<void> _selectTrailer() async {
-    final paths = await FileFolderPicker.show(
-      context,
-      title: _i18n.t('select_trailer_video'),
-      allowMultiSelect: false,
-      allowedExtensions: FileFolderPicker.videoExtensions,
-      profileStorage: AppService().profileStorage,
-    );
+    String? filePath;
 
-    if (paths != null && paths.isNotEmpty) {
-      final filePath = paths.first;
+    if (_isMobile) {
+      final video = await _imagePicker.pickVideo(source: ImageSource.gallery);
+      filePath = video?.path;
+    } else {
+      final paths = await FileFolderPicker.show(
+        context,
+        title: _i18n.t('select_trailer_video'),
+        allowMultiSelect: false,
+        allowedExtensions: FileFolderPicker.videoExtensions,
+        profileStorage: AppService().profileStorage,
+      );
+      filePath = (paths != null && paths.isNotEmpty) ? paths.first : null;
+    }
+
+    if (filePath != null) {
       final originalFileName = path.basename(filePath);
       final extension = path.extension(originalFileName).replaceFirst('.', '').toLowerCase();
       final trailerFileName = extension.isNotEmpty
@@ -429,7 +441,7 @@ class _NewEventPageState extends State<NewEventPage>
 
       setState(() {
         _trailer = _PendingFile(
-          path: filePath,
+          path: filePath!,
           name: originalFileName,
           targetName: trailerFileName,
         );
@@ -444,16 +456,23 @@ class _NewEventPageState extends State<NewEventPage>
   }
 
   Future<void> _selectFlyer() async {
-    final paths = await FileFolderPicker.show(
-      context,
-      title: _i18n.t('select_flyer_image'),
-      allowMultiSelect: false,
-      allowedExtensions: FileFolderPicker.imageExtensions,
-      profileStorage: AppService().profileStorage,
-    );
+    String? filePath;
 
-    if (paths != null && paths.isNotEmpty) {
-      final filePath = paths.first;
+    if (_isMobile) {
+      final image = await _imagePicker.pickImage(source: ImageSource.gallery);
+      filePath = image?.path;
+    } else {
+      final paths = await FileFolderPicker.show(
+        context,
+        title: _i18n.t('select_flyer_image'),
+        allowMultiSelect: false,
+        allowedExtensions: FileFolderPicker.imageExtensions,
+        profileStorage: AppService().profileStorage,
+      );
+      filePath = (paths != null && paths.isNotEmpty) ? paths.first : null;
+    }
+
+    if (filePath != null) {
       final originalFileName = path.basename(filePath);
       final extension = path.extension(originalFileName).replaceFirst('.', '').toLowerCase();
 
@@ -476,7 +495,7 @@ class _NewEventPageState extends State<NewEventPage>
       setState(() {
         _flyers.add(
           _PendingFile(
-            path: filePath,
+            path: filePath!,
             name: originalFileName,
             targetName: flyerFileName,
           ),
@@ -1267,18 +1286,30 @@ class _NewEventPageState extends State<NewEventPage>
   }
 
   Future<void> _selectPhotos() async {
-    final paths = await FileFolderPicker.show(
-      context,
-      title: _i18n.t('select_photos'),
-      allowMultiSelect: true,
-      allowedExtensions: FileFolderPicker.imageExtensions,
-      profileStorage: AppService().profileStorage,
-    );
+    List<String> filePaths;
 
-    if (paths == null || paths.isEmpty) return;
+    if (_isMobile) {
+      final images = await _imagePicker.pickMultiImage(
+        imageQuality: 85,
+        maxWidth: 1920,
+        maxHeight: 1920,
+      );
+      filePaths = images.map((f) => f.path).toList();
+    } else {
+      final paths = await FileFolderPicker.show(
+        context,
+        title: _i18n.t('select_photos'),
+        allowMultiSelect: true,
+        allowedExtensions: FileFolderPicker.imageExtensions,
+        profileStorage: AppService().profileStorage,
+      );
+      filePaths = paths ?? [];
+    }
+
+    if (filePaths.isEmpty) return;
 
     setState(() {
-      for (final filePath in paths) {
+      for (final filePath in filePaths) {
         final originalFileName = path.basename(filePath);
         final extension = path.extension(originalFileName).replaceFirst('.', '').toLowerCase();
 

@@ -356,6 +356,7 @@ class MeetingTranscriptionService {
   bool transcribeInBackground({
     required ConferenceArchiveEntry entry,
     required ConferenceArchiveAsset recording,
+    int? maxDurationSeconds,
   }) {
     if (isBusy) {
       LogService().log(
@@ -382,7 +383,7 @@ class MeetingTranscriptionService {
     TaskMonitorService().reportStart(_taskId);
 
     // Fire and forget
-    _runBackgroundTranscription(entry, recording);
+    _runBackgroundTranscription(entry, recording, maxDurationSeconds);
     return true;
   }
 
@@ -390,6 +391,7 @@ class MeetingTranscriptionService {
   Future<void> _runBackgroundTranscription(
     ConferenceArchiveEntry entry,
     ConferenceArchiveAsset recording,
+    int? maxDurationSeconds,
   ) async {
     try {
       // Export MP4 to temp path
@@ -408,6 +410,25 @@ class MeetingTranscriptionService {
           error: error,
         ));
         return;
+      }
+
+      // Check duration before expensive WAV conversion
+      if (maxDurationSeconds != null) {
+        final duration = await _getAudioDuration(mp4Path);
+        if (duration > maxDurationSeconds) {
+          LogService().log(
+            'MeetingTranscriptionService: Skipping ${recording.name} — '
+            '${duration.round()}s exceeds max ${maxDurationSeconds}s',
+          );
+          await _safeDelete(mp4Path);
+          TaskMonitorService().reportFailure(_taskId, 'exceeds_max_duration');
+          _completionController.add(MeetingTranscriptionCompletedEvent(
+            archiveRelativePath: entry.relativePath,
+            recordingName: recording.name,
+            error: 'exceeds_max_duration',
+          ));
+          return;
+        }
       }
 
       final result = await transcribeRecording(

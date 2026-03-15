@@ -58,6 +58,9 @@ class _ConferenceArchiveDetailPageState
   StreamSubscription? _completionSub;
   TranscriptionProgress? _transcriptionProgress;
 
+  // Auto-transcription: tracks recordings skipped this session
+  final Set<String> _autoTranscribeSkipped = {};
+
   // Inline transcript expansion
   final Set<String> _expandedTranscripts = {};
   final Map<String, String?> _transcriptTexts = {};
@@ -75,19 +78,29 @@ class _ConferenceArchiveDetailPageState
     _completionSub = _transcriptionService.completionStream.listen((event) {
       if (event.archiveRelativePath == _currentEntry.relativePath) {
         if (event.success) {
-          _loadArchive();
+          _loadArchive(); // calls _maybeAutoTranscribe() at the end
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               const SnackBar(content: Text('Transcription complete')),
             );
           }
-        } else if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Transcription failed: ${event.error}'),
-            ),
-          );
+        } else if (event.error == 'exceeds_max_duration') {
+          _autoTranscribeSkipped.add(event.recordingName);
+          _maybeAutoTranscribe();
+        } else {
+          _autoTranscribeSkipped.add(event.recordingName);
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('Transcription failed: ${event.error}'),
+              ),
+            );
+          }
+          _maybeAutoTranscribe();
         }
+      } else {
+        // Service finished with a different archive — resume our queue
+        _maybeAutoTranscribe();
       }
     });
     _loadArchive();
@@ -155,6 +168,8 @@ class _ConferenceArchiveDetailPageState
           }
         });
       }
+
+      _maybeAutoTranscribe();
     } catch (error) {
       if (!mounted) {
         return;
@@ -163,6 +178,24 @@ class _ConferenceArchiveDetailPageState
         _loading = false;
         _error = '$error';
       });
+    }
+  }
+
+  void _maybeAutoTranscribe() {
+    if (!SpeechToTextService.isSupported) return;
+    if (_transcriptionService.isBusy) return;
+
+    final recordings = _currentEntry.recordings;
+    for (final rec in recordings) {
+      if (!_hasTranscript(rec.name) &&
+          !_autoTranscribeSkipped.contains(rec.name)) {
+        _transcriptionService.transcribeInBackground(
+          entry: _currentEntry,
+          recording: rec,
+          maxDurationSeconds: 10800, // 3 hours
+        );
+        return; // one at a time
+      }
     }
   }
 
