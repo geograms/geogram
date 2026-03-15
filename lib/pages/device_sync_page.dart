@@ -33,6 +33,12 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
   bool _loadingDiffs = false;
   String? _diffError;
 
+  // Stage 2: expansion state
+  final Set<String> _expandedFolders = {};
+
+  // Stage 2: direction filter — null=show all, true=pull only, false=push only
+  bool? _directionFilter;
+
   // Stage 3: transfer state
   final Map<String, Set<String>> _selectedFiles = {}; // folder -> selected file paths
   final Map<String, bool> _fileDirections = {}; // "folder:path" -> true=pull, false=push
@@ -98,6 +104,8 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
           _diffs.clear();
           _tokens.clear();
           _diffError = null;
+          _expandedFolders.clear();
+          _directionFilter = null;
         }
       });
     } else {
@@ -342,6 +350,24 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
 
     return Column(
       children: [
+        // Direction filter bar
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+          child: SegmentedButton<bool?>(
+            segments: const [
+              ButtonSegment(value: null, label: Text('All')),
+              ButtonSegment(value: false, label: Text('Push'), icon: Icon(Icons.arrow_forward, size: 16)),
+              ButtonSegment(value: true, label: Text('Pull'), icon: Icon(Icons.arrow_back, size: 16)),
+            ],
+            selected: {_directionFilter},
+            onSelectionChanged: (v) {
+              setState(() {
+                _directionFilter = v.first;
+                _applyDirectionFilter();
+              });
+            },
+          ),
+        ),
         Expanded(
           child: ListView(
             padding: const EdgeInsets.all(16),
@@ -355,92 +381,154 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
     );
   }
 
+  /// Select/deselect files based on the direction filter.
+  void _applyDirectionFilter() {
+    for (final entry in _diffs.entries) {
+      final folder = entry.key;
+      final changes = entry.value;
+      if (_directionFilter == null) {
+        // All — select everything
+        _selectedFiles[folder] = changes.map((c) => c.path).toSet();
+      } else if (_directionFilter == false) {
+        // Push only — select uploads (local-only files)
+        _selectedFiles[folder] = changes
+            .where((c) => c.type == FileChangeType.upload)
+            .map((c) => c.path)
+            .toSet();
+        // Set direction to push for all
+        for (final c in changes) {
+          _fileDirections['$folder:${c.path}'] = false;
+        }
+      } else {
+        // Pull only — select adds and modifies (remote files)
+        _selectedFiles[folder] = changes
+            .where((c) => c.type == FileChangeType.add || c.type == FileChangeType.modify)
+            .map((c) => c.path)
+            .toSet();
+        // Set direction to pull for all
+        for (final c in changes) {
+          _fileDirections['$folder:${c.path}'] = true;
+        }
+      }
+    }
+  }
+
   Widget _buildFolderDiffCard(String folder, List<FileChange> changes) {
     final adds = changes.where((c) => c.type == FileChangeType.add).length;
     final mods = changes.where((c) => c.type == FileChangeType.modify).length;
     final dels = changes.where((c) => c.type == FileChangeType.delete).length;
     final ups = changes.where((c) => c.type == FileChangeType.upload).length;
     final selected = _selectedFiles[folder] ?? {};
+    final isExpanded = _expandedFolders.contains(folder);
 
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
-      child: ExpansionTile(
-        leading: Checkbox(
-          value: selected.length == changes.length
-              ? true
-              : selected.isEmpty
-                  ? false
-                  : null,
-          tristate: true,
-          onChanged: (value) {
-            setState(() {
-              if (value == true || value == null) {
-                _selectedFiles[folder] = changes.map((c) => c.path).toSet();
-              } else {
-                _selectedFiles[folder] = {};
-              }
-            });
-          },
-        ),
-        title: Text(folder, style: const TextStyle(fontWeight: FontWeight.bold)),
-        subtitle: Row(
-          children: [
-            if (adds > 0)
-              _changeChip('+$adds', Colors.green),
-            if (mods > 0)
-              _changeChip('~$mods', Colors.amber),
-            if (dels > 0)
-              _changeChip('-$dels', Colors.red),
-            if (ups > 0)
-              _changeChip('^$ups', Colors.blue),
-          ],
-        ),
-        children: changes.map((change) {
-          final key = '$folder:${change.path}';
-          final isSelected = selected.contains(change.path);
-          final isPull = _fileDirections[key] ?? true;
-
-          return ListTile(
-            dense: true,
-            leading: Checkbox(
-              value: isSelected,
-              onChanged: (v) {
-                setState(() {
-                  if (v == true) {
-                    _selectedFiles.putIfAbsent(folder, () => {}).add(change.path);
-                  } else {
-                    _selectedFiles[folder]?.remove(change.path);
-                  }
-                });
-              },
-            ),
-            title: Text(
-              change.path,
-              style: TextStyle(
-                fontSize: 13,
-                color: _changeColor(change.type),
-              ),
-            ),
-            subtitle: Text(
-              _changeLabel(change.type),
-              style: TextStyle(fontSize: 11, color: _changeColor(change.type)),
-            ),
-            trailing: isSelected
-                ? IconButton(
-                    icon: Icon(
-                      isPull ? Icons.arrow_back : Icons.arrow_forward,
-                      color: isPull ? Colors.green : Colors.blue,
-                    ),
-                    tooltip: isPull ? 'Pull from sibling' : 'Push to sibling',
-                    onPressed: () {
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Folder header — checkbox is separate from the expand tap area
+          InkWell(
+            onTap: () {
+              setState(() {
+                if (isExpanded) {
+                  _expandedFolders.remove(folder);
+                } else {
+                  _expandedFolders.add(folder);
+                }
+              });
+            },
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              child: Row(
+                children: [
+                  Checkbox(
+                    value: selected.length == changes.length
+                        ? true
+                        : selected.isEmpty
+                            ? false
+                            : null,
+                    tristate: true,
+                    onChanged: (value) {
                       setState(() {
-                        _fileDirections[key] = !isPull;
+                        if (value == true || value == null) {
+                          _selectedFiles[folder] = changes.map((c) => c.path).toSet();
+                        } else {
+                          _selectedFiles[folder] = {};
+                        }
                       });
                     },
-                  )
-                : null,
-          );
-        }).toList(),
+                  ),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(folder, style: const TextStyle(fontWeight: FontWeight.bold)),
+                        const SizedBox(height: 4),
+                        Row(
+                          children: [
+                            if (adds > 0) _changeChip('+$adds', Colors.green),
+                            if (mods > 0) _changeChip('~$mods', Colors.amber),
+                            if (dels > 0) _changeChip('-$dels', Colors.red),
+                            if (ups > 0) _changeChip('^$ups', Colors.blue),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                  Icon(isExpanded ? Icons.expand_less : Icons.expand_more),
+                ],
+              ),
+            ),
+          ),
+          // File list — shown when expanded
+          if (isExpanded)
+            ...changes.map((change) {
+              final key = '$folder:${change.path}';
+              final isSelected = selected.contains(change.path);
+              final isPull = _fileDirections[key] ?? true;
+
+              return ListTile(
+                dense: true,
+                leading: Checkbox(
+                  value: isSelected,
+                  onChanged: (v) {
+                    setState(() {
+                      if (v == true) {
+                        _selectedFiles.putIfAbsent(folder, () => {}).add(change.path);
+                      } else {
+                        _selectedFiles[folder]?.remove(change.path);
+                      }
+                    });
+                  },
+                ),
+                title: Text(
+                  change.path,
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: _changeColor(change.type),
+                  ),
+                ),
+                subtitle: Text(
+                  _changeLabel(change.type),
+                  style: TextStyle(fontSize: 11, color: _changeColor(change.type)),
+                ),
+                trailing: isSelected
+                    ? IconButton(
+                        icon: Icon(
+                          isPull ? Icons.arrow_back : Icons.arrow_forward,
+                          color: isPull ? Colors.green : Colors.blue,
+                        ),
+                        tooltip: isPull ? 'Pull from sibling' : 'Push to sibling',
+                        onPressed: () {
+                          setState(() {
+                            _fileDirections[key] = !isPull;
+                          });
+                        },
+                      )
+                    : null,
+              );
+            }),
+        ],
       ),
     );
   }
