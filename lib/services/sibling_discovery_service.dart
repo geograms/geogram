@@ -7,7 +7,8 @@ import 'profile_service.dart';
 
 /// A sibling device discovered via station relay or LAN scan.
 class SiblingDevice {
-  final String deviceId;
+  final String deviceId; // Station connection ID
+  final String? installId; // Per-install UUID (first 4 chars used as display suffix)
   final String callsign;
   final String? npub;
   final String platform;
@@ -20,6 +21,7 @@ class SiblingDevice {
 
   SiblingDevice({
     required this.deviceId,
+    this.installId,
     required this.callsign,
     this.npub,
     this.platform = 'unknown',
@@ -30,6 +32,14 @@ class SiblingDevice {
     this.stationRelayUrl,
     DateTime? lastSeen,
   }) : lastSeen = lastSeen ?? DateTime.now();
+
+  /// Short display name: "Android (a1b2)" or just "Android" if no install ID.
+  String get displayName {
+    if (installId != null && installId!.length >= 4) {
+      return '$platform (${installId!.substring(0, 4)})';
+    }
+    return platform;
+  }
 
   @override
   String toString() => 'SiblingDevice($callsign, $platform, $connectionType, id=$deviceId)';
@@ -68,6 +78,7 @@ class SiblingDiscoveryService {
       if (s is! Map<String, dynamic>) continue;
       stationSiblings.add(SiblingDevice(
         deviceId: s['device_id'] as String? ?? '',
+        installId: s['install_id'] as String?,
         callsign: callsign,
         npub: s['npub'] as String?,
         platform: s['platform'] as String? ?? 'unknown',

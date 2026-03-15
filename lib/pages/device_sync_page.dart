@@ -86,7 +86,7 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
       case 1:
         return 'Device Sync';
       case 2:
-        return 'Changes with ${_selectedSibling?.platform ?? "Sibling"}';
+        return 'Changes with ${_selectedSibling?.displayName ?? "Sibling"}';
       case 3:
         return 'Syncing...';
       default:
@@ -176,7 +176,7 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
       margin: const EdgeInsets.only(bottom: 12),
       child: ListTile(
         leading: Icon(icon, size: 40),
-        title: Text(sibling.platform),
+        title: Text(sibling.displayName),
         subtitle: Row(
           children: [
             Icon(connectionIcon, size: 14, color: Colors.grey),
