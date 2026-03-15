@@ -155,6 +155,8 @@ import 'pages/mirror_settings_page.dart';
 import 'pages/mirror_wizard_page.dart';
 import 'pages/hotspot_settings_page.dart';
 import 'widgets/profile_switcher.dart';
+import 'widgets/sync_button.dart';
+import 'services/sibling_discovery_service.dart';
 import 'widgets/transfer/incoming_transfer_dialog.dart';
 import 'transfer/services/p2p_transfer_service.dart';
 import 'cli/console.dart';
@@ -1935,6 +1937,8 @@ class _HomePageState extends State<HomePage> {
   }
 
   void _onProfileChanged() {
+    // Clear sibling discovery state on profile switch
+    SiblingDiscoveryService().clear();
     if (mounted) setState(() {});
   }
 
@@ -2062,6 +2066,7 @@ class _HomePageState extends State<HomePage> {
                     // Show ProfileSwitcher only when search is not focused
                     if (!_isSearchFocused) ...[
                       const ProfileSwitcher(),
+                      const SyncButton(),
                       const SizedBox(width: 12),
                     ],
                     // Search field

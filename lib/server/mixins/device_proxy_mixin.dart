@@ -103,6 +103,9 @@ mixin DeviceProxyMixin {
     return matches;
   }
 
+  /// Find a connected client by its connection ID.
+  DeviceProxyClient? findClientById(String id) => proxyClients[id];
+
   // ── Single device proxy ──────────────────────────────────────────
 
   /// Proxy a request to a single device. Returns the response map.
@@ -258,6 +261,131 @@ mixin DeviceProxyMixin {
 
     proxyLog('INFO',
         'Device proxy response: ${response['statusCode']} for $callsign $apiPath');
+  }
+
+  // ── /device/{callsign} proxy ────────────────────────────────────
+
+  /// Handle /device/{callsign} and /device/{callsign}/* requests.
+  /// Bare path returns device info JSON; subpath is proxied to the device.
+  ///
+  /// Query param `target` pins all requests to a specific connection ID —
+  /// required for same-callsign multi-device scenarios where challenge and
+  /// response must reach the same physical device.
+  Future<void> handleDevicePathProxy(HttpRequest request) async {
+    final path = request.uri.path;
+    final parts = path.substring('/device/'.length).split('/');
+    final callsign = parts.first;
+    final subPathBase = parts.length > 1 ? '/${parts.sublist(1).join('/')}' : '';
+
+    final client = findConnectedClientByIdentifier(callsign);
+    if (client == null) {
+      request.response.statusCode = 404;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({
+        'callsign': callsign,
+        'connected': false,
+        'error': 'Device not connected',
+      }));
+      return;
+    }
+
+    // Bare /device/{callsign} → device info
+    if (subPathBase.isEmpty) {
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({
+        'callsign': client.callsign,
+        'connected': true,
+      }));
+      return;
+    }
+
+    // Build query string for the device, stripping `target` (station-only param)
+    final queryParams = Map<String, String>.from(request.uri.queryParameters);
+    final targetId = queryParams.remove('target');
+    final cleanQuery = queryParams.entries
+        .map((e) => '${Uri.encodeComponent(e.key)}=${Uri.encodeComponent(e.value)}')
+        .join('&');
+    final devicePath = cleanQuery.isNotEmpty ? '$subPathBase?$cleanQuery' : subPathBase;
+
+    // Forward auth-relevant headers
+    final forwardedHeaders = <String, String>{};
+    final cookie = request.headers.value('cookie');
+    if (cookie != null) forwardedHeaders['cookie'] = cookie;
+    final authorization = request.headers.value('authorization');
+    if (authorization != null) forwardedHeaders['authorization'] = authorization;
+    final contentType = request.headers.value('content-type');
+    if (contentType != null) forwardedHeaders['content-type'] = contentType;
+
+    String requestBody = '';
+    if (request.contentLength > 0) {
+      requestBody = await utf8.decodeStream(request);
+    }
+
+    Map<String, dynamic>? response;
+
+    // If a specific target connection ID is given, route only to that device
+    if (targetId != null) {
+      final targeted = findClientById(targetId);
+      if (targeted != null) {
+        response = await proxySingleDevice(
+          targeted,
+          request.method,
+          devicePath,
+          jsonEncode(forwardedHeaders),
+          requestBody,
+        );
+      }
+    } else {
+      response = await proxyToAnyDevice(
+        callsign,
+        request.method,
+        devicePath,
+        headers: jsonEncode(forwardedHeaders),
+        body: requestBody,
+      );
+    }
+
+    if (response == null) {
+      request.response.statusCode = 504;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({
+        'error': 'Gateway Timeout',
+        'message': 'No device responded for $callsign',
+      }));
+      return;
+    }
+
+    request.response.statusCode = response['statusCode'] ?? 500;
+    if (response['responseHeaders'] != null) {
+      try {
+        final headers =
+            jsonDecode(response['responseHeaders'] as String) as Map<String, dynamic>;
+        const skipHeaders = {'transfer-encoding', 'content-length', 'connection'};
+        headers.forEach((key, value) {
+          final lk = key.toLowerCase();
+          if (skipHeaders.contains(lk)) return;
+          if (lk == 'content-type') {
+            final ct = value.toString();
+            final ctParts = ct.split(';');
+            final mimeType = ctParts.first.trim();
+            final mimeParts = mimeType.split('/');
+            if (mimeParts.length == 2) {
+              final charset = ct.contains('charset=')
+                  ? ct.split('charset=').last.split(';').first.trim()
+                  : null;
+              request.response.headers.contentType =
+                  ContentType(mimeParts[0], mimeParts[1], charset: charset);
+            }
+          } else {
+            try {
+              request.response.headers.set(key, value.toString());
+            } catch (_) {}
+          }
+        });
+      } catch (_) {}
+    }
+
+    _writeResponseBody(request, response);
   }
 
   // ── Generic device proxy (pure bridge) ─────────────────────────

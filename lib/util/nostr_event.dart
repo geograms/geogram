@@ -151,6 +151,7 @@ class NostrEvent {
     String? platform,
     int? ssid,
     String? challenge,
+    String? deviceId,
   }) {
     // Convert npub to pubkey hex
     final pubkeyHex = NostrCrypto.decodeNpub(npub);
@@ -182,6 +183,10 @@ class NostrEvent {
     // Include challenge nonce for v2 authentication
     if (challenge != null && challenge.isNotEmpty) {
       tags.add(['challenge', challenge]);
+    }
+    // Include per-install device ID for NAT-safe dedup
+    if (deviceId != null && deviceId.isNotEmpty) {
+      tags.add(['device_id', deviceId]);
     }
     // Build content with platform name
     final platformName = platform ?? 'Desktop';

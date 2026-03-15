@@ -18,6 +18,8 @@ import '../services/signing_service.dart';
 import '../services/user_location_service.dart';
 import '../services/security_service.dart';
 import '../services/backup_service.dart';
+import '../services/config_service.dart';
+import '../services/sibling_discovery_service.dart';
 import '../services/email_service.dart';
 import '../services/ble_foreground_service.dart';
 import '../services/station_service.dart';
@@ -275,11 +277,16 @@ class WebSocketService {
                 _enableForegroundKeepAlive();
                 // Populate station relay addresses for mirror peers
                 _updateMirrorRelayAddresses();
+                // Parse sibling count for multi-device sync
+                final siblingCount = data['sibling_count'] as int? ?? 0;
+                SiblingDiscoveryService().handleHelloAckSiblingCount(siblingCount);
               } else {
                 LogService().log('✗ Hello rejected');
                 LogService().log('Reason: ${data['message']}');
                 LogService().log('══════════════════════════════════════');
               }
+            } else if (data['type'] == 'siblings_update') {
+              SiblingDiscoveryService().handleSiblingsUpdate(data);
             } else if (data['type'] == 'APPS_REQUEST') {
               LogService().log('✓ Station requested collections');
               _handleAppsRequest(data['requestId'] as String?);
@@ -404,6 +411,7 @@ class WebSocketService {
         platform: platform,
         ssid: profile.ssid,
         challenge: challengeNonce,
+        deviceId: ConfigService().deviceId,
       );
       event.calculateId();
 
@@ -1743,6 +1751,9 @@ class WebSocketService {
     _subscription = null;
     _lastDisconnectAt = DateTime.now();
     _recordHeartbeat('disconnected', connected: false);
+
+    // Clear sibling discovery state (station-sourced siblings no longer valid)
+    SiblingDiscoveryService().clear();
 
     // Disable foreground service keep-alive on Android when connection lost
     _disableForegroundKeepAlive();

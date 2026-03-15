@@ -412,7 +412,25 @@ class MirrorSyncService {
         _allowedPeers[peer.npub] = peer.callsign;
       }
     }
+    // Auto-add own npub as allowed peer for same-identity sibling sync
+    _addOwnNpubAsAllowedPeer();
     LogService().log('MirrorSync: Loaded ${_allowedPeers.length} allowed peers from config');
+  }
+
+  /// Auto-add own npub as allowed peer so sibling devices with the same
+  /// identity can authenticate via challenge-response.
+  void _addOwnNpubAsAllowedPeer() {
+    try {
+      final profile = ProfileService().getProfile();
+      if (profile.npub.isNotEmpty && profile.callsign.isNotEmpty) {
+        if (!_allowedPeers.containsKey(profile.npub)) {
+          _allowedPeers[profile.npub] = profile.callsign;
+          LogService().log('MirrorSync: Auto-added own npub as allowed peer for sibling sync');
+        }
+      }
+    } catch (_) {
+      // ProfileService may not be initialized yet
+    }
   }
 
   /// Generate a challenge for a folder sync request
@@ -713,14 +731,27 @@ class MirrorSyncService {
   // Destination Side (Instance B) - Perform sync
   // ============================================================
 
+  /// Build a URI from a peer base URL, an API path, and optional query params.
+  /// Preserves any query params already on [peerUrl] (e.g. `?target=ID`).
+  static Uri _buildPeerUri(String peerUrl, String apiPath, [Map<String, String>? params]) {
+    final base = Uri.parse(peerUrl);
+    final merged = <String, String>{
+      ...base.queryParameters,
+      if (params != null) ...params,
+    };
+    return base.replace(
+      path: '${base.path}$apiPath',
+      queryParameters: merged.isNotEmpty ? merged : null,
+    );
+  }
+
   /// Fetch a challenge from the peer for the given folder
   Future<({String? nonce, String? error})> fetchChallenge(
     String peerUrl,
     String folder,
   ) async {
     try {
-      final url = Uri.parse(
-          '$peerUrl/api/mirror/challenge?folder=${Uri.encodeComponent(folder)}');
+      final url = _buildPeerUri(peerUrl, '/api/mirror/challenge', {'folder': folder});
       final response = await http.get(url);
 
       if (response.statusCode != 200) {
@@ -794,7 +825,7 @@ class MirrorSyncService {
       }
 
       // 3. Send signed challenge response to peer
-      final url = Uri.parse('$peerUrl/api/mirror/request');
+      final url = _buildPeerUri(peerUrl, '/api/mirror/request');
       final response = await http.post(
         url,
         headers: {'Content-Type': 'application/json'},
@@ -842,8 +873,7 @@ class MirrorSyncService {
     _updateStatus(const SyncStatus(state: 'fetching_manifest'));
 
     try {
-      final url = Uri.parse(
-          '$peerUrl/api/mirror/manifest?folder=${Uri.encodeComponent(folder)}&token=${Uri.encodeComponent(token)}');
+      final url = _buildPeerUri(peerUrl, '/api/mirror/manifest', {'folder': folder, 'token': token});
 
       final response = await http.get(url);
 
@@ -992,8 +1022,7 @@ class MirrorSyncService {
     ProfileStorage? storage,
   }) async {
     try {
-      final url = Uri.parse(
-          '$peerUrl/api/mirror/file?path=${Uri.encodeComponent(filePath)}&token=${Uri.encodeComponent(token)}');
+      final url = _buildPeerUri(peerUrl, '/api/mirror/file', {'path': filePath, 'token': token});
 
       final response = await http.get(url);
 
@@ -1061,8 +1090,7 @@ class MirrorSyncService {
 
       final hash = sha1Hash ?? sha1.convert(bytes).toString();
 
-      final url = Uri.parse(
-          '$peerUrl/api/mirror/upload?path=${Uri.encodeComponent(filePath)}&token=${Uri.encodeComponent(token)}&sha1=${Uri.encodeComponent(hash)}');
+      final url = _buildPeerUri(peerUrl, '/api/mirror/upload', {'path': filePath, 'token': token, 'sha1': hash});
 
       final response = await http.post(
         url,

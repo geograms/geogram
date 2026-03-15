@@ -1,6 +1,8 @@
 // Unified connected client model for station server
 import 'dart:io';
 
+import 'mixins/sibling_notify_mixin.dart';
+
 /// Connection type enum for categorizing how clients connect
 enum ConnectionType {
   localWifi,
@@ -64,7 +66,7 @@ enum ConnectionType {
 
 /// Connected WebSocket client
 /// Unified model combining PureConnectedClient (CLI) and ConnectedClient (App)
-class StationClient {
+class StationClient implements SiblingClient {
   final WebSocket socket;
   final String id;
   String? callsign;
@@ -75,6 +77,8 @@ class StationClient {
   String? version;
   String? remoteAddress;
   String? npub;
+  @override
+  String? deviceId;
   ConnectionType connectionType;
   double? latitude;
   double? longitude;
@@ -90,6 +94,10 @@ class StationClient {
   // Multi-device responsiveness tracking
   int successCount = 0; // Successful proxy responses
   int failCount = 0; // Timeouts/errors
+
+  /// SiblingClient address alias (maps to remoteAddress)
+  @override
+  String? get address => remoteAddress;
 
   /// Success rate for adaptive device ordering (0.0 to 1.0)
   double get successRate {

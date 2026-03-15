@@ -5349,6 +5349,7 @@ final tileHandler = TileHandler(
 | HeartbeatMixin | server/mixins/heartbeat_mixin.dart | WebSocket client PING/PONG and stale connection cleanup |
 | HealthWatchdogMixin | server/mixins/health_watchdog_mixin.dart | Auto-recovery |
 | EmailHandlerMixin | server/mixins/email_handler_mixin.dart | Shared email send/receive/delivery |
+| SiblingNotifyMixin | server/mixins/sibling_notify_mixin.dart | Multi-device sibling notifications, /api/siblings endpoint, `findZombieConnections()` for NAT-safe dedup by device_id |
 | BlogHandlerMixin | server/mixins/blog_handler_mixin.dart | Blog URL resolution, NIP-05 callsign lookup, local/proxy serving |
 
 ---
@@ -9227,9 +9228,11 @@ Pure proxy bridge shared by `StationServer` and `PureStationServer`. Any HTTP re
 |--------|-------------|
 | `isDevicePath(path)` | Single check: is first path segment a callsign or nickname (not a reserved station path)? |
 | `handleGenericDeviceProxy(request)` | Pure proxy: strips identifier, forwards method/headers/body/query to device, writes response back |
+| `handleDevicePathProxy(request)` | Handle `/device/{callsign}/*` — device info or proxy. Supports `?target=ID` to pin to a specific connection (needed for same-callsign multi-device sync where challenge/response must hit the same device) |
 | `proxyToAnyDevice(identifier, method, path)` | Multi-device failover (priority + success rate ordering) |
 | `proxySingleDevice(client, method, path, headers, body)` | Send to one device, track success/fail stats |
 | `findAllClientsByIdentifier(identifier)` | Find all connected clients for a callsign/nickname |
+| `findClientById(id)` | Find a connected client by its connection ID |
 
 ### Reserved Station Paths
 

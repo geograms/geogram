@@ -31,10 +31,11 @@ import '../api/handlers/feedback_handler.dart';
 import 'handlers/road_handler.dart';
 import '../version.dart';
 import 'mixins/karma_mixin.dart';
+import 'mixins/sibling_notify_mixin.dart';
 
 /// Abstract base class for station servers
 /// Provides shared functionality for HTTP server, WebSocket, tile caching, NOSTR services
-abstract class StationServerBase {
+abstract class StationServerBase with SiblingNotifyMixin {
   // ============ Core State ============
   HttpServer? _httpServer;
   StationSettings _settings = StationSettings();
@@ -83,6 +84,14 @@ abstract class StationServerBase {
   Map<String, StationClient> get clients => Map.unmodifiable(_clients);
   String? get dataDir => _dataDir;
   NostrBlossomService? get blossom => _blossom;
+
+  // ── SiblingNotifyMixin contract ─────────────────────────────────
+  @override
+  Map<String, SiblingClient> get siblingClients => _clients;
+  @override
+  void siblingLog(String level, String message) => log(level, message);
+  @override
+  bool siblingSafeSocketSend(StationClient client, String data) => safeSocketSend(client, data);
 
   // ============ Abstract Methods (Platform-Specific) ============
 
@@ -444,6 +453,10 @@ abstract class StationServerBase {
     else if (path == '/api/debug/connected-devices') {
       await _handleDebugConnectedDevices(request);
     }
+    // Siblings: returns sibling devices for the requester's callsign
+    else if (path == '/api/siblings') {
+      await handleSiblingsRequest(request);
+    }
     // Blossom endpoints
     else if (path.startsWith('/blossom')) {
       await _handleBlossomRequest(request);
@@ -750,6 +763,9 @@ abstract class StationServerBase {
     }
 
     // Send acknowledgment
+    final siblingCount = callsign != null
+        ? siblingCountForCallsign(callsign, excludeClientId: client.id)
+        : 0;
     final response = {
       'type': 'hello_ack',
       'success': true,
@@ -757,9 +773,15 @@ abstract class StationServerBase {
       'station_npub': _settings.npub,
       'message': 'Welcome to ${_settings.name ?? "Geogram Station"}',
       'version': appVersion,
+      'sibling_count': siblingCount,
     };
     client.socket.add(jsonEncode(response));
     log('INFO', 'Hello from: ${client.callsign ?? "unknown"} (${client.deviceType ?? "unknown"})');
+
+    // Notify all siblings (including the new device) about each other
+    if (callsign != null) {
+      notifySiblingsOfCallsign(callsign);
+    }
 
     // Record daily login karma
     if (callsign != null && this is KarmaMixin) {
@@ -856,9 +878,11 @@ abstract class StationServerBase {
     final client = _clients.remove(clientId);
     if (client == null) return;
 
+    final disconnectedCallsign = client.callsign;
+
     // Store disconnect info for reconnection tolerance
-    if (client.callsign != null) {
-      final callsignKey = client.callsign!.toUpperCase();
+    if (disconnectedCallsign != null) {
+      final callsignKey = disconnectedCallsign.toUpperCase();
       _disconnectInfo[callsignKey] = DisconnectInfo(
         disconnectTime: DateTime.now(),
         originalConnectTime: client.connectedAt,
@@ -870,7 +894,12 @@ abstract class StationServerBase {
       client.socket.close();
     } catch (_) {}
 
-    log('INFO', 'Client removed: ${client.callsign ?? clientId} ($reason)');
+    log('INFO', 'Client removed: ${disconnectedCallsign ?? clientId} ($reason)');
+
+    // Notify remaining siblings about the departure
+    if (disconnectedCallsign != null) {
+      notifySiblingsOfCallsign(disconnectedCallsign);
+    }
   }
 
   bool _isOpenRelayPath(String path) {

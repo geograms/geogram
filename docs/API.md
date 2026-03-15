@@ -4133,6 +4133,81 @@ curl -X POST http://localhost:3456/api/debug \
   -d '{"action": "profile_delete", "callsign": "X1FART"}'
 ```
 
+---
+
+## Sibling Discovery & Multi-Device Sync
+
+Sibling discovery enables multi-device sync between devices sharing the same callsign/identity. The station relays sibling presence notifications via WebSocket.
+
+### Station Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/siblings` | GET | Returns sibling devices for the requester's callsign (matched by IP) |
+
+#### GET /api/siblings
+
+Returns sibling devices connected to the same station with the same callsign as the requester.
+
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "callsign": "X1ABCD",
+  "siblings": [
+    {
+      "device_id": "abc123",
+      "platform": "Android",
+      "device_type": "phone",
+      "npub": "npub1...",
+      "verified": true
+    }
+  ]
+}
+```
+
+### WebSocket Messages
+
+#### `siblings_update` (server → client)
+
+Sent to all verified devices with the same callsign when a sibling connects or disconnects.
+
+```json
+{
+  "type": "siblings_update",
+  "callsign": "X1ABCD",
+  "siblings": [
+    {"device_id": "...", "platform": "Android", "device_type": "phone", "npub": "npub1...", "verified": true}
+  ]
+}
+```
+
+#### `hello_ack` additions
+
+The `hello_ack` response now includes a `sibling_count` field indicating how many other devices with the same callsign are connected.
+
+### Debug Endpoints
+
+```bash
+# Get current sibling discovery state
+curl http://localhost:3456/api/debug/siblings
+
+# Run full diff against first sibling (or specify device_id)
+curl -X POST http://localhost:3456/api/debug/sync-trigger \
+  -H "Content-Type: application/json" -d '{}'
+
+# Diff against a specific sibling
+curl -X POST http://localhost:3456/api/debug/sync-trigger \
+  -H "Content-Type: application/json" \
+  -d '{"device_id": "abc123"}'
+```
+
+The `sync-trigger` endpoint runs the full mirror diff for all app folders
+(blog, places, events, alerts, contacts, etc.) and returns per-folder
+changes (adds, modifies, deletes, uploads) without transferring any files.
+
+---
+
 ### APRS Debug Actions
 
 Use these to inspect and simulate APRS geo-chat without a live APRS-IS session.

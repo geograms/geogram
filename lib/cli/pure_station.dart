@@ -62,6 +62,7 @@ import '../server/mixins/email_handler_mixin.dart';
 import '../server/mixins/console_command_mixin.dart';
 import '../server/mixins/conference_mixin.dart';
 import '../server/mixins/device_proxy_mixin.dart';
+import '../server/mixins/sibling_notify_mixin.dart';
 import '../server/mixins/heartbeat_mixin.dart';
 import '../server/mixins/karma_mixin.dart';
 import 'themes_embedded.dart';
@@ -601,7 +602,7 @@ class ChatMessage implements ChatMessageReadable {
 }
 
 /// Connected WebSocket client
-class PureConnectedClient implements EmailClient, ConnectedClientReadable, DeviceProxyClient {
+class PureConnectedClient implements EmailClient, ConnectedClientReadable, DeviceProxyClient, SiblingClient {
   @override
   final WebSocket socket;
   @override
@@ -617,6 +618,8 @@ class PureConnectedClient implements EmailClient, ConnectedClientReadable, Devic
   String? version;
   String? address;
   String? npub;
+  @override
+  String? deviceId;
   double? latitude;
   double? longitude;
   @override
@@ -809,7 +812,7 @@ class PureTileCache {
 }
 
 /// Pure Dart station server for CLI mode
-class PureStationServer with HeartbeatMixin, EmailHandlerMixin, ConsoleCommandMixin, ChatModificationMixin, ChatNip05Mixin, ChatModerationMixin, ConferenceMixin, XmppServerMixin, KarmaMixin, DeviceProxyMixin
+class PureStationServer with HeartbeatMixin, EmailHandlerMixin, ConsoleCommandMixin, ChatModificationMixin, ChatNip05Mixin, ChatModerationMixin, ConferenceMixin, XmppServerMixin, KarmaMixin, DeviceProxyMixin, SiblingNotifyMixin
     implements StationCommandInterface {
   HttpServer? _httpServer;
   HttpServer? _httpsServer;
@@ -824,6 +827,14 @@ class PureStationServer with HeartbeatMixin, EmailHandlerMixin, ConsoleCommandMi
   Map<String, Completer<Map<String, dynamic>>> get proxyPendingRequests => _pendingProxyRequests;
   @override
   void proxyLog(String level, String message) => _log(level, message);
+
+  // ── SiblingNotifyMixin contract ─────────────────────────────────
+  @override
+  Map<String, SiblingClient> get siblingClients => _clients;
+  @override
+  void siblingLog(String level, String message) => _log(level, message);
+  @override
+  bool siblingSafeSocketSend(PureConnectedClient client, String data) => _safeSocketSend(client, data);
 
   // Connection tolerance: preserve uptime for reconnects within 5 minutes
   // Maps callsign -> (disconnectTime, originalConnectTime)
@@ -2334,11 +2345,13 @@ class PureStationServer with HeartbeatMixin, EmailHandlerMixin, ConsoleCommandMi
   void _removeClient(String clientId, {String reason = 'disconnected'}) {
     final client = _clients.remove(clientId);
     if (client == null) return;
-    _log('INFO', 'Client removed: ${client.callsign ?? clientId} - reason: $reason (remaining clients: ${_clients.length})');
+
+    final disconnectedCallsign = client.callsign;
+    _log('INFO', 'Client removed: ${disconnectedCallsign ?? clientId} - reason: $reason (remaining clients: ${_clients.length})');
 
     // Store disconnect info for reconnection tolerance
-    if (client.callsign != null) {
-      final callsignKey = client.callsign!.toUpperCase();
+    if (disconnectedCallsign != null) {
+      final callsignKey = disconnectedCallsign.toUpperCase();
       _disconnectInfo[callsignKey] = (
         disconnectTime: DateTime.now(),
         originalConnectTime: client.connectedAt,
@@ -2358,7 +2371,12 @@ class PureStationServer with HeartbeatMixin, EmailHandlerMixin, ConsoleCommandMi
     // Clean up conference rooms hosted by this client
     conferenceHandleClientDisconnect(clientId);
 
-    _log('INFO', 'Client removed: ${client.callsign ?? clientId} ($reason)');
+    _log('INFO', 'Client removed: ${disconnectedCallsign ?? clientId} ($reason)');
+
+    // Notify remaining siblings about the departure
+    if (disconnectedCallsign != null) {
+      notifySiblingsOfCallsign(disconnectedCallsign);
+    }
   }
 
   /// Clean up pending proxy requests that were waiting for a disconnected client
@@ -2711,6 +2729,8 @@ class PureStationServer with HeartbeatMixin, EmailHandlerMixin, ConsoleCommandMi
         await _handleUpdateDownload(request);
       } else if (path == '/api/debug/connected-devices') {
         await _handleDebugConnectedDevices(request);
+      } else if (path == '/api/siblings') {
+        await handleSiblingsRequest(request);
       } else if (path == '/api/devices' || path == '/api/clients') {
         await _handleDevices(request);
       } else if (path.startsWith('/device/')) {
@@ -2968,6 +2988,8 @@ class PureStationServer with HeartbeatMixin, EmailHandlerMixin, ConsoleCommandMi
                       latitude = double.tryParse(tag[1].toString());
                     } else if (tag[0] == 'longitude') {
                       longitude = double.tryParse(tag[1].toString());
+                    } else if (tag[0] == 'device_id') {
+                      client.deviceId = tag[1] as String?;
                     } else if (tag[0] == 'priority') {
                       client.priority = int.tryParse(tag[1].toString()) ?? 0;
                     }
@@ -3078,21 +3100,19 @@ class PureStationServer with HeartbeatMixin, EmailHandlerMixin, ConsoleCommandMi
               }
             }
 
-            // DEDUP: Only close connections from the SAME remote address (same device reconnecting).
-            // Multiple devices with the same callsign+npub are now legitimate (multi-device support).
-            if (callsign != null && npub != null && client.address != null) {
-              final callsignUpper = callsign.toUpperCase();
-              final zombies = _clients.values.where((c) =>
-                c.id != client.id &&
-                c.callsign != null &&
-                c.callsign!.toUpperCase() == callsignUpper &&
-                c.npub == npub &&
-                c.address == client.address  // Same physical device reconnecting
-              ).toList();
-
-              for (final zombie in zombies) {
-                _log('INFO', 'Closing zombie connection for $callsign from same address ${client.address} (id: ${zombie.id}, replacing with ${client.id})');
-                _removeClient(zombie.id, reason: 'replaced_by_same_device');
+            // DEDUP: Close zombie connections from the same physical device.
+            // Uses device_id (per-install UUID) when available, falls back to IP for legacy clients.
+            if (callsign != null && npub != null) {
+              final zombies = findZombieConnections(
+                clientId: client.id,
+                callsign: callsign!,
+                npub: npub,
+                address: client.address,
+                deviceId: client.deviceId,
+              );
+              for (final zombieId in zombies) {
+                _log('INFO', 'Dedup: closing zombie $zombieId for $callsign (replaced by ${client.id})');
+                _removeClient(zombieId, reason: 'replaced_by_same_device');
               }
             }
 
@@ -3132,6 +3152,9 @@ class PureStationServer with HeartbeatMixin, EmailHandlerMixin, ConsoleCommandMi
             }
 
             // Send hello_ack (expected by desktop/mobile clients)
+            final siblingCount = callsign != null
+                ? siblingCountForCallsign(callsign, excludeClientId: client.id)
+                : 0;
             final response = {
               'type': 'hello_ack',
               'success': true,
@@ -3139,10 +3162,16 @@ class PureStationServer with HeartbeatMixin, EmailHandlerMixin, ConsoleCommandMi
               'station_npub': _settings.npub,
               'message': 'Welcome to ${_settings.name}',
               'version': cliAppVersion,
+              'sibling_count': siblingCount,
             };
             client.socket.add(jsonEncode(response));
             final nicknameInfo = client.nickname != null ? ' [${client.nickname}]' : '';
             _log('INFO', 'Hello from: ${client.callsign ?? "unknown"}$nicknameInfo (${client.deviceType ?? "unknown"}) npub=${npub.substring(0, 20)}...');
+
+            // Notify all siblings (including the new device) about each other
+            if (callsign != null) {
+              notifySiblingsOfCallsign(callsign);
+            }
 
             // Award karma for daily login
             if (callsign != null) {
@@ -6385,111 +6414,10 @@ class PureStationServer with HeartbeatMixin, EmailHandlerMixin, ConsoleCommandMi
     }));
   }
 
-  /// Handle /device/{callsign} and /device/{callsign}/* requests
-  Future<void> _handleDeviceProxy(HttpRequest request) async {
-    final path = request.uri.path;
-    final parts = path.substring('/device/'.length).split('/');
-    final callsign = parts.first;
-    final subPath = parts.length > 1 ? '/${parts.sublist(1).join('/')}' : '';
-
-    // Find the client by callsign
-    PureConnectedClient? foundClient;
-    for (final c in _clients.values) {
-      if (c.callsign?.toLowerCase() == callsign.toLowerCase()) {
-        foundClient = c;
-        break;
-      }
-    }
-
-    if (foundClient == null) {
-      request.response.statusCode = 404;
-      request.response.headers.contentType = ContentType.json;
-      request.response.write(jsonEncode({
-        'callsign': callsign,
-        'connected': false,
-        'error': 'Device not connected',
-      }));
-      return;
-    }
-
-    final client = foundClient;
-
-    // If just /device/{callsign} with no subpath, return device info
-    if (subPath.isEmpty) {
-      final uptime = DateTime.now().difference(client.connectedAt).inSeconds;
-      final idleTime = DateTime.now().difference(client.lastActivity).inSeconds;
-
-      request.response.headers.contentType = ContentType.json;
-      request.response.write(jsonEncode({
-        'callsign': client.callsign,
-        'connected': true,
-        'uptime': uptime,
-        'idleTime': idleTime,
-        'deviceType': client.deviceType,
-        'version': client.version,
-        'address': client.address,
-      }));
-      return;
-    }
-
-    // Proxy request to device via WebSocket
-    final requestId = DateTime.now().millisecondsSinceEpoch.toString();
-    final proxyRequest = {
-      'type': 'HTTP_REQUEST',
-      'requestId': requestId,
-      'method': request.method,
-      'path': subPath,
-      'headers': request.headers.toString(),
-      'body': '',
-    };
-
-    // Read request body if present
-    if (request.contentLength > 0) {
-      final body = await utf8.decodeStream(request);
-      proxyRequest['body'] = body;
-    }
-
-    // Send request to device and wait for response
-    final completer = Completer<Map<String, dynamic>>();
-    _pendingProxyRequests[requestId] = completer;
-
-    try {
-      client.socket.add(jsonEncode(proxyRequest));
-
-      // Wait for response with timeout
-      final response = await completer.future.timeout(
-        const Duration(seconds: 30),
-        onTimeout: () => {
-          'type': 'HTTP_RESPONSE',
-          'statusCode': 504,
-          'responseBody': 'Gateway Timeout',
-        },
-      );
-
-      request.response.statusCode = response['statusCode'] ?? 500;
-      if (response['responseHeaders'] != null) {
-        try {
-          final headers = jsonDecode(response['responseHeaders'] as String) as Map<String, dynamic>;
-          headers.forEach((key, value) {
-            request.response.headers.add(key, value.toString());
-          });
-        } catch (_) {}
-      }
-
-      final body = response['responseBody'] ?? '';
-      final isBase64 = response['isBase64'] == true;
-      if (isBase64) {
-        request.response.add(base64Decode(body));
-      } else {
-        request.response.write(body);
-      }
-    } catch (e) {
-      request.response.statusCode = 502;
-      request.response.write('Bad Gateway: $e');
-    } finally {
-      _pendingProxyRequests.remove(requestId);
-    }
-  }
+  /// Handle /device/{callsign} and /device/{callsign}/* requests.
+  /// Delegates to shared DeviceProxyMixin.handleDevicePathProxy().
+  Future<void> _handleDeviceProxy(HttpRequest request) =>
+      handleDevicePathProxy(request);
 
   /// Check if path matches /{callsign}/api/alerts/{alertId}/files/{filename} pattern for photo uploads
   /// Also matches: /{callsign}/api/alerts/{alertId}/files/images/{filename}

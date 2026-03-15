@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:uuid/uuid.dart';
 import '../util/nostr_key_generator.dart';
 import '../platform/web_storage.dart' if (dart.library.io) '../platform/web_storage_stub.dart';
 import 'storage_config.dart';
@@ -429,6 +430,16 @@ class ConfigService {
     } catch (e) {
       return null;
     }
+  }
+
+  /// Persistent per-install device ID. Generated once on first access, stored in config.json.
+  String get deviceId {
+    var id = get('device_id') as String?;
+    if (id == null || id.isEmpty) {
+      id = const Uuid().v4();
+      set('device_id', id);
+    }
+    return id;
   }
 
   /// Get video auto-play setting (defaults to true)

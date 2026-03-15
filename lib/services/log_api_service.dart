@@ -29,6 +29,7 @@ import 'profile_storage.dart';
 import 'direct_message_service.dart';
 import 'message_retention_service.dart';
 import 'devices_service.dart';
+import 'sibling_discovery_service.dart';
 import 'conference_service.dart';
 import 'conference_archive_service.dart';
 import 'conference_schedule_service.dart';
@@ -438,6 +439,14 @@ class LogApiService with ChatModificationMixin {
     // File content endpoint: /api/files/content or /files/content (legacy)
     if ((urlPath == 'api/files/content' || urlPath == 'files/content') && request.method == 'GET') {
       return _handleFileContentRequest(request, headers);
+    }
+
+    // Sibling discovery debug endpoints
+    if (urlPath == 'api/debug/siblings' && request.method == 'GET') {
+      return _handleDebugSiblings(headers);
+    }
+    if (urlPath == 'api/debug/sync-trigger' && request.method == 'POST') {
+      return await _handleDebugSyncTrigger(request, headers);
     }
 
     // Now (activity feed) debug endpoints
@@ -19582,6 +19591,161 @@ class LogApiService with ChatModificationMixin {
       LogService().log('HotspotPortalAction error: $e');
       return shelf.Response.internalServerError(
         body: jsonEncode({'error': e.toString()}),
+        headers: headers,
+      );
+    }
+  }
+
+  /// GET /api/debug/siblings — returns current sibling discovery state.
+  shelf.Response _handleDebugSiblings(Map<String, String> headers) {
+    final siblings = SiblingDiscoveryService().siblings.value;
+    return shelf.Response.ok(
+      jsonEncode({
+        'success': true,
+        'count': siblings.length,
+        'siblings': siblings.map((s) => {
+          'device_id': s.deviceId,
+          'callsign': s.callsign,
+          'platform': s.platform,
+          'device_type': s.deviceType,
+          'connection_type': s.connectionType,
+          'npub': s.npub,
+          'verified': s.verified,
+          'direct_address': s.directAddress,
+          'station_relay_url': s.stationRelayUrl,
+          'last_seen': s.lastSeen.toIso8601String(),
+        }).toList(),
+      }),
+      headers: headers,
+    );
+  }
+
+  /// POST /api/debug/sync-trigger — run full diff against a sibling device.
+  ///
+  /// Body: {"device_id": "..."} or {} to auto-select the first sibling.
+  /// Returns per-folder diffs showing adds, modifies, deletes, uploads.
+  Future<shelf.Response> _handleDebugSyncTrigger(
+    shelf.Request request,
+    Map<String, String> headers,
+  ) async {
+    try {
+      final body = await request.readAsString();
+      final data = body.isNotEmpty
+          ? jsonDecode(body) as Map<String, dynamic>
+          : <String, dynamic>{};
+      final deviceId = data['device_id'] as String?;
+
+      final siblings = SiblingDiscoveryService().siblings.value;
+      if (siblings.isEmpty) {
+        return shelf.Response.ok(
+          jsonEncode({'success': false, 'error': 'No siblings connected'}),
+          headers: headers,
+        );
+      }
+
+      final sibling = deviceId != null
+          ? siblings.where((s) => s.deviceId == deviceId).firstOrNull
+          : siblings.first;
+
+      if (sibling == null) {
+        return shelf.Response.notFound(
+          jsonEncode({'success': false, 'error': 'Sibling not found: $deviceId'}),
+          headers: headers,
+        );
+      }
+
+      // Build peer URL the same way DeviceSyncPage does
+      String? peerUrl = sibling.directAddress ?? sibling.stationRelayUrl;
+      if (peerUrl == null) {
+        final wsUrl = WebSocketService().connectedUrl;
+        if (wsUrl != null) {
+          final stationUrl = wsUrl
+              .replaceFirst('ws://', 'http://')
+              .replaceFirst('wss://', 'https://');
+          // Pin to the specific sibling connection so challenge/response
+          // hit the same physical device (not ourselves).
+          peerUrl = '$stationUrl/device/${sibling.callsign}?target=${sibling.deviceId}';
+        }
+      }
+      if (peerUrl == null) {
+        return shelf.Response.ok(
+          jsonEncode({'success': false, 'error': 'Cannot determine peer URL'}),
+          headers: headers,
+        );
+      }
+
+      // Run the same diff logic as DeviceSyncPage._loadDiffs
+      final mirror = MirrorSyncService.instance;
+      final storage = AppService().profileStorage;
+      final profile = ProfileService().getProfile();
+      const folders = [
+        'blog', 'places', 'events', 'alerts', 'contacts', 'groups',
+        'inventory', 'market', 'postcards', 'news', 'files', 'qr',
+        'reports', 'stories', 'wallet', 'tracker',
+      ];
+
+      final diffs = <String, dynamic>{};
+      final errors = <String, String>{};
+
+      for (final folder in folders) {
+        try {
+          final syncResult = await mirror.requestSync(peerUrl, folder);
+          if (!syncResult.allowed || syncResult.token == null) {
+            if (syncResult.error != null) errors[folder] = syncResult.error!;
+            continue;
+          }
+
+          final manifest = await mirror.fetchManifest(
+            peerUrl, folder, syncResult.token!,
+          );
+          if (manifest == null) {
+            errors[folder] = 'Failed to fetch manifest';
+            continue;
+          }
+
+          final localPath = '${profile.callsign}/$folder';
+          final changes = await mirror.diffManifest(
+            manifest, localPath,
+            syncStyle: SyncStyle.sendReceive,
+            storage: storage,
+          );
+
+          if (changes.isNotEmpty) {
+            diffs[folder] = {
+              'total': changes.length,
+              'adds': changes.where((c) => c.type == FileChangeType.add).length,
+              'modifies': changes.where((c) => c.type == FileChangeType.modify).length,
+              'deletes': changes.where((c) => c.type == FileChangeType.delete).length,
+              'uploads': changes.where((c) => c.type == FileChangeType.upload).length,
+              'files': changes.map((c) => {
+                'path': c.path,
+                'type': c.type.name,
+              }).toList(),
+            };
+          }
+        } catch (e) {
+          errors[folder] = e.toString();
+        }
+      }
+
+      return shelf.Response.ok(
+        jsonEncode({
+          'success': true,
+          'sibling': {
+            'device_id': sibling.deviceId,
+            'platform': sibling.platform,
+            'connection_type': sibling.connectionType,
+          },
+          'peer_url': peerUrl,
+          'folders_with_diffs': diffs.length,
+          'diffs': diffs,
+          if (errors.isNotEmpty) 'errors': errors,
+        }),
+        headers: headers,
+      );
+    } catch (e) {
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'success': false, 'error': e.toString()}),
         headers: headers,
       );
     }
