@@ -344,54 +344,11 @@ class EventDetailWidget extends StatelessWidget {
 
   Widget _buildFlyer(BuildContext context, ThemeData theme, I18nService i18n) {
     final year = event.id.substring(0, 4);
-    final flyerPath = '$appPath/$year/${event.id}/${event.primaryFlyer}';
     final flyerPaths = event.flyers
         .map((flyer) => '$appPath/$year/${event.id}/$flyer')
         .toList();
-    final canOpen = !kIsWeb && flyerPaths.isNotEmpty;
 
-    return GestureDetector(
-      onTap: canOpen
-          ? () {
-              Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (context) => PhotoViewerPage(
-                    imagePaths: flyerPaths,
-                    initialIndex: 0,
-                  ),
-                ),
-              );
-            }
-          : null,
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(8),
-        child: kIsWeb
-            ? Container(
-                height: 200,
-                color: theme.colorScheme.surfaceVariant,
-                child: Center(
-                  child: Text(i18n.t('image_not_available_on_web')),
-                ),
-              )
-            : Image.file(
-                io.File(flyerPath),
-                fit: BoxFit.contain,
-                errorBuilder: (context, error, stackTrace) {
-                  return Container(
-                    height: 200,
-                    color: theme.colorScheme.surfaceVariant,
-                    child: Center(
-                      child: Icon(
-                        Icons.broken_image,
-                        size: 48,
-                        color: theme.colorScheme.onSurfaceVariant,
-                      ),
-                    ),
-                  );
-                },
-              ),
-      ),
-    );
+    return _SwipeableFlyer(flyerPaths: flyerPaths);
   }
 
   Widget _buildTrailer(ThemeData theme, I18nService i18n) {
@@ -1590,4 +1547,126 @@ class _ContactInfo {
     required this.displayName,
     this.profilePicPath,
   });
+}
+
+/// Swipeable flyer/photo carousel for the event detail hero image.
+class _SwipeableFlyer extends StatefulWidget {
+  final List<String> flyerPaths;
+
+  const _SwipeableFlyer({required this.flyerPaths});
+
+  @override
+  State<_SwipeableFlyer> createState() => _SwipeableFlyerState();
+}
+
+class _SwipeableFlyerState extends State<_SwipeableFlyer> {
+  late final PageController _pageController;
+  int _currentPage = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _pageController = PageController();
+  }
+
+  @override
+  void dispose() {
+    _pageController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final paths = widget.flyerPaths;
+    if (paths.isEmpty) return const SizedBox.shrink();
+
+    if (kIsWeb) {
+      return ClipRRect(
+        borderRadius: BorderRadius.circular(8),
+        child: Container(
+          height: 200,
+          color: theme.colorScheme.surfaceVariant,
+          child: Center(
+            child: Text(I18nService().t('image_not_available_on_web')),
+          ),
+        ),
+      );
+    }
+
+    return Column(
+      children: [
+        ClipRRect(
+          borderRadius: BorderRadius.circular(8),
+          child: SizedBox(
+            height: 300,
+            child: PageView.builder(
+              controller: _pageController,
+              itemCount: paths.length,
+              onPageChanged: (index) {
+                setState(() => _currentPage = index);
+              },
+              itemBuilder: (context, index) {
+                return GestureDetector(
+                  onTap: () {
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (context) => PhotoViewerPage(
+                          imagePaths: paths,
+                          initialIndex: index,
+                        ),
+                      ),
+                    );
+                  },
+                  child: Image.file(
+                    io.File(paths[index]),
+                    fit: BoxFit.contain,
+                    errorBuilder: (context, error, stackTrace) {
+                      return Container(
+                        color: theme.colorScheme.surfaceVariant,
+                        child: Center(
+                          child: Icon(
+                            Icons.broken_image,
+                            size: 48,
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                );
+              },
+            ),
+          ),
+        ),
+        if (paths.length > 1) ...[
+          const SizedBox(height: 8),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: List.generate(
+              paths.length > 10 ? 0 : paths.length,
+              (index) => Container(
+                width: 8,
+                height: 8,
+                margin: const EdgeInsets.symmetric(horizontal: 3),
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: index == _currentPage
+                      ? theme.colorScheme.primary
+                      : theme.colorScheme.outlineVariant,
+                ),
+              ),
+            ),
+          ),
+          if (paths.length > 10)
+            Text(
+              '${_currentPage + 1} / ${paths.length}',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+        ],
+      ],
+    );
+  }
 }

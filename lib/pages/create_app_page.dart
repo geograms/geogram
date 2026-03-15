@@ -26,6 +26,7 @@ class _CreateAppPageState extends State<CreateAppPage> {
   final _titleController = TextEditingController();
   final _descriptionController = TextEditingController();
   final _searchController = TextEditingController();
+  final _searchFocusNode = FocusNode();
 
   String? _selectedType;
   bool _isCreating = false;
@@ -102,6 +103,10 @@ class _CreateAppPageState extends State<CreateAppPage> {
   void initState() {
     super.initState();
     _checkExistingTypes();
+    // Auto-focus the search field so the user can start typing immediately
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _searchFocusNode.requestFocus();
+    });
   }
 
   Future<void> _checkExistingTypes() async {
@@ -140,6 +145,7 @@ class _CreateAppPageState extends State<CreateAppPage> {
     _titleController.dispose();
     _descriptionController.dispose();
     _searchController.dispose();
+    _searchFocusNode.dispose();
     _scrollController.dispose();
     super.dispose();
   }
@@ -211,6 +217,7 @@ class _CreateAppPageState extends State<CreateAppPage> {
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
           child: TextField(
             controller: _searchController,
+            focusNode: _searchFocusNode,
             decoration: InputDecoration(
               hintText: _i18n.t('search_apps'),
               prefixIcon: const Icon(Icons.search),

@@ -150,6 +150,8 @@ class _NewEventPageState extends State<NewEventPage>
     // Location type
     if (event.isOnline) {
       _locationType = 'online';
+    } else if (event.location == 'other') {
+      _locationType = 'other';
     } else if (event.placePath != null && event.placePath!.isNotEmpty) {
       _locationType = 'place';
       // Note: Place object would need to be loaded separately if needed
@@ -474,21 +476,19 @@ class _NewEventPageState extends State<NewEventPage>
 
     if (filePath != null) {
       final originalFileName = path.basename(filePath);
-      final extension = path.extension(originalFileName).replaceFirst('.', '').toLowerCase();
+      final ext = path.extension(originalFileName).replaceFirst('.', '').toLowerCase();
+      final effectiveExt = ext.isNotEmpty ? ext : 'jpg';
 
-      String flyerFileName;
+      String targetName;
       if (_flyers.isEmpty) {
-        flyerFileName = extension.isNotEmpty ? 'flyer.$extension' : 'flyer.jpg';
+        targetName = 'flyer.$effectiveExt';
       } else {
-        int altNum = 1;
-        flyerFileName = extension.isNotEmpty
-            ? 'flyer-alt.$extension'
-            : 'flyer-alt.jpg';
-        while (_flyers.any((flyer) => flyer.targetName == flyerFileName)) {
-          altNum++;
-          flyerFileName = extension.isNotEmpty
-              ? 'flyer-alt$altNum.$extension'
-              : 'flyer-alt$altNum.jpg';
+        final existingNames = _flyers.map((f) => f.targetName).toSet();
+        int num = _flyers.length;
+        targetName = 'photo-$num.$effectiveExt';
+        while (existingNames.contains(targetName)) {
+          num++;
+          targetName = 'photo-$num.$effectiveExt';
         }
       }
 
@@ -497,7 +497,7 @@ class _NewEventPageState extends State<NewEventPage>
           _PendingFile(
             path: filePath!,
             name: originalFileName,
-            targetName: flyerFileName,
+            targetName: targetName,
           ),
         );
       });
@@ -728,9 +728,11 @@ class _NewEventPageState extends State<NewEventPage>
 
     final location = _locationType == 'online'
         ? 'online'
-        : _locationType == 'place' && _selectedPlace != null
-            ? 'place'
-            : _locationController.text.trim();
+        : _locationType == 'other'
+            ? 'other'
+            : _locationType == 'place' && _selectedPlace != null
+                ? 'place'
+                : _locationController.text.trim();
 
     final agenda = _buildAgendaText();
     final eventDateTime = _isMultiDay
@@ -951,12 +953,22 @@ class _NewEventPageState extends State<NewEventPage>
                 ],
               ),
             ),
+            DropdownMenuItem(
+              value: 'other',
+              child: Row(
+                children: [
+                  const Icon(Icons.more_horiz, size: 20),
+                  const SizedBox(width: 8),
+                  Text(_i18n.t('other')),
+                ],
+              ),
+            ),
           ],
           onChanged: (value) {
             if (value != null) {
               setState(() {
                 _locationType = value;
-                if (value == 'online') {
+                if (value == 'online' || value == 'other') {
                   _locationController.clear();
                   _selectedPlace = null;
                 } else if (value == 'coordinates') {
@@ -1311,16 +1323,29 @@ class _NewEventPageState extends State<NewEventPage>
     setState(() {
       for (final filePath in filePaths) {
         final originalFileName = path.basename(filePath);
-        final extension = path.extension(originalFileName).replaceFirst('.', '').toLowerCase();
+        final ext = path.extension(originalFileName).replaceFirst('.', '').toLowerCase();
+        final effectiveExt = ext.isNotEmpty ? ext : 'jpg';
 
-        final existingNames = _flyers.map((f) => f.targetName).toList();
-        final flyerFileName = EventService.nextFlyerName(existingNames, extension);
+        String targetName;
+        if (_flyers.isEmpty) {
+          // First photo becomes the cover/flyer
+          targetName = 'flyer.$effectiveExt';
+        } else {
+          // Subsequent photos are named photo-1, photo-2, ...
+          final existingNames = _flyers.map((f) => f.targetName).toSet();
+          int num = _flyers.length;
+          targetName = 'photo-$num.$effectiveExt';
+          while (existingNames.contains(targetName)) {
+            num++;
+            targetName = 'photo-$num.$effectiveExt';
+          }
+        }
 
         _flyers.add(
           _PendingFile(
             path: filePath,
             name: originalFileName,
-            targetName: flyerFileName,
+            targetName: targetName,
           ),
         );
       }
@@ -1331,17 +1356,23 @@ class _NewEventPageState extends State<NewEventPage>
     if (index == 0 || index >= _flyers.length) return;
     setState(() {
       final photo = _flyers.removeAt(index);
-      // Rename to be primary (flyer.ext)
-      final extension = path.extension(photo.targetName);
-      final primaryName = 'flyer$extension';
-      // Rename old primary
+      final ext = path.extension(photo.targetName);
+      final primaryName = 'flyer$ext';
+      // Demote old cover to photo-*
       if (_flyers.isNotEmpty) {
         final oldPrimary = _flyers.first;
         final oldExt = path.extension(oldPrimary.targetName);
+        final existingNames = _flyers.map((f) => f.targetName).toSet();
+        int num = 1;
+        var demotedName = 'photo-$num$oldExt';
+        while (existingNames.contains(demotedName)) {
+          num++;
+          demotedName = 'photo-$num$oldExt';
+        }
         _flyers[0] = _PendingFile(
           path: oldPrimary.path,
           name: oldPrimary.name,
-          targetName: 'flyer-1$oldExt',
+          targetName: demotedName,
         );
       }
       _flyers.insert(0, _PendingFile(

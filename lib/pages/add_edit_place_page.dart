@@ -4,7 +4,6 @@
  */
 
 import 'dart:io';
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
@@ -24,6 +23,7 @@ import '../services/profile_storage.dart';
 import '../models/group.dart';
 import 'location_picker_page.dart';
 import 'photo_viewer_page.dart';
+import '../widgets/file_folder_picker.dart';
 import '../widgets/transcribe_button_widget.dart';
 
 /// Helper class for group options in visibility selector
@@ -99,7 +99,10 @@ class _AddEditPlacePageState extends State<AddEditPlacePage> {
 
   // Common place types for quick selection (sorted alphabetically, 'other' last)
   final List<String> _commonTypes = [
+    'airport',
+    'bar',
     'beach',
+    'bus-station',
     'cafe',
     'campsite',
     'caravan-park',
@@ -111,12 +114,14 @@ class _AddEditPlacePageState extends State<AddEditPlacePage> {
     'gallery',
     'geocaching',
     'grocery',
+    'harbour',
     'hospital',
     'hotel',
     'house',
     'landmark',
     'library',
     'market',
+    'meeting-point',
     'monument',
     'museum',
     'office',
@@ -129,6 +134,7 @@ class _AddEditPlacePageState extends State<AddEditPlacePage> {
     'shop',
     'store',
     'theater',
+    'train-station',
     'veterinary',
     'viewpoint',
     'wild-camping',
@@ -451,24 +457,26 @@ class _AddEditPlacePageState extends State<AddEditPlacePage> {
     return null;
   }
 
+  bool get _isMobile => !kIsWeb && (Platform.isAndroid || Platform.isIOS);
+
   /// Pick images from file system
   Future<void> _pickImages() async {
     if (kIsWeb) return;
 
     try {
-      final result = await FilePicker.platform.pickFiles(
-        type: FileType.image,
-        allowMultiple: true,
+      final paths = await FileFolderPicker.show(
+        context,
+        title: I18nService().t('select_photos'),
+        allowMultiSelect: true,
+        allowedExtensions: FileFolderPicker.imageExtensions,
+        profileStorage: AppService().profileStorage,
+        initialDirectory: _isMobile ? 'virtual://recent' : null,
+        initialGridView: _isMobile,
       );
 
-      if (result != null && result.files.isNotEmpty) {
-        final newPaths = result.files
-            .where((f) => f.path != null)
-            .map((file) => file.path!)
-            .toList();
-
+      if (paths != null && paths.isNotEmpty) {
         setState(() {
-          _imageFilePaths.addAll(newPaths);
+          _imageFilePaths.addAll(paths);
 
           // Auto-select first image as profile picture if none selected yet
           if (_profileImageSelection == null && !_profileImageCleared) {

@@ -123,6 +123,9 @@ class FileFolderPicker extends StatefulWidget {
   /// and upward navigation is clamped to this root.
   final String? rootPath;
 
+  /// When true, the picker starts in grid/gallery view instead of list view.
+  final bool initialGridView;
+
   const FileFolderPicker({
     super.key,
     this.initialDirectory,
@@ -137,6 +140,7 @@ class FileFolderPicker extends StatefulWidget {
     this.profileStorage,
     this.showStorageBar = true,
     this.rootPath,
+    this.initialGridView = false,
   });
 
   /// Show the picker as a full-screen dialog
@@ -148,6 +152,7 @@ class FileFolderPicker extends StatefulWidget {
     bool showHiddenFiles = false,
     Set<String>? allowedExtensions,
     ProfileStorage? profileStorage,
+    bool initialGridView = false,
   }) {
     return Navigator.of(context).push<List<String>>(
       MaterialPageRoute(
@@ -158,6 +163,7 @@ class FileFolderPicker extends StatefulWidget {
           showHiddenFiles: showHiddenFiles,
           allowedExtensions: allowedExtensions,
           profileStorage: profileStorage,
+          initialGridView: initialGridView,
         ),
       ),
     );
@@ -226,16 +232,30 @@ class FileFolderPickerState extends State<FileFolderPicker> {
   void initState() {
     super.initState();
     _showHidden = widget.showHiddenFiles;
+    _isGridView = widget.initialGridView;
     // Initialize directory paths immediately to avoid late init errors
     final initial = widget.initialDirectory ??
         Platform.environment['HOME'] ??
         Platform.environment['USERPROFILE'] ??
         (Platform.isAndroid ? '/storage/emulated/0' : '/');
-    _baseDirectory = initial;
-    _currentDirectory = Directory(initial);
+
+    final isVirtual = initial.startsWith('virtual://');
+    _baseDirectory = isVirtual
+        ? (Platform.environment['HOME'] ??
+            Platform.environment['USERPROFILE'] ??
+            (Platform.isAndroid ? '/storage/emulated/0' : '/'))
+        : initial;
+    _currentDirectory = Directory(_baseDirectory);
+
     // Wait for cache service before loading directory contents
     _initializeCacheService().then((_) {
-      if (mounted) _loadDirectory();
+      if (mounted) {
+        if (isVirtual) {
+          _loadVirtualFolder(initial);
+        } else {
+          _loadDirectory();
+        }
+      }
     });
     _detectStorageLocations();
   }
