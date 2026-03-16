@@ -11,6 +11,7 @@ import '../services/app_service.dart';
 import '../services/encrypted_storage_stub.dart' if (dart.library.ui) '../services/encrypted_storage_service.dart';
 import '../services/storage_config.dart';
 import '../services/signing_service.dart';
+import '../services/file_index_service.dart';
 import '../services/mirror_auto_sync_service.dart';
 import '../services/mirror_config_service.dart';
 import '../services/mirror_sync_service.dart';
@@ -462,6 +463,9 @@ class ProfileService {
       throw Exception('Profile not found: $profileId');
     }
 
+    // Stop background file indexing for old profile
+    FileIndexService.stopBackgroundIndexing();
+
     // Close encrypted storage for old profile before switching
     final oldProfile = _activeProfileId != null ? getProfile() : null;
     if (oldProfile != null) {
@@ -489,6 +493,12 @@ class ProfileService {
     await MirrorConfigService.instance.setStorage(AppService().profileStorage);
     MirrorSyncService.instance.loadAllowedPeersFromConfig();
     MirrorAutoSyncService.instance.start();
+
+    // Restart background file indexing for new profile
+    FileIndexService.startBackgroundIndexing(
+      dbPath: StorageConfig().getFileIndexPath(newProfile.callsign),
+      storage: AppService().profileStorage,
+    );
 
     // Switch logs to profile-specific directory
     await LogService().switchToProfile(newProfile.callsign);

@@ -1,11 +1,13 @@
 import 'package:flutter/material.dart';
 
+import '../services/file_index_service.dart';
 import '../services/mirror_discovery_service.dart';
 import '../services/mirror_sync_service.dart';
 import '../models/mirror_config.dart';
 import '../services/profile_service.dart';
 import '../services/log_service.dart';
 import '../services/app_service.dart';
+import '../services/storage_config.dart';
 import '../services/websocket_service.dart';
 
 /// Multi-device sync page with three stages:
@@ -46,6 +48,11 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
   int _filesTransferred = 0;
   int _totalFilesToTransfer = 0;
   String? _currentTransferFile;
+
+  // Stage 2: diff progress
+  int _diffFoldersDone = 0;
+  int _diffFoldersTotal = 0;
+  String? _currentDiffFolder;
 
   // Known app folders to sync — uses shared constant from mirror_config
   static const _appFolders = kSyncableFolders;
@@ -89,6 +96,9 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
           _diffError = null;
           _expandedFolders.clear();
           _directionFilter = null;
+          _diffFoldersDone = 0;
+          _diffFoldersTotal = 0;
+          _currentDiffFolder = null;
         }
       });
     } else {
@@ -245,7 +255,20 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
     _diffs.clear();
     _tokens.clear();
 
+    final profile = ProfileService().getProfile();
+    final indexPath = StorageConfig().getFileIndexPath(profile.callsign);
+    final fileIndex = FileIndexService(indexPath);
+
+    _diffFoldersTotal = _appFolders.length;
+
     for (final folder in _appFolders) {
+      if (mounted) {
+        setState(() {
+          _currentDiffFolder = kFolderLabels[folder]?.$1 ?? folder;
+          _diffFoldersDone = _appFolders.indexOf(folder);
+        });
+      }
+
       try {
         // Authenticate for this folder
         final syncResult = await mirror.requestSync(_peerUrl!, folder);
@@ -264,13 +287,13 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
         if (manifest == null) continue;
 
         // Compute diff
-        final profile = ProfileService().getProfile();
         final localPath = '${profile.callsign}/$folder';
         final changes = await mirror.diffManifest(
           manifest,
           localPath,
           syncStyle: SyncStyle.sendReceive,
           storage: storage,
+          fileIndex: fileIndex,
         );
 
         if (changes.isNotEmpty) {
@@ -288,9 +311,13 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
       }
     }
 
+    fileIndex.close();
+
     if (mounted) {
       setState(() {
         _loadingDiffs = false;
+        _diffFoldersDone = _diffFoldersTotal;
+        _currentDiffFolder = null;
         if (_diffs.isEmpty) {
           _diffError = 'Devices are in sync — no differences found.';
         }
@@ -300,13 +327,18 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
 
   Widget _buildDiffView() {
     if (_loadingDiffs) {
-      return const Center(
+      return Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            CircularProgressIndicator(),
-            SizedBox(height: 16),
-            Text('Comparing files...'),
+            CircularProgressIndicator(
+              value: _diffFoldersTotal > 0
+                  ? _diffFoldersDone / _diffFoldersTotal
+                  : null,
+            ),
+            const SizedBox(height: 16),
+            Text('Comparing ${_currentDiffFolder ?? "files"}...'),
+            Text('$_diffFoldersDone / $_diffFoldersTotal folders'),
           ],
         ),
       );

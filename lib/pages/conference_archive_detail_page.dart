@@ -11,16 +11,27 @@ import 'package:path/path.dart' as p;
 import '../bot/services/speech_to_text_service.dart';
 import '../models/chat_message.dart';
 import '../models/conference_archive_entry.dart';
+import '../models/conference_schedule_entry.dart' show MeetingVisibility;
+import '../models/group.dart';
+import '../util/nostr_crypto.dart';
 import '../work/models/meeting_content.dart' show MeetingSession;
+import '../work/models/ndf_permission.dart';
+import '../services/app_service.dart';
 import '../services/conference_archive_service.dart';
 import '../services/conference_service.dart';
+import '../services/contact_service.dart';
+import '../services/devices_service.dart';
 import '../services/file_launcher_service.dart';
+import '../services/groups_service.dart';
+import '../services/i18n_service.dart';
 import '../services/meeting_transcription_service.dart';
+import '../services/profile_storage.dart';
 import '../widgets/message_bubble_widget.dart';
 import '../widgets/message_list_widget.dart';
 import '../widgets/video_player_widget.dart';
 import '../work/utils/voicememo_transcription_service.dart';
 import 'conference_call_page.dart';
+import 'contact_picker_page.dart';
 
 class ConferenceArchiveDetailPage extends StatefulWidget {
   final ConferenceArchiveEntry entry;
@@ -1442,6 +1453,111 @@ class _ConferenceArchiveDetailPageState
     );
   }
 
+  Future<void> _editVisibility() async {
+    final entry = _currentEntry;
+    if (!entry.hostedByMe) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Only the host can change visibility')),
+        );
+      }
+      return;
+    }
+
+    final result = await Navigator.push<_VisibilityResult>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => _MeetingVisibilityPage(
+          currentVisibility: entry.visibility,
+        ),
+      ),
+    );
+    if (result == null || !mounted) return;
+
+    // Build NDF permissions based on new visibility
+    final perms = await _archiveService.loadPermissions(entry);
+    final docId = perms?.documentId ?? 'meeting-${entry.roomId}';
+
+    final NdfPermission newPerms;
+    switch (result.visibility) {
+      case MeetingVisibility.public:
+        newPerms = NdfPermission(
+          documentId: docId,
+          owners: perms?.owners ?? [],
+          allowAnonymousView: true,
+        );
+      case MeetingVisibility.private:
+        newPerms = NdfPermission(
+          documentId: docId,
+          owners: perms?.owners ?? [],
+          access: {
+            NdfPermissionAction.view: NdfAccess(type: NdfAccessType.ownersOnly),
+            NdfPermissionAction.comment: NdfAccess(type: NdfAccessType.ownersOnly),
+            NdfPermissionAction.react: NdfAccess(type: NdfAccessType.ownersOnly),
+            NdfPermissionAction.edit: NdfAccess(type: NdfAccessType.ownersOnly),
+            NdfPermissionAction.admin: NdfAccess(type: NdfAccessType.ownersOnly),
+          },
+          allowAnonymousView: false,
+        );
+      case MeetingVisibility.restricted:
+        final npubs = result.allowedContacts.entries
+            .map((e) {
+              try { return NostrCrypto.encodeNpub(e.key); } catch (_) { return e.key; }
+            })
+            .toList();
+        newPerms = NdfPermission(
+          documentId: docId,
+          owners: perms?.owners ?? [],
+          access: {
+            NdfPermissionAction.view: NdfAccess(
+              type: NdfAccessType.allowlist,
+              npubs: npubs,
+            ),
+            NdfPermissionAction.comment: NdfAccess(
+              type: NdfAccessType.allowlist,
+              npubs: npubs,
+            ),
+            NdfPermissionAction.react: NdfAccess(
+              type: NdfAccessType.allowlist,
+              npubs: npubs,
+            ),
+            NdfPermissionAction.edit: NdfAccess(type: NdfAccessType.ownersOnly),
+            NdfPermissionAction.admin: NdfAccess(type: NdfAccessType.ownersOnly),
+          },
+          allowAnonymousView: false,
+        );
+      case MeetingVisibility.unlisted:
+        newPerms = NdfPermission(
+          documentId: docId,
+          owners: perms?.owners ?? [],
+          allowAnonymousView: true,
+        );
+    }
+
+    await _archiveService.savePermissions(entry, newPerms);
+
+    // Update the visibility in the archive metadata
+    final refreshed = await _archiveService.updateArchive(
+      entry,
+      visibility: result.visibility,
+    );
+    if (mounted) {
+      setState(() => _entry = refreshed);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Visibility changed to ${result.visibility.name}')),
+      );
+    }
+  }
+
+  IconData _visibilityIcon(MeetingVisibility v) {
+    switch (v) {
+      case MeetingVisibility.public: return Icons.public;
+      case MeetingVisibility.private: return Icons.lock;
+      case MeetingVisibility.restricted: return Icons.group;
+      case MeetingVisibility.unlisted: return Icons.link;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -1482,6 +1598,13 @@ class _ConferenceArchiveDetailPageState
       appBar: AppBar(
         title: Text(entry.roomName),
         actions: [
+          // Visibility
+          if (entry.hostedByMe)
+            IconButton(
+              icon: Icon(_visibilityIcon(entry.visibility)),
+              tooltip: 'Visibility: ${entry.visibility.name}',
+              onPressed: _editVisibility,
+            ),
           // Cover image
           IconButton(
             icon: const Icon(Icons.image_outlined),
@@ -1870,4 +1993,256 @@ String _formatFileSize(int bytes) {
     return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
   }
   return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(1)} GB';
+}
+
+// ── Visibility editing page ──────────────────────────────────────
+
+class _VisibilityResult {
+  final MeetingVisibility visibility;
+  final Set<String> selectedGroups;
+  final Map<String, String> allowedContacts; // hex → label
+
+  _VisibilityResult({
+    required this.visibility,
+    this.selectedGroups = const {},
+    this.allowedContacts = const {},
+  });
+}
+
+class _MeetingVisibilityPage extends StatefulWidget {
+  final MeetingVisibility currentVisibility;
+
+  const _MeetingVisibilityPage({required this.currentVisibility});
+
+  @override
+  State<_MeetingVisibilityPage> createState() => _MeetingVisibilityPageState();
+}
+
+class _MeetingVisibilityPageState extends State<_MeetingVisibilityPage> {
+  late MeetingVisibility _visibility;
+  List<Group> _availableGroups = [];
+  final Set<String> _selectedGroups = {};
+  final Map<String, String> _allowedContacts = {};
+
+  @override
+  void initState() {
+    super.initState();
+    _visibility = widget.currentVisibility;
+    if (_visibility == MeetingVisibility.restricted) {
+      _loadGroups();
+    }
+  }
+
+  Future<void> _loadGroups() async {
+    try {
+      final appService = AppService();
+      final groupsApp = appService.getAppByType('groups');
+      if (groupsApp?.storagePath == null) return;
+      final groupsService = GroupsService();
+      final profileStorage = appService.profileStorage;
+      if (profileStorage != null) {
+        groupsService.setStorage(ScopedProfileStorage.fromAbsolutePath(
+          profileStorage, groupsApp!.storagePath!));
+      } else {
+        groupsService.setStorage(
+          FilesystemProfileStorage(groupsApp!.storagePath!));
+      }
+      await groupsService.initializeApp(groupsApp.storagePath!);
+      final groups = await groupsService.loadGroups();
+      if (mounted) setState(() => _availableGroups = groups);
+    } catch (_) {}
+  }
+
+  Future<void> _addContacts() async {
+    final results = await Navigator.push<List<ContactPickerResult>>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ContactPickerPage(
+          i18n: I18nService(),
+          multiSelect: true,
+        ),
+      ),
+    );
+    if (results == null || !mounted) return;
+
+    final appService = AppService();
+    final contactsApp = appService.getAppByType('contacts');
+    if (contactsApp?.storagePath == null) return;
+    final contactService = ContactService();
+    final profileStorage = appService.profileStorage;
+    if (profileStorage != null) {
+      contactService.setStorage(ScopedProfileStorage.fromAbsolutePath(
+        profileStorage, contactsApp!.storagePath!));
+    } else {
+      contactService.setStorage(
+        FilesystemProfileStorage(contactsApp!.storagePath!));
+    }
+    await contactService.initializeApp(contactsApp.storagePath!);
+
+    final devicesService = DevicesService();
+    for (final r in results) {
+      final fullContact = await contactService.loadContact(
+        r.contact.callsign, groupPath: r.contact.groupPath);
+      if (fullContact?.npub != null && fullContact!.npub!.isNotEmpty) {
+        try {
+          final hex = NostrCrypto.decodeNpub(fullContact.npub!);
+          if (hex.isNotEmpty) {
+            final callsign = fullContact.callsign;
+            final device = devicesService.getDevice(callsign);
+            final nickname = device?.nickname;
+            final label = nickname != null && nickname.isNotEmpty
+                ? '$nickname ($callsign)'
+                : callsign;
+            _allowedContacts[hex] = label;
+          }
+        } catch (_) {}
+      }
+    }
+    if (mounted) setState(() {});
+  }
+
+  void _save() {
+    Navigator.pop(
+      context,
+      _VisibilityResult(
+        visibility: _visibility,
+        selectedGroups: _selectedGroups,
+        allowedContacts: _allowedContacts,
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Meeting Visibility'),
+        actions: [
+          TextButton(onPressed: _save, child: const Text('Save')),
+        ],
+      ),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          DropdownButtonFormField<MeetingVisibility>(
+            value: _visibility,
+            decoration: const InputDecoration(
+              labelText: 'Visibility',
+              prefixIcon: Icon(Icons.visibility_outlined),
+              border: OutlineInputBorder(),
+            ),
+            items: const [
+              DropdownMenuItem(
+                value: MeetingVisibility.public,
+                child: Row(children: [
+                  Icon(Icons.public, size: 20),
+                  SizedBox(width: 8),
+                  Text('Public — everyone'),
+                ]),
+              ),
+              DropdownMenuItem(
+                value: MeetingVisibility.private,
+                child: Row(children: [
+                  Icon(Icons.lock, size: 20),
+                  SizedBox(width: 8),
+                  Text('Private — just me'),
+                ]),
+              ),
+              DropdownMenuItem(
+                value: MeetingVisibility.restricted,
+                child: Row(children: [
+                  Icon(Icons.group, size: 20),
+                  SizedBox(width: 8),
+                  Text('Restricted — selected people'),
+                ]),
+              ),
+              DropdownMenuItem(
+                value: MeetingVisibility.unlisted,
+                child: Row(children: [
+                  Icon(Icons.link, size: 20),
+                  SizedBox(width: 8),
+                  Text('Unlisted — link only'),
+                ]),
+              ),
+            ],
+            onChanged: (value) {
+              if (value != null) {
+                setState(() => _visibility = value);
+                if (value == MeetingVisibility.restricted) {
+                  _loadGroups();
+                }
+              }
+            },
+          ),
+
+          if (_visibility == MeetingVisibility.restricted) ...[
+            const SizedBox(height: 16),
+            Text('Allowed groups', style: theme.textTheme.titleSmall),
+            const SizedBox(height: 8),
+            if (_availableGroups.isEmpty)
+              Text(
+                'No groups available',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              )
+            else
+              ..._availableGroups.map((group) => CheckboxListTile(
+                dense: true,
+                contentPadding: EdgeInsets.zero,
+                title: Text(group.title),
+                subtitle: Text('${group.members.length} members'),
+                value: _selectedGroups.contains(group.name),
+                onChanged: (checked) {
+                  setState(() {
+                    if (checked == true) {
+                      _selectedGroups.add(group.name);
+                    } else {
+                      _selectedGroups.remove(group.name);
+                    }
+                  });
+                },
+              )),
+            const SizedBox(height: 16),
+            Text('Allowed contacts', style: theme.textTheme.titleSmall),
+            const SizedBox(height: 8),
+            OutlinedButton.icon(
+              onPressed: _addContacts,
+              icon: const Icon(Icons.person_add),
+              label: const Text('Add contacts'),
+              style: OutlinedButton.styleFrom(
+                minimumSize: const Size(double.infinity, 40),
+              ),
+            ),
+            if (_allowedContacts.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 6,
+                runSpacing: 4,
+                children: _allowedContacts.entries.map((entry) => Chip(
+                  label: Text(entry.value),
+                  deleteIcon: const Icon(Icons.close, size: 16),
+                  onDeleted: () {
+                    setState(() => _allowedContacts.remove(entry.key));
+                  },
+                )).toList(),
+              ),
+            ],
+          ],
+
+          const SizedBox(height: 24),
+          FilledButton.icon(
+            onPressed: _save,
+            icon: const Icon(Icons.save),
+            label: const Text('Save'),
+            style: FilledButton.styleFrom(
+              minimumSize: const Size(double.infinity, 48),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }

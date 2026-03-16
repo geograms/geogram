@@ -1,6 +1,7 @@
 library;
 
 import '../models/conference_schedule_entry.dart';
+import '../tracker/models/tracker_visibility.dart';
 import 'app_service.dart';
 import 'profile_storage.dart';
 
@@ -20,6 +21,9 @@ class ConferenceScheduleService {
     DateTime? scheduledAt,
     String? stationMeetUrl,
     String? description,
+    MeetingVisibility visibility = MeetingVisibility.public,
+    List<AllowedContact> allowedContacts = const [],
+    List<AllowedGroup> allowedGroups = const [],
   }) async {
     final existing = await findScheduleByRoomId(roomId);
     final created = existing ??
@@ -32,6 +36,9 @@ class ConferenceScheduleService {
           scheduledAt: scheduledAt?.toLocal(),
           stationMeetUrl: stationMeetUrl,
           description: description,
+          visibility: visibility,
+          allowedContacts: allowedContacts,
+          allowedGroups: allowedGroups,
         );
     final entry = created.copyWith(
       roomName: roomName,
@@ -40,6 +47,9 @@ class ConferenceScheduleService {
       scheduledAt: scheduledAt?.toLocal(),
       status: existing?.status == 'active' ? 'active' : 'scheduled',
       stationMeetUrl: stationMeetUrl,
+      visibility: visibility,
+      allowedContacts: allowedContacts,
+      allowedGroups: allowedGroups,
     );
     await saveSchedule(entry);
     return entry;

@@ -16,6 +16,7 @@ import '../models/monitored_task.dart';
 import '../services/conference_archive_service.dart';
 import '../services/log_service.dart';
 import '../services/task_monitor_service.dart';
+import '../util/event_bus.dart';
 import '../work/utils/voicememo_transcription_service.dart';
 
 /// Result of a meeting recording transcription
@@ -670,6 +671,60 @@ class MeetingTranscriptionService {
         await file.delete();
       }
     } catch (_) {}
+  }
+
+  /// Register background auto-transcription that starts after AppStartedEvent.
+  ///
+  /// Call once during Phase 1 init. The actual work starts only when
+  /// [AppStartedEvent] fires at the end of Phase 2.
+  void startBackgroundAutoTranscription() {
+    if (!SpeechToTextService.isSupported) return;
+
+    EventBus().on<AppStartedEvent>((_) async {
+      // Small delay to let other services finish
+      await Future.delayed(const Duration(seconds: 10));
+      _autoTranscribeNext();
+    });
+
+    // Chain: when one finishes, start the next
+    completionStream.listen((event) {
+      if (event.success || event.error != null) {
+        Future.delayed(const Duration(seconds: 5), _autoTranscribeNext);
+      }
+    });
+  }
+
+  Future<void> _autoTranscribeNext() async {
+    if (isBusy) return;
+    if (!SpeechToTextService.isSupported) return;
+
+    try {
+      final archives = await ConferenceArchiveService().listArchives();
+      for (final archive in archives) {
+        final transcriptNames = archive.voiceTranscripts
+            .map((t) => _baseName(t.name))
+            .toSet();
+        for (final rec in archive.recordings) {
+          if (!transcriptNames.contains(_baseName(rec.name))) {
+            transcribeInBackground(
+              entry: archive,
+              recording: rec,
+              maxDurationSeconds: 10800,
+            );
+            return; // one at a time
+          }
+        }
+      }
+    } catch (e) {
+      LogService().log(
+        'MeetingTranscriptionService: auto-transcribe scan error: $e',
+      );
+    }
+  }
+
+  static String _baseName(String name) {
+    final dot = name.lastIndexOf('.');
+    return dot > 0 ? name.substring(0, dot) : name;
   }
 
   void dispose() {

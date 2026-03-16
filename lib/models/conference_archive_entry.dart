@@ -1,5 +1,6 @@
 library;
 
+import 'conference_schedule_entry.dart' show MeetingVisibility;
 import '../work/models/meeting_content.dart' show MeetingSession;
 
 class ConferenceArchiveAsset {
@@ -86,6 +87,7 @@ class ConferenceArchiveEntry {
   final List<MeetingSession> sessions;
   final Map<String, String> participantNicknames;
   final String? coverImagePath;
+  final MeetingVisibility visibility;
 
   const ConferenceArchiveEntry({
     required this.relativePath,
@@ -112,6 +114,7 @@ class ConferenceArchiveEntry {
     this.sessions = const <MeetingSession>[],
     this.participantNicknames = const <String, String>{},
     this.coverImagePath,
+    this.visibility = MeetingVisibility.public,
   });
 
   bool get isActive => endedAt == null;
@@ -144,6 +147,7 @@ class ConferenceArchiveEntry {
     if (sessions.isNotEmpty) 'sessions': sessions.map((s) => s.toJson()).toList(),
     if (participantNicknames.isNotEmpty) 'participant_nicknames': participantNicknames,
     if (coverImagePath != null) 'cover_image_path': coverImagePath,
+    'visibility': visibility.name,
   };
 
   factory ConferenceArchiveEntry.fromJson(Map<String, dynamic> json) {
@@ -193,6 +197,7 @@ class ConferenceArchiveEntry {
       participantNicknames: (json['participant_nicknames'] as Map<String, dynamic>?)
           ?.map((k, v) => MapEntry(k, v.toString())) ?? const {},
       coverImagePath: json['cover_image_path'] as String?,
+      visibility: MeetingVisibility.fromString(json['visibility'] as String?),
     );
   }
 
@@ -224,6 +229,7 @@ class ConferenceArchiveEntry {
     Map<String, String>? participantNicknames,
     String? coverImagePath,
     bool clearCoverImagePath = false,
+    MeetingVisibility? visibility,
   }) {
     return ConferenceArchiveEntry(
       relativePath: relativePath ?? this.relativePath,
@@ -258,6 +264,7 @@ class ConferenceArchiveEntry {
       coverImagePath: clearCoverImagePath
           ? null
           : (coverImagePath ?? this.coverImagePath),
+      visibility: visibility ?? this.visibility,
     );
   }
 }

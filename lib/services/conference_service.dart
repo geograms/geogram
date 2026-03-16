@@ -23,6 +23,7 @@ import '../util/event_bus.dart';
 import '../models/chat_message.dart';
 import '../models/conference_archive_entry.dart';
 import '../models/conference_schedule_entry.dart';
+import '../tracker/models/tracker_visibility.dart';
 import 'app_args.dart';
 import 'conference_archive_service.dart';
 import 'conference_host_peer_manager.dart';
@@ -103,6 +104,9 @@ class ConferenceRoom {
   String? password;
   bool approvalRequired;
   final Map<String, DateTime> pendingJoinRequests = {};
+  final MeetingVisibility visibility;
+  final List<AllowedContact> allowedContacts;
+  final List<AllowedGroup> allowedGroups;
 
   ConferenceRoom({
     required this.roomId,
@@ -113,6 +117,9 @@ class ConferenceRoom {
     this.description,
     this.password,
     this.approvalRequired = false,
+    this.visibility = MeetingVisibility.public,
+    this.allowedContacts = const [],
+    this.allowedGroups = const [],
   }) : chatRoomId = roomId.replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '_'),
        startTime = DateTime.now();
 
@@ -298,6 +305,9 @@ class ConferenceService {
     String? password,
     bool approvalRequired = false,
     ConferenceArchiveEntry? resumeFromArchive,
+    MeetingVisibility visibility = MeetingVisibility.public,
+    List<AllowedContact> allowedContacts = const [],
+    List<AllowedGroup> allowedGroups = const [],
   }) async {
     if (_state != ConferenceState.idle) {
       throw StateError('Conference already active');
@@ -333,6 +343,9 @@ class ConferenceService {
       description: effectiveDescription,
       password: effectivePassword,
       approvalRequired: approvalRequired,
+      visibility: visibility,
+      allowedContacts: allowedContacts,
+      allowedGroups: allowedGroups,
     );
     _room!.participants[callsign] = ConferenceParticipant(
       callsign: callsign,
@@ -465,6 +478,9 @@ class ConferenceService {
     DateTime? scheduledAt,
     String? description,
     String? roomIdOverride,
+    MeetingVisibility visibility = MeetingVisibility.public,
+    List<AllowedContact> allowedContacts = const [],
+    List<AllowedGroup> allowedGroups = const [],
   }) async {
     await _ensureStationConnectionForHosting();
     final roomId = roomIdOverride ?? _generateRoomId();
@@ -491,6 +507,9 @@ class ConferenceService {
       maxSpeakers: maxSpeakers,
       scheduledAt: scheduledAt,
       description: effectiveDescription,
+      visibility: visibility,
+      allowedContacts: allowedContacts,
+      allowedGroups: allowedGroups,
       stationMeetUrl: _buildMeetUrlFromStationUrl(
         WebSocketService().connectedUrl ??
             (() {
@@ -517,6 +536,9 @@ class ConferenceService {
       maxSpeakers: schedule.maxSpeakers,
       roomIdOverride: schedule.roomId,
       description: schedule.description,
+      visibility: schedule.visibility,
+      allowedContacts: schedule.allowedContacts,
+      allowedGroups: schedule.allowedGroups,
     );
   }
 
@@ -2577,6 +2599,9 @@ class ConferenceService {
       signalingMode: room.signalingMode.name,
       stationMeetUrl: shareableStationMeetUrl,
       meetUrls: meetUrls,
+      visibility: room.visibility,
+      allowedContacts: room.allowedContacts,
+      allowedGroups: room.allowedGroups,
     );
   }
 

@@ -21,6 +21,8 @@ import 'package:uuid/uuid.dart';
 import '../util/managed_http_client.dart';
 import '../util/nostr_event.dart';
 import '../util/nostr_crypto.dart';
+import '../util/tlsh.dart';
+import 'file_index_service.dart';
 import 'log_service.dart';
 import 'mirror_config_service.dart';
 import 'profile_service.dart';
@@ -80,11 +82,15 @@ class MirrorFileEntry {
   /// File size in bytes
   final int size;
 
+  /// TLSH locality-sensitive hash (null if file < 50 bytes)
+  final String? tlsh;
+
   const MirrorFileEntry({
     required this.path,
     required this.sha1,
     required this.mtime,
     required this.size,
+    this.tlsh,
   });
 
   factory MirrorFileEntry.fromJson(Map<String, dynamic> json) {
@@ -93,6 +99,7 @@ class MirrorFileEntry {
       sha1: json['sha1'] as String,
       mtime: json['mtime'] as int,
       size: json['size'] as int,
+      tlsh: json['tlsh'] as String?,
     );
   }
 
@@ -101,6 +108,7 @@ class MirrorFileEntry {
         'sha1': sha1,
         'mtime': mtime,
         'size': size,
+        if (tlsh != null) 'tlsh': tlsh,
       };
 }
 
@@ -611,6 +619,7 @@ class MirrorSyncService {
   Future<MirrorManifest> generateManifest(
     String folderPath, {
     ProfileStorage? storage,
+    FileIndexService? fileIndex,
   }) async {
     final files = <MirrorFileEntry>[];
     var totalBytes = 0;
@@ -624,6 +633,11 @@ class MirrorSyncService {
       }
 
       final entries = await storage.listDirectory(folder, recursive: true);
+      final currentPaths = <String>{};
+      final cachedIndex = fileIndex?.getFolderIndex(folder) ?? {};
+      final cacheMisses =
+          <({String path, int size, int mtime, String sha1, String? tlsh})>[];
+
       for (final entry in entries) {
         if (entry.isDirectory) continue;
         // entry.path is relative to storage base, e.g. "blog-xxx/2024/post.md"
@@ -636,29 +650,65 @@ class MirrorSyncService {
         if (relativePath.startsWith('.')) continue;
         if (relativePath == 'log' || relativePath.startsWith('log/')) continue;
 
+        currentPaths.add(relativePath);
+
         try {
-          final bytes = await storage.readBytes(fullRelPath);
-          if (bytes == null) continue;
-          final sha1Hash = sha1.convert(bytes).toString();
+          final entryMtime =
+              (entry.modified?.millisecondsSinceEpoch ?? 0) ~/ 1000;
+          final entrySize = entry.size ?? 0;
+
+          // Try bulk-loaded cache first
+          final cached = cachedIndex[relativePath];
+          final cachedHash =
+              (cached != null && cached.size == entrySize && cached.mtime == entryMtime)
+                  ? cached.sha1
+                  : null;
+          String sha1Hash;
+          String? tlshHash;
+
+          if (cachedHash != null) {
+            sha1Hash = cachedHash;
+          } else {
+            final bytes = await storage.readBytes(fullRelPath);
+            if (bytes == null) continue;
+            sha1Hash = sha1.convert(bytes).toString();
+            tlshHash = TLSH.hash(Uint8List.fromList(bytes));
+            cacheMisses.add((
+              path: relativePath,
+              size: entrySize,
+              mtime: entryMtime,
+              sha1: sha1Hash,
+              tlsh: tlshHash,
+            ));
+          }
 
           files.add(MirrorFileEntry(
             path: relativePath,
             sha1: sha1Hash,
-            mtime: (entry.modified?.millisecondsSinceEpoch ?? 0) ~/ 1000,
-            size: bytes.length,
+            mtime: entryMtime,
+            size: entrySize,
+            tlsh: tlshHash,
           ));
 
-          totalBytes += bytes.length;
+          totalBytes += entrySize;
         } catch (e) {
           LogService().log('MirrorSync: Error reading file $relativePath: $e');
         }
       }
+
+      fileIndex?.batchPutHashes(folder, cacheMisses);
+      fileIndex?.pruneFolder(folder, currentPaths);
     } else {
       // Fallback: raw filesystem
       final dir = Directory(folderPath);
       if (!await dir.exists()) {
         throw StateError('Folder does not exist: $folderPath');
       }
+
+      final currentPaths = <String>{};
+      final cachedIndex = fileIndex?.getFolderIndex(folder) ?? {};
+      final cacheMisses =
+          <({String path, int size, int mtime, String sha1, String? tlsh})>[];
 
       await for (final entity in dir.list(recursive: true)) {
         if (entity is File) {
@@ -667,24 +717,54 @@ class MirrorSyncService {
           if (relativePath.startsWith('.')) continue;
           if (relativePath == 'log' || relativePath.startsWith('log/')) continue;
 
+          currentPaths.add(relativePath);
+
           try {
-            final bytes = await entity.readAsBytes();
-            final sha1Hash = sha1.convert(bytes).toString();
             final stat = await entity.stat();
+            final entryMtime = stat.modified.millisecondsSinceEpoch ~/ 1000;
+            final entrySize = stat.size;
+
+            // Try bulk-loaded cache first
+            final cached = cachedIndex[relativePath];
+            final cachedHash =
+                (cached != null && cached.size == entrySize && cached.mtime == entryMtime)
+                    ? cached.sha1
+                    : null;
+            String sha1Hash;
+            String? tlshHash;
+
+            if (cachedHash != null) {
+              sha1Hash = cachedHash;
+            } else {
+              final bytes = await entity.readAsBytes();
+              sha1Hash = sha1.convert(bytes).toString();
+              tlshHash = TLSH.hash(Uint8List.fromList(bytes));
+              cacheMisses.add((
+                path: relativePath,
+                size: entrySize,
+                mtime: entryMtime,
+                sha1: sha1Hash,
+                tlsh: tlshHash,
+              ));
+            }
 
             files.add(MirrorFileEntry(
               path: relativePath,
               sha1: sha1Hash,
-              mtime: stat.modified.millisecondsSinceEpoch ~/ 1000,
-              size: bytes.length,
+              mtime: entryMtime,
+              size: entrySize,
+              tlsh: tlshHash,
             ));
 
-            totalBytes += bytes.length;
+            totalBytes += entrySize;
           } catch (e) {
             LogService().log('MirrorSync: Error reading file $relativePath: $e');
           }
         }
       }
+
+      fileIndex?.batchPutHashes(folder, cacheMisses);
+      fileIndex?.pruneFolder(folder, currentPaths);
     }
 
     // Sort files by path for consistent ordering
@@ -906,55 +986,170 @@ class MirrorSyncService {
     SyncStyle syncStyle = SyncStyle.receiveOnly,
     List<String> ignorePatterns = const [],
     ProfileStorage? storage,
+    FileIndexService? fileIndex,
+    void Function(int done, int total)? onProgress,
   }) async {
     final changes = <FileChange>[];
     final localFiles = <String, ({int size, int mtime, String sha1})>{};
+    final folder = path.basename(localPath);
+
+    int filesProcessed = 0;
+    int totalEntries = 0;
 
     if (storage != null) {
       // Scan via ProfileStorage
-      final folder = path.basename(localPath);
       final exists = await storage.directoryExists(folder);
       if (exists) {
         final entries = await storage.listDirectory(folder, recursive: true);
-        for (final entry in entries) {
-          if (entry.isDirectory) continue;
+        final fileEntries =
+            entries.where((e) => !e.isDirectory).toList();
+        totalEntries = fileEntries.length;
+        final currentPaths = <String>{};
+        final cachedIndex = fileIndex?.getFolderIndex(folder) ?? {};
+        final cacheMisses =
+            <({String path, int size, int mtime, String sha1, String? tlsh})>[];
+
+        for (final entry in fileEntries) {
           final fullRelPath = entry.path;
           final relativePath = fullRelPath.startsWith('$folder/')
               ? fullRelPath.substring(folder.length + 1)
               : fullRelPath;
-          if (relativePath.startsWith('.')) continue;
-          if (relativePath == 'log' || relativePath.startsWith('log/')) continue;
-          if (isIgnored(relativePath, ignorePatterns)) continue;
-          final bytes = await storage.readBytes(fullRelPath);
-          if (bytes == null) continue;
-          final hash = sha1.convert(bytes).toString();
+          if (relativePath.startsWith('.')) {
+            filesProcessed++;
+            onProgress?.call(filesProcessed, totalEntries);
+            continue;
+          }
+          if (relativePath == 'log' || relativePath.startsWith('log/')) {
+            filesProcessed++;
+            onProgress?.call(filesProcessed, totalEntries);
+            continue;
+          }
+          if (isIgnored(relativePath, ignorePatterns)) {
+            filesProcessed++;
+            onProgress?.call(filesProcessed, totalEntries);
+            continue;
+          }
+
+          currentPaths.add(relativePath);
+
+          final entryMtime =
+              (entry.modified?.millisecondsSinceEpoch ?? 0) ~/ 1000;
+          final entrySize = entry.size ?? 0;
+
+          // Try bulk-loaded cache first
+          final cached = cachedIndex[relativePath];
+          final cachedHash =
+              (cached != null && cached.size == entrySize && cached.mtime == entryMtime)
+                  ? cached.sha1
+                  : null;
+          String hash;
+
+          if (cachedHash != null) {
+            hash = cachedHash;
+          } else {
+            final bytes = await storage.readBytes(fullRelPath);
+            if (bytes == null) {
+              filesProcessed++;
+              onProgress?.call(filesProcessed, totalEntries);
+              continue;
+            }
+            hash = sha1.convert(bytes).toString();
+            final tlshHash = TLSH.hash(Uint8List.fromList(bytes));
+            cacheMisses.add((
+              path: relativePath,
+              size: entrySize,
+              mtime: entryMtime,
+              sha1: hash,
+              tlsh: tlshHash,
+            ));
+          }
+
           localFiles[relativePath] = (
-            size: bytes.length,
-            mtime: (entry.modified?.millisecondsSinceEpoch ?? 0) ~/ 1000,
+            size: entrySize,
+            mtime: entryMtime,
             sha1: hash,
           );
+
+          filesProcessed++;
+          onProgress?.call(filesProcessed, totalEntries);
         }
+
+        fileIndex?.batchPutHashes(folder, cacheMisses);
+        fileIndex?.pruneFolder(folder, currentPaths);
       }
     } else {
       // Scan local folder via filesystem
       final localDir = Directory(localPath);
       if (await localDir.exists()) {
+        final fileEntries = <FileSystemEntity>[];
         await for (final entity in localDir.list(recursive: true)) {
-          if (entity is File) {
-            final relativePath = path.relative(entity.path, from: localPath);
-            if (relativePath.startsWith('.')) continue;
-            if (relativePath == 'log' || relativePath.startsWith('log/')) continue;
-            if (isIgnored(relativePath, ignorePatterns)) continue;
-            final stat = await entity.stat();
-            final bytes = await entity.readAsBytes();
-            final hash = sha1.convert(bytes).toString();
-            localFiles[relativePath] = (
-              size: stat.size,
-              mtime: stat.modified.millisecondsSinceEpoch ~/ 1000,
-              sha1: hash,
-            );
-          }
+          if (entity is File) fileEntries.add(entity);
         }
+        totalEntries = fileEntries.length;
+        final currentPaths = <String>{};
+        final cachedIndex = fileIndex?.getFolderIndex(folder) ?? {};
+        final cacheMisses =
+            <({String path, int size, int mtime, String sha1, String? tlsh})>[];
+
+        for (final entity in fileEntries) {
+          final relativePath = path.relative(entity.path, from: localPath);
+          if (relativePath.startsWith('.')) {
+            filesProcessed++;
+            onProgress?.call(filesProcessed, totalEntries);
+            continue;
+          }
+          if (relativePath == 'log' || relativePath.startsWith('log/')) {
+            filesProcessed++;
+            onProgress?.call(filesProcessed, totalEntries);
+            continue;
+          }
+          if (isIgnored(relativePath, ignorePatterns)) {
+            filesProcessed++;
+            onProgress?.call(filesProcessed, totalEntries);
+            continue;
+          }
+
+          currentPaths.add(relativePath);
+
+          final stat = await (entity as File).stat();
+          final entryMtime = stat.modified.millisecondsSinceEpoch ~/ 1000;
+          final entrySize = stat.size;
+
+          // Try bulk-loaded cache first
+          final cached = cachedIndex[relativePath];
+          final cachedHash =
+              (cached != null && cached.size == entrySize && cached.mtime == entryMtime)
+                  ? cached.sha1
+                  : null;
+          String hash;
+
+          if (cachedHash != null) {
+            hash = cachedHash;
+          } else {
+            final bytes = await (entity as File).readAsBytes();
+            hash = sha1.convert(bytes).toString();
+            final tlshHash = TLSH.hash(Uint8List.fromList(bytes));
+            cacheMisses.add((
+              path: relativePath,
+              size: entrySize,
+              mtime: entryMtime,
+              sha1: hash,
+              tlsh: tlshHash,
+            ));
+          }
+
+          localFiles[relativePath] = (
+            size: entrySize,
+            mtime: entryMtime,
+            sha1: hash,
+          );
+
+          filesProcessed++;
+          onProgress?.call(filesProcessed, totalEntries);
+        }
+
+        fileIndex?.batchPutHashes(folder, cacheMisses);
+        fileIndex?.pruneFolder(folder, currentPaths);
       }
     }
 

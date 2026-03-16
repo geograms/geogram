@@ -57,6 +57,7 @@ import '../teleport/nostr/models/nostr_relay_config.dart';
 import '../teleport/atproto/atproto_client_service.dart';
 import '../teleport/atproto/atproto_local_pds_service.dart';
 import '../teleport/irc/models/irc_server_config.dart';
+import 'file_index_service.dart';
 import 'sqlite_loader.dart';
 import 'local_backup_service.dart';
 import '../version.dart';
@@ -1084,6 +1085,7 @@ class LogApiService with ChatModificationMixin {
         relativeFilePath.contains('..') ||
         (!relativeFilePath.startsWith('files/') &&
             !relativeFilePath.startsWith('recordings/') &&
+            !relativeFilePath.startsWith('transcripts/') &&
             !isCoverImage)) {
       return shelf.Response.notFound(
         jsonEncode({'error': 'Asset not found'}),
@@ -1295,6 +1297,16 @@ class LogApiService with ChatModificationMixin {
               },
             )
             .toList(),
+        archiveVoiceTranscripts: archive.voiceTranscripts
+            .map(
+              (asset) => {
+                ...asset.toJson(),
+                'url': Uri(
+                  pathSegments: [code, ...asset.relativePath.split('/')],
+                ).toString(),
+              },
+            )
+            .toList(),
         archiveSessions: archive.sessions
             .map((s) => s.toJson())
             .toList(),
@@ -1349,6 +1361,8 @@ class LogApiService with ChatModificationMixin {
     final visible = <ConferenceArchiveEntry>[];
     for (final entry in allArchives) {
       if (activeRoomId != null && entry.roomId == activeRoomId) continue;
+      // Unlisted archives are never shown in the listing
+      if (entry.visibility == MeetingVisibility.unlisted) continue;
       final perms = await ConferenceArchiveService().loadPermissions(entry);
       if (perms == null) {
         visible.add(entry);
@@ -1365,20 +1379,36 @@ class LogApiService with ChatModificationMixin {
       }
     }
 
-    // 3. Active meeting + schedules
+    // 3. Active meeting + schedules (filtered by visibility)
     Map<String, dynamic>? activeMeeting;
     if (conf.isActive && conf.room != null) {
       final room = conf.room!;
-      activeMeeting = {
-        'code': room.roomId.split('@').first,
-        'roomName': room.roomName,
-        'hostCallsign': room.hostCallsign,
-        'participantCount': room.participants.length,
-        'state': 'active',
-      };
+      final showActive = room.visibility == MeetingVisibility.public ||
+          (room.visibility == MeetingVisibility.restricted && userNpub != null &&
+              room.allowedContacts.any((c) => c.npub == userNpub));
+      if (showActive) {
+        activeMeeting = {
+          'code': room.roomId.split('@').first,
+          'roomName': room.roomName,
+          'hostCallsign': room.hostCallsign,
+          'participantCount': room.participants.length,
+          'state': 'active',
+        };
+      }
     }
-    final schedules = await ConferenceScheduleService()
+    final allSchedules = await ConferenceScheduleService()
         .listSchedules(includeCompleted: false);
+    // Filter schedules by visibility
+    final schedules = allSchedules.where((s) {
+      if (s.visibility == MeetingVisibility.public) return true;
+      if (s.visibility == MeetingVisibility.unlisted) return false;
+      if (s.visibility == MeetingVisibility.private) return false;
+      // Restricted: check if user is in allowed contacts
+      if (s.visibility == MeetingVisibility.restricted && userNpub != null) {
+        return s.allowedContacts.any((c) => c.npub == userNpub);
+      }
+      return false;
+    }).toList();
 
     // 4. Build data payload
     final data = <String, dynamic>{
@@ -15067,9 +15097,17 @@ class LogApiService with ChatModificationMixin {
         );
       }
 
-      final manifest = await mirrorService.generateManifest(
-        folderPath,
-      );
+      final indexPath = StorageConfig().getFileIndexPath(tokenData.peerCallsign);
+      final fileIndex = FileIndexService(indexPath);
+      MirrorManifest manifest;
+      try {
+        manifest = await mirrorService.generateManifest(
+          folderPath,
+          fileIndex: fileIndex,
+        );
+      } finally {
+        fileIndex.close();
+      }
 
       return shelf.Response.ok(
         jsonEncode({

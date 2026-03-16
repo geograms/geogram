@@ -24,6 +24,7 @@ class ConferenceWebPageConfig {
   final List<Map<String, dynamic>> initialMessages;
   final List<Map<String, dynamic>> archiveFiles;
   final List<Map<String, dynamic>> archiveRecordings;
+  final List<Map<String, dynamic>> archiveVoiceTranscripts;
   final List<Map<String, dynamic>> archiveSessions;
   final String? archiveNdfUrl;
   final String? archiveCoverImageUrl;
@@ -48,6 +49,7 @@ class ConferenceWebPageConfig {
     this.initialMessages = const <Map<String, dynamic>>[],
     this.archiveFiles = const <Map<String, dynamic>>[],
     this.archiveRecordings = const <Map<String, dynamic>>[],
+    this.archiveVoiceTranscripts = const <Map<String, dynamic>>[],
     this.archiveSessions = const <Map<String, dynamic>>[],
     this.archiveNdfUrl,
     this.archiveCoverImageUrl,
@@ -108,6 +110,7 @@ class ConferenceWebPageService {
       'initialMessages': config.initialMessages,
       'archiveFiles': config.archiveFiles,
       'archiveRecordings': config.archiveRecordings,
+      'archiveVoiceTranscripts': config.archiveVoiceTranscripts,
       'archiveSessions': config.archiveSessions,
       'archiveNdfUrl': config.archiveNdfUrl,
       'archiveCoverImageUrl': config.archiveCoverImageUrl,
@@ -576,6 +579,7 @@ function playRecording(rec) {
   if (coverImg) coverImg.style.display = 'none';
   screenVideoEl.style.display = '';
   screenVideoEl.controls = true;
+  screenVideoEl.muted = false;
   screenVideoEl.src = (rec.url || '') + '?inline=1';
   screenVideoEl.play().catch(function() {});
   if (screenLabelEl) screenLabelEl.textContent = rec.name || 'Recording';
@@ -662,23 +666,78 @@ function renderArchiveAssets() {
            d.getMinutes().toString().padStart(2, '0');
   }
 
+  var voiceTranscripts = Array.isArray(CONFIG.archiveVoiceTranscripts) ? CONFIG.archiveVoiceTranscripts : [];
+  var transcriptsByBase = {};
+  voiceTranscripts.forEach(function(t) {
+    var name = t.name || t.path || '';
+    var base = name.replace(/\.[^.]+$/, '');
+    transcriptsByBase[base] = t;
+  });
+
+  function findTranscript(rec) {
+    var name = rec.name || rec.path || '';
+    var base = name.replace(/\.[^.]+$/, '');
+    return transcriptsByBase[base] || null;
+  }
+
   function addRecordingRow(rec, index) {
     var sizeLabel = rec.size ? Math.max(1, Math.round(rec.size / 1024)) + ' KB' : '';
+    var transcript = findTranscript(rec);
+    var wrapper = document.createElement('div');
+    wrapper.className = 'recording-wrapper';
     var row = document.createElement('a');
     row.className = 'archive-asset archive-asset--recording';
     row.href = '#';
     row.dataset.path = rec.path || '';
     row.innerHTML =
-      '<div><div class="archive-asset-title">' +
+      '<svg class="play-icon" width="36" height="36" style="flex-shrink:0" viewBox="0 0 36 36" xmlns="http://www.w3.org/2000/svg">' +
+      '<circle cx="18" cy="18" r="17" fill="none" stroke="currentColor" stroke-width="2"/>' +
+      '<polygon points="14,10 27,18 14,26" fill="currentColor"/></svg>' +
+      '<div class="recording-info"><div class="archive-asset-title">' +
       escapeHtml(rec.name || rec.path || 'Recording') +
       '</div><div class="participant-role">Recording' +
       (sizeLabel ? ' \u00b7 ' + escapeHtml(sizeLabel) : '') +
       '</div></div>';
+    if (transcript) {
+      var toggleBtn = document.createElement('button');
+      toggleBtn.className = 'transcript-toggle';
+      toggleBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg">' +
+        '<rect x="3" y="3" width="14" height="14" rx="2" fill="none" stroke="currentColor" stroke-width="1.5"/>' +
+        '<line x1="6" y1="7" x2="14" y2="7" stroke="currentColor" stroke-width="1.2"/>' +
+        '<line x1="6" y1="10" x2="14" y2="10" stroke="currentColor" stroke-width="1.2"/>' +
+        '<line x1="6" y1="13" x2="11" y2="13" stroke="currentColor" stroke-width="1.2"/>' +
+        '</svg>';
+      toggleBtn.addEventListener('click', function(e) {
+        e.stopPropagation();
+        e.preventDefault();
+        var panel = wrapper.querySelector('.transcript-panel');
+        var open = panel.style.display !== 'none';
+        panel.style.display = open ? 'none' : 'block';
+        toggleBtn.classList.toggle('transcript-toggle--open', !open);
+        if (!open && !panel.dataset.loaded) {
+          panel.textContent = 'Loading\u2026';
+          fetch(transcript.url).then(function(r) { return r.text(); }).then(function(text) {
+            panel.dataset.loaded = '1';
+            panel.textContent = text || '(empty transcript)';
+          }).catch(function() {
+            panel.textContent = 'Failed to load transcript.';
+          });
+        }
+      });
+      row.appendChild(toggleBtn);
+    }
     row.addEventListener('click', function(e) {
       e.preventDefault();
       playRecording(rec);
     });
-    archiveAssetsEl.appendChild(row);
+    wrapper.appendChild(row);
+    if (transcript) {
+      var panel = document.createElement('div');
+      panel.className = 'transcript-panel';
+      panel.style.display = 'none';
+      wrapper.appendChild(panel);
+    }
+    archiveAssetsEl.appendChild(wrapper);
   }
 
   if (multipleSessions) {

@@ -133,6 +133,14 @@ class StorageConfig {
     return path.join(devicesDir, '$sanitized.sqlite');
   }
 
+  /// Get the file index cache path for a callsign
+  ///
+  /// Returns path like: {devicesDir}/{CALLSIGN}_fileindex.sqlite
+  String getFileIndexPath(String callsign) {
+    final sanitized = _sanitizeCallsign(callsign);
+    return path.join(devicesDir, '${sanitized}_fileindex.sqlite');
+  }
+
   /// Check if encrypted storage is being used for a callsign
   ///
   /// Returns true if the .sqlite archive file exists

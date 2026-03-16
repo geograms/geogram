@@ -43,6 +43,7 @@ import 'services/message_attention_service.dart';
 import 'services/update_service.dart';
 import 'services/devices_service.dart';
 import 'services/ble_permission_service.dart';
+import 'services/file_index_service.dart';
 import 'services/storage_config.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'services/web_theme_service.dart';
@@ -57,6 +58,7 @@ import 'services/dm_queue_service.dart';
 import 'services/message_retention_service.dart';
 import 'services/websocket_service.dart';
 import 'services/backup_service.dart';
+import 'services/meeting_transcription_service.dart';
 import 'teleport/aprs/aprs_service.dart';
 import 'teleport/irc/irc_service.dart';
 import 'teleport/xmpp/xmpp_service.dart';
@@ -395,6 +397,12 @@ void main() async {
     // Initialize mirror config with profile storage so peers persist across restarts
     await MirrorConfigService.instance.setStorage(AppService().profileStorage);
 
+    // Start background file indexing (hourly, only changed folders)
+    FileIndexService.startBackgroundIndexing(
+      dbPath: StorageConfig().getFileIndexPath(profile.callsign),
+      storage: AppService().profileStorage,
+    );
+
     // Wire up serialized mirror peer auto-registration callback
     MirrorDiscoveryService.onMirrorsChanged = (mirrors) async {
       for (final m in mirrors) {
@@ -482,6 +490,9 @@ void main() async {
 
     await MessageAttentionService().initialize();
     LogService().log('MessageAttentionService initialized');
+
+    MeetingTranscriptionService().startBackgroundAutoTranscription();
+    LogService().log('MeetingTranscriptionService background auto-transcription wired');
 
     await TrayService().initialize();
     LogService().log('TrayService initialized');
@@ -814,6 +825,9 @@ void main() async {
               'GroupSyncService: Error verifying chat rooms: $e',
             );
           });
+
+      EventBus().fire(AppStartedEvent());
+      LogService().log('AppStartedEvent fired');
     } catch (e, stackTrace) {
       LogService().log('ERROR during deferred initialization: $e');
       LogService().log('Stack trace: $stackTrace');

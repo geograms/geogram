@@ -285,6 +285,40 @@ button:disabled {
 
 .archive-asset--recording {
   cursor: pointer;
+  align-items: center;
+}
+
+.archive-asset--recording .recording-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.transcript-toggle {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: inherit;
+  opacity: 0.5;
+  cursor: pointer;
+  padding: 4px;
+  display: flex;
+  align-items: center;
+}
+
+.transcript-toggle:hover {
+  opacity: 1;
+}
+
+.transcript-toggle--open {
+  opacity: 1;
+  color: var(--accent);
+}
+
+.transcript-panel {
+  padding: 8px 12px;
+  font-size: 0.85rem;
+  white-space: pre-wrap;
+  color: var(--accent-alpha-70);
 }
 
 .archive-asset--active {
@@ -298,7 +332,7 @@ button:disabled {
   align-items: center;
   gap: 12px;
   padding: 6px 0;
-  margin-top: 8px;
+  margin-top: 40px;
 }
 
 .archive-session-header:first-child {
@@ -324,6 +358,7 @@ button:disabled {
 .archive-asset--download {
   background: rgba(255, 255, 255, 0.03);
   border-style: dashed;
+  margin-top: 12px;
 }
 
 @media (max-width: 900px) {

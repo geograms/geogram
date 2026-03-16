@@ -1034,6 +1034,11 @@ class NowNotificationTappedEvent extends AppEvent {
   NowNotificationTappedEvent({required this.appType, required this.sourceId, required this.sourceName});
 }
 
+/// App fully initialized (fired once at end of Phase 2 deferred init)
+/// Services can subscribe to this to start background work after all
+/// services are ready.
+class AppStartedEvent extends AppEvent {}
+
 /// P2P download progress event (receiver tracks locally)
 /// Fired as the receiver downloads files from sender
 class P2PDownloadProgressEvent extends AppEvent {

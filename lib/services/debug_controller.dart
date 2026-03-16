@@ -19,6 +19,7 @@ import 'storage_config.dart';
 import '../util/nostr_key_generator.dart';
 import 'conference_service.dart';
 import 'conference_schedule_service.dart';
+import '../models/conference_schedule_entry.dart' show MeetingVisibility;
 import 'devices_service.dart';
 import 'log_service.dart';
 import 'usb_aoa_service.dart';
@@ -2218,11 +2219,14 @@ class DebugController {
       final maxSpeakers = params['max_speakers'] as int? ?? 6;
       final password = params['password'] as String?;
       final approvalRequired = params['approval_required'] == true;
+      final visibilityStr = params['visibility'] as String?;
+      final visibility = MeetingVisibility.fromString(visibilityStr);
       final room = await ConferenceService().hostConference(
         roomName: roomName,
         maxSpeakers: maxSpeakers,
         password: password,
         approvalRequired: approvalRequired,
+        visibility: visibility,
       );
       final meetUrls = await ConferenceService().getMeetUrls();
       return {
@@ -2285,10 +2289,13 @@ class DebugController {
       if (scheduledAtRaw != null && scheduledAtRaw.trim().isNotEmpty) {
         scheduledAt = DateTime.tryParse(scheduledAtRaw)?.toLocal();
       }
+      final visibilityStr = params['visibility'] as String?;
+      final visibility = MeetingVisibility.fromString(visibilityStr);
       final entry = await ConferenceService().scheduleConference(
         roomName: roomName,
         maxSpeakers: maxSpeakers,
         scheduledAt: scheduledAt,
+        visibility: visibility,
       );
       return {
         'success': true,

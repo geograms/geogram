@@ -1,5 +1,30 @@
 library;
 
+import '../tracker/models/tracker_visibility.dart';
+
+/// Meeting visibility levels
+enum MeetingVisibility {
+  /// Anyone can see and join
+  public,
+
+  /// Only the host can see (not listed)
+  private,
+
+  /// Specific contacts/groups can see and join
+  restricted,
+
+  /// Accessible via direct link only (not listed on /meet/)
+  unlisted;
+
+  static MeetingVisibility fromString(String? value) {
+    if (value == null) return MeetingVisibility.public;
+    return MeetingVisibility.values.firstWhere(
+      (v) => v.name == value,
+      orElse: () => MeetingVisibility.public,
+    );
+  }
+}
+
 class ConferenceScheduleEntry {
   final String roomId;
   final String roomName;
@@ -12,6 +37,9 @@ class ConferenceScheduleEntry {
   final String? stationMeetUrl;
   final String? description;
   final String status;
+  final MeetingVisibility visibility;
+  final List<AllowedContact> allowedContacts;
+  final List<AllowedGroup> allowedGroups;
 
   const ConferenceScheduleEntry({
     required this.roomId,
@@ -25,6 +53,9 @@ class ConferenceScheduleEntry {
     this.stationMeetUrl,
     this.description,
     this.status = 'scheduled',
+    this.visibility = MeetingVisibility.public,
+    this.allowedContacts = const [],
+    this.allowedGroups = const [],
   });
 
   bool get isScheduled => status == 'scheduled';
@@ -44,6 +75,11 @@ class ConferenceScheduleEntry {
     'station_meet_url': stationMeetUrl,
     'description': description,
     'status': status,
+    'visibility': visibility.name,
+    if (allowedContacts.isNotEmpty)
+      'allowed_contacts': allowedContacts.map((c) => c.toJson()).toList(),
+    if (allowedGroups.isNotEmpty)
+      'allowed_groups': allowedGroups.map((g) => g.toJson()).toList(),
   };
 
   factory ConferenceScheduleEntry.fromJson(Map<String, dynamic> json) {
@@ -60,6 +96,13 @@ class ConferenceScheduleEntry {
       stationMeetUrl: json['station_meet_url'] as String?,
       description: json['description'] as String?,
       status: json['status'] as String? ?? 'scheduled',
+      visibility: MeetingVisibility.fromString(json['visibility'] as String?),
+      allowedContacts: (json['allowed_contacts'] as List<dynamic>?)
+          ?.map((c) => AllowedContact.fromJson(c as Map<String, dynamic>))
+          .toList() ?? const [],
+      allowedGroups: (json['allowed_groups'] as List<dynamic>?)
+          ?.map((g) => AllowedGroup.fromJson(g as Map<String, dynamic>))
+          .toList() ?? const [],
     );
   }
 
@@ -80,6 +123,9 @@ class ConferenceScheduleEntry {
     String? description,
     bool clearDescription = false,
     String? status,
+    MeetingVisibility? visibility,
+    List<AllowedContact>? allowedContacts,
+    List<AllowedGroup>? allowedGroups,
   }) {
     return ConferenceScheduleEntry(
       roomId: roomId ?? this.roomId,
@@ -97,6 +143,9 @@ class ConferenceScheduleEntry {
           ? null
           : (description ?? this.description),
       status: status ?? this.status,
+      visibility: visibility ?? this.visibility,
+      allowedContacts: allowedContacts ?? this.allowedContacts,
+      allowedGroups: allowedGroups ?? this.allowedGroups,
     );
   }
 }

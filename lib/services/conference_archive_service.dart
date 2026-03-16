@@ -10,6 +10,8 @@ import 'package:path_provider/path_provider.dart';
 
 import '../models/chat_message.dart';
 import '../models/conference_archive_entry.dart';
+import '../models/conference_schedule_entry.dart' show MeetingVisibility;
+import '../tracker/models/tracker_visibility.dart';
 import '../util/reaction_utils.dart';
 import '../util/zip_storage.dart';
 import '../work/models/meeting_content.dart';
@@ -57,6 +59,9 @@ class ConferenceArchiveService {
     String? signalingMode,
     String? stationMeetUrl,
     List<String> meetUrls = const <String>[],
+    MeetingVisibility visibility = MeetingVisibility.public,
+    List<AllowedContact> allowedContacts = const [],
+    List<AllowedGroup> allowedGroups = const [],
   }) async {
     final existingPath =
         _activeArchivePathsByRoom[roomId] ??
@@ -127,10 +132,11 @@ class ConferenceArchiveService {
       title: roomName,
       description: 'Meeting archive from ${_formatDate(startedAt)}',
     );
-    final permissions = NdfPermission.create(
+    final permissions = _buildPermissionsForVisibility(
       documentId: metadata.id,
-      ownerNpub: '',
       ownerCallsign: localCallsign,
+      visibility: visibility,
+      allowedContacts: allowedContacts,
     );
 
     // Write NDF structure into ZIP
@@ -168,6 +174,7 @@ class ConferenceArchiveService {
       messageCount: 0,
       tags: [yearTag],
       sessions: [initialSession],
+      visibility: visibility,
     );
 
     // Generate default cover image
@@ -204,6 +211,7 @@ class ConferenceArchiveService {
     List<String>? meetUrls,
     DateTime? endedAt,
     Map<String, String>? participantNicknames,
+    MeetingVisibility? visibility,
   }) async {
     final refreshed = await _recalculateCounts(entry);
     final updated = refreshed.copyWith(
@@ -221,6 +229,7 @@ class ConferenceArchiveService {
       updatedAt: DateTime.now().toLocal(),
       endedAt: endedAt,
       participantNicknames: participantNicknames,
+      visibility: visibility,
     );
     await _writeEntry(updated);
     _activeArchivePathsByRoom[updated.roomId] = updated.relativePath;
@@ -571,6 +580,16 @@ class ConferenceArchiveService {
     }
   }
 
+  /// Save NDF permissions for an archive entry.
+  Future<void> savePermissions(
+    ConferenceArchiveEntry entry,
+    NdfPermission permissions,
+  ) async {
+    final storage = await _archiveStorage(entry);
+    await storage.writeString('permissions.json', permissions.toJsonString());
+    await _flushNdfStorage(entry.relativePath);
+  }
+
   Future<Uint8List?> readArchiveFileBytes(
     ConferenceArchiveEntry entry,
     String relativeFilePath,
@@ -811,6 +830,75 @@ class ConferenceArchiveService {
       metadata: message.metadata,
       reactions: updatedReactions,
     );
+  }
+
+  /// Build NDF permissions from meeting visibility settings.
+  NdfPermission _buildPermissionsForVisibility({
+    required String documentId,
+    required String ownerCallsign,
+    required MeetingVisibility visibility,
+    List<AllowedContact> allowedContacts = const [],
+  }) {
+    final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    final owner = NdfOwner(
+      npub: '',
+      callsign: ownerCallsign,
+      role: NdfOwnerRole.creator,
+      addedAt: now,
+    );
+
+    switch (visibility) {
+      case MeetingVisibility.public:
+        return NdfPermission(
+          documentId: documentId,
+          owners: [owner],
+          allowAnonymousView: true,
+        );
+      case MeetingVisibility.private:
+        return NdfPermission(
+          documentId: documentId,
+          owners: [owner],
+          access: {
+            NdfPermissionAction.view: NdfAccess(type: NdfAccessType.ownersOnly),
+            NdfPermissionAction.comment: NdfAccess(type: NdfAccessType.ownersOnly),
+            NdfPermissionAction.react: NdfAccess(type: NdfAccessType.ownersOnly),
+            NdfPermissionAction.edit: NdfAccess(type: NdfAccessType.ownersOnly),
+            NdfPermissionAction.admin: NdfAccess(type: NdfAccessType.ownersOnly),
+          },
+          allowAnonymousView: false,
+        );
+      case MeetingVisibility.restricted:
+        final npubs = allowedContacts.map((c) => c.npub).toList();
+        return NdfPermission(
+          documentId: documentId,
+          owners: [owner],
+          access: {
+            NdfPermissionAction.view: NdfAccess(
+              type: NdfAccessType.allowlist,
+              npubs: npubs,
+            ),
+            NdfPermissionAction.comment: NdfAccess(
+              type: NdfAccessType.allowlist,
+              npubs: npubs,
+            ),
+            NdfPermissionAction.react: NdfAccess(
+              type: NdfAccessType.allowlist,
+              npubs: npubs,
+            ),
+            NdfPermissionAction.edit: NdfAccess(type: NdfAccessType.ownersOnly),
+            NdfPermissionAction.admin: NdfAccess(type: NdfAccessType.ownersOnly),
+          },
+          allowAnonymousView: false,
+        );
+      case MeetingVisibility.unlisted:
+        // Unlisted: public access for those with the link, but not listed
+        // The listing handler excludes unlisted meetings
+        return NdfPermission(
+          documentId: documentId,
+          owners: [owner],
+          allowAnonymousView: true,
+        );
+    }
   }
 
   // ============ Private ============

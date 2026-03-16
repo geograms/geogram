@@ -25,6 +25,12 @@ This document catalogs reusable UI components available in the Geogram codebase.
 - [RouteResult](#routeresult) - Route calculation result (polyline, distance, duration)
 - [MapTileService.getStationBaseUrl](#maptileservicegetstationbaseurl) - Station HTTP base URL (reusable for tiles and road data)
 
+### Lifecycle Events
+- [AppStartedEvent](#appstartedevent--post-initialization-hook) - Fire-once event after full app init for background work
+
+### Access Control
+- [MeetingVisibility](#meetingvisibility--meeting-access-control) - Meeting visibility enum (public/private/restricted/unlisted)
+
 ### HTTP Client Utilities
 - [ManagedHttpClient](#managedhttpclient) - Persistent HTTP client with circuit breaker (drop-in `http.Client` replacement)
 - [withHttpClient](#withhttpclient) - One-shot HTTP client with guaranteed cleanup
@@ -32,6 +38,7 @@ This document catalogs reusable UI components available in the Geogram codebase.
 
 ### Cache & File System
 - [CacheServiceBase](#cacheservicebase) - Shared relay cache logic for Desktop and CLI stations
+- [FileIndexService](#fileindexservice) - SQLite file hash cache for fast mirror sync comparison (sha1, tlsh, size, mtime)
 - [FileSystemService path utilities](#filesystemservice-path-utilities) - Cross-platform path handling (Windows `\` + Unix `/`)
 - [ZipProfileStorage](#zipprofilestorage) - ProfileStorage backed by an in-memory ZIP archive (NDF files)
 
@@ -11080,6 +11087,36 @@ class CliRelayCacheService extends CacheServiceBase {
 
 ---
 
+## FileIndexService
+
+**File**: `lib/services/file_index_service.dart`
+
+SQLite-backed file hash cache that accelerates mirror sync comparison. Instead of reading every file's bytes and computing SHA1 on every sync, it caches `(sha1, tlsh, size, mtime)` per file. Unchanged files (same size + mtime) skip all I/O.
+
+### Key methods:
+- `getHash(folder, path, size, mtime)` — returns cached SHA1 if size+mtime match, else null
+- `putHash(folder, path, size, mtime, sha1, {tlsh})` — upsert entry
+- `getFolderIndex(folder)` — bulk load all entries for a folder
+- `pruneFolder(folder, currentPaths)` — delete entries for removed files
+- `importFromManifest(folder, files)` — populate index from received remote manifest
+- `refreshFolder(folder, storage, callsign)` — scan and update a single folder
+- `startBackgroundIndexing(...)` — start hourly background re-indexing (static, singleton timer)
+- `stopBackgroundIndexing()` — stop background indexing
+
+### Schema:
+- `file_index` table: `(folder, path, size, mtime, sha1, tlsh, indexed_at)` with PK `(folder, path)`
+- `folder_meta` table: `(folder, last_indexed_at, file_count)` for change detection
+
+### Integration points:
+- `MirrorSyncService.generateManifest()` and `diffManifest()` accept optional `FileIndexService? fileIndex`
+- `DeviceSyncPage._loadDiffs()` creates a `FileIndexService`, passes to `diffManifest()`
+- `LogApiService` manifest endpoint uses `FileIndexService` for server-side acceleration
+- Background indexing starts in `main.dart` after profile storage init, restarts on profile switch
+
+**Used in**: `mirror_sync_service.dart`, `device_sync_page.dart`, `log_api_service.dart`, `main.dart`, `profile_service.dart`
+
+---
+
 ## FileSystemService path utilities
 
 **File**: `lib/platform/file_system_service.dart`, `lib/platform/file_system_native.dart`
@@ -11365,3 +11402,52 @@ final desc = labels?.$2;             // 'Posts and articles'
 ```
 
 **Used in**: `PeerSettingsPage._buildAppsSection()`
+
+## AppStartedEvent — post-initialization hook
+
+**File**: `lib/util/event_bus.dart`
+
+Fire-once event on `EventBus` after all Phase 2 (deferred) services finish initializing in `main.dart`. Any service can subscribe to start background work without coupling to the startup sequence.
+
+**Usage — subscribe:**
+```dart
+EventBus().on<AppStartedEvent>((_) async {
+  // App is fully initialized, safe to start background work
+  await doBackgroundWork();
+});
+```
+
+**Already fired in** `lib/main.dart` at the end of Phase 2 deferred init. Do not fire it again.
+
+**Current subscribers:**
+- `MeetingTranscriptionService.startBackgroundAutoTranscription()` — auto-transcribes meeting recordings in background
+
+**When to use:**
+- Background tasks that need all services ready (storage, station, network, etc.)
+- Tasks that previously required a specific page to be open
+- Long-running work that should start at app launch without UI interaction
+
+## MeetingVisibility — meeting access control
+
+**File**: `lib/models/conference_schedule_entry.dart`
+
+Enum with four levels: `public`, `private`, `restricted`, `unlisted`. Reuses `AllowedContact` and `AllowedGroup` from `lib/tracker/models/tracker_visibility.dart` for the restricted mode.
+
+```dart
+import '../models/conference_schedule_entry.dart' show MeetingVisibility;
+import '../tracker/models/tracker_visibility.dart';
+
+// Set on creation (ConferenceHostPage) or change after (archive detail page)
+MeetingVisibility.public     // Everyone can see and join
+MeetingVisibility.private    // Only host can see
+MeetingVisibility.restricted // Selected contacts/groups
+MeetingVisibility.unlisted   // Direct link only, not listed on /meet/
+```
+
+**Stored in**: `ConferenceScheduleEntry.visibility`, `ConferenceArchiveEntry.visibility`, `ConferenceRoom.visibility`
+
+**NDF permission mapping**: `ConferenceArchiveService._buildPermissionsForVisibility()` converts visibility to NDF permissions on archive creation. `savePermissions()` persists changes.
+
+**Listing filter**: `log_api_service.dart:_handleMeetListingPage()` filters archives, schedules, and active meetings by visibility.
+
+**Used in**: `ConferenceHostPage` (creation), `ConferenceArchiveDetailPage` (post-creation editing)
