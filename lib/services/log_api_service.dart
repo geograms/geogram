@@ -29,7 +29,7 @@ import 'profile_storage.dart';
 import 'direct_message_service.dart';
 import 'message_retention_service.dart';
 import 'devices_service.dart';
-import 'sibling_discovery_service.dart';
+import 'mirror_discovery_service.dart';
 import 'conference_service.dart';
 import 'conference_archive_service.dart';
 import 'conference_schedule_service.dart';
@@ -441,9 +441,9 @@ class LogApiService with ChatModificationMixin {
       return _handleFileContentRequest(request, headers);
     }
 
-    // Sibling discovery debug endpoints
-    if (urlPath == 'api/debug/siblings' && request.method == 'GET') {
-      return _handleDebugSiblings(headers);
+    // Mirror discovery debug endpoints
+    if (urlPath == 'api/debug/mirrors' && request.method == 'GET') {
+      return _handleDebugMirrors(headers);
     }
     if (urlPath == 'api/debug/sync-trigger' && request.method == 'POST') {
       return await _handleDebugSyncTrigger(request, headers);
@@ -19596,15 +19596,17 @@ class LogApiService with ChatModificationMixin {
     }
   }
 
-  /// GET /api/debug/siblings — returns current sibling discovery state.
-  shelf.Response _handleDebugSiblings(Map<String, String> headers) {
-    final siblings = SiblingDiscoveryService().siblings.value;
+  /// GET /api/debug/mirrors — returns current mirror discovery state.
+  shelf.Response _handleDebugMirrors(Map<String, String> headers) {
+    final mirrors = MirrorDiscoveryService().mirrors.value;
     return shelf.Response.ok(
       jsonEncode({
         'success': true,
-        'count': siblings.length,
-        'siblings': siblings.map((s) => {
+        'count': mirrors.length,
+        'mirrors': mirrors.map((s) => {
           'device_id': s.deviceId,
+          'install_id': s.installId,
+          'display_name': s.displayName,
           'callsign': s.callsign,
           'platform': s.platform,
           'device_type': s.deviceType,
@@ -19620,9 +19622,9 @@ class LogApiService with ChatModificationMixin {
     );
   }
 
-  /// POST /api/debug/sync-trigger — run full diff against a sibling device.
+  /// POST /api/debug/sync-trigger — run full diff against a mirror device.
   ///
-  /// Body: {"device_id": "..."} or {} to auto-select the first sibling.
+  /// Body: {"device_id": "..."} or {} to auto-select the first mirror.
   /// Returns per-folder diffs showing adds, modifies, deletes, uploads.
   Future<shelf.Response> _handleDebugSyncTrigger(
     shelf.Request request,
@@ -19635,36 +19637,36 @@ class LogApiService with ChatModificationMixin {
           : <String, dynamic>{};
       final deviceId = data['device_id'] as String?;
 
-      final siblings = SiblingDiscoveryService().siblings.value;
-      if (siblings.isEmpty) {
+      final mirrors = MirrorDiscoveryService().mirrors.value;
+      if (mirrors.isEmpty) {
         return shelf.Response.ok(
-          jsonEncode({'success': false, 'error': 'No siblings connected'}),
+          jsonEncode({'success': false, 'error': 'No mirrors connected'}),
           headers: headers,
         );
       }
 
-      final sibling = deviceId != null
-          ? siblings.where((s) => s.deviceId == deviceId).firstOrNull
-          : siblings.first;
+      final targetMirror = deviceId != null
+          ? mirrors.where((s) => s.deviceId == deviceId).firstOrNull
+          : mirrors.first;
 
-      if (sibling == null) {
+      if (targetMirror == null) {
         return shelf.Response.notFound(
-          jsonEncode({'success': false, 'error': 'Sibling not found: $deviceId'}),
+          jsonEncode({'success': false, 'error': 'Mirror not found: $deviceId'}),
           headers: headers,
         );
       }
 
       // Build peer URL the same way DeviceSyncPage does
-      String? peerUrl = sibling.directAddress ?? sibling.stationRelayUrl;
+      String? peerUrl = targetMirror.directAddress ?? targetMirror.stationRelayUrl;
       if (peerUrl == null) {
         final wsUrl = WebSocketService().connectedUrl;
         if (wsUrl != null) {
           final stationUrl = wsUrl
               .replaceFirst('ws://', 'http://')
               .replaceFirst('wss://', 'https://');
-          // Pin to the specific sibling connection so challenge/response
+          // Pin to the specific mirror connection so challenge/response
           // hit the same physical device (not ourselves).
-          peerUrl = '$stationUrl/device/${sibling.callsign}?target=${sibling.deviceId}';
+          peerUrl = '$stationUrl/device/${targetMirror.callsign}?target=${targetMirror.deviceId}';
         }
       }
       if (peerUrl == null) {
@@ -19731,10 +19733,10 @@ class LogApiService with ChatModificationMixin {
       return shelf.Response.ok(
         jsonEncode({
           'success': true,
-          'sibling': {
-            'device_id': sibling.deviceId,
-            'platform': sibling.platform,
-            'connection_type': sibling.connectionType,
+          'mirror': {
+            'device_id': targetMirror.deviceId,
+            'platform': targetMirror.platform,
+            'connection_type': targetMirror.connectionType,
           },
           'peer_url': peerUrl,
           'folders_with_diffs': diffs.length,

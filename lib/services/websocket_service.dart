@@ -19,7 +19,7 @@ import '../services/user_location_service.dart';
 import '../services/security_service.dart';
 import '../services/backup_service.dart';
 import '../services/config_service.dart';
-import '../services/sibling_discovery_service.dart';
+import '../services/mirror_discovery_service.dart';
 import '../services/email_service.dart';
 import '../services/ble_foreground_service.dart';
 import '../services/station_service.dart';
@@ -277,16 +277,16 @@ class WebSocketService {
                 _enableForegroundKeepAlive();
                 // Populate station relay addresses for mirror peers
                 _updateMirrorRelayAddresses();
-                // Parse sibling count for multi-device sync
-                final siblingCount = data['sibling_count'] as int? ?? 0;
-                SiblingDiscoveryService().handleHelloAckSiblingCount(siblingCount);
+                // Parse mirror count for multi-device sync
+                final mirrorCount = data['mirror_count'] as int? ?? 0;
+                MirrorDiscoveryService().handleHelloAckMirrorCount(mirrorCount);
               } else {
                 LogService().log('✗ Hello rejected');
                 LogService().log('Reason: ${data['message']}');
                 LogService().log('══════════════════════════════════════');
               }
-            } else if (data['type'] == 'siblings_update') {
-              SiblingDiscoveryService().handleSiblingsUpdate(data);
+            } else if (data['type'] == 'mirrors_update') {
+              MirrorDiscoveryService().handleMirrorsUpdate(data);
             } else if (data['type'] == 'APPS_REQUEST') {
               LogService().log('✓ Station requested collections');
               _handleAppsRequest(data['requestId'] as String?);
@@ -472,6 +472,16 @@ class WebSocketService {
       _recordHeartbeat('connect_error', message: e.toString(), connected: false);
       return false;
     }
+  }
+
+  /// Force a fresh reconnection (e.g. after profile switch).
+  /// Disconnects cleanly, then reconnects with current profile credentials.
+  Future<void> reconnect() async {
+    if (_stationUrl == null) return;
+    final url = _stationUrl!;
+    disconnect();
+    await Future.delayed(const Duration(milliseconds: 200));
+    await connectAndHello(url);
   }
 
   /// Disconnect from station
@@ -1752,8 +1762,8 @@ class WebSocketService {
     _lastDisconnectAt = DateTime.now();
     _recordHeartbeat('disconnected', connected: false);
 
-    // Clear sibling discovery state (station-sourced siblings no longer valid)
-    SiblingDiscoveryService().clear();
+    // Clear mirror discovery state (station-sourced mirrors no longer valid)
+    MirrorDiscoveryService().clear();
 
     // Disable foreground service keep-alive on Android when connection lost
     _disableForegroundKeepAlive();

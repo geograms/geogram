@@ -660,9 +660,11 @@ class _ProfileManagementPageState extends State<ProfileManagementPage> {
                         children: [
                           Switch(
                             value: profile.isActive,
-                            onChanged: (value) {
-                              _profileService.toggleProfileActive(profile.id);
-                            },
+                            onChanged: isActive
+                                ? null  // Cannot toggle off the current profile
+                                : (value) async {
+                                    await _profileService.switchToProfile(profile.id);
+                                  },
                             activeColor: Colors.green,
                           ),
                           Text(
@@ -691,12 +693,6 @@ class _ProfileManagementPageState extends State<ProfileManagementPage> {
                               break;
                             case 'switch':
                               _switchToProfile(profile);
-                              break;
-                            case 'activate':
-                              _profileService.activateProfile(profile.id);
-                              break;
-                            case 'deactivate':
-                              _profileService.deactivateProfile(profile.id);
                               break;
                             case 'share_qr':
                               _shareAsQr(profile);
@@ -749,29 +745,6 @@ class _ProfileManagementPageState extends State<ProfileManagementPage> {
                                   const Icon(Icons.swap_horiz),
                                   const SizedBox(width: 8),
                                   Text(_i18n.t('switch_to_profile')),
-                                ],
-                              ),
-                            ),
-                          const PopupMenuDivider(),
-                          if (!profile.isActive)
-                            PopupMenuItem(
-                              value: 'activate',
-                              child: Row(
-                                children: [
-                                  const Icon(Icons.play_arrow, color: Colors.green),
-                                  const SizedBox(width: 8),
-                                  Text(_i18n.t('activate_profile')),
-                                ],
-                              ),
-                            )
-                          else
-                            PopupMenuItem(
-                              value: 'deactivate',
-                              child: Row(
-                                children: [
-                                  Icon(Icons.stop, color: Colors.grey[600]),
-                                  const SizedBox(width: 8),
-                                  Text(_i18n.t('deactivate_profile')),
                                 ],
                               ),
                             ),

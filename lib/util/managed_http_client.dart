@@ -4,7 +4,9 @@
  */
 
 import 'dart:async';
+import 'dart:io';
 
+import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
 
 /// Exception thrown when the circuit breaker is open (too many consecutive errors).
@@ -79,6 +81,94 @@ class ManagedHttpClient extends http.BaseClient {
       _inner.close();
     }
   }
+}
+
+/// Stream an HTTP GET response directly to a file, computing SHA1 incrementally.
+///
+/// Downloads [url] to [targetPath] via a `.tmp` intermediate file.
+/// Returns `(success, sha1, bytesWritten)`.
+/// Aborts if the download exceeds [maxBytes] (default 500 MB).
+///
+/// ```dart
+/// final result = await streamDownloadToFile(
+///   Uri.parse('https://example.com/large.bin'),
+///   '/tmp/large.bin',
+///   headers: {'Authorization': 'Bearer token'},
+/// );
+/// if (result.success) print('SHA1: ${result.sha1}');
+/// ```
+Future<({bool success, String? sha1, int bytesWritten})> streamDownloadToFile(
+  Uri url,
+  String targetPath, {
+  Map<String, String>? headers,
+  int maxBytes = 500 * 1024 * 1024,
+  Duration timeout = const Duration(minutes: 10),
+}) async {
+  final tmpPath = '$targetPath.tmp';
+  final tmpFile = File(tmpPath);
+  return withHttpClient((client) async {
+    try {
+      final request = http.Request('GET', url);
+      if (headers != null) request.headers.addAll(headers);
+      final response = await client.send(request).timeout(timeout);
+
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        return (success: false, sha1: null, bytesWritten: 0);
+      }
+
+      // Check Content-Length up front if available
+      if (response.contentLength != null && response.contentLength! > maxBytes) {
+        // Drain the stream to avoid socket leaks, then abort
+        await response.stream.drain<void>();
+        return (success: false, sha1: null, bytesWritten: 0);
+      }
+
+      await tmpFile.parent.create(recursive: true);
+      final sink = tmpFile.openWrite();
+      final digestOutput = _SingleDigestSink();
+      final sha1Input = sha1.startChunkedConversion(digestOutput);
+      var totalBytes = 0;
+
+      try {
+        await for (final chunk in response.stream) {
+          totalBytes += chunk.length;
+          if (totalBytes > maxBytes) {
+            await sink.close();
+            if (await tmpFile.exists()) await tmpFile.delete();
+            return (success: false, sha1: null, bytesWritten: totalBytes);
+          }
+          sink.add(chunk);
+          sha1Input.add(chunk);
+        }
+        sha1Input.close();
+        await sink.close();
+      } catch (e) {
+        await sink.close();
+        if (await tmpFile.exists()) await tmpFile.delete();
+        rethrow;
+      }
+
+      // Atomic rename
+      await tmpFile.rename(targetPath);
+      return (success: true, sha1: digestOutput.value.toString(), bytesWritten: totalBytes);
+    } catch (e) {
+      if (await tmpFile.exists()) {
+        try { await tmpFile.delete(); } catch (_) {}
+      }
+      rethrow;
+    }
+  });
+}
+
+/// Minimal [Sink] that captures the single [Digest] produced by a chunked hash.
+class _SingleDigestSink implements Sink<Digest> {
+  late Digest value;
+
+  @override
+  void add(Digest data) => value = data;
+
+  @override
+  void close() {}
 }
 
 /// Execute a one-shot HTTP operation with a temporary client.

@@ -1962,11 +1962,15 @@ class BackupService {
     }
   }
 
+  /// Max size for binary HTTP responses (50 MB) to prevent OOM.
+  static const _maxBinaryResponseBytes = 50 * 1024 * 1024;
+
   Future<Uint8List?> _httpGetBinary(
     String callsign,
     String path,
     Map<String, String> headers, {
     String? baseUrlOverride,
+    int maxBytes = _maxBinaryResponseBytes,
   }) async {
     final baseUrl = baseUrlOverride ?? await _resolveDeviceUrl(callsign);
     if (baseUrl == null || baseUrl.isEmpty) return null;
@@ -1974,6 +1978,13 @@ class BackupService {
       final uri = Uri.parse('$baseUrl$path');
       final response = await http.get(uri, headers: headers).timeout(const Duration(seconds: 20));
       if (response.statusCode != 200) return null;
+      // Guard against OOM: reject responses larger than maxBytes
+      final bodyLen = response.bodyBytes.length;
+      if (bodyLen > maxBytes) {
+        _log('BackupService: Response too large for $callsign $path '
+            '($bodyLen bytes > $maxBytes limit)');
+        return null;
+      }
       return response.bodyBytes;
     } catch (e) {
       _log('BackupService: HTTP binary fallback failed for $callsign $path ($e)');

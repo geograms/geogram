@@ -161,14 +161,22 @@ class DMNotificationService {
     }
 
     // Request permissions for Android 13+ (unless skipping for onboarding)
+    // Wrapped in try/catch because the foreground service engine may not have
+    // an Activity context, causing a NullPointerException in checkPermission.
     if (!skipPermissionRequest &&
         defaultTargetPlatform == TargetPlatform.android) {
-      await _notificationsPlugin
-          .resolvePlatformSpecificImplementation<
-            AndroidFlutterLocalNotificationsPlugin
-          >()
-          ?.requestNotificationsPermission();
-      _permissionRequested = true;
+      try {
+        await _notificationsPlugin
+            .resolvePlatformSpecificImplementation<
+              AndroidFlutterLocalNotificationsPlugin
+            >()
+            ?.requestNotificationsPermission();
+        _permissionRequested = true;
+      } catch (e) {
+        LogService().log(
+          'DMNotificationService: Permission request failed (no Activity context): $e',
+        );
+      }
     }
 
     // Desktop platforms (Linux/Windows/macOS) don't require explicit permission

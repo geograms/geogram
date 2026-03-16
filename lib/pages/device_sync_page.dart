@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-import '../services/sibling_discovery_service.dart';
+import '../services/mirror_discovery_service.dart';
 import '../services/mirror_sync_service.dart';
 import '../models/mirror_config.dart';
 import '../services/profile_service.dart';
@@ -9,7 +9,7 @@ import '../services/app_service.dart';
 import '../services/websocket_service.dart';
 
 /// Multi-device sync page with three stages:
-/// 1. Sibling list — discover and select a sibling device
+/// 1. Mirror list — discover and select a mirror device
 /// 2. App/folder diff — see what changed between devices
 /// 3. Approval & transfer — select files and sync
 class DeviceSyncPage extends StatefulWidget {
@@ -21,10 +21,10 @@ class DeviceSyncPage extends StatefulWidget {
 
 class _DeviceSyncPageState extends State<DeviceSyncPage> {
   // Stage tracking
-  int _stage = 1; // 1=sibling list, 2=diff view, 3=transfer
+  int _stage = 1; // 1=mirror list, 2=diff view, 3=transfer
 
-  // Stage 1: selected sibling
-  SiblingDevice? _selectedSibling;
+  // Stage 1: selected mirror
+  MirrorDevice? _selectedMirror;
   String? _peerUrl;
 
   // Stage 2: diff data per folder
@@ -47,25 +47,8 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
   int _totalFilesToTransfer = 0;
   String? _currentTransferFile;
 
-  // Known app folders to sync
-  static const _appFolders = [
-    'blog',
-    'places',
-    'events',
-    'alerts',
-    'contacts',
-    'groups',
-    'inventory',
-    'market',
-    'postcards',
-    'news',
-    'files',
-    'qr',
-    'reports',
-    'stories',
-    'wallet',
-    'tracker',
-  ];
+  // Known app folders to sync — uses shared constant from mirror_config
+  static const _appFolders = kSyncableFolders;
 
   @override
   Widget build(BuildContext context) {
@@ -86,7 +69,7 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
       case 1:
         return 'Device Sync';
       case 2:
-        return 'Changes with ${_selectedSibling?.displayName ?? "Sibling"}';
+        return 'Changes with ${_selectedMirror?.displayName ?? "Mirror"}';
       case 3:
         return 'Syncing...';
       default:
@@ -100,7 +83,7 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
       setState(() {
         _stage--;
         if (_stage == 1) {
-          _selectedSibling = null;
+          _selectedMirror = null;
           _diffs.clear();
           _tokens.clear();
           _diffError = null;
@@ -116,7 +99,7 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
   Widget _buildStage() {
     switch (_stage) {
       case 1:
-        return _buildSiblingList();
+        return _buildMirrorList();
       case 2:
         return _buildDiffView();
       case 3:
@@ -127,21 +110,21 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
   }
 
   // ════════════════════════════════════════════════════════════════
-  // Stage 1: Sibling List
+  // Stage 1: Mirror List
   // ════════════════════════════════════════════════════════════════
 
-  Widget _buildSiblingList() {
-    return ValueListenableBuilder<List<SiblingDevice>>(
-      valueListenable: SiblingDiscoveryService().siblings,
-      builder: (context, siblings, _) {
-        if (siblings.isEmpty) {
+  Widget _buildMirrorList() {
+    return ValueListenableBuilder<List<MirrorDevice>>(
+      valueListenable: MirrorDiscoveryService().mirrors,
+      builder: (context, mirrors, _) {
+        if (mirrors.isEmpty) {
           return const Center(
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 Icon(Icons.devices, size: 64, color: Colors.grey),
                 SizedBox(height: 16),
-                Text('No sibling devices found',
+                Text('No mirror devices found',
                     style: TextStyle(fontSize: 18, color: Colors.grey)),
                 SizedBox(height: 8),
                 Text(
@@ -156,19 +139,19 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
 
         return ListView.builder(
           padding: const EdgeInsets.all(16),
-          itemCount: siblings.length,
+          itemCount: mirrors.length,
           itemBuilder: (context, index) {
-            final sibling = siblings[index];
-            return _buildSiblingCard(sibling);
+            final mirror = mirrors[index];
+            return _buildMirrorCard(mirror);
           },
         );
       },
     );
   }
 
-  Widget _buildSiblingCard(SiblingDevice sibling) {
-    final icon = _platformIcon(sibling.platform);
-    final connectionIcon = sibling.connectionType == 'lan'
+  Widget _buildMirrorCard(MirrorDevice mirror) {
+    final icon = _platformIcon(mirror.platform);
+    final connectionIcon = mirror.connectionType == 'lan'
         ? Icons.wifi
         : Icons.cloud;
 
@@ -176,13 +159,13 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
       margin: const EdgeInsets.only(bottom: 12),
       child: ListTile(
         leading: Icon(icon, size: 40),
-        title: Text(sibling.displayName),
+        title: Text(mirror.displayName),
         subtitle: Row(
           children: [
             Icon(connectionIcon, size: 14, color: Colors.grey),
             const SizedBox(width: 4),
-            Text(sibling.connectionType),
-            if (sibling.verified) ...[
+            Text(mirror.connectionType),
+            if (mirror.verified) ...[
               const SizedBox(width: 8),
               const Icon(Icons.verified, size: 14, color: Colors.green),
               const SizedBox(width: 2),
@@ -191,7 +174,7 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
           ],
         ),
         trailing: const Icon(Icons.chevron_right),
-        onTap: () => _selectSibling(sibling),
+        onTap: () => _selectMirror(mirror),
       ),
     );
   }
@@ -213,24 +196,24 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
     }
   }
 
-  Future<void> _selectSibling(SiblingDevice sibling) async {
+  Future<void> _selectMirror(MirrorDevice mirror) async {
     setState(() {
-      _selectedSibling = sibling;
+      _selectedMirror = mirror;
       _loadingDiffs = true;
       _diffError = null;
       _stage = 2;
     });
 
     // Determine peer URL (LAN direct or station relay)
-    _peerUrl = sibling.directAddress ?? sibling.stationRelayUrl;
+    _peerUrl = mirror.directAddress ?? mirror.stationRelayUrl;
     if (_peerUrl == null) {
       // If we don't have a direct address, try the station relay via the connected station
       final stationUrl = _getStationHttpUrl();
-      if (stationUrl != null && sibling.deviceId.isNotEmpty) {
-        // Use station device proxy to reach the sibling.
+      if (stationUrl != null && mirror.deviceId.isNotEmpty) {
+        // Use station device proxy to reach the mirror.
         // Pin to the specific connection ID so challenge/response
         // hit the same physical device (not ourselves behind NAT).
-        _peerUrl = '$stationUrl/device/${sibling.callsign}?target=${sibling.deviceId}';
+        _peerUrl = '$stationUrl/device/${mirror.callsign}?target=${mirror.deviceId}';
       }
     }
 
@@ -518,7 +501,7 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
                           isPull ? Icons.arrow_back : Icons.arrow_forward,
                           color: isPull ? Colors.green : Colors.blue,
                         ),
-                        tooltip: isPull ? 'Pull from sibling' : 'Push to sibling',
+                        tooltip: isPull ? 'Pull from mirror' : 'Push to mirror',
                         onPressed: () {
                           setState(() {
                             _fileDirections[key] = !isPull;
@@ -562,11 +545,11 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
   String _changeLabel(FileChangeType type) {
     switch (type) {
       case FileChangeType.add:
-        return 'New on sibling';
+        return 'New on mirror';
       case FileChangeType.modify:
         return 'Modified';
       case FileChangeType.delete:
-        return 'Deleted on sibling';
+        return 'Deleted on mirror';
       case FileChangeType.upload:
         return 'New locally';
     }
@@ -610,8 +593,8 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
       builder: (ctx) => AlertDialog(
         title: const Text('Confirm Sync'),
         content: Text(
-          'Pull $pullCount file(s) from sibling\n'
-          'Push $pushCount file(s) to sibling\n\n'
+          'Pull $pullCount file(s) from mirror\n'
+          'Push $pushCount file(s) to mirror\n\n'
           'Proceed?',
         ),
         actions: [
@@ -655,7 +638,7 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
 
         try {
           if (isPull) {
-            // Download from sibling
+            // Download from mirror
             final change = _diffs[folder]?.firstWhere((c) => c.path == filePath);
             await mirror.downloadFile(
               _peerUrl!,
@@ -667,7 +650,7 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
               storage: storage,
             );
           } else {
-            // Upload to sibling
+            // Upload to mirror
             final change = _diffs[folder]?.firstWhere((c) => c.path == filePath);
             await mirror.uploadFile(
               _peerUrl!,

@@ -778,6 +778,11 @@ class _PeerSettingsPageState extends State<PeerSettingsPage> {
 
           const Divider(),
 
+          // Sync mode section
+          _buildSyncModeSection(theme),
+
+          const Divider(),
+
           // Apps section
           _buildAppsSection(theme),
 
@@ -913,17 +918,84 @@ class _PeerSettingsPageState extends State<PeerSettingsPage> {
     );
   }
 
-  Widget _buildAppsSection(ThemeData theme) {
-    // TODO: Get actual app list from collection service
-    final apps = [
-      ('blog', 'Blog', 'Posts and comments'),
-      ('chat', 'Chat', 'Messages and conversations'),
-      ('places', 'Places', 'Saved locations'),
-      ('events', 'Events', 'Calendar events'),
-      ('contacts', 'Contacts', 'Contact list'),
-      ('tracker', 'Tracker', 'GPS tracks'),
-    ];
+  Widget _buildSyncModeSection(ThemeData theme) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+          child: Text(
+            'Sync Mode',
+            style: theme.textTheme.titleSmall?.copyWith(
+              color: theme.colorScheme.primary,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: SegmentedButton<AutoSyncMode>(
+            segments: const [
+              ButtonSegment(
+                value: AutoSyncMode.manual,
+                label: Text('Manual'),
+                icon: Icon(Icons.touch_app, size: 18),
+              ),
+              ButtonSegment(
+                value: AutoSyncMode.automatic,
+                label: Text('Automatic'),
+                icon: Icon(Icons.autorenew, size: 18),
+              ),
+            ],
+            selected: {_peer.autoSyncMode},
+            onSelectionChanged: (value) async {
+              final mode = value.first;
+              final updated = _peer.copyWith(
+                autoSyncMode: mode,
+                syncIntervalMinutes: mode == AutoSyncMode.automatic
+                    ? (_peer.syncIntervalMinutes ?? 60)
+                    : _peer.syncIntervalMinutes,
+              );
+              await _configService.updatePeer(updated);
+              setState(() {
+                _peer = updated;
+              });
+            },
+          ),
+        ),
+        if (_peer.autoSyncMode == AutoSyncMode.automatic)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+            child: Row(
+              children: [
+                Text('Every ', style: theme.textTheme.bodyMedium),
+                DropdownButton<int>(
+                  value: _peer.syncIntervalMinutes ?? 60,
+                  underline: const SizedBox(),
+                  items: const [
+                    DropdownMenuItem(value: 15, child: Text('15 min')),
+                    DropdownMenuItem(value: 60, child: Text('1 hour')),
+                    DropdownMenuItem(value: 1440, child: Text('1 day')),
+                    DropdownMenuItem(value: 10080, child: Text('1 week')),
+                  ],
+                  onChanged: (value) async {
+                    if (value == null) return;
+                    final updated = _peer.copyWith(syncIntervalMinutes: value);
+                    await _configService.updatePeer(updated);
+                    setState(() {
+                      _peer = updated;
+                    });
+                  },
+                ),
+              ],
+            ),
+          ),
+        const SizedBox(height: 8),
+      ],
+    );
+  }
 
+  Widget _buildAppsSection(ThemeData theme) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -937,7 +1009,15 @@ class _PeerSettingsPageState extends State<PeerSettingsPage> {
             ),
           ),
         ),
-        ...apps.map((app) => _buildAppTile(theme, app.$1, app.$2, app.$3)),
+        ...kSyncableFolders.map((id) {
+          final labels = kFolderLabels[id];
+          return _buildAppTile(
+            theme,
+            id,
+            labels?.$1 ?? id,
+            labels?.$2 ?? '',
+          );
+        }),
       ],
     );
   }
@@ -1058,11 +1138,11 @@ class _PeerSettingsPageState extends State<PeerSettingsPage> {
   String _syncStyleLabel(SyncStyle style) {
     switch (style) {
       case SyncStyle.sendReceive:
-        return 'Send & Receive';
+        return '\u2194 Both ways';
       case SyncStyle.receiveOnly:
-        return 'Receive Only';
+        return 'Other \u2192 This';
       case SyncStyle.sendOnly:
-        return 'Send Only';
+        return 'This \u2192 Other';
       case SyncStyle.paused:
         return 'Paused';
     }

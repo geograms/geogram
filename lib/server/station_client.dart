@@ -1,7 +1,7 @@
 // Unified connected client model for station server
 import 'dart:io';
 
-import 'mixins/sibling_notify_mixin.dart';
+import 'mixins/mirror_notify_mixin.dart';
 
 /// Connection type enum for categorizing how clients connect
 enum ConnectionType {
@@ -66,7 +66,7 @@ enum ConnectionType {
 
 /// Connected WebSocket client
 /// Unified model combining PureConnectedClient (CLI) and ConnectedClient (App)
-class StationClient implements SiblingClient {
+class StationClient implements MirrorClient {
   final WebSocket socket;
   final String id;
   String? callsign;
@@ -95,7 +95,7 @@ class StationClient implements SiblingClient {
   int successCount = 0; // Successful proxy responses
   int failCount = 0; // Timeouts/errors
 
-  /// SiblingClient address alias (maps to remoteAddress)
+  /// MirrorClient address alias (maps to remoteAddress)
   @override
   String? get address => remoteAddress;
 

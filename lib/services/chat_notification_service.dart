@@ -375,6 +375,13 @@ class ChatNotificationService {
     }
   }
 
+  /// Reset all notification state for a profile switch
+  void resetForProfileSwitch() {
+    _currentRoomId = null;
+    _unreadCounts.clear();
+    _notificationController.add(Map.from(_unreadCounts));
+  }
+
   /// Re-connect to station updates (call after station reconnection)
   void reconnect() {
     _setupUpdateListener();

@@ -18,6 +18,7 @@ import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as path;
 import 'package:uuid/uuid.dart';
 
+import '../util/managed_http_client.dart';
 import '../util/nostr_event.dart';
 import '../util/nostr_crypto.dart';
 import 'log_service.dart';
@@ -412,12 +413,12 @@ class MirrorSyncService {
         _allowedPeers[peer.npub] = peer.callsign;
       }
     }
-    // Auto-add own npub as allowed peer for same-identity sibling sync
+    // Auto-add own npub as allowed peer for same-identity mirror sync
     _addOwnNpubAsAllowedPeer();
     LogService().log('MirrorSync: Loaded ${_allowedPeers.length} allowed peers from config');
   }
 
-  /// Auto-add own npub as allowed peer so sibling devices with the same
+  /// Auto-add own npub as allowed peer so mirror devices with the same
   /// identity can authenticate via challenge-response.
   void _addOwnNpubAsAllowedPeer() {
     try {
@@ -425,7 +426,7 @@ class MirrorSyncService {
       if (profile.npub.isNotEmpty && profile.callsign.isNotEmpty) {
         if (!_allowedPeers.containsKey(profile.npub)) {
           _allowedPeers[profile.npub] = profile.callsign;
-          LogService().log('MirrorSync: Auto-added own npub as allowed peer for sibling sync');
+          LogService().log('MirrorSync: Auto-added own npub as allowed peer for mirror sync');
         }
       }
     } catch (_) {
@@ -1011,7 +1012,18 @@ class MirrorSyncService {
     return changes;
   }
 
-  /// Download a single file from peer
+  /// Max file size for buffered downloads into ProfileStorage (100 MB).
+  static const _maxStorageFileBytes = 100 * 1024 * 1024;
+
+  /// Max file size for streamed filesystem downloads (500 MB).
+  static const _maxStreamFileBytes = 500 * 1024 * 1024;
+
+  /// Download a single file from peer.
+  ///
+  /// When [storage] is null (filesystem path), the response is streamed
+  /// directly to disk — no full-body buffering — to avoid OOM on large files.
+  /// When [storage] is provided, chunks are collected into a [BytesBuilder]
+  /// with a size guard ([_maxStorageFileBytes]).
   Future<bool> downloadFile(
     String peerUrl,
     String folder,
@@ -1024,7 +1036,56 @@ class MirrorSyncService {
     try {
       final url = _buildPeerUri(peerUrl, '/api/mirror/file', {'path': filePath, 'token': token});
 
-      final response = await http.get(url);
+      if (storage != null) {
+        // ProfileStorage requires Uint8List — stream into BytesBuilder with size cap
+        return await _downloadFileBuffered(
+          url, folder, filePath, expectedSha1, storage);
+      }
+
+      // Filesystem path: stream directly to file (no full-body buffer)
+      final targetPath = '$localPath/$filePath';
+      final result = await streamDownloadToFile(
+        url,
+        targetPath,
+        maxBytes: _maxStreamFileBytes,
+      );
+
+      if (!result.success) {
+        LogService().log(
+            'MirrorSync: File download failed: $filePath (stream error or too large)');
+        return false;
+      }
+
+      // Verify SHA1 if provided
+      if (expectedSha1 != null && result.sha1 != expectedSha1) {
+        LogService().log(
+            'MirrorSync: SHA1 mismatch for $filePath: expected $expectedSha1, got ${result.sha1}');
+        // Remove the bad file
+        final f = File(targetPath);
+        if (await f.exists()) await f.delete();
+        return false;
+      }
+
+      return true;
+    } catch (e) {
+      LogService().log('MirrorSync: File download failed: $filePath: $e');
+      return false;
+    }
+  }
+
+  /// Buffered download for ProfileStorage (writeBytes needs Uint8List).
+  /// Collects streamed chunks into a BytesBuilder with a size guard.
+  Future<bool> _downloadFileBuffered(
+    Uri url,
+    String folder,
+    String filePath,
+    String? expectedSha1,
+    ProfileStorage storage,
+  ) async {
+    return withHttpClient((client) async {
+      final request = http.Request('GET', url);
+      final response = await client.send(request).timeout(
+          const Duration(minutes: 5));
 
       if (response.statusCode != 200) {
         LogService().log(
@@ -1032,7 +1093,27 @@ class MirrorSyncService {
         return false;
       }
 
-      final bytes = response.bodyBytes;
+      // Reject if Content-Length exceeds cap
+      if (response.contentLength != null &&
+          response.contentLength! > _maxStorageFileBytes) {
+        LogService().log(
+            'MirrorSync: Skipping $filePath — too large for storage '
+            '(${response.contentLength} bytes)');
+        await response.stream.drain<void>();
+        return false;
+      }
+
+      final builder = BytesBuilder(copy: false);
+      await for (final chunk in response.stream) {
+        builder.add(chunk);
+        if (builder.length > _maxStorageFileBytes) {
+          LogService().log(
+              'MirrorSync: Skipping $filePath — exceeded ${_maxStorageFileBytes ~/ (1024 * 1024)} MB during download');
+          return false;
+        }
+      }
+
+      final bytes = builder.takeBytes();
 
       // Verify SHA1 if provided
       if (expectedSha1 != null) {
@@ -1044,20 +1125,9 @@ class MirrorSyncService {
         }
       }
 
-      // Write file
-      if (storage != null) {
-        await storage.writeBytes('$folder/$filePath', Uint8List.fromList(bytes));
-      } else {
-        final localFile = File('$localPath/$filePath');
-        await localFile.parent.create(recursive: true);
-        await localFile.writeAsBytes(bytes);
-      }
-
+      await storage.writeBytes('$folder/$filePath', Uint8List.fromList(bytes));
       return true;
-    } catch (e) {
-      LogService().log('MirrorSync: File download failed: $filePath: $e');
-      return false;
-    }
+    });
   }
 
   /// Upload a single file to peer

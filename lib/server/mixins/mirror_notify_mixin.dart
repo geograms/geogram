@@ -1,4 +1,4 @@
-/// Sibling Notification Mixin — notifies connected devices when other devices
+/// Mirror Notification Mixin — notifies connected devices when other devices
 /// with the same callsign connect or disconnect.
 ///
 /// Shared by both `StationServer` (Desktop) and `PureStationServer` (CLI).
@@ -8,8 +8,8 @@ library;
 import 'dart:convert';
 import 'dart:io';
 
-/// Minimal client interface for sibling notifications.
-abstract class SiblingClient {
+/// Minimal client interface for mirror notifications.
+abstract class MirrorClient {
   String get id;
   String? get callsign;
   String? get npub;
@@ -17,32 +17,33 @@ abstract class SiblingClient {
   String? get deviceType;
   String? get address; // Remote IP stored at connection time
   String? get deviceId; // Per-install UUID for NAT-safe dedup
+  String? get nickname; // User-chosen device name
   bool get verified;
   WebSocket get socket;
 }
 
-/// Mixin providing sibling device notifications shared across station implementations.
+/// Mixin providing mirror device notifications shared across station implementations.
 ///
 /// When a device connects or disconnects, all other verified devices with the
-/// same callsign are notified with an updated siblings list.
-mixin SiblingNotifyMixin {
+/// same callsign are notified with an updated mirrors list.
+mixin MirrorNotifyMixin {
   // ── Abstract contract ────────────────────────────────────────────
 
   /// Return all connected clients.
-  Map<String, SiblingClient> get siblingClients;
+  Map<String, MirrorClient> get mirrorClients;
 
   /// Log a message at the given level.
-  void siblingLog(String level, String message);
+  void mirrorLog(String level, String message);
 
   /// Safely send data to a client socket. Returns true on success.
-  bool siblingSafeSocketSend(covariant SiblingClient client, String data);
+  bool mirrorSafeSocketSend(covariant MirrorClient client, String data);
 
-  // ── Sibling notification ─────────────────────────────────────────
+  // ── Mirror notification ─────────────────────────────────────────
 
-  /// Build the siblings list for a given callsign (excluding a specific client).
-  List<Map<String, dynamic>> buildSiblingsList(String callsign, {String? excludeClientId}) {
+  /// Build the mirrors list for a given callsign (excluding a specific client).
+  List<Map<String, dynamic>> buildMirrorsList(String callsign, {String? excludeClientId}) {
     final upper = callsign.toUpperCase();
-    return siblingClients.values
+    return mirrorClients.values
         .where((c) =>
             c.callsign?.toUpperCase() == upper &&
             c.verified &&
@@ -53,38 +54,39 @@ mixin SiblingNotifyMixin {
               'platform': c.platform ?? 'unknown',
               'device_type': c.deviceType ?? 'unknown',
               'npub': c.npub,
+              'nickname': c.nickname,
               'verified': c.verified,
             })
         .toList();
   }
 
-  /// Count verified siblings for a callsign (excluding a specific client).
-  int siblingCountForCallsign(String callsign, {String? excludeClientId}) {
-    return buildSiblingsList(callsign, excludeClientId: excludeClientId).length;
+  /// Count verified mirrors for a callsign (excluding a specific client).
+  int mirrorCountForCallsign(String callsign, {String? excludeClientId}) {
+    return buildMirrorsList(callsign, excludeClientId: excludeClientId).length;
   }
 
-  /// Notify all verified devices with the given callsign about their current siblings.
+  /// Notify all verified devices with the given callsign about their current mirrors.
   ///
   /// Called after a new device connects (hello_ack) or an existing device disconnects.
-  void notifySiblingsOfCallsign(String callsign) {
+  void notifyMirrorsOfCallsign(String callsign) {
     final upper = callsign.toUpperCase();
-    final matchingClients = siblingClients.values
+    final matchingClients = mirrorClients.values
         .where((c) => c.callsign?.toUpperCase() == upper && c.verified)
         .toList();
 
     if (matchingClients.isEmpty) return;
 
     for (final client in matchingClients) {
-      final siblings = buildSiblingsList(callsign, excludeClientId: client.id);
+      final mirrors = buildMirrorsList(callsign, excludeClientId: client.id);
       final message = jsonEncode({
-        'type': 'siblings_update',
+        'type': 'mirrors_update',
         'callsign': callsign,
-        'siblings': siblings,
+        'mirrors': mirrors,
       });
-      siblingSafeSocketSend(client, message);
+      mirrorSafeSocketSend(client, message);
     }
 
-    siblingLog('INFO', 'Notified ${matchingClients.length} devices of sibling update for $callsign');
+    mirrorLog('INFO', 'Notified ${matchingClients.length} devices of mirror update for $callsign');
   }
 
   /// Find zombie connections from the same physical device.
@@ -98,7 +100,7 @@ mixin SiblingNotifyMixin {
     required String? deviceId,
   }) {
     final upper = callsign.toUpperCase();
-    return siblingClients.values
+    return mirrorClients.values
         .where((c) {
           if (c.id == clientId) return false;
           if (c.callsign?.toUpperCase() != upper) return false;
@@ -118,10 +120,10 @@ mixin SiblingNotifyMixin {
         .toList();
   }
 
-  /// Handle GET /api/siblings — return siblings for the requester's callsign.
+  /// Handle GET /api/mirrors — return mirrors for the requester's callsign.
   ///
   /// Identifies the requester by remote IP matching against connected clients.
-  Future<void> handleSiblingsRequest(HttpRequest request) async {
+  Future<void> handleMirrorsRequest(HttpRequest request) async {
     request.response.headers.contentType = ContentType.json;
 
     final remoteIp = request.connectionInfo?.remoteAddress.address;
@@ -135,8 +137,8 @@ mixin SiblingNotifyMixin {
     }
 
     // Find a verified client from this IP
-    SiblingClient? requester;
-    for (final client in siblingClients.values) {
+    MirrorClient? requester;
+    for (final client in mirrorClients.values) {
       if (client.verified && client.address == remoteIp) {
         requester = client;
         break;
@@ -152,11 +154,11 @@ mixin SiblingNotifyMixin {
       return;
     }
 
-    final siblings = buildSiblingsList(requester.callsign!, excludeClientId: requester.id);
+    final mirrors = buildMirrorsList(requester.callsign!, excludeClientId: requester.id);
     request.response.write(jsonEncode({
       'success': true,
       'callsign': requester.callsign,
-      'siblings': siblings,
+      'mirrors': mirrors,
     }));
   }
 }

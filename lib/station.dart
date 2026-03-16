@@ -59,7 +59,7 @@ import 'server/mixins/chat_moderation_mixin.dart';
 import 'server/mixins/chat_nip05_mixin.dart';
 import 'server/mixins/conference_mixin.dart';
 import 'server/mixins/device_proxy_mixin.dart';
-import 'server/mixins/sibling_notify_mixin.dart';
+import 'server/mixins/mirror_notify_mixin.dart';
 import 'server/mixins/heartbeat_mixin.dart';
 import 'server/mixins/karma_mixin.dart';
 import 'cli/themes_embedded.dart';
@@ -426,7 +426,7 @@ class LogEntry implements LogEntryReadable {
 }
 
 /// Connected WebSocket client
-class PureConnectedClient implements EmailClient, ConnectedClientReadable, DeviceProxyClient, SiblingClient {
+class PureConnectedClient implements EmailClient, ConnectedClientReadable, DeviceProxyClient, MirrorClient {
   @override
   final WebSocket socket;
   @override
@@ -635,7 +635,7 @@ class PureTileCache {
 }
 
 /// Unified station server for CLI and Android modes
-class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, EmailHandlerMixin, ConsoleCommandMixin, ChatNip05Mixin, ChatModerationMixin, ConferenceMixin, XmppServerMixin, KarmaMixin, DeviceProxyMixin, SiblingNotifyMixin
+class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, EmailHandlerMixin, ConsoleCommandMixin, ChatNip05Mixin, ChatModerationMixin, ConferenceMixin, XmppServerMixin, KarmaMixin, DeviceProxyMixin, MirrorNotifyMixin
     implements StationCommandInterface {
   HttpServer? _httpServer;
   HttpServer? _httpsServer;
@@ -651,13 +651,13 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
   @override
   void proxyLog(String level, String message) => _log(level, message);
 
-  // ── SiblingNotifyMixin contract ─────────────────────────────────
+  // ── MirrorNotifyMixin contract ─────────────────────────────────
   @override
-  Map<String, SiblingClient> get siblingClients => _clients;
+  Map<String, MirrorClient> get mirrorClients => _clients;
   @override
-  void siblingLog(String level, String message) => _log(level, message);
+  void mirrorLog(String level, String message) => _log(level, message);
   @override
-  bool siblingSafeSocketSend(PureConnectedClient client, String data) => _safeSocketSend(client, data);
+  bool mirrorSafeSocketSend(PureConnectedClient client, String data) => _safeSocketSend(client, data);
 
   // Connection tolerance: preserve uptime for reconnects within 5 minutes
   // Maps callsign -> (disconnectTime, originalConnectTime)
@@ -2115,9 +2115,9 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
 
     _log('INFO', 'Client removed: ${disconnectedCallsign ?? clientId} ($reason)');
 
-    // Notify remaining siblings about the departure
+    // Notify remaining mirrors about the departure
     if (disconnectedCallsign != null) {
-      notifySiblingsOfCallsign(disconnectedCallsign);
+      notifyMirrorsOfCallsign(disconnectedCallsign);
     }
   }
 
@@ -2471,8 +2471,8 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
         await _handleUpdatesLatest(request);
       } else if (path.startsWith('/updates/')) {
         await _handleUpdateDownload(request);
-      } else if (path == '/api/siblings') {
-        await handleSiblingsRequest(request);
+      } else if (path == '/api/mirrors') {
+        await handleMirrorsRequest(request);
       } else if (path == '/api/devices' || path == '/api/clients') {
         await _handleDevices(request);
       } else if (path.startsWith('/device/')) {
@@ -2901,8 +2901,8 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
             }
 
             // Send hello_ack (expected by desktop/mobile clients)
-            final siblingCount = callsign != null
-                ? siblingCountForCallsign(callsign, excludeClientId: client.id)
+            final mirrorCount = callsign != null
+                ? mirrorCountForCallsign(callsign, excludeClientId: client.id)
                 : 0;
             final response = {
               'type': 'hello_ack',
@@ -2911,15 +2911,15 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
               'station_npub': _settings.npub,
               'message': 'Welcome to ${_settings.name}',
               'version': cliAppVersion,
-              'sibling_count': siblingCount,
+              'mirror_count': mirrorCount,
             };
             client.socket.add(jsonEncode(response));
             final nicknameInfo = client.nickname != null ? ' [${client.nickname}]' : '';
             _log('INFO', 'Hello from: ${client.callsign ?? "unknown"}$nicknameInfo (${client.deviceType ?? "unknown"}) npub=${npub.substring(0, 20)}...');
 
-            // Notify all siblings (including the new device) about each other
+            // Notify all mirrors (including the new device) about each other
             if (callsign != null) {
-              notifySiblingsOfCallsign(callsign);
+              notifyMirrorsOfCallsign(callsign);
             }
 
             // Record daily login karma

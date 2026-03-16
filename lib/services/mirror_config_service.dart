@@ -248,6 +248,56 @@ class MirrorConfigService {
     });
   }
 
+  /// Auto-register or update a peer from a discovered mirror device.
+  ///
+  /// Accepts plain fields instead of MirrorDevice to avoid circular imports.
+  /// Rate-limited: skips if the peer's lastSeenAt is < 5 minutes ago
+  /// and no field changes are needed.
+  Future<void> ensurePeerFromDiscovery({
+    required String installId,
+    required String callsign,
+    String? nickname,
+    String? npub,
+    String platform = 'unknown',
+    String displayName = '',
+  }) async {
+    if (_config == null) await loadConfig();
+
+    final existing = _config!.getPeer(installId);
+    final now = DateTime.now();
+
+    if (existing != null) {
+      // Rate-limit: skip if recently seen and no changes
+      final timeSinceLastSeen = existing.lastSeenAt != null
+          ? now.difference(existing.lastSeenAt!).inMinutes
+          : 999;
+      final nameChanged = nickname != null &&
+          nickname.isNotEmpty &&
+          nickname != existing.name;
+      final platformChanged = platform != existing.platform;
+
+      if (timeSinceLastSeen < 5 && !nameChanged && !platformChanged) return;
+
+      // Update existing peer
+      await updatePeer(existing.copyWith(
+        lastSeenAt: now,
+        name: nameChanged ? nickname : null,
+        platform: platformChanged ? platform : null,
+      ));
+    } else {
+      // Create new peer with defaults (manual mode, no folders enabled)
+      await addPeer(MirrorPeer(
+        peerId: installId,
+        name: nickname ?? displayName,
+        callsign: callsign,
+        npub: npub ?? '',
+        platform: platform,
+        lastSeenAt: now,
+        autoSyncMode: AutoSyncMode.manual,
+      ));
+    }
+  }
+
   /// Get list of enabled apps for a peer
   List<String> getEnabledAppsForPeer(String peerId) {
     final peer = _config?.getPeer(peerId);

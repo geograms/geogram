@@ -3,6 +3,55 @@
 /// Enables P2P synchronization between devices running the same account.
 library;
 
+/// Auto-sync mode per peer
+enum AutoSyncMode {
+  /// Sync only when manually triggered
+  manual,
+
+  /// Sync automatically on a timer
+  automatic,
+}
+
+/// Syncable folder IDs used across the app
+const kSyncableFolders = [
+  'blog',
+  'places',
+  'events',
+  'alerts',
+  'contacts',
+  'groups',
+  'inventory',
+  'market',
+  'postcards',
+  'news',
+  'files',
+  'qr',
+  'reports',
+  'stories',
+  'wallet',
+  'tracker',
+];
+
+/// Human-readable labels and descriptions for each syncable folder
+const kFolderLabels = <String, (String, String)>{
+  'blog': ('Blog', 'Posts and articles'),
+  'places': ('Places', 'Saved locations'),
+  'events': ('Events', 'Calendar events'),
+  'alerts': ('Alerts', 'Emergency alerts'),
+  'contacts': ('Contacts', 'Contact list'),
+  'groups': ('Groups', 'Group memberships'),
+  'inventory': ('Inventory', 'Item tracking'),
+  'market': ('Market', 'Marketplace listings'),
+  'postcards': ('Postcards', 'Sent and received postcards'),
+  'news': ('News', 'News feeds'),
+  'files': ('Files', 'Shared files'),
+  'qr': ('QR Codes', 'Saved QR codes'),
+  'reports': ('Reports', 'Field reports'),
+  'stories': ('Stories', 'Published stories'),
+  'wallet': ('Wallet', 'Wallet data'),
+  'tracker': ('Tracker', 'GPS tracks'),
+};
+
 /// Sync style for an app (like Syncthing)
 enum SyncStyle {
   /// Full two-way sync - both sides send and receive
@@ -295,6 +344,12 @@ class MirrorPeer {
   /// Platform (Android, iOS, Linux, etc.)
   String? platform;
 
+  /// Per-peer auto-sync mode
+  AutoSyncMode autoSyncMode;
+
+  /// Sync interval in minutes (null = use global; 15/60/1440/10080)
+  int? syncIntervalMinutes;
+
   MirrorPeer({
     required this.peerId,
     this.npub = '',
@@ -307,6 +362,8 @@ class MirrorPeer {
     this.lastSeenAt,
     this.lastQuality,
     this.platform,
+    this.autoSyncMode = AutoSyncMode.manual,
+    this.syncIntervalMinutes,
   }) : apps = apps ?? {};
 
   /// First non-relay address (LAN IP / direct URL), or null if none.
@@ -383,6 +440,11 @@ class MirrorPeer {
               json['last_quality'] as Map<String, dynamic>)
           : null,
       platform: json['platform'] as String?,
+      autoSyncMode: AutoSyncMode.values.firstWhere(
+        (e) => e.name == json['auto_sync_mode'],
+        orElse: () => AutoSyncMode.manual,
+      ),
+      syncIntervalMinutes: json['sync_interval_minutes'] as int?,
     );
   }
 
@@ -398,6 +460,8 @@ class MirrorPeer {
         if (lastSeenAt != null) 'last_seen_at': lastSeenAt!.toIso8601String(),
         if (lastQuality != null) 'last_quality': lastQuality!.toJson(),
         if (platform != null) 'platform': platform,
+        'auto_sync_mode': autoSyncMode.name,
+        if (syncIntervalMinutes != null) 'sync_interval_minutes': syncIntervalMinutes,
       };
 
   MirrorPeer copyWith({
@@ -411,6 +475,8 @@ class MirrorPeer {
     DateTime? lastSeenAt,
     ConnectionQuality? lastQuality,
     String? platform,
+    AutoSyncMode? autoSyncMode,
+    int? syncIntervalMinutes,
   }) {
     return MirrorPeer(
       peerId: peerId,
@@ -424,6 +490,8 @@ class MirrorPeer {
       lastSeenAt: lastSeenAt ?? this.lastSeenAt,
       lastQuality: lastQuality ?? this.lastQuality,
       platform: platform ?? this.platform,
+      autoSyncMode: autoSyncMode ?? this.autoSyncMode,
+      syncIntervalMinutes: syncIntervalMinutes ?? this.syncIntervalMinutes,
     );
   }
 }

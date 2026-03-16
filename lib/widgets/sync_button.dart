@@ -1,29 +1,29 @@
 import 'package:flutter/material.dart';
 
-import '../services/sibling_discovery_service.dart';
+import '../services/mirror_discovery_service.dart';
 import '../pages/device_sync_page.dart';
 
 /// Sync button for the AppBar.
 ///
-/// Listens to [SiblingDiscoveryService.siblings] and shows a sync icon
-/// with a badge count when sibling devices are available.
-/// Invisible when no siblings are discovered.
+/// Listens to [MirrorDiscoveryService.mirrors] and shows a sync icon
+/// with a badge count when mirror devices are available.
+/// Invisible when no mirrors are discovered.
 class SyncButton extends StatelessWidget {
   const SyncButton({super.key});
 
   @override
   Widget build(BuildContext context) {
-    return ValueListenableBuilder<List<SiblingDevice>>(
-      valueListenable: SiblingDiscoveryService().siblings,
-      builder: (context, siblings, _) {
-        if (siblings.isEmpty) return const SizedBox.shrink();
+    return ValueListenableBuilder<List<MirrorDevice>>(
+      valueListenable: MirrorDiscoveryService().mirrors,
+      builder: (context, mirrors, _) {
+        if (mirrors.isEmpty) return const SizedBox.shrink();
 
         return IconButton(
           icon: Badge(
-            label: Text('${siblings.length}'),
+            label: Text('${mirrors.length}'),
             child: const Icon(Icons.sync),
           ),
-          tooltip: '${siblings.length} sibling device(s)',
+          tooltip: '${mirrors.length} mirror device(s)',
           onPressed: () {
             Navigator.of(context).push(
               MaterialPageRoute(builder: (_) => const DeviceSyncPage()),

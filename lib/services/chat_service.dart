@@ -250,6 +250,16 @@ class ChatService {
     _watchSubscriptions.clear();
   }
 
+  /// Reset all chat state for a profile switch
+  void reset() {
+    stopWatching();
+    _appPath = null;
+    _channels = [];
+    _participants = {};
+    _security = ChatSecurity();
+    _hiddenMessageIds.clear();
+  }
+
   /// Load channels from channels.json
   Future<void> _loadChannels() async {
     if (_appPath == null) return;

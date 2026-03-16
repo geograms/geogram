@@ -24,7 +24,7 @@ class Profile implements ProfileReadable {
   String? locationName; // Human-readable location
   DateTime createdAt; // When this profile was created
 
-  // Profile activation state (multiple profiles can be active simultaneously)
+  // Profile activation state (only one profile active at a time)
   bool isActive;
 
   // Station-specific settings (only used when type == station)
@@ -54,7 +54,7 @@ class Profile implements ProfileReadable {
     this.longitude,
     this.locationName,
     DateTime? createdAt,
-    this.isActive = true,
+    this.isActive = false,
     this.port,
     this.stationRole,
     this.parentStationUrl,

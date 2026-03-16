@@ -28,11 +28,16 @@ This document catalogs reusable UI components available in the Geogram codebase.
 ### HTTP Client Utilities
 - [ManagedHttpClient](#managedhttpclient) - Persistent HTTP client with circuit breaker (drop-in `http.Client` replacement)
 - [withHttpClient](#withhttpclient) - One-shot HTTP client with guaranteed cleanup
+- [streamDownloadToFile](#streamdownloadtofile) - Stream HTTP GET to file with incremental SHA1 and size guard (OOM-safe)
 
 ### Cache & File System
 - [CacheServiceBase](#cacheservicebase) - Shared relay cache logic for Desktop and CLI stations
 - [FileSystemService path utilities](#filesystemservice-path-utilities) - Cross-platform path handling (Windows `\` + Unix `/`)
 - [ZipProfileStorage](#zipprofilestorage) - ProfileStorage backed by an in-memory ZIP archive (NDF files)
+
+### Mirror Sync Constants
+- [kSyncableFolders](#ksyncablefolders) - Canonical list of folder IDs that can be synced between devices
+- [kFolderLabels](#kfolderlabels) - Human-readable (name, description) pairs for each syncable folder
 
 ### URL Utilities
 - [callsignForUrl](#callsignforurl) - Format callsign for URL path segments (lowercase)
@@ -5349,7 +5354,7 @@ final tileHandler = TileHandler(
 | HeartbeatMixin | server/mixins/heartbeat_mixin.dart | WebSocket client PING/PONG and stale connection cleanup |
 | HealthWatchdogMixin | server/mixins/health_watchdog_mixin.dart | Auto-recovery |
 | EmailHandlerMixin | server/mixins/email_handler_mixin.dart | Shared email send/receive/delivery |
-| SiblingNotifyMixin | server/mixins/sibling_notify_mixin.dart | Multi-device sibling notifications, /api/siblings endpoint, `findZombieConnections()` for NAT-safe dedup by device_id |
+| MirrorNotifyMixin | server/mixins/mirror_notify_mixin.dart | Multi-device mirror notifications, /api/mirrors endpoint, `findZombieConnections()` for NAT-safe dedup by device_id |
 | BlogHandlerMixin | server/mixins/blog_handler_mixin.dart | Blog URL resolution, NIP-05 callsign lookup, local/proxy serving |
 
 ---
@@ -11128,6 +11133,32 @@ The client is always closed in a `finally` block after the callback completes or
 
 ---
 
+## streamDownloadToFile
+
+**File**: `lib/util/managed_http_client.dart`
+
+Stream an HTTP GET response directly to a file, computing SHA1 incrementally. Writes to a `.tmp` file first, then renames atomically on success. Aborts if the download exceeds a configurable size limit (default 500 MB) to prevent OOM on mobile devices.
+
+```dart
+import '../util/managed_http_client.dart';
+
+final result = await streamDownloadToFile(
+  Uri.parse('https://example.com/large.bin'),
+  '/path/to/output.bin',
+  headers: {'Authorization': 'Bearer token'},
+  maxBytes: 500 * 1024 * 1024, // optional, default 500 MB
+);
+if (result.success) {
+  print('SHA1: ${result.sha1}, bytes: ${result.bytesWritten}');
+}
+```
+
+Returns `({bool success, String? sha1, int bytesWritten})`. Uses `withHttpClient()` internally for automatic client cleanup.
+
+**Used in**: `MirrorSyncService.downloadFile()`
+
+---
+
 ## callsignForUrl
 
 **File**: `lib/util/callsign_url.dart`
@@ -11248,3 +11279,39 @@ await ndf.saveRecordingVideo(filePath, recordingId, videoBytes);
 ```
 
 **Used in**: `ConferenceArchiveService.exportAsNdf()`
+
+---
+
+## kSyncableFolders
+
+**File**: `lib/models/mirror_config.dart`
+
+Canonical list of folder IDs that can be synced between devices. Use this constant instead of hardcoding folder lists in pages.
+
+```dart
+import '../models/mirror_config.dart';
+
+for (final folder in kSyncableFolders) {
+  // 'blog', 'places', 'events', 'alerts', 'contacts', 'groups',
+  // 'inventory', 'market', 'postcards', 'news', 'files', 'qr',
+  // 'reports', 'stories', 'wallet', 'tracker'
+}
+```
+
+**Used in**: `DeviceSyncPage`, `PeerSettingsPage`
+
+## kFolderLabels
+
+**File**: `lib/models/mirror_config.dart`
+
+Human-readable labels for each syncable folder. Returns a `(String name, String description)` record.
+
+```dart
+import '../models/mirror_config.dart';
+
+final labels = kFolderLabels['blog']; // ('Blog', 'Posts and articles')
+final name = labels?.$1;             // 'Blog'
+final desc = labels?.$2;             // 'Posts and articles'
+```
+
+**Used in**: `PeerSettingsPage._buildAppsSection()`

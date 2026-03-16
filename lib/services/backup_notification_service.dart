@@ -87,10 +87,14 @@ class BackupNotificationService {
     }
 
     if (!skipPermissionRequest && defaultTargetPlatform == TargetPlatform.android) {
-      await _notificationsPlugin
-          .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
-          ?.requestNotificationsPermission();
-      _permissionRequested = true;
+      try {
+        await _notificationsPlugin
+            .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
+            ?.requestNotificationsPermission();
+        _permissionRequested = true;
+      } catch (e) {
+        // Foreground service engine may lack Activity context
+      }
     }
 
     // Desktop platforms don't require explicit permission

@@ -14,6 +14,8 @@ import '../services/signing_service.dart';
 import '../services/mirror_auto_sync_service.dart';
 import '../services/mirror_config_service.dart';
 import '../services/mirror_sync_service.dart';
+import '../services/chat_service.dart';
+import '../services/chat_notification_service.dart';
 import '../services/app_args.dart';
 import '../util/event_bus.dart';
 import '../util/nostr_key_generator.dart';
@@ -111,6 +113,11 @@ class ProfileService {
         _activeProfileId = _profiles.isNotEmpty ? _profiles.first.id : null;
       }
 
+      // Enforce single-active invariant
+      for (final p in _profiles) {
+        p.isActive = (p.id == _activeProfileId);
+      }
+
       // Validate and fix any profiles with invalid NOSTR keys
       bool profilesUpdated = false;
       for (final profile in _profiles) {
@@ -181,10 +188,12 @@ class ProfileService {
           // Encrypted profile: derive callsign from filename
           callsign = path.basenameWithoutExtension(entity.path);
         } else if (entity is Directory) {
-          // Plain profile folder — only count if it has subdirectories
-          final sub = await entity.list().take(1).toList();
-          if (sub.isNotEmpty) {
+          // Plain profile folder — only count if it has contents
+          try {
+            await entity.list().first; // cancels stream after first element
             callsign = path.basename(entity.path);
+          } catch (_) {
+            // Empty directory — skip
           }
         }
 
@@ -460,6 +469,9 @@ class ProfileService {
     }
 
     _activeProfileId = profileId;
+    for (final p in _profiles) {
+      p.isActive = (p.id == profileId);
+    }
     _saveAllProfiles();
 
     // Update AppService to use the new profile's storage path BEFORE notifying listeners
@@ -481,6 +493,10 @@ class ProfileService {
     // Switch logs to profile-specific directory
     await LogService().switchToProfile(newProfile.callsign);
 
+    // Reset chat state for profile isolation
+    ChatService().reset();
+    ChatNotificationService().resetForProfileSwitch();
+
     // Ensure default collections exist for this profile
     await AppService().ensureDefaultApps();
 
@@ -490,20 +506,17 @@ class ProfileService {
     LogService().log('Switched to profile: ${newProfile.callsign}');
   }
 
-  /// Activate a profile (can have multiple active profiles)
-  void activateProfile(String profileId) {
-    final profile = _profiles.firstWhere(
-      (p) => p.id == profileId,
-      orElse: () => throw Exception('Profile not found: $profileId'),
-    );
-    profile.isActive = true;
-    _saveAllProfiles();
-    profileNotifier.notifyListeners();
-    LogService().log('Activated profile: ${profile.callsign}');
+  /// Activate a profile (switches to it as the single active profile)
+  Future<void> activateProfile(String profileId) async {
+    await switchToProfile(profileId);
   }
 
-  /// Deactivate a profile
+  /// Deactivate a profile (cannot deactivate the currently active profile)
   void deactivateProfile(String profileId) {
+    if (profileId == _activeProfileId) {
+      LogService().log('Cannot deactivate the currently active profile');
+      return;
+    }
     final profile = _profiles.firstWhere(
       (p) => p.id == profileId,
       orElse: () => throw Exception('Profile not found: $profileId'),
@@ -511,19 +524,18 @@ class ProfileService {
     profile.isActive = false;
     _saveAllProfiles();
     profileNotifier.notifyListeners();
-    LogService().log('Deactivated profile: ${profile.callsign}');
   }
 
-  /// Toggle profile active state
-  void toggleProfileActive(String profileId) {
+  /// Toggle profile active state (activating switches to it; cannot deactivate current)
+  Future<void> toggleProfileActive(String profileId) async {
     final profile = _profiles.firstWhere(
       (p) => p.id == profileId,
       orElse: () => throw Exception('Profile not found: $profileId'),
     );
-    profile.isActive = !profile.isActive;
-    _saveAllProfiles();
-    profileNotifier.notifyListeners();
-    LogService().log('Toggled profile ${profile.callsign} active: ${profile.isActive}');
+    if (!profile.isActive) {
+      await switchToProfile(profileId);
+    }
+    // Cannot deactivate the current profile — no-op
   }
 
   /// Get all active profiles
@@ -550,6 +562,7 @@ class ProfileService {
     final newProfile = Profile(
       nickname: nickname ?? '',
       type: type,
+      isActive: false,
     );
     await _generateIdentityForProfile(newProfile, type: type);
     _profiles.add(newProfile);
@@ -569,6 +582,7 @@ class ProfileService {
     final newProfile = Profile(
       nickname: nickname ?? '',
       type: type,
+      isActive: false,
     );
     newProfile.npub = npub;
     newProfile.nsec = nsec;
@@ -758,6 +772,10 @@ class ProfileService {
       await MirrorConfigService.instance.setStorage(AppService().profileStorage);
       MirrorSyncService.instance.loadAllowedPeersFromConfig();
       MirrorAutoSyncService.instance.start();
+
+      // Reset chat state for profile isolation
+      ChatService().reset();
+      ChatNotificationService().resetForProfileSwitch();
 
       // Switch logs to profile-specific directory
       await LogService().switchToProfile(profile.callsign);

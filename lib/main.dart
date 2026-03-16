@@ -83,6 +83,7 @@ import 'models/app.dart';
 import 'util/file_icon_helper.dart';
 import 'util/event_bus.dart';
 import 'util/app_type_theme.dart';
+import 'pages/device_sync_settings_page.dart';
 import 'pages/profile_page.dart';
 import 'pages/about_page.dart';
 import 'pages/update_page.dart';
@@ -156,7 +157,8 @@ import 'pages/mirror_wizard_page.dart';
 import 'pages/hotspot_settings_page.dart';
 import 'widgets/profile_switcher.dart';
 import 'widgets/sync_button.dart';
-import 'services/sibling_discovery_service.dart';
+import 'services/mirror_config_service.dart';
+import 'services/mirror_discovery_service.dart';
 import 'widgets/transfer/incoming_transfer_dialog.dart';
 import 'transfer/services/p2p_transfer_service.dart';
 import 'cli/console.dart';
@@ -389,6 +391,22 @@ void main() async {
     // Switch logs to profile-specific directory
     await LogService().switchToProfile(profile.callsign);
     LogService().log('AppService callsign set: ${profile.callsign}');
+
+    // Wire up serialized mirror peer auto-registration callback
+    MirrorDiscoveryService.onMirrorsChanged = (mirrors) async {
+      for (final m in mirrors) {
+        if (m.installId != null) {
+          await MirrorConfigService.instance.ensurePeerFromDiscovery(
+            installId: m.installId!,
+            callsign: m.callsign,
+            nickname: m.nickname,
+            npub: m.npub,
+            platform: m.platform,
+            displayName: m.displayName,
+          );
+        }
+      }
+    };
 
     // Only create default apps if first launch is complete.
     // On first launch, WelcomePage.finalizeProfileIdentity() will create them
@@ -1937,8 +1955,10 @@ class _HomePageState extends State<HomePage> {
   }
 
   void _onProfileChanged() {
-    // Clear sibling discovery state on profile switch
-    SiblingDiscoveryService().clear();
+    // Clear mirror discovery state and force reconnect so the station
+    // sends a fresh mirrors_update for the new callsign.
+    MirrorDiscoveryService().clear();
+    WebSocketService().reconnect();
     if (mounted) setState(() {});
   }
 
@@ -2322,6 +2342,19 @@ class _HomePageState extends State<HomePage> {
                       context,
                       MaterialPageRoute(
                         builder: (context) => const StationsPage(),
+                      ),
+                    );
+                  },
+                ),
+                ListTile(
+                  leading: const Icon(Icons.sync_alt),
+                  title: Text(_i18n.t('device_sync')),
+                  onTap: () {
+                    Navigator.pop(context);
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => const DeviceSyncSettingsPage(),
                       ),
                     );
                   },
