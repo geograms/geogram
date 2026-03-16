@@ -20,7 +20,12 @@ class SyncButton extends StatelessWidget {
 
         return IconButton(
           icon: Badge(
-            label: Text('${mirrors.length}'),
+            label: Text(
+              '${mirrors.length}',
+              style: const TextStyle(color: Colors.white, fontSize: 10),
+            ),
+            backgroundColor: Colors.grey,
+            offset: const Offset(6, -6),
             child: const Icon(Icons.sync),
           ),
           tooltip: '${mirrors.length} mirror device(s)',
