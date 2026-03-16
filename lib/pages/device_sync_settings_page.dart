@@ -192,27 +192,13 @@ class _DeviceSyncSettingsPageState extends State<DeviceSyncSettingsPage> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Padding(
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-          child: Text(
-            'This Device',
-            style: theme.textTheme.titleSmall?.copyWith(
-              color: theme.colorScheme.primary,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-        ),
-        Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16),
           child: TextField(
             controller: _nicknameController,
-            decoration: InputDecoration(
-              labelText: 'Device nickname',
+            decoration: const InputDecoration(
+              labelText: 'This device nickname',
               hintText: 'Enter a name for this device',
-              border: const OutlineInputBorder(),
-              helperText: _config != null
-                  ? 'Install ID: ${_config!.deviceId.substring(0, 8)}...'
-                  : null,
-              helperStyle: const TextStyle(fontFamily: 'monospace', fontSize: 11),
+              border: OutlineInputBorder(),
             ),
             onSubmitted: _saveNickname,
           ),
