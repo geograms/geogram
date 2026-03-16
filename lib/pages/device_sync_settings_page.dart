@@ -155,13 +155,28 @@ class _DeviceSyncSettingsPageState extends State<DeviceSyncSettingsPage> {
         ],
       ),
       title: Text(peer.name),
-      subtitle: Text(
-        peer.lastSeenAt != null
-            ? 'Last seen ${_formatTimeAgo(peer.lastSeenAt!)}'
-            : 'Never seen',
-        style: theme.textTheme.bodySmall?.copyWith(
-          color: theme.colorScheme.outline,
-        ),
+      subtitle: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            peer.lastSeenAt != null
+                ? 'Last seen ${_formatTimeAgo(peer.lastSeenAt!)}'
+                : 'Never seen',
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.outline,
+            ),
+          ),
+          Text(
+            peer.lastSyncAt != null
+                ? 'Last sync ${_formatTimeAgo(peer.lastSyncAt!)}'
+                : 'Never synced',
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: peer.lastSyncAt != null
+                  ? theme.colorScheme.primary
+                  : theme.colorScheme.outline,
+            ),
+          ),
+        ],
       ),
       trailing: const Icon(Icons.chevron_right),
       onTap: () async {
