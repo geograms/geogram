@@ -119,6 +119,10 @@ class MeetingTranscriptionService {
 
   String? _currentArchivePath;
 
+  /// Queue tracking for background auto-transcription
+  int _queueTotal = 0;
+  int _queueCompleted = 0;
+
   /// Stream of detailed progress updates
   Stream<TranscriptionProgress> get progressStream => _progressController.stream;
 
@@ -153,6 +157,7 @@ class MeetingTranscriptionService {
   Future<MeetingTranscriptionResult> transcribeRecording({
     required String mp4Path,
     required String recordingName,
+    double? knownDurationSeconds,
   }) async {
     if (isBusy) {
       return MeetingTranscriptionResult.failure(
@@ -257,8 +262,9 @@ class MeetingTranscriptionService {
 
       if (_isCancelled) return MeetingTranscriptionResult.cancelled();
 
-      // Get audio duration
-      final durationSeconds = await _getAudioDuration(wavPath);
+      // Get audio duration (skip ffprobe if already known)
+      final durationSeconds =
+          knownDurationSeconds ?? await _getAudioDuration(wavPath);
 
       // Split into chunks if needed (>10 minutes)
       final chunkPaths = await _splitIfNeeded(
@@ -373,10 +379,13 @@ class MeetingTranscriptionService {
       'for ${recording.name}',
     );
 
+    final queueInfo = _queueTotal > 1
+        ? ' (${_queueCompleted + 1}/$_queueTotal remaining)'
+        : '';
     TaskMonitorService().register(MonitoredTask(
       id: _taskId,
       name: 'Meeting Transcription',
-      description: 'Transcribing recording: ${recording.name}',
+      description: 'Transcribing: ${recording.name}$queueInfo',
       serviceName: 'MeetingTranscription',
       priority: TaskPriority.normal,
       type: TaskType.oneshot,
@@ -394,9 +403,10 @@ class MeetingTranscriptionService {
     ConferenceArchiveAsset recording,
     int? maxDurationSeconds,
   ) async {
+    String? mp4Path;
     try {
       // Export MP4 to temp path
-      final mp4Path =
+      mp4Path =
           await ConferenceArchiveService().exportArchiveFileToTemporaryPath(
         entry,
         recording.relativePath,
@@ -414,12 +424,13 @@ class MeetingTranscriptionService {
       }
 
       // Check duration before expensive WAV conversion
+      double? knownDuration;
       if (maxDurationSeconds != null) {
-        final duration = await _getAudioDuration(mp4Path);
-        if (duration > maxDurationSeconds) {
+        knownDuration = await _getAudioDuration(mp4Path);
+        if (knownDuration > maxDurationSeconds) {
           LogService().log(
             'MeetingTranscriptionService: Skipping ${recording.name} — '
-            '${duration.round()}s exceeds max ${maxDurationSeconds}s',
+            '${knownDuration.round()}s exceeds max ${maxDurationSeconds}s',
           );
           await _safeDelete(mp4Path);
           TaskMonitorService().reportFailure(_taskId, 'exceeds_max_duration');
@@ -435,6 +446,7 @@ class MeetingTranscriptionService {
       final result = await transcribeRecording(
         mp4Path: mp4Path,
         recordingName: recording.name,
+        knownDurationSeconds: knownDuration,
       );
 
       if (result.cancelled) {
@@ -497,6 +509,7 @@ class MeetingTranscriptionService {
       ));
     } finally {
       _currentArchivePath = null;
+      if (mp4Path != null) await _safeDelete(mp4Path);
       TaskMonitorService().unregister(_taskId);
     }
   }
@@ -518,6 +531,7 @@ class MeetingTranscriptionService {
   Future<bool> _extractAudioToWav(String mp4Path, String wavPath) async {
     try {
       final result = await Process.run('ffmpeg', [
+        '-vn',
         '-i', mp4Path,
         '-ar', '16000',
         '-ac', '1',
@@ -582,8 +596,7 @@ class MeetingTranscriptionService {
         '-i', wavPath,
         '-f', 'segment',
         '-segment_time', '600',
-        '-ar', '16000',
-        '-ac', '1',
+        '-c', 'copy',
         '-y',
         outputPattern,
       ]);
@@ -686,9 +699,10 @@ class MeetingTranscriptionService {
       _autoTranscribeNext();
     });
 
-    // Chain: when one finishes, start the next
+    // Chain: when one finishes, update counter and start the next
     completionStream.listen((event) {
       if (event.success || event.error != null) {
+        _queueCompleted++;
         Future.delayed(const Duration(seconds: 5), _autoTranscribeNext);
       }
     });
@@ -700,21 +714,38 @@ class MeetingTranscriptionService {
 
     try {
       final archives = await ConferenceArchiveService().listArchives();
+
+      // Collect all pending recordings across all archives
+      final pending = <(ConferenceArchiveEntry, ConferenceArchiveAsset)>[];
       for (final archive in archives) {
         final transcriptNames = archive.voiceTranscripts
             .map((t) => _baseName(t.name))
             .toSet();
         for (final rec in archive.recordings) {
           if (!transcriptNames.contains(_baseName(rec.name))) {
-            transcribeInBackground(
-              entry: archive,
-              recording: rec,
-              maxDurationSeconds: 10800,
-            );
-            return; // one at a time
+            pending.add((archive, rec));
           }
         }
       }
+
+      if (pending.isEmpty) {
+        _queueTotal = 0;
+        _queueCompleted = 0;
+        return;
+      }
+
+      // On first call (or after queue was cleared), initialize counters
+      if (_queueTotal == 0) {
+        _queueTotal = pending.length;
+        _queueCompleted = 0;
+      }
+
+      final (entry, rec) = pending.first;
+      transcribeInBackground(
+        entry: entry,
+        recording: rec,
+        maxDurationSeconds: 10800,
+      );
     } catch (e) {
       LogService().log(
         'MeetingTranscriptionService: auto-transcribe scan error: $e',

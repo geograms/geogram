@@ -33,8 +33,8 @@ class MonitoredTask {
   /// Human-readable name
   final String name;
 
-  /// What this task does
-  final String description;
+  /// What this task does (mutable for progress updates)
+  String description;
 
   /// Owning service name
   final String serviceName;
