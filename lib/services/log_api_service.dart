@@ -16073,6 +16073,46 @@ class LogApiService with ChatModificationMixin {
             headers: headers,
           );
 
+        case 'profile_switch':
+          final callsign = params['callsign'] as String?;
+          if (callsign == null || callsign.isEmpty) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Missing callsign parameter',
+              }),
+              headers: headers,
+            );
+          }
+
+          final profiles = profileService.getAllProfiles();
+          final matchIdx = profiles.indexWhere(
+            (p) => p.callsign.toUpperCase() == callsign.toUpperCase(),
+          );
+          final target = matchIdx >= 0 ? profiles[matchIdx] : null;
+
+          if (target == null) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Profile not found for callsign: $callsign',
+                'available_callsigns': profiles.map((p) => p.callsign).toList(),
+              }),
+              headers: headers,
+            );
+          }
+
+          await profileService.switchToProfile(target.id);
+
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'switched_to': target.callsign,
+              'message': 'Profile switched to ${target.callsign}',
+            }),
+            headers: headers,
+          );
+
         default:
           return shelf.Response.badRequest(
             body: jsonEncode({
@@ -16081,6 +16121,7 @@ class LogApiService with ChatModificationMixin {
               'available': [
                 'profile_list',
                 'profile_delete',
+                'profile_switch',
               ],
             }),
             headers: headers,

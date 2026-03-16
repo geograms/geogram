@@ -4131,6 +4131,11 @@ curl -X POST http://localhost:3456/api/debug \
 curl -X POST http://localhost:3456/api/debug \
   -H "Content-Type: application/json" \
   -d '{"action": "profile_delete", "callsign": "X1FART"}'
+
+# Switch to a different profile by callsign
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action": "profile_switch", "callsign": "X1ZCCL"}'
 ```
 
 ---
