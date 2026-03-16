@@ -56,6 +56,7 @@ This document catalogs reusable UI components available in the Geogram codebase.
 - [ChatNip05Mixin](#chatnip05mixin) - Shared NIP-05 registration for chat message senders
 - [Nip05RegistryService.buildNostrJsonResponse](#nip05registryservicebuildnostrjsonresponse) - Build NIP-05 nostr.json response (used by all station handlers)
 - [DeviceProxyMixin](#deviceproxymixin) - Pure proxy bridge: forwards any `/{identifier}/*` request to connected device via WebSocket
+- [Serialized Callback Pattern](#serialized-callback-pattern) - Coalescing async callback that prevents concurrent file I/O (used in MirrorDiscoveryService)
 
 ### Conference Components (SFU Star Topology)
 - [ConferenceMixin](#conferencemixin) - Station-side conference signaling relay (shared mixin)
@@ -7586,6 +7587,55 @@ final decrypted = BackupEncryption.decryptFile(encryptedBytes, myNsec);
 ```
 
 **Reused by:** Backup service, Email cache (offline delivery)
+
+---
+
+## Serialized Callback Pattern
+
+Prevents concurrent async operations when a service emits rapid updates. Only one callback runs at a time; subsequent calls coalesce into a single follow-up.
+
+**Location:** `lib/services/mirror_discovery_service.dart` (MirrorDiscoveryService)
+
+**Pattern:**
+```dart
+class MyService {
+  /// Set by app init — decouples producer from consumer (breaks circular imports).
+  static Future<void> Function(List<Item> items)? onItemsChanged;
+  static bool _callbackRunning = false;
+  static List<Item>? _pendingCallback;
+
+  static void _scheduleCallback(List<Item> items) {
+    final cb = onItemsChanged;
+    if (cb == null) return;
+
+    if (_callbackRunning) {
+      _pendingCallback = items; // coalesce: keep only latest
+      return;
+    }
+
+    _callbackRunning = true;
+    cb(items).whenComplete(() {
+      _callbackRunning = false;
+      final pending = _pendingCallback;
+      if (pending != null) {
+        _pendingCallback = null;
+        _scheduleCallback(pending);
+      }
+    });
+  }
+}
+```
+
+**When to use:** Any time a synchronous `void` method needs to trigger async file I/O or network calls. Prevents fire-and-forget FD leaks and unbounded concurrency.
+
+**Wiring (in main.dart or app init):**
+```dart
+MyService.onItemsChanged = (items) async {
+  for (final item in items) {
+    await processItem(item); // serialized — each awaited in order
+  }
+};
+```
 
 ---
 
