@@ -27,13 +27,15 @@ class _DeviceSyncSettingsPageState extends State<DeviceSyncSettingsPage> {
   MirrorConfig? _config;
   StreamSubscription<MirrorConfig>? _configSub;
   late TextEditingController _nicknameController;
-  bool _isLoading = true;
 
   @override
   void initState() {
     super.initState();
-    _nicknameController = TextEditingController();
-    _loadConfig();
+    // Show cached config immediately — no spinner needed
+    _config = _configService.config;
+    _nicknameController = TextEditingController(
+      text: _config?.deviceName ?? '',
+    );
     _configSub = _configService.configStream.listen((config) {
       if (mounted) {
         setState(() {
@@ -41,17 +43,6 @@ class _DeviceSyncSettingsPageState extends State<DeviceSyncSettingsPage> {
         });
       }
     });
-  }
-
-  Future<void> _loadConfig() async {
-    final config = await _configService.loadConfig();
-    if (mounted) {
-      setState(() {
-        _config = config;
-        _nicknameController.text = config.deviceName;
-        _isLoading = false;
-      });
-    }
   }
 
   @override
@@ -69,9 +60,7 @@ class _DeviceSyncSettingsPageState extends State<DeviceSyncSettingsPage> {
       appBar: AppBar(
         title: const Text('Device Sync'),
       ),
-      body: _isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : ValueListenableBuilder<List<MirrorDevice>>(
+      body: ValueListenableBuilder<List<MirrorDevice>>(
               valueListenable: _discovery.mirrors,
               builder: (context, discoveredMirrors, _) {
                 return ListView(
@@ -182,7 +171,8 @@ class _DeviceSyncSettingsPageState extends State<DeviceSyncSettingsPage> {
             builder: (context) => PeerSettingsPage(peer: peer),
           ),
         );
-        await _loadConfig();
+        // Config updates arrive via stream subscription automatically
+        if (mounted) setState(() => _config = _configService.config);
       },
     );
   }

@@ -392,6 +392,9 @@ void main() async {
     await LogService().switchToProfile(profile.callsign);
     LogService().log('AppService callsign set: ${profile.callsign}');
 
+    // Initialize mirror config with profile storage so peers persist across restarts
+    await MirrorConfigService.instance.setStorage(AppService().profileStorage);
+
     // Wire up serialized mirror peer auto-registration callback
     MirrorDiscoveryService.onMirrorsChanged = (mirrors) async {
       for (final m in mirrors) {

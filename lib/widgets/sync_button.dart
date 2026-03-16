@@ -25,7 +25,7 @@ class SyncButton extends StatelessWidget {
               style: const TextStyle(color: Colors.white, fontSize: 10),
             ),
             backgroundColor: Colors.grey,
-            offset: const Offset(6, -6),
+            offset: const Offset(9, -6),
             child: const Icon(Icons.sync),
           ),
           tooltip: '${mirrors.length} mirror device(s)',
