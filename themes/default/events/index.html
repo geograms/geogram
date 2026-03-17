@@ -24,14 +24,13 @@
     </nav>
   </header>
 
-  <main class="main">
-    <div class="events-shell">
-      <input id="events-search" class="listing-search" type="text" placeholder="Search events..." autofocus>
-      <div id="year-tabs" class="year-tabs"></div>
-      <div id="events-list" class="events-list"></div>
-      <div id="events-hint" class="listing-hint" style="display:none"></div>
+  <div class="content">
+    <div class="post">
+      <input id="events-search" class="events-search" type="text" placeholder="Search events...">
+      <div id="events-list"></div>
+      <div id="events-hint" class="events-hint" style="display:none"></div>
     </div>
-  </main>
+  </div>
 
   <footer class="footer">
     <div class="footer__inner">
@@ -52,11 +51,8 @@
     var listEl = document.getElementById('events-list');
     var hintEl = document.getElementById('events-hint');
     var searchEl = document.getElementById('events-search');
-    var yearTabsEl = document.getElementById('year-tabs');
 
     var allEvents = data.events || [];
-    var years = data.years || [];
-    var activeYear = null;
 
     if (!data.authenticated) {
       hintEl.textContent = 'Connect with Nostr to see group events';
@@ -72,97 +68,63 @@
     function formatDate(iso) {
       if (!iso) return '';
       var d = new Date(iso.replace(/_/g, ':'));
-      return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+      return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
     }
 
-    function getDateParts(iso) {
-      if (!iso) return null;
+    function formatFullDate(iso) {
+      if (!iso) return '';
       var d = new Date(iso.replace(/_/g, ':'));
-      if (isNaN(d.getTime())) return null;
-      var months = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'];
-      var days = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
-      return {
-        month: months[d.getMonth()],
-        day: d.getDate(),
-        weekday: days[d.getDay()]
-      };
+      return d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
     }
 
-    function renderYearTabs() {
-      if (years.length <= 1) return;
-      var html = '<button class="year-tab' + (activeYear === null ? ' active' : '') + '" data-year="all">All</button>';
-      years.forEach(function(y) {
-        html += '<button class="year-tab' + (activeYear === y ? ' active' : '') + '" data-year="' + y + '">' + y + '</button>';
-      });
-      yearTabsEl.innerHTML = html;
-      yearTabsEl.querySelectorAll('.year-tab').forEach(function(btn) {
-        btn.addEventListener('click', function() {
-          var yr = this.getAttribute('data-year');
-          activeYear = yr === 'all' ? null : parseInt(yr);
-          renderYearTabs();
-          render(searchEl.value);
-        });
-      });
+    function getYear(item) {
+      var ts = item.start_date || item.timestamp || '';
+      return ts.substring(0, 4);
     }
 
-    function renderEventCard(item) {
-      var dp = getDateParts(item.start_date || item.timestamp);
-      var dateBlock = '';
-      if (dp) {
-        dateBlock = '<div class="event-date-block">' +
-          '<div class="event-month">' + dp.month + '</div>' +
-          '<div class="event-day">' + dp.day + '</div>' +
-          '<div class="event-weekday">' + dp.weekday + '</div>' +
-        '</div>';
-      }
+    function isFuture(item) {
+      var ts = item.start_date || item.timestamp || '';
+      try { return new Date(ts.replace(/_/g, ':')) > new Date(); } catch(e) { return false; }
+    }
 
-      var meta = [];
-      if (item.location_name) {
-        meta.push(esc(item.location_name));
-      } else if (item.location && item.location !== 'online') {
-        meta.push('In-person');
-      } else if (item.location === 'online') {
-        meta.push('Online');
-      }
+    function renderEventNode(item) {
+      var linkId = item.slug || item.id;
+      var date = item.start_date || item.timestamp;
+      var dateLabel = formatFullDate(date);
       if (item.start_date && item.end_date && item.start_date !== item.end_date) {
-        meta.push(formatDate(item.start_date) + ' - ' + formatDate(item.end_date));
-      } else if (item.start_date) {
-        meta.push(formatDate(item.start_date));
-      } else {
-        meta.push(formatDate(item.timestamp));
+        dateLabel = formatDate(item.start_date) + ' \u2013 ' + formatDate(item.end_date);
+      }
+
+      var location = '';
+      if (item.location_name) {
+        location = esc(item.location_name);
+      } else if (item.location === 'online') {
+        location = 'Online';
+      } else if (item.location && item.location !== 'online') {
+        location = 'In-person';
       }
 
       var stats = [];
       if (item.going_count > 0) stats.push(item.going_count + ' going');
       if (item.interested_count > 0) stats.push(item.interested_count + ' interested');
-      if (item.comment_count > 0) stats.push(item.comment_count + ' comment' + (item.comment_count === 1 ? '' : 's'));
 
-      var flyerHtml = '';
-      if (item.has_flyer) {
-        flyerHtml = '<div class="event-flyer-thumb"><img src="' + esc(item.id) + '/files/flyer.jpg" alt="Flyer" loading="lazy" onerror="this.parentElement.style.display=\'none\'"></div>';
-      }
+      var future = isFuture(item);
 
-      var linkId = item.slug || item.id;
-      return '<a class="event-item" href="' + encodeURIComponent(linkId) + '">' +
-        dateBlock +
-        '<div class="event-content">' +
-          '<div class="event-title">' + esc(item.title) + '</div>' +
-          '<div class="event-meta">' + meta.join(' &middot; ') + '</div>' +
-          (stats.length ? '<div class="event-attendance">' + stats.join(' &middot; ') + '</div>' : '') +
+      return '<a class="tl-node' + (future ? ' tl-future' : '') + '" href="' + encodeURIComponent(linkId) + '">' +
+        '<div class="tl-dot"></div>' +
+        '<div class="tl-card">' +
+          '<div class="tl-title">' + esc(item.title) + '</div>' +
+          '<div class="tl-meta">' +
+            '<span>' + dateLabel + '</span>' +
+            (location ? '<span class="tl-sep">\u00b7</span><span>' + location + '</span>' : '') +
+          '</div>' +
+          (stats.length ? '<div class="tl-stats">' + stats.join(' \u00b7 ') + '</div>' : '') +
         '</div>' +
-        flyerHtml +
       '</a>';
     }
 
     function render(filter) {
       var filtered = allEvents;
-
-      if (activeYear !== null) {
-        filtered = filtered.filter(function(item) {
-          var ts = item.start_date || item.timestamp || '';
-          return ts.substring(0, 4) === String(activeYear);
-        });
-      }
 
       if (filter) {
         var q = filter.toLowerCase();
@@ -173,13 +135,37 @@
       }
 
       if (filtered.length === 0) {
-        listEl.innerHTML = '<div class="listing-empty">' + (allEvents.length === 0 ? 'No events yet' : 'No matches') + '</div>';
-      } else {
-        listEl.innerHTML = filtered.map(renderEventCard).join('');
+        listEl.innerHTML = '<div class="events-empty">' + (allEvents.length === 0 ? 'No events yet' : 'No matches') + '</div>';
+        return;
       }
+
+      // Group by year
+      var groups = {};
+      var yearOrder = [];
+      filtered.forEach(function(item) {
+        var y = getYear(item);
+        if (!groups[y]) { groups[y] = []; yearOrder.push(y); }
+        groups[y].push(item);
+      });
+      // Sort years descending (newest first), but future events on top
+      yearOrder.sort(function(a, b) { return parseInt(b) - parseInt(a); });
+
+      var html = '<div class="timeline">';
+      yearOrder.forEach(function(year) {
+        html += '<div class="tl-year-group">';
+        html += '<div class="tl-year-header"><span class="tl-year-label">' + year + '</span></div>';
+        html += '<div class="tl-track">';
+        groups[year].forEach(function(item) {
+          html += renderEventNode(item);
+        });
+        html += '</div>';
+        html += '</div>';
+      });
+      html += '</div>';
+
+      listEl.innerHTML = html;
     }
 
-    renderYearTabs();
     render('');
     searchEl.addEventListener('input', function() { render(searchEl.value); });
 

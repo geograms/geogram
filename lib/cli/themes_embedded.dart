@@ -1303,14 +1303,13 @@ class ThemesEmbedded {
     </nav>
   </header>
 
-  <main class="main">
-    <div class="events-shell">
-      <input id="events-search" class="listing-search" type="text" placeholder="Search events..." autofocus>
-      <div id="year-tabs" class="year-tabs"></div>
-      <div id="events-list" class="events-list"></div>
-      <div id="events-hint" class="listing-hint" style="display:none"></div>
+  <div class="content">
+    <div class="post">
+      <input id="events-search" class="events-search" type="text" placeholder="Search events...">
+      <div id="events-list"></div>
+      <div id="events-hint" class="events-hint" style="display:none"></div>
     </div>
-  </main>
+  </div>
 
   <footer class="footer">
     <div class="footer__inner">
@@ -1331,11 +1330,8 @@ class ThemesEmbedded {
     var listEl = document.getElementById('events-list');
     var hintEl = document.getElementById('events-hint');
     var searchEl = document.getElementById('events-search');
-    var yearTabsEl = document.getElementById('year-tabs');
 
     var allEvents = data.events || [];
-    var years = data.years || [];
-    var activeYear = null;
 
     if (!data.authenticated) {
       hintEl.textContent = 'Connect with Nostr to see group events';
@@ -1351,97 +1347,63 @@ class ThemesEmbedded {
     function formatDate(iso) {
       if (!iso) return '';
       var d = new Date(iso.replace(/_/g, ':'));
-      return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+      return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
     }
 
-    function getDateParts(iso) {
-      if (!iso) return null;
+    function formatFullDate(iso) {
+      if (!iso) return '';
       var d = new Date(iso.replace(/_/g, ':'));
-      if (isNaN(d.getTime())) return null;
-      var months = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'];
-      var days = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
-      return {
-        month: months[d.getMonth()],
-        day: d.getDate(),
-        weekday: days[d.getDay()]
-      };
+      return d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
     }
 
-    function renderYearTabs() {
-      if (years.length <= 1) return;
-      var html = '<button class="year-tab' + (activeYear === null ? ' active' : '') + '" data-year="all">All</button>';
-      years.forEach(function(y) {
-        html += '<button class="year-tab' + (activeYear === y ? ' active' : '') + '" data-year="' + y + '">' + y + '</button>';
-      });
-      yearTabsEl.innerHTML = html;
-      yearTabsEl.querySelectorAll('.year-tab').forEach(function(btn) {
-        btn.addEventListener('click', function() {
-          var yr = this.getAttribute('data-year');
-          activeYear = yr === 'all' ? null : parseInt(yr);
-          renderYearTabs();
-          render(searchEl.value);
-        });
-      });
+    function getYear(item) {
+      var ts = item.start_date || item.timestamp || '';
+      return ts.substring(0, 4);
     }
 
-    function renderEventCard(item) {
-      var dp = getDateParts(item.start_date || item.timestamp);
-      var dateBlock = '';
-      if (dp) {
-        dateBlock = '<div class="event-date-block">' +
-          '<div class="event-month">' + dp.month + '</div>' +
-          '<div class="event-day">' + dp.day + '</div>' +
-          '<div class="event-weekday">' + dp.weekday + '</div>' +
-        '</div>';
-      }
+    function isFuture(item) {
+      var ts = item.start_date || item.timestamp || '';
+      try { return new Date(ts.replace(/_/g, ':')) > new Date(); } catch(e) { return false; }
+    }
 
-      var meta = [];
-      if (item.location_name) {
-        meta.push(esc(item.location_name));
-      } else if (item.location && item.location !== 'online') {
-        meta.push('In-person');
-      } else if (item.location === 'online') {
-        meta.push('Online');
-      }
+    function renderEventNode(item) {
+      var linkId = item.slug || item.id;
+      var date = item.start_date || item.timestamp;
+      var dateLabel = formatFullDate(date);
       if (item.start_date && item.end_date && item.start_date !== item.end_date) {
-        meta.push(formatDate(item.start_date) + ' - ' + formatDate(item.end_date));
-      } else if (item.start_date) {
-        meta.push(formatDate(item.start_date));
-      } else {
-        meta.push(formatDate(item.timestamp));
+        dateLabel = formatDate(item.start_date) + ' \u2013 ' + formatDate(item.end_date);
+      }
+
+      var location = '';
+      if (item.location_name) {
+        location = esc(item.location_name);
+      } else if (item.location === 'online') {
+        location = 'Online';
+      } else if (item.location && item.location !== 'online') {
+        location = 'In-person';
       }
 
       var stats = [];
       if (item.going_count > 0) stats.push(item.going_count + ' going');
       if (item.interested_count > 0) stats.push(item.interested_count + ' interested');
-      if (item.comment_count > 0) stats.push(item.comment_count + ' comment' + (item.comment_count === 1 ? '' : 's'));
 
-      var flyerHtml = '';
-      if (item.has_flyer) {
-        flyerHtml = '<div class="event-flyer-thumb"><img src="' + esc(item.id) + '/files/flyer.jpg" alt="Flyer" loading="lazy" onerror="this.parentElement.style.display=\'none\'"></div>';
-      }
+      var future = isFuture(item);
 
-      var linkId = item.slug || item.id;
-      return '<a class="event-item" href="' + encodeURIComponent(linkId) + '">' +
-        dateBlock +
-        '<div class="event-content">' +
-          '<div class="event-title">' + esc(item.title) + '</div>' +
-          '<div class="event-meta">' + meta.join(' &middot; ') + '</div>' +
-          (stats.length ? '<div class="event-attendance">' + stats.join(' &middot; ') + '</div>' : '') +
+      return '<a class="tl-node' + (future ? ' tl-future' : '') + '" href="' + encodeURIComponent(linkId) + '">' +
+        '<div class="tl-dot"></div>' +
+        '<div class="tl-card">' +
+          '<div class="tl-title">' + esc(item.title) + '</div>' +
+          '<div class="tl-meta">' +
+            '<span>' + dateLabel + '</span>' +
+            (location ? '<span class="tl-sep">\u00b7</span><span>' + location + '</span>' : '') +
+          '</div>' +
+          (stats.length ? '<div class="tl-stats">' + stats.join(' \u00b7 ') + '</div>' : '') +
         '</div>' +
-        flyerHtml +
       '</a>';
     }
 
     function render(filter) {
       var filtered = allEvents;
-
-      if (activeYear !== null) {
-        filtered = filtered.filter(function(item) {
-          var ts = item.start_date || item.timestamp || '';
-          return ts.substring(0, 4) === String(activeYear);
-        });
-      }
 
       if (filter) {
         var q = filter.toLowerCase();
@@ -1452,13 +1414,37 @@ class ThemesEmbedded {
       }
 
       if (filtered.length === 0) {
-        listEl.innerHTML = '<div class="listing-empty">' + (allEvents.length === 0 ? 'No events yet' : 'No matches') + '</div>';
-      } else {
-        listEl.innerHTML = filtered.map(renderEventCard).join('');
+        listEl.innerHTML = '<div class="events-empty">' + (allEvents.length === 0 ? 'No events yet' : 'No matches') + '</div>';
+        return;
       }
+
+      // Group by year
+      var groups = {};
+      var yearOrder = [];
+      filtered.forEach(function(item) {
+        var y = getYear(item);
+        if (!groups[y]) { groups[y] = []; yearOrder.push(y); }
+        groups[y].push(item);
+      });
+      // Sort years descending (newest first), but future events on top
+      yearOrder.sort(function(a, b) { return parseInt(b) - parseInt(a); });
+
+      var html = '<div class="timeline">';
+      yearOrder.forEach(function(year) {
+        html += '<div class="tl-year-group">';
+        html += '<div class="tl-year-header"><span class="tl-year-label">' + year + '</span></div>';
+        html += '<div class="tl-track">';
+        groups[year].forEach(function(item) {
+          html += renderEventNode(item);
+        });
+        html += '</div>';
+        html += '</div>';
+      });
+      html += '</div>';
+
+      listEl.innerHTML = html;
     }
 
-    renderYearTabs();
     render('');
     searchEl.addEventListener('input', function() { render(searchEl.value); });
 
@@ -1474,303 +1460,164 @@ class ThemesEmbedded {
 ''';
 
   static const String _defaultEventsStylesCss = r'''
-/* Events App - Theme Overrides */
+/* Events App - Listing Page */
 
-/* Events Header */
-.events-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: var(--spacing-lg);
-  gap: var(--spacing-md);
-}
-
-@media (max-width: 640px) {
-  .events-header {
-    flex-direction: column;
-    align-items: stretch;
-  }
-}
-
-.view-toggle {
-  display: flex;
-  gap: var(--spacing-xs);
-}
-
-.view-toggle .btn.active {
-  background-color: var(--color-accent);
-  color: white;
-}
-
-/* Events List */
-.events-list {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-md);
-}
-
-/* Event Item */
-.event-item {
-  display: flex;
-  gap: var(--spacing-lg);
-  background-color: var(--color-bg);
-  border: 1px solid var(--color-border-light);
-  border-radius: var(--border-radius);
-  padding: var(--spacing-lg);
-  transition: box-shadow var(--transition-fast);
-}
-
-.event-item:hover {
-  box-shadow: var(--shadow-md);
-}
-
-@media (max-width: 640px) {
-  .event-item {
-    flex-direction: column;
-  }
-}
-
-/* Event Date Block */
-.event-date-block {
-  flex-shrink: 0;
-  width: 80px;
-  text-align: center;
-  padding: var(--spacing-md);
-  background-color: var(--color-bg-secondary);
-  border-radius: var(--border-radius);
-}
-
-.event-month {
-  font-size: var(--font-size-sm);
-  font-weight: 600;
-  text-transform: uppercase;
-  color: var(--color-accent);
-  margin-bottom: var(--spacing-xs);
-}
-
-.event-day {
-  font-size: var(--font-size-3xl);
-  font-weight: 700;
-  line-height: 1;
-  color: var(--color-text);
-}
-
-.event-weekday {
-  font-size: var(--font-size-xs);
-  color: var(--color-text-muted);
-  margin-top: var(--spacing-xs);
-}
-
-/* Event Content */
-.event-content {
-  flex: 1;
-  min-width: 0;
-}
-
-.event-title {
-  font-size: var(--font-size-xl);
-  font-weight: 600;
-  margin-bottom: var(--spacing-sm);
-  color: var(--color-text);
-}
-
-.event-title a {
-  color: inherit;
-}
-
-.event-title a:hover {
-  color: var(--color-accent);
-}
-
-.event-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--spacing-md);
-  margin-bottom: var(--spacing-md);
-  font-size: var(--font-size-sm);
-  color: var(--color-text-muted);
-}
-
-.event-meta-item {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-xs);
-}
-
-.event-description {
-  color: var(--color-text-secondary);
-  margin-bottom: var(--spacing-md);
-}
-
-.event-footer {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--spacing-md);
-}
-
-.event-tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--spacing-xs);
-}
-
-.event-tag {
-  font-size: var(--font-size-xs);
-  padding: var(--spacing-xs) var(--spacing-sm);
-  background-color: var(--color-bg-secondary);
-  border-radius: var(--border-radius-sm);
-  color: var(--color-text-secondary);
-}
-
-/* Event Status */
-.event-status {
-  font-size: var(--font-size-xs);
-  font-weight: 500;
-  padding: var(--spacing-xs) var(--spacing-sm);
-  border-radius: var(--border-radius-sm);
-}
-
-.event-status.upcoming {
-  background-color: var(--color-success);
-  color: white;
-}
-
-.event-status.ongoing {
-  background-color: var(--color-warning);
-  color: white;
-}
-
-.event-status.past {
-  background-color: var(--color-bg-tertiary);
-  color: var(--color-text-muted);
-}
-
-/* Attendance */
-.event-attendance {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-sm);
-  font-size: var(--font-size-sm);
-  color: var(--color-text-muted);
-}
-
-.attendance-avatars {
-  display: flex;
-}
-
-.attendance-avatars .avatar {
-  width: 24px;
-  height: 24px;
-  font-size: var(--font-size-xs);
-  margin-left: -8px;
-  border: 2px solid var(--color-bg);
-}
-
-.attendance-avatars .avatar:first-child {
-  margin-left: 0;
-}
-
-/* Featured Event */
-.event-item.featured {
-  border-left: 4px solid var(--color-accent);
-}
-
-/* Cancelled Event */
-.event-item.cancelled {
-  opacity: 0.6;
-}
-
-.event-item.cancelled .event-title {
-  text-decoration: line-through;
-}
-
-/* Events Shell (listing page) */
-.events-shell {
-  max-width: 800px;
-  margin: 0 auto;
-}
-
-/* Listing link styles */
-a.event-item {
-  text-decoration: none;
-  color: inherit;
-  cursor: pointer;
-}
-
-/* Flyer thumbnail in listing */
-.event-flyer-thumb {
-  flex-shrink: 0;
-  width: 80px;
-  height: 80px;
-  border-radius: var(--border-radius);
-  overflow: hidden;
-}
-
-.event-flyer-thumb img {
+/* Search */
+.events-search {
   width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
-/* Year tabs */
-.year-tabs {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--spacing-xs);
-  margin-bottom: var(--spacing-lg);
-}
-
-.year-tab {
-  padding: var(--spacing-xs) var(--spacing-md);
-  border: 1px solid var(--color-border-light);
-  border-radius: var(--border-radius-sm);
+  padding: 10px 14px;
+  border: 1px dashed var(--border-color);
   background: transparent;
-  color: var(--color-text-secondary);
-  cursor: pointer;
-  font-size: var(--font-size-sm);
-}
-
-.year-tab:hover {
-  border-color: var(--color-accent);
-  color: var(--color-accent);
-}
-
-.year-tab.active {
-  background-color: var(--color-accent);
-  border-color: var(--color-accent);
-  color: white;
-}
-
-/* Listing search */
-.listing-search {
-  width: 100%;
-  padding: var(--spacing-sm) var(--spacing-md);
-  border: 1px solid var(--color-border-light);
-  border-radius: var(--border-radius);
-  background: var(--color-bg);
-  color: var(--color-text);
-  font-size: var(--font-size-base);
-  margin-bottom: var(--spacing-lg);
+  color: var(--color);
+  font-size: 1rem;
+  font-family: inherit;
+  margin-bottom: 30px;
   box-sizing: border-box;
 }
 
-.listing-search:focus {
+.events-search:focus {
   outline: none;
-  border-color: var(--color-accent);
+  border-color: var(--accent);
+  border-style: solid;
 }
 
-.listing-hint {
-  text-align: center;
-  color: var(--color-text-muted);
-  font-size: var(--font-size-sm);
-  padding: var(--spacing-md);
+.events-search::placeholder {
+  color: var(--accent-alpha-70);
 }
 
-.listing-empty {
+.events-hint {
   text-align: center;
-  color: var(--color-text-muted);
-  padding: var(--spacing-xl) var(--spacing-md);
+  opacity: 0.5;
+  font-size: 0.9rem;
+  padding: 12px;
+}
+
+.events-empty {
+  text-align: center;
+  opacity: 0.4;
+  padding: 40px 12px;
+}
+
+/* Timeline */
+.timeline {
+  position: relative;
+}
+
+/* Year group */
+.tl-year-group {
+  margin-bottom: 10px;
+}
+
+.tl-year-header {
+  display: flex;
+  align-items: center;
+  margin-bottom: 0;
+  position: relative;
+}
+
+.tl-year-label {
+  display: inline-block;
+  font-size: 0.85rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: var(--accent);
+  background: var(--background);
+  padding: 4px 12px;
+  border: 2px dashed var(--accent);
+  position: relative;
+  z-index: 1;
+}
+
+/* The vertical track with wire */
+.tl-track {
+  position: relative;
+  padding-left: 28px;
+  border-left: 2px dashed var(--border-color);
+  margin-left: 18px;
+}
+
+/* Event node */
+.tl-node {
+  display: block;
+  position: relative;
+  padding: 16px 0;
+  text-decoration: none;
+  color: inherit;
+}
+
+.tl-node:not(:last-child) {
+  border-bottom: 1px solid var(--border-color);
+}
+
+/* The dot on the wire */
+.tl-dot {
+  position: absolute;
+  left: -34px;
+  top: 22px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--border-color);
+  border: 2px solid var(--background);
+  box-shadow: 0 0 0 2px var(--border-color);
+  transition: all 0.15s;
+}
+
+.tl-node:hover .tl-dot {
+  background: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+/* Future events get accent dot */
+.tl-future .tl-dot {
+  background: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-alpha-70);
+}
+
+/* Card content */
+.tl-card {
+  transition: transform 0.1s;
+}
+
+.tl-node:hover .tl-card {
+  transform: translateX(4px);
+}
+
+.tl-title {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--accent);
+  margin-bottom: 4px;
+  line-height: 1.3;
+}
+
+.tl-meta {
+  font-size: 0.9rem;
+  color: var(--color);
+  opacity: 0.6;
+}
+
+.tl-sep {
+  margin: 0 6px;
+  opacity: 0.4;
+}
+
+.tl-stats {
+  font-size: 0.8rem;
+  color: var(--accent-alpha-70);
+  margin-top: 4px;
+}
+
+@media (max-width: 480px) {
+  .tl-track {
+    padding-left: 20px;
+    margin-left: 12px;
+  }
+  .tl-dot {
+    left: -26px;
+    width: 8px;
+    height: 8px;
+  }
 }
 
 /* ========== Event Detail Page ========== */
