@@ -376,6 +376,8 @@ CONFIG_PARTITION_TABLE_MD5=y
 # Geogram Board Selection
 #
 CONFIG_GEOGRAM_BOARD_HELTEC_V2=y
+# CONFIG_GEOGRAM_BOARD_HELTEC_V1 is not set
+# CONFIG_GEOGRAM_BOARD_KV4P is not set
 # CONFIG_GEOGRAM_BOARD_GENERIC is not set
 # end of Geogram Board Selection
 

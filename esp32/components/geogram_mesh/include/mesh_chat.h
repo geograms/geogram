@@ -56,6 +56,15 @@ typedef enum {
 } mesh_chat_msg_type_t;
 
 /**
+ * @brief Channel bitmask — how a message entered/left the system
+ */
+#define MESH_CHAT_CH_WIFI  (1 << 0)  // 0x01
+#define MESH_CHAT_CH_BLE   (1 << 1)  // 0x02
+#define MESH_CHAT_CH_MESH  (1 << 2)  // 0x04
+#define MESH_CHAT_CH_APRS  (1 << 3)  // 0x08
+#define MESH_CHAT_CH_LORA  (1 << 4)  // 0x10
+
+/**
  * @brief File metadata for file messages
  */
 typedef struct {
@@ -76,6 +85,7 @@ typedef struct {
     uint8_t sender_mac[6];                          /**< Sender MAC address */
     bool is_local;                                  /**< True if sent from this node */
     mesh_chat_msg_type_t msg_type;                 /**< Message type (text/file) */
+    uint8_t channels;                              /**< Channel bitmask (MESH_CHAT_CH_*) */
     mesh_chat_file_info_t file;                    /**< File info (only if msg_type==FILE) */
 } mesh_chat_message_t;
 
@@ -109,7 +119,7 @@ esp_err_t mesh_chat_send(const char *text);
  * @param text Message text (max MESH_CHAT_MAX_MESSAGE_LEN chars)
  * @return ESP_OK on success
  */
-esp_err_t mesh_chat_add_local_message(const char *callsign, const char *text);
+esp_err_t mesh_chat_add_local_message(const char *callsign, const char *text, uint8_t channels);
 /**
  * @brief Add a local-only chat message with a custom callsign and timestamp
  * @param callsign Sender callsign (optional)
@@ -118,7 +128,8 @@ esp_err_t mesh_chat_add_local_message(const char *callsign, const char *text);
  */
 esp_err_t mesh_chat_add_local_message_with_timestamp(const char *callsign,
                                                      const char *text,
-                                                     uint32_t timestamp);
+                                                     uint32_t timestamp,
+                                                     uint8_t channels);
 
 /**
  * @brief Add a local-only file metadata message with a custom callsign
@@ -134,7 +145,8 @@ esp_err_t mesh_chat_add_local_file_message(const char *callsign,
                                            const uint8_t *sha1,
                                            uint32_t size,
                                            const char *filename,
-                                           const char *mime_type);
+                                           const char *mime_type,
+                                           uint8_t channels);
 
 /**
  * @brief Send a file message to all mesh nodes

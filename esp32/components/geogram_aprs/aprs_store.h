@@ -114,6 +114,17 @@ char aprs_store_get_epoch(void);
  */
 void aprs_store_parse_id(const char *str, char *epoch, uint32_t *id);
 
+/**
+ * @brief Callback fired after each RX message is stored
+ */
+typedef void (*aprs_store_rx_notify_cb_t)(const char *from, const char *to,
+                                           const char *message, void *ctx);
+
+/**
+ * @brief Register an RX notification callback (e.g. for BLE push)
+ */
+void aprs_store_set_rx_notify(aprs_store_rx_notify_cb_t cb, void *ctx);
+
 #ifdef __cplusplus
 }
 #endif

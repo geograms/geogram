@@ -71,9 +71,15 @@
     #include "wifi_bsp.h"
     #include "esp_wifi.h"
     #include "http_server.h"
+    #include "ble_aprs.h"
+    #include "radio_tx.h"
     #if HAS_LED
     #include "led_bsp.h"
     #endif
+#elif BOARD_MODEL == MODEL_TDONGLE_S3
+    #include "model_config.h"
+    #include "model_init.h"
+    #include "ble_aprs.h"
 #elif BOARD_MODEL == MODEL_HELTEC_V3
     #include "model_config.h"
     #include "model_init.h"
@@ -806,6 +812,69 @@ static void rtc_task(void *pvParameter)
 
 #endif  // BOARD_MODEL == MODEL_ESP32S3_EPAPER_1IN54
 
+// ============================================================================
+// BlueAPRS bridge callbacks (KV4P + T-Dongle-S3)
+// ============================================================================
+
+#if BOARD_MODEL == MODEL_KV4P
+#include "aprs_store.h"
+
+/** BLE RX → SA818 radio TX queue */
+static void kv4p_ble_aprs_rx(const char *tnc2, int rssi, void *ctx)
+{
+    (void)ctx;
+    ESP_LOGI(TAG, "BlueAPRS RX (rssi=%d): %s", rssi, tnc2);
+
+    /* Parse TNC2 "FROM>TO:message" into radio_tx_item_t */
+    radio_tx_item_t item = {0};
+    const char *gt = strchr(tnc2, '>');
+    const char *colon = strchr(tnc2, ':');
+    if (!gt || !colon || colon <= gt) {
+        ESP_LOGW(TAG, "BlueAPRS: malformed TNC2 frame");
+        return;
+    }
+
+    int from_len = gt - tnc2;
+    int to_len = colon - gt - 1;
+    if (from_len >= RADIO_TX_MAX_CALLSIGN) from_len = RADIO_TX_MAX_CALLSIGN - 1;
+    if (to_len >= RADIO_TX_MAX_CALLSIGN) to_len = RADIO_TX_MAX_CALLSIGN - 1;
+
+    memcpy(item.from, tnc2, from_len);
+    item.from[from_len] = '\0';
+    memcpy(item.to, gt + 1, to_len);
+    item.to[to_len] = '\0';
+    strncpy(item.message, colon + 1, RADIO_TX_MAX_MESSAGE - 1);
+    item.message[RADIO_TX_MAX_MESSAGE - 1] = '\0';
+
+    if (radio_tx_queue_send(&item)) {
+        ESP_LOGI(TAG, "BlueAPRS→radio: %s -> %s", item.from, item.to);
+    } else {
+        ESP_LOGW(TAG, "BlueAPRS→radio: TX queue full");
+    }
+}
+
+/** SA818 RX (via aprs_store) → BLE TX advertisement */
+static void kv4p_aprs_to_ble(const char *from, const char *to,
+                              const char *msg, void *ctx)
+{
+    (void)ctx;
+    char tnc2[BLE_APRS_MAX_TNC2_LEN];
+    int len = snprintf(tnc2, sizeof(tnc2), "%s>%s:%s", from, to, msg);
+    if (len > 0 && len < (int)sizeof(tnc2)) {
+        ble_aprs_advertise(tnc2, 2000);
+    }
+}
+#endif  /* MODEL_KV4P */
+
+#if BOARD_MODEL == MODEL_TDONGLE_S3
+/** BlueAPRS RX callback — log received frames */
+static void tdongle_ble_aprs_rx(const char *tnc2, int rssi, void *ctx)
+{
+    (void)ctx;
+    ESP_LOGI(TAG, "BlueAPRS RX (rssi=%d): %s", rssi, tnc2);
+}
+#endif  /* MODEL_TDONGLE_S3 */
+
 extern "C" void app_main(void)
 {
     ESP_LOGI(TAG, "=====================================");
@@ -868,9 +937,16 @@ extern "C" void app_main(void)
         ESP_LOGW(TAG, "BLE init failed: %s", esp_err_to_name(ret));
     }
 #elif BOARD_MODEL == MODEL_KV4P
-    // KV4P: BLE disabled — heap too tight with WiFi APSTA + APRS I2S
+    // KV4P: station init (BLE observer+broadcaster added after HTTP server)
     station_init();
-    ESP_LOGI(TAG, "BLE disabled on KV4P (heap conservation)");
+#elif BOARD_MODEL == MODEL_TDONGLE_S3
+    // T-Dongle-S3: BlueAPRS observer+broadcaster
+    ret = ble_aprs_init(tdongle_ble_aprs_rx, NULL);
+    if (ret == ESP_OK) {
+        ESP_LOGI(TAG, "BlueAPRS active — scanning for APRS advertisements");
+    } else {
+        ESP_LOGE(TAG, "BlueAPRS init failed: %s", esp_err_to_name(ret));
+    }
 #endif
 
 #ifdef CONFIG_GEOGRAM_MESH_ENABLED
@@ -974,7 +1050,8 @@ extern "C" void app_main(void)
 
 #if ((BOARD_MODEL == MODEL_ESP32C3_MINI) && !defined(CONFIG_GEOGRAM_MESH_ENABLED)) || (BOARD_MODEL == MODEL_KV4P)
     // Standalone WiFi AP mode for KV4P and for minimal ESP32 boards when mesh
-    // is disabled. KV4P runs out of heap with mesh+BLE+APRS enabled together.
+    // is disabled. KV4P mesh disconnect event kills the HTTP server, making
+    // the device unreachable — keep KV4P in standalone AP+STA mode.
 
     // Initialize NOSTR keys (needed for AP SSID with callsign)
     ret = nostr_keys_init();
@@ -1029,6 +1106,21 @@ extern "C" void app_main(void)
             station_init();
             http_server_start_ex(NULL, true);
             ESP_LOGI(TAG, "HTTP server started");
+
+            // BlueAPRS: observer+broadcaster BLE (no GATT, no connections)
+            ESP_LOGI(TAG, "Free heap before BlueAPRS: %lu",
+                     (unsigned long)esp_get_free_heap_size());
+            {
+                esp_err_t ble_ret = ble_aprs_init(kv4p_ble_aprs_rx, NULL);
+                if (ble_ret == ESP_OK) {
+                    aprs_store_set_rx_notify(kv4p_aprs_to_ble, NULL);
+                    ESP_LOGI(TAG, "BlueAPRS active (free heap: %lu)",
+                             (unsigned long)esp_get_free_heap_size());
+                } else {
+                    ESP_LOGW(TAG, "BlueAPRS failed: %s (continuing without)",
+                             esp_err_to_name(ble_ret));
+                }
+            }
 
             // Telnet disabled on KV4P — heap too tight with BLE+WiFi APSTA+APRS
             ESP_LOGI(TAG, "Telnet disabled on KV4P (use serial console)");
@@ -1257,6 +1349,23 @@ extern "C" void app_main(void)
 
     // Main loop
     ESP_LOGI(TAG, "Entering main loop...");
+
+#if BOARD_MODEL == MODEL_TDONGLE_S3
+    // T-Dongle-S3: send periodic test APRS advertisement
+    {
+        bool test_sent = false;
+        vTaskDelay(pdMS_TO_TICKS(3000));  // Let BLE stack settle
+
+        while (1) {
+            if (ble_aprs_is_active() && !test_sent) {
+                ESP_LOGI(TAG, "Sending test: DONGLE>CQ:BlueAPRS test");
+                ble_aprs_advertise("DONGLE>CQ:BlueAPRS test", 3000);
+                test_sent = true;
+            }
+            vTaskDelay(pdMS_TO_TICKS(500));
+        }
+    }
+#else
     while (1) {
 #if BOARD_MODEL == MODEL_ESP32S3_EPAPER_1IN54
         // Check for shutdown request (from power button long press)
@@ -1268,4 +1377,5 @@ extern "C" void app_main(void)
 #endif
         vTaskDelay(pdMS_TO_TICKS(100));  // Check more frequently for responsiveness
     }
+#endif
 }

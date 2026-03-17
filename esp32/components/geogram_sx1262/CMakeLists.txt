@@ -1,4 +1,4 @@
-if(CONFIG_IDF_TARGET_ESP32S3)
+if(CONFIG_GEOGRAM_BOARD_HELTEC_V3)
     idf_component_register(
         SRCS "sx1262.c"
         INCLUDE_DIRS "."

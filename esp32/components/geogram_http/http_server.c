@@ -40,6 +40,7 @@
 #endif
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
+#include "radio_tx.h"
 #endif
 
 static const char *TAG = "http_server";
@@ -49,13 +50,6 @@ static wifi_config_callback_t s_config_callback = NULL;
 static bool s_station_api_enabled = false;
 
 #if BOARD_MODEL == MODEL_KV4P
-// APRS TX queue — offloads radio transmission from the HTTP handler task
-typedef struct {
-    char from[APRS_MAX_CALLSIGN_LEN];
-    char to[APRS_MAX_CALLSIGN_LEN];
-    char message[APRS_MAX_MESSAGE_LEN];
-} aprs_tx_item_t;
-
 // Max input length for the HTTP POST body (split into 67-char APRS parts)
 #define APRS_INPUT_MAX_LEN  500
 // APRS message text limit per frame (APRS101 spec: 67 chars)
@@ -63,40 +57,6 @@ typedef struct {
 // Part prefix like "[1/8] " = 6 chars; payload = 67 - 6 = 61
 #define APRS_PART_PREFIX_LEN 6
 #define APRS_PART_PAYLOAD   (APRS_PART_MAX_LEN - APRS_PART_PREFIX_LEN)
-
-static QueueHandle_t s_aprs_tx_queue = NULL;
-
-static void aprs_tx_task(void *arg)
-{
-    aprs_tx_item_t item;
-    while (true) {
-        if (xQueueReceive(s_aprs_tx_queue, &item, portMAX_DELAY) == pdTRUE) {
-            ESP_LOGI(TAG, "aprs_tx_task: dequeued %s -> %s", item.from, item.to);
-            sa818_radio_handle_t radio = model_get_sa818_radio();
-            if (!radio) {
-                ESP_LOGW(TAG, "aprs_tx_task: radio handle is NULL");
-                continue;
-            }
-            ESP_LOGI(TAG, "aprs_tx_task: calling send_aprs_message");
-            esp_err_t err = sa818_radio_send_aprs_message(radio, item.from, item.to, item.message);
-            if (err != ESP_OK) {
-                ESP_LOGW(TAG, "APRS TX failed: %s", esp_err_to_name(err));
-            } else {
-                ESP_LOGI(TAG, "aprs_tx_task: TX complete OK");
-            }
-        }
-    }
-}
-
-static void aprs_tx_queue_init(void)
-{
-    if (s_aprs_tx_queue == NULL) {
-        s_aprs_tx_queue = xQueueCreate(12, sizeof(aprs_tx_item_t));
-        if (s_aprs_tx_queue) {
-            xTaskCreatePinnedToCore(aprs_tx_task, "aprs_tx", 8192, NULL, 5, NULL, 1);
-        }
-    }
-}
 #endif
 
 /**
@@ -711,12 +671,7 @@ static const char *LANDING_PAGE_HTML_SUFFIX =
     "return;"
     "}"
     "}"
-    "function initWebSocket(){"
-    "ws=new WebSocket('ws://'+location.host+'/ws');"
-    "ws.onopen=()=>{wsSend({type:'hello',id:clientId});};"
-    "ws.onmessage=e=>{try{const msg=JSON.parse(e.data);handleWsMessage(msg);}catch(_){}};"
-    "ws.onclose=()=>{setTimeout(initWebSocket,2000);};"
-    "}"
+    "function initWebSocket(){}"
     "let aprsAvailable=false,aprsLastId='';"
     "const aprsStorageKey='geogram_aprs_messages';"
     "let storedAprs=JSON.parse(localStorage.getItem(aprsStorageKey)||'[]');"
@@ -1661,8 +1616,8 @@ static esp_err_t api_aprs_post_handler(httpd_req_t *req)
         aprs_store_add_tx(from, to, part_msg);
 
         // Queue TX for background task
-        if (radio && s_aprs_tx_queue) {
-            aprs_tx_item_t item;
+        if (radio) {
+            radio_tx_item_t item;
             strncpy(item.from, from, sizeof(item.from) - 1);
             item.from[sizeof(item.from) - 1] = '\0';
             strncpy(item.to, to, sizeof(item.to) - 1);
@@ -1670,7 +1625,7 @@ static esp_err_t api_aprs_post_handler(httpd_req_t *req)
             strncpy(item.message, part_msg, sizeof(item.message) - 1);
             item.message[sizeof(item.message) - 1] = '\0';
 
-            if (xQueueSend(s_aprs_tx_queue, &item, 0) != pdTRUE) {
+            if (!radio_tx_queue_send(&item)) {
                 ESP_LOGW(TAG, "APRS TX queue full at part %d/%d", part + 1, total_parts);
                 break;
             }
@@ -1874,11 +1829,11 @@ static esp_err_t api_chat_send_post_handler(httpd_req_t *req)
         err = mesh_chat_send(text);
     } else {
         err = mesh_chat_add_local_message_with_timestamp(
-            callsign[0] ? callsign : NULL, text, timestamp);
+            callsign[0] ? callsign : NULL, text, timestamp, MESH_CHAT_CH_WIFI);
     }
 #else
     err = mesh_chat_add_local_message_with_timestamp(
-        callsign[0] ? callsign : NULL, text, timestamp);
+        callsign[0] ? callsign : NULL, text, timestamp, MESH_CHAT_CH_WIFI);
 #endif
 
     char resp[64];
@@ -1948,7 +1903,8 @@ static esp_err_t api_chat_send_file_post_handler(httpd_req_t *req)
         text[0] ? text : NULL,
         sha1, file_size,
         filename[0] ? filename : NULL,
-        mime[0] ? mime : NULL);
+        mime[0] ? mime : NULL,
+        MESH_CHAT_CH_WIFI);
 
     char resp[64];
     int resp_len = snprintf(resp, sizeof(resp), "{\"ok\":%s}", err == ESP_OK ? "true" : "false");
@@ -2616,11 +2572,13 @@ esp_err_t http_server_start_ex(wifi_config_callback_t callback, bool enable_stat
     // Register Station API handlers if enabled
     if (enable_station_api) {
         httpd_register_uri_handler(s_server, &uri_api_status);
-        httpd_register_uri_handler(s_server, &uri_api_index);
 
 #if BOARD_MODEL == MODEL_KV4P
+        httpd_register_uri_handler(s_server, &uri_api_index);
         // Register APRS API endpoints and start TX task
-        aprs_tx_queue_init();
+        radio_tx_set_backend((radio_tx_getter_t)model_get_sa818_radio,
+                             (radio_tx_send_fn_t)sa818_radio_send_aprs_message);
+        radio_tx_queue_init();
         httpd_register_uri_handler(s_server, &uri_api_aprs);
         httpd_register_uri_handler(s_server, &uri_api_aprs_send);
         httpd_register_uri_handler(s_server, &uri_api_aprs_status);

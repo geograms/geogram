@@ -7,6 +7,7 @@
 #include "mesh_bsp.h"
 
 #include <string.h>
+#include <stdlib.h>
 #include <stdio.h>
 #include <time.h>
 #include "freertos/FreeRTOS.h"
@@ -181,19 +182,13 @@ esp_err_t mesh_chat_send(const char *text)
         .id = wire_msg->msg_id,
         .timestamp = wire_msg->timestamp,
         .is_local = true,
-        .msg_type = MESH_CHAT_MSG_TEXT
+        .msg_type = MESH_CHAT_MSG_TEXT,
+        .channels = MESH_CHAT_CH_WIFI
     };
     memset(&local_msg.file, 0, sizeof(local_msg.file));
     strncpy(local_msg.callsign, callsign, MESH_CHAT_MAX_CALLSIGN_LEN - 1);
     strncpy(local_msg.text, text, MESH_CHAT_MAX_MESSAGE_LEN);
     memcpy(local_msg.sender_mac, s_local_mac, 6);
-
-    add_message_to_history(&local_msg);
-
-    // Notify callback
-    if (s_callback) {
-        s_callback(&local_msg);
-    }
 
     // Broadcast to all mesh nodes
     if (geogram_mesh_is_connected()) {
@@ -218,9 +213,20 @@ esp_err_t mesh_chat_send(const char *text)
             }
         }
 
+        if (sent > 0) {
+            local_msg.channels |= MESH_CHAT_CH_MESH;
+        }
+
         ESP_LOGI(TAG, "[CHAT TX] Broadcast to %d/%zu nodes", sent, node_count);
     } else {
         ESP_LOGW(TAG, "[CHAT TX] Mesh not connected, message stored locally only");
+    }
+
+    add_message_to_history(&local_msg);
+
+    // Notify callback
+    if (s_callback) {
+        s_callback(&local_msg);
     }
 
     free(wire_msg);
@@ -231,14 +237,15 @@ esp_err_t mesh_chat_send(const char *text)
 // Local-only Message (custom callsign)
 // ============================================================================
 
-esp_err_t mesh_chat_add_local_message(const char *callsign, const char *text)
+esp_err_t mesh_chat_add_local_message(const char *callsign, const char *text, uint8_t channels)
 {
-    return mesh_chat_add_local_message_with_timestamp(callsign, text, 0);
+    return mesh_chat_add_local_message_with_timestamp(callsign, text, 0, channels);
 }
 
 esp_err_t mesh_chat_add_local_message_with_timestamp(const char *callsign,
                                                      const char *text,
-                                                     uint32_t timestamp)
+                                                     uint32_t timestamp,
+                                                     uint8_t channels)
 {
     if (!s_initialized) {
         ESP_LOGE(TAG, "Chat not initialized");
@@ -260,7 +267,8 @@ esp_err_t mesh_chat_add_local_message_with_timestamp(const char *callsign,
     mesh_chat_message_t local_msg = {
         .timestamp = msg_timestamp,
         .is_local = true,
-        .msg_type = MESH_CHAT_MSG_TEXT
+        .msg_type = MESH_CHAT_MSG_TEXT,
+        .channels = channels
     };
     memset(&local_msg.file, 0, sizeof(local_msg.file));
 
@@ -287,7 +295,8 @@ esp_err_t mesh_chat_add_local_file_message(const char *callsign,
                                            const uint8_t *sha1,
                                            uint32_t size,
                                            const char *filename,
-                                           const char *mime_type)
+                                           const char *mime_type,
+                                           uint8_t channels)
 {
     if (!s_initialized) {
         ESP_LOGE(TAG, "Chat not initialized");
@@ -308,7 +317,8 @@ esp_err_t mesh_chat_add_local_file_message(const char *callsign,
     mesh_chat_message_t local_msg = {
         .timestamp = get_timestamp(),
         .is_local = true,
-        .msg_type = MESH_CHAT_MSG_FILE
+        .msg_type = MESH_CHAT_MSG_FILE,
+        .channels = channels
     };
     memset(&local_msg.file, 0, sizeof(local_msg.file));
 
@@ -418,7 +428,8 @@ esp_err_t mesh_chat_send_file(const char *text, const uint8_t *sha1,
         .id = wire_msg->msg_id,
         .timestamp = wire_msg->timestamp,
         .is_local = true,
-        .msg_type = MESH_CHAT_MSG_FILE
+        .msg_type = MESH_CHAT_MSG_FILE,
+        .channels = MESH_CHAT_CH_WIFI
     };
     strncpy(local_msg.callsign, callsign, MESH_CHAT_MAX_CALLSIGN_LEN - 1);
     if (text) {
@@ -433,13 +444,6 @@ esp_err_t mesh_chat_send_file(const char *text, const uint8_t *sha1,
     local_msg.file.size = size;
     strncpy(local_msg.file.filename, filename, MESH_CHAT_MAX_FILENAME_LEN - 1);
     strncpy(local_msg.file.mime_type, mime_type, MESH_CHAT_MAX_MIME_LEN - 1);
-
-    add_message_to_history(&local_msg);
-
-    // Notify callback
-    if (s_callback) {
-        s_callback(&local_msg);
-    }
 
     // Broadcast to all mesh nodes
     if (geogram_mesh_is_connected()) {
@@ -459,9 +463,20 @@ esp_err_t mesh_chat_send_file(const char *text, const uint8_t *sha1,
             }
         }
 
+        if (sent > 0) {
+            local_msg.channels |= MESH_CHAT_CH_MESH;
+        }
+
         ESP_LOGI(TAG, "[CHAT TX] File broadcast to %d/%zu nodes", sent, node_count);
     } else {
         ESP_LOGW(TAG, "[CHAT TX] Mesh not connected, file message stored locally only");
+    }
+
+    add_message_to_history(&local_msg);
+
+    // Notify callback
+    if (s_callback) {
+        s_callback(&local_msg);
     }
 
     free(wire_msg);
@@ -526,7 +541,8 @@ void mesh_chat_handle_packet(const uint8_t *src_mac, const void *data, size_t le
         .id = wire_msg->msg_id,
         .timestamp = wire_msg->timestamp,
         .is_local = false,
-        .msg_type = msg_type
+        .msg_type = msg_type,
+        .channels = MESH_CHAT_CH_MESH
     };
     memcpy(msg.sender_mac, src_mac, 6);
     strncpy(msg.callsign, wire_msg->callsign, MESH_CHAT_MAX_CALLSIGN_LEN - 1);
@@ -634,6 +650,20 @@ void mesh_chat_register_callback(mesh_chat_callback_t callback)
 // JSON Builder
 // ============================================================================
 
+static size_t channels_to_json(char *buf, size_t sz, uint8_t ch)
+{
+    size_t p = 0;
+    p += snprintf(buf + p, sz - p, "[");
+    int first = 1;
+    if (ch & MESH_CHAT_CH_WIFI) { p += snprintf(buf + p, sz - p, "%s\"wifi\"", first ? "" : ","); first = 0; }
+    if (ch & MESH_CHAT_CH_BLE)  { p += snprintf(buf + p, sz - p, "%s\"ble\"",  first ? "" : ","); first = 0; }
+    if (ch & MESH_CHAT_CH_MESH) { p += snprintf(buf + p, sz - p, "%s\"mesh\"", first ? "" : ","); first = 0; }
+    if (ch & MESH_CHAT_CH_APRS) { p += snprintf(buf + p, sz - p, "%s\"aprs\"", first ? "" : ","); first = 0; }
+    if (ch & MESH_CHAT_CH_LORA) { p += snprintf(buf + p, sz - p, "%s\"lora\"", first ? "" : ","); first = 0; }
+    p += snprintf(buf + p, sz - p, "]");
+    return p;
+}
+
 size_t mesh_chat_build_json(char *buffer, size_t size, uint32_t since_id)
 {
     if (!buffer || size < 64) {
@@ -704,7 +734,7 @@ size_t mesh_chat_build_json(char *buffer, size_t size, uint32_t since_id)
 
             pos += snprintf(buffer + pos, size - pos,
                 "{\"id\":%lu,\"ts\":%lu,\"from\":\"%s\",\"type\":\"file\",\"text\":\"%s\",\"local\":%s,"
-                "\"file\":{\"sha1\":\"%s\",\"name\":\"%s\",\"size\":%lu,\"mime\":\"%s\"}}",
+                "\"file\":{\"sha1\":\"%s\",\"name\":\"%s\",\"size\":%lu,\"mime\":\"%s\"},\"channels\":",
                 (unsigned long)messages[i].id,
                 (unsigned long)messages[i].timestamp,
                 messages[i].callsign,
@@ -714,14 +744,18 @@ size_t mesh_chat_build_json(char *buffer, size_t size, uint32_t since_id)
                 escaped_filename,
                 (unsigned long)messages[i].file.size,
                 messages[i].file.mime_type);
+            pos += channels_to_json(buffer + pos, size - pos, messages[i].channels);
+            pos += snprintf(buffer + pos, size - pos, "}");
         } else {
             pos += snprintf(buffer + pos, size - pos,
-                "{\"id\":%lu,\"ts\":%lu,\"from\":\"%s\",\"type\":\"text\",\"text\":\"%s\",\"local\":%s}",
+                "{\"id\":%lu,\"ts\":%lu,\"from\":\"%s\",\"type\":\"text\",\"text\":\"%s\",\"local\":%s,\"channels\":",
                 (unsigned long)messages[i].id,
                 (unsigned long)messages[i].timestamp,
                 messages[i].callsign,
                 escaped_text,
                 messages[i].is_local ? "true" : "false");
+            pos += channels_to_json(buffer + pos, size - pos, messages[i].channels);
+            pos += snprintf(buffer + pos, size - pos, "}");
         }
 
         if (pos >= size - 1) break;
@@ -746,6 +780,19 @@ static void add_message_to_history(const mesh_chat_message_t *msg)
     if (!msg) return;
 
     xSemaphoreTake(s_mutex, portMAX_DELAY);
+
+    // Check for duplicate: same callsign + same text + timestamp within 5s
+    for (size_t i = 0; i < s_history_count && i < 10; i++) {
+        size_t idx = (s_history_head - 1 - i + MESH_CHAT_HISTORY_SIZE) % MESH_CHAT_HISTORY_SIZE;
+        mesh_chat_message_t *existing = &s_history[idx];
+        if (strcmp(existing->callsign, msg->callsign) == 0 &&
+            strcmp(existing->text, msg->text) == 0 &&
+            abs((int)existing->timestamp - (int)msg->timestamp) <= 5) {
+            existing->channels |= msg->channels;
+            xSemaphoreGive(s_mutex);
+            return;
+        }
+    }
 
     // Copy to circular buffer
     memcpy(&s_history[s_history_head], msg, sizeof(mesh_chat_message_t));

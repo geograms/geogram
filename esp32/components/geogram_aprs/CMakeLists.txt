@@ -6,5 +6,5 @@ idf_component_register(
     SRCS "aprs_store.c"
     INCLUDE_DIRS "."
     REQUIRES log
-    PRIV_REQUIRES freertos
+    PRIV_REQUIRES freertos geogram_mesh
 )

@@ -1,5 +1,5 @@
-# Only build for ESP32-S3 targets
-if(CONFIG_IDF_TARGET_ESP32S3)
+# Only build for ePaper board
+if(CONFIG_GEOGRAM_BOARD_EPAPER_1IN54)
     idf_component_register(
         SRCS "epaper_1in54.cpp"
         INCLUDE_DIRS "."

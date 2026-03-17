@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <time.h>
 #include "aprs_store.h"
+#include "mesh_chat.h"
 #include "esp_log.h"
 #include "esp_random.h"
 #include "freertos/FreeRTOS.h"
@@ -22,6 +23,8 @@ static uint32_t s_total_rx = 0;  // Total RX (including dedup'd beacons)
 static uint32_t s_total_tx = 0;  // Total TX
 static char s_epoch_prefix = 'A'; // Random letter chosen at init — changes on reflash
 static SemaphoreHandle_t s_mutex = NULL;
+static aprs_store_rx_notify_cb_t s_rx_notify_cb = NULL;
+static void *s_rx_notify_ctx = NULL;
 
 /**
  * @brief Check if a "to" field looks like a generic APRS path (beacon indicator)
@@ -358,6 +361,16 @@ void aprs_store_rx_callback(const char *from, const char *to,
 {
     (void)ctx;
     aprs_store_add_rx(from, to, message, raw_tnc2);
+
+    // Bridge into mesh_chat so RX APRS messages appear in the unified chat
+    if (message && message[0] != '\0') {
+        mesh_chat_add_local_message_with_timestamp(from, message, 0, MESH_CHAT_CH_APRS);
+    }
+
+    // Fire RX notify hook (e.g. BLE push)
+    if (s_rx_notify_cb) {
+        s_rx_notify_cb(from, to, message, s_rx_notify_ctx);
+    }
 }
 
 uint32_t aprs_store_get_total_rx(void)
@@ -395,4 +408,10 @@ void aprs_store_parse_id(const char *str, char *epoch, uint32_t *id)
     } else {
         *id = (uint32_t)strtoul(str, NULL, 10);
     }
+}
+
+void aprs_store_set_rx_notify(aprs_store_rx_notify_cb_t cb, void *ctx)
+{
+    s_rx_notify_cb = cb;
+    s_rx_notify_ctx = ctx;
 }

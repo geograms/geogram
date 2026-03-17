@@ -19,6 +19,11 @@
 #include "nostr_keys.h"
 #include "station.h"
 
+#if BOARD_MODEL == MODEL_KV4P
+#include "aprs_store.h"
+#include "radio_tx.h"
+#endif
+
 #if CONFIG_BT_ENABLED
 #include "host/ble_att.h"
 #include "host/ble_gap.h"
@@ -42,8 +47,13 @@ static const char *TAG = "geogram_ble";
 
 // KV4P runs close to heap limits with mesh+radio+BLE active.
 // Keep BLE peer buffers lean to preserve at least one stable connection.
+#if BOARD_MODEL == MODEL_KV4P
+#define GEOGRAM_BLE_MAX_CONNECTIONS         1
+#define GEOGRAM_BLE_RX_BUFFER_SIZE          1024
+#else
 #define GEOGRAM_BLE_MAX_CONNECTIONS         2
 #define GEOGRAM_BLE_RX_BUFFER_SIZE          4096
+#endif
 #define GEOGRAM_BLE_MAX_PATH_LEN            192
 #define GEOGRAM_BLE_MAX_QUERY_LEN           192
 #define GEOGRAM_BLE_MAX_ROOM_LEN            48
@@ -69,6 +79,9 @@ typedef struct {
     char callsign[STATION_CALLSIGN_LEN];
     uint8_t *rx_buffer;
     size_t rx_len;
+#if BOARD_MODEL == MODEL_KV4P
+    uint32_t aprs_last_tx_ms;  // esp_log_timestamp() of last BLE APRS TX
+#endif
 } geogram_ble_peer_t;
 
 typedef struct {
@@ -91,6 +104,9 @@ static const char *s_geoblue_caps[] = {
     "data",
     "broadcast",
     GEOBLUE_TEST_CAP_REVERSE,
+#if BOARD_MODEL == MODEL_KV4P
+    "aprs",
+#endif
 };
 
 #if CONFIG_BT_ENABLED
@@ -1120,7 +1136,7 @@ static geogram_ble_api_result_t ble_handle_chat_message_post(cJSON *body,
         return ble_api_result_make(400, ble_strdup_local("{\"error\":\"missing message content\"}"));
     }
 
-    esp_err_t ret = mesh_chat_add_local_message_with_timestamp(author, text, timestamp);
+    esp_err_t ret = mesh_chat_add_local_message_with_timestamp(author, text, timestamp, MESH_CHAT_CH_BLE);
     if (ret != ESP_OK) {
         if (body_obj && !body_obj_borrowed) {
             cJSON_Delete(body_obj);
@@ -1228,7 +1244,7 @@ static geogram_ble_api_result_t ble_handle_chat_file_post(cJSON *body, const cha
         mime = mime_item->valuestring;
     }
 
-    esp_err_t ret = mesh_chat_add_local_file_message(author, text, sha1_bytes, size, filename, mime);
+    esp_err_t ret = mesh_chat_add_local_file_message(author, text, sha1_bytes, size, filename, mime, MESH_CHAT_CH_BLE);
     if (!body_obj_borrowed) {
         cJSON_Delete(body_obj);
     }
@@ -1794,6 +1810,144 @@ static void ble_handle_hello_ack(uint16_t conn_handle,
 #endif
 }
 
+// ============================================================================
+// BLE APRS handlers (KV4P only)
+// ============================================================================
+
+#if BOARD_MODEL == MODEL_KV4P
+
+#define BLE_APRS_RATE_LIMIT_MS  30000
+
+/**
+ * Handle incoming _aprs DATA frame from BLE client.
+ * Parses BLEAprsPayload JSON, rate-limits, queues for radio TX,
+ * stores in APRS history, and bridges to mesh_chat.
+ */
+static void ble_handle_aprs_data(uint16_t conn_handle,
+                                  geogram_ble_peer_t *peer,
+                                  const char *content,
+                                  const char *from,
+                                  uint32_t timestamp)
+{
+#if CONFIG_BT_ENABLED
+    if (!content || content[0] == '\0') {
+        ESP_LOGW(TAG, "BLE APRS: empty content");
+        return;
+    }
+
+    // Parse content as JSON: {"to":"CALL","text":"msg","type":"message"}
+    cJSON *json = cJSON_Parse(content);
+    if (!json) {
+        ESP_LOGW(TAG, "BLE APRS: invalid JSON");
+        return;
+    }
+
+    cJSON *type_item = cJSON_GetObjectItemCaseSensitive(json, "type");
+    const char *type = cJSON_IsString(type_item) ? type_item->valuestring : NULL;
+    if (!type || strcmp(type, "message") != 0) {
+        ESP_LOGD(TAG, "BLE APRS: ignoring type=%s", type ? type : "null");
+        cJSON_Delete(json);
+        return;
+    }
+
+    cJSON *to_item = cJSON_GetObjectItemCaseSensitive(json, "to");
+    cJSON *text_item = cJSON_GetObjectItemCaseSensitive(json, "text");
+    const char *to = cJSON_IsString(to_item) ? to_item->valuestring : NULL;
+    const char *text = cJSON_IsString(text_item) ? text_item->valuestring : NULL;
+
+    if (!to || to[0] == '\0' || !text || text[0] == '\0') {
+        ESP_LOGW(TAG, "BLE APRS: missing to/text");
+        cJSON_Delete(json);
+        return;
+    }
+
+    // Rate limit per peer
+    if (peer) {
+        uint32_t now_ms = esp_log_timestamp();
+        if (peer->aprs_last_tx_ms != 0 &&
+            (now_ms - peer->aprs_last_tx_ms) < BLE_APRS_RATE_LIMIT_MS) {
+            ESP_LOGW(TAG, "BLE APRS: rate limited (peer conn=%u)", conn_handle);
+            cJSON_Delete(json);
+            return;
+        }
+        peer->aprs_last_tx_ms = now_ms;
+    }
+
+    ESP_LOGI(TAG, "BLE APRS TX: %s -> %s: %.40s", from, to, text);
+
+    // Queue for radio TX
+    radio_tx_item_t item;
+    strncpy(item.from, from, sizeof(item.from) - 1);
+    item.from[sizeof(item.from) - 1] = '\0';
+    strncpy(item.to, to, sizeof(item.to) - 1);
+    item.to[sizeof(item.to) - 1] = '\0';
+    strncpy(item.message, text, sizeof(item.message) - 1);
+    item.message[sizeof(item.message) - 1] = '\0';
+    radio_tx_queue_send(&item);
+
+    // Store in APRS history
+    aprs_store_add_tx(from, to, text);
+
+    // Bridge to mesh_chat
+    mesh_chat_add_local_message_with_timestamp(from, text, timestamp,
+                                                MESH_CHAT_CH_APRS | MESH_CHAT_CH_BLE);
+
+    cJSON_Delete(json);
+#else
+    (void)conn_handle; (void)peer; (void)content; (void)from; (void)timestamp;
+#endif
+}
+
+/**
+ * APRS RX notify callback — pushes received APRS messages to all BLE clients
+ * on the _aprs channel as Geoblue DATA frames.
+ */
+static void ble_aprs_rx_notify(const char *from, const char *to,
+                                const char *message, void *ctx)
+{
+#if CONFIG_BT_ENABLED
+    (void)ctx;
+    if (!message || message[0] == '\0') return;
+
+    // Build JSON payload: {"from":"...","to":"...","text":"...","type":"message"}
+    cJSON *obj = cJSON_CreateObject();
+    if (!obj) return;
+    cJSON_AddStringToObject(obj, "from", from ? from : "");
+    cJSON_AddStringToObject(obj, "to", to ? to : "");
+    cJSON_AddStringToObject(obj, "text", message);
+    cJSON_AddStringToObject(obj, "type", "message");
+    char *payload_str = cJSON_PrintUnformatted(obj);
+    cJSON_Delete(obj);
+    if (!payload_str) return;
+
+    // Build Geoblue DATA frame
+    char frame_id[48];
+    snprintf(frame_id, sizeof(frame_id), "aprs-rx-%lu", (unsigned long)esp_log_timestamp());
+
+    char *frame = geoblue_build_data_frame(
+        frame_id,
+        ble_station_callsign(),
+        NULL,
+        "_aprs",
+        payload_str,
+        (int64_t)time(NULL));
+    free(payload_str);
+    if (!frame) return;
+
+    // Push to all connected BLE peers
+    for (size_t i = 0; i < GEOGRAM_BLE_MAX_CONNECTIONS; i++) {
+        if (s_peers[i].active && s_peers[i].subscribed) {
+            ble_notify_json(s_peers[i].conn_handle, frame);
+        }
+    }
+    free(frame);
+#else
+    (void)from; (void)to; (void)message; (void)ctx;
+#endif
+}
+
+#endif // BOARD_MODEL == MODEL_KV4P
+
 static void ble_handle_data(uint16_t conn_handle,
                             geogram_ble_peer_t *peer,
                             cJSON *message)
@@ -1862,8 +2016,15 @@ static void ble_handle_data(uint16_t conn_handle,
         return;
     }
 
+#if BOARD_MODEL == MODEL_KV4P
+    if (strcmp(channel, "_aprs") == 0) {
+        ble_handle_aprs_data(conn_handle, peer, content, from, timestamp);
+        return;
+    }
+#endif
+
     if (content && content[0] != '\0') {
-        mesh_chat_add_local_message_with_timestamp(from, content, timestamp);
+        mesh_chat_add_local_message_with_timestamp(from, content, timestamp, MESH_CHAT_CH_BLE);
     }
 
     if (content && content[0] != '\0' && strcmp(channel, GEOBLUE_CH_UNICAST_TEST) == 0) {
@@ -1974,7 +2135,7 @@ static void ble_handle_broadcast(uint16_t conn_handle,
     if (content && content[0] != '\0') {
         char line[GEOGRAM_BLE_MAX_MESSAGE_LEN + 1] = {0};
         snprintf(line, sizeof(line), "[%s] %s", topic, content);
-        mesh_chat_add_local_message_with_timestamp(from, line, timestamp);
+        mesh_chat_add_local_message_with_timestamp(from, line, timestamp, MESH_CHAT_CH_BLE);
 
         // Confirm delivery to the broadcast sender over BLE.
         ble_send_broadcast_receipt(conn_handle, from, content);
@@ -2104,7 +2265,7 @@ static void ble_handle_chat(uint16_t conn_handle,
     }
 
     if (text[0] != '\0') {
-        mesh_chat_add_local_message_with_timestamp(effective_author, text, timestamp);
+        mesh_chat_add_local_message_with_timestamp(effective_author, text, timestamp, MESH_CHAT_CH_BLE);
     }
 #else
     (void)conn_handle;
@@ -2527,6 +2688,10 @@ esp_err_t geogram_ble_init(void)
 
     ble_reset_all_peers();
     s_initialized = true;
+
+#if BOARD_MODEL == MODEL_KV4P
+    aprs_store_set_rx_notify(ble_aprs_rx_notify, NULL);
+#endif
 
     nimble_port_freertos_init(ble_host_task);
 
