@@ -1740,8 +1740,36 @@ class LogApiService with ChatModificationMixin {
       }
     }
 
-    // 4. Build full JSON
+    // 4. Build full JSON with feedback data
     final data = event.toApiJson(summary: false);
+
+    // Load feedback likes for the like button
+    final eventPath = await EventService().getEventPath(event.id, dataDir);
+    if (eventPath != null) {
+      final likesFile = io.File('$eventPath/.feedback/likes.txt');
+      if (await likesFile.exists()) {
+        final content = await likesFile.readAsString();
+        final feedbackLikes = content
+            .split('\n')
+            .map((l) => l.trim())
+            .where((l) => l.isNotEmpty)
+            .toList();
+        data['feedback_likes'] = feedbackLikes;
+        data['feedback_like_count'] = feedbackLikes.length;
+      }
+    }
+    // Include hex pubkeys for the JS like check
+    if (data['feedback_likes'] != null) {
+      final npubLikes = data['feedback_likes'] as List<String>;
+      final hexPubkeys = <String>[];
+      for (final npub in npubLikes) {
+        try {
+          hexPubkeys.add(NostrCrypto.decodeNpub(npub));
+        } catch (_) {}
+      }
+      data['feedback_liked_hex_pubkeys'] = hexPubkeys;
+    }
+    data['authenticated'] = userNpub != null;
 
     // 5. Render
     final menuItems =
@@ -7988,6 +8016,12 @@ class LogApiService with ChatModificationMixin {
         );
       }
 
+      // POST /api/events/{eventId}/like - Toggle like
+      if (pathParts.length == 2 && pathParts[1] == 'like' && request.method == 'POST') {
+        final eventId = pathParts[0];
+        return await _handleEventToggleLike(request, eventId, dataDir, headers);
+      }
+
       if (request.method != 'GET') {
         return shelf.Response(
           405,
@@ -8263,6 +8297,105 @@ class LogApiService with ChatModificationMixin {
         'Cache-Control': 'public, max-age=86400', // Cache for 1 day
       },
     );
+  }
+
+  /// POST /api/events/{eventId}/like - Toggle like via signed NOSTR event
+  Future<shelf.Response> _handleEventToggleLike(
+    shelf.Request request,
+    String eventId,
+    String dataDir,
+    Map<String, String> headers,
+  ) async {
+    try {
+      final body = await request.readAsString();
+      final eventJson = jsonDecode(body) as Map<String, dynamic>;
+
+      if (!eventJson.containsKey('id') || !eventJson.containsKey('sig')) {
+        return shelf.Response(
+          400,
+          body: jsonEncode({'error': 'Missing required NOSTR event fields (id, sig)'}),
+          headers: headers,
+        );
+      }
+
+      // Extract pubkey from signed event
+      final pubkey = eventJson['pubkey'] as String?;
+      if (pubkey == null || pubkey.isEmpty) {
+        return shelf.Response(
+          400,
+          body: jsonEncode({'error': 'Missing pubkey in signed event'}),
+          headers: headers,
+        );
+      }
+
+      // Find event
+      final event = await EventService().findEventByIdGlobal(eventId, dataDir);
+      if (event == null) {
+        return shelf.Response.notFound(
+          jsonEncode({'error': 'Event not found'}),
+          headers: headers,
+        );
+      }
+
+      // Get event path for feedback storage
+      final eventPath = await EventService().getEventPath(eventId, dataDir);
+      if (eventPath == null) {
+        return shelf.Response.notFound(
+          jsonEncode({'error': 'Event path not found'}),
+          headers: headers,
+        );
+      }
+
+      // Convert hex pubkey to npub
+      String npub;
+      try {
+        npub = NostrCrypto.encodeNpub(pubkey);
+      } catch (_) {
+        return shelf.Response(
+          400,
+          body: jsonEncode({'error': 'Invalid pubkey'}),
+          headers: headers,
+        );
+      }
+
+      // Read current likes
+      final likesFile = io.File('$eventPath/.feedback/likes.txt');
+      List<String> likes = [];
+      if (await likesFile.exists()) {
+        final content = await likesFile.readAsString();
+        likes = content
+            .split('\n')
+            .map((l) => l.trim())
+            .where((l) => l.isNotEmpty)
+            .toList();
+      }
+
+      // Toggle
+      final wasLiked = likes.contains(npub);
+      if (wasLiked) {
+        likes.remove(npub);
+      } else {
+        likes.add(npub);
+      }
+
+      // Write back
+      await likesFile.parent.create(recursive: true);
+      await likesFile.writeAsString(likes.join('\n'));
+
+      return shelf.Response.ok(
+        jsonEncode({
+          'success': true,
+          'liked': !wasLiked,
+          'like_count': likes.length,
+        }),
+        headers: headers,
+      );
+    } catch (e) {
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'error': 'Failed to toggle like: $e'}),
+        headers: headers,
+      );
+    }
   }
 
   // ============================================================

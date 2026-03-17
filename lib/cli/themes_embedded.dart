@@ -944,7 +944,9 @@ class ThemesEmbedded {
   <header class="header">
     <div class="header__inner">
       <div class="header__logo">
-        <div class="logo">{{LOGO_TEXT}}</div>
+        <a href="/events/" style="text-decoration:none">
+          <div class="logo">{{LOGO_TEXT}}</div>
+        </a>
       </div>
       {{NOSTR_HEADER}}
     </div>
@@ -968,6 +970,14 @@ class ThemesEmbedded {
   </footer>
 </div>
 
+<!-- Lightbox overlay -->
+<div id="lightbox" class="lightbox" style="display:none" onclick="closeLightbox()">
+  <img id="lightbox-img" src="" alt="">
+  <button class="lightbox-close" onclick="closeLightbox()">&times;</button>
+  <button class="lightbox-prev" id="lb-prev" onclick="event.stopPropagation();lbNav(-1)">&lsaquo;</button>
+  <button class="lightbox-next" id="lb-next" onclick="event.stopPropagation();lbNav(1)">&rsaquo;</button>
+</div>
+
 <script>
   window.GEOGRAM_EVENT = {{DATA_JSON}};
   {{SCRIPTS}}
@@ -989,113 +999,280 @@ class ThemesEmbedded {
       return d.toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
     }
 
+    function formatShortDate(iso) {
+      if (!iso) return '';
+      var d = new Date(iso.replace(/_/g, ':'));
+      return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+    }
+
     function formatDateTime(iso) {
       if (!iso) return '';
       var d = new Date(iso.replace(/_/g, ':'));
-      if (d.getHours() === 0 && d.getMinutes() === 0) {
-        return formatDate(iso);
-      }
+      if (d.getHours() === 0 && d.getMinutes() === 0) return formatDate(iso);
       return d.toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }) +
         ' at ' + d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
     }
 
-    // Hero section
-    var dateHtml = '';
-    if (ev.start_date && ev.end_date && ev.start_date !== ev.end_date) {
-      dateHtml = '<div class="event-hero-date">' + formatDate(ev.start_date) + ' &mdash; ' + formatDate(ev.end_date) + '</div>';
-    } else if (ev.start_date) {
-      dateHtml = '<div class="event-hero-date">' + formatDate(ev.start_date) + '</div>';
-    } else if (ev.timestamp) {
-      dateHtml = '<div class="event-hero-date">' + formatDateTime(ev.timestamp) + '</div>';
+    function fileUrl(filename) {
+      return '/events/' + encodeURIComponent(ev.id) + '/files/' + encodeURIComponent(filename);
     }
 
-    var locationHtml = '';
+    function mapUrl(lat, lon) {
+      return 'https://www.openstreetmap.org/?mlat=' + lat + '&mlon=' + lon + '#map=15/' + lat + '/' + lon;
+    }
+
+    // === Build page ===
+    var html = '';
+
+    // Back link
+    html += '<div class="pagination"><div class="pagination__buttons"><span class="button"><a href="/events/">&larr; All Events</a></span></div></div>';
+
+    // --- Hero ---
+    html += '<div class="event-hero">';
+    html += '<h1 class="event-hero-title">' + esc(ev.title) + '</h1>';
+
+    // Date
+    if (ev.start_date && ev.end_date && ev.start_date !== ev.end_date) {
+      html += '<div class="event-hero-meta"><span class="event-hero-meta-icon">&#128197;</span> ' + formatDate(ev.start_date) + ' &mdash; ' + formatDate(ev.end_date) + '</div>';
+    } else if (ev.start_date) {
+      html += '<div class="event-hero-meta"><span class="event-hero-meta-icon">&#128197;</span> ' + formatDate(ev.start_date) + '</div>';
+    } else if (ev.timestamp) {
+      html += '<div class="event-hero-meta"><span class="event-hero-meta-icon">&#128197;</span> ' + formatDateTime(ev.timestamp) + '</div>';
+    }
+
+    // Location
     if (ev.location_name) {
       var locText = esc(ev.location_name);
       if (ev.location && ev.location !== 'online' && ev.location.indexOf(',') !== -1) {
         var parts = ev.location.split(',');
-        locText = '<a href="https://www.openstreetmap.org/?mlat=' + parts[0].trim() + '&mlon=' + parts[1].trim() + '#map=15/' + parts[0].trim() + '/' + parts[1].trim() + '" target="_blank" rel="noopener">' + locText + '</a>';
+        locText = '<a href="' + mapUrl(parts[0].trim(), parts[1].trim()) + '" target="_blank" rel="noopener">' + locText + ' &#8599;</a>';
       }
-      locationHtml = '<div class="event-hero-location">' + locText + '</div>';
+      html += '<div class="event-hero-meta"><span class="event-hero-meta-icon">&#128205;</span> ' + locText + '</div>';
     } else if (ev.location === 'online') {
-      locationHtml = '<div class="event-hero-location">Online</div>';
+      html += '<div class="event-hero-meta"><span class="event-hero-meta-icon">&#127760;</span> Online</div>';
     } else if (ev.location && ev.location.indexOf(',') !== -1) {
       var parts = ev.location.split(',');
-      locationHtml = '<div class="event-hero-location"><a href="https://www.openstreetmap.org/?mlat=' + parts[0].trim() + '&mlon=' + parts[1].trim() + '#map=15/' + parts[0].trim() + '/' + parts[1].trim() + '" target="_blank" rel="noopener">View on map</a></div>';
+      html += '<div class="event-hero-meta"><span class="event-hero-meta-icon">&#128205;</span> <a href="' + mapUrl(parts[0].trim(), parts[1].trim()) + '" target="_blank" rel="noopener">View on map &#8599;</a></div>';
     }
 
-    var html = '<div class="event-hero">' +
-      '<a href="/events/" class="event-back-link">All Events</a>' +
-      '<h1 class="event-hero-title">' + esc(ev.title) + '</h1>' +
-      dateHtml + locationHtml +
-    '</div>';
+    // Author
+    if (ev.author) {
+      html += '<div class="event-hero-meta"><span class="event-hero-meta-icon">&#128100;</span> ' + esc(ev.author) + '</div>';
+    }
 
-    // Flyer images
+    // Signed badge
+    if (ev.signature) {
+      html += '<div class="event-hero-meta event-signed"><span class="event-hero-meta-icon">&#10003;</span> Signed with NOSTR</div>';
+    }
+
+    html += '</div>'; // .event-hero
+
+    // --- Flyer Gallery ---
     if (ev.flyers && ev.flyers.length > 0) {
-      html += '<div class="event-flyers">';
-      ev.flyers.forEach(function(f) {
-        html += '<img class="event-flyer-img" src="/events/' + encodeURIComponent(ev.id) + '/files/' + encodeURIComponent(f) + '" alt="Event flyer" loading="lazy">';
+      html += '<div class="event-gallery">';
+      ev.flyers.forEach(function(f, i) {
+        html += '<div class="event-gallery-item" onclick="openLightbox(' + i + ')">' +
+          '<img src="' + fileUrl(f) + '" alt="Event flyer" loading="lazy">' +
+        '</div>';
       });
       html += '</div>';
     }
 
-    // Registration stats
+    // --- Registration & Engagement Stats ---
+    var statsItems = [];
     var reg = ev.registration;
     if (reg) {
       var goingCount = reg.going ? reg.going.length : 0;
       var interestedCount = reg.interested ? reg.interested.length : 0;
-      if (goingCount > 0 || interestedCount > 0) {
-        html += '<div class="event-registration-stats">';
-        if (goingCount > 0) html += '<span class="event-stat">' + goingCount + ' going</span>';
-        if (interestedCount > 0) html += '<span class="event-stat">' + interestedCount + ' interested</span>';
-        html += '</div>';
-      }
+      if (goingCount > 0) statsItems.push('<span class="event-stat"><span class="event-stat-num">' + goingCount + '</span> going</span>');
+      if (interestedCount > 0) statsItems.push('<span class="event-stat"><span class="event-stat-num">' + interestedCount + '</span> interested</span>');
+    }
+    var likeCount = ev.feedback_like_count || (ev.likes ? ev.likes.length : 0);
+    if (likeCount > 0) statsItems.push('<span class="event-stat"><span class="event-stat-num">' + likeCount + '</span> like' + (likeCount !== 1 ? 's' : '') + '</span>');
+    var commentCount = ev.comments ? ev.comments.length : 0;
+    if (commentCount > 0) statsItems.push('<span class="event-stat"><span class="event-stat-num">' + commentCount + '</span> comment' + (commentCount !== 1 ? 's' : '') + '</span>');
+
+    if (statsItems.length > 0) {
+      html += '<div class="event-stats-bar">' + statsItems.join('<span class="event-stat-sep">&middot;</span>') + '</div>';
     }
 
-    // Description/content
-    if (ev.content) {
-      html += '<div class="event-section"><h2>About</h2><div class="event-description-body">' + esc(ev.content).replace(/\n/g, '<br>') + '</div></div>';
+    // --- Like button (shown after Nostr connect) ---
+    html += '<div class="feedback-section" id="feedback-section" style="display:none">' +
+      '<button class="like-button" id="like-button" onclick="toggleLike()">' +
+        '<span id="like-icon">&#9825;</span> <span>Like</span>' +
+      '</button>' +
+      '<span class="like-count" id="like-count">' + (likeCount > 0 ? likeCount + ' like' + (likeCount !== 1 ? 's' : '') : '') + '</span>' +
+    '</div>';
+
+    // --- Description ---
+    if (ev.content && ev.content.trim()) {
+      html += '<div class="event-section">' +
+        '<h2>About</h2>' +
+        '<div class="event-body">' + esc(ev.content).replace(/\n\n/g, '</p><p>').replace(/\n/g, '<br>') + '</div>' +
+      '</div>';
     }
 
-    // Agenda
-    if (ev.agenda) {
-      html += '<div class="event-section event-agenda"><h2>Agenda</h2><div class="event-agenda-body">' + esc(ev.agenda).replace(/\n/g, '<br>') + '</div></div>';
+    // --- Agenda ---
+    if (ev.agenda && ev.agenda.trim()) {
+      html += '<div class="event-section">' +
+        '<h2>Agenda</h2>' +
+        '<div class="event-body event-agenda-content">' + esc(ev.agenda).replace(/\n\n/g, '</p><p>').replace(/\n/g, '<br>') + '</div>' +
+      '</div>';
     }
 
-    // Links
+    // --- Links ---
     if (ev.links && ev.links.length > 0) {
-      html += '<div class="event-section event-links"><h2>Links</h2><ul>';
+      html += '<div class="event-section"><h2>Links</h2><div class="event-links-list">';
       ev.links.forEach(function(l) {
-        html += '<li><a href="' + esc(l.url) + '" target="_blank" rel="noopener">' + esc(l.description || l.url) + '</a></li>';
+        html += '<div class="event-link-card">' +
+          '<a href="' + esc(l.url) + '" target="_blank" rel="noopener" class="event-link-url">' + esc(l.description || l.url) + ' &#8599;</a>';
+        if (l.description && l.url !== l.description) {
+          html += '<div class="event-link-domain">' + esc(l.url.replace(/^https?:\/\//, '').split('/')[0]) + '</div>';
+        }
+        if (l.note) {
+          html += '<div class="event-link-note">' + esc(l.note) + '</div>';
+        }
+        html += '</div>';
       });
-      html += '</ul></div>';
+      html += '</div></div>';
     }
 
-    // Updates
+    // --- Updates ---
     if (ev.updates && ev.updates.length > 0) {
-      html += '<div class="event-section event-updates"><h2>Updates</h2>';
+      html += '<div class="event-section"><h2>Updates</h2>';
       ev.updates.forEach(function(u) {
-        html += '<div class="event-update-item">' +
-          '<div class="event-update-header"><strong>' + esc(u.title) + '</strong> <span class="event-update-date">' + esc(u.posted) + '</span></div>' +
-          '<div class="event-update-content">' + esc(u.content).replace(/\n/g, '<br>') + '</div>' +
+        var updateMeta = [];
+        if (u.author) updateMeta.push(esc(u.author));
+        if (u.posted) updateMeta.push(formatShortDate(u.posted));
+        html += '<article class="event-update-card">' +
+          '<div class="event-update-title">' + esc(u.title) + '</div>' +
+          (updateMeta.length ? '<div class="event-update-meta">' + updateMeta.join(' &middot; ') + '</div>' : '') +
+          '<div class="event-update-body">' + esc(u.content).replace(/\n/g, '<br>') + '</div>';
+        var uStats = [];
+        if (u.like_count > 0) uStats.push(u.like_count + ' like' + (u.like_count !== 1 ? 's' : ''));
+        if (u.comment_count > 0) uStats.push(u.comment_count + ' comment' + (u.comment_count !== 1 ? 's' : ''));
+        if (uStats.length) html += '<div class="event-update-stats">' + uStats.join(' &middot; ') + '</div>';
+        html += '</article>';
+      });
+      html += '</div>';
+    }
+
+    // --- Comments ---
+    if (ev.comments && ev.comments.length > 0) {
+      html += '<div class="event-section"><h2>Comments (' + ev.comments.length + ')</h2>';
+      ev.comments.forEach(function(c) {
+        html += '<div class="event-comment-card">' +
+          '<div class="event-comment-author">' + esc(c.author) +
+            '<span class="event-comment-time">' + formatShortDate(c.timestamp) + '</span>' +
+          '</div>' +
+          '<div class="event-comment-text">' + esc(c.content).replace(/\n/g, '<br>') + '</div>' +
         '</div>';
       });
       html += '</div>';
     }
 
-    // Comments
-    if (ev.comments && ev.comments.length > 0) {
-      html += '<div class="event-section event-comments"><h2>Comments (' + ev.comments.length + ')</h2>';
-      ev.comments.forEach(function(c) {
-        html += '<div class="event-comment">' +
-          '<div class="event-comment-header"><strong>' + esc(c.author) + '</strong> <span class="event-comment-date">' + esc(c.timestamp) + '</span></div>' +
-          '<div class="event-comment-body">' + esc(c.content).replace(/\n/g, '<br>') + '</div>' +
-        '</div>';
+    // --- Contacts ---
+    if (ev.contacts && ev.contacts.length > 0) {
+      html += '<div class="event-section"><h2>People</h2><div class="event-contacts">';
+      ev.contacts.forEach(function(c) {
+        html += '<span class="event-contact-badge">' + esc(c) + '</span>';
       });
-      html += '</div>';
+      html += '</div></div>';
     }
 
     detailEl.innerHTML = html;
+
+    // === Lightbox ===
+    var lbImages = (ev.flyers || []).map(fileUrl);
+    var lbIndex = 0;
+
+    window.openLightbox = function(i) {
+      lbIndex = i;
+      var lb = document.getElementById('lightbox');
+      document.getElementById('lightbox-img').src = lbImages[lbIndex];
+      lb.style.display = 'flex';
+      document.getElementById('lb-prev').style.display = lbImages.length > 1 ? '' : 'none';
+      document.getElementById('lb-next').style.display = lbImages.length > 1 ? '' : 'none';
+      document.body.style.overflow = 'hidden';
+    };
+    window.closeLightbox = function() {
+      document.getElementById('lightbox').style.display = 'none';
+      document.body.style.overflow = '';
+    };
+    window.lbNav = function(dir) {
+      lbIndex = (lbIndex + dir + lbImages.length) % lbImages.length;
+      document.getElementById('lightbox-img').src = lbImages[lbIndex];
+    };
+    document.addEventListener('keydown', function(e) {
+      var lb = document.getElementById('lightbox');
+      if (lb.style.display === 'none') return;
+      if (e.key === 'Escape') closeLightbox();
+      if (e.key === 'ArrowLeft') lbNav(-1);
+      if (e.key === 'ArrowRight') lbNav(1);
+    });
+
+    // === Like button (reuses blog NOSTR likes pattern) ===
+    var likedPubkeys = ev.feedback_liked_hex_pubkeys || [];
+    var userPubkey = null;
+    var isLiked = false;
+
+    function onNostrConnected(pubkey) {
+      userPubkey = pubkey;
+      document.getElementById('feedback-section').style.display = 'flex';
+      if (likedPubkeys.includes(pubkey)) {
+        isLiked = true;
+        updateLikeUI(ev.feedback_like_count || (ev.likes ? ev.likes.length : 0));
+      }
+    }
+
+    window.toggleLike = async function() {
+      if (!userPubkey || !window.nostr) {
+        alert('Please connect with Nostr first');
+        return;
+      }
+      var button = document.getElementById('like-button');
+      button.disabled = true;
+      try {
+        var unsignedEvent = {
+          pubkey: userPubkey,
+          created_at: Math.floor(Date.now() / 1000),
+          kind: 7,
+          tags: [['e', ev.id], ['type', 'likes']],
+          content: 'like'
+        };
+        if (ev.npub) unsignedEvent.tags.push(['p', ev.npub]);
+        var signedEvent = await window.nostr.signEvent(unsignedEvent);
+        if (!signedEvent || !signedEvent.sig) throw new Error('Signing cancelled');
+        var response = await fetch('/api/events/' + encodeURIComponent(ev.id) + '/like', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(signedEvent)
+        });
+        var result = await response.json();
+        if (result.success) {
+          isLiked = result.liked;
+          updateLikeUI(result.like_count);
+        }
+      } catch (e) { console.error('Error toggling like:', e); }
+      finally { button.disabled = false; }
+    };
+
+    function updateLikeUI(count) {
+      var button = document.getElementById('like-button');
+      var icon = document.getElementById('like-icon');
+      var countEl = document.getElementById('like-count');
+      if (isLiked) { button.classList.add('liked'); } else { button.classList.remove('liked'); }
+      icon.innerHTML = isLiked ? '&#9829;' : '&#9825;';
+      countEl.textContent = count > 0 ? count + ' like' + (count !== 1 ? 's' : '') : '';
+    }
+
+    // Init: listen for Nostr connection
+    document.addEventListener('nostr-connected', function(e) {
+      onNostrConnected(e.detail.pubkey);
+    });
+    if (window.GeogramNostr && window.GeogramNostr.connected && window.GeogramNostr.pubkey) {
+      onNostrConnected(window.GeogramNostr.pubkey);
+    }
   })();
 </script>
 </body>
@@ -1609,73 +1786,196 @@ a.event-item {
 /* Hero */
 .event-hero {
   margin-bottom: var(--spacing-xl);
-}
-
-.event-back-link {
-  display: inline-block;
-  margin-bottom: var(--spacing-md);
-  color: var(--color-accent);
-  text-decoration: none;
-  font-size: var(--font-size-sm);
-}
-
-.event-back-link:hover {
-  text-decoration: underline;
+  padding-bottom: var(--spacing-lg);
+  border-bottom: 1px solid var(--color-border-light);
 }
 
 .event-hero-title {
-  font-size: var(--font-size-3xl);
+  font-size: 2rem;
   font-weight: 700;
-  margin: 0 0 var(--spacing-md) 0;
+  margin: 0 0 var(--spacing-lg) 0;
   color: var(--color-text);
   line-height: 1.2;
 }
 
-.event-hero-date {
-  font-size: var(--font-size-lg);
+.event-hero-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  font-size: var(--font-size-base);
   color: var(--color-text-secondary);
   margin-bottom: var(--spacing-sm);
+  line-height: 1.4;
 }
 
-.event-hero-location {
-  font-size: var(--font-size-base);
-  color: var(--color-text-muted);
+.event-hero-meta-icon {
+  flex-shrink: 0;
+  width: 1.4em;
+  text-align: center;
 }
 
-.event-hero-location a {
+.event-hero-meta a {
   color: var(--color-accent);
   text-decoration: none;
 }
 
-.event-hero-location a:hover {
+.event-hero-meta a:hover {
   text-decoration: underline;
 }
 
-/* Flyer images */
-.event-flyers {
+.event-signed {
+  color: #4ade80;
+}
+
+/* Gallery */
+.event-gallery {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: var(--spacing-md);
   margin-bottom: var(--spacing-xl);
 }
 
-.event-flyer-img {
-  max-width: 100%;
+.event-gallery-item {
   border-radius: var(--border-radius);
-  margin-bottom: var(--spacing-md);
+  overflow: hidden;
+  cursor: pointer;
+  aspect-ratio: 4/3;
+  background: var(--color-bg-secondary);
 }
 
-/* Registration stats */
-.event-registration-stats {
+.event-gallery-item img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: transform 0.2s;
+}
+
+.event-gallery-item:hover img {
+  transform: scale(1.05);
+}
+
+@media (max-width: 480px) {
+  .event-gallery {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Lightbox */
+.lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  background: rgba(0,0,0,0.92);
   display: flex;
-  gap: var(--spacing-lg);
-  margin-bottom: var(--spacing-xl);
-  padding: var(--spacing-md);
-  background-color: var(--color-bg-secondary);
+  align-items: center;
+  justify-content: center;
+}
+
+.lightbox img {
+  max-width: 90vw;
+  max-height: 90vh;
+  object-fit: contain;
+  border-radius: 4px;
+}
+
+.lightbox-close {
+  position: absolute;
+  top: 16px;
+  right: 20px;
+  background: none;
+  border: none;
+  color: #fff;
+  font-size: 2rem;
+  cursor: pointer;
+  line-height: 1;
+  padding: 4px 10px;
+}
+
+.lightbox-prev,
+.lightbox-next {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  background: rgba(255,255,255,0.12);
+  border: none;
+  color: #fff;
+  font-size: 2rem;
+  cursor: pointer;
+  padding: 12px 16px;
+  border-radius: 4px;
+}
+
+.lightbox-prev { left: 16px; }
+.lightbox-next { right: 16px; }
+.lightbox-prev:hover,
+.lightbox-next:hover { background: rgba(255,255,255,0.25); }
+
+/* Stats bar */
+.event-stats-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--spacing-sm);
+  padding: var(--spacing-md) var(--spacing-lg);
+  background: var(--color-bg-secondary);
   border-radius: var(--border-radius);
+  margin-bottom: var(--spacing-lg);
 }
 
 .event-stat {
-  font-size: var(--font-size-base);
+  font-size: var(--font-size-sm);
   color: var(--color-text-secondary);
-  font-weight: 500;
+}
+
+.event-stat-num {
+  font-weight: 700;
+  color: var(--color-text);
+}
+
+.event-stat-sep {
+  color: var(--color-text-muted);
+}
+
+/* Feedback / Like button */
+.feedback-section {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-md);
+  margin-bottom: var(--spacing-xl);
+}
+
+.like-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 18px;
+  border: 1px solid var(--color-border-light);
+  border-radius: var(--border-radius);
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  font-size: var(--font-size-base);
+  transition: all 0.15s;
+}
+
+.like-button:hover {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+.like-button.liked {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+.like-button:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+
+.like-count {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
 }
 
 /* Sections */
@@ -1692,86 +1992,134 @@ a.event-item {
   padding-bottom: var(--spacing-sm);
 }
 
-.event-description-body {
+.event-body {
   color: var(--color-text-secondary);
-  line-height: 1.6;
+  line-height: 1.7;
+  font-size: var(--font-size-base);
 }
 
-/* Agenda */
-.event-agenda-body {
-  color: var(--color-text-secondary);
-  line-height: 1.6;
+.event-body p { margin: 0 0 1em 0; }
+
+.event-agenda-content {
+  padding-left: var(--spacing-md);
+  border-left: 3px solid var(--color-accent);
 }
 
 /* Links */
-.event-links ul {
-  list-style: none;
-  padding: 0;
-  margin: 0;
+.event-links-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
 }
 
-.event-links li {
-  padding: var(--spacing-sm) 0;
-  border-bottom: 1px solid var(--color-border-light);
+.event-link-card {
+  padding: var(--spacing-md);
+  background: var(--color-bg-secondary);
+  border-radius: var(--border-radius);
+  border: 1px solid var(--color-border-light);
 }
 
-.event-links li:last-child {
-  border-bottom: none;
-}
-
-.event-links a {
+.event-link-url {
   color: var(--color-accent);
   text-decoration: none;
+  font-weight: 500;
+  font-size: var(--font-size-base);
 }
 
-.event-links a:hover {
+.event-link-url:hover {
   text-decoration: underline;
 }
 
+.event-link-domain {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  margin-top: 2px;
+}
+
+.event-link-note {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  margin-top: var(--spacing-xs);
+}
+
 /* Updates */
-.event-update-item {
-  padding: var(--spacing-md);
-  background-color: var(--color-bg-secondary);
+.event-update-card {
+  padding: var(--spacing-lg);
+  background: var(--color-bg-secondary);
   border-radius: var(--border-radius);
+  border-left: 3px solid var(--color-accent);
   margin-bottom: var(--spacing-md);
 }
 
-.event-update-header {
+.event-update-title {
+  font-weight: 600;
+  font-size: var(--font-size-lg);
+  color: var(--color-text);
+  margin-bottom: var(--spacing-xs);
+}
+
+.event-update-meta {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
   margin-bottom: var(--spacing-sm);
 }
 
-.event-update-date {
-  color: var(--color-text-muted);
-  font-size: var(--font-size-sm);
-}
-
-.event-update-content {
+.event-update-body {
   color: var(--color-text-secondary);
   line-height: 1.6;
 }
 
+.event-update-stats {
+  margin-top: var(--spacing-sm);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+}
+
 /* Comments */
-.event-comment {
+.event-comment-card {
   padding: var(--spacing-md) 0;
   border-bottom: 1px solid var(--color-border-light);
 }
 
-.event-comment:last-child {
+.event-comment-card:last-child {
   border-bottom: none;
 }
 
-.event-comment-header {
+.event-comment-author {
+  font-weight: 600;
+  color: var(--color-text);
   margin-bottom: var(--spacing-xs);
+  display: flex;
+  align-items: baseline;
+  gap: var(--spacing-sm);
 }
 
-.event-comment-date {
+.event-comment-time {
+  font-weight: 400;
+  font-size: var(--font-size-xs);
   color: var(--color-text-muted);
-  font-size: var(--font-size-sm);
 }
 
-.event-comment-body {
+.event-comment-text {
   color: var(--color-text-secondary);
   line-height: 1.5;
+}
+
+/* Contacts badges */
+.event-contacts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-xs);
+}
+
+.event-contact-badge {
+  display: inline-block;
+  padding: var(--spacing-xs) var(--spacing-sm);
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border-light);
+  border-radius: var(--border-radius-sm);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
 }
 ''';
 
