@@ -110,7 +110,14 @@ class MirrorDiscoveryService {
     final lanMirrors = mirrors.value
         .where((s) => s.connectionType == 'lan')
         .toList();
-    mirrors.value = [...stationMirrors, ...lanMirrors];
+    final merged = [...stationMirrors, ...lanMirrors];
+
+    // Stable sort so the list doesn't jump around
+    merged.sort((a, b) => a.deviceId.compareTo(b.deviceId));
+
+    // Only notify listeners when devices actually changed (add/remove)
+    if (!_mirrorListChanged(mirrors.value, merged)) return;
+    mirrors.value = merged;
 
     LogService().log('MirrorDiscovery: ${stationMirrors.length} station mirror(s) for $callsign');
 
@@ -161,5 +168,20 @@ class MirrorDiscoveryService {
 
   void dispose() {
     mirrors.dispose();
+  }
+
+  /// Returns true when the set of devices changed (add/remove/identity change).
+  static bool _mirrorListChanged(
+      List<MirrorDevice> old, List<MirrorDevice> updated) {
+    if (old.length != updated.length) return true;
+    for (int i = 0; i < old.length; i++) {
+      if (old[i].deviceId != updated[i].deviceId ||
+          old[i].connectionType != updated[i].connectionType ||
+          old[i].verified != updated[i].verified ||
+          old[i].displayName != updated[i].displayName) {
+        return true;
+      }
+    }
+    return false;
   }
 }
