@@ -1096,12 +1096,13 @@ class ThemesEmbedded {
       html += '<div class="event-stats-bar">' + statsItems.join('<span class="event-stat-sep">&middot;</span>') + '</div>';
     }
 
-    // --- Like button (shown after Nostr connect) ---
-    html += '<div class="feedback-section" id="feedback-section" style="display:none">' +
-      '<button class="like-button" id="like-button" onclick="toggleLike()">' +
+    // --- Like button ---
+    html += '<div class="feedback-section" id="feedback-section">' +
+      '<button class="like-button" id="like-button" onclick="toggleLike()" disabled>' +
         '<span id="like-icon">&#9825;</span> <span>Like</span>' +
       '</button>' +
       '<span class="like-count" id="like-count">' + (likeCount > 0 ? likeCount + ' like' + (likeCount !== 1 ? 's' : '') : '') + '</span>' +
+      '<span class="like-hint" id="like-hint">Connect with Nostr to like</span>' +
     '</div>';
 
     // --- Description ---
@@ -1218,7 +1219,9 @@ class ThemesEmbedded {
 
     function onNostrConnected(pubkey) {
       userPubkey = pubkey;
-      document.getElementById('feedback-section').style.display = 'flex';
+      document.getElementById('like-button').disabled = false;
+      var hint = document.getElementById('like-hint');
+      if (hint) hint.style.display = 'none';
       if (likedPubkeys.includes(pubkey)) {
         isLiked = true;
         updateLikeUI(ev.feedback_like_count || (ev.likes ? ev.likes.length : 0));
@@ -1976,6 +1979,12 @@ a.event-item {
 .like-count {
   font-size: var(--font-size-sm);
   color: var(--color-text-muted);
+}
+
+.like-hint {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  font-style: italic;
 }
 
 /* Sections */

@@ -1670,8 +1670,7 @@ class LogApiService with ChatModificationMixin {
     }
     userNpub ??= _verifyNostrAuth(request);
 
-    // 2. Load event (use getAllEventsGlobal + filter since findEventByIdGlobal
-    //    only searches collections/ and may miss events in devices/)
+    // 2. Load event — resolve ID/slug, then do a full load (with links, etc.)
     String? dataDir;
     try {
       dataDir = StorageConfig().baseDir;
@@ -1681,16 +1680,21 @@ class LogApiService with ChatModificationMixin {
         headers: headers,
       );
     }
-    final allEvents = await EventService().getAllEventsGlobal(dataDir);
-    // Look up by ID first, then fall back to slug
-    var event = allEvents.cast<Event?>().firstWhere(
-      (e) => e?.id == eventId,
-      orElse: () => null,
-    );
-    event ??= allEvents.cast<Event?>().firstWhere(
-      (e) => e?.slug == eventId,
-      orElse: () => null,
-    );
+    // Try full load by ID first (searches collections + devices)
+    var event = await EventService().findEventByIdGlobal(eventId, dataDir);
+    // Fall back to slug lookup
+    if (event == null) {
+      final allEvents = await EventService().getAllEventsGlobal(dataDir);
+      final bySlug = allEvents.cast<Event?>().firstWhere(
+        (e) => e?.slug == eventId,
+        orElse: () => null,
+      );
+      if (bySlug != null) {
+        // Full load via findEventByIdGlobal with the real ID
+        event = await EventService().findEventByIdGlobal(bySlug.id, dataDir);
+        event ??= bySlug;
+      }
+    }
     if (event == null) {
       final htmlHeaders = Map<String, String>.from(headers);
       htmlHeaders['Content-Type'] = 'text/html; charset=utf-8';
@@ -8328,8 +8332,16 @@ class LogApiService with ChatModificationMixin {
         );
       }
 
-      // Find event
-      final event = await EventService().findEventByIdGlobal(eventId, dataDir);
+      // Find event (by ID or slug)
+      final allEvents = await EventService().getAllEventsGlobal(dataDir);
+      var event = allEvents.cast<Event?>().firstWhere(
+        (e) => e?.id == eventId,
+        orElse: () => null,
+      );
+      event ??= allEvents.cast<Event?>().firstWhere(
+        (e) => e?.slug == eventId,
+        orElse: () => null,
+      );
       if (event == null) {
         return shelf.Response.notFound(
           jsonEncode({'error': 'Event not found'}),
@@ -8338,7 +8350,7 @@ class LogApiService with ChatModificationMixin {
       }
 
       // Get event path for feedback storage
-      final eventPath = await EventService().getEventPath(eventId, dataDir);
+      final eventPath = await EventService().getEventPath(event.id, dataDir);
       if (eventPath == null) {
         return shelf.Response.notFound(
           jsonEncode({'error': 'Event path not found'}),

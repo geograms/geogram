@@ -499,6 +499,12 @@ a.event-item {
   color: var(--color-text-muted);
 }
 
+.like-hint {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  font-style: italic;
+}
+
 /* Sections */
 .event-section {
   margin-bottom: var(--spacing-xl);

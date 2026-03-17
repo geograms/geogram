@@ -1285,10 +1285,6 @@ class EventService {
 
       // Scan collections directory for event-type apps
       final appsDir = Directory('$dataDir/collections');
-      if (!await appsDir.exists()) {
-        print('EventService: Collections directory not found');
-        return null;
-      }
 
       Future<Event?> searchInDir(Directory parentDir) async {
         if (!await parentDir.exists()) return null;
