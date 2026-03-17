@@ -1718,13 +1718,39 @@ class AppService {
         // Check if the folder is essentially empty (only hidden/system files)
         // This can happen if the app was "deleted" but folder remained
         final entries = await _profileStorage!.listDirectory(folderName);
+        final hasAppJs = entries.any((e) => e.name == 'app.js');
         final hasUserContent = entries.any((e) {
           // Hidden files/folders (starting with .) and system folders are not user content
           return !e.name.startsWith('.') && e.name != 'extra' && e.name != 'media';
         });
 
-        if (hasUserContent) {
+        if (hasAppJs) {
+          // Genuinely installed app — refuse to overwrite
           throw Exception('A $type app already exists');
+        }
+
+        if (hasUserContent) {
+          // Synced folder with data but no app.js — adopt it by writing
+          // metadata into the existing folder instead of rejecting it
+          stderr.writeln('Adopting synced folder for $type (has content but no app.js)');
+          await _profileStorage!.createDirectory('$folderName/extra');
+          final storagePath = _profileStorage!.getAbsolutePath(folderName);
+          final app = App(
+            id: id,
+            title: title,
+            description: description,
+            type: type,
+            updated: DateTime.now().toIso8601String(),
+            storagePath: storagePath,
+            isOwned: true,
+            isFavorite: false,
+            filesCount: 0,
+            totalSize: 0,
+          );
+          await _writeAppFilesWithStorage(app, folderName);
+          stderr.writeln('Adopted synced folder as $type app');
+          appsNotifier.value++;
+          return app;
         }
 
         // Folder exists but is empty - delete it and recreate fresh

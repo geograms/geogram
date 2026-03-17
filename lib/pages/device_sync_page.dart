@@ -729,6 +729,9 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
       _transferring = false;
       _currentTransferFile = null;
     });
+
+    // Refresh the main UI app list so newly-synced folders appear
+    AppService().appsNotifier.value++;
   }
 
   Widget _buildTransferView() {
