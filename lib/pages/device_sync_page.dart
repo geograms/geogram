@@ -11,7 +11,7 @@ import '../services/storage_config.dart';
 import '../services/websocket_service.dart';
 
 /// Multi-device sync page with three stages:
-/// 1. Mirror list — discover and select a mirror device
+/// 1. Mirror list — discover and select a mirror device (or multi-select for push)
 /// 2. App/folder diff — see what changed between devices
 /// 3. Approval & transfer — select files and sync
 class DeviceSyncPage extends StatefulWidget {
@@ -25,13 +25,24 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
   // Stage tracking
   int _stage = 1; // 1=mirror list, 2=diff view, 3=transfer
 
-  // Stage 1: selected mirror
+  // Stage 1: selected mirror (single-device mode)
   MirrorDevice? _selectedMirror;
   String? _peerUrl;
 
+  // Stage 1: multi-device push mode
+  bool _multiSelectMode = false;
+  final Set<String> _selectedMirrorIds = {};
+  List<MirrorDevice> _multiMirrors = []; // resolved mirrors for push
+  final Map<String, String> _multiPeerUrls = {}; // deviceId -> url
+  final Map<String, Map<String, String>> _multiTokens = {}; // deviceId -> {folder -> token}
+  // Which files each device needs: deviceId -> {folder -> set of paths}
+  final Map<String, Map<String, Set<String>>> _multiDeviceNeeds = {};
+
+  bool get _isMultiMode => _multiMirrors.isNotEmpty;
+
   // Stage 2: diff data per folder
   final Map<String, List<FileChange>> _diffs = {};
-  final Map<String, String> _tokens = {}; // folder -> auth token
+  final Map<String, String> _tokens = {}; // folder -> auth token (single mode)
   bool _loadingDiffs = false;
   String? _diffError;
 
@@ -48,6 +59,7 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
   int _filesTransferred = 0;
   int _totalFilesToTransfer = 0;
   String? _currentTransferFile;
+  String? _currentTransferDevice; // multi-mode: which device we're pushing to
 
   // Stage 2: diff progress
   int _diffFoldersDone = 0;
@@ -76,6 +88,9 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
       case 1:
         return 'Device Sync';
       case 2:
+        if (_isMultiMode) {
+          return 'Push to ${_multiMirrors.length} device(s)';
+        }
         return 'Changes with ${_selectedMirror?.displayName ?? "Mirror"}';
       case 3:
         return 'Syncing...';
@@ -91,6 +106,10 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
         _stage--;
         if (_stage == 1) {
           _selectedMirror = null;
+          _multiMirrors = [];
+          _multiPeerUrls.clear();
+          _multiTokens.clear();
+          _multiDeviceNeeds.clear();
           _diffs.clear();
           _tokens.clear();
           _diffError = null;
@@ -99,6 +118,7 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
           _diffFoldersDone = 0;
           _diffFoldersTotal = 0;
           _currentDiffFolder = null;
+          _currentTransferDevice = null;
         }
       });
     } else {
@@ -147,13 +167,67 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
           );
         }
 
-        return ListView.builder(
-          padding: const EdgeInsets.all(16),
-          itemCount: mirrors.length,
-          itemBuilder: (context, index) {
-            final mirror = mirrors[index];
-            return _buildMirrorCard(mirror);
-          },
+        return Column(
+          children: [
+            // Mode toggle bar
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      _multiSelectMode
+                          ? 'Select devices to push to:'
+                          : 'Tap a device to sync:',
+                      style: const TextStyle(fontSize: 14, color: Colors.grey),
+                    ),
+                  ),
+                  TextButton.icon(
+                    icon: Icon(
+                      _multiSelectMode ? Icons.close : Icons.send,
+                      size: 18,
+                    ),
+                    label: Text(_multiSelectMode ? 'Cancel' : 'Multi Push'),
+                    onPressed: () {
+                      setState(() {
+                        _multiSelectMode = !_multiSelectMode;
+                        _selectedMirrorIds.clear();
+                      });
+                    },
+                  ),
+                ],
+              ),
+            ),
+            Expanded(
+              child: ListView.builder(
+                padding: const EdgeInsets.all(16),
+                itemCount: mirrors.length,
+                itemBuilder: (context, index) {
+                  final mirror = mirrors[index];
+                  if (_multiSelectMode) {
+                    return _buildMultiSelectMirrorCard(mirror);
+                  }
+                  return _buildMirrorCard(mirror);
+                },
+              ),
+            ),
+            if (_multiSelectMode && _selectedMirrorIds.isNotEmpty)
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Theme.of(context).colorScheme.surface,
+                  boxShadow: const [BoxShadow(color: Colors.black12, blurRadius: 4)],
+                ),
+                child: SizedBox(
+                  width: double.infinity,
+                  child: FilledButton.icon(
+                    icon: const Icon(Icons.send),
+                    label: Text('Push to ${_selectedMirrorIds.length} device(s)'),
+                    onPressed: () => _startMultiPush(mirrors),
+                  ),
+                ),
+              ),
+          ],
         );
       },
     );
@@ -189,6 +263,56 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
     );
   }
 
+  Widget _buildMultiSelectMirrorCard(MirrorDevice mirror) {
+    final icon = _platformIcon(mirror.platform);
+    final isSelected = _selectedMirrorIds.contains(mirror.deviceId);
+    final connectionIcon = mirror.connectionType == 'lan'
+        ? Icons.wifi
+        : Icons.cloud;
+
+    return Card(
+      margin: const EdgeInsets.only(bottom: 12),
+      child: ListTile(
+        leading: Icon(icon, size: 40),
+        title: Text(mirror.displayName),
+        subtitle: Row(
+          children: [
+            Icon(connectionIcon, size: 14, color: Colors.grey),
+            const SizedBox(width: 4),
+            Text(mirror.connectionType),
+            if (mirror.verified) ...[
+              const SizedBox(width: 8),
+              const Icon(Icons.verified, size: 14, color: Colors.green),
+              const SizedBox(width: 2),
+              const Text('Verified', style: TextStyle(color: Colors.green, fontSize: 12)),
+            ],
+          ],
+        ),
+        trailing: Checkbox(
+          value: isSelected,
+          onChanged: (_) {
+            setState(() {
+              if (isSelected) {
+                _selectedMirrorIds.remove(mirror.deviceId);
+              } else {
+                _selectedMirrorIds.add(mirror.deviceId);
+              }
+            });
+          },
+        ),
+        onTap: () {
+          setState(() {
+            if (isSelected) {
+              _selectedMirrorIds.remove(mirror.deviceId);
+            } else {
+              _selectedMirrorIds.add(mirror.deviceId);
+            }
+          });
+        },
+      ),
+    );
+  }
+
   IconData _platformIcon(String platform) {
     switch (platform.toLowerCase()) {
       case 'android':
@@ -206,6 +330,18 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
     }
   }
 
+  /// Resolve the HTTP URL to reach a mirror device.
+  String? _resolvePeerUrl(MirrorDevice mirror) {
+    var url = mirror.directAddress ?? mirror.stationRelayUrl;
+    if (url == null) {
+      final stationUrl = _getStationHttpUrl();
+      if (stationUrl != null && mirror.deviceId.isNotEmpty) {
+        url = '$stationUrl/device/${mirror.callsign}?target=${mirror.deviceId}';
+      }
+    }
+    return url;
+  }
+
   Future<void> _selectMirror(MirrorDevice mirror) async {
     setState(() {
       _selectedMirror = mirror;
@@ -214,18 +350,7 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
       _stage = 2;
     });
 
-    // Determine peer URL (LAN direct or station relay)
-    _peerUrl = mirror.directAddress ?? mirror.stationRelayUrl;
-    if (_peerUrl == null) {
-      // If we don't have a direct address, try the station relay via the connected station
-      final stationUrl = _getStationHttpUrl();
-      if (stationUrl != null && mirror.deviceId.isNotEmpty) {
-        // Use station device proxy to reach the mirror.
-        // Pin to the specific connection ID so challenge/response
-        // hit the same physical device (not ourselves behind NAT).
-        _peerUrl = '$stationUrl/device/${mirror.callsign}?target=${mirror.deviceId}';
-      }
-    }
+    _peerUrl = _resolvePeerUrl(mirror);
 
     if (_peerUrl == null) {
       setState(() {
@@ -236,6 +361,38 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
     }
 
     await _loadDiffs();
+  }
+
+  Future<void> _startMultiPush(List<MirrorDevice> allMirrors) async {
+    _multiMirrors = allMirrors
+        .where((m) => _selectedMirrorIds.contains(m.deviceId))
+        .toList();
+    _multiPeerUrls.clear();
+    _multiTokens.clear();
+    _multiDeviceNeeds.clear();
+
+    for (final mirror in _multiMirrors) {
+      final url = _resolvePeerUrl(mirror);
+      if (url != null) {
+        _multiPeerUrls[mirror.deviceId] = url;
+      }
+    }
+
+    if (_multiPeerUrls.isEmpty) {
+      setState(() {
+        _diffError = 'Cannot determine address for any selected device';
+      });
+      return;
+    }
+
+    setState(() {
+      _stage = 2;
+      _loadingDiffs = true;
+      _diffError = null;
+      _multiSelectMode = false;
+    });
+
+    await _loadMultiDiffs();
   }
 
   String? _getStationHttpUrl() {
@@ -346,6 +503,112 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
     }
   }
 
+  /// Load push-only diffs across all selected devices.
+  Future<void> _loadMultiDiffs() async {
+    final mirrorService = MirrorSyncService.instance;
+    final storage = AppService().profileStorage;
+    final profile = ProfileService().getProfile();
+    final indexPath = StorageConfig().getFileIndexPath(profile.callsign);
+    final fileIndex = FileIndexService(indexPath);
+
+    _diffs.clear();
+    _tokens.clear();
+    _selectedFiles.clear();
+    _fileDirections.clear();
+    _multiDeviceNeeds.clear();
+
+    _diffFoldersTotal = _appFolders.length;
+    int foldersCompared = 0;
+
+    for (final folder in _appFolders) {
+      if (mounted) {
+        setState(() {
+          _currentDiffFolder = kFolderLabels[folder]?.$1 ?? folder;
+          _diffFoldersDone = _appFolders.indexOf(folder);
+        });
+      }
+
+      // Collect push-able paths across all devices for this folder
+      final pushEntries = <String, MirrorFileEntry>{}; // path -> local entry
+
+      for (final entry in _multiPeerUrls.entries) {
+        final deviceId = entry.key;
+        final peerUrl = entry.value;
+
+        try {
+          final syncResult = await mirrorService.requestSync(peerUrl, folder);
+          if (!syncResult.allowed || syncResult.token == null) continue;
+
+          _multiTokens.putIfAbsent(deviceId, () => {})[folder] = syncResult.token!;
+
+          final manifest = await mirrorService.fetchManifest(peerUrl, folder, syncResult.token!);
+          if (manifest == null) continue;
+
+          foldersCompared++;
+
+          final localPath = '${profile.callsign}/$folder';
+          final changes = await mirrorService.diffManifest(
+            manifest,
+            localPath,
+            syncStyle: SyncStyle.sendReceive,
+            storage: storage,
+            fileIndex: fileIndex,
+          );
+
+          // Only keep push-direction changes (uploads = local-only or local-newer)
+          for (final change in changes) {
+            if (change.type == FileChangeType.upload) {
+              pushEntries.putIfAbsent(
+                change.path,
+                () => change.localEntry ?? MirrorFileEntry(
+                  path: change.path, sha1: '', mtime: 0, size: 0,
+                ),
+              );
+              _multiDeviceNeeds
+                  .putIfAbsent(deviceId, () => {})
+                  .putIfAbsent(folder, () => {})
+                  .add(change.path);
+            }
+          }
+        } catch (e) {
+          LogService().log('DeviceSync: Multi-diff error for $folder on $deviceId: $e');
+        }
+      }
+
+      // Build unified diff for this folder (push-only)
+      if (pushEntries.isNotEmpty) {
+        _diffs[folder] = pushEntries.entries.map((e) {
+          return FileChange.upload(MirrorFileEntry(
+            path: e.key,
+            sha1: e.value.sha1,
+            mtime: e.value.mtime,
+            size: e.value.size,
+          ));
+        }).toList();
+
+        _selectedFiles[folder] = pushEntries.keys.toSet();
+        for (final path in pushEntries.keys) {
+          _fileDirections['$folder:$path'] = false; // push
+        }
+      }
+    }
+
+    fileIndex.close();
+
+    if (mounted) {
+      setState(() {
+        _loadingDiffs = false;
+        _diffFoldersDone = _diffFoldersTotal;
+        _currentDiffFolder = null;
+        if (_diffs.isEmpty) {
+          _diffError = foldersCompared == 0
+              ? 'Could not compare any folders. Check device connectivity.'
+              : 'All devices are up to date — nothing to push.';
+        }
+      });
+    }
+  }
+
   Widget _buildDiffView() {
     if (_loadingDiffs) {
       return Center(
@@ -371,7 +634,7 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             Icon(
-              _diffs.isEmpty && _diffError!.contains('in sync')
+              _diffs.isEmpty && _diffError!.contains('in sync') || _diffError!.contains('up to date')
                   ? Icons.check_circle
                   : Icons.info_outline,
               size: 64,
@@ -386,24 +649,39 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
 
     return Column(
       children: [
-        // Direction filter bar
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-          child: SegmentedButton<bool?>(
-            segments: const [
-              ButtonSegment(value: null, label: Text('All')),
-              ButtonSegment(value: false, label: Text('Push'), icon: Icon(Icons.arrow_forward, size: 16)),
-              ButtonSegment(value: true, label: Text('Pull'), icon: Icon(Icons.arrow_back, size: 16)),
-            ],
-            selected: {_directionFilter},
-            onSelectionChanged: (v) {
-              setState(() {
-                _directionFilter = v.first;
-                _applyDirectionFilter();
-              });
-            },
+        // Direction filter bar — only in single-device mode
+        if (!_isMultiMode)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+            child: SegmentedButton<bool?>(
+              segments: const [
+                ButtonSegment(value: null, label: Text('All')),
+                ButtonSegment(value: false, label: Text('Push'), icon: Icon(Icons.arrow_forward, size: 16)),
+                ButtonSegment(value: true, label: Text('Pull'), icon: Icon(Icons.arrow_back, size: 16)),
+              ],
+              selected: {_directionFilter},
+              onSelectionChanged: (v) {
+                setState(() {
+                  _directionFilter = v.first;
+                  _applyDirectionFilter();
+                });
+              },
+            ),
           ),
-        ),
+        if (_isMultiMode)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+            child: Row(
+              children: [
+                const Icon(Icons.arrow_forward, size: 16, color: Colors.blue),
+                const SizedBox(width: 8),
+                Text(
+                  'Push files to ${_multiMirrors.length} device(s)',
+                  style: const TextStyle(color: Colors.blue, fontWeight: FontWeight.w500),
+                ),
+              ],
+            ),
+          ),
         Expanded(
           child: ListView(
             padding: const EdgeInsets.all(16),
@@ -498,7 +776,10 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(folder, style: const TextStyle(fontWeight: FontWeight.bold)),
+                        Text(
+                          kFolderLabels[folder]?.$1 ?? folder,
+                          style: const TextStyle(fontWeight: FontWeight.bold),
+                        ),
                         const SizedBox(height: 4),
                         Row(
                           children: [
@@ -545,10 +826,11 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
                   ),
                 ),
                 subtitle: Text(
-                  _changeLabel(change.type),
+                  _isMultiMode ? _multiPushLabel(folder, change.path) : _changeLabel(change.type),
                   style: TextStyle(fontSize: 11, color: _changeColor(change.type)),
                 ),
-                trailing: isSelected
+                // In multi-mode, direction is always push — no toggle
+                trailing: (!_isMultiMode && isSelected)
                     ? IconButton(
                         icon: Icon(
                           isPull ? Icons.arrow_back : Icons.arrow_forward,
@@ -567,6 +849,15 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
         ],
       ),
     );
+  }
+
+  /// Label showing how many devices need this file.
+  String _multiPushLabel(String folder, String path) {
+    int count = 0;
+    for (final needs in _multiDeviceNeeds.values) {
+      if (needs[folder]?.contains(path) == true) count++;
+    }
+    return 'Push to $count device(s)';
   }
 
   Widget _changeChip(String label, Color color) {
@@ -622,8 +913,8 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
           const Spacer(),
           FilledButton.icon(
             onPressed: totalSelected > 0 ? _confirmAndApply : null,
-            icon: const Icon(Icons.sync),
-            label: const Text('Apply Selected'),
+            icon: Icon(_isMultiMode ? Icons.send : Icons.sync),
+            label: Text(_isMultiMode ? 'Push Selected' : 'Apply Selected'),
           ),
         ],
       ),
@@ -636,37 +927,77 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
 
   Future<void> _confirmAndApply() async {
     final totalSelected = _selectedFiles.values.fold<int>(0, (sum, s) => sum + s.length);
-    final pullCount = _selectedFiles.entries.expand((e) {
-      return e.value.where((path) => _fileDirections['${e.key}:$path'] == true);
-    }).length;
-    final pushCount = totalSelected - pullCount;
 
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Confirm Sync'),
-        content: Text(
-          'Pull $pullCount file(s) from mirror\n'
-          'Push $pushCount file(s) to mirror\n\n'
-          'Proceed?',
+    if (_isMultiMode) {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Confirm Multi-Push'),
+          content: Text(
+            'Push $totalSelected file(s) to ${_multiMirrors.length} device(s)?\n\n'
+            'Each device will receive only the files it needs.',
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Push')),
+          ],
         ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Sync')),
-        ],
-      ),
-    );
+      );
 
-    if (confirmed != true) return;
+      if (confirmed != true) return;
 
-    setState(() {
-      _stage = 3;
-      _transferring = true;
-      _filesTransferred = 0;
-      _totalFilesToTransfer = totalSelected;
-    });
+      // Count total file transfers across all devices
+      int totalTransfers = 0;
+      for (final entry in _selectedFiles.entries) {
+        final folder = entry.key;
+        for (final path in entry.value) {
+          for (final needs in _multiDeviceNeeds.values) {
+            if (needs[folder]?.contains(path) == true) totalTransfers++;
+          }
+        }
+      }
 
-    await _executeTransfer();
+      setState(() {
+        _stage = 3;
+        _transferring = true;
+        _filesTransferred = 0;
+        _totalFilesToTransfer = totalTransfers;
+      });
+
+      await _executeMultiTransfer();
+    } else {
+      final pullCount = _selectedFiles.entries.expand((e) {
+        return e.value.where((path) => _fileDirections['${e.key}:$path'] == true);
+      }).length;
+      final pushCount = totalSelected - pullCount;
+
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Confirm Sync'),
+          content: Text(
+            'Pull $pullCount file(s) from mirror\n'
+            'Push $pushCount file(s) to mirror\n\n'
+            'Proceed?',
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Sync')),
+          ],
+        ),
+      );
+
+      if (confirmed != true) return;
+
+      setState(() {
+        _stage = 3;
+        _transferring = true;
+        _filesTransferred = 0;
+        _totalFilesToTransfer = totalSelected;
+      });
+
+      await _executeTransfer();
+    }
   }
 
   Future<void> _executeTransfer() async {
@@ -734,6 +1065,64 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
     AppService().appsNotifier.value++;
   }
 
+  /// Push selected files to all devices that need them.
+  Future<void> _executeMultiTransfer() async {
+    final mirrorService = MirrorSyncService.instance;
+    final storage = AppService().profileStorage;
+    final profile = ProfileService().getProfile();
+
+    for (final entry in _selectedFiles.entries) {
+      final folder = entry.key;
+      final files = entry.value;
+      final localPath = '${profile.callsign}/$folder';
+
+      for (final filePath in files) {
+        // Push to each device that needs this file
+        for (final mirror in _multiMirrors) {
+          final deviceId = mirror.deviceId;
+          final needs = _multiDeviceNeeds[deviceId]?[folder];
+          if (needs == null || !needs.contains(filePath)) continue;
+
+          final peerUrl = _multiPeerUrls[deviceId];
+          final token = _multiTokens[deviceId]?[folder];
+          if (peerUrl == null || token == null) continue;
+
+          setState(() {
+            _currentTransferFile = '$folder/$filePath';
+            _currentTransferDevice = mirror.displayName;
+          });
+
+          try {
+            final change = _diffs[folder]?.firstWhere((c) => c.path == filePath);
+            await mirrorService.uploadFile(
+              peerUrl,
+              folder,
+              filePath,
+              localPath,
+              token,
+              sha1Hash: change?.localEntry?.sha1,
+              storage: storage,
+            );
+          } catch (e) {
+            LogService().log('DeviceSync: Multi-push failed for $filePath to $deviceId: $e');
+          }
+
+          setState(() {
+            _filesTransferred++;
+          });
+        }
+      }
+    }
+
+    setState(() {
+      _transferring = false;
+      _currentTransferFile = null;
+      _currentTransferDevice = null;
+    });
+
+    AppService().appsNotifier.value++;
+  }
+
   Widget _buildTransferView() {
     final progress = _totalFilesToTransfer > 0
         ? _filesTransferred / _totalFilesToTransfer
@@ -749,11 +1138,20 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
               const CircularProgressIndicator(),
               const SizedBox(height: 24),
               Text(
-                'Syncing $_filesTransferred / $_totalFilesToTransfer files',
+                _isMultiMode
+                    ? 'Pushing $_filesTransferred / $_totalFilesToTransfer'
+                    : 'Syncing $_filesTransferred / $_totalFilesToTransfer files',
                 style: const TextStyle(fontSize: 18),
               ),
-              if (_currentTransferFile != null) ...[
+              if (_currentTransferDevice != null) ...[
                 const SizedBox(height: 8),
+                Text(
+                  _currentTransferDevice!,
+                  style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
+                ),
+              ],
+              if (_currentTransferFile != null) ...[
+                const SizedBox(height: 4),
                 Text(
                   _currentTransferFile!,
                   style: const TextStyle(fontSize: 13, color: Colors.grey),
@@ -766,8 +1164,11 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
               const Icon(Icons.check_circle, size: 64, color: Colors.green),
               const SizedBox(height: 16),
               Text(
-                'Sync complete — $_filesTransferred file(s) transferred',
+                _isMultiMode
+                    ? 'Push complete — $_filesTransferred transfer(s) to ${_multiMirrors.length} device(s)'
+                    : 'Sync complete — $_filesTransferred file(s) transferred',
                 style: const TextStyle(fontSize: 18),
+                textAlign: TextAlign.center,
               ),
               const SizedBox(height: 24),
               FilledButton(
