@@ -34,6 +34,7 @@ import 'conference_service.dart';
 import 'conference_archive_service.dart';
 import 'conference_schedule_service.dart';
 import 'conference_web_page_service.dart';
+import 'event_web_page_service.dart';
 import 'device_apps_service.dart';
 import 'chat_file_upload_manager.dart';
 import 'app_args.dart';
@@ -77,6 +78,7 @@ import 'audio_service.dart';
 import 'backup_service.dart';
 import '../models/backup_models.dart';
 import 'event_service.dart';
+import '../models/event.dart';
 import 'blog_service.dart';
 import 'report_service.dart';
 import '../models/blog_post.dart';
@@ -381,6 +383,15 @@ class LogApiService with ChatModificationMixin {
       }
       if (urlPath.startsWith('meet/')) {
         final response = await _handleMeetRoute(request, urlPath, headers);
+        if (response != null) {
+          return response;
+        }
+      }
+      if (urlPath == 'events/styles.css') {
+        return await _handleThemeStylesRequest(headers, appType: 'events');
+      }
+      if (urlPath == 'events' || urlPath.startsWith('events/')) {
+        final response = await _handleEventsRoute(request, urlPath, headers);
         if (response != null) {
           return response;
         }
@@ -792,6 +803,8 @@ class LogApiService with ChatModificationMixin {
           '/meet/active': 'Active meeting info (room ID, signaling mode/port) or 404',
           '/meet/info': 'Room info (participants list) on the local device web server',
           '/meet/{code}': 'Meeting join page (HTML) on the local device web server',
+          '/events/': 'Events listing page (HTML) with visibility filtering',
+          '/events/{eventId}': 'Event detail page (HTML)',
           '/api/meet/active': 'Active meeting info (room ID, signaling port) or 404',
           '/api/meet/info': 'Room info (participants list)',
           '/api/meet/{code}': 'Meeting join page (HTML) for browser access via station',
@@ -1493,6 +1506,258 @@ class LogApiService with ChatModificationMixin {
     <div class="icon">&#128528;</div>
     <h1>Meeting Not Found</h1>
     <p class="subtitle">The meeting "$code" is not active or has ended.</p>
+  </div>
+</body>
+</html>''';
+  }
+
+  // ── Events HTML routes ────────────────────────────────────────────────
+
+  Future<shelf.Response?> _handleEventsRoute(
+    shelf.Request request,
+    String urlPath,
+    Map<String, String> headers,
+  ) async {
+    // Strip prefix: "events" or "events/"
+    final rest = urlPath.startsWith('events/')
+        ? urlPath.substring('events/'.length)
+        : '';
+    final segments =
+        rest.split('/').where((s) => s.isNotEmpty).toList();
+
+    // /events or /events/
+    if (segments.isEmpty) {
+      return _handleEventsListingPage(request, headers);
+    }
+
+    final eventId = Uri.decodeComponent(segments.first);
+
+    // /events/{eventId}/files/{path} → proxy to existing API file handler
+    if (segments.length >= 3 && segments[1] == 'files') {
+      final filePath = segments.sublist(2).map(Uri.decodeComponent).join('/');
+      String? dataDir;
+      try {
+        dataDir = StorageConfig().baseDir;
+      } catch (_) {
+        return shelf.Response.internalServerError(
+          body: 'Storage not initialized',
+          headers: headers,
+        );
+      }
+      return _handleEventsGetFile(eventId, filePath, dataDir, headers);
+    }
+
+    // /events/{eventId}
+    if (segments.length == 1) {
+      return _handleEventDetailPage(request, eventId, headers);
+    }
+
+    return null;
+  }
+
+  Future<shelf.Response> _handleEventsListingPage(
+    shelf.Request request,
+    Map<String, String> headers,
+  ) async {
+    // 1. Identify viewer via cookie or Authorization header
+    String? userNpub;
+    final hexPubkey = _extractNostrPubkeyFromCookie(request);
+    if (hexPubkey != null) {
+      try {
+        userNpub = NostrCrypto.encodeNpub(hexPubkey);
+      } catch (_) {}
+    }
+    userNpub ??= _verifyNostrAuth(request);
+
+    // 2. Load events
+    String? dataDir;
+    try {
+      dataDir = StorageConfig().baseDir;
+    } catch (_) {
+      return shelf.Response.internalServerError(
+        body: 'Storage not initialized',
+        headers: headers,
+      );
+    }
+    final eventService = EventService();
+    final allEvents = await eventService.getAllEventsGlobal(dataDir);
+    final years = await eventService.getAvailableYearsGlobal(dataDir);
+
+    // 3. Filter by visibility
+    final visible = <Event>[];
+    for (final event in allEvents) {
+      final vis = event.visibility;
+      if (vis == 'public') {
+        visible.add(event);
+        continue;
+      }
+      if (vis == 'private' || vis == 'unlisted') {
+        // Never shown in listing
+        continue;
+      }
+      if (vis == 'group') {
+        // Show only if user is in one of the event's groups
+        if (userNpub != null && event.groupAccess.isNotEmpty) {
+          bool inGroup = false;
+          for (final groupName in event.groupAccess) {
+            final members =
+                await GroupsService().loadMembers(groupName);
+            if (members.any((m) => m.npub == userNpub)) {
+              inGroup = true;
+              break;
+            }
+          }
+          if (inGroup) visible.add(event);
+        }
+        continue;
+      }
+      // Unknown visibility → treat as public
+      visible.add(event);
+    }
+
+    // 4. Build data payload
+    final data = <String, dynamic>{
+      'events': visible
+          .map((e) => e.toApiJson(summary: true))
+          .toList(),
+      'years': years,
+      'total': visible.length,
+      'authenticated': userNpub != null,
+    };
+
+    // 5. Render
+    final menuItems =
+        await AppService().generateDeviceMenu(activeApp: 'events');
+    final assets = await EventWebPageService().buildListingPage(
+      data: data,
+      logoText: 'Events',
+      menuItems: menuItems,
+    );
+    final htmlHeaders = Map<String, String>.from(headers);
+    htmlHeaders['Content-Type'] = 'text/html; charset=utf-8';
+    return shelf.Response.ok(assets.html, headers: htmlHeaders);
+  }
+
+  Future<shelf.Response> _handleEventDetailPage(
+    shelf.Request request,
+    String eventId,
+    Map<String, String> headers,
+  ) async {
+    // 1. Identify viewer
+    String? userNpub;
+    final hexPubkey = _extractNostrPubkeyFromCookie(request);
+    if (hexPubkey != null) {
+      try {
+        userNpub = NostrCrypto.encodeNpub(hexPubkey);
+      } catch (_) {}
+    }
+    userNpub ??= _verifyNostrAuth(request);
+
+    // 2. Load event (use getAllEventsGlobal + filter since findEventByIdGlobal
+    //    only searches collections/ and may miss events in devices/)
+    String? dataDir;
+    try {
+      dataDir = StorageConfig().baseDir;
+    } catch (_) {
+      return shelf.Response.internalServerError(
+        body: 'Storage not initialized',
+        headers: headers,
+      );
+    }
+    final allEvents = await EventService().getAllEventsGlobal(dataDir);
+    final event = allEvents.cast<Event?>().firstWhere(
+      (e) => e?.id == eventId,
+      orElse: () => null,
+    );
+    if (event == null) {
+      final htmlHeaders = Map<String, String>.from(headers);
+      htmlHeaders['Content-Type'] = 'text/html; charset=utf-8';
+      return shelf.Response.notFound(
+        _eventNotFoundHtml(eventId),
+        headers: htmlHeaders,
+      );
+    }
+
+    // 3. Visibility check
+    final vis = event.visibility;
+    if (vis == 'private') {
+      if (userNpub == null ||
+          (!event.isAdmin(userNpub) &&
+              event.npub != userNpub)) {
+        final htmlHeaders = Map<String, String>.from(headers);
+        htmlHeaders['Content-Type'] = 'text/html; charset=utf-8';
+        return shelf.Response.notFound(
+          _eventNotFoundHtml(eventId),
+          headers: htmlHeaders,
+        );
+      }
+    }
+    if (vis == 'group') {
+      bool allowed = false;
+      if (userNpub != null && event.groupAccess.isNotEmpty) {
+        for (final groupName in event.groupAccess) {
+          final members =
+              await GroupsService().loadMembers(groupName);
+          if (members.any((m) => m.npub == userNpub)) {
+            allowed = true;
+            break;
+          }
+        }
+      }
+      // Admins always allowed
+      if (userNpub != null && event.isAdmin(userNpub)) {
+        allowed = true;
+      }
+      if (!allowed) {
+        final htmlHeaders = Map<String, String>.from(headers);
+        htmlHeaders['Content-Type'] = 'text/html; charset=utf-8';
+        return shelf.Response.notFound(
+          _eventNotFoundHtml(eventId),
+          headers: htmlHeaders,
+        );
+      }
+    }
+
+    // 4. Build full JSON
+    final data = event.toApiJson(summary: false);
+
+    // 5. Render
+    final menuItems =
+        await AppService().generateDeviceMenu(activeApp: 'events');
+    final assets = await EventWebPageService().buildEventPage(
+      data: data,
+      logoText: 'Events',
+      menuItems: menuItems,
+    );
+    final htmlHeaders = Map<String, String>.from(headers);
+    htmlHeaders['Content-Type'] = 'text/html; charset=utf-8';
+    return shelf.Response.ok(assets.html, headers: htmlHeaders);
+  }
+
+  String _eventNotFoundHtml(String eventId) {
+    return '''<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Event Not Found</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+           display: flex; justify-content: center; align-items: center; min-height: 100vh;
+           margin: 0; background: #1a1a2e; color: #eee; }
+    .card { background: #16213e; border-radius: 16px; padding: 40px; max-width: 420px;
+            text-align: center; box-shadow: 0 8px 32px rgba(0,0,0,0.3); }
+    h1 { margin: 0 0 8px; font-size: 24px; }
+    .subtitle { color: #a0a0b0; }
+    .back { display: inline-block; margin-top: 16px; color: #7c83ff; text-decoration: none; }
+    .back:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Event Not Found</h1>
+    <p class="subtitle">The event could not be found or you don't have access.</p>
+    <a class="back" href="/events/">Browse events</a>
   </div>
 </body>
 </html>''';
@@ -9194,6 +9459,7 @@ class LogApiService with ChatModificationMixin {
           await eventService.initializeApp(appPath);
 
           // Create the event
+          final customSlug = params['custom_slug'] as String?;
           final event = await eventService.createEvent(
             author: callsign,
             title: title,
@@ -9203,6 +9469,7 @@ class LogApiService with ChatModificationMixin {
             visibility: visibility,
             groupAccess: groupAccess,
             npub: npub,
+            customSlug: customSlug,
           );
 
           if (event == null) {

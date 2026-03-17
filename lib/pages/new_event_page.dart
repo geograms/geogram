@@ -100,6 +100,7 @@ class _NewEventPageState extends State<NewEventPage>
   late TabController _tabController;
 
   final _titleController = TextEditingController();
+  final _slugController = TextEditingController();
   final _locationController = TextEditingController();
   final _locationNameController = TextEditingController();
   final _contentController = TextEditingController();
@@ -146,6 +147,12 @@ class _NewEventPageState extends State<NewEventPage>
     _contentController.text = event.content;
     _agendaController.text = event.agenda ?? '';
     _locationNameController.text = event.locationName ?? '';
+
+    // Extract slug from event ID (strip the YYYY-MM-DD_ prefix)
+    final id = event.id;
+    if (id.length > 11 && id[10] == '_') {
+      _slugController.text = id.substring(11);
+    }
 
     // Location type
     if (event.isOnline) {
@@ -234,6 +241,7 @@ class _NewEventPageState extends State<NewEventPage>
   void dispose() {
     _tabController.dispose();
     _titleController.dispose();
+    _slugController.dispose();
     _locationController.dispose();
     _locationNameController.dispose();
     _contentController.dispose();
@@ -766,6 +774,8 @@ class _NewEventPageState extends State<NewEventPage>
       'mediaFiles': _mediaFiles.map((file) => file.toMap()).toList(),
       'registrationEnabled': _registrationEnabled,
       'contacts': _selectedContacts.keys.toList(),
+      if (_slugController.text.trim().isNotEmpty)
+        'customSlug': _slugController.text.trim(),
     };
     final placePath = _selectedPlace?.folderPath;
     if (placePath != null && placePath.isNotEmpty) {
@@ -836,6 +846,20 @@ class _NewEventPageState extends State<NewEventPage>
             }
             return null;
           },
+          textInputAction: TextInputAction.next,
+        ),
+        const SizedBox(height: 16),
+
+        // URL slug (optional)
+        TextFormField(
+          controller: _slugController,
+          decoration: InputDecoration(
+            labelText: _i18n.t('url_slug'),
+            hintText: _i18n.t('url_slug_hint'),
+            border: const OutlineInputBorder(),
+            helperText: _i18n.t('url_slug_helper'),
+            prefixText: 'events/ ',
+          ),
           textInputAction: TextInputAction.next,
         ),
         const SizedBox(height: 24),

@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en" class="events-page">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1">
+  <title>{{TITLE}}</title>
+  <style>{{GLOBAL_STYLES}}</style>
+  <style>{{APP_STYLES}}</style>
+  {{NOSTR_STYLES}}
+</head>
+<body>
+<div class="container">
+  <header class="header">
+    <div class="header__inner">
+      <div class="header__logo">
+        <div class="logo">{{LOGO_TEXT}}</div>
+      </div>
+      {{NOSTR_HEADER}}
+    </div>
+    <nav class="menu">
+      <ul class="menu__inner">
+        {{MENU_ITEMS}}
+      </ul>
+    </nav>
+  </header>
+
+  <main class="main">
+    <div id="event-detail" class="event-detail"></div>
+  </main>
+
+  <footer class="footer">
+    <div class="footer__inner">
+      <div class="copyright">
+        <span>powered by geogram</span>
+      </div>
+    </div>
+  </footer>
+</div>
+
+<script>
+  window.GEOGRAM_EVENT = {{DATA_JSON}};
+  {{SCRIPTS}}
+
+  'use strict';
+  (function() {
+    var ev = window.GEOGRAM_EVENT || {};
+    var detailEl = document.getElementById('event-detail');
+
+    function esc(s) {
+      var el = document.createElement('span');
+      el.textContent = s || '';
+      return el.innerHTML;
+    }
+
+    function formatDate(iso) {
+      if (!iso) return '';
+      var d = new Date(iso.replace(/_/g, ':'));
+      return d.toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+    }
+
+    function formatDateTime(iso) {
+      if (!iso) return '';
+      var d = new Date(iso.replace(/_/g, ':'));
+      if (d.getHours() === 0 && d.getMinutes() === 0) {
+        return formatDate(iso);
+      }
+      return d.toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }) +
+        ' at ' + d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+    }
+
+    // Hero section
+    var dateHtml = '';
+    if (ev.start_date && ev.end_date && ev.start_date !== ev.end_date) {
+      dateHtml = '<div class="event-hero-date">' + formatDate(ev.start_date) + ' &mdash; ' + formatDate(ev.end_date) + '</div>';
+    } else if (ev.start_date) {
+      dateHtml = '<div class="event-hero-date">' + formatDate(ev.start_date) + '</div>';
+    } else if (ev.timestamp) {
+      dateHtml = '<div class="event-hero-date">' + formatDateTime(ev.timestamp) + '</div>';
+    }
+
+    var locationHtml = '';
+    if (ev.location_name) {
+      var locText = esc(ev.location_name);
+      if (ev.location && ev.location !== 'online' && ev.location.indexOf(',') !== -1) {
+        var parts = ev.location.split(',');
+        locText = '<a href="https://www.openstreetmap.org/?mlat=' + parts[0].trim() + '&mlon=' + parts[1].trim() + '#map=15/' + parts[0].trim() + '/' + parts[1].trim() + '" target="_blank" rel="noopener">' + locText + '</a>';
+      }
+      locationHtml = '<div class="event-hero-location">' + locText + '</div>';
+    } else if (ev.location === 'online') {
+      locationHtml = '<div class="event-hero-location">Online</div>';
+    } else if (ev.location && ev.location.indexOf(',') !== -1) {
+      var parts = ev.location.split(',');
+      locationHtml = '<div class="event-hero-location"><a href="https://www.openstreetmap.org/?mlat=' + parts[0].trim() + '&mlon=' + parts[1].trim() + '#map=15/' + parts[0].trim() + '/' + parts[1].trim() + '" target="_blank" rel="noopener">View on map</a></div>';
+    }
+
+    var html = '<div class="event-hero">' +
+      '<a href="/events/" class="event-back-link">All Events</a>' +
+      '<h1 class="event-hero-title">' + esc(ev.title) + '</h1>' +
+      dateHtml + locationHtml +
+    '</div>';
+
+    // Flyer images
+    if (ev.flyers && ev.flyers.length > 0) {
+      html += '<div class="event-flyers">';
+      ev.flyers.forEach(function(f) {
+        html += '<img class="event-flyer-img" src="/events/' + encodeURIComponent(ev.id) + '/files/' + encodeURIComponent(f) + '" alt="Event flyer" loading="lazy">';
+      });
+      html += '</div>';
+    }
+
+    // Registration stats
+    var reg = ev.registration;
+    if (reg) {
+      var goingCount = reg.going ? reg.going.length : 0;
+      var interestedCount = reg.interested ? reg.interested.length : 0;
+      if (goingCount > 0 || interestedCount > 0) {
+        html += '<div class="event-registration-stats">';
+        if (goingCount > 0) html += '<span class="event-stat">' + goingCount + ' going</span>';
+        if (interestedCount > 0) html += '<span class="event-stat">' + interestedCount + ' interested</span>';
+        html += '</div>';
+      }
+    }
+
+    // Description/content
+    if (ev.content) {
+      html += '<div class="event-section"><h2>About</h2><div class="event-description-body">' + esc(ev.content).replace(/\n/g, '<br>') + '</div></div>';
+    }
+
+    // Agenda
+    if (ev.agenda) {
+      html += '<div class="event-section event-agenda"><h2>Agenda</h2><div class="event-agenda-body">' + esc(ev.agenda).replace(/\n/g, '<br>') + '</div></div>';
+    }
+
+    // Links
+    if (ev.links && ev.links.length > 0) {
+      html += '<div class="event-section event-links"><h2>Links</h2><ul>';
+      ev.links.forEach(function(l) {
+        html += '<li><a href="' + esc(l.url) + '" target="_blank" rel="noopener">' + esc(l.description || l.url) + '</a></li>';
+      });
+      html += '</ul></div>';
+    }
+
+    // Updates
+    if (ev.updates && ev.updates.length > 0) {
+      html += '<div class="event-section event-updates"><h2>Updates</h2>';
+      ev.updates.forEach(function(u) {
+        html += '<div class="event-update-item">' +
+          '<div class="event-update-header"><strong>' + esc(u.title) + '</strong> <span class="event-update-date">' + esc(u.posted) + '</span></div>' +
+          '<div class="event-update-content">' + esc(u.content).replace(/\n/g, '<br>') + '</div>' +
+        '</div>';
+      });
+      html += '</div>';
+    }
+
+    // Comments
+    if (ev.comments && ev.comments.length > 0) {
+      html += '<div class="event-section event-comments"><h2>Comments (' + ev.comments.length + ')</h2>';
+      ev.comments.forEach(function(c) {
+        html += '<div class="event-comment">' +
+          '<div class="event-comment-header"><strong>' + esc(c.author) + '</strong> <span class="event-comment-date">' + esc(c.timestamp) + '</span></div>' +
+          '<div class="event-comment-body">' + esc(c.content).replace(/\n/g, '<br>') + '</div>' +
+        '</div>';
+      });
+      html += '</div>';
+    }
+
+    detailEl.innerHTML = html;
+  })();
+</script>
+</body>
+</html>

@@ -14,6 +14,7 @@ class ThemesEmbedded {
     'default/blog/styles.css': _defaultBlogStylesCss,
     'default/chat/index.html': _defaultChatIndexHtml,
     'default/chat/styles.css': _defaultChatStylesCss,
+    'default/events/event.html': _defaultEventsEventHtml,
     'default/events/index.html': _defaultEventsIndexHtml,
     'default/events/styles.css': _defaultEventsStylesCss,
     'default/files/index.html': _defaultFilesIndexHtml,
@@ -927,79 +928,372 @@ class ThemesEmbedded {
 }
 ''';
 
-  static const String _defaultEventsIndexHtml = r'''
+  static const String _defaultEventsEventHtml = r'''
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="events-page">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>{{TITLE}} - Events</title>
-  <link rel="stylesheet" href="/styles.css">
-  <link rel="stylesheet" href="styles.css">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1">
+  <title>{{TITLE}}</title>
+  <style>{{GLOBAL_STYLES}}</style>
+  <style>{{APP_STYLES}}</style>
+  {{NOSTR_STYLES}}
 </head>
 <body>
+<div class="container">
   <header class="header">
-    <div class="container">
-      <div class="header-content">
-        <div>
-          <h1 class="header-title">{{COLLECTION_NAME}}</h1>
-          <p class="header-subtitle">{{COLLECTION_DESCRIPTION}}</p>
-        </div>
-        <nav class="nav">
-          <span class="badge">Events</span>
-        </nav>
+    <div class="header__inner">
+      <div class="header__logo">
+        <div class="logo">{{LOGO_TEXT}}</div>
       </div>
+      {{NOSTR_HEADER}}
     </div>
+    <nav class="menu">
+      <ul class="menu__inner">
+        {{MENU_ITEMS}}
+      </ul>
+    </nav>
   </header>
 
   <main class="main">
-    <div class="container">
-      <div class="events-header">
-        <div class="search-container">
-          <input type="text" class="input search-input" placeholder="Search events..." id="search">
-        </div>
-        <div class="view-toggle">
-          <button class="btn btn-secondary active" data-view="list">List</button>
-          <button class="btn btn-secondary" data-view="calendar">Calendar</button>
-        </div>
-      </div>
+    <div id="event-detail" class="event-detail"></div>
+  </main>
 
-      <div class="events-list" id="events">
-        {{CONTENT}}
+  <footer class="footer">
+    <div class="footer__inner">
+      <div class="copyright">
+        <span>powered by geogram</span>
       </div>
+    </div>
+  </footer>
+</div>
+
+<script>
+  window.GEOGRAM_EVENT = {{DATA_JSON}};
+  {{SCRIPTS}}
+
+  'use strict';
+  (function() {
+    var ev = window.GEOGRAM_EVENT || {};
+    var detailEl = document.getElementById('event-detail');
+
+    function esc(s) {
+      var el = document.createElement('span');
+      el.textContent = s || '';
+      return el.innerHTML;
+    }
+
+    function formatDate(iso) {
+      if (!iso) return '';
+      var d = new Date(iso.replace(/_/g, ':'));
+      return d.toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+    }
+
+    function formatDateTime(iso) {
+      if (!iso) return '';
+      var d = new Date(iso.replace(/_/g, ':'));
+      if (d.getHours() === 0 && d.getMinutes() === 0) {
+        return formatDate(iso);
+      }
+      return d.toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }) +
+        ' at ' + d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+    }
+
+    // Hero section
+    var dateHtml = '';
+    if (ev.start_date && ev.end_date && ev.start_date !== ev.end_date) {
+      dateHtml = '<div class="event-hero-date">' + formatDate(ev.start_date) + ' &mdash; ' + formatDate(ev.end_date) + '</div>';
+    } else if (ev.start_date) {
+      dateHtml = '<div class="event-hero-date">' + formatDate(ev.start_date) + '</div>';
+    } else if (ev.timestamp) {
+      dateHtml = '<div class="event-hero-date">' + formatDateTime(ev.timestamp) + '</div>';
+    }
+
+    var locationHtml = '';
+    if (ev.location_name) {
+      var locText = esc(ev.location_name);
+      if (ev.location && ev.location !== 'online' && ev.location.indexOf(',') !== -1) {
+        var parts = ev.location.split(',');
+        locText = '<a href="https://www.openstreetmap.org/?mlat=' + parts[0].trim() + '&mlon=' + parts[1].trim() + '#map=15/' + parts[0].trim() + '/' + parts[1].trim() + '" target="_blank" rel="noopener">' + locText + '</a>';
+      }
+      locationHtml = '<div class="event-hero-location">' + locText + '</div>';
+    } else if (ev.location === 'online') {
+      locationHtml = '<div class="event-hero-location">Online</div>';
+    } else if (ev.location && ev.location.indexOf(',') !== -1) {
+      var parts = ev.location.split(',');
+      locationHtml = '<div class="event-hero-location"><a href="https://www.openstreetmap.org/?mlat=' + parts[0].trim() + '&mlon=' + parts[1].trim() + '#map=15/' + parts[0].trim() + '/' + parts[1].trim() + '" target="_blank" rel="noopener">View on map</a></div>';
+    }
+
+    var html = '<div class="event-hero">' +
+      '<a href="/events/" class="event-back-link">All Events</a>' +
+      '<h1 class="event-hero-title">' + esc(ev.title) + '</h1>' +
+      dateHtml + locationHtml +
+    '</div>';
+
+    // Flyer images
+    if (ev.flyers && ev.flyers.length > 0) {
+      html += '<div class="event-flyers">';
+      ev.flyers.forEach(function(f) {
+        html += '<img class="event-flyer-img" src="/events/' + encodeURIComponent(ev.id) + '/files/' + encodeURIComponent(f) + '" alt="Event flyer" loading="lazy">';
+      });
+      html += '</div>';
+    }
+
+    // Registration stats
+    var reg = ev.registration;
+    if (reg) {
+      var goingCount = reg.going ? reg.going.length : 0;
+      var interestedCount = reg.interested ? reg.interested.length : 0;
+      if (goingCount > 0 || interestedCount > 0) {
+        html += '<div class="event-registration-stats">';
+        if (goingCount > 0) html += '<span class="event-stat">' + goingCount + ' going</span>';
+        if (interestedCount > 0) html += '<span class="event-stat">' + interestedCount + ' interested</span>';
+        html += '</div>';
+      }
+    }
+
+    // Description/content
+    if (ev.content) {
+      html += '<div class="event-section"><h2>About</h2><div class="event-description-body">' + esc(ev.content).replace(/\n/g, '<br>') + '</div></div>';
+    }
+
+    // Agenda
+    if (ev.agenda) {
+      html += '<div class="event-section event-agenda"><h2>Agenda</h2><div class="event-agenda-body">' + esc(ev.agenda).replace(/\n/g, '<br>') + '</div></div>';
+    }
+
+    // Links
+    if (ev.links && ev.links.length > 0) {
+      html += '<div class="event-section event-links"><h2>Links</h2><ul>';
+      ev.links.forEach(function(l) {
+        html += '<li><a href="' + esc(l.url) + '" target="_blank" rel="noopener">' + esc(l.description || l.url) + '</a></li>';
+      });
+      html += '</ul></div>';
+    }
+
+    // Updates
+    if (ev.updates && ev.updates.length > 0) {
+      html += '<div class="event-section event-updates"><h2>Updates</h2>';
+      ev.updates.forEach(function(u) {
+        html += '<div class="event-update-item">' +
+          '<div class="event-update-header"><strong>' + esc(u.title) + '</strong> <span class="event-update-date">' + esc(u.posted) + '</span></div>' +
+          '<div class="event-update-content">' + esc(u.content).replace(/\n/g, '<br>') + '</div>' +
+        '</div>';
+      });
+      html += '</div>';
+    }
+
+    // Comments
+    if (ev.comments && ev.comments.length > 0) {
+      html += '<div class="event-section event-comments"><h2>Comments (' + ev.comments.length + ')</h2>';
+      ev.comments.forEach(function(c) {
+        html += '<div class="event-comment">' +
+          '<div class="event-comment-header"><strong>' + esc(c.author) + '</strong> <span class="event-comment-date">' + esc(c.timestamp) + '</span></div>' +
+          '<div class="event-comment-body">' + esc(c.content).replace(/\n/g, '<br>') + '</div>' +
+        '</div>';
+      });
+      html += '</div>';
+    }
+
+    detailEl.innerHTML = html;
+  })();
+</script>
+</body>
+</html>
+''';
+
+  static const String _defaultEventsIndexHtml = r'''
+<!DOCTYPE html>
+<html lang="en" class="events-page">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1">
+  <title>{{TITLE}}</title>
+  <style>{{GLOBAL_STYLES}}</style>
+  <style>{{APP_STYLES}}</style>
+  {{NOSTR_STYLES}}
+</head>
+<body>
+<div class="container">
+  <header class="header">
+    <div class="header__inner">
+      <div class="header__logo">
+        <div class="logo">{{LOGO_TEXT}}</div>
+      </div>
+      {{NOSTR_HEADER}}
+    </div>
+    <nav class="menu">
+      <ul class="menu__inner">
+        {{MENU_ITEMS}}
+      </ul>
+    </nav>
+  </header>
+
+  <main class="main">
+    <div class="events-shell">
+      <input id="events-search" class="listing-search" type="text" placeholder="Search events..." autofocus>
+      <div id="year-tabs" class="year-tabs"></div>
+      <div id="events-list" class="events-list"></div>
+      <div id="events-hint" class="listing-hint" style="display:none"></div>
     </div>
   </main>
 
   <footer class="footer">
-    <div class="container">
-      <p>Generated on {{GENERATED_DATE}}</p>
+    <div class="footer__inner">
+      <div class="copyright">
+        <span>powered by geogram</span>
+      </div>
     </div>
   </footer>
+</div>
 
-  <script>
-    window.GEOGRAM_DATA = {{DATA_JSON}};
-    {{SCRIPTS}}
-  </script>
-  <script>
-    // Search functionality
-    document.getElementById('search').addEventListener('input', function(e) {
-      const query = e.target.value.toLowerCase();
-      const events = document.querySelectorAll('.event-item');
-      events.forEach(event => {
-        const text = event.textContent.toLowerCase();
-        event.style.display = text.includes(query) ? '' : 'none';
-      });
-    });
+<script>
+  window.GEOGRAM_EVENTS = {{DATA_JSON}};
+  {{SCRIPTS}}
 
-    // View toggle
-    document.querySelectorAll('.view-toggle .btn').forEach(btn => {
-      btn.addEventListener('click', function() {
-        document.querySelectorAll('.view-toggle .btn').forEach(b => b.classList.remove('active'));
-        this.classList.add('active');
-        // View switching logic would go here
+  'use strict';
+  (function() {
+    var data = window.GEOGRAM_EVENTS || {};
+    var listEl = document.getElementById('events-list');
+    var hintEl = document.getElementById('events-hint');
+    var searchEl = document.getElementById('events-search');
+    var yearTabsEl = document.getElementById('year-tabs');
+
+    var allEvents = data.events || [];
+    var years = data.years || [];
+    var activeYear = null;
+
+    if (!data.authenticated) {
+      hintEl.textContent = 'Connect with Nostr to see group events';
+      hintEl.style.display = '';
+    }
+
+    function esc(s) {
+      var el = document.createElement('span');
+      el.textContent = s || '';
+      return el.innerHTML;
+    }
+
+    function formatDate(iso) {
+      if (!iso) return '';
+      var d = new Date(iso.replace(/_/g, ':'));
+      return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+    }
+
+    function getDateParts(iso) {
+      if (!iso) return null;
+      var d = new Date(iso.replace(/_/g, ':'));
+      if (isNaN(d.getTime())) return null;
+      var months = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'];
+      var days = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+      return {
+        month: months[d.getMonth()],
+        day: d.getDate(),
+        weekday: days[d.getDay()]
+      };
+    }
+
+    function renderYearTabs() {
+      if (years.length <= 1) return;
+      var html = '<button class="year-tab' + (activeYear === null ? ' active' : '') + '" data-year="all">All</button>';
+      years.forEach(function(y) {
+        html += '<button class="year-tab' + (activeYear === y ? ' active' : '') + '" data-year="' + y + '">' + y + '</button>';
       });
+      yearTabsEl.innerHTML = html;
+      yearTabsEl.querySelectorAll('.year-tab').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          var yr = this.getAttribute('data-year');
+          activeYear = yr === 'all' ? null : parseInt(yr);
+          renderYearTabs();
+          render(searchEl.value);
+        });
+      });
+    }
+
+    function renderEventCard(item) {
+      var dp = getDateParts(item.start_date || item.timestamp);
+      var dateBlock = '';
+      if (dp) {
+        dateBlock = '<div class="event-date-block">' +
+          '<div class="event-month">' + dp.month + '</div>' +
+          '<div class="event-day">' + dp.day + '</div>' +
+          '<div class="event-weekday">' + dp.weekday + '</div>' +
+        '</div>';
+      }
+
+      var meta = [];
+      if (item.location_name) {
+        meta.push(esc(item.location_name));
+      } else if (item.location && item.location !== 'online') {
+        meta.push('In-person');
+      } else if (item.location === 'online') {
+        meta.push('Online');
+      }
+      if (item.start_date && item.end_date && item.start_date !== item.end_date) {
+        meta.push(formatDate(item.start_date) + ' - ' + formatDate(item.end_date));
+      } else if (item.start_date) {
+        meta.push(formatDate(item.start_date));
+      } else {
+        meta.push(formatDate(item.timestamp));
+      }
+
+      var stats = [];
+      if (item.going_count > 0) stats.push(item.going_count + ' going');
+      if (item.interested_count > 0) stats.push(item.interested_count + ' interested');
+      if (item.comment_count > 0) stats.push(item.comment_count + ' comment' + (item.comment_count === 1 ? '' : 's'));
+
+      var flyerHtml = '';
+      if (item.has_flyer) {
+        flyerHtml = '<div class="event-flyer-thumb"><img src="' + esc(item.id) + '/files/flyer.jpg" alt="Flyer" loading="lazy" onerror="this.parentElement.style.display=\'none\'"></div>';
+      }
+
+      return '<a class="event-item" href="' + encodeURIComponent(item.id) + '">' +
+        dateBlock +
+        '<div class="event-content">' +
+          '<div class="event-title">' + esc(item.title) + '</div>' +
+          '<div class="event-meta">' + meta.join(' &middot; ') + '</div>' +
+          (stats.length ? '<div class="event-attendance">' + stats.join(' &middot; ') + '</div>' : '') +
+        '</div>' +
+        flyerHtml +
+      '</a>';
+    }
+
+    function render(filter) {
+      var filtered = allEvents;
+
+      if (activeYear !== null) {
+        filtered = filtered.filter(function(item) {
+          var ts = item.start_date || item.timestamp || '';
+          return ts.substring(0, 4) === String(activeYear);
+        });
+      }
+
+      if (filter) {
+        var q = filter.toLowerCase();
+        filtered = filtered.filter(function(item) {
+          var haystack = (item.title || '') + ' ' + (item.location_name || '') + ' ' + (item.author || '');
+          return haystack.toLowerCase().indexOf(q) !== -1;
+        });
+      }
+
+      if (filtered.length === 0) {
+        listEl.innerHTML = '<div class="listing-empty">' + (allEvents.length === 0 ? 'No events yet' : 'No matches') + '</div>';
+      } else {
+        listEl.innerHTML = filtered.map(renderEventCard).join('');
+      }
+    }
+
+    renderYearTabs();
+    render('');
+    searchEl.addEventListener('input', function() { render(searchEl.value); });
+
+    document.addEventListener('nostr-connected', function() {
+      if (!data.authenticated) {
+        window.location.reload();
+      }
     });
-  </script>
+  })();
+</script>
 </body>
 </html>
 ''';
@@ -1214,6 +1508,269 @@ class ThemesEmbedded {
 
 .event-item.cancelled .event-title {
   text-decoration: line-through;
+}
+
+/* Events Shell (listing page) */
+.events-shell {
+  max-width: 800px;
+  margin: 0 auto;
+}
+
+/* Listing link styles */
+a.event-item {
+  text-decoration: none;
+  color: inherit;
+  cursor: pointer;
+}
+
+/* Flyer thumbnail in listing */
+.event-flyer-thumb {
+  flex-shrink: 0;
+  width: 80px;
+  height: 80px;
+  border-radius: var(--border-radius);
+  overflow: hidden;
+}
+
+.event-flyer-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* Year tabs */
+.year-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-xs);
+  margin-bottom: var(--spacing-lg);
+}
+
+.year-tab {
+  padding: var(--spacing-xs) var(--spacing-md);
+  border: 1px solid var(--color-border-light);
+  border-radius: var(--border-radius-sm);
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  font-size: var(--font-size-sm);
+}
+
+.year-tab:hover {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+.year-tab.active {
+  background-color: var(--color-accent);
+  border-color: var(--color-accent);
+  color: white;
+}
+
+/* Listing search */
+.listing-search {
+  width: 100%;
+  padding: var(--spacing-sm) var(--spacing-md);
+  border: 1px solid var(--color-border-light);
+  border-radius: var(--border-radius);
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-size: var(--font-size-base);
+  margin-bottom: var(--spacing-lg);
+  box-sizing: border-box;
+}
+
+.listing-search:focus {
+  outline: none;
+  border-color: var(--color-accent);
+}
+
+.listing-hint {
+  text-align: center;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+  padding: var(--spacing-md);
+}
+
+.listing-empty {
+  text-align: center;
+  color: var(--color-text-muted);
+  padding: var(--spacing-xl) var(--spacing-md);
+}
+
+/* ========== Event Detail Page ========== */
+
+.event-detail {
+  max-width: 800px;
+  margin: 0 auto;
+}
+
+/* Hero */
+.event-hero {
+  margin-bottom: var(--spacing-xl);
+}
+
+.event-back-link {
+  display: inline-block;
+  margin-bottom: var(--spacing-md);
+  color: var(--color-accent);
+  text-decoration: none;
+  font-size: var(--font-size-sm);
+}
+
+.event-back-link:hover {
+  text-decoration: underline;
+}
+
+.event-hero-title {
+  font-size: var(--font-size-3xl);
+  font-weight: 700;
+  margin: 0 0 var(--spacing-md) 0;
+  color: var(--color-text);
+  line-height: 1.2;
+}
+
+.event-hero-date {
+  font-size: var(--font-size-lg);
+  color: var(--color-text-secondary);
+  margin-bottom: var(--spacing-sm);
+}
+
+.event-hero-location {
+  font-size: var(--font-size-base);
+  color: var(--color-text-muted);
+}
+
+.event-hero-location a {
+  color: var(--color-accent);
+  text-decoration: none;
+}
+
+.event-hero-location a:hover {
+  text-decoration: underline;
+}
+
+/* Flyer images */
+.event-flyers {
+  margin-bottom: var(--spacing-xl);
+}
+
+.event-flyer-img {
+  max-width: 100%;
+  border-radius: var(--border-radius);
+  margin-bottom: var(--spacing-md);
+}
+
+/* Registration stats */
+.event-registration-stats {
+  display: flex;
+  gap: var(--spacing-lg);
+  margin-bottom: var(--spacing-xl);
+  padding: var(--spacing-md);
+  background-color: var(--color-bg-secondary);
+  border-radius: var(--border-radius);
+}
+
+.event-stat {
+  font-size: var(--font-size-base);
+  color: var(--color-text-secondary);
+  font-weight: 500;
+}
+
+/* Sections */
+.event-section {
+  margin-bottom: var(--spacing-xl);
+}
+
+.event-section h2 {
+  font-size: var(--font-size-xl);
+  font-weight: 600;
+  margin: 0 0 var(--spacing-md) 0;
+  color: var(--color-text);
+  border-bottom: 1px solid var(--color-border-light);
+  padding-bottom: var(--spacing-sm);
+}
+
+.event-description-body {
+  color: var(--color-text-secondary);
+  line-height: 1.6;
+}
+
+/* Agenda */
+.event-agenda-body {
+  color: var(--color-text-secondary);
+  line-height: 1.6;
+}
+
+/* Links */
+.event-links ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.event-links li {
+  padding: var(--spacing-sm) 0;
+  border-bottom: 1px solid var(--color-border-light);
+}
+
+.event-links li:last-child {
+  border-bottom: none;
+}
+
+.event-links a {
+  color: var(--color-accent);
+  text-decoration: none;
+}
+
+.event-links a:hover {
+  text-decoration: underline;
+}
+
+/* Updates */
+.event-update-item {
+  padding: var(--spacing-md);
+  background-color: var(--color-bg-secondary);
+  border-radius: var(--border-radius);
+  margin-bottom: var(--spacing-md);
+}
+
+.event-update-header {
+  margin-bottom: var(--spacing-sm);
+}
+
+.event-update-date {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.event-update-content {
+  color: var(--color-text-secondary);
+  line-height: 1.6;
+}
+
+/* Comments */
+.event-comment {
+  padding: var(--spacing-md) 0;
+  border-bottom: 1px solid var(--color-border-light);
+}
+
+.event-comment:last-child {
+  border-bottom: none;
+}
+
+.event-comment-header {
+  margin-bottom: var(--spacing-xs);
+}
+
+.event-comment-date {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.event-comment-body {
+  color: var(--color-text-secondary);
+  line-height: 1.5;
 }
 ''';
 

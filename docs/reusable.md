@@ -9651,6 +9651,19 @@ Shared browser page builder for Meetings. Generates the themed HTML shell, injec
 **Key method:**
 - `buildJoinPage(config)` — returns a themed browser client for `/meet/{code}` hosting paths
 
+### EventWebPageService
+
+**File:** `lib/services/event_web_page_service.dart`
+
+Shared browser page builder for Events. Mirrors `ConferenceWebPageService` pattern — generates themed HTML shell with NOSTR login, injects event data as JSON for client-side rendering. Serves both listing and detail pages.
+
+**Key types:**
+- `EventWebPageAssets` — generated `html`, `globalStyles`, and `appStyles`
+
+**Key methods:**
+- `buildListingPage(data, logoText, menuItems)` — returns themed listing page for `/events/`
+- `buildEventPage(data, logoText, menuItems)` — returns themed detail page for `/events/{eventId}`
+
 ### ConferenceScheduleService
 
 **File:** `lib/services/conference_schedule_service.dart`

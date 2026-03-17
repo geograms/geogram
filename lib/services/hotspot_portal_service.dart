@@ -83,8 +83,8 @@ class HotspotPortalService {
       return null;
     }
 
-    // Meetings pages are served dynamically by LogApiService.
-    if (path.startsWith('/meet/')) {
+    // Meetings and events pages are served dynamically by LogApiService.
+    if (path.startsWith('/meet/') || path.startsWith('/events')) {
       return null;
     }
 

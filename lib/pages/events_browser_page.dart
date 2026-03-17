@@ -338,6 +338,7 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
         contacts: (result['contacts'] as List<dynamic>?)?.cast<String>(),
         npub: profile.npub,
         metadata: metadata,
+        customSlug: result['customSlug'] as String?,
       );
 
       if (event != null && mounted) {
@@ -539,6 +540,7 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
         registrationEnabled: result['registrationEnabled'] as bool?,
         contacts: (result['contacts'] as List<dynamic>?)?.cast<String>(),
         metadata: metadata,
+        customSlug: result['customSlug'] as String?,
       );
 
       if (newEventId != null && mounted) {
@@ -593,6 +595,7 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
         registrationEnabled: result['registrationEnabled'] as bool?,
         contacts: (result['contacts'] as List<dynamic>?)?.cast<String>(),
         metadata: metadata,
+        customSlug: result['customSlug'] as String?,
       );
 
       if (newEventId != null && mounted) {

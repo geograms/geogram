@@ -327,6 +327,9 @@ class EventService {
   }
 
   /// Create new event
+  ///
+  /// When [customSlug] is provided it replaces the auto-generated title
+  /// portion of the folder name, producing `YYYY-MM-DD_<customSlug>`.
   Future<Event?> createEvent({
     required String author,
     required String title,
@@ -344,6 +347,7 @@ class EventService {
     List<String>? contacts,
     String? npub,
     Map<String, String>? metadata,
+    String? customSlug,
   }) async {
     if (_appPath == null) return null;
 
@@ -352,8 +356,10 @@ class EventService {
       final dateToUse = eventDate ?? DateTime.now();
       final year = dateToUse.year;
 
-      // Sanitize folder name
-      final baseFolderName = sanitizeFolderName(title, dateToUse);
+      // Sanitize folder name — use custom slug when provided
+      final baseFolderName = customSlug != null && customSlug.trim().isNotEmpty
+          ? sanitizeFolderName(customSlug.trim(), dateToUse)
+          : sanitizeFolderName(title, dateToUse);
       final folderName = await _ensureUniqueFolderName(baseFolderName, year);
 
       // Event paths
@@ -1063,6 +1069,7 @@ class EventService {
     bool? registrationEnabled,
     Map<String, String>? metadata,
     List<String>? contacts,
+    String? customSlug,
   }) async {
     if (_appPath == null) return null;
 
@@ -1126,10 +1133,12 @@ class EventService {
       String workingRelativePath = eventRelativePath;
       String finalEventId = eventId;
 
-      // Check if folder needs to be renamed (date or title changed)
-      if (folderDate != null || title != existingEvent.title) {
+      // Check if folder needs to be renamed (date, title, or custom slug changed)
+      final hasCustomSlug = customSlug != null && customSlug.trim().isNotEmpty;
+      if (folderDate != null || title != existingEvent.title || hasCustomSlug) {
         final dateToUse = folderDate ?? existingEvent.dateTime;
-        final newFolderName = sanitizeFolderName(title, dateToUse);
+        final nameSource = hasCustomSlug ? customSlug!.trim() : title;
+        final newFolderName = sanitizeFolderName(nameSource, dateToUse);
         final newYear = dateToUse.year.toString();
 
         print('EventService: Checking rename: oldId=$eventId, newId=$newFolderName, oldYear=$year, newYear=$newYear');
@@ -1275,24 +1284,58 @@ class EventService {
         return null;
       }
 
-      final entities = await appsDir.list().toList();
-      for (var entity in entities) {
-        if (entity is Directory) {
-          // Check if this is an events-type app by looking for events subdirectory
-          final eventsSubdir = Directory('${entity.path}/events');
-          if (await eventsSubdir.exists()) {
-            // Look for the event in this app
-            final eventDir = Directory('${entity.path}/events/$year/$eventId');
-            if (await eventDir.exists()) {
-              // Found! Load the event using this collection
+      Future<Event?> searchInDir(Directory parentDir) async {
+        if (!await parentDir.exists()) return null;
+        final entities = await parentDir.list().toList();
+        for (var entity in entities) {
+          if (entity is Directory) {
+            // Check if this is an events-type app by looking for events subdirectory
+            final eventsSubdir = Directory('${entity.path}/events');
+            if (await eventsSubdir.exists()) {
+              // Look for the event in this app
+              final eventDir = Directory('${entity.path}/events/$year/$eventId');
+              if (await eventDir.exists()) {
+                // Found! Load the event using this collection
+                final savedPath = _appPath;
+                _appPath = entity.path;
+                final event = await loadEvent(eventId);
+                _appPath = savedPath; // Restore original path
+                if (event != null) {
+                  return event;
+                }
+              }
+            }
+            // Also check direct layout: {entity}/{year}/{eventId}/
+            final directDir = Directory('${entity.path}/$year/$eventId');
+            if (await directDir.exists()) {
               final savedPath = _appPath;
+              final savedStorage = _storageOrNull;
               _appPath = entity.path;
+              _storage = FilesystemProfileStorage(entity.path);
               final event = await loadEvent(eventId);
-              _appPath = savedPath; // Restore original path
+              _appPath = savedPath;
+              if (savedStorage != null) _storage = savedStorage;
               if (event != null) {
                 return event;
               }
             }
+          }
+        }
+        return null;
+      }
+
+      // Search collections directory
+      final result = await searchInDir(appsDir);
+      if (result != null) return result;
+
+      // Search devices directory
+      final devicesDir = Directory('$dataDir/devices');
+      if (await devicesDir.exists()) {
+        final deviceEntities = await devicesDir.list().toList();
+        for (var deviceEntity in deviceEntities) {
+          if (deviceEntity is Directory) {
+            final deviceResult = await searchInDir(deviceEntity);
+            if (deviceResult != null) return deviceResult;
           }
         }
       }

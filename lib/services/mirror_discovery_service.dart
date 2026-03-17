@@ -89,16 +89,31 @@ class MirrorDiscoveryService {
       return;
     }
 
+    // Build lookup of known device names by installId so we can preserve
+    // them when a mirrors_update arrives during reconnection with null names.
+    final knownNames = <String, String>{};
+    for (final m in mirrors.value) {
+      if (m.installId != null && m.deviceName != null && m.deviceName!.isNotEmpty) {
+        knownNames[m.installId!] = m.deviceName!;
+      }
+    }
+
     final stationMirrors = <MirrorDevice>[];
     for (final s in mirrorsList) {
       if (s is! Map<String, dynamic>) continue;
+      final installId = s['install_id'] as String?;
+      final incomingDeviceName = s['device_name'] as String?;
+      // Preserve previously-known device_name if the update has null/empty
+      final effectiveDeviceName = (incomingDeviceName != null && incomingDeviceName.isNotEmpty)
+          ? incomingDeviceName
+          : (installId != null ? knownNames[installId] : null);
       stationMirrors.add(MirrorDevice(
         deviceId: s['device_id'] as String? ?? '',
-        installId: s['install_id'] as String?,
+        installId: installId,
         callsign: callsign,
         npub: s['npub'] as String?,
         nickname: s['nickname'] as String?,
-        deviceName: s['device_name'] as String?,
+        deviceName: effectiveDeviceName,
         platform: s['platform'] as String? ?? 'unknown',
         deviceType: s['device_type'] as String? ?? 'unknown',
         connectionType: 'station',
