@@ -15423,32 +15423,32 @@ class LogApiService with ChatModificationMixin {
       final callsignDir = StorageConfig().getCallsignDir(tokenData.peerCallsign);
       final folderPath = '$callsignDir/$folder';
 
-      // Check if folder exists on disk
+      // If folder doesn't exist on disk, return an empty manifest so the
+      // peer can detect all its local files as pushable uploads.
       final folderExists = await io.Directory(folderPath).exists();
 
-      if (!folderExists) {
-        return shelf.Response.notFound(
-          jsonEncode({
-            'success': false,
-            'error': 'Folder not found',
-            'code': 'FOLDER_NOT_FOUND',
-          }),
-          headers: headers,
-        );
-      }
-
-      final indexPath = StorageConfig().getFileIndexPath(tokenData.peerCallsign);
-      final fileIndex = FileIndexService(indexPath);
-      final storage = AppService().profileStorage;
       MirrorManifest manifest;
-      try {
-        manifest = await mirrorService.generateManifest(
-          storage != null ? '${tokenData.peerCallsign}/$folder' : folderPath,
-          storage: storage,
-          fileIndex: fileIndex,
+      if (!folderExists) {
+        manifest = MirrorManifest(
+          folder: folder,
+          totalFiles: 0,
+          totalBytes: 0,
+          files: [],
+          generatedAt: DateTime.now().millisecondsSinceEpoch ~/ 1000,
         );
-      } finally {
-        fileIndex.close();
+      } else {
+        final indexPath = StorageConfig().getFileIndexPath(tokenData.peerCallsign);
+        final fileIndex = FileIndexService(indexPath);
+        final storage = AppService().profileStorage;
+        try {
+          manifest = await mirrorService.generateManifest(
+            storage != null ? '${tokenData.peerCallsign}/$folder' : folderPath,
+            storage: storage,
+            fileIndex: fileIndex,
+          );
+        } finally {
+          fileIndex.close();
+        }
       }
 
       return shelf.Response.ok(

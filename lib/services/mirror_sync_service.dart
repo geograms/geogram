@@ -565,18 +565,10 @@ class MirrorSyncService {
     _activeChallenges.remove(nonce);
     LogService().log('MirrorSync: Challenge verified for $peerCallsign');
 
-    // 5. Check if folder exists under the shared callsign directory
-    final callsignDir = StorageConfig().getCallsignDir(peerCallsign);
-    final folderPath = '$callsignDir/$folder';
-    final folderExists = await Directory(folderPath).exists();
-    if (!folderExists) {
-      return (
-        allowed: false,
-        token: null,
-        error: 'FOLDER_NOT_FOUND',
-        expiresAt: null
-      );
-    }
+    // 5. Folder existence is NOT required — the peer may want to push
+    // files into a folder that doesn't exist here yet. The upload handler
+    // creates directories on the fly, and the manifest handler returns an
+    // empty manifest for missing folders.
 
     // 6. Generate access token
     final token = const Uuid().v4();
