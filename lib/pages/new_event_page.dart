@@ -148,10 +148,9 @@ class _NewEventPageState extends State<NewEventPage>
     _agendaController.text = event.agenda ?? '';
     _locationNameController.text = event.locationName ?? '';
 
-    // Extract slug from event ID (strip the YYYY-MM-DD_ prefix)
-    final id = event.id;
-    if (id.length > 11 && id[10] == '_') {
-      _slugController.text = id.substring(11);
+    // Populate slug from event
+    if (event.slug != null && event.slug!.isNotEmpty) {
+      _slugController.text = event.slug!;
     }
 
     // Location type
@@ -858,7 +857,7 @@ class _NewEventPageState extends State<NewEventPage>
             hintText: _i18n.t('url_slug_hint'),
             border: const OutlineInputBorder(),
             helperText: _i18n.t('url_slug_helper'),
-            prefixText: 'events/ ',
+            prefixText: '/events/ ',
           ),
           textInputAction: TextInputAction.next,
         ),

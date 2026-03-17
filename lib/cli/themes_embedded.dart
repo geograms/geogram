@@ -1247,7 +1247,8 @@ class ThemesEmbedded {
         flyerHtml = '<div class="event-flyer-thumb"><img src="' + esc(item.id) + '/files/flyer.jpg" alt="Flyer" loading="lazy" onerror="this.parentElement.style.display=\'none\'"></div>';
       }
 
-      return '<a class="event-item" href="' + encodeURIComponent(item.id) + '">' +
+      var linkId = item.slug || item.id;
+      return '<a class="event-item" href="' + encodeURIComponent(linkId) + '">' +
         dateBlock +
         '<div class="event-content">' +
           '<div class="event-title">' + esc(item.title) + '</div>' +

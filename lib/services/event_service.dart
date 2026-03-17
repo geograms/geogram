@@ -356,10 +356,8 @@ class EventService {
       final dateToUse = eventDate ?? DateTime.now();
       final year = dateToUse.year;
 
-      // Sanitize folder name — use custom slug when provided
-      final baseFolderName = customSlug != null && customSlug.trim().isNotEmpty
-          ? sanitizeFolderName(customSlug.trim(), dateToUse)
-          : sanitizeFolderName(title, dateToUse);
+      // Sanitize folder name (always from title — slug is stored inside event.txt)
+      final baseFolderName = sanitizeFolderName(title, dateToUse);
       final folderName = await _ensureUniqueFolderName(baseFolderName, year);
 
       // Event paths
@@ -384,6 +382,9 @@ class EventService {
       }
 
       // Create event object
+      final slugValue = (customSlug != null && customSlug.trim().isNotEmpty)
+          ? customSlug.trim()
+          : null;
       final event = Event(
         id: folderName,
         author: author,
@@ -400,6 +401,7 @@ class EventService {
         content: content,
         agenda: agenda,
         visibility: visibility ?? 'private',
+        slug: slugValue,
         metadata: {
           ...?metadata,
           if (npub != null) 'npub': npub,
@@ -1112,6 +1114,11 @@ class EventService {
         }
       }
 
+      // Resolve slug: explicit value, empty string to clear, null to keep existing
+      final resolvedSlug = customSlug != null
+          ? (customSlug.trim().isEmpty ? null : customSlug.trim())
+          : existingEvent.slug;
+
       final updatedEvent = existingEvent.copyWith(
         title: title,
         location: location,
@@ -1126,6 +1133,7 @@ class EventService {
         startDate: startDate,
         endDate: endDate,
         contacts: contacts,
+        slug: resolvedSlug,
         metadata: mergedMetadata,
       );
 
@@ -1133,12 +1141,10 @@ class EventService {
       String workingRelativePath = eventRelativePath;
       String finalEventId = eventId;
 
-      // Check if folder needs to be renamed (date, title, or custom slug changed)
-      final hasCustomSlug = customSlug != null && customSlug.trim().isNotEmpty;
-      if (folderDate != null || title != existingEvent.title || hasCustomSlug) {
+      // Check if folder needs to be renamed (date or title changed)
+      if (folderDate != null || title != existingEvent.title) {
         final dateToUse = folderDate ?? existingEvent.dateTime;
-        final nameSource = hasCustomSlug ? customSlug!.trim() : title;
-        final newFolderName = sanitizeFolderName(nameSource, dateToUse);
+        final newFolderName = sanitizeFolderName(title, dateToUse);
         final newYear = dateToUse.year.toString();
 
         print('EventService: Checking rename: oldId=$eventId, newId=$newFolderName, oldYear=$year, newYear=$newYear');

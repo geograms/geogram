@@ -1544,7 +1544,10 @@ class LogApiService with ChatModificationMixin {
           headers: headers,
         );
       }
-      return _handleEventsGetFile(eventId, filePath, dataDir, headers);
+      // Resolve slug to real event ID for file serving
+      final realId = await _resolveEventId(eventId, dataDir);
+      if (realId == null) return null;
+      return _handleEventsGetFile(realId, filePath, dataDir, headers);
     }
 
     // /events/{eventId}
@@ -1552,6 +1555,20 @@ class LogApiService with ChatModificationMixin {
       return _handleEventDetailPage(request, eventId, headers);
     }
 
+    return null;
+  }
+
+  /// Resolve an event identifier (folder ID or slug) to the real folder ID.
+  Future<String?> _resolveEventId(String idOrSlug, String dataDir) async {
+    final allEvents = await EventService().getAllEventsGlobal(dataDir);
+    // Try by ID first
+    for (final e in allEvents) {
+      if (e.id == idOrSlug) return e.id;
+    }
+    // Fall back to slug
+    for (final e in allEvents) {
+      if (e.slug == idOrSlug) return e.id;
+    }
     return null;
   }
 
@@ -1665,8 +1682,13 @@ class LogApiService with ChatModificationMixin {
       );
     }
     final allEvents = await EventService().getAllEventsGlobal(dataDir);
-    final event = allEvents.cast<Event?>().firstWhere(
+    // Look up by ID first, then fall back to slug
+    var event = allEvents.cast<Event?>().firstWhere(
       (e) => e?.id == eventId,
+      orElse: () => null,
+    );
+    event ??= allEvents.cast<Event?>().firstWhere(
+      (e) => e?.slug == eventId,
       orElse: () => null,
     );
     if (event == null) {

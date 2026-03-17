@@ -35,6 +35,7 @@ class Event {
   final EventRegistration? registration; // Going/Interested lists
   final List<EventLink> links; // Relevant links
   final List<String> contacts; // List of contact callsigns associated with event
+  final String? slug; // URL-friendly short name (optional)
 
   Event({
     required this.id,
@@ -61,6 +62,7 @@ class Event {
     this.registration,
     this.links = const [],
     this.contacts = const [],
+    this.slug,
   });
 
   /// Create Event from API JSON (from toApiJson output)
@@ -168,6 +170,7 @@ class Event {
       registration: registration,
       links: links,
       contacts: (json['contacts'] as List<dynamic>?)?.cast<String>() ?? [],
+      slug: json['slug'] as String?,
       metadata: metadata,
     );
   }
@@ -365,6 +368,11 @@ class Event {
       buffer.writeln('CONTACTS: ${contacts.join(', ')}');
     }
 
+    // URL slug (optional)
+    if (slug != null && slug!.isNotEmpty) {
+      buffer.writeln('SLUG: $slug');
+    }
+
     buffer.writeln();
 
     // Content
@@ -422,6 +430,7 @@ class Event {
     String author = '';
     String? startDate;
     String? endDate;
+    String? slug;
     List<String> admins = [];
     List<String> moderators = [];
     List<String> groupAccess = [];
@@ -465,6 +474,8 @@ class Event {
       } else if (line.startsWith('CONTACTS: ')) {
         final contactsStr = line.substring(10).trim();
         contacts = contactsStr.split(',').map((s) => s.trim()).where((s) => s.isNotEmpty).toList();
+      } else if (line.startsWith('SLUG: ')) {
+        slug = line.substring(6).trim();
       }
 
       currentLine++;
@@ -525,6 +536,7 @@ class Event {
       agenda: agenda,
       visibility: visibility,
       contacts: contacts,
+      slug: slug,
       metadata: metadata,
     );
   }
@@ -588,6 +600,7 @@ class Event {
     EventRegistration? registration,
     List<EventLink>? links,
     List<String>? contacts,
+    String? slug,
   }) {
     return Event(
       id: id ?? this.id,
@@ -613,6 +626,7 @@ class Event {
       registration: registration ?? this.registration,
       links: links ?? this.links,
       contacts: contacts ?? this.contacts,
+      slug: slug ?? this.slug,
     );
   }
 
@@ -640,6 +654,7 @@ class Event {
         'update_count': updates.length,
         'going_count': registration?.goingCount ?? 0,
         'interested_count': registration?.interestedCount ?? 0,
+        if (slug != null) 'slug': slug,
         if (placePath != null) 'place_path': placePath,
       };
     }
@@ -696,6 +711,7 @@ class Event {
       'contacts': contacts,
       'npub': npub,
       'signature': signature,
+      if (slug != null) 'slug': slug,
       if (placePath != null) 'place_path': placePath,
     };
   }
