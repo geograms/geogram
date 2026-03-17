@@ -1075,7 +1075,8 @@ class ThemesEmbedded {
       html += '</div>';
     }
 
-    // --- Registration & Engagement Stats ---
+    // --- Registration Stats (going/interested only) ---
+    var likeCount = ev.feedback_like_count || (ev.likes ? ev.likes.length : 0);
     var statsItems = [];
     var reg = ev.registration;
     if (reg) {
@@ -1084,10 +1085,6 @@ class ThemesEmbedded {
       if (goingCount > 0) statsItems.push('<span class="event-stat"><span class="event-stat-num">' + goingCount + '</span> going</span>');
       if (interestedCount > 0) statsItems.push('<span class="event-stat"><span class="event-stat-num">' + interestedCount + '</span> interested</span>');
     }
-    var likeCount = ev.feedback_like_count || (ev.likes ? ev.likes.length : 0);
-    if (likeCount > 0) statsItems.push('<span class="event-stat"><span class="event-stat-num">' + likeCount + '</span> like' + (likeCount !== 1 ? 's' : '') + '</span>');
-    var commentCount = ev.comments ? ev.comments.length : 0;
-    if (commentCount > 0) statsItems.push('<span class="event-stat"><span class="event-stat-num">' + commentCount + '</span> comment' + (commentCount !== 1 ? 's' : '') + '</span>');
 
     if (statsItems.length > 0) {
       html += '<div class="event-stats-bar">' + statsItems.join('<span class="event-stat-sep">&middot;</span>') + '</div>';
