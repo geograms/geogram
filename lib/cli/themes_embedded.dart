@@ -1024,9 +1024,6 @@ class ThemesEmbedded {
     // === Build page ===
     var html = '';
 
-    // Back link
-    html += '<div class="pagination"><div class="pagination__buttons"><span class="button"><a href="/events/">&larr; All Events</a></span></div></div>';
-
     // --- Hero ---
     html += '<div class="event-hero">';
     html += '<h1 class="event-hero-title">' + esc(ev.title) + '</h1>';
@@ -1246,7 +1243,7 @@ class ThemesEmbedded {
         if (ev.npub) unsignedEvent.tags.push(['p', ev.npub]);
         var signedEvent = await window.nostr.signEvent(unsignedEvent);
         if (!signedEvent || !signedEvent.sig) throw new Error('Signing cancelled');
-        var response = await fetch('/api/events/' + encodeURIComponent(ev.id) + '/like', {
+        var response = await fetch('../api/events/' + encodeURIComponent(ev.id) + '/like', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(signedEvent)

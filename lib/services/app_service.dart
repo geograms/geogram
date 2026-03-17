@@ -867,8 +867,24 @@ class AppService {
               e is File &&
               e.path.endsWith('.json') &&
               !metaFiles.contains(e.path.split('/').last));
+        case 'events':
+          // Events: check for year subdirectories with event folders
+          // (events are served dynamically, not from index.html)
+          if (storage != null) {
+            final scoped =
+                ScopedProfileStorage.fromAbsolutePath(storage, appPath);
+            final entries = await scoped.listDirectory('');
+            return entries.any((e) =>
+                e.isDirectory && RegExp(r'^\d{4}$').hasMatch(e.name));
+          }
+          final evDir = Directory(appPath);
+          if (!await evDir.exists()) return false;
+          final evEntries = await evDir.list().toList();
+          return evEntries.any((e) =>
+              e is Directory &&
+              RegExp(r'^\d{4}$').hasMatch(e.path.split('/').last));
         default:
-          // Events, places, files, alerts: need a generated index.html
+          // Places, files, alerts: need a generated index.html
           if (storage != null) {
             final scoped =
                 ScopedProfileStorage.fromAbsolutePath(storage, appPath);
