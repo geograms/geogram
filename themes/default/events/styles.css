@@ -190,8 +190,15 @@
 
 .event-hero-meta-icon {
   flex-shrink: 0;
-  width: 1.4em;
-  text-align: center;
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.event-hero-meta-icon svg {
+  vertical-align: middle;
 }
 
 .event-hero-meta a {
@@ -329,6 +336,11 @@
   font-size: 1rem;
   font-family: inherit;
   transition: all 0.15s;
+}
+
+.like-button svg {
+  width: 16px;
+  height: 16px;
 }
 
 .like-button:hover:not(:disabled) {

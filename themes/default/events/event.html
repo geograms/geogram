@@ -93,17 +93,30 @@
     // === Build page ===
     var html = '';
 
+    // SVG icons (monochrome, inherits currentColor)
+    var svgSize = 'width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"';
+    var ico = {
+      calendar: '<svg ' + svgSize + '><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>',
+      pin:      '<svg ' + svgSize + '><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 1 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>',
+      globe:    '<svg ' + svgSize + '><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>',
+      user:     '<svg ' + svgSize + '><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>',
+      check:    '<svg ' + svgSize + '><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>',
+      heart0:   '<svg ' + svgSize + '><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>',
+      heart1:   '<svg ' + svgSize.replace('fill="none"', 'fill="currentColor"') + '><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>',
+      arrow:    '<svg ' + svgSize + ' width="12" height="12"><line x1="7" y1="17" x2="17" y2="7"/><polyline points="7 7 17 7 17 17"/></svg>'
+    };
+
     // --- Hero ---
     html += '<div class="event-hero">';
     html += '<h1 class="event-hero-title">' + esc(ev.title) + '</h1>';
 
     // Date
     if (ev.start_date && ev.end_date && ev.start_date !== ev.end_date) {
-      html += '<div class="event-hero-meta"><span class="event-hero-meta-icon">&#128197;</span> ' + formatDate(ev.start_date) + ' &mdash; ' + formatDate(ev.end_date) + '</div>';
+      html += '<div class="event-hero-meta"><span class="event-hero-meta-icon">' + ico.calendar + '</span> ' + formatDate(ev.start_date) + ' &mdash; ' + formatDate(ev.end_date) + '</div>';
     } else if (ev.start_date) {
-      html += '<div class="event-hero-meta"><span class="event-hero-meta-icon">&#128197;</span> ' + formatDate(ev.start_date) + '</div>';
+      html += '<div class="event-hero-meta"><span class="event-hero-meta-icon">' + ico.calendar + '</span> ' + formatDate(ev.start_date) + '</div>';
     } else if (ev.timestamp) {
-      html += '<div class="event-hero-meta"><span class="event-hero-meta-icon">&#128197;</span> ' + formatDateTime(ev.timestamp) + '</div>';
+      html += '<div class="event-hero-meta"><span class="event-hero-meta-icon">' + ico.calendar + '</span> ' + formatDateTime(ev.timestamp) + '</div>';
     }
 
     // Location
@@ -111,24 +124,24 @@
       var locText = esc(ev.location_name);
       if (ev.location && ev.location !== 'online' && ev.location.indexOf(',') !== -1) {
         var parts = ev.location.split(',');
-        locText = '<a href="' + mapUrl(parts[0].trim(), parts[1].trim()) + '" target="_blank" rel="noopener">' + locText + ' &#8599;</a>';
+        locText = '<a href="' + mapUrl(parts[0].trim(), parts[1].trim()) + '" target="_blank" rel="noopener">' + locText + ' ' + ico.arrow + '</a>';
       }
-      html += '<div class="event-hero-meta"><span class="event-hero-meta-icon">&#128205;</span> ' + locText + '</div>';
+      html += '<div class="event-hero-meta"><span class="event-hero-meta-icon">' + ico.pin + '</span> ' + locText + '</div>';
     } else if (ev.location === 'online') {
-      html += '<div class="event-hero-meta"><span class="event-hero-meta-icon">&#127760;</span> Online</div>';
+      html += '<div class="event-hero-meta"><span class="event-hero-meta-icon">' + ico.globe + '</span> Online</div>';
     } else if (ev.location && ev.location.indexOf(',') !== -1) {
       var parts = ev.location.split(',');
-      html += '<div class="event-hero-meta"><span class="event-hero-meta-icon">&#128205;</span> <a href="' + mapUrl(parts[0].trim(), parts[1].trim()) + '" target="_blank" rel="noopener">View on map &#8599;</a></div>';
+      html += '<div class="event-hero-meta"><span class="event-hero-meta-icon">' + ico.pin + '</span> <a href="' + mapUrl(parts[0].trim(), parts[1].trim()) + '" target="_blank" rel="noopener">View on map ' + ico.arrow + '</a></div>';
     }
 
     // Author
     if (ev.author) {
-      html += '<div class="event-hero-meta"><span class="event-hero-meta-icon">&#128100;</span> ' + esc(ev.author) + '</div>';
+      html += '<div class="event-hero-meta"><span class="event-hero-meta-icon">' + ico.user + '</span> ' + esc(ev.author) + '</div>';
     }
 
     // Signed badge
     if (ev.signature) {
-      html += '<div class="event-hero-meta event-signed"><span class="event-hero-meta-icon">&#10003;</span> Signed with NOSTR</div>';
+      html += '<div class="event-hero-meta event-signed"><span class="event-hero-meta-icon">' + ico.check + '</span> Signed with NOSTR</div>';
     }
 
     html += '</div>'; // .event-hero
@@ -162,7 +175,7 @@
     // --- Like button ---
     html += '<div class="feedback-section" id="feedback-section">' +
       '<button class="like-button" id="like-button" onclick="toggleLike()" disabled>' +
-        '<span id="like-icon">&#9825;</span> <span>Like</span>' +
+        '<span id="like-icon">' + ico.heart0 + '</span> <span>Like</span>' +
       '</button>' +
       '<span class="like-count" id="like-count">' + (likeCount > 0 ? likeCount + ' like' + (likeCount !== 1 ? 's' : '') : '') + '</span>' +
       '<span class="like-hint" id="like-hint">Connect with Nostr to like</span>' +
@@ -189,7 +202,7 @@
       html += '<div class="event-section"><h2>Links</h2><div class="event-links-list">';
       ev.links.forEach(function(l) {
         html += '<div class="event-link-card">' +
-          '<a href="' + esc(l.url) + '" target="_blank" rel="noopener" class="event-link-url">' + esc(l.description || l.url) + ' &#8599;</a>';
+          '<a href="' + esc(l.url) + '" target="_blank" rel="noopener" class="event-link-url">' + esc(l.description || l.url) + ' ' + ico.arrow + '</a>';
         if (l.description && l.url !== l.description) {
           html += '<div class="event-link-domain">' + esc(l.url.replace(/^https?:\/\//, '').split('/')[0]) + '</div>';
         }
@@ -328,7 +341,7 @@
       var icon = document.getElementById('like-icon');
       var countEl = document.getElementById('like-count');
       if (isLiked) { button.classList.add('liked'); } else { button.classList.remove('liked'); }
-      icon.innerHTML = isLiked ? '&#9829;' : '&#9825;';
+      icon.innerHTML = isLiked ? ico.heart1 : ico.heart0;
       countEl.textContent = count > 0 ? count + ' like' + (count !== 1 ? 's' : '') : '';
     }
 
