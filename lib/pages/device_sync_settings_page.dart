@@ -10,6 +10,7 @@ import 'package:flutter/material.dart';
 import '../models/mirror_config.dart';
 import '../services/mirror_config_service.dart';
 import '../services/mirror_discovery_service.dart';
+import '../services/websocket_service.dart';
 import 'mirror_settings_page.dart';
 
 /// Settings page for managing device sync configuration.
@@ -178,7 +179,17 @@ class _DeviceSyncSettingsPageState extends State<DeviceSyncSettingsPage> {
           ),
         ],
       ),
-      trailing: const Icon(Icons.chevron_right),
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          IconButton(
+            icon: Icon(Icons.delete_outline, color: theme.colorScheme.error),
+            tooltip: 'Remove device',
+            onPressed: () => _confirmRemovePeer(peer),
+          ),
+          const Icon(Icons.chevron_right),
+        ],
+      ),
       onTap: () async {
         await Navigator.push(
           context,
@@ -223,9 +234,44 @@ class _DeviceSyncSettingsPageState extends State<DeviceSyncSettingsPage> {
     );
   }
 
+  Future<void> _confirmRemovePeer(MirrorPeer peer) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Remove Device'),
+        content: Text(
+          'Remove "${peer.name}" from known devices?\n\n'
+          'It will reappear automatically if it connects again.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            child: const Text('Remove'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) {
+      await _configService.removePeer(peer.peerId);
+      if (mounted) {
+        setState(() => _config = _configService.config);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('${peer.name} removed')),
+        );
+      }
+    }
+  }
+
   Future<void> _saveNickname(String value) async {
     if (value.trim().isEmpty) return;
     await _configService.setDeviceName(value.trim());
+    // Re-send hello so station gets the updated device name immediately
+    WebSocketService().reconnect();
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Device nickname saved')),

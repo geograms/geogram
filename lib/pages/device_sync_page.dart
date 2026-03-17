@@ -260,6 +260,10 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
     final fileIndex = FileIndexService(indexPath);
 
     _diffFoldersTotal = _appFolders.length;
+    int foldersCompared = 0;
+    int foldersAuthFailed = 0;
+    int foldersFetchFailed = 0;
+    int foldersErrored = 0;
 
     for (final folder in _appFolders) {
       if (mounted) {
@@ -274,6 +278,7 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
         final syncResult = await mirror.requestSync(_peerUrl!, folder);
         if (!syncResult.allowed || syncResult.token == null) {
           LogService().log('DeviceSync: Auth failed for $folder: ${syncResult.error}');
+          foldersAuthFailed++;
           continue;
         }
         _tokens[folder] = syncResult.token!;
@@ -284,7 +289,12 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
           folder,
           syncResult.token!,
         );
-        if (manifest == null) continue;
+        if (manifest == null) {
+          foldersFetchFailed++;
+          continue;
+        }
+
+        foldersCompared++;
 
         // Compute diff
         final localPath = '${profile.callsign}/$folder';
@@ -308,6 +318,7 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
         }
       } catch (e) {
         LogService().log('DeviceSync: Error loading diff for $folder: $e');
+        foldersErrored++;
       }
     }
 
@@ -319,7 +330,17 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
         _diffFoldersDone = _diffFoldersTotal;
         _currentDiffFolder = null;
         if (_diffs.isEmpty) {
-          _diffError = 'Devices are in sync — no differences found.';
+          if (foldersCompared == 0) {
+            // No folders were actually compared — report the real problem
+            final issues = <String>[];
+            if (foldersAuthFailed > 0) issues.add('$foldersAuthFailed auth failed');
+            if (foldersFetchFailed > 0) issues.add('$foldersFetchFailed manifest fetch failed');
+            if (foldersErrored > 0) issues.add('$foldersErrored errored');
+            _diffError = 'Could not compare any folders (${issues.join(', ')}). '
+                'Check that the peer device is online and mirror sync is enabled on both devices.';
+          } else {
+            _diffError = 'Devices are in sync — no differences found.';
+          }
         }
       });
     }

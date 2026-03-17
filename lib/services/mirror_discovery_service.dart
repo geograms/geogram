@@ -12,6 +12,7 @@ class MirrorDevice {
   final String callsign;
   final String? npub;
   final String? nickname; // User-chosen device name from remote peer
+  final String? deviceName; // Device-chosen name (e.g., "thinkpad", "My Phone")
   final String platform;
   final String deviceType;
   final String connectionType; // 'station', 'lan'
@@ -26,6 +27,7 @@ class MirrorDevice {
     required this.callsign,
     this.npub,
     this.nickname,
+    this.deviceName,
     this.platform = 'unknown',
     this.deviceType = 'unknown',
     this.connectionType = 'station',
@@ -35,9 +37,14 @@ class MirrorDevice {
     DateTime? lastSeen,
   }) : lastSeen = lastSeen ?? DateTime.now();
 
-  /// Short display name: nickname if set, else "Android (a1b2)", else platform.
+  /// Short display name: deviceName with install suffix, else platform fallback.
   String get displayName {
-    if (nickname != null && nickname!.isNotEmpty) return nickname!;
+    if (deviceName != null && deviceName!.isNotEmpty) {
+      if (installId != null && installId!.length >= 4) {
+        return '$deviceName (${installId!.substring(0, 4)})';
+      }
+      return deviceName!;
+    }
     if (installId != null && installId!.length >= 4) {
       return '$platform (${installId!.substring(0, 4)})';
     }
@@ -91,6 +98,7 @@ class MirrorDiscoveryService {
         callsign: callsign,
         npub: s['npub'] as String?,
         nickname: s['nickname'] as String?,
+        deviceName: s['device_name'] as String?,
         platform: s['platform'] as String? ?? 'unknown',
         deviceType: s['device_type'] as String? ?? 'unknown',
         connectionType: 'station',

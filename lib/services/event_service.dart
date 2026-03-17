@@ -35,8 +35,12 @@ class EventService {
   /// IMPORTANT: This MUST be set before using the service.
   /// All file operations go through this abstraction.
   late ProfileStorage _storage;
+  bool _storageInitialized = false;
 
   String? _appPath;
+
+  /// Safely get storage or null if not yet initialized
+  ProfileStorage? get _storageOrNull => _storageInitialized ? _storage : null;
 
   /// Whether using encrypted storage
   bool get useEncryptedStorage => _storage.isEncrypted;
@@ -45,6 +49,7 @@ class EventService {
   /// MUST be called before initializeApp
   void setStorage(ProfileStorage storage) {
     _storage = storage;
+    _storageInitialized = true;
   }
 
   /// Initialize event service for a collection
@@ -1307,6 +1312,34 @@ class EventService {
   Future<List<Event>> getAllEventsGlobal(String dataDir, {int? year}) async {
     final allEvents = <Event>[];
 
+    Future<void> scanAppDir(Directory appDir) async {
+      // Events can be stored in two layouts:
+      //   1) {appDir}/{year}/{eventFolder}/ — local client layout (storage base = appDir)
+      //   2) {appDir}/events/{year}/{eventFolder}/ — station/upload layout (storage base = appDir/events)
+      // Scan both layouts.
+      final savedPath = _appPath;
+      final savedStorage = _storageOrNull;
+      try {
+        // Layout 1: year folders directly under appDir
+        _appPath = appDir.path;
+        _storage = FilesystemProfileStorage(appDir.path);
+        final directEvents = await loadEvents(year: year);
+        allEvents.addAll(directEvents);
+
+        // Layout 2: year folders under appDir/events/
+        final eventsSubdir = Directory('${appDir.path}/events');
+        if (await eventsSubdir.exists()) {
+          _appPath = eventsSubdir.path;
+          _storage = FilesystemProfileStorage(eventsSubdir.path);
+          final subEvents = await loadEvents(year: year);
+          allEvents.addAll(subEvents);
+        }
+      } finally {
+        _appPath = savedPath;
+        if (savedStorage != null) _storage = savedStorage;
+      }
+    }
+
     try {
       // Search in collections directory
       final appsDir = Directory('$dataDir/collections');
@@ -1314,16 +1347,7 @@ class EventService {
         final entities = await appsDir.list().toList();
         for (var entity in entities) {
           if (entity is Directory) {
-            // Check if this is an events-type app
-            final eventsSubdir = Directory('${entity.path}/events');
-            if (await eventsSubdir.exists()) {
-              // Load events from this app
-              final savedPath = _appPath;
-              _appPath = entity.path;
-              final events = await loadEvents(year: year);
-              _appPath = savedPath; // Restore original path
-              allEvents.addAll(events);
-            }
+            await scanAppDir(entity);
           }
         }
       }
@@ -1334,19 +1358,10 @@ class EventService {
         final deviceEntities = await devicesDir.list().toList();
         for (var deviceEntity in deviceEntities) {
           if (deviceEntity is Directory) {
-            // Look for events apps in each device folder
             final deviceApps = await deviceEntity.list().toList();
             for (var appEntity in deviceApps) {
               if (appEntity is Directory) {
-                final eventsSubdir = Directory('${appEntity.path}/events');
-                if (await eventsSubdir.exists()) {
-                  // Load events from this app
-                  final savedPath = _appPath;
-                  _appPath = appEntity.path;
-                  final events = await loadEvents(year: year);
-                  _appPath = savedPath; // Restore original path
-                  allEvents.addAll(events);
-                }
+                await scanAppDir(appEntity);
               }
             }
           }
@@ -1367,6 +1382,28 @@ class EventService {
   Future<List<int>> getAvailableYearsGlobal(String dataDir) async {
     final years = <int>{};
 
+    Future<void> scanAppDir(Directory appDir) async {
+      final savedPath = _appPath;
+      final savedStorage = _storageOrNull;
+      try {
+        // Layout 1: year folders directly under appDir
+        _appPath = appDir.path;
+        _storage = FilesystemProfileStorage(appDir.path);
+        years.addAll(await getYears());
+
+        // Layout 2: year folders under appDir/events/
+        final eventsSubdir = Directory('${appDir.path}/events');
+        if (await eventsSubdir.exists()) {
+          _appPath = eventsSubdir.path;
+          _storage = FilesystemProfileStorage(eventsSubdir.path);
+          years.addAll(await getYears());
+        }
+      } finally {
+        _appPath = savedPath;
+        if (savedStorage != null) _storage = savedStorage;
+      }
+    }
+
     try {
       // Search in collections directory
       final appsDir = Directory('$dataDir/collections');
@@ -1374,15 +1411,7 @@ class EventService {
         final entities = await appsDir.list().toList();
         for (var entity in entities) {
           if (entity is Directory) {
-            final eventsSubdir = Directory('${entity.path}/events');
-            if (await eventsSubdir.exists()) {
-              // Get years from this app
-              final savedPath = _appPath;
-              _appPath = entity.path;
-              final appYears = await getYears();
-              _appPath = savedPath;
-              years.addAll(appYears);
-            }
+            await scanAppDir(entity);
           }
         }
       }
@@ -1393,18 +1422,10 @@ class EventService {
         final deviceEntities = await devicesDir.list().toList();
         for (var deviceEntity in deviceEntities) {
           if (deviceEntity is Directory) {
-            // Look for events apps in each device folder
             final deviceApps = await deviceEntity.list().toList();
             for (var appEntity in deviceApps) {
               if (appEntity is Directory) {
-                final eventsSubdir = Directory('${appEntity.path}/events');
-                if (await eventsSubdir.exists()) {
-                  final savedPath = _appPath;
-                  _appPath = appEntity.path;
-                  final appYears = await getYears();
-                  _appPath = savedPath;
-                  years.addAll(appYears);
-                }
+                await scanAppDir(appEntity);
               }
             }
           }
@@ -1430,16 +1451,25 @@ class EventService {
       }
       final year = eventId.substring(0, 4);
 
+      // Check both event storage layouts for a given app directory
+      Future<String?> checkAppDir(Directory appDir) async {
+        // Layout 1: {appDir}/{year}/{eventId}/ (local client)
+        final direct = Directory('${appDir.path}/$year/$eventId');
+        if (await direct.exists()) return direct.path;
+        // Layout 2: {appDir}/events/{year}/{eventId}/ (station/upload)
+        final nested = Directory('${appDir.path}/events/$year/$eventId');
+        if (await nested.exists()) return nested.path;
+        return null;
+      }
+
       // Search in collections directory
       final appsDir = Directory('$dataDir/collections');
       if (await appsDir.exists()) {
         final entities = await appsDir.list().toList();
         for (var entity in entities) {
           if (entity is Directory) {
-            final eventDir = Directory('${entity.path}/events/$year/$eventId');
-            if (await eventDir.exists()) {
-              return eventDir.path;
-            }
+            final found = await checkAppDir(entity);
+            if (found != null) return found;
           }
         }
       }
@@ -1450,14 +1480,11 @@ class EventService {
         final deviceEntities = await devicesDir.list().toList();
         for (var deviceEntity in deviceEntities) {
           if (deviceEntity is Directory) {
-            // Look for events apps in each device folder
             final deviceApps = await deviceEntity.list().toList();
             for (var appEntity in deviceApps) {
               if (appEntity is Directory) {
-                final eventDir = Directory('${appEntity.path}/events/$year/$eventId');
-                if (await eventDir.exists()) {
-                  return eventDir.path;
-                }
+                final found = await checkAppDir(appEntity);
+                if (found != null) return found;
               }
             }
           }

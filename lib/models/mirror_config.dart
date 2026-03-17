@@ -30,6 +30,19 @@ const kSyncableFolders = [
   'stories',
   'wallet',
   'tracker',
+  'chat',
+  'email',
+  'teleport',
+  'www',
+  'conference',
+  'meetings',
+  'reader',
+  'shared',
+  'work',
+  'extra',
+  'karma',
+  'transfer',
+  'my-events',
 ];
 
 /// Human-readable labels and descriptions for each syncable folder
@@ -50,6 +63,19 @@ const kFolderLabels = <String, (String, String)>{
   'stories': ('Stories', 'Published stories'),
   'wallet': ('Wallet', 'Wallet data'),
   'tracker': ('Tracker', 'GPS tracks'),
+  'chat': ('Chat', 'Chat messages and history'),
+  'email': ('Email', 'Email messages'),
+  'teleport': ('Teleport', 'Teleport transfers'),
+  'www': ('Web', 'Web content and pages'),
+  'conference': ('Conference', 'Conference recordings and notes'),
+  'meetings': ('Meetings', 'Meeting records'),
+  'reader': ('Reader', 'Saved articles and reading list'),
+  'shared': ('Shared', 'Shared content'),
+  'work': ('Work', 'Work documents'),
+  'extra': ('Extra', 'Additional data'),
+  'karma': ('Karma', 'Karma records'),
+  'transfer': ('Transfer', 'File transfers'),
+  'my-events': ('My Events', 'Personal events'),
 };
 
 /// Sync style for an app (like Syncthing)

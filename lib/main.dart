@@ -161,6 +161,7 @@ import 'widgets/profile_switcher.dart';
 import 'widgets/sync_button.dart';
 import 'services/mirror_config_service.dart';
 import 'services/mirror_discovery_service.dart';
+import 'services/mirror_sync_service.dart';
 import 'widgets/transfer/incoming_transfer_dialog.dart';
 import 'transfer/services/p2p_transfer_service.dart';
 import 'cli/console.dart';
@@ -396,6 +397,7 @@ void main() async {
 
     // Initialize mirror config with profile storage so peers persist across restarts
     await MirrorConfigService.instance.setStorage(AppService().profileStorage);
+    MirrorSyncService.instance.loadAllowedPeersFromConfig();
 
     // Start background file indexing (hourly, only changed folders)
     FileIndexService.startBackgroundIndexing(
@@ -411,6 +413,7 @@ void main() async {
             installId: m.installId!,
             callsign: m.callsign,
             nickname: m.nickname,
+            deviceName: m.deviceName,
             npub: m.npub,
             platform: m.platform,
             displayName: m.displayName,

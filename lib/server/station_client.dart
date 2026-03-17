@@ -1,6 +1,9 @@
 // Unified connected client model for station server
 import 'dart:io';
 
+import '../cli/commands/service_interfaces.dart';
+import 'mixins/device_proxy_mixin.dart';
+import 'mixins/email_handler_mixin.dart';
 import 'mixins/mirror_notify_mixin.dart';
 
 /// Connection type enum for categorizing how clients connect
@@ -66,16 +69,25 @@ enum ConnectionType {
 
 /// Connected WebSocket client
 /// Unified model combining PureConnectedClient (CLI) and ConnectedClient (App)
-class StationClient implements MirrorClient {
+class StationClient implements EmailClient, ConnectedClientReadable, DeviceProxyClient, MirrorClient {
+  @override
   final WebSocket socket;
+  @override
   final String id;
+  @override
   String? callsign;
+  @override
   String? nickname;
+  @override
+  String? deviceName; // Device-chosen name (e.g., "thinkpad", "My Phone")
   String? color;
+  @override
   String? deviceType;
+  @override
   String? platform;
   String? version;
   String? remoteAddress;
+  @override
   String? npub;
   @override
   String? deviceId;
@@ -83,23 +95,32 @@ class StationClient implements MirrorClient {
   double? latitude;
   double? longitude;
   int ssid; // APRS-style SSID for device identification (0-15)
+  @override
   DateTime connectedAt;
   DateTime lastActivity;
 
   // Challenge-response authentication (HELLO protocol v2)
   String? pendingChallenge; // Nonce sent to client for verification
   int helloProtocol = 1; // Protocol version used by client (1=legacy, 2=challenge-response)
+  @override
   bool verified = false; // Whether challenge-response passed
 
   // Multi-device responsiveness tracking
+  @override
   int successCount = 0; // Successful proxy responses
+  @override
   int failCount = 0; // Timeouts/errors
+
+  // Device priority (lower = higher priority, 0 = no priority set)
+  @override
+  int priority = 0;
 
   /// MirrorClient address alias (maps to remoteAddress)
   @override
   String? get address => remoteAddress;
 
   /// Success rate for adaptive device ordering (0.0 to 1.0)
+  @override
   double get successRate {
     final total = successCount + failCount;
     if (total == 0) return 0.5; // Neutral for new connections

@@ -854,6 +854,9 @@ class StationServerService with KarmaMixin, ConferenceMixin {
       } else if (_isAlertFileFetchPath(path, request.method)) {
         // Handle alert file downloads - serve from local storage
         await _handleAlertFileFetch(request);
+      } else if (_isEventFileUploadPath(path, request.method)) {
+        // Handle event file uploads - store locally
+        await _handleEventFileUpload(request);
       } else if (_isPlaceFileUploadPath(path, request.method)) {
         // Handle place file uploads - store locally instead of proxying
         await _handlePlaceFileUpload(request);
@@ -4611,6 +4614,93 @@ h2 { font-size: 1.2rem; margin: 0 0 20px 0; }
       request.response.write(jsonEncode({
         'error': e.toString(),
       }));
+    }
+  }
+
+  // ── Event file upload ──────────────────────────────────────────
+
+  /// Check if path matches /{callsign}/api/events/files/{path} for POST
+  bool _isEventFileUploadPath(String urlPath, String method) {
+    if (method != 'POST') return false;
+    final regex = RegExp(r'^/([A-Za-z0-9]+)/api/events/files/.+$');
+    return regex.hasMatch(urlPath);
+  }
+
+  /// Handle POST /{callsign}/api/events/files/{relativePath}
+  Future<void> _handleEventFileUpload(HttpRequest request) async {
+    try {
+      final parts = request.uri.pathSegments;
+      if (parts.length < 5 || parts[1] != 'api' || parts[2] != 'events' || parts[3] != 'files') {
+        request.response.statusCode = 400;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'Invalid path format'}));
+        return;
+      }
+
+      final callsign = parts[0].toUpperCase();
+      final relativePath = parts.sublist(4).join('/');
+
+      if (relativePath.contains('..')) {
+        request.response.statusCode = 400;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'Invalid path'}));
+        return;
+      }
+
+      final bytes = await request.fold<List<int>>(
+        <int>[],
+        (previous, element) => previous..addAll(element),
+      );
+
+      if (bytes.isEmpty) {
+        request.response.statusCode = 400;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'Empty file'}));
+        return;
+      }
+
+      if (bytes.length > 10 * 1024 * 1024) {
+        request.response.statusCode = 413;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'File too large', 'max_size_mb': 10}));
+        return;
+      }
+
+      final storageConfig = StorageConfig();
+      final eventsRoot = path.join(storageConfig.devicesDir, callsign, 'my-events', 'events');
+      final filePath = path.join(eventsRoot, relativePath);
+      final parentDir = Directory(path.dirname(filePath));
+      if (!await parentDir.exists()) {
+        await parentDir.create(recursive: true);
+      }
+
+      final file = File(filePath);
+      await file.writeAsBytes(bytes, flush: true);
+
+      LogService().log('Event file upload: $callsign/$relativePath (${bytes.length} bytes)');
+
+      if (relativePath.endsWith('/event.txt') || relativePath == 'event.txt') {
+        final pathParts = relativePath.split('/');
+        final eventId = pathParts.length >= 2 ? pathParts[pathParts.length - 2] : relativePath;
+        EventBus().fire(EventCreatedEvent(
+          eventId: eventId,
+          author: callsign,
+          title: eventId,
+        ));
+      }
+
+      request.response.statusCode = 201;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({
+        'success': true,
+        'path': '/$callsign/events/$relativePath',
+        'size': bytes.length,
+      }));
+    } catch (e) {
+      LogService().log('Error handling event file upload: $e');
+      request.response.statusCode = 500;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({'error': 'Internal server error'}));
     }
   }
 

@@ -425,10 +425,17 @@ class WebSocketService {
       }
 
       // Build hello message with protocol version
+      // Ensure mirror config is loaded so device_name is available
+      var mirrorConfig = MirrorConfigService.instance.config;
+      if (mirrorConfig == null) {
+        await MirrorConfigService.instance.initialize();
+        mirrorConfig = MirrorConfigService.instance.config;
+      }
       final helloMessage = {
         'type': 'hello',
         if (challengeNonce != null) 'protocol': 2,
         'event': signedEvent.toJson(),
+        if (mirrorConfig != null) 'device_name': mirrorConfig.deviceName,
       };
 
       final helloJson = jsonEncode(helloMessage);

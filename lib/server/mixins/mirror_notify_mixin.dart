@@ -18,6 +18,7 @@ abstract class MirrorClient {
   String? get address; // Remote IP stored at connection time
   String? get deviceId; // Per-install UUID for NAT-safe dedup
   String? get nickname; // User-chosen device name
+  String? get deviceName; // Device-chosen name (e.g., "thinkpad", "My Phone")
   bool get verified;
   WebSocket get socket;
 }
@@ -55,6 +56,7 @@ mixin MirrorNotifyMixin {
               'device_type': c.deviceType ?? 'unknown',
               'npub': c.npub,
               'nickname': c.nickname,
+              'device_name': c.deviceName,
               'verified': c.verified,
             })
         .toList();

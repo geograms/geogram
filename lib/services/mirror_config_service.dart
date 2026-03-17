@@ -257,6 +257,7 @@ class MirrorConfigService {
     required String installId,
     required String callsign,
     String? nickname,
+    String? deviceName,
     String? npub,
     String platform = 'unknown',
     String displayName = '',
@@ -265,15 +266,17 @@ class MirrorConfigService {
 
     final existing = _config!.getPeer(installId);
     final now = DateTime.now();
+    // Prefer deviceName (device-chosen) over nickname (profile nickname)
+    final effectiveName = deviceName ?? nickname;
 
     if (existing != null) {
       // Rate-limit: skip if recently seen and no changes
       final timeSinceLastSeen = existing.lastSeenAt != null
           ? now.difference(existing.lastSeenAt!).inMinutes
           : 999;
-      final nameChanged = nickname != null &&
-          nickname.isNotEmpty &&
-          nickname != existing.name;
+      final nameChanged = effectiveName != null &&
+          effectiveName.isNotEmpty &&
+          effectiveName != existing.name;
       final platformChanged = platform != existing.platform;
 
       if (timeSinceLastSeen < 5 && !nameChanged && !platformChanged) return;
@@ -281,14 +284,14 @@ class MirrorConfigService {
       // Update existing peer
       await updatePeer(existing.copyWith(
         lastSeenAt: now,
-        name: nameChanged ? nickname : null,
+        name: nameChanged ? effectiveName : null,
         platform: platformChanged ? platform : null,
       ));
     } else {
       // Create new peer with defaults (manual mode, no folders enabled)
       await addPeer(MirrorPeer(
         peerId: installId,
-        name: nickname ?? displayName,
+        name: effectiveName ?? displayName,
         callsign: callsign,
         npub: npub ?? '',
         platform: platform,

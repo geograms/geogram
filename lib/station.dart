@@ -63,6 +63,7 @@ import 'server/mixins/mirror_notify_mixin.dart';
 import 'server/mixins/heartbeat_mixin.dart';
 import 'server/mixins/karma_mixin.dart';
 import 'cli/themes_embedded.dart';
+import 'server/station_client.dart';
 
 /// App version - use central version.dart for consistency
 import 'version.dart' show appVersion;
@@ -425,90 +426,6 @@ class LogEntry implements LogEntryReadable {
       '[${timestamp.toIso8601String()}] [$level] $message';
 }
 
-/// Connected WebSocket client
-class PureConnectedClient implements EmailClient, ConnectedClientReadable, DeviceProxyClient, MirrorClient {
-  @override
-  final WebSocket socket;
-  @override
-  final String id;
-  @override
-  String? callsign;
-  @override
-  String? nickname;
-  String? color;
-  String? deviceType;
-  String? platform;
-  String? version;
-  String? address;
-  String? npub;
-  @override
-  String? deviceId;
-  double? latitude;
-  double? longitude;
-  DateTime connectedAt;
-  DateTime lastActivity;
-
-  // Challenge-response authentication (HELLO protocol v2)
-  String? pendingChallenge;
-  int helloProtocol = 1;
-  bool verified = false;
-
-  // Multi-device responsiveness tracking
-  @override
-  int successCount = 0;
-  @override
-  int failCount = 0;
-
-  // Device priority (lower = higher priority, 0 = no priority set)
-  @override
-  int priority = 0;
-
-  /// Success rate for adaptive device ordering (0.0 to 1.0)
-  @override
-  double get successRate {
-    final total = successCount + failCount;
-    if (total == 0) return 0.5;
-    return successCount / total;
-  }
-
-  PureConnectedClient({
-    required this.socket,
-    required this.id,
-    this.callsign,
-    this.nickname,
-    this.color,
-    this.deviceType,
-    this.platform,
-    this.version,
-    this.address,
-    this.npub,
-    this.latitude,
-    this.longitude,
-  })  : connectedAt = DateTime.now(),
-        lastActivity = DateTime.now();
-
-  Map<String, dynamic> toJson() => {
-        'id': id,
-        'callsign': callsign ?? 'Unknown',
-        'nickname': nickname,
-        'color': color,
-        'npub': npub,
-        'device_type': deviceType ?? 'Unknown',
-        'platform': platform,
-        'version': version,
-        'address': address,
-        'latitude': latitude,
-        'longitude': longitude,
-        'connected_at': connectedAt.toIso8601String(),
-        'last_activity': lastActivity.toIso8601String(),
-        'protocol': helloProtocol,
-        'verified': verified,
-        'success_count': successCount,
-        'fail_count': failCount,
-        'priority': priority,
-      };
-}
-
 /// Server statistics
 class ServerStats implements StationStatsReadable {
   int totalConnections = 0;
@@ -641,7 +558,7 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
   HttpServer? _httpsServer;
   SMTPServer? _smtpServer;
   PureRelaySettings _settings = PureRelaySettings();
-  final Map<String, PureConnectedClient> _clients = {};
+  final Map<String, StationClient> _clients = {};
 
   // ── DeviceProxyMixin contract ─────────────────────────────────
   @override
@@ -657,7 +574,7 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
   @override
   void mirrorLog(String level, String message) => _log(level, message);
   @override
-  bool mirrorSafeSocketSend(PureConnectedClient client, String data) => _safeSocketSend(client, data);
+  bool mirrorSafeSocketSend(StationClient client, String data) => _safeSocketSend(client, data);
 
   // Connection tolerance: preserve uptime for reconnects within 5 minutes
   // Maps callsign -> (disconnectTime, originalConnectTime)
@@ -698,7 +615,7 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
   @override
   void heartbeatLog(String level, String message) => _log(level, message);
   @override
-  bool heartbeatSend(dynamic client, String data) => _safeSocketSend(client as PureConnectedClient, data);
+  bool heartbeatSend(dynamic client, String data) => _safeSocketSend(client as StationClient, data);
   @override
   void heartbeatRemoveClient(String clientId, {String reason = 'disconnected'}) => _removeClient(clientId, reason: reason);
   @override
@@ -736,7 +653,7 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
     return matches;
   }
   @override
-  bool emailSafeSocketSend(PureConnectedClient client, String data) => _safeSocketSend(client, data);
+  bool emailSafeSocketSend(StationClient client, String data) => _safeSocketSend(client, data);
 
   // ── ConferenceMixin interface ───────────────────────────────────
   @override
@@ -881,7 +798,7 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
   DateTime? get startTime => _startTime;
   List<LogEntry> get logs => List.unmodifiable(_logs);
   ServerStats get stats => _stats;
-  Map<String, PureConnectedClient> get clients => Map.unmodifiable(_clients);
+  Map<String, StationClient> get clients => Map.unmodifiable(_clients);
   Map<String, ChatRoom> get chatRooms => Map.unmodifiable(_chatRooms);
   bool get quietMode => _quietMode;
   set quietMode(bool value) => _quietMode = value;
@@ -2064,7 +1981,7 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
   // ============ End Server Health Watchdog ============
 
   /// Safely send data to a WebSocket client, handling errors gracefully
-  bool _safeSocketSend(PureConnectedClient client, String data) {
+  bool _safeSocketSend(StationClient client, String data) {
     try {
       client.socket.add(data);
       return true;
@@ -2122,7 +2039,7 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
   }
 
   /// Clean up pending proxy requests that were waiting for a disconnected client
-  void _cleanupPendingRequestsForClient(PureConnectedClient client) {
+  void _cleanupPendingRequestsForClient(StationClient client) {
     // Find and complete any pending requests that might be waiting for this client
     // This prevents memory leaks and hanging requests
     final keysToRemove = <String>[];
@@ -2618,10 +2535,10 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
       final socket = await WebSocketTransformer.upgrade(request);
       final clientId = DateTime.now().millisecondsSinceEpoch.toString();
       final isOpenRelay = _isOpenRelayPath(request.uri.path);
-      final client = PureConnectedClient(
+      final client = StationClient(
         socket: socket,
         id: clientId,
-        address: request.connectionInfo?.remoteAddress.address,
+        remoteAddress: request.connectionInfo?.remoteAddress.address,
       );
 
       // Generate challenge nonce for HELLO protocol v2
@@ -2665,7 +2582,7 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
     }
   }
 
-  void _handleWebSocketMessage(PureConnectedClient client, dynamic data) {
+  void _handleWebSocketMessage(StationClient client, dynamic data) {
     try {
       client.lastActivity = DateTime.now();
 
@@ -2867,6 +2784,7 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
 
             client.callsign = callsign;
             client.nickname = nickname;
+            client.deviceName = message['device_name'] as String?;
             client.color = color;
             client.npub = npub;
             client.deviceType = deviceType;
@@ -2915,7 +2833,8 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
             };
             client.socket.add(jsonEncode(response));
             final nicknameInfo = client.nickname != null ? ' [${client.nickname}]' : '';
-            _log('INFO', 'Hello from: ${client.callsign ?? "unknown"}$nicknameInfo (${client.deviceType ?? "unknown"}) npub=${npub.substring(0, 20)}...');
+            final deviceNameInfo = client.deviceName != null ? ' device="${client.deviceName}"' : '';
+            _log('INFO', 'Hello from: ${client.callsign ?? "unknown"}$nicknameInfo$deviceNameInfo (${client.deviceType ?? "unknown"}) npub=${npub.substring(0, 20)}...');
 
             // Notify all mirrors (including the new device) about each other
             if (callsign != null) {
@@ -3001,7 +2920,7 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
             final targetCallsign = message['callsign'] as String?;
             if (targetCallsign != null) {
               // Forward to the target device
-              PureConnectedClient? targetClient;
+              StationClient? targetClient;
               try {
                 targetClient = _clients.values.firstWhere(
                   (c) => c.callsign?.toLowerCase() == targetCallsign.toLowerCase(),
@@ -3038,7 +2957,7 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
             // Forward collection response to the requester
             final fromCallsign = message['from'] as String?;
             if (fromCallsign != null) {
-              PureConnectedClient? requester;
+              StationClient? requester;
               try {
                 requester = _clients.values.firstWhere(
                   (c) => c.callsign?.toLowerCase() == fromCallsign.toLowerCase(),
@@ -3478,7 +3397,7 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
 
   /// Handle WebRTC signaling messages (offer, answer, ICE candidates)
   /// Simply forwards the message to the target device identified by to_callsign
-  void _handleWebRTCSignaling(PureConnectedClient client, Map<String, dynamic> message) {
+  void _handleWebRTCSignaling(StationClient client, Map<String, dynamic> message) {
     final type = message['type'] as String?;
     final toCallsign = message['to_callsign'] as String?;
     final fromCallsign = message['from_callsign'] as String?;
@@ -3496,7 +3415,7 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
     }
 
     // Find target client by callsign
-    PureConnectedClient? target;
+    StationClient? target;
     try {
       target = _clients.values.firstWhere(
         (c) => c.callsign?.toLowerCase() == toCallsign.toLowerCase(),
@@ -3534,7 +3453,7 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
 
   /// Handle incoming NOSTR event from WebSocket
   /// Format: ["EVENT", {id, pubkey, created_at, kind, tags, content, sig}]
-  Future<void> _handleNostrEvent(PureConnectedClient client, dynamic nostrEvent) async {
+  Future<void> _handleNostrEvent(StationClient client, dynamic nostrEvent) async {
     try {
       // Parse NOSTR message format: ["EVENT", {...}]
       if (nostrEvent is! List || nostrEvent.length < 2) {
@@ -3658,7 +3577,7 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
   }
 
   /// Handle alert event (kind 30078 with t=alert tag)
-  Future<void> _handleAlertEvent(PureConnectedClient client, NostrEvent event) async {
+  Future<void> _handleAlertEvent(StationClient client, NostrEvent event) async {
     final eventId = event.id ?? '';
 
     try {
@@ -3764,7 +3683,7 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
 
   /// Fetch photos from the connected client for an alert
   /// This runs asynchronously (fire and forget) to not block the alert acknowledgment
-  Future<void> _fetchAlertPhotosFromClient(PureConnectedClient client, String callsign, String folderName) async {
+  Future<void> _fetchAlertPhotosFromClient(StationClient client, String callsign, String folderName) async {
     try {
       _log('INFO', 'ALERT PHOTOS: Attempting to fetch photos from $callsign for alert $folderName');
 
@@ -3918,7 +3837,7 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
   /// Fetch a single photo from a connected client (on-demand)
   /// Returns true if the photo was successfully fetched and saved
   Future<bool> _fetchSinglePhotoFromClient(
-    PureConnectedClient client,
+    StationClient client,
     String callsign,
     String alertId,
     String filename,
@@ -5841,7 +5760,7 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
   }
 
   /// Send NOSTR OK response
-  void _sendOkResponse(PureConnectedClient client, String? eventId, bool success, String message) {
+  void _sendOkResponse(StationClient client, String? eventId, bool success, String message) {
     // Send in object format to match what the desktop/mobile client expects
     final response = jsonEncode({
       'type': 'OK',
@@ -6326,7 +6245,7 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
         _log('INFO', 'ALERT PHOTO: $cleanFilename not found locally, checking if author $callsign is online');
 
         // Find the client by callsign
-        PureConnectedClient? authorClient;
+        StationClient? authorClient;
         for (final c in _clients.values) {
           if (c.callsign?.toUpperCase() == callsign) {
             authorClient = c;

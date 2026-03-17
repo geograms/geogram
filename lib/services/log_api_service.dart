@@ -89,6 +89,10 @@ import 'mirror_sync_service.dart';
 import '../models/mirror_config.dart';
 import 'encrypted_storage_stub.dart' if (dart.library.ui) 'encrypted_storage_service.dart';
 import 'place_feedback_service.dart';
+import 'place_service.dart';
+import 'place_sharing_service.dart';
+import 'station_place_service.dart';
+import '../models/place.dart';
 import 'station_alert_service.dart';
 import '../api/handlers/apps_handler.dart';
 import '../api/handlers/blog_handler.dart';
@@ -9275,12 +9279,200 @@ class LogApiService with ChatModificationMixin {
             headers: headers,
           );
 
+        case 'event_upload':
+          // Upload an existing local event to the station
+          final eventId = params['event_id'] as String?;
+          if (eventId == null || eventId.isEmpty) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({'success': false, 'error': 'Missing event_id parameter'}),
+              headers: headers,
+            );
+          }
+
+          // Get callsign
+          String callsign = 'UNKNOWN';
+          try {
+            callsign = ProfileService().getProfile().callsign;
+          } catch (_) {}
+
+          final appName = params['app_name'] as String? ?? 'my-events';
+          final year = eventId.substring(0, 4);
+
+          // Search for the event in the app directory (events stored at {appDir}/{year}/{eventId}/)
+          String? eventPath;
+          final candidatePaths = [
+            '$dataDir/devices/$callsign/$appName/$year/$eventId',
+            '$dataDir/devices/$callsign/$appName/events/$year/$eventId',
+          ];
+          for (final candidate in candidatePaths) {
+            if (await io.Directory(candidate).exists()) {
+              eventPath = candidate;
+              break;
+            }
+          }
+
+          // Fallback: try getEventPath which scans all devices/apps
+          eventPath ??= await EventService().getEventPath(eventId, dataDir!);
+
+          if (eventPath == null) {
+            return shelf.Response.notFound(
+              jsonEncode({
+                'success': false,
+                'error': 'Event not found',
+                'event_id': eventId,
+                'searched': candidatePaths,
+              }),
+              headers: headers,
+            );
+          }
+
+          // Get station URL
+          final stationService = StationService();
+          if (!stationService.isInitialized) {
+            await stationService.initialize();
+          }
+          final preferred = stationService.getPreferredStation();
+          final station = (preferred != null && preferred.url.isNotEmpty)
+              ? preferred
+              : stationService.getConnectedStation();
+          if (station == null || station.url.isEmpty) {
+            return shelf.Response.internalServerError(
+              body: jsonEncode({'success': false, 'error': 'No station configured'}),
+              headers: headers,
+            );
+          }
+
+          var baseUrl = station.url;
+          if (baseUrl.startsWith('wss://')) {
+            baseUrl = baseUrl.replaceFirst('wss://', 'https://');
+          } else if (baseUrl.startsWith('ws://')) {
+            baseUrl = baseUrl.replaceFirst('ws://', 'http://');
+          }
+
+          final uploadRelativePath = '$year/$eventId/event.txt';
+
+          final eventFile = io.File('$eventPath/event.txt');
+          if (!await eventFile.exists()) {
+            return shelf.Response.notFound(
+              jsonEncode({'success': false, 'error': 'event.txt not found in event folder'}),
+              headers: headers,
+            );
+          }
+
+          final bytes = await eventFile.readAsBytes();
+          final baseUri = Uri.parse(baseUrl);
+          final uploadUri = baseUri.replace(
+            pathSegments: [
+              ...baseUri.pathSegments,
+              callsign,
+              'api',
+              'events',
+              'files',
+              ...uploadRelativePath.split('/'),
+            ],
+          );
+
+          final uploadResponse = await http.post(
+            uploadUri,
+            headers: {
+              'Content-Type': 'text/plain',
+              'X-Callsign': callsign,
+            },
+            body: bytes,
+          ).timeout(const Duration(seconds: 30));
+
+          if (uploadResponse.statusCode == 200 || uploadResponse.statusCode == 201) {
+            return shelf.Response.ok(
+              jsonEncode({
+                'success': true,
+                'event_id': eventId,
+                'station': baseUrl,
+                'uploaded_path': uploadRelativePath,
+                'size': bytes.length,
+              }),
+              headers: headers,
+            );
+          } else {
+            return shelf.Response.internalServerError(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Station rejected upload: ${uploadResponse.statusCode}',
+                'body': uploadResponse.body,
+              }),
+              headers: headers,
+            );
+          }
+
+        case 'event_list_station':
+          // Fetch events from the remote station
+          final stationService2 = StationService();
+          if (!stationService2.isInitialized) {
+            await stationService2.initialize();
+          }
+          final preferred2 = stationService2.getPreferredStation();
+          final station2 = (preferred2 != null && preferred2.url.isNotEmpty)
+              ? preferred2
+              : stationService2.getConnectedStation();
+          if (station2 == null || station2.url.isEmpty) {
+            return shelf.Response.internalServerError(
+              body: jsonEncode({'success': false, 'error': 'No station configured'}),
+              headers: headers,
+            );
+          }
+
+          var stationUrl = station2.url;
+          if (stationUrl.startsWith('wss://')) {
+            stationUrl = stationUrl.replaceFirst('wss://', 'https://');
+          } else if (stationUrl.startsWith('ws://')) {
+            stationUrl = stationUrl.replaceFirst('ws://', 'http://');
+          }
+
+          final stationUri = Uri.parse('$stationUrl/api/events');
+          final stationResp = await http.get(
+            stationUri,
+            headers: {'Accept': 'application/json'},
+          ).timeout(const Duration(seconds: 30));
+
+          if (stationResp.statusCode != 200) {
+            return shelf.Response.internalServerError(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Station returned ${stationResp.statusCode}',
+              }),
+              headers: headers,
+            );
+          }
+
+          final stationData = jsonDecode(stationResp.body) as Map<String, dynamic>;
+          final eventsList = stationData['events'] as List<dynamic>? ?? [];
+          final eventsJson = eventsList.map((e) {
+            final m = e as Map<String, dynamic>;
+            return {
+              'id': m['id'],
+              'title': m['title'],
+              'author': m['author'],
+              'visibility': m['visibility'],
+              'timestamp': m['timestamp'],
+              'location': m['location'],
+            };
+          }).toList();
+
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'station': stationUrl,
+              'count': eventsList.length,
+              'events': eventsJson,
+            }),
+            headers: headers,
+          );
+
         default:
           return shelf.Response.badRequest(
             body: jsonEncode({
               'success': false,
               'error': 'Unknown event action: $action',
-              'available': ['event_create', 'event_list', 'event_delete'],
+              'available': ['event_create', 'event_list', 'event_delete', 'event_upload', 'event_list_station'],
             }),
             headers: headers,
           );
@@ -10955,6 +11147,14 @@ class LogApiService with ChatModificationMixin {
             : baseName;
       }
 
+      // Actions that don't require a placeId
+      if (action == 'place_create') {
+        return _handlePlaceCreate(params, headers, dataDir, defaultCallsign, defaultNpub);
+      }
+      if (action == 'place_list_station') {
+        return _handlePlaceListStation(headers);
+      }
+
       if (placeId == null || placeId.isEmpty) {
         return shelf.Response.badRequest(
           body: jsonEncode({
@@ -11176,12 +11376,33 @@ class LogApiService with ChatModificationMixin {
             headers: headers,
           );
 
+        case 'place_delete':
+          if (placePath == null || placeStorage == null) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Place not found locally',
+                'place_id': placeId,
+              }),
+              headers: headers,
+            );
+          }
+          await placeStorage.deleteDirectory(placePath, recursive: true);
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'deleted_path': placePath,
+              'place_id': placeId,
+            }),
+            headers: headers,
+          );
+
         default:
           return shelf.Response.badRequest(
             body: jsonEncode({
               'success': false,
               'error': 'Unknown place action: $action',
-              'available': ['place_like', 'place_comment'],
+              'available': ['place_create', 'place_list_station', 'place_delete', 'place_like', 'place_comment'],
             }),
             headers: headers,
           );
@@ -11243,6 +11464,125 @@ class LogApiService with ChatModificationMixin {
     }
 
     return null;
+  }
+
+  /// Handle place_create debug action
+  Future<shelf.Response> _handlePlaceCreate(
+    Map<String, dynamic> params,
+    Map<String, String> headers,
+    String dataDir,
+    String? defaultCallsign,
+    String? defaultNpub,
+  ) async {
+    final callsign = params['callsign'] as String? ?? defaultCallsign;
+    if (callsign == null || callsign.isEmpty) {
+      return shelf.Response.badRequest(
+        body: jsonEncode({'success': false, 'error': 'No callsign available'}),
+        headers: headers,
+      );
+    }
+
+    final name = params['name'] as String? ?? 'Debug Test Place';
+    final latitude = (params['latitude'] as num?)?.toDouble() ?? 38.7223;
+    final longitude = (params['longitude'] as num?)?.toDouble() ?? -9.1393;
+    final radius = (params['radius'] as num?)?.toInt() ?? 100;
+    final description = params['description'] as String? ?? '';
+    final type = params['type'] as String?;
+    final visibility = params['visibility'] as String? ?? 'public';
+    final upload = params['upload'] != false; // default true
+
+    final now = DateTime.now();
+    final created = '${now.year}-${now.month.toString().padLeft(2, '0')}-'
+        '${now.day.toString().padLeft(2, '0')} '
+        '${now.hour.toString().padLeft(2, '0')}:'
+        '${now.minute.toString().padLeft(2, '0')}_'
+        '${now.second.toString().padLeft(2, '0')}';
+
+    final place = Place(
+      name: name,
+      created: created,
+      author: callsign,
+      latitude: latitude,
+      longitude: longitude,
+      radius: radius,
+      description: description,
+      type: type,
+      visibility: visibility,
+      metadataNpub: defaultNpub,
+    );
+
+    final deviceBase = '$dataDir/devices/$callsign';
+    final storage = FilesystemProfileStorage(deviceBase);
+    PlaceService().setStorage(storage);
+    await PlaceService().initializeApp('places');
+
+    final saveError = await PlaceService().savePlace(place);
+    if (saveError != null) {
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'success': false, 'error': saveError}),
+        headers: headers,
+      );
+    }
+
+    final relativeFolderPath = await PlaceService().getPlaceFolderPath(place);
+    final placeId = place.placeFolderName;
+    int uploadedCount = 0;
+
+    if (upload && relativeFolderPath != null) {
+      final absoluteFolderPath = path.join(deviceBase, relativeFolderPath);
+      final updatedPlace = place.copyWith(folderPath: absoluteFolderPath);
+      final placesBase = path.join(deviceBase, 'places');
+      uploadedCount = await PlaceSharingService().uploadPlaceToStations(
+        updatedPlace,
+        placesBase,
+      );
+    }
+
+    return shelf.Response.ok(
+      jsonEncode({
+        'success': true,
+        'place_id': placeId,
+        'place_name': name,
+        'folder_path': relativeFolderPath,
+        'uploaded_count': uploadedCount,
+      }),
+      headers: headers,
+    );
+  }
+
+  /// Handle place_list_station debug action
+  Future<shelf.Response> _handlePlaceListStation(
+    Map<String, String> headers,
+  ) async {
+    final result = await StationPlaceService().fetchPlaces();
+    if (!result.success) {
+      return shelf.Response.internalServerError(
+        body: jsonEncode({
+          'success': false,
+          'error': result.error ?? 'Failed to fetch places from station',
+        }),
+        headers: headers,
+      );
+    }
+
+    final placesJson = result.places.map((entry) => {
+      'name': entry.place.name,
+      'author': entry.place.author,
+      'latitude': entry.place.latitude,
+      'longitude': entry.place.longitude,
+      'type': entry.place.type,
+      'callsign': entry.callsign,
+      'relativePath': entry.relativePath,
+    }).toList();
+
+    return shelf.Response.ok(
+      jsonEncode({
+        'success': true,
+        'count': result.places.length,
+        'places': placesJson,
+      }),
+      headers: headers,
+    );
   }
 
   // ============================================================
@@ -15099,10 +15439,12 @@ class LogApiService with ChatModificationMixin {
 
       final indexPath = StorageConfig().getFileIndexPath(tokenData.peerCallsign);
       final fileIndex = FileIndexService(indexPath);
+      final storage = AppService().profileStorage;
       MirrorManifest manifest;
       try {
         manifest = await mirrorService.generateManifest(
-          folderPath,
+          storage != null ? '${tokenData.peerCallsign}/$folder' : folderPath,
+          storage: storage,
           fileIndex: fileIndex,
         );
       } finally {
@@ -16546,6 +16888,176 @@ class LogApiService with ChatModificationMixin {
             headers: headers,
           );
 
+        case 'mirror_diff_test':
+          // Test diffManifest correctness using REAL profile data.
+          //
+          // Required: "folder" param (e.g., "blog").
+          //
+          // Phase 1 (self-compare): Generate manifest from raw filesystem,
+          // then run diffManifest with storage. Should produce 0 diffs.
+          //
+          // Phase 2 (cross-device simulation): Copy the folder to temp,
+          // mutate some files (add, delete, modify), generate manifest
+          // from the mutated copy. Then run diffManifest against real
+          // local data. Should detect all mutations.
+          final mirrorService = MirrorSyncService.instance;
+          final storage = AppService().profileStorage;
+          final profile = ProfileService().getProfile();
+          final callsignDir = StorageConfig().getCallsignDir(profile.callsign);
+          final testFolder = params['folder'] as String?;
+          if (testFolder == null) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Missing "folder" param (e.g., "blog")',
+              }),
+              headers: headers,
+            );
+          }
+
+          final folderPath = '$callsignDir/$testFolder';
+          if (!await io.Directory(folderPath).exists()) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Folder "$testFolder" not found at $folderPath',
+              }),
+              headers: headers,
+            );
+          }
+
+          final tempDir = await io.Directory.systemTemp.createTemp('mirror_diff_diag_');
+          final indexPath = '${tempDir.path}/diag_fileindex.sqlite';
+          final fileIndex = FileIndexService(indexPath);
+
+          try {
+            // === Phase 1: Self-compare ===
+            // Generate manifest from raw filesystem (like server does)
+            final selfManifest = await mirrorService.generateManifest(folderPath);
+
+            // Run diffManifest with storage (like client does)
+            final localPath = '${profile.callsign}/$testFolder';
+            final selfChanges = await mirrorService.diffManifest(
+              selfManifest,
+              localPath,
+              syncStyle: SyncStyle.sendReceive,
+              storage: storage,
+              fileIndex: fileIndex,
+            );
+
+            // === Phase 2: Cross-device simulation ===
+            // Copy folder to temp and mutate it
+            final mutatedDir = io.Directory('${tempDir.path}/$testFolder');
+            await mutatedDir.create(recursive: true);
+            // Copy all files
+            await for (final entity in io.Directory(folderPath).list(recursive: true)) {
+              final relPath = path.relative(entity.path, from: folderPath);
+              if (entity is io.File) {
+                final dest = io.File('${mutatedDir.path}/$relPath');
+                await dest.parent.create(recursive: true);
+                await entity.copy(dest.path);
+              }
+            }
+
+            // Mutation 1: Add a new file (simulates remote-only file)
+            final addedFile = io.File('${mutatedDir.path}/_test_remote_only.txt');
+            await addedFile.writeAsString('remote only file');
+
+            // Mutation 2: Delete a file if possible (simulates local-only)
+            String? deletedFile;
+            final mutatedFiles = await mutatedDir.list(recursive: true)
+                .where((e) => e is io.File)
+                .cast<io.File>()
+                .toList();
+            if (mutatedFiles.length > 1) {
+              final toDelete = mutatedFiles
+                  .where((f) => !f.path.endsWith('_test_remote_only.txt'))
+                  .first;
+              deletedFile = path.relative(toDelete.path, from: mutatedDir.path);
+              await toDelete.delete();
+            }
+
+            // Mutation 3: Modify a file's content (change hash + mtime)
+            String? modifiedFile;
+            final remainingFiles = await mutatedDir.list(recursive: true)
+                .where((e) => e is io.File && !e.path.endsWith('_test_remote_only.txt'))
+                .cast<io.File>()
+                .toList();
+            if (remainingFiles.isNotEmpty) {
+              final toModify = remainingFiles.first;
+              modifiedFile = path.relative(toModify.path, from: mutatedDir.path);
+              final original = await toModify.readAsString();
+              await toModify.writeAsString('$original\n_MUTATED_BY_TEST');
+            }
+
+            // Generate manifest from mutated folder (simulates "remote device")
+            final mutatedManifest = await mirrorService.generateManifest(mutatedDir.path);
+
+            // Run diffManifest: compare mutated manifest against real local data
+            // This is exactly what happens when desktop compares against Android
+            final crossChanges = await mirrorService.diffManifest(
+              mutatedManifest,
+              localPath,
+              syncStyle: SyncStyle.sendReceive,
+              storage: storage,
+              fileIndex: fileIndex,
+            );
+
+            // Run again with fresh FileIndexService to check cache effect
+            final fileIndex2 = FileIndexService('${tempDir.path}/diag2.sqlite');
+            final crossChanges2 = await mirrorService.diffManifest(
+              mutatedManifest,
+              localPath,
+              syncStyle: SyncStyle.sendReceive,
+              storage: storage,
+              fileIndex: fileIndex2,
+            );
+            fileIndex2.close();
+
+            // Expected mutations:
+            // - _test_remote_only.txt → add (exists in mutated, not local)
+            // - deletedFile → upload (exists local, not in mutated)
+            // - modifiedFile → modify or upload (different hash)
+            final expectedCount = 1 + (deletedFile != null ? 1 : 0) + (modifiedFile != null ? 1 : 0);
+
+            return shelf.Response.ok(
+              jsonEncode({
+                'success': true,
+                'callsign': profile.callsign,
+                'storage_type': storage.runtimeType.toString(),
+                'folder': testFolder,
+                'phase1_self_compare': {
+                  'manifest_files': selfManifest.totalFiles,
+                  'diff_count': selfChanges.length,
+                  'correct': selfChanges.isEmpty,
+                  'changes': selfChanges.take(10).map((c) => '${c.type.name}:${c.path}').toList(),
+                },
+                'phase2_cross_device': {
+                  'mutated_manifest_files': mutatedManifest.totalFiles,
+                  'local_manifest_files': selfManifest.totalFiles,
+                  'mutations_applied': {
+                    'added': '_test_remote_only.txt',
+                    'deleted': deletedFile,
+                    'modified': modifiedFile,
+                  },
+                  'expected_diff_count': expectedCount,
+                  'diff_count_cached': crossChanges.length,
+                  'diff_count_fresh': crossChanges2.length,
+                  'correct_cached': crossChanges.length == expectedCount,
+                  'correct_fresh': crossChanges2.length == expectedCount,
+                  'changes_cached': crossChanges.map((c) => '${c.type.name}:${c.path}').toList(),
+                  'changes_fresh': crossChanges2.map((c) => '${c.type.name}:${c.path}').toList(),
+                },
+              }),
+              headers: headers,
+            );
+          } finally {
+            fileIndex.close();
+            try {
+              await tempDir.delete(recursive: true);
+            } catch (_) {}
+          }
+
         default:
           return shelf.Response.badRequest(
             body: jsonEncode({
@@ -16564,6 +17076,7 @@ class LogApiService with ChatModificationMixin {
                 'mirror_relay_status',
                 'mirror_open_settings',
                 'mirror_open_wizard',
+                'mirror_diff_test',
               ],
             }),
             headers: headers,
@@ -19715,55 +20228,60 @@ class LogApiService with ChatModificationMixin {
           ? jsonDecode(body) as Map<String, dynamic>
           : <String, dynamic>{};
       final deviceId = data['device_id'] as String?;
+      final explicitPeerUrl = data['peer_url'] as String?;
 
-      final mirrors = MirrorDiscoveryService().mirrors.value;
-      if (mirrors.isEmpty) {
-        return shelf.Response.ok(
-          jsonEncode({'success': false, 'error': 'No mirrors connected'}),
-          headers: headers,
-        );
-      }
+      String? peerUrl;
+      String? mirrorInfo;
 
-      final targetMirror = deviceId != null
-          ? mirrors.where((s) => s.deviceId == deviceId).firstOrNull
-          : mirrors.first;
-
-      if (targetMirror == null) {
-        return shelf.Response.notFound(
-          jsonEncode({'success': false, 'error': 'Mirror not found: $deviceId'}),
-          headers: headers,
-        );
-      }
-
-      // Build peer URL the same way DeviceSyncPage does
-      String? peerUrl = targetMirror.directAddress ?? targetMirror.stationRelayUrl;
-      if (peerUrl == null) {
-        final wsUrl = WebSocketService().connectedUrl;
-        if (wsUrl != null) {
-          final stationUrl = wsUrl
-              .replaceFirst('ws://', 'http://')
-              .replaceFirst('wss://', 'https://');
-          // Pin to the specific mirror connection so challenge/response
-          // hit the same physical device (not ourselves).
-          peerUrl = '$stationUrl/device/${targetMirror.callsign}?target=${targetMirror.deviceId}';
+      if (explicitPeerUrl != null) {
+        // Direct peer URL provided (e.g., via ADB port forward)
+        peerUrl = explicitPeerUrl;
+        mirrorInfo = 'direct: $peerUrl';
+      } else {
+        final mirrors = MirrorDiscoveryService().mirrors.value;
+        if (mirrors.isEmpty) {
+          return shelf.Response.ok(
+            jsonEncode({'success': false, 'error': 'No mirrors connected'}),
+            headers: headers,
+          );
         }
-      }
-      if (peerUrl == null) {
-        return shelf.Response.ok(
-          jsonEncode({'success': false, 'error': 'Cannot determine peer URL'}),
-          headers: headers,
-        );
+
+        final targetMirror = deviceId != null
+            ? mirrors.where((s) => s.deviceId == deviceId).firstOrNull
+            : mirrors.first;
+
+        if (targetMirror == null) {
+          return shelf.Response.notFound(
+            jsonEncode({'success': false, 'error': 'Mirror not found: $deviceId'}),
+            headers: headers,
+          );
+        }
+
+        // Build peer URL the same way DeviceSyncPage does
+        peerUrl = targetMirror.directAddress ?? targetMirror.stationRelayUrl;
+        if (peerUrl == null) {
+          final wsUrl = WebSocketService().connectedUrl;
+          if (wsUrl != null) {
+            final stationUrl = wsUrl
+                .replaceFirst('ws://', 'http://')
+                .replaceFirst('wss://', 'https://');
+            peerUrl = '$stationUrl/device/${targetMirror.callsign}?target=${targetMirror.deviceId}';
+          }
+        }
+        if (peerUrl == null) {
+          return shelf.Response.ok(
+            jsonEncode({'success': false, 'error': 'Cannot determine peer URL'}),
+            headers: headers,
+          );
+        }
+        mirrorInfo = '${targetMirror.deviceId} (${targetMirror.platform}, ${targetMirror.connectionType})';
       }
 
       // Run the same diff logic as DeviceSyncPage._loadDiffs
       final mirror = MirrorSyncService.instance;
       final storage = AppService().profileStorage;
       final profile = ProfileService().getProfile();
-      const folders = [
-        'blog', 'places', 'events', 'alerts', 'contacts', 'groups',
-        'inventory', 'market', 'postcards', 'news', 'files', 'qr',
-        'reports', 'stories', 'wallet', 'tracker',
-      ];
+      final folders = kSyncableFolders;
 
       final diffs = <String, dynamic>{};
       final errors = <String, String>{};
@@ -19812,11 +20330,7 @@ class LogApiService with ChatModificationMixin {
       return shelf.Response.ok(
         jsonEncode({
           'success': true,
-          'mirror': {
-            'device_id': targetMirror.deviceId,
-            'platform': targetMirror.platform,
-            'connection_type': targetMirror.connectionType,
-          },
+          'mirror': mirrorInfo,
           'peer_url': peerUrl,
           'folders_with_diffs': diffs.length,
           'diffs': diffs,

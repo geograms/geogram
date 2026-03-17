@@ -415,13 +415,15 @@ class MirrorSyncService {
   /// Called on startup and after pairing to restore _allowedPeers from disk.
   void loadAllowedPeersFromConfig() {
     final config = MirrorConfigService.instance.config;
-    if (config == null) return;
-    for (final peer in config.peers) {
-      if (peer.npub.isNotEmpty) {
-        _allowedPeers[peer.npub] = peer.callsign;
+    if (config != null) {
+      for (final peer in config.peers) {
+        if (peer.npub.isNotEmpty) {
+          _allowedPeers[peer.npub] = peer.callsign;
+        }
       }
     }
-    // Auto-add own npub as allowed peer for same-identity mirror sync
+    // Always auto-add own npub — even without a config file (fresh device)
+    // so that mirror devices with the same identity can authenticate.
     _addOwnNpubAsAllowedPeer();
     LogService().log('MirrorSync: Loaded ${_allowedPeers.length} allowed peers from config');
   }
