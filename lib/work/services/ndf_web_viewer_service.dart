@@ -742,9 +742,9 @@ $extraScripts
       if (btn) btn.title = 'Fullscreen';
     }
   });
-  // Double-click on slide deck to enter fullscreen (ignore clicks on buttons)
+  // Click on slide deck to enter fullscreen (ignore clicks on buttons)
   var deck = document.getElementById('slide-deck');
-  deck.addEventListener('dblclick', function(e) {
+  deck.addEventListener('click', function(e) {
     if (e.target.closest('.slide-arrow') || e.target.closest('.slide-counter')) return;
     if (!document.fullscreenElement) toggleFullscreen();
   });
@@ -828,24 +828,26 @@ $extraScripts
 
   String _getPresentationStyles() {
     return '''
-/* Immersive story-like presentation — hide page chrome */
-.header { display: none; }
-.post-title { display: none; }
-.post-meta, .post-meta-inline { display: none; }
-.footer { display: none; }
-.content { padding: 0; }
-.post { padding: 0; margin: 0; max-width: 100%; }
-.container { max-width: 100%; padding: 0; }
-
+/* Presentation: normal page layout with embedded slide deck */
 .slide-deck {
   position: relative;
   width: 100%;
+  max-width: 960px;
+  margin: 0 auto;
   aspect-ratio: 16/9;
   overflow: hidden;
   background: #000;
   container-type: inline-size;
-  cursor: default;
+  cursor: pointer;
 }
+/* Fullscreen: hide page chrome */
+.slide-deck--fs ~ *, .slide-deck--fs ~ script { display: none; }
+:fullscreen .header, :fullscreen .post-title, :fullscreen .post-meta,
+:fullscreen .post-meta-inline, :fullscreen .footer { display: none; }
+:fullscreen .content { padding: 0; }
+:fullscreen .post { padding: 0; margin: 0; max-width: 100%; }
+:fullscreen .container { max-width: 100%; padding: 0; }
+:fullscreen .slide-deck { max-width: 100%; }
 .slide {
   display: none;
   position: absolute;
