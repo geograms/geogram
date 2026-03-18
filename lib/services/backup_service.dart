@@ -101,7 +101,8 @@ class BackupService {
         await storageConfig.init();
       }
 
-      _basePath = storageConfig.baseDir;
+      final callsign = ProfileService().getProfile().callsign;
+      _basePath = storageConfig.getCallsignDir(callsign);
 
       // Ensure directories exist
       await _ensureDirectories();

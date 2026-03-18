@@ -6800,7 +6800,7 @@ class LogApiService with ChatModificationMixin {
       }
 
       // PUT /api/backup/clients/{callsign}/snapshots/{date}/note - Update note
-      final noteMatch = RegExp(r'^clients/([^/]+)/snapshots/(\d{4}-\d{2}-\d{2})/note/?$').firstMatch(subPath);
+      final noteMatch = RegExp(r'^clients/([^/]+)/snapshots/([\w.-]+)/note/?$').firstMatch(subPath);
       if (noteMatch != null) {
         final callsign = noteMatch.group(1)!.toUpperCase();
         final snapshotId = noteMatch.group(2)!;
@@ -6810,7 +6810,7 @@ class LogApiService with ChatModificationMixin {
       }
 
       // GET/PUT /api/backup/clients/{callsign}/snapshots/{date} - Manifest
-      final snapshotMatch = RegExp(r'^clients/([^/]+)/snapshots/(\d{4}-\d{2}-\d{2})/?$').firstMatch(subPath);
+      final snapshotMatch = RegExp(r'^clients/([^/]+)/snapshots/([\w.-]+)/?$').firstMatch(subPath);
       if (snapshotMatch != null) {
         final callsign = snapshotMatch.group(1)!.toUpperCase();
         final snapshotId = snapshotMatch.group(2)!;
@@ -6822,7 +6822,7 @@ class LogApiService with ChatModificationMixin {
       }
 
       // GET/PUT /api/backup/clients/{callsign}/snapshots/{date}/files/{name}
-      final fileMatch = RegExp(r'^clients/([^/]+)/snapshots/(\d{4}-\d{2}-\d{2})/files/(.+)$').firstMatch(subPath);
+      final fileMatch = RegExp(r'^clients/([^/]+)/snapshots/([\w.-]+)/files/(.+)$').firstMatch(subPath);
       if (fileMatch != null) {
         final callsign = fileMatch.group(1)!.toUpperCase();
         final snapshotId = fileMatch.group(2)!;
