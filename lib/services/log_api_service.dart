@@ -140,6 +140,7 @@ import '../stories/services/stories_storage_service.dart';
 import '../stories/services/story_ndf_service.dart';
 import '../stories/services/story_web_viewer_service.dart';
 import '../util/nostr_login_scripts.dart';
+import '../work/models/ndf_document.dart';
 import '../work/models/ndf_interaction_settings.dart';
 import 'package:archive/archive.dart';
 
@@ -14562,6 +14563,11 @@ class LogApiService with ChatModificationMixin {
 
       final decodedPath = Uri.decodeFull(urlPath);
 
+      // Listing pages: work/ or work/{workspaceId}/
+      if (request.method == 'GET' && !decodedPath.contains('.ndf')) {
+        return await _handleWorkListingRoute(request, decodedPath, headers);
+      }
+
       // Split path at the .ndf boundary to separate document path from action
       final ndfIdx = decodedPath.indexOf('.ndf');
       if (ndfIdx < 0) return null;
@@ -14949,6 +14955,417 @@ class LogApiService with ChatModificationMixin {
 
     return shelf.Response.notFound(
       jsonEncode({'error': 'Unknown action: $action'}), headers: headers);
+  }
+
+  // ============================================================
+  // Work File Explorer
+  // ============================================================
+
+  /// Handle work listing routes: work/ (all workspaces) or work/{id}/ (workspace contents)
+  Future<shelf.Response?> _handleWorkListingRoute(
+    shelf.Request request,
+    String decodedPath,
+    Map<String, String> headers,
+  ) async {
+    // Get profile info
+    String? callsign;
+    String? nickname;
+    try {
+      final profile = ProfileService().getProfile();
+      if (profile.callsign.isNotEmpty) callsign = profile.callsign;
+      if (profile.nickname.isNotEmpty) nickname = profile.nickname;
+    } catch (_) {}
+    callsign ??= AppService().currentCallsign;
+    nickname ??= callsign;
+    final identifier = nickname ?? callsign ?? '';
+
+    // Find work app
+    final apps = await AppService().loadApps();
+    App? workApp;
+    for (final app in apps) {
+      if (app.type == 'work') { workApp = app; break; }
+    }
+    if (workApp?.storagePath == null) {
+      return shelf.Response.notFound(
+        '<html><body><h1>404</h1><p>Work app not found</p></body></html>',
+        headers: {'Content-Type': 'text/html'},
+      );
+    }
+
+    final baseStorage = AppService().profileStorage;
+    if (baseStorage == null) {
+      return shelf.Response.internalServerError(
+        body: '<html><body><h1>500</h1><p>Storage not available</p></body></html>',
+        headers: {'Content-Type': 'text/html'},
+      );
+    }
+
+    final workStorage = WorkStorageService(baseStorage, workApp!.storagePath!);
+
+    // Extract visitor identity
+    String? visitorNpub;
+    final hexPubkey = _extractNostrPubkeyFromCookie(request);
+    if (hexPubkey != null) {
+      try { visitorNpub = NostrCrypto.encodeNpub(hexPubkey); } catch (_) {}
+    }
+
+    final menuItems = await AppService().generateDeviceMenu(activeApp: 'work');
+
+    // Parse path segments after "work/"
+    final pathAfterWork = decodedPath.length > 5 ? decodedPath.substring(5) : '';
+    final trimmed = pathAfterWork.endsWith('/') ? pathAfterWork.substring(0, pathAfterWork.length - 1) : pathAfterWork;
+
+    if (trimmed.isEmpty) {
+      // work/ → list all workspaces
+      return await _buildWorkspacesListingPage(
+        workStorage, identifier, visitorNpub, menuItems, headers,
+      );
+    } else {
+      // work/{workspaceId}/ → list documents in workspace
+      return await _buildWorkspaceContentsPage(
+        workStorage, trimmed, identifier, visitorNpub, menuItems, headers,
+      );
+    }
+  }
+
+  /// Build the workspaces listing page (work/)
+  Future<shelf.Response> _buildWorkspacesListingPage(
+    WorkStorageService workStorage,
+    String identifier,
+    String? visitorNpub,
+    String menuItems,
+    Map<String, String> headers,
+  ) async {
+    final workspaces = await workStorage.loadWorkspaces();
+    final nostrHeaderHtml = getNostrLoginHeaderHtml();
+    final nostrStyles = getNostrLoginStyles();
+    final nostrScripts = getNostrLoginScripts();
+    final globalStyles = StationHtmlTemplates.getBaseStyles();
+
+    // Build workspace cards — only show workspaces that have at least one public/unlisted/restricted doc
+    final cardsHtml = StringBuffer();
+    int visibleCount = 0;
+    for (final ws in workspaces) {
+      int publicDocs = 0;
+      for (final doc in ws.documents) {
+        final vis = ws.getDocumentVisibility(doc);
+        if (vis.level == TrackerVisibilityLevel.public ||
+            vis.level == TrackerVisibilityLevel.unlisted ||
+            (vis.level == TrackerVisibilityLevel.restricted && visitorNpub != null)) {
+          publicDocs++;
+        }
+      }
+      if (publicDocs == 0) continue;
+      visibleCount++;
+
+      cardsHtml.write('''
+      <a href="${Uri.encodeComponent(ws.id)}/" class="ws-card">
+        <div class="ws-card-icon">\ud83d\udcc1</div>
+        <div class="ws-card-body">
+          <h3 class="ws-card-title">${escapeHtml(ws.name)}</h3>
+          ${ws.description != null && ws.description!.isNotEmpty ? '<p class="ws-card-desc">${escapeHtml(ws.description!)}</p>' : ''}
+          <div class="ws-card-meta">$publicDocs document${publicDocs != 1 ? 's' : ''}</div>
+        </div>
+      </a>''');
+    }
+
+    final html = '''<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1">
+  <title>Work${identifier.isNotEmpty ? ' - ${escapeHtml(identifier)}' : ''}</title>
+  <style>$globalStyles
+${_getWorkExplorerStyles()}
+  </style>
+  $nostrStyles
+</head>
+<body>
+<div class="container">
+  <header class="header">
+    <div class="header__inner">
+      <div class="header__logo">
+        <a href="../" style="text-decoration: none;">
+          <div class="logo">${escapeHtml(identifier)}</div>
+        </a>
+      </div>
+      $nostrHeaderHtml
+    </div>
+    ${menuItems.isNotEmpty ? '<nav class="menu"><ul class="menu__inner">$menuItems</ul></nav>' : ''}
+  </header>
+  <div class="content">
+    <h1 class="explorer-title">Work</h1>
+    <div class="explorer-grid">
+      $cardsHtml
+    </div>
+    ${visibleCount == 0 ? '<p class="empty-message">No documents published yet.</p>' : ''}
+  </div>
+  <footer class="footer">
+    <div class="footer__inner">
+      <div class="copyright"><span>published via geogram</span></div>
+    </div>
+  </footer>
+</div>
+<script>$nostrScripts</script>
+</body>
+</html>''';
+
+    return shelf.Response.ok(html, headers: {'Content-Type': 'text/html; charset=utf-8'});
+  }
+
+  /// Build a workspace contents page (work/{workspaceId}/)
+  Future<shelf.Response> _buildWorkspaceContentsPage(
+    WorkStorageService workStorage,
+    String workspaceId,
+    String identifier,
+    String? visitorNpub,
+    String menuItems,
+    Map<String, String> headers,
+  ) async {
+    final workspace = await workStorage.loadWorkspace(workspaceId);
+    if (workspace == null) {
+      return shelf.Response.notFound(
+        '<html><body><h1>404</h1><p>Workspace not found</p></body></html>',
+        headers: {'Content-Type': 'text/html'},
+      );
+    }
+
+    final nostrHeaderHtml = getNostrLoginHeaderHtml();
+    final nostrStyles = getNostrLoginStyles();
+    final nostrScripts = getNostrLoginScripts();
+    final globalStyles = StationHtmlTemplates.getBaseStyles();
+
+    // Load document metadata
+    final docRefs = await workStorage.listDocuments(workspaceId);
+    final docRefMap = <String, NdfDocumentRef>{};
+    for (final ref in docRefs) {
+      docRefMap[ref.filename] = ref;
+    }
+
+    // Get root folders and documents
+    final rootFolders = workspace.getFoldersIn(null);
+    final rootDocs = workspace.getDocumentsIn(null);
+
+    final contentHtml = StringBuffer();
+
+    // Render folders first
+    for (final folder in rootFolders) {
+      final folderDocs = workspace.getDocumentsIn(folder.id);
+      // Count visible docs in folder
+      int visCount = 0;
+      for (final doc in folderDocs) {
+        final vis = workspace.getDocumentVisibility(doc);
+        if (_isDocVisible(vis, visitorNpub)) visCount++;
+      }
+      if (visCount == 0) continue;
+
+      contentHtml.write('''
+      <div class="folder-section">
+        <h2 class="folder-name">\ud83d\udcc1 ${escapeHtml(folder.name)}</h2>
+        <div class="doc-list">''');
+
+      for (final docFilename in folderDocs) {
+        final vis = workspace.getDocumentVisibility(docFilename);
+        if (!_isDocVisible(vis, visitorNpub)) continue;
+        final ref = docRefMap[docFilename];
+        contentHtml.write(_buildDocCard(docFilename, ref, vis));
+      }
+
+      contentHtml.write('</div></div>');
+    }
+
+    // Render root-level documents
+    final visibleRootDocs = <String>[];
+    for (final doc in rootDocs) {
+      final vis = workspace.getDocumentVisibility(doc);
+      if (_isDocVisible(vis, visitorNpub)) visibleRootDocs.add(doc);
+    }
+
+    if (visibleRootDocs.isNotEmpty) {
+      if (rootFolders.isNotEmpty) {
+        contentHtml.write('<h2 class="folder-name">Documents</h2>');
+      }
+      contentHtml.write('<div class="doc-list">');
+      for (final docFilename in visibleRootDocs) {
+        final vis = workspace.getDocumentVisibility(docFilename);
+        final ref = docRefMap[docFilename];
+        contentHtml.write(_buildDocCard(docFilename, ref, vis));
+      }
+      contentHtml.write('</div>');
+    }
+
+    final totalVisible = contentHtml.isEmpty;
+
+    final html = '''<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1">
+  <title>${escapeHtml(workspace.name)}${identifier.isNotEmpty ? ' - ${escapeHtml(identifier)}' : ''}</title>
+  <style>$globalStyles
+${_getWorkExplorerStyles()}
+  </style>
+  $nostrStyles
+</head>
+<body>
+<div class="container">
+  <header class="header">
+    <div class="header__inner">
+      <div class="header__logo">
+        <a href="../../" style="text-decoration: none;">
+          <div class="logo">${escapeHtml(identifier)}</div>
+        </a>
+      </div>
+      $nostrHeaderHtml
+    </div>
+    ${menuItems.isNotEmpty ? '<nav class="menu"><ul class="menu__inner">$menuItems</ul></nav>' : ''}
+  </header>
+  <div class="content">
+    <div class="explorer-breadcrumb">
+      <a href="./">Work</a> &gt; <span>${escapeHtml(workspace.name)}</span>
+    </div>
+    <h1 class="explorer-title">${escapeHtml(workspace.name)}</h1>
+    ${workspace.description != null && workspace.description!.isNotEmpty ? '<p class="explorer-desc">${escapeHtml(workspace.description!)}</p>' : ''}
+    $contentHtml
+    ${totalVisible ? '<p class="empty-message">No accessible documents in this workspace.</p>' : ''}
+  </div>
+  <footer class="footer">
+    <div class="footer__inner">
+      <div class="copyright"><span>published via geogram</span></div>
+    </div>
+  </footer>
+</div>
+<script>$nostrScripts</script>
+</body>
+</html>''';
+
+    return shelf.Response.ok(html, headers: {'Content-Type': 'text/html; charset=utf-8'});
+  }
+
+  /// Check if a document is visible to the current visitor
+  bool _isDocVisible(TrackerVisibility vis, String? visitorNpub) {
+    switch (vis.level) {
+      case TrackerVisibilityLevel.public:
+        return true;
+      case TrackerVisibilityLevel.unlisted:
+        return true; // Show in listing but require key to open
+      case TrackerVisibilityLevel.restricted:
+        return visitorNpub != null; // Show to authenticated users (access checked on open)
+      case TrackerVisibilityLevel.private:
+        return false;
+    }
+  }
+
+  /// Build a document card HTML snippet
+  String _buildDocCard(String filename, NdfDocumentRef? ref, TrackerVisibility vis) {
+    final title = ref?.title ?? filename.replaceAll('.ndf', '');
+    final type = ref?.type.name ?? 'document';
+    final icon = _docTypeIcon(type);
+    final href = vis.level == TrackerVisibilityLevel.unlisted
+        ? '${Uri.encodeComponent(filename)}?key=${Uri.encodeComponent(vis.unlistedId ?? '')}'
+        : Uri.encodeComponent(filename);
+
+    return '''
+      <a href="$href" class="doc-card">
+        <div class="doc-card-icon">$icon</div>
+        <div class="doc-card-body">
+          <div class="doc-card-title">${escapeHtml(title)}</div>
+          <div class="doc-card-type">${escapeHtml(type)}</div>
+        </div>
+      </a>''';
+  }
+
+  /// Get icon for document type
+  String _docTypeIcon(String type) {
+    switch (type) {
+      case 'spreadsheet': return '\ud83d\udcca';
+      case 'document': return '\ud83d\udcc4';
+      case 'presentation': return '\ud83d\udcfd';
+      case 'form': return '\ud83d\udccb';
+      case 'todo': return '\u2611';
+      case 'voicememo': return '\ud83c\udfa4';
+      case 'meeting': return '\ud83c\udfa5';
+      default: return '\ud83d\udcc4';
+    }
+  }
+
+  /// CSS for the work file explorer pages
+  String _getWorkExplorerStyles() {
+    return '''
+.explorer-title {
+  color: var(--accent);
+  margin: 0 0 16px;
+  padding-bottom: 10px;
+  border-bottom: 2px dashed var(--accent);
+}
+.explorer-desc {
+  margin: 0 0 16px;
+  opacity: 0.7;
+  font-size: 0.9rem;
+}
+.explorer-breadcrumb {
+  font-size: 0.85rem;
+  margin-bottom: 8px;
+  opacity: 0.7;
+}
+.explorer-breadcrumb a { color: var(--accent); text-decoration: none; }
+.explorer-breadcrumb a:hover { text-decoration: underline; }
+.explorer-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px;
+}
+.ws-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  text-decoration: none;
+  color: var(--color);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 16px;
+  transition: border-color 0.15s;
+}
+.ws-card:hover { border-color: var(--accent); }
+.ws-card-icon { font-size: 1.5rem; }
+.ws-card-body { flex: 1; min-width: 0; }
+.ws-card-title { margin: 0 0 4px; font-size: 1rem; color: var(--accent); }
+.ws-card-desc { margin: 0 0 4px; font-size: 0.8rem; opacity: 0.6; }
+.ws-card-meta { font-size: 0.75rem; opacity: 0.5; }
+.folder-section { margin-bottom: 24px; }
+.folder-name {
+  font-size: 1rem;
+  margin: 0 0 10px;
+  color: var(--accent-alpha-70);
+}
+.doc-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 10px;
+}
+.doc-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  text-decoration: none;
+  color: var(--color);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 10px 14px;
+  transition: border-color 0.15s;
+}
+.doc-card:hover { border-color: var(--accent); }
+.doc-card-icon { font-size: 1.3rem; }
+.doc-card-body { flex: 1; min-width: 0; }
+.doc-card-title {
+  font-size: 0.9rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.doc-card-type { font-size: 0.7rem; opacity: 0.5; text-transform: capitalize; }
+.empty-message { text-align: center; opacity: 0.5; margin-top: 40px; }
+''';
   }
 
   // ============================================================

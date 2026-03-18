@@ -90,7 +90,7 @@ class HotspotPortalService {
     }
 
     // Work document pages are served dynamically by LogApiService.
-    if (path.startsWith('/work/')) {
+    if (path.startsWith('/work/') || path == '/work') {
       return null;
     }
 
