@@ -397,7 +397,8 @@ class ThemesEmbedded {
 
   <div class="content">
     <div class="post">
-      <h1 class="post-title"><a href="#">{{POST_TITLE}}</a></h1>
+      <h1 class="post-title">{{POST_TITLE}}</h1>
+      {{DESCRIPTION}}
       <div class="post-meta-inline">
         <span class="post-date">{{POST_DATE}}</span>
       </div>
@@ -452,7 +453,9 @@ class ThemesEmbedded {
 }
 
 /* Clickable card link wrapping the entire post */
-.blog-card-link {
+.blog-card-link,
+.blog-card-link:hover,
+.blog-card-link:visited {
   display: block;
   text-decoration: none;
   color: inherit;
@@ -503,50 +506,59 @@ class ThemesEmbedded {
   border-radius: 4px;
 }
 
-/* Feedback section */
+/* Feedback section — matches events page design */
 .feedback-section {
-  margin-top: 30px;
-  padding: 20px 0;
-  border-top: 1px solid var(--border-color);
   display: flex;
   align-items: center;
-  gap: 30px;
+  gap: 12px;
+  margin-top: 30px;
+  padding-top: 20px;
+  border-top: 1px solid var(--border-color);
 }
 
 .like-button {
-  position: relative;
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  gap: 8px;
-  padding: 8px 16px;
-  background: none;
-  border: 1px solid var(--accent);
+  gap: 6px;
+  padding: 8px 18px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: transparent;
   color: var(--color);
-  font-family: inherit;
-  font-size: 1rem;
   cursor: pointer;
-  border-radius: 8px;
-  transition: background-color 0.2s ease;
+  font-size: 1rem;
+  font-family: inherit;
+  transition: all 0.15s;
 }
 
-.like-button:hover {
-  background: var(--accent-alpha-20);
+.like-button svg {
+  width: 16px;
+  height: 16px;
+}
+
+.like-button:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 .like-button.liked {
-  background: var(--accent);
-  color: #000;
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 .like-button:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
+  opacity: 0.4;
+  cursor: default;
 }
 
 .like-count {
+  font-size: 0.9rem;
   color: var(--accent-alpha-70);
-  font-size: 0.95rem;
+}
+
+.like-hint {
+  font-size: 0.85rem;
+  color: var(--accent-alpha-70);
 }
 
 .nostr-notice {
@@ -556,6 +568,16 @@ class ThemesEmbedded {
 
 .nostr-notice a {
   color: var(--accent);
+}
+
+/* Blog post detail — title without italic, no link underline */
+.post > .post-title {
+  font-style: normal;
+}
+.post > .post-title a {
+  pointer-events: none;
+  color: inherit;
+  text-decoration: none;
 }
 ''';
 
