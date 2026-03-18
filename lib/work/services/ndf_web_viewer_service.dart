@@ -300,7 +300,12 @@ class NdfWebViewerService {
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1">
   <title>${escapeHtml(title)}${ownerIdentifier.isNotEmpty ? ' - ${escapeHtml(ownerIdentifier)}' : ''}</title>
   $nostrStyles
-  <style>$globalStyles</style>
+  <style>$globalStyles
+.content { display: flex; }
+.post { width: 100%; text-align: left; margin: 0 auto; padding: 10px 0; }
+.post-title { color: var(--accent); margin: 0 0 10px; padding-bottom: 10px; border-bottom: 2px dashed var(--accent); }
+.post-meta, .post-meta-inline { font-size: 0.85rem; color: var(--accent-alpha-70); margin-bottom: 16px; }
+  </style>
   <style>$appStyles</style>
 </head>
 <body>
@@ -1025,9 +1030,11 @@ $extraScripts
       }
     }
 
+    // Add lightbox overlay
+    contentHtml.write('<div class="todo-lightbox" id="todo-lightbox" onclick="closeLightbox()"><img id="todo-lightbox-img" src="" alt=""></div>');
+
     final todoScript = r'''<script>
 (function() {
-  // Toggle completed section
   window.toggleCompleted = function() {
     var list = document.getElementById('todo-completed-list');
     var chevron = document.getElementById('todo-chevron');
@@ -1037,7 +1044,6 @@ $extraScripts
     chevron.style.transform = hidden ? 'rotate(90deg)' : '';
   };
 
-  // Toggle item details
   window.toggleItem = function(id) {
     var details = document.getElementById('details-' + id);
     var chevron = document.getElementById('chevron-' + id);
@@ -1046,6 +1052,23 @@ $extraScripts
     details.style.display = hidden ? 'block' : 'none';
     chevron.style.transform = hidden ? 'rotate(90deg)' : '';
   };
+
+  window.openLightbox = function(src) {
+    var lb = document.getElementById('todo-lightbox');
+    var img = document.getElementById('todo-lightbox-img');
+    if (!lb || !img) return;
+    img.src = src;
+    lb.classList.add('active');
+  };
+
+  window.closeLightbox = function() {
+    var lb = document.getElementById('todo-lightbox');
+    if (lb) lb.classList.remove('active');
+  };
+
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') closeLightbox();
+  });
 })();
 </script>''';
 
@@ -1114,13 +1137,13 @@ $extraScripts
 
     // Attachment indicators
     if (item.pictures.isNotEmpty) {
-      buf.write('<span class="todo-badge todo-badge--pictures">${item.pictures.length}</span>');
+      buf.write('<span class="todo-badge todo-badge--pictures"><svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor"><path d="M1 3a1 1 0 011-1h12a1 1 0 011 1v10a1 1 0 01-1 1H2a1 1 0 01-1-1V3zm5 4l-2 3h8l-3-4-2 2.5L6 7z"/></svg> ${item.pictures.length}</span>');
     }
     if (item.updates.isNotEmpty) {
-      buf.write('<span class="todo-badge todo-badge--updates">${item.updates.length}</span>');
+      buf.write('<span class="todo-badge todo-badge--updates"><svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor"><path d="M2 2h12v2H2V2zm0 4h12v2H2V6zm0 4h8v2H2v-2z"/></svg> ${item.updates.length}</span>');
     }
     if (item.links.isNotEmpty) {
-      buf.write('<span class="todo-badge todo-badge--links">${item.links.length}</span>');
+      buf.write('<span class="todo-badge todo-badge--links"><svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M6.5 3.5H3a1 1 0 00-1 1V13a1 1 0 001 1h8.5a1 1 0 001-1V9.5"/><path d="M9.5 2h4.5v4.5"/><line x1="14" y1="2" x2="7.5" y2="8.5"/></svg> ${item.links.length}</span>');
     }
 
     buf.write('</span>'); // badges
@@ -1152,7 +1175,8 @@ $extraScripts
                 : ext == 'gif' ? 'image/gif'
                 : ext == 'webp' ? 'image/webp'
                 : 'image/jpeg';
-            buf.write('<img class="todo-picture" src="data:$mime;base64,${base64Encode(picBytes)}" alt="">');
+            final dataUri = 'data:$mime;base64,${base64Encode(picBytes)}';
+            buf.write('<img class="todo-picture" src="$dataUri" alt="" onclick="openLightbox(this.src)">');
           }
         }
         buf.write('</div>');
@@ -1210,25 +1234,25 @@ $extraScripts
   margin-bottom: 16px;
 }
 .todo-summary-item { display: flex; align-items: center; gap: 5px; }
-.todo-count { font-weight: bold; }
+.todo-count { font-weight: bold; color: var(--accent); }
 .todo-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
 .todo-dot--pending { background: var(--accent); }
-.todo-dot--done { background: #4caf50; }
+.todo-dot--done { background: var(--accent-alpha-70); }
 .todo-progress-wrap { display: flex; align-items: center; gap: 6px; margin-left: auto; }
 .todo-progress-bar { width: 80px; height: 6px; background: var(--border-color); border-radius: 3px; overflow: hidden; }
-.todo-progress-fill { height: 100%; background: #4caf50; border-radius: 3px; transition: width 0.3s; }
-.todo-progress-pct { font-size: 0.8rem; font-weight: bold; opacity: 0.7; }
+.todo-progress-fill { height: 100%; background: var(--accent); border-radius: 3px; transition: width 0.3s; }
+.todo-progress-pct { font-size: 0.8rem; font-weight: bold; color: var(--accent); }
 .todo-empty { opacity: 0.5; font-style: italic; }
 
 /* Items */
 .todo-section { margin-bottom: 16px; }
 .todo-section--completed { margin-top: 8px; }
 .todo-section-header {
-  font-size: 0.85rem; font-weight: bold; opacity: 0.6;
+  font-size: 0.85rem; font-weight: bold; color: var(--accent-alpha-70);
   cursor: pointer; display: flex; align-items: center; gap: 4px;
   padding: 6px 0; user-select: none;
 }
-.todo-section-header:hover { opacity: 1; }
+.todo-section-header:hover { color: var(--accent); }
 .todo-chevron { transition: transform 0.15s; transform: rotate(90deg); }
 .todo-item {
   border: 1px solid var(--border-color);
@@ -1237,12 +1261,12 @@ $extraScripts
   transition: border-color 0.15s;
 }
 .todo-item:hover { border-color: var(--accent); }
-.todo-item--done { opacity: 0.65; }
+.todo-item--done { opacity: 0.55; }
 .todo-item-header {
   display: flex; align-items: center; gap: 10px;
   padding: 10px 12px;
 }
-.todo-check { flex-shrink: 0; opacity: 0.5; }
+.todo-check { flex-shrink: 0; opacity: 0.4; }
 .todo-check--done { opacity: 1; }
 .todo-item-title {
   flex: 1; min-width: 0;
@@ -1258,15 +1282,12 @@ $extraScripts
   font-size: 0.7rem; font-weight: 600;
   white-space: nowrap;
 }
-.todo-badge--high { background: rgba(244,67,54,0.15); color: #f44336; }
-.todo-badge--low { background: rgba(158,158,158,0.15); color: #9e9e9e; }
-.todo-badge--duration { background: rgba(76,175,80,0.15); color: #4caf50; }
-.todo-badge--pictures { background: rgba(33,150,243,0.15); color: #2196f3; }
-.todo-badge--pictures::before { content: "\\1F4F7"; font-size: 0.65rem; }
-.todo-badge--updates { background: rgba(255,152,0,0.15); color: #ff9800; }
-.todo-badge--updates::before { content: "\\1F4DD"; font-size: 0.65rem; }
-.todo-badge--links { background: rgba(156,39,176,0.15); color: #9c27b0; }
-.todo-badge--links::before { content: "\\1F517"; font-size: 0.65rem; }
+.todo-badge--high { background: var(--accent-alpha-20); color: var(--accent); }
+.todo-badge--low { background: var(--accent-alpha-20); color: var(--accent-alpha-70); }
+.todo-badge--duration { background: var(--accent-alpha-20); color: var(--accent-alpha-70); }
+.todo-badge--pictures { background: var(--accent-alpha-20); color: var(--accent-alpha-70); }
+.todo-badge--updates { background: var(--accent-alpha-20); color: var(--accent-alpha-70); }
+.todo-badge--links { background: var(--accent-alpha-20); color: var(--accent-alpha-70); }
 .todo-expand-chevron {
   flex-shrink: 0; opacity: 0.4;
   transition: transform 0.15s;
@@ -1293,7 +1314,10 @@ $extraScripts
   object-fit: cover;
   border-radius: 6px;
   border: 1px solid var(--border-color);
+  cursor: pointer;
+  transition: border-color 0.15s, opacity 0.15s;
 }
+.todo-picture:hover { border-color: var(--accent); opacity: 0.85; }
 .todo-updates { margin: 8px 0; }
 .todo-update {
   display: flex; flex-direction: column;
@@ -1303,7 +1327,7 @@ $extraScripts
   border-radius: 6px;
   font-size: 0.85rem;
 }
-.todo-update-date { font-size: 0.7rem; opacity: 0.5; margin-bottom: 3px; }
+.todo-update-date { font-size: 0.7rem; color: var(--accent-alpha-70); margin-bottom: 3px; }
 .todo-update-text { line-height: 1.5; }
 .todo-links { display: flex; flex-direction: column; gap: 4px; margin: 8px 0; }
 .todo-link {
@@ -1313,6 +1337,21 @@ $extraScripts
   font-size: 0.85rem;
 }
 .todo-link:hover { text-decoration: underline; }
+
+/* Lightbox overlay for images */
+.todo-lightbox {
+  display: none; position: fixed; inset: 0; z-index: 9999;
+  background: rgba(0,0,0,0.85);
+  align-items: center; justify-content: center;
+  cursor: pointer;
+}
+.todo-lightbox.active { display: flex; }
+.todo-lightbox img {
+  max-width: 90vw; max-height: 90vh;
+  object-fit: contain;
+  border-radius: 4px;
+  cursor: default;
+}
 ''' + _getFeedbackStyles() + '''
 ''';
   }
