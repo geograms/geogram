@@ -618,38 +618,67 @@ class AppService {
           .where((p) => p['status'] == 'published')
           .toList();
 
-      // Build posts list HTML using Terminimal theme structure
+      // Build posts list HTML grouped by year (like events timeline)
       final postsHtml = StringBuffer();
       if (publishedPosts.isEmpty) {
         postsHtml.writeln('<div class="post"><p>No posts yet.</p></div>');
       } else {
+        // Group posts by year
+        final grouped = <int, List<Map<String, dynamic>>>{};
+        final yearOrder = <int>[];
         for (final post in publishedPosts) {
-          final title = escapeHtml(post['title'] as String? ?? 'Untitled');
-          final excerpt = escapeHtml(post['excerpt'] as String? ?? post['description'] as String? ?? '');
-          final created = post['created'] as String? ?? '';
-          final postId = post['id'] as String? ?? '';
-          final tags = (post['tags'] as List?)?.cast<String>() ?? [];
-
-          // Format date for display
-          String displayDate = created;
-          try {
-            final dt = DateTime.parse(created.replaceAll('_', ':'));
-            displayDate = '${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')}';
-          } catch (_) {}
-
-          postsHtml.writeln('''
-<div class="post on-list">
-  <a href="$postId.html" class="blog-card-link">
-    <h2 class="post-title">$title</h2>
-    ${excerpt.isNotEmpty ? '<p class="blog-excerpt">$excerpt</p>' : ''}
-    <div class="blog-card-footer">
-      <span class="blog-card-date">$displayDate</span>
-      ${tags.isNotEmpty ? '<span class="blog-card-tags">${tags.map((t) => '#${escapeHtml(t)}').join(' ')}</span>' : ''}
-      <span class="blog-card-read">Read more →</span>
-    </div>
-  </a>
-</div>''');
+          final year = post['year'] as int? ?? DateTime.now().year;
+          if (!grouped.containsKey(year)) {
+            grouped[year] = [];
+            yearOrder.add(year);
+          }
+          grouped[year]!.add(post as Map<String, dynamic>);
         }
+        yearOrder.sort((a, b) => b.compareTo(a)); // newest first
+
+        postsHtml.writeln('<div class="blog-timeline">');
+        for (final year in yearOrder) {
+          postsHtml.writeln('<div class="blog-year-group">');
+          postsHtml.writeln('<div class="blog-year-header"><span class="blog-year-label">$year</span></div>');
+          postsHtml.writeln('<div class="blog-year-posts">');
+
+          for (final post in grouped[year]!) {
+            final title = escapeHtml(post['title'] as String? ?? 'Untitled');
+            final description = escapeHtml(post['description'] as String? ?? '');
+            final rawExcerpt = post['excerpt'] as String? ?? '';
+            // Clean excerpt: skip if it looks like raw metadata
+            String excerpt = '';
+            if (rawExcerpt.isNotEmpty && !rawExcerpt.startsWith('AUTHOR:') && !rawExcerpt.startsWith('CREATED:')) {
+              excerpt = escapeHtml(rawExcerpt.length > 250 ? '${rawExcerpt.substring(0, 250)}...' : rawExcerpt);
+            }
+            final created = post['created'] as String? ?? '';
+            final postId = post['id'] as String? ?? '';
+            final tags = (post['tags'] as List?)?.cast<String>() ?? [];
+
+            // Format date for display
+            String displayDate = created;
+            try {
+              final dt = DateTime.parse(created.replaceAll('_', ':'));
+              displayDate = '${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')}';
+            } catch (_) {}
+
+            postsHtml.writeln('''
+<a href="$postId.html" class="blog-node">
+  <div class="blog-dot"></div>
+  <div class="blog-card">
+    <div class="blog-card-title">$title</div>
+    ${description.isNotEmpty ? '<div class="blog-card-desc">$description</div>' : ''}
+    ${excerpt.isNotEmpty ? '<div class="blog-card-excerpt">$excerpt</div>' : ''}
+    <div class="blog-card-meta">
+      <span>$displayDate</span>
+      ${tags.isNotEmpty ? '<span class="blog-card-sep">\u00b7</span><span>${tags.map((t) => '#${escapeHtml(t)}').join(' ')}</span>' : ''}
+    </div>
+  </div>
+</a>''');
+          }
+          postsHtml.writeln('</div></div>');
+        }
+        postsHtml.writeln('</div>');
       }
 
       // Generate dynamic menu items based on available public apps
