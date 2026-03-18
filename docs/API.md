@@ -1408,7 +1408,12 @@ The station can mirror software releases from GitHub, allowing clients to downlo
 
 #### GET /api/updates/latest
 
-Returns information about the latest cached release.
+Returns information about the latest cached release. Supports update channels via query parameter.
+
+**Query Parameters:**
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `channel` | `stable` | Update channel: `stable` (default, non-prerelease only) or `beta` (includes prereleases) |
 
 **Response - Update Available (200 OK):**
 ```json
@@ -1420,6 +1425,7 @@ Returns information about the latest cached release.
   "body": "## Changelog\n- New feature...\n- Bug fix...",
   "publishedAt": "2024-12-08T10:00:00Z",
   "htmlUrl": "https://github.com/geograms/geogram-desktop/releases/tag/v1.5.36",
+  "isPrerelease": false,
   "assets": {
     "android-apk": "/updates/1.5.36/geogram.apk",
     "android-aab": "/updates/1.5.36/app-release.aab",
@@ -1486,8 +1492,11 @@ Downloads a specific binary file from the version archive.
 
 **Example Usage:**
 ```bash
-# Check for updates
+# Check for stable updates (default)
 curl http://192.168.1.100:8080/api/updates/latest
+
+# Check for beta updates (includes prereleases)
+curl http://192.168.1.100:8080/api/updates/latest?channel=beta
 
 # Download Android APK (version 1.5.36)
 curl -O http://192.168.1.100:8080/updates/1.5.36/geogram.apk
@@ -4669,6 +4678,7 @@ Clients configure their update source in **Settings > Software Updates**:
 |---------|----------|
 | **Download from Station** (default) | Check connected station first, fall back to GitHub |
 | **Download from GitHub** | Skip station check, always download from GitHub directly |
+| **Beta updates** (off by default) | When enabled, receives pre-release updates (may be less stable) |
 
 ### Station Storage Structure
 
@@ -4677,7 +4687,8 @@ Updates are organized by version number, making it easy to browse and archive:
 ```
 {appSupportDir}/
 ├── updates/
-│   ├── release.json              # Cached release metadata (latest)
+│   ├── release.json              # Cached stable release metadata
+│   ├── beta_release.json         # Cached beta (prerelease) metadata
 │   ├── 1.5.34/                   # Archived version
 │   │   ├── geogram.apk
 │   │   ├── app-release.aab

@@ -55,6 +55,27 @@
 
 - CI also regenerates `lib/version.dart` from `pubspec.yaml` during release builds. Keep those values aligned to avoid self-updater loops.
 
+### Beta vs Stable Releases
+
+The app supports two update channels. Clients opt in to beta via a toggle in Settings > Updates.
+
+| Channel | Tag format | GitHub release | F-Droid | Client endpoint |
+|---------|-----------|---------------|---------|-----------------|
+| **Stable** | `v1.36.0` | Normal release | Picked up automatically | `/releases/latest` |
+| **Beta** | `v1.36.0-beta.1` | **Pre-release** checkbox checked | Ignored (tag doesn't match version regex) | `/releases?per_page=1` |
+
+**Publishing a beta:**
+1. Bump version in `pubspec.yaml` as normal (e.g., `1.36.0+12`).
+2. Commit, tag as `v1.36.0-beta.1` (the `-beta.N` suffix ensures F-Droid ignores it).
+3. Create GitHub release with **"Set as a pre-release"** checked.
+
+**Publishing stable:**
+1. Same or bumped version (e.g., `1.36.0+12`).
+2. Tag as `v1.36.0` (no suffix).
+3. Create GitHub release as normal (not pre-release).
+
+Stations cache both channels simultaneously and serve them via `?channel=beta|stable` on `/api/updates/latest`.
+
 ## Collaboration Safety
 
 - Another agent or developer may be editing this repository at the same time.
