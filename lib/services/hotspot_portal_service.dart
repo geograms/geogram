@@ -88,6 +88,11 @@ class HotspotPortalService {
       return null;
     }
 
+    // Work document pages are served dynamically by LogApiService.
+    if (path.startsWith('/work/')) {
+      return null;
+    }
+
     // Map URL paths to device content paths
     final devicePath = _mapToDevicePath(path);
     if (devicePath == null) {

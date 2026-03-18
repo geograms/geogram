@@ -44,6 +44,9 @@ import '../models/app.dart';
 import '../models/shared_folder.dart';
 import '../services/shared_folder_service.dart';
 import '../services/groups_service.dart';
+import '../tracker/models/tracker_visibility.dart';
+import '../work/services/ndf_web_viewer_service.dart';
+import '../work/services/work_storage_service.dart';
 
 /// WebSocket service for station connections (singleton)
 class WebSocketService {
@@ -915,6 +918,11 @@ class WebSocketService {
       return _handleUpdateFileServe(path);
     }
 
+    // Serve NDF documents from work app: /work/{workspaceId}/{filename}.ndf
+    if (path.startsWith('/work/') && path.endsWith('.ndf')) {
+      return _handleWorkPageLocal(path, headersJson: headersJson);
+    }
+
     // Parse path: should be /{appName}/{filePath}
     // e.g., /blog/index.html, /www/index.html
     final parts = path.split('/').where((p) => p.isNotEmpty).toList();
@@ -1459,6 +1467,108 @@ class WebSocketService {
       globalStyles: StationHtmlTemplates.getBaseStyles(),
       appStyles: '',
     );
+  }
+
+  /// Serve an NDF document as a read-only HTML page from the work app.
+  /// Path format: /work/{workspaceId}/{filename}.ndf
+  static Future<({int statusCode, String contentType, List<int> body})> _handleWorkPageLocal(
+    String path, {
+    String? headersJson,
+  }) async {
+    try {
+      // Parse: /work/{workspaceId}/{filename}.ndf
+      final decodedPath = Uri.decodeFull(path);
+      final parts = decodedPath.split('/').where((p) => p.isNotEmpty).toList();
+      // ['work', workspaceId, filename.ndf]
+      if (parts.length < 3 || parts[0] != 'work') {
+        return (statusCode: 404, contentType: 'text/plain', body: utf8.encode('Not Found'));
+      }
+
+      final workspaceId = parts[1];
+      final filename = parts.sublist(2).join('/');
+
+      // Find work app
+      final apps = await AppService().loadApps();
+      final workApp = apps.cast<App?>().firstWhere(
+        (a) => a?.type == 'work',
+        orElse: () => null,
+      );
+      if (workApp?.storagePath == null) {
+        return (statusCode: 404, contentType: 'text/plain', body: utf8.encode('Work app not found'));
+      }
+
+      final profileStorage = AppService().profileStorage;
+      if (profileStorage == null) {
+        return (statusCode: 500, contentType: 'text/plain', body: utf8.encode('Storage not available'));
+      }
+
+      final workStorage = WorkStorageService(profileStorage, workApp!.storagePath!);
+      final workspace = await workStorage.loadWorkspace(workspaceId);
+      if (workspace == null || !workspace.documents.contains(filename)) {
+        return (statusCode: 404, contentType: 'text/plain', body: utf8.encode('Not Found'));
+      }
+
+      // Check visibility
+      final visibility = workspace.getDocumentVisibility(filename);
+      switch (visibility.level) {
+        case TrackerVisibilityLevel.private:
+          return (statusCode: 403, contentType: 'text/plain', body: utf8.encode('Forbidden'));
+        case TrackerVisibilityLevel.public:
+          break;
+        case TrackerVisibilityLevel.unlisted:
+          // For local hotspot requests, no query params available — allow access
+          break;
+        case TrackerVisibilityLevel.restricted:
+          final visitorPubkey = WebSocketService()._extractNostrPubkeyFromHeaders(headersJson);
+          if (visitorPubkey == null) {
+            return (statusCode: 403, contentType: 'text/plain', body: utf8.encode('Forbidden'));
+          }
+          final visitorNpub = NostrCrypto.encodeNpub(visitorPubkey);
+          final contactMatch = visibility.allowedContacts.any((c) => c.npub == visitorNpub);
+          if (!contactMatch) {
+            return (statusCode: 403, contentType: 'text/plain', body: utf8.encode('Forbidden'));
+          }
+          break;
+      }
+
+      // Read NDF bytes
+      final ndfBytes = await workStorage.readDocumentBytes(workspaceId, filename);
+      if (ndfBytes == null) {
+        return (statusCode: 404, contentType: 'text/plain', body: utf8.encode('Not Found'));
+      }
+
+      // Get owner info
+      String identifier = AppService().currentCallsign ?? '';
+      try {
+        final profile = ProfileService().getProfile();
+        if (profile.callsign.isNotEmpty) {
+          identifier = profile.nickname ?? profile.callsign;
+        }
+      } catch (_) {}
+
+      final menuItems = await AppService().generateDeviceMenu(
+        activeApp: 'work',
+        depth: 2,
+      );
+
+      final html = NdfWebViewerService().buildPage(
+        ndfBytes,
+        ownerIdentifier: identifier,
+        workspaceName: workspace.name,
+        menuItems: menuItems,
+        logoText: identifier,
+        logoHref: '../../',
+      );
+
+      if (html == null) {
+        return (statusCode: 404, contentType: 'text/plain', body: utf8.encode('Unsupported document type'));
+      }
+
+      return (statusCode: 200, contentType: 'text/html', body: utf8.encode(html));
+    } catch (e) {
+      LogService().log('WebSocketService: Error serving work page: $e');
+      return (statusCode: 500, contentType: 'text/plain', body: utf8.encode('Internal error'));
+    }
   }
 
   /// Serve the download page listing available update binaries.

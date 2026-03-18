@@ -1035,6 +1035,9 @@ class _WorkspaceDetailPageState extends State<WorkspaceDetailPage> {
             builder: (context) => SpreadsheetEditorPage(
               filePath: filePath,
               title: doc.title,
+              workspaceId: widget.workspaceId,
+              documentFilename: doc.filename,
+              workStorage: _storage,
             ),
           ),
         ).then((_) => onEditorClosed());

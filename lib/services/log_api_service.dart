@@ -130,6 +130,11 @@ import 'shared_folder_service.dart';
 import 'groups_service.dart';
 import 'hotspot_portal_service.dart';
 import '../models/app.dart';
+import '../tracker/models/tracker_visibility.dart';
+import '../work/models/workspace.dart';
+import '../work/services/ndf_web_viewer_service.dart';
+import '../work/services/work_storage_service.dart';
+import '../util/feedback_comment_utils.dart';
 
 class _MeetSessionSnapshot {
   final String state;
@@ -379,6 +384,15 @@ class LogApiService with ChatModificationMixin {
         if (response != null) {
           return response;
         }
+      }
+    }
+
+    // Work document routes — GET for HTML pages, POST/DELETE for feedback actions
+    // Placed outside the GET block so feedback POST/DELETE also works
+    if (urlPath.startsWith('work/')) {
+      final response = await _handleWorkRoute(request, urlPath, headers);
+      if (response != null) {
+        return response;
       }
     }
 
@@ -14002,6 +14016,399 @@ class LogApiService with ChatModificationMixin {
   }
 
 
+
+  // ============================================================
+  // Work / NDF Document Web Viewer
+  // ============================================================
+
+  /// Handle GET work/{workspace-id}/{filename}.ndf — serve NDF document as HTML
+  Future<shelf.Response?> _handleWorkRoute(
+    shelf.Request request,
+    String urlPath,
+    Map<String, String> headers,
+  ) async {
+    try {
+      // Parse path: work/{workspaceId}/{filename}.ndf
+      // Also handle work/styles.css
+      if (urlPath == 'work/styles.css') {
+        return await _handleThemeStylesRequest(headers, appType: 'work');
+      }
+
+      final decodedPath = Uri.decodeFull(urlPath);
+
+      // Split path at the .ndf boundary to separate document path from action
+      final ndfIdx = decodedPath.indexOf('.ndf');
+      if (ndfIdx < 0) return null;
+
+      final docPath = decodedPath.substring(0, ndfIdx + 4); // up to and including .ndf
+      final actionPath = decodedPath.substring(ndfIdx + 4);  // after .ndf (e.g., /like, /comment, /comment/{id})
+      final action = actionPath.startsWith('/') ? actionPath.substring(1) : '';
+
+      final docParts = docPath.split('/');
+      // Expect: ['work', workspaceId, filename.ndf]
+      if (docParts.length < 3) return null;
+
+      final workspaceId = docParts[1];
+      final filename = docParts.sublist(2).join('/');
+
+      // Get current profile info
+      String? callsign;
+      String? nickname;
+      String? dataDir;
+      try {
+        final profile = ProfileService().getProfile();
+        if (profile.callsign.isNotEmpty) callsign = profile.callsign;
+        if (profile.nickname.isNotEmpty) nickname = profile.nickname;
+      } catch (_) {}
+      callsign ??= AppService().currentCallsign;
+      nickname ??= callsign;
+      try {
+        dataDir = StorageConfig().baseDir;
+      } catch (_) {}
+
+      if (callsign == null || dataDir == null) {
+        return shelf.Response.internalServerError(
+          body: '<html><body><h1>500</h1><p>Profile not initialized</p></body></html>',
+          headers: {'Content-Type': 'text/html'},
+        );
+      }
+
+      // Find work app
+      final apps = await AppService().loadApps();
+      App? workApp;
+      for (final app in apps) {
+        if (app.type == 'work') {
+          workApp = app;
+          break;
+        }
+      }
+
+      if (workApp?.storagePath == null) {
+        return shelf.Response.notFound(
+          '<html><body><h1>404</h1><p>Work app not found</p></body></html>',
+          headers: {'Content-Type': 'text/html'},
+        );
+      }
+
+      // Create work storage
+      final baseStorage = AppService().profileStorage;
+      if (baseStorage == null) {
+        return shelf.Response.internalServerError(
+          body: '<html><body><h1>500</h1><p>Storage not available</p></body></html>',
+          headers: {'Content-Type': 'text/html'},
+        );
+      }
+
+      final workStorage = WorkStorageService(baseStorage, workApp!.storagePath!);
+
+      // Load workspace
+      final workspace = await workStorage.loadWorkspace(workspaceId);
+      if (workspace == null) {
+        return shelf.Response.notFound(
+          '<html><body><h1>404</h1><p>Workspace not found</p></body></html>',
+          headers: {'Content-Type': 'text/html'},
+        );
+      }
+
+      // Check document exists in workspace
+      if (!workspace.documents.contains(filename)) {
+        return shelf.Response.notFound(
+          '<html><body><h1>404</h1><p>Document not found</p></body></html>',
+          headers: {'Content-Type': 'text/html'},
+        );
+      }
+
+      // Check visibility
+      final visibility = workspace.getDocumentVisibility(filename);
+      switch (visibility.level) {
+        case TrackerVisibilityLevel.private:
+          return shelf.Response.forbidden(
+            '<html><body><h1>403</h1><p>This document is private</p></body></html>',
+            headers: {'Content-Type': 'text/html'},
+          );
+
+        case TrackerVisibilityLevel.unlisted:
+          final key = request.url.queryParameters['key'];
+          if (key == null || !visibility.validateUnlistedKey(key)) {
+            return shelf.Response.notFound(
+              '<html><body><h1>404</h1><p>Not found</p></body></html>',
+              headers: {'Content-Type': 'text/html'},
+            );
+          }
+          break; // Proceed to render
+
+        case TrackerVisibilityLevel.restricted:
+          final hexPubkey = _extractNostrPubkeyFromCookie(request);
+          if (hexPubkey == null) {
+            return shelf.Response.forbidden(
+              '<html><body><h1>403</h1><p>Authentication required</p></body></html>',
+              headers: {'Content-Type': 'text/html'},
+            );
+          }
+          // Convert hex pubkey to npub for access check
+          String? visitorNpub;
+          try {
+            visitorNpub = NostrCrypto.encodeNpub(hexPubkey);
+          } catch (_) {}
+          if (visitorNpub == null) {
+            return shelf.Response.forbidden(
+              '<html><body><h1>403</h1><p>Invalid identity</p></body></html>',
+              headers: {'Content-Type': 'text/html'},
+            );
+          }
+          // Check if contact is in allowed list
+          final contactMatch = visibility.allowedContacts.any(
+            (c) => c.npub == visitorNpub,
+          );
+          if (!contactMatch) {
+            // Check group membership
+            bool groupMatch = false;
+            if (visibility.allowedGroups.isNotEmpty) {
+              try {
+                final profileStorage = AppService().profileStorage;
+                if (profileStorage != null) {
+                  final allApps = await AppService().loadApps();
+                  final groupsApp = allApps.cast<App?>().firstWhere(
+                    (a) => a?.type == 'groups',
+                    orElse: () => null,
+                  );
+                  if (groupsApp?.storagePath != null) {
+                    final groupsStorage = ScopedProfileStorage.fromAbsolutePath(
+                      profileStorage, groupsApp!.storagePath!,
+                    );
+                    final groupsService = GroupsService();
+                    groupsService.setStorage(groupsStorage);
+                    for (final ag in visibility.allowedGroups) {
+                      final group = await groupsService.loadGroup(ag.groupId);
+                      if (group != null && group.isMember(visitorNpub)) {
+                        groupMatch = true;
+                        break;
+                      }
+                    }
+                  }
+                }
+              } catch (_) {}
+            }
+            if (!groupMatch) {
+              return shelf.Response.forbidden(
+                '<html><body><h1>403</h1><p>Access denied</p></body></html>',
+                headers: {'Content-Type': 'text/html'},
+              );
+            }
+          }
+          break; // Proceed to render
+
+        case TrackerVisibilityLevel.public:
+          break; // Proceed to render
+      }
+
+      // Handle feedback actions (like, comment, feedback) on sub-paths
+      if (action.isNotEmpty) {
+        return await _handleWorkFeedbackAction(
+          request, action, workStorage, workspaceId, filename, workspace, headers,
+        );
+      }
+
+      // Read NDF document bytes (GET only for HTML rendering)
+      if (request.method != 'GET') return null;
+      final ndfBytes = await workStorage.readDocumentBytes(workspaceId, filename);
+      if (ndfBytes == null) {
+        return shelf.Response.notFound(
+          '<html><body><h1>404</h1><p>Document file not found</p></body></html>',
+          headers: {'Content-Type': 'text/html'},
+        );
+      }
+
+      // Generate navigation menu
+      final menuItems = await AppService().generateDeviceMenu(
+        activeApp: 'work',
+        depth: 2,
+      );
+
+      // Load interaction settings and feedback data for the page
+      final interaction = workspace.getDocumentInteraction(filename);
+      final feedbackPath = workStorage.documentFeedbackPath(workspaceId, filename);
+      int likesCount = 0;
+      List<String> likedHexPubkeys = [];
+      List<FeedbackComment> comments = [];
+      if (interaction.permitLikes) {
+        likesCount = await FeedbackFolderUtils.getFeedbackCount(
+          feedbackPath, FeedbackFolderUtils.feedbackTypeLikes,
+          storage: workStorage.storage,
+        );
+        final likedNpubs = await FeedbackFolderUtils.readFeedbackFile(
+          feedbackPath, FeedbackFolderUtils.feedbackTypeLikes,
+          storage: workStorage.storage,
+        );
+        for (final npub in likedNpubs) {
+          try { likedHexPubkeys.add(NostrCrypto.decodeNpub(npub)); } catch (_) {}
+        }
+      }
+      if (interaction.permitComments) {
+        comments = await FeedbackCommentUtils.loadComments(
+          feedbackPath, storage: workStorage.storage,
+        );
+      }
+
+      // Generate HTML page
+      final identifier = nickname ?? callsign ?? '';
+      final ownerNpub = workspace.ownerNpub;
+      final html = NdfWebViewerService().buildPage(
+        ndfBytes,
+        ownerIdentifier: identifier,
+        workspaceName: workspace.name,
+        menuItems: menuItems,
+        logoText: identifier,
+        logoHref: '../../',
+        interaction: interaction,
+        likesCount: likesCount,
+        likedHexPubkeys: likedHexPubkeys,
+        comments: comments,
+        ownerNpub: ownerNpub,
+        documentFilename: filename,
+      );
+
+      if (html == null) {
+        return shelf.Response.notFound(
+          '<html><body><h1>404</h1><p>Unsupported document type</p></body></html>',
+          headers: {'Content-Type': 'text/html'},
+        );
+      }
+
+      return shelf.Response.ok(
+        html,
+        headers: {'Content-Type': 'text/html; charset=utf-8'},
+      );
+    } catch (e, stack) {
+      LogService().log('LogApiService: Error handling work route: $e');
+      LogService().log('LogApiService: Stack: $stack');
+      return shelf.Response.internalServerError(
+        body: '<html><body><h1>500</h1><p>$e</p></body></html>',
+        headers: {'Content-Type': 'text/html'},
+      );
+    }
+  }
+
+  /// Handle feedback actions on work documents: like, comment, feedback, comment/{id}
+  /// Called from _handleWorkRoute when the URL has a sub-path after .ndf
+  Future<shelf.Response> _handleWorkFeedbackAction(
+    shelf.Request request,
+    String action,
+    WorkStorageService workStorage,
+    String workspaceId,
+    String filename,
+    Workspace workspace,
+    Map<String, String> headers,
+  ) async {
+    final feedbackPath = workStorage.documentFeedbackPath(workspaceId, filename);
+    final interaction = workspace.getDocumentInteraction(filename);
+    final storage = workStorage.storage;
+
+    // POST .ndf/like
+    if (action == 'like' && request.method == 'POST') {
+      if (!interaction.permitLikes) {
+        return shelf.Response.forbidden(
+          jsonEncode({'error': 'Likes not permitted'}), headers: headers);
+      }
+      final body = await request.readAsString();
+      final event = NostrEvent.fromJson(jsonDecode(body) as Map<String, dynamic>);
+      if (event.id == null || event.sig == null) {
+        return shelf.Response(401,
+          body: jsonEncode({'error': 'Missing signature'}), headers: headers);
+      }
+      final result = await FeedbackFolderUtils.toggleFeedbackEvent(
+        feedbackPath, FeedbackFolderUtils.feedbackTypeLikes, event, storage: storage);
+      if (result == null) {
+        return shelf.Response(401,
+          body: jsonEncode({'error': 'Invalid signature'}), headers: headers);
+      }
+      final count = await FeedbackFolderUtils.getFeedbackCount(
+        feedbackPath, FeedbackFolderUtils.feedbackTypeLikes, storage: storage);
+      return shelf.Response.ok(
+        jsonEncode({'success': true, 'action': result ? 'added' : 'removed',
+          'liked': result, 'like_count': count}),
+        headers: headers);
+    }
+
+    // POST .ndf/comment
+    if (action == 'comment' && request.method == 'POST') {
+      if (!interaction.permitComments) {
+        return shelf.Response.forbidden(
+          jsonEncode({'error': 'Comments not permitted'}), headers: headers);
+      }
+      final data = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+      final author = data['author'] as String? ?? '';
+      final content = data['content'] as String? ?? '';
+      final npub = data['npub'] as String?;
+      final signature = data['signature'] as String?;
+      if (author.isEmpty || content.isEmpty) {
+        return shelf.Response(400,
+          body: jsonEncode({'error': 'author and content required'}), headers: headers);
+      }
+      if (npub == null || signature == null) {
+        return shelf.Response(401,
+          body: jsonEncode({'error': 'npub and signature required'}), headers: headers);
+      }
+      final commentId = await FeedbackCommentUtils.writeComment(
+        contentPath: feedbackPath, author: author, content: content,
+        npub: npub, signature: signature, storage: storage);
+      return shelf.Response.ok(
+        jsonEncode({'success': true, 'comment_id': commentId}), headers: headers);
+    }
+
+    // DELETE .ndf/comment/{commentId}
+    if (action.startsWith('comment/') && request.method == 'DELETE') {
+      final commentId = action.substring('comment/'.length);
+      final requesterNpub = request.headers['x-npub'];
+      if (requesterNpub == null || requesterNpub.isEmpty) {
+        return shelf.Response(401,
+          body: jsonEncode({'error': 'X-Npub header required'}), headers: headers);
+      }
+      final isOwner = workspace.ownerNpub == requesterNpub;
+      final comment = await FeedbackCommentUtils.getComment(
+        feedbackPath, commentId, storage: storage);
+      if (comment == null) {
+        return shelf.Response.notFound(
+          jsonEncode({'error': 'Comment not found'}), headers: headers);
+      }
+      if (!isOwner && comment.npub != requesterNpub) {
+        return shelf.Response.forbidden(
+          jsonEncode({'error': 'Not authorized'}), headers: headers);
+      }
+      await FeedbackCommentUtils.deleteComment(feedbackPath, commentId, storage: storage);
+      return shelf.Response.ok(jsonEncode({'success': true}), headers: headers);
+    }
+
+    // GET .ndf/feedback
+    if (action == 'feedback' && request.method == 'GET') {
+      final likesCount = interaction.permitLikes
+          ? await FeedbackFolderUtils.getFeedbackCount(
+              feedbackPath, FeedbackFolderUtils.feedbackTypeLikes, storage: storage)
+          : 0;
+      final comments = interaction.permitComments
+          ? await FeedbackCommentUtils.loadComments(feedbackPath, storage: storage)
+          : <FeedbackComment>[];
+      final npub = request.url.queryParameters['npub'];
+      bool? hasLiked;
+      if (npub != null && npub.isNotEmpty && interaction.permitLikes) {
+        hasLiked = await FeedbackFolderUtils.hasFeedback(
+          feedbackPath, FeedbackFolderUtils.feedbackTypeLikes, npub, storage: storage);
+      }
+      return shelf.Response.ok(
+        jsonEncode({
+          'success': true,
+          'permit_likes': interaction.permitLikes,
+          'permit_comments': interaction.permitComments,
+          'likes': likesCount,
+          'comments': comments.map((c) => c.toJson()).toList(),
+          if (hasLiked != null) 'has_liked': hasLiked,
+        }),
+        headers: headers);
+    }
+
+    return shelf.Response.notFound(
+      jsonEncode({'error': 'Unknown action: $action'}), headers: headers);
+  }
 
   // ============ Wallet API Handlers ============
 

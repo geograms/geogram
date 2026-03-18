@@ -29,6 +29,8 @@ import 'blog_service.dart' hide ChatSecurity;
 import 'conference_service.dart';
 import 'conference_archive_service.dart';
 import 'event_service.dart';
+import '../tracker/models/tracker_visibility.dart';
+import '../work/services/work_storage_service.dart';
 
 
 /// Service for managing apps on disk (or in memory for web)
@@ -747,6 +749,7 @@ class AppService {
       'shared': false,
       'alerts': false,
       'meet': false,
+      'work': false,
     };
 
     final effectiveStorage = storage ?? _profileStorage;
@@ -755,7 +758,7 @@ class AppService {
 
     try {
       for (final appType in result.keys) {
-        if (appType == 'meet') continue; // meet is handled separately below
+        if (appType == 'meet' || appType == 'work') continue; // handled separately below
         // Check directory exists and is not private
         if (!await _appIsPublic(appType, dirPath, effectiveStorage)) continue;
         // Check for actual content per app type
@@ -770,6 +773,33 @@ class AppService {
       } else {
         final archives = await ConferenceArchiveService().listArchives();
         result['meet'] = archives.isNotEmpty;
+      }
+    } catch (_) {}
+
+    // Work: show if any workspace has documents with public or unlisted visibility
+    try {
+      final apps = await loadApps();
+      for (final app in apps) {
+        if (app.type != 'work') continue;
+        final storagePath = app.storagePath;
+        if (storagePath == null) continue;
+        final workStorage = WorkStorageService(
+          effectiveStorage ?? FilesystemProfileStorage(storagePath),
+          effectiveStorage != null ? storagePath : '',
+        );
+        final workspaces = await workStorage.loadWorkspaces();
+        for (final ws in workspaces) {
+          for (final doc in ws.documents) {
+            final vis = ws.getDocumentVisibility(doc);
+            if (vis.level == TrackerVisibilityLevel.public ||
+                vis.level == TrackerVisibilityLevel.unlisted) {
+              result['work'] = true;
+              break;
+            }
+          }
+          if (result['work']!) break;
+        }
+        if (result['work']!) break;
       }
     } catch (_) {}
 
@@ -891,6 +921,7 @@ class AppService {
       hasFiles: apps['files']!,
       hasShared: apps['shared']!,
       hasMeet: apps['meet'] ?? false,
+      hasWork: apps['work'] ?? false,
       hasAlerts: apps['alerts']!,
       hasDownload: hasDownload,
       isRootLevel: isRootLevel,

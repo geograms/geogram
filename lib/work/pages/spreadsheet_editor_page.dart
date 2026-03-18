@@ -11,19 +11,29 @@ import 'package:flutter/material.dart';
 import '../../services/i18n_service.dart';
 import '../../services/log_service.dart';
 import '../models/ndf_document.dart';
+import '../models/ndf_interaction_settings.dart';
 import '../models/spreadsheet_content.dart';
 import '../services/ndf_service.dart';
+import '../services/work_storage_service.dart';
+import '../widgets/document_interaction_widget.dart';
+import '../widgets/document_visibility_widget.dart';
 import '../widgets/spreadsheet/sheet_grid_widget.dart';
 
 /// Spreadsheet editor page
 class SpreadsheetEditorPage extends StatefulWidget {
   final String filePath;
   final String? title;
+  final String? workspaceId;
+  final String? documentFilename;
+  final WorkStorageService? workStorage;
 
   const SpreadsheetEditorPage({
     super.key,
     required this.filePath,
     this.title,
+    this.workspaceId,
+    this.documentFilename,
+    this.workStorage,
   });
 
   @override
@@ -174,6 +184,73 @@ class _SpreadsheetEditorPageState extends State<SpreadsheetEditorPage>
         );
       }
     }
+  }
+
+  Future<void> _showVisibilitySheet() async {
+    final workspaceId = widget.workspaceId;
+    final filename = widget.documentFilename;
+    final storage = widget.workStorage;
+    if (workspaceId == null || filename == null || storage == null) return;
+
+    final workspace = await storage.loadWorkspace(workspaceId);
+    if (workspace == null) return;
+
+    var visibility = workspace.getDocumentVisibility(filename);
+    var interaction = workspace.getDocumentInteraction(filename);
+
+    if (!mounted) return;
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setSheetState) {
+            return SingleChildScrollView(
+              child: Padding(
+                padding: EdgeInsets.only(
+                  bottom: MediaQuery.of(context).viewInsets.bottom,
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    DocumentVisibilityWidget(
+                      visibility: visibility,
+                      onChanged: (newVis) async {
+                        setSheetState(() => visibility = newVis);
+                        workspace.setDocumentVisibility(filename, newVis);
+                        await storage.saveWorkspace(workspace);
+                      },
+                      shareUrl: _buildShareUrl(workspaceId, filename),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      child: Divider(color: Theme.of(context).colorScheme.outlineVariant),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                      child: DocumentInteractionWidget(
+                        interaction: interaction,
+                        onChanged: (newInt) async {
+                          setSheetState(() => interaction = newInt);
+                          workspace.setDocumentInteraction(filename, newInt);
+                          await storage.saveWorkspace(workspace);
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  String? _buildShareUrl(String workspaceId, String filename) {
+    // Build URL from what we know — the station URL must be configured externally
+    // For now, return a relative path that the user can combine with their station URL
+    return 'work/$workspaceId/$filename';
   }
 
   void _onSheetChanged(SpreadsheetSheet sheet) {
@@ -344,6 +421,12 @@ class _SpreadsheetEditorPageState extends State<SpreadsheetEditorPage>
             child: Text(_metadata?.title ?? widget.title ?? _i18n.t('work_spreadsheet')),
           ),
           actions: [
+            if (widget.workspaceId != null && widget.documentFilename != null)
+              IconButton(
+                icon: const Icon(Icons.share_outlined),
+                onPressed: _showVisibilitySheet,
+                tooltip: _i18n.t('share'),
+              ),
             if (_hasChanges)
               IconButton(
                 icon: const Icon(Icons.save),

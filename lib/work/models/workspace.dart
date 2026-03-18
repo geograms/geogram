@@ -5,6 +5,9 @@
 
 import 'dart:convert';
 
+import '../../tracker/models/tracker_visibility.dart';
+import 'ndf_interaction_settings.dart';
+
 /// Collaborator role in a workspace
 enum CollaboratorRole {
   editor,
@@ -112,6 +115,8 @@ class Workspace {
   final List<String> documents;
   final List<WorkspaceFolder> folders;
   final Map<String, String?> documentFolders; // document filename -> folder id (null = root)
+  final Map<String, TrackerVisibility> documentVisibility; // document filename -> visibility settings
+  final Map<String, NdfInteractionSettings> documentInteraction; // document filename -> interaction settings
 
   Workspace({
     required this.id,
@@ -125,10 +130,14 @@ class Workspace {
     List<String>? documents,
     List<WorkspaceFolder>? folders,
     Map<String, String?>? documentFolders,
+    Map<String, TrackerVisibility>? documentVisibility,
+    Map<String, NdfInteractionSettings>? documentInteraction,
   }) : collaborators = collaborators ?? [],
        documents = documents ?? [],
        folders = folders ?? [],
-       documentFolders = documentFolders ?? {};
+       documentFolders = documentFolders ?? {},
+       documentVisibility = documentVisibility ?? {},
+       documentInteraction = documentInteraction ?? {};
 
   factory Workspace.create({
     required String id,
@@ -158,6 +167,16 @@ class Workspace {
       }
     }
 
+    final docVisJson = json['document_visibility'] as Map<String, dynamic>?;
+    final docVis = <String, TrackerVisibility>{};
+    if (docVisJson != null) {
+      for (final entry in docVisJson.entries) {
+        docVis[entry.key] = TrackerVisibility.fromJson(
+          entry.value as Map<String, dynamic>,
+        );
+      }
+    }
+
     return Workspace(
       id: json['id'] as String,
       name: json['name'] as String,
@@ -176,7 +195,21 @@ class Workspace {
           ?.map((f) => WorkspaceFolder.fromJson(f as Map<String, dynamic>))
           .toList() ?? [],
       documentFolders: docFolders,
+      documentVisibility: docVis,
+      documentInteraction: _parseInteraction(json['document_interaction']),
     );
+  }
+
+  static Map<String, NdfInteractionSettings> _parseInteraction(dynamic raw) {
+    final map = <String, NdfInteractionSettings>{};
+    if (raw is Map<String, dynamic>) {
+      for (final entry in raw.entries) {
+        map[entry.key] = NdfInteractionSettings.fromJson(
+          entry.value as Map<String, dynamic>,
+        );
+      }
+    }
+    return map;
   }
 
   Map<String, dynamic> toJson() => {
@@ -191,6 +224,14 @@ class Workspace {
     'documents': documents,
     'folders': folders.map((f) => f.toJson()).toList(),
     'document_folders': documentFolders,
+    if (documentVisibility.isNotEmpty)
+      'document_visibility': {
+        for (final e in documentVisibility.entries) e.key: e.value.toJson(),
+      },
+    if (documentInteraction.isNotEmpty)
+      'document_interaction': {
+        for (final e in documentInteraction.entries) e.key: e.value.toJson(),
+      },
   };
 
   String toJsonString() => const JsonEncoder.withIndent('  ').convert(toJson());
@@ -291,6 +332,28 @@ class Workspace {
       documentFolders[newFilename] = folderId;
       touch();
     }
+  }
+
+  /// Get visibility settings for a document (defaults to private)
+  TrackerVisibility getDocumentVisibility(String filename) {
+    return documentVisibility[filename] ?? TrackerVisibility.private;
+  }
+
+  /// Set visibility settings for a document
+  void setDocumentVisibility(String filename, TrackerVisibility visibility) {
+    documentVisibility[filename] = visibility;
+    touch();
+  }
+
+  /// Get interaction settings for a document (defaults to none)
+  NdfInteractionSettings getDocumentInteraction(String filename) {
+    return documentInteraction[filename] ?? NdfInteractionSettings.none;
+  }
+
+  /// Set interaction settings for a document
+  void setDocumentInteraction(String filename, NdfInteractionSettings settings) {
+    documentInteraction[filename] = settings;
+    touch();
   }
 
   /// Generate a filesystem-safe ID from name

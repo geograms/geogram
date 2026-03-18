@@ -1,0 +1,782 @@
+/*
+ * Copyright (c) geogram
+ * License: Apache-2.0
+ */
+
+// Web viewer service for NDF documents — generates read-only HTML pages.
+// Pure Dart, no Flutter dependencies.
+
+import 'dart:typed_data';
+
+import '../../util/feedback_comment_utils.dart';
+import '../../util/html_utils.dart';
+import '../../util/nostr_login_scripts.dart';
+import '../../util/station_html_templates.dart';
+import '../models/ndf_document.dart';
+import '../models/ndf_interaction_settings.dart';
+import '../models/spreadsheet_content.dart';
+import 'ndf_service.dart';
+
+/// Singleton service for rendering NDF documents as HTML pages.
+class NdfWebViewerService {
+  static final NdfWebViewerService _instance =
+      NdfWebViewerService._internal();
+
+  factory NdfWebViewerService() => _instance;
+
+  NdfWebViewerService._internal();
+
+  final NdfService _ndfService = NdfService();
+
+  static const _defaultColWidth = 100.0;
+  static const _rowHeaderWidth = 40;
+
+  /// Build an HTML page for an NDF document.
+  /// Dispatches by document type.
+  String? buildPage(
+    Uint8List ndfBytes, {
+    String ownerIdentifier = '',
+    String workspaceName = '',
+    String menuItems = '',
+    String logoText = '',
+    String logoHref = '../../',
+    NdfInteractionSettings interaction = const NdfInteractionSettings(),
+    int likesCount = 0,
+    List<String> likedHexPubkeys = const [],
+    List<FeedbackComment> comments = const [],
+    String ownerNpub = '',
+    String documentFilename = '',
+  }) {
+    final metadata = _ndfService.readMetadataFromBytes(ndfBytes);
+    if (metadata == null) return null;
+
+    switch (metadata.type) {
+      case NdfDocumentType.spreadsheet:
+        return buildSpreadsheetPage(
+          ndfBytes,
+          metadata: metadata,
+          ownerIdentifier: ownerIdentifier,
+          workspaceName: workspaceName,
+          menuItems: menuItems,
+          logoText: logoText,
+          logoHref: logoHref,
+          interaction: interaction,
+          likesCount: likesCount,
+          likedHexPubkeys: likedHexPubkeys,
+          comments: comments,
+          ownerNpub: ownerNpub,
+          documentFilename: documentFilename,
+        );
+      default:
+        return null; // Other types not yet supported
+    }
+  }
+
+  /// Build a read-only HTML page for a spreadsheet NDF document.
+  String? buildSpreadsheetPage(
+    Uint8List ndfBytes, {
+    required NdfDocument metadata,
+    String ownerIdentifier = '',
+    String workspaceName = '',
+    String menuItems = '',
+    String logoText = '',
+    String logoHref = '../../',
+    NdfInteractionSettings interaction = const NdfInteractionSettings(),
+    int likesCount = 0,
+    List<String> likedHexPubkeys = const [],
+    List<FeedbackComment> comments = const [],
+    String ownerNpub = '',
+    String documentFilename = '',
+  }) {
+    // Read main content
+    final mainJson =
+        _ndfService.readArchiveJsonFromBytes(ndfBytes, 'content/main.json');
+    if (mainJson == null) return null;
+
+    final content = SpreadsheetContent.fromJson(mainJson);
+
+    // Read all sheets
+    final sheets = <SpreadsheetSheet>[];
+    for (final sheetId in content.sheets) {
+      final sheetJson = _ndfService.readArchiveJsonFromBytes(
+          ndfBytes, 'content/$sheetId.json');
+      if (sheetJson != null) {
+        sheets.add(SpreadsheetSheet.fromJson(sheetJson));
+      }
+    }
+
+    if (sheets.isEmpty) return null;
+
+    final title = metadata.title.isNotEmpty ? metadata.title : 'Spreadsheet';
+    final logo = logoText.isNotEmpty ? logoText : ownerIdentifier;
+
+    // Build sheet content HTML
+    final sheetsHtml = StringBuffer();
+    final tabsHtml = StringBuffer();
+
+    for (var i = 0; i < sheets.length; i++) {
+      final sheet = sheets[i];
+      final isActive = i == 0;
+      final safeId = 'sheet-${sheet.id.replaceAll(RegExp(r'[^a-zA-Z0-9_-]'), '')}';
+
+      // Tab button
+      tabsHtml.write(
+        '<button class="sheet-tab${isActive ? ' active' : ''}" '
+        'onclick="switchSheet(\'$safeId\')">'
+        '${escapeHtml(sheet.name)}</button>',
+      );
+
+      // Sheet table
+      sheetsHtml.write(
+        '<div class="sheet-panel${isActive ? ' active' : ''}" id="$safeId">',
+      );
+      sheetsHtml.write(_buildSheetTable(sheet));
+      sheetsHtml.write('</div>');
+    }
+
+    // Build the page using the same structure as buildBlogPostPage
+    final nostrHeaderHtml = getNostrLoginHeaderHtml();
+    final nostrStyles = getNostrLoginStyles();
+    final nostrScripts = getNostrLoginScripts();
+    final globalStyles = StationHtmlTemplates.getBaseStyles();
+
+    final headerHtml = '''
+  <header class="header">
+    <div class="header__inner">
+      <div class="header__logo">
+        <a href="$logoHref" style="text-decoration: none;">
+          <div class="logo">${escapeHtml(logo)}</div>
+        </a>
+      </div>
+      $nostrHeaderHtml
+    </div>
+    ${menuItems.isNotEmpty ? '<nav class="menu"><ul class="menu__inner">$menuItems</ul></nav>' : ''}
+  </header>''';
+
+    return '''<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1">
+  <title>${escapeHtml(title)}${ownerIdentifier.isNotEmpty ? ' - ${escapeHtml(ownerIdentifier)}' : ''}</title>
+  $nostrStyles
+  <style>$globalStyles</style>
+  <style>${_getSpreadsheetStyles()}</style>
+</head>
+<body>
+<div class="container">
+$headerHtml
+  <div class="content">
+    <div class="post">
+      <h1 class="post-title">${escapeHtml(title)}</h1>
+      ${workspaceName.isNotEmpty ? '<div class="post-meta-inline"><span class="post-date">${escapeHtml(workspaceName)}</span></div>' : ''}
+      ${sheets.length > 1 ? '<div class="sheet-tabs">$tabsHtml</div>' : ''}
+      <div class="sheets-container">
+        $sheetsHtml
+      </div>
+      ${_buildFeedbackHtml(interaction, likesCount, comments)}
+    </div>
+  </div>
+  <footer class="footer">
+    <div class="footer__inner">
+      <div class="copyright">
+        <span>published via geogram</span>
+      </div>
+    </div>
+  </footer>
+</div>
+${interaction.permitLikes ? _getLikesScript(ownerNpub, likesCount, likedHexPubkeys, documentFilename) : ''}
+${interaction.permitComments ? _getCommentsScript(ownerNpub, documentFilename) : ''}
+${sheets.length > 1 ? '<script>${_getTabScript()}</script>' : ''}
+<script>$nostrScripts</script>
+</body>
+</html>''';
+  }
+
+  /// Build an HTML table for a single sheet.
+  String _buildSheetTable(SpreadsheetSheet sheet) {
+    final buf = StringBuffer();
+
+    // Determine actual data bounds (cap at 500 rows)
+    final maxRow = _getMaxRow(sheet).clamp(0, 499);
+    final maxCol = _getMaxCol(sheet).clamp(0, 51); // cap at AZ
+
+    // Build merge map
+    final mergeMap = _buildMergeMap(sheet);
+
+    buf.write('<div class="sheet-table-wrapper"><table class="sheet-table">');
+
+    // Colgroup for column widths (matching Flutter UI defaults)
+    buf.write('<colgroup>');
+    buf.write('<col style="width:${_rowHeaderWidth}px">'); // row header
+    for (var c = 0; c <= maxCol; c++) {
+      final w = sheet.columns[c]?.width ?? _defaultColWidth;
+      buf.write('<col style="width:${w.toInt()}px">');
+    }
+    buf.write('</colgroup>');
+
+    // Column headers
+    buf.write('<thead><tr><th class="hdr corner-hdr"></th>');
+    for (var c = 0; c <= maxCol; c++) {
+      final frozen = c < sheet.frozenCols ? ' frozen-col' : '';
+      buf.write(
+        '<th class="hdr col-hdr$frozen">'
+        '${SpreadsheetSheet.columnLetter(c)}</th>',
+      );
+    }
+    buf.write('</tr></thead>');
+
+    // Data rows
+    buf.write('<tbody>');
+    for (var r = 0; r <= maxRow; r++) {
+      final frozenRow = r < sheet.frozenRows;
+      buf.write('<tr>');
+      buf.write(
+        '<td class="hdr row-hdr${frozenRow ? ' frozen-row' : ''}">${r + 1}</td>',
+      );
+      for (var c = 0; c <= maxCol; c++) {
+        final key = '$r:$c';
+        final mergeInfo = mergeMap[key];
+
+        // Skip cells covered by a merge
+        if (mergeInfo != null && mergeInfo.skip) continue;
+
+        final cell = sheet.cells[key];
+        final styleName = cell?.style;
+        final cellStyle = styleName != null ? sheet.styles[styleName] : null;
+
+        final cssClasses = <String>[];
+        if (frozenRow) cssClasses.add('frozen-row');
+        if (c < sheet.frozenCols) cssClasses.add('frozen-col');
+
+        final inlineStyle = _cellInlineStyle(cellStyle);
+
+        final spanAttrs = StringBuffer();
+        if (mergeInfo != null) {
+          if (mergeInfo.colspan > 1) {
+            spanAttrs.write(' colspan="${mergeInfo.colspan}"');
+          }
+          if (mergeInfo.rowspan > 1) {
+            spanAttrs.write(' rowspan="${mergeInfo.rowspan}"');
+          }
+        }
+
+        final displayValue = cell?.displayValue ?? '';
+        final classAttr =
+            cssClasses.isNotEmpty ? ' class="${cssClasses.join(' ')}"' : '';
+
+        buf.write(
+          '<td$classAttr$spanAttrs${inlineStyle.isNotEmpty ? ' style="$inlineStyle"' : ''}>'
+          '${escapeHtml(displayValue)}</td>',
+        );
+      }
+      buf.write('</tr>');
+    }
+    buf.write('</tbody></table></div>');
+
+    // Large sheet notice
+    final totalRows = _getMaxRow(sheet);
+    if (totalRows > 499) {
+      buf.write(
+        '<p class="sheet-notice">Showing first 500 of ${totalRows + 1} rows</p>',
+      );
+    }
+
+    return buf.toString();
+  }
+
+  int _getMaxRow(SpreadsheetSheet sheet) {
+    int maxRow = 0;
+    for (final key in sheet.cells.keys) {
+      final parts = key.split(':');
+      if (parts.length == 2) {
+        final r = int.tryParse(parts[0]);
+        if (r != null && r > maxRow) maxRow = r;
+      }
+    }
+    return maxRow;
+  }
+
+  int _getMaxCol(SpreadsheetSheet sheet) {
+    int maxCol = 0;
+    for (final key in sheet.cells.keys) {
+      final parts = key.split(':');
+      if (parts.length == 2) {
+        final c = int.tryParse(parts[1]);
+        if (c != null && c > maxCol) maxCol = c;
+      }
+    }
+    return maxCol;
+  }
+
+  Map<String, _MergeInfo> _buildMergeMap(SpreadsheetSheet sheet) {
+    final map = <String, _MergeInfo>{};
+    for (final merge in sheet.merges) {
+      final startParts = merge.start.split(':');
+      final endParts = merge.end.split(':');
+      if (startParts.length != 2 || endParts.length != 2) continue;
+
+      final startRow = int.tryParse(startParts[0]);
+      final startCol = int.tryParse(startParts[1]);
+      final endRow = int.tryParse(endParts[0]);
+      final endCol = int.tryParse(endParts[1]);
+      if (startRow == null ||
+          startCol == null ||
+          endRow == null ||
+          endCol == null) {
+        continue;
+      }
+
+      final rowspan = endRow - startRow + 1;
+      final colspan = endCol - startCol + 1;
+
+      map['$startRow:$startCol'] =
+          _MergeInfo(colspan: colspan, rowspan: rowspan);
+
+      for (var r = startRow; r <= endRow; r++) {
+        for (var c = startCol; c <= endCol; c++) {
+          if (r == startRow && c == startCol) continue;
+          map['$r:$c'] = _MergeInfo.covered();
+        }
+      }
+    }
+    return map;
+  }
+
+  String _cellInlineStyle(CellStyle? style) {
+    if (style == null) return '';
+    final parts = <String>[];
+    if (style.bold == true) parts.add('font-weight:bold');
+    if (style.italic == true) parts.add('font-style:italic');
+    if (style.fontSize != null) parts.add('font-size:${style.fontSize}px');
+    if (style.textColor != null) parts.add('color:${style.textColor}');
+    if (style.backgroundColor != null) {
+      parts.add('background-color:${style.backgroundColor}');
+    }
+    if (style.alignment != null) {
+      final h = style.alignment!['horizontal'] as String?;
+      if (h != null) parts.add('text-align:$h');
+      final v = style.alignment!['vertical'] as String?;
+      if (v != null) parts.add('vertical-align:$v');
+    }
+    return parts.join(';');
+  }
+
+  String _getSpreadsheetStyles() {
+    return '''
+/* Sheet tabs */
+.sheet-tabs {
+  display: flex;
+  gap: 2px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--border-color);
+}
+.sheet-tab {
+  padding: 6px 16px;
+  border: 1px solid var(--border-color);
+  border-bottom: none;
+  background: transparent;
+  color: var(--color);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 0.85rem;
+  border-radius: 4px 4px 0 0;
+  opacity: 0.6;
+  transition: opacity 0.15s;
+}
+.sheet-tab:hover { opacity: 1; }
+.sheet-tab.active {
+  opacity: 1;
+  color: var(--accent);
+  border-color: var(--accent-alpha-70);
+  background: var(--background);
+  position: relative;
+  bottom: -1px;
+  padding-bottom: 7px;
+}
+.sheet-panel { display: none; }
+.sheet-panel.active { display: block; }
+
+/* Table wrapper — scroll horizontally within the container */
+.sheet-table-wrapper {
+  overflow-x: auto;
+  margin-bottom: 20px;
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+}
+.sheet-table {
+  border-collapse: collapse;
+  font-size: 13px;
+  line-height: 1.4;
+  white-space: nowrap;
+  table-layout: fixed;
+}
+.sheet-table th,
+.sheet-table td {
+  border: 1px solid var(--border-color);
+  padding: 2px 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Headers — subtle, not flashy */
+.hdr {
+  background: var(--background);
+  color: var(--accent-alpha-70);
+  font-weight: normal;
+  font-size: 11px;
+  text-align: center;
+  user-select: none;
+}
+.col-hdr {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  border-bottom: 2px solid var(--border-color);
+}
+.row-hdr {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  border-right: 2px solid var(--border-color);
+}
+.corner-hdr {
+  position: sticky;
+  top: 0;
+  left: 0;
+  z-index: 3;
+  border-right: 2px solid var(--border-color);
+  border-bottom: 2px solid var(--border-color);
+}
+
+/* Frozen visual distinction — thin accent line */
+.frozen-row { border-bottom: 2px solid var(--accent-alpha-70); }
+.frozen-col { border-right: 2px solid var(--accent-alpha-70); }
+
+.sheet-notice {
+  opacity: 0.5;
+  font-size: 0.8rem;
+  margin-top: 8px;
+}
+
+/* Override container max-width for wide spreadsheets */
+@media (min-width: 900px) {
+  .container { max-width: 95vw; }
+}
+
+/* Feedback section */
+.feedback-section {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 20px;
+  padding-top: 15px;
+  border-top: 1px solid var(--border-color);
+}
+.like-button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  padding: 6px 14px;
+  color: var(--color);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 0.9rem;
+  transition: border-color 0.15s;
+}
+.like-button:hover { border-color: var(--accent); }
+.like-button.liked { color: #e25555; border-color: #e25555; }
+.like-count { font-size: 0.85rem; opacity: 0.7; }
+
+/* Comments */
+.comments-section {
+  margin-top: 24px;
+  padding-top: 15px;
+  border-top: 1px solid var(--border-color);
+}
+.comments-section h3 { margin: 0 0 12px; }
+.comment {
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border-color);
+}
+.comment-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.8rem;
+  margin-bottom: 4px;
+}
+.comment-author { color: var(--accent); font-weight: bold; }
+.comment-date { opacity: 0.5; }
+.comment-delete {
+  background: none;
+  border: none;
+  color: var(--color);
+  opacity: 0.4;
+  cursor: pointer;
+  font-size: 0.8rem;
+  padding: 0 4px;
+  margin-left: auto;
+}
+.comment-delete:hover { opacity: 1; color: #e25555; }
+.comment p { margin: 0; font-size: 0.9rem; }
+.comment-form { margin-top: 16px; }
+.comment-form textarea {
+  width: 100%;
+  background: var(--background);
+  color: var(--color);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  padding: 8px;
+  font-family: inherit;
+  font-size: 0.9rem;
+  resize: vertical;
+}
+.comment-form button {
+  margin-top: 8px;
+  background: var(--accent);
+  color: #000;
+  border: none;
+  border-radius: 4px;
+  padding: 6px 16px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 0.85rem;
+}
+.comment-form button:hover { opacity: 0.9; }
+.comment-form button:disabled { opacity: 0.5; cursor: not-allowed; }
+''';
+  }
+
+  String _getTabScript() {
+    return '''
+function switchSheet(id) {
+  document.querySelectorAll('.sheet-panel').forEach(function(p) {
+    p.classList.remove('active');
+  });
+  document.querySelectorAll('.sheet-tab').forEach(function(t) {
+    t.classList.remove('active');
+  });
+  var panel = document.getElementById(id);
+  if (panel) panel.classList.add('active');
+  var tabs = document.querySelectorAll('.sheet-tab');
+  for (var i = 0; i < tabs.length; i++) {
+    if (tabs[i].getAttribute('onclick').indexOf(id) !== -1) {
+      tabs[i].classList.add('active');
+      break;
+    }
+  }
+}
+''';
+  }
+
+  String _buildFeedbackHtml(
+    NdfInteractionSettings interaction,
+    int likesCount,
+    List<FeedbackComment> comments,
+  ) {
+    if (!interaction.hasAnyInteraction) return '';
+    final buf = StringBuffer();
+
+    // Likes section (hidden until Nostr connects — same as blog)
+    if (interaction.permitLikes) {
+      buf.write('''
+      <div class="feedback-section" id="feedback-section" style="display: none;">
+        <button class="like-button" id="like-button" onclick="toggleLike()">
+          <span id="like-icon">\u2661</span>
+          <span>Like</span>
+        </button>
+        <span class="like-count" id="like-count">${likesCount > 0 ? "$likesCount like${likesCount != 1 ? "s" : ""}" : ""}</span>
+      </div>''');
+    }
+
+    // Comments section
+    if (interaction.permitComments) {
+      buf.write('<div class="comments-section" id="comments-section">');
+      buf.write('<h3>Comments${comments.isNotEmpty ? " (${comments.length})" : ""}</h3>');
+
+      for (final c in comments) {
+        buf.write('''
+        <div class="comment" data-comment-id="${escapeHtml(c.id)}" data-comment-npub="${escapeHtml(c.npub ?? '')}">
+          <div class="comment-meta">
+            <span class="comment-author">${escapeHtml(c.author)}</span>
+            <span class="comment-date">${escapeHtml(c.created)}</span>
+            <button class="comment-delete" onclick="deleteComment('${escapeHtml(c.id)}')" style="display:none" title="Delete">\u2715</button>
+          </div>
+          <p>${escapeHtml(c.content)}</p>
+        </div>''');
+      }
+
+      // Comment form (hidden until Nostr connects)
+      buf.write('''
+      <div class="comment-form" id="comment-form" style="display: none;">
+        <textarea id="comment-input" placeholder="Write a comment..." rows="3"></textarea>
+        <button id="comment-submit" onclick="submitComment()">Post Comment</button>
+      </div>''');
+      buf.write('</div>');
+    }
+
+    return buf.toString();
+  }
+
+  String _getLikesScript(String authorNpub, int likesCount, List<String> likedHexPubkeys, String filename) {
+    // Use the filename as the base for API URLs since the browser treats .ndf as a file
+    // From page at .../Spreadsheet%202.ndf, we need "Spreadsheet%202.ndf/like"
+    final encodedFilename = Uri.encodeComponent(filename);
+    return '''
+<script>
+(function() {
+  const authorNpub = '${escapeHtml(authorNpub)}';
+  const likedPubkeys = ${toJsonArray(likedHexPubkeys)};
+  const apiBase = '$encodedFilename';
+  let userPubkey = null;
+  let isLiked = false;
+
+  function onNostrConnected(pubkey) {
+    userPubkey = pubkey;
+    var sec = document.getElementById('feedback-section');
+    if (sec) sec.style.display = 'flex';
+    if (likedPubkeys.includes(pubkey)) {
+      isLiked = true;
+      updateUI($likesCount);
+    }
+  }
+
+  function init() {
+    document.addEventListener('nostr-connected', function(e) {
+      onNostrConnected(e.detail.pubkey);
+    });
+    if (window.GeogramNostr && window.GeogramNostr.connected && window.GeogramNostr.pubkey) {
+      onNostrConnected(window.GeogramNostr.pubkey);
+    }
+  }
+
+  window.toggleLike = async function() {
+    if (!userPubkey || !window.nostr) { alert('Please connect with Nostr first'); return; }
+    var button = document.getElementById('like-button');
+    button.disabled = true;
+    try {
+      var unsignedEvent = {
+        pubkey: userPubkey,
+        created_at: Math.floor(Date.now() / 1000),
+        kind: 7,
+        tags: [['p', authorNpub], ['type', 'likes']],
+        content: 'like'
+      };
+      var signedEvent = await window.nostr.signEvent(unsignedEvent);
+      if (!signedEvent || !signedEvent.sig) throw new Error('Signing failed');
+      var response = await fetch(apiBase + '/like', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(signedEvent)
+      });
+      var result = await response.json();
+      if (result.success) { isLiked = result.liked; updateUI(result.like_count); }
+    } catch (e) { console.error('Like error:', e); }
+    finally { button.disabled = false; }
+  };
+
+  function updateUI(count) {
+    var button = document.getElementById('like-button');
+    var icon = document.getElementById('like-icon');
+    var countEl = document.getElementById('like-count');
+    button.classList.toggle('liked', isLiked);
+    icon.textContent = isLiked ? '\\u2665' : '\\u2661';
+    countEl.textContent = count > 0 ? count + ' like' + (count !== 1 ? 's' : '') : '';
+  }
+
+  document.addEventListener('DOMContentLoaded', init);
+})();
+</script>''';
+  }
+
+  String _getCommentsScript(String ownerNpub, String filename) {
+    final encodedFilename = Uri.encodeComponent(filename);
+    return '''
+<script>
+(function() {
+  const ownerNpub = '${escapeHtml(ownerNpub)}';
+  const apiBase = '$encodedFilename';
+  let userPubkey = null;
+  let userNpub = null;
+  let userCallsign = null;
+
+  function onConnected(pubkey) {
+    userPubkey = pubkey;
+    userNpub = window.GeogramNostr ? window.GeogramNostr.npub : null;
+    userCallsign = window.GeogramNostr ? (window.GeogramNostr.callsign || window.GeogramNostr.nickname || 'anon') : 'anon';
+    var form = document.getElementById('comment-form');
+    if (form) form.style.display = 'block';
+    // Show delete buttons for own comments and if user is owner
+    document.querySelectorAll('.comment').forEach(function(el) {
+      var npub = el.getAttribute('data-comment-npub');
+      var btn = el.querySelector('.comment-delete');
+      if (btn && (npub === userNpub || userNpub === ownerNpub)) {
+        btn.style.display = 'inline';
+      }
+    });
+  }
+
+  document.addEventListener('nostr-connected', function(e) { onConnected(e.detail.pubkey); });
+  if (window.GeogramNostr && window.GeogramNostr.connected && window.GeogramNostr.pubkey) {
+    onConnected(window.GeogramNostr.pubkey);
+  }
+
+  window.submitComment = async function() {
+    if (!userPubkey || !window.nostr) { alert('Connect with Nostr first'); return; }
+    var input = document.getElementById('comment-input');
+    var content = input.value.trim();
+    if (!content) return;
+    var btn = document.getElementById('comment-submit');
+    btn.disabled = true;
+    try {
+      var unsignedEvent = {
+        pubkey: userPubkey,
+        created_at: Math.floor(Date.now() / 1000),
+        kind: 1,
+        tags: [['t', 'ndf-comment'], ['callsign', userCallsign]],
+        content: content
+      };
+      var signedEvent = await window.nostr.signEvent(unsignedEvent);
+      if (!signedEvent || !signedEvent.sig) throw new Error('Signing failed');
+      var resp = await fetch(apiBase + '/comment', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ author: userCallsign, content: content, npub: userNpub, signature: signedEvent.sig })
+      });
+      var result = await resp.json();
+      if (result.success) { input.value = ''; location.reload(); }
+    } catch(e) { console.error('Comment error:', e); }
+    finally { btn.disabled = false; }
+  };
+
+  window.deleteComment = async function(commentId) {
+    if (!userNpub) return;
+    if (!confirm('Delete this comment?')) return;
+    try {
+      var resp = await fetch(apiBase + '/comment/' + encodeURIComponent(commentId), {
+        method: 'DELETE',
+        headers: { 'X-Npub': userNpub }
+      });
+      var result = await resp.json();
+      if (result.success) { location.reload(); }
+    } catch(e) { console.error('Delete error:', e); }
+  };
+})();
+</script>''';
+  }
+}
+
+class _MergeInfo {
+  final int colspan;
+  final int rowspan;
+  final bool skip;
+
+  _MergeInfo({this.colspan = 1, this.rowspan = 1, this.skip = false});
+
+  factory _MergeInfo.covered() =>
+      _MergeInfo(skip: true);
+}

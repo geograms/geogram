@@ -253,6 +253,16 @@ class WorkStorageService {
   String documentPath(String workspaceId, String filename) =>
       '${workspacePath(workspaceId)}/$filename';
 
+  /// Get the feedback directory path for a document
+  /// Structure: workspaces/{id}/feedback/{sanitized_filename}/
+  String documentFeedbackPath(String workspaceId, String filename) {
+    final safeName = filename.replaceAll('.ndf', '').replaceAll(RegExp(r'[^\w-]'), '_');
+    return '${workspacePath(workspaceId)}/feedback/$safeName';
+  }
+
+  /// Get the ProfileStorage instance (for passing to FeedbackFolderUtils)
+  ProfileStorage get storage => _storage;
+
   /// Read NDF document bytes
   Future<Uint8List?> readDocumentBytes(String workspaceId, String filename) async {
     return _storage.readBytes(documentPath(workspaceId, filename));
@@ -280,6 +290,4 @@ class WorkStorageService {
     }
   }
 
-  /// Get the underlying ProfileStorage (for encrypted storage checks)
-  ProfileStorage get storage => _storage;
 }
