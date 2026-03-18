@@ -716,26 +716,33 @@ $extraScripts
     }
   };
   document.addEventListener('fullscreenchange', function() {
-    var deck = document.getElementById('slide-deck');
+    var d = document.getElementById('slide-deck');
     var btn = document.getElementById('fs-btn');
     if (document.fullscreenElement) {
-      deck.classList.add('slide-deck--fs');
+      d.classList.add('slide-deck--fs');
+      d.focus();
       if (btn) btn.title = 'Exit fullscreen';
     } else {
-      deck.classList.remove('slide-deck--fs');
+      d.classList.remove('slide-deck--fs');
       if (btn) btn.title = 'Fullscreen';
     }
   });
   // Click on slide deck to enter fullscreen
-  document.getElementById('slide-deck').addEventListener('click', function(e) {
+  var deck = document.getElementById('slide-deck');
+  deck.addEventListener('click', function(e) {
     if (!document.fullscreenElement) toggleFullscreen();
   });
-  document.addEventListener('keydown', function(e) {
-    if (e.key === 'ArrowLeft') prevSlide();
-    if (e.key === 'ArrowRight') nextSlide();
+  // Make deck focusable so it receives key events in fullscreen
+  deck.setAttribute('tabindex', '0');
+  deck.style.outline = 'none';
+  function handleKey(e) {
+    if (e.key === 'ArrowLeft') { prevSlide(); e.preventDefault(); }
+    if (e.key === 'ArrowRight') { nextSlide(); e.preventDefault(); }
     if (e.key === 'Escape' && document.fullscreenElement) document.exitFullscreen();
     if (e.key === 'f' || e.key === 'F') toggleFullscreen();
-  });
+  }
+  document.addEventListener('keydown', handleKey);
+  deck.addEventListener('keydown', handleKey);
   showNotes();
 })();
 </script>''';
@@ -897,9 +904,6 @@ $extraScripts
   opacity: 0.2;
 }
 
-/* More space before feedback section */
-.feedback-section { margin-top: 48px; }
-.comments-section { margin-top: 48px; }
 .slide-notes {
   display: none;
   padding: 10px 14px;
@@ -910,6 +914,9 @@ $extraScripts
   line-height: 1.5;
 }
 ''' + _getFeedbackStyles() + '''
+/* Presentation: extra space before feedback */
+.feedback-section { margin-top: 48px; }
+.comments-section { margin-top: 48px; }
 ''';
   }
 
