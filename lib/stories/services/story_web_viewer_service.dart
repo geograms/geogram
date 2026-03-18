@@ -402,11 +402,16 @@ ${feedback.getFeedbackStyles()}
 <body>
 <div class="container">
 $headerHtml
-  <div class="scene-viewport" id="scene-viewport">
-    <div class="scene-container" id="scene-container"></div>
-    <div class="scene-title-overlay" id="scene-title-overlay" style="display:none;"></div>
-    <div class="countdown-overlay" id="countdown-overlay" style="display:none;"></div>
-    <div class="back-button" id="back-button" style="display:none;" onclick="goBack()">\u2190</div>
+  <div class="story-layout">
+    <div class="scene-viewport" id="scene-viewport">
+      <div class="scene-container" id="scene-container"></div>
+      <div class="scene-title-overlay" id="scene-title-overlay" style="display:none;"></div>
+      <div class="countdown-overlay" id="countdown-overlay" style="display:none;"></div>
+      <div class="back-button" id="back-button" style="display:none;" onclick="goBack()">\u2190</div>
+    </div>
+    <div class="story-sidebar">
+      ${feedback.buildFeedbackHtml(interaction, likesCount, comments)}
+    </div>
   </div>
 </div>
 <script>
@@ -490,11 +495,30 @@ ${interaction.permitComments ? feedback.getCommentsScript(ownerNpub, storyFilena
 
   String _getViewerStyles() {
     return '''
+.story-layout {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 24px;
+  padding: 0 16px;
+}
+.story-sidebar {
+  flex: 0 1 320px;
+  min-width: 0;
+  max-height: 70vh;
+  overflow-y: auto;
+}
+.story-sidebar:empty { display: none; }
+@media (max-width: 800px) {
+  .story-layout { flex-direction: column; align-items: center; gap: 16px; padding: 0; }
+  .story-sidebar { flex: none; width: 100%; max-width: 420px; max-height: none; padding: 0 16px 20px; }
+}
 .scene-viewport {
   position: relative;
+  flex: 0 0 auto;
   width: 100%;
   max-width: 420px;
-  margin: 0 auto 10vh;
   aspect-ratio: 9 / 16;
   max-height: 70vh;
   overflow: hidden;
@@ -502,7 +526,7 @@ ${interaction.permitComments ? feedback.getCommentsScript(ownerNpub, storyFilena
   background: #000;
 }
 @media (max-width: 600px) {
-  .scene-viewport { max-width: 100%; max-height: 75vh; margin-bottom: 5vh; border-radius: 0; }
+  .scene-viewport { max-width: 100%; max-height: 75vh; border-radius: 0; }
 }
 .scene-container {
   position: absolute;
