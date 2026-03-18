@@ -394,19 +394,13 @@ ${feedback.getFeedbackStyles()}
   $nostrStyles
 </head>
 <body>
-<div class="story-page-container">
+<div class="container">
 $headerHtml
   <div class="scene-viewport" id="scene-viewport">
     <div class="scene-container" id="scene-container"></div>
     <div class="scene-title-overlay" id="scene-title-overlay" style="display:none;"></div>
     <div class="countdown-overlay" id="countdown-overlay" style="display:none;"></div>
     <div class="back-button" id="back-button" style="display:none;" onclick="goBack()">\u2190</div>
-  </div>
-  <div class="story-info-section">
-    <h1 class="story-title">${escapeHtml(story.title)}</h1>
-    ${story.description != null && story.description!.isNotEmpty ? '<p class="story-description">${escapeHtml(story.description!)}</p>' : ''}
-    ${story.tags.isNotEmpty ? '<div class="story-tags">${story.tags.map((t) => '<span class="tag">${escapeHtml(t)}</span>').join('')}</div>' : ''}
-    ${feedback.buildFeedbackHtml(interaction, likesCount, comments)}
   </div>
   <footer class="footer">
     <div class="footer__inner">
@@ -495,23 +489,19 @@ ${interaction.permitComments ? feedback.getCommentsScript(ownerNpub, storyFilena
 
   String _getViewerStyles() {
     return '''
-.story-page-container {
-  max-width: 100%;
-  margin: 0 auto;
-}
 .scene-viewport {
   position: relative;
   width: 100%;
   max-width: 480px;
   margin: 0 auto;
   aspect-ratio: 9 / 16;
-  max-height: 70vh;
+  max-height: 80vh;
   overflow: hidden;
   border-radius: 8px;
   background: #000;
 }
 @media (max-width: 600px) {
-  .scene-viewport { max-width: 100%; max-height: 75vh; border-radius: 0; }
+  .scene-viewport { max-width: 100%; max-height: 85vh; border-radius: 0; }
 }
 .scene-container {
   position: absolute;
@@ -677,15 +667,6 @@ ${interaction.permitComments ? feedback.getCommentsScript(ownerNpub, storyFilena
   font-family: inherit;
 }
 
-/* Info section below viewer */
-.story-info-section {
-  max-width: 800px;
-  margin: 20px auto;
-  padding: 0 16px;
-}
-.story-title { color: var(--accent); margin: 0 0 8px; font-size: 1.3rem; }
-.story-description { margin: 0 0 12px; opacity: 0.7; font-size: 0.9rem; }
-.story-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 16px; }
 ''';
   }
 
