@@ -16,7 +16,9 @@ import '../../util/station_html_templates.dart';
 import '../models/document_content.dart';
 import '../models/ndf_document.dart';
 import '../models/ndf_interaction_settings.dart';
+import '../models/presentation_content.dart';
 import '../models/spreadsheet_content.dart';
+import '../models/voicememo_content.dart';
 import 'ndf_service.dart';
 
 /// Singleton service for rendering NDF documents as HTML pages.
@@ -85,6 +87,20 @@ class NdfWebViewerService {
           ownerNpub: ownerNpub,
           documentFilename: documentFilename,
         );
+      case NdfDocumentType.presentation:
+        return _buildPresentationPage(ndfBytes, metadata: metadata,
+          ownerIdentifier: ownerIdentifier, workspaceName: workspaceName,
+          menuItems: menuItems, logoText: logoText, logoHref: logoHref,
+          interaction: interaction, likesCount: likesCount,
+          likedHexPubkeys: likedHexPubkeys, comments: comments,
+          ownerNpub: ownerNpub, documentFilename: documentFilename);
+      case NdfDocumentType.voicememo:
+        return _buildVoiceMemoPage(ndfBytes, metadata: metadata,
+          ownerIdentifier: ownerIdentifier, workspaceName: workspaceName,
+          menuItems: menuItems, logoText: logoText, logoHref: logoHref,
+          interaction: interaction, likesCount: likesCount,
+          likedHexPubkeys: likedHexPubkeys, comments: comments,
+          ownerNpub: ownerNpub, documentFilename: documentFilename);
       default:
         return null; // Other types not yet supported
     }
@@ -535,6 +551,298 @@ $extraScripts
 }
 
 /* Feedback (shared with spreadsheet) */
+''' + _getFeedbackStyles() + '''
+''';
+  }
+
+  // ============================================================
+  // Presentation viewer
+  // ============================================================
+
+  String? _buildPresentationPage(Uint8List ndfBytes, {
+    required NdfDocument metadata,
+    String ownerIdentifier = '', String workspaceName = '',
+    String menuItems = '', String logoText = '', String logoHref = '../../',
+    NdfInteractionSettings interaction = const NdfInteractionSettings(),
+    int likesCount = 0, List<String> likedHexPubkeys = const [],
+    List<FeedbackComment> comments = const [], String ownerNpub = '',
+    String documentFilename = '',
+  }) {
+    final mainJson = _ndfService.readArchiveJsonFromBytes(ndfBytes, 'content/main.json');
+    if (mainJson == null) return null;
+
+    final content = PresentationContent.fromJson(mainJson);
+    final title = metadata.title.isNotEmpty ? metadata.title : 'Presentation';
+    final logo = logoText.isNotEmpty ? logoText : ownerIdentifier;
+    final theme = content.theme;
+
+    // Read all slides
+    final slides = <PresentationSlide>[];
+    for (final slideId in content.slides) {
+      // Slides may be stored as content/{slideId}.json or content/slides/{slideId}.json
+      var slideJson = _ndfService.readArchiveJsonFromBytes(ndfBytes, 'content/$slideId.json');
+      slideJson ??= _ndfService.readArchiveJsonFromBytes(ndfBytes, 'content/slides/$slideId.json');
+      if (slideJson != null) {
+        slides.add(PresentationSlide.fromJson(slideJson));
+      }
+    }
+    if (slides.isEmpty) return null;
+
+    // Build slides HTML
+    final slidesHtml = StringBuffer();
+    for (var i = 0; i < slides.length; i++) {
+      final slide = slides[i];
+      final isActive = i == 0;
+      final bg = slide.background;
+      final bgStyle = bg.color != null ? 'background-color:${bg.color};' : 'background-color:${theme.colors.background};';
+
+      slidesHtml.write('<div class="slide${isActive ? ' active' : ''}" data-index="$i" style="$bgStyle color:${theme.colors.text};">');
+
+      // Render elements
+      for (final el in slide.elements) {
+        final pos = el.position;
+        final posStyle = 'left:${pos.x};top:${pos.y};width:${pos.w};height:${pos.h};';
+
+        if (el.type == SlideElementType.image && el.imagePath != null) {
+          // Try to load image from archive
+          final imgPath = el.imagePath!.startsWith('asset://') ? 'assets/${el.imagePath!.substring(8)}' : el.imagePath!;
+          final imgBytes = _ndfService.readArchiveFileFromBytes(ndfBytes, imgPath);
+          if (imgBytes != null) {
+            final ext = imgPath.split('.').last.toLowerCase();
+            final mime = ext == 'jpg' || ext == 'jpeg' ? 'image/jpeg' : ext == 'svg' ? 'image/svg+xml' : 'image/$ext';
+            slidesHtml.write('<div class="slide-el" style="$posStyle"><img src="data:$mime;base64,${base64Encode(imgBytes)}" style="width:100%;height:100%;object-fit:contain;"></div>');
+          }
+        } else {
+          // Text element
+          final style = el.style;
+          final textStyles = <String>[];
+          if (style?.fontSize != null) textStyles.add('font-size:${style!.fontSize}px');
+          if (style?.color != null) textStyles.add('color:${style!.color}');
+          if (style?.bold == true) textStyles.add('font-weight:bold');
+          if (style?.italic == true) textStyles.add('font-style:italic');
+          if (style?.align != null) textStyles.add('text-align:${style!.align!.name}');
+          final inlineStyle = textStyles.isNotEmpty ? '${textStyles.join(';')};' : '';
+
+          slidesHtml.write('<div class="slide-el" style="$posStyle$inlineStyle">');
+          for (final span in el.content) {
+            var text = escapeHtml(span.value);
+            if (span.isBold) text = '<strong>$text</strong>';
+            if (span.isItalic) text = '<em>$text</em>';
+            if (span.isUnderline) text = '<u>$text</u>';
+            slidesHtml.write(text);
+          }
+          slidesHtml.write('</div>');
+        }
+      }
+
+      // Slide number
+      slidesHtml.write('<div class="slide-num">${i + 1} / ${slides.length}</div>');
+      slidesHtml.write('</div>');
+    }
+
+    // Build content with navigation
+    final contentHtml = '''
+      <div class="slide-deck" id="slide-deck">
+        $slidesHtml
+      </div>
+      <div class="slide-nav">
+        <button onclick="prevSlide()" id="prev-btn" disabled>&larr; Prev</button>
+        <button onclick="nextSlide()" id="next-btn"${slides.length <= 1 ? ' disabled' : ''}>Next &rarr;</button>
+      </div>''';
+
+    final slideScript = slides.length > 1 ? '''<script>
+(function() {
+  var current = 0;
+  var total = ${slides.length};
+  var slides = document.querySelectorAll('.slide');
+  window.prevSlide = function() {
+    if (current > 0) { slides[current].classList.remove('active'); current--; slides[current].classList.add('active'); updateNav(); }
+  };
+  window.nextSlide = function() {
+    if (current < total - 1) { slides[current].classList.remove('active'); current++; slides[current].classList.add('active'); updateNav(); }
+  };
+  function updateNav() {
+    document.getElementById('prev-btn').disabled = current === 0;
+    document.getElementById('next-btn').disabled = current === total - 1;
+  }
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'ArrowLeft') prevSlide();
+    if (e.key === 'ArrowRight') nextSlide();
+  });
+})();
+</script>''' : '';
+
+    return _buildPageShell(
+      title: title, ownerIdentifier: ownerIdentifier,
+      workspaceName: workspaceName, menuItems: menuItems,
+      logo: logo, logoHref: logoHref,
+      appStyles: _getPresentationStyles(),
+      contentHtml: contentHtml, interaction: interaction,
+      likesCount: likesCount, likedHexPubkeys: likedHexPubkeys,
+      comments: comments, ownerNpub: ownerNpub,
+      documentFilename: documentFilename, extraScripts: slideScript,
+    );
+  }
+
+  String _getPresentationStyles() {
+    return '''
+.slide-deck {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16/9;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  overflow: hidden;
+  margin-bottom: 12px;
+}
+.slide {
+  display: none;
+  position: absolute;
+  top: 0; left: 0; width: 100%; height: 100%;
+}
+.slide.active { display: block; }
+.slide-el {
+  position: absolute;
+  overflow: hidden;
+  word-wrap: break-word;
+  display: flex;
+  align-items: flex-start;
+}
+.slide-num {
+  position: absolute;
+  bottom: 8px;
+  right: 12px;
+  font-size: 11px;
+  opacity: 0.4;
+}
+.slide-nav {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+.slide-nav button {
+  background: transparent;
+  border: 1px solid var(--border-color);
+  color: var(--color);
+  padding: 6px 16px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 0.85rem;
+}
+.slide-nav button:hover:not(:disabled) { border-color: var(--accent); }
+.slide-nav button:disabled { opacity: 0.3; cursor: not-allowed; }
+''' + _getFeedbackStyles() + '''
+''';
+  }
+
+  // ============================================================
+  // Voice memo viewer
+  // ============================================================
+
+  String? _buildVoiceMemoPage(Uint8List ndfBytes, {
+    required NdfDocument metadata,
+    String ownerIdentifier = '', String workspaceName = '',
+    String menuItems = '', String logoText = '', String logoHref = '../../',
+    NdfInteractionSettings interaction = const NdfInteractionSettings(),
+    int likesCount = 0, List<String> likedHexPubkeys = const [],
+    List<FeedbackComment> comments = const [], String ownerNpub = '',
+    String documentFilename = '',
+  }) {
+    final mainJson = _ndfService.readArchiveJsonFromBytes(ndfBytes, 'content/main.json');
+    if (mainJson == null) return null;
+
+    final content = VoiceMemoContent.fromJson(mainJson);
+    final title = metadata.title.isNotEmpty ? metadata.title : content.title;
+    final logo = logoText.isNotEmpty ? logoText : ownerIdentifier;
+
+    // Read all clips
+    final clips = <VoiceMemoClip>[];
+    for (final clipId in content.clips) {
+      final clipJson = _ndfService.readArchiveJsonFromBytes(ndfBytes, 'content/clips/$clipId.json');
+      if (clipJson != null) {
+        try {
+          clips.add(VoiceMemoClip.fromJson(clipJson));
+        } catch (_) {}
+      }
+    }
+
+    // Build clips HTML
+    final contentHtml = StringBuffer('<div class="vm-clips">');
+    if (clips.isEmpty) {
+      contentHtml.write('<p style="opacity:0.5">No clips in this voice memo</p>');
+    }
+    for (final clip in clips) {
+      contentHtml.write('<div class="vm-clip">');
+      contentHtml.write('<div class="vm-clip-header">');
+      contentHtml.write('<span class="vm-clip-title">${escapeHtml(clip.title)}</span>');
+      contentHtml.write('<span class="vm-clip-duration">${clip.durationFormatted}</span>');
+      contentHtml.write('</div>');
+      if (clip.description != null && clip.description!.isNotEmpty) {
+        contentHtml.write('<p class="vm-clip-desc">${escapeHtml(clip.description!)}</p>');
+      }
+      if (clip.transcription != null && content.settings.showTranscriptions) {
+        contentHtml.write('<div class="vm-transcription">');
+        contentHtml.write('<div class="vm-transcription-label">Transcription</div>');
+        contentHtml.write('<p>${escapeHtml(clip.transcription!.text)}</p>');
+        contentHtml.write('</div>');
+      }
+      contentHtml.write('</div>');
+    }
+    contentHtml.write('</div>');
+
+    return _buildPageShell(
+      title: title, ownerIdentifier: ownerIdentifier,
+      workspaceName: workspaceName, menuItems: menuItems,
+      logo: logo, logoHref: logoHref,
+      appStyles: _getVoiceMemoStyles(),
+      contentHtml: contentHtml.toString(), interaction: interaction,
+      likesCount: likesCount, likedHexPubkeys: likedHexPubkeys,
+      comments: comments, ownerNpub: ownerNpub,
+      documentFilename: documentFilename,
+    );
+  }
+
+  String _getVoiceMemoStyles() {
+    return '''
+.vm-clips { display: flex; flex-direction: column; gap: 12px; }
+.vm-clip {
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  padding: 12px 16px;
+}
+.vm-clip-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+.vm-clip-title { font-weight: bold; }
+.vm-clip-duration {
+  font-size: 0.8rem;
+  color: var(--accent);
+  font-family: monospace;
+}
+.vm-clip-desc {
+  margin: 4px 0 0;
+  font-size: 0.9rem;
+  opacity: 0.8;
+}
+.vm-transcription {
+  margin-top: 8px;
+  padding: 8px 12px;
+  background: var(--accent-alpha-20);
+  border-radius: 4px;
+  font-size: 0.85rem;
+}
+.vm-transcription-label {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  opacity: 0.6;
+  margin-bottom: 4px;
+}
+.vm-transcription p { margin: 0; line-height: 1.6; }
 ''' + _getFeedbackStyles() + '''
 ''';
   }
