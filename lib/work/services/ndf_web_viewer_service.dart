@@ -898,8 +898,8 @@ $extraScripts
 }
 
 /* More space before feedback section */
-.feedback-section { margin-top: 30px; }
-.comments-section { margin-top: 30px; }
+.feedback-section { margin-top: 48px; }
+.comments-section { margin-top: 48px; }
 .slide-notes {
   display: none;
   padding: 10px 14px;
