@@ -168,6 +168,7 @@ class _MirrorSettingsPageState extends State<MirrorSettingsPage> {
               onPressed: _syncAll,
             ),
           PopupMenuButton<String>(
+            icon: const Icon(Icons.menu),
             onSelected: (value) {
               if (value == 'excluded_files') {
                 Navigator.push(
