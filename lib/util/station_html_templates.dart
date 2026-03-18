@@ -324,45 +324,6 @@ ${getDownloadStyles()}
 
       <!-- Speech Recognition Models -->
       $whisperModelsHtml
-
-      <!-- Vision AI Models -->
-      <section class="download-section">
-        <div class="section-header">
-          <h2>Vision AI Models</h2>
-        </div>
-        <div class="model-list">
-          <a href="/bot/models/vision/mobilenet-v3-small.tflite" class="model-item">
-            <span class="model-icon"><svg viewBox="0 0 24 24"><path d="M12 3v12m0 0l-4-4m4 4l4-4M5 17v2a2 2 0 002 2h10a2 2 0 002-2v-2"/></svg></span>
-            <span class="model-name">MobileNet V3 Small</span>
-            <span class="model-size">~10 MB</span>
-            <span class="model-desc">Fast image classification</span>
-          </a>
-          <a href="/bot/models/vision/mobilenet-v4-medium.tflite" class="model-item">
-            <span class="model-icon"><svg viewBox="0 0 24 24"><path d="M12 3v12m0 0l-4-4m4 4l4-4M5 17v2a2 2 0 002 2h10a2 2 0 002-2v-2"/></svg></span>
-            <span class="model-name">MobileNet V4 Medium</span>
-            <span class="model-size">~19 MB</span>
-            <span class="model-desc">Better accuracy classification</span>
-          </a>
-          <a href="/bot/models/vision/efficientdet-lite0.tflite" class="model-item">
-            <span class="model-icon"><svg viewBox="0 0 24 24"><path d="M12 3v12m0 0l-4-4m4 4l4-4M5 17v2a2 2 0 002 2h10a2 2 0 002-2v-2"/></svg></span>
-            <span class="model-name">EfficientDet Lite</span>
-            <span class="model-size">~20 MB</span>
-            <span class="model-desc">Object detection</span>
-          </a>
-          <a href="/bot/models/vision/llava-7b-q4.gguf" class="model-item">
-            <span class="model-icon"><svg viewBox="0 0 24 24"><path d="M12 3v12m0 0l-4-4m4 4l4-4M5 17v2a2 2 0 002 2h10a2 2 0 002-2v-2"/></svg></span>
-            <span class="model-name">LLaVA 7B (Q4)</span>
-            <span class="model-size">~4.1 GB</span>
-            <span class="model-desc">Full visual Q&A</span>
-          </a>
-          <a href="/bot/models/vision/llava-7b-q5.gguf" class="model-item">
-            <span class="model-icon"><svg viewBox="0 0 24 24"><path d="M12 3v12m0 0l-4-4m4 4l4-4M5 17v2a2 2 0 002 2h10a2 2 0 002-2v-2"/></svg></span>
-            <span class="model-name">LLaVA 7B (Q5)</span>
-            <span class="model-size">~4.8 GB</span>
-            <span class="model-desc">Better quality visual Q&A</span>
-          </a>
-        </div>
-      </section>
     </main>
 
     <footer class="footer">
@@ -374,22 +335,21 @@ ${getDownloadStyles()}
 ''';
   }
 
+  /// Static whisper model definitions (same as station_server_service)
+  static const List<Map<String, dynamic>> _defaultWhisperModels = [
+    {'id': 'ggml-tiny.bin', 'name': 'Whisper Tiny', 'size': 39 * 1024 * 1024, 'description': 'Fastest, lower accuracy'},
+    {'id': 'ggml-base.bin', 'name': 'Whisper Base', 'size': 145 * 1024 * 1024, 'description': 'Good balance of speed and accuracy'},
+    {'id': 'ggml-small.bin', 'name': 'Whisper Small', 'size': 465 * 1024 * 1024, 'description': 'Better accuracy, slower'},
+    {'id': 'ggml-medium.bin', 'name': 'Whisper Medium', 'size': 1500 * 1024 * 1024, 'description': 'High accuracy'},
+    {'id': 'ggml-large-v2.bin', 'name': 'Whisper Large v2', 'size': 3000 * 1024 * 1024, 'description': 'Best accuracy'},
+  ];
+
   /// Build whisper models HTML section based on available models
   static String _buildWhisperModelsHtml(List<Map<String, dynamic>>? models) {
-    if (models == null || models.isEmpty) {
-      return '''
-      <section class="download-section">
-        <div class="section-header">
-          <h2>Speech Recognition Models (Whisper)</h2>
-        </div>
-        <p style="color: var(--accent-alpha-70);">
-          No whisper models available yet. The station will sync models automatically.
-        </p>
-      </section>
-      ''';
-    }
+    // Fall back to static model list if none passed
+    final effectiveModels = (models != null && models.isNotEmpty) ? models : _defaultWhisperModels;
 
-    final modelItems = models.map((m) {
+    final modelItems = effectiveModels.map((m) {
       final id = m['id'] as String;
       final name = m['name'] as String;
       final size = m['size'] as int;
