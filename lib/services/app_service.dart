@@ -637,11 +637,11 @@ class AppService {
         }
         yearOrder.sort((a, b) => b.compareTo(a)); // newest first
 
-        postsHtml.writeln('<div class="blog-timeline">');
+        postsHtml.writeln('<div class="timeline">');
         for (final year in yearOrder) {
-          postsHtml.writeln('<div class="blog-year-group">');
-          postsHtml.writeln('<div class="blog-year-header"><span class="blog-year-label">$year</span></div>');
-          postsHtml.writeln('<div class="blog-year-posts">');
+          postsHtml.writeln('<div class="tl-year-group">');
+          postsHtml.writeln('<div class="tl-year-header"><span class="tl-year-label">$year</span></div>');
+          postsHtml.writeln('<div class="tl-track">');
 
           for (final post in grouped[year]!) {
             final title = escapeHtml(post['title'] as String? ?? 'Untitled');
@@ -664,15 +664,15 @@ class AppService {
             } catch (_) {}
 
             postsHtml.writeln('''
-<a href="$postId.html" class="blog-node">
-  <div class="blog-dot"></div>
-  <div class="blog-card">
-    <div class="blog-card-title">$title</div>
-    ${description.isNotEmpty ? '<div class="blog-card-desc">$description</div>' : ''}
-    ${excerpt.isNotEmpty ? '<div class="blog-card-excerpt">$excerpt</div>' : ''}
-    <div class="blog-card-meta">
+<a href="$postId.html" class="tl-node">
+  <div class="tl-dot"></div>
+  <div class="tl-card">
+    <div class="tl-title">$title</div>
+    ${description.isNotEmpty ? '<div class="tl-desc">$description</div>' : ''}
+    ${excerpt.isNotEmpty ? '<div class="tl-excerpt">$excerpt</div>' : ''}
+    <div class="tl-meta">
       <span>$displayDate</span>
-      ${tags.isNotEmpty ? '<span class="blog-card-sep">\u00b7</span><span>${tags.map((t) => '#${escapeHtml(t)}').join(' ')}</span>' : ''}
+      ${tags.isNotEmpty ? '<span class="tl-sep">\u00b7</span><span>${tags.map((t) => '#${escapeHtml(t)}').join(' ')}</span>' : ''}
     </div>
   </div>
 </a>''');
