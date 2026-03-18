@@ -510,6 +510,7 @@ ${interaction.permitComments ? feedback.getCommentsScript(ownerNpub, storyFilena
   overflow-y: auto;
 }
 .story-sidebar:empty { display: none; }
+.story-sidebar .feedback-section { border-top: none; margin-top: 0; padding-top: 0; }
 @media (max-width: 800px) {
   .story-layout { flex-direction: column; align-items: center; gap: 16px; padding: 0; }
   .story-sidebar { flex: none; width: 100%; max-width: 420px; max-height: none; padding: 0 16px 20px; }
