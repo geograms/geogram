@@ -13,7 +13,7 @@ import '../services/station_server_service.dart';
 import '../util/event_bus.dart';
 
 /// Karma gamification dashboard page.
-/// 3-tab layout: Today (daily missions), Stats, Leaderboard.
+/// 2-tab layout: Today (daily missions), Ranking (profile + leaderboard).
 class KarmaPage extends StatefulWidget {
   const KarmaPage({super.key});
 
@@ -51,7 +51,7 @@ class _KarmaPageState extends State<KarmaPage>
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 3, vsync: this);
+    _tabController = TabController(length: 2, vsync: this);
     _loadData();
     _karmaSubscription = EventBus().on<KarmaUpdatedEvent>((event) {
       if (event.callsign.toUpperCase() == _callsign.toUpperCase()) {
@@ -149,8 +149,7 @@ class _KarmaPageState extends State<KarmaPage>
           indicatorColor: _karmaMagenta,
           tabs: const [
             Tab(text: 'Today'),
-            Tab(text: 'Stats'),
-            Tab(text: 'Leaderboard'),
+            Tab(text: 'Ranking'),
           ],
         ),
       ),
@@ -160,8 +159,7 @@ class _KarmaPageState extends State<KarmaPage>
               controller: _tabController,
               children: [
                 _buildTodayTab(theme),
-                _buildStatsTab(theme),
-                _buildLeaderboardTab(theme),
+                _buildRankingTab(theme),
               ],
             ),
     );
@@ -396,7 +394,8 @@ class _KarmaPageState extends State<KarmaPage>
               child: LinearProgressIndicator(
                 value: progress.clamp(0.0, 1.0),
                 minHeight: 6,
-                color: complete ? Colors.green : null,
+                color: complete ? Colors.green : _karmaMagenta,
+                backgroundColor: _karmaMagenta.withValues(alpha: 0.1),
               ),
             ),
             const SizedBox(height: 2),
@@ -426,13 +425,13 @@ class _KarmaPageState extends State<KarmaPage>
             : Container(
                 padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                 decoration: BoxDecoration(
-                  color: theme.colorScheme.primaryContainer,
+                  color: _karmaMagenta.withValues(alpha: 0.15),
                   borderRadius: BorderRadius.circular(12),
                 ),
                 child: Text(
                   '+$max',
                   style: theme.textTheme.bodySmall?.copyWith(
-                    color: theme.colorScheme.onPrimaryContainer,
+                    color: _karmaMagenta,
                     fontWeight: FontWeight.bold,
                   ),
                 ),
@@ -502,12 +501,12 @@ class _KarmaPageState extends State<KarmaPage>
               decoration: BoxDecoration(
                 color: complete
                     ? Colors.green.withValues(alpha: 0.15)
-                    : theme.colorScheme.tertiaryContainer,
+                    : _karmaMagenta.withValues(alpha: 0.12),
                 shape: BoxShape.circle,
               ),
               child: Icon(
                 complete ? Icons.check : Icons.stars,
-                color: complete ? Colors.green : theme.colorScheme.tertiary,
+                color: complete ? Colors.green : _karmaMagenta,
                 size: 22,
               ),
             ),
@@ -590,24 +589,87 @@ class _KarmaPageState extends State<KarmaPage>
     );
   }
 
-  // ==================== Tab 2: Stats ====================
+  // ==================== Tab 2: Ranking (Profile + Leaderboard) ====================
 
-  Widget _buildStatsTab(ThemeData theme) {
+  Widget _buildRankingTab(ThemeData theme) {
+    final profile = _profile;
+    final cs = _callsign.toUpperCase();
+
+    // Top 15 from the leaderboard
+    final top15 = _leaderboard.take(15).toList();
+    final userInTop15 = top15.any((e) => e.callsign.toUpperCase() == cs);
+
+    // Find user entry if outside top 15
+    LeaderboardEntry? userEntry;
+    if (!userInTop15) {
+      for (final e in _leaderboard) {
+        if (e.callsign.toUpperCase() == cs) {
+          userEntry = e;
+          break;
+        }
+      }
+    }
+
     return RefreshIndicator(
       onRefresh: _loadData,
       child: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          _buildProfileHeader(theme),
+          // Profile score header
+          _buildProfileScore(theme, profile),
           const SizedBox(height: 16),
-          _buildStreakDetails(theme),
+
+          // Period selector
+          Row(
+            children: [
+              _buildPeriodChip('weekly'),
+              const SizedBox(width: 4),
+              _buildPeriodChip('monthly'),
+              const SizedBox(width: 4),
+              _buildPeriodChip('alltime'),
+            ],
+          ),
+          const SizedBox(height: 12),
+
+          // Leaderboard
+          if (top15.isEmpty)
+            Padding(
+              padding: const EdgeInsets.all(32),
+              child: Center(
+                child: Text('No leaderboard data yet',
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    )),
+              ),
+            )
+          else ...[
+            for (final entry in top15)
+              _buildLeaderboardRow(theme, entry),
+            // Show user below top 15 with separator
+            if (userEntry != null) ...[
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: Row(
+                  children: [
+                    const Expanded(child: Divider()),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      child: Icon(Icons.more_horiz,
+                          size: 16, color: theme.colorScheme.onSurfaceVariant),
+                    ),
+                    const Expanded(child: Divider()),
+                  ],
+                ),
+              ),
+              _buildLeaderboardRow(theme, userEntry),
+            ],
+          ],
         ],
       ),
     );
   }
 
-  Widget _buildProfileHeader(ThemeData theme) {
-    final profile = _profile;
+  Widget _buildProfileScore(ThemeData theme, KarmaProfile? profile) {
     if (profile == null) {
       return Card(
         child: Padding(
@@ -631,14 +693,17 @@ class _KarmaPageState extends State<KarmaPage>
         padding: const EdgeInsets.all(20),
         child: Column(
           children: [
-            // Level badge
             Row(
               children: [
                 Container(
                   width: 56,
                   height: 56,
                   decoration: BoxDecoration(
-                    color: theme.colorScheme.primaryContainer,
+                    gradient: LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [_karmaMagenta, _karmaMagentaDark],
+                    ),
                     shape: BoxShape.circle,
                   ),
                   child: Center(
@@ -646,7 +711,7 @@ class _KarmaPageState extends State<KarmaPage>
                       'Lv${profile.level}',
                       style: theme.textTheme.titleMedium?.copyWith(
                         fontWeight: FontWeight.bold,
-                        color: theme.colorScheme.onPrimaryContainer,
+                        color: Colors.white,
                       ),
                     ),
                   ),
@@ -673,10 +738,8 @@ class _KarmaPageState extends State<KarmaPage>
                 ),
               ],
             ),
-            const SizedBox(height: 16),
-
-            // Progress bar to next level
             if (nextLevel != null) ...[
+              const SizedBox(height: 16),
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
@@ -690,6 +753,8 @@ class _KarmaPageState extends State<KarmaPage>
                 child: LinearProgressIndicator(
                   value: progressToNext.clamp(0.0, 1.0),
                   minHeight: 8,
+                  color: _karmaMagenta,
+                  backgroundColor: _karmaMagenta.withValues(alpha: 0.15),
                 ),
               ),
               const SizedBox(height: 4),
@@ -700,144 +765,8 @@ class _KarmaPageState extends State<KarmaPage>
                 ),
               ),
             ],
-
-            const SizedBox(height: 12),
-
-            // Streak info
-            Row(
-              children: [
-                Icon(Icons.local_fire_department,
-                    color: profile.currentStreakDays >= 7
-                        ? Colors.orange
-                        : theme.colorScheme.onSurfaceVariant,
-                    size: 20),
-                const SizedBox(width: 4),
-                Text(
-                  '${profile.currentStreakDays}-day streak',
-                  style: theme.textTheme.bodyMedium?.copyWith(
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: theme.colorScheme.tertiaryContainer,
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Text(
-                    '${profile.currentMultiplier}x multiplier',
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: theme.colorScheme.onTertiaryContainer,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ),
-              ],
-            ),
           ],
         ),
-      ),
-    );
-  }
-
-  Widget _buildStreakDetails(ThemeData theme) {
-    final profile = _profile;
-    if (profile == null) return const SizedBox.shrink();
-
-    return GridView.count(
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      crossAxisCount: 2,
-      childAspectRatio: 1.8,
-      crossAxisSpacing: 8,
-      mainAxisSpacing: 8,
-      children: [
-        _buildStatTile(theme, Icons.local_fire_department, 'Current Streak',
-            '${profile.currentStreakDays} days', Colors.orange),
-        _buildStatTile(theme, Icons.speed, 'Multiplier',
-            '${profile.currentMultiplier}x', theme.colorScheme.tertiary),
-        _buildStatTile(theme, Icons.military_tech, 'Level',
-            'Lv${profile.level} ${profile.levelName}', theme.colorScheme.primary),
-        _buildStatTile(theme, Icons.star, 'Total Points',
-            '${profile.totalPoints}', Colors.amber),
-      ],
-    );
-  }
-
-  Widget _buildStatTile(ThemeData theme, IconData icon, String label, String value, Color iconColor) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(14),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Row(
-              children: [
-                Icon(icon, size: 18, color: iconColor),
-                const SizedBox(width: 6),
-                Text(label, style: theme.textTheme.bodySmall?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant,
-                )),
-              ],
-            ),
-            const SizedBox(height: 6),
-            Text(
-              value,
-              style: theme.textTheme.titleMedium?.copyWith(
-                fontWeight: FontWeight.bold,
-              ),
-              overflow: TextOverflow.ellipsis,
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  // ==================== Tab 3: Leaderboard ====================
-
-  Widget _buildLeaderboardTab(ThemeData theme) {
-    return RefreshIndicator(
-      onRefresh: _loadData,
-      child: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-            child: Row(
-              children: [
-                _buildPeriodChip('weekly'),
-                const SizedBox(width: 4),
-                _buildPeriodChip('monthly'),
-                const SizedBox(width: 4),
-                _buildPeriodChip('alltime'),
-              ],
-            ),
-          ),
-          Expanded(
-            child: _leaderboard.isEmpty
-                ? ListView(
-                    children: [
-                      Padding(
-                        padding: const EdgeInsets.all(48),
-                        child: Center(
-                          child: Text('No leaderboard data yet',
-                              style: theme.textTheme.bodyMedium?.copyWith(
-                                color: theme.colorScheme.onSurfaceVariant,
-                              )),
-                        ),
-                      ),
-                    ],
-                  )
-                : ListView.builder(
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    itemCount: _leaderboard.length,
-                    itemBuilder: (context, index) =>
-                        _buildLeaderboardRow(theme, _leaderboard[index]),
-                  ),
-          ),
-        ],
       ),
     );
   }
@@ -865,7 +794,8 @@ class _KarmaPageState extends State<KarmaPage>
 
     return Container(
       decoration: BoxDecoration(
-        color: isYou ? theme.colorScheme.primaryContainer.withValues(alpha: 0.3) : null,
+        color: isYou ? _karmaMagenta.withValues(alpha: 0.1) : null,
+        borderRadius: isYou ? BorderRadius.circular(8) : null,
         border: Border(
           bottom: BorderSide(color: theme.dividerColor.withValues(alpha: 0.2)),
         ),
@@ -876,11 +806,11 @@ class _KarmaPageState extends State<KarmaPage>
           width: 32,
           child: Center(
             child: Text(
-              '${entry.rank}',
+              '#${entry.rank}',
               style: theme.textTheme.titleMedium?.copyWith(
                 fontWeight: FontWeight.bold,
                 color: entry.rank <= 3
-                    ? theme.colorScheme.primary
+                    ? _karmaMagenta
                     : theme.colorScheme.onSurface,
               ),
             ),
@@ -895,7 +825,7 @@ class _KarmaPageState extends State<KarmaPage>
         subtitle: Text(entry.levelName,
             style: theme.textTheme.bodySmall),
         trailing: Text(
-          '${entry.points} points',
+          '${entry.points} pts',
           style: theme.textTheme.bodyMedium?.copyWith(
             fontWeight: FontWeight.w600,
           ),
