@@ -31,6 +31,8 @@
   "update_from_station_enabled": "As atualizações serão descarregadas da estação de rádio conectada (offline)",
   "update_installed_restart": "Atualização instalada! Por favor reinicie a aplicação.",
   "update_map_position": "Atualizar Posição no Mapa",
+  "beta_updates": "Atualizações beta",
+  "beta_updates_desc": "Receber atualizações de pré-lançamento (podem ser menos estáveis)",
   "update_notifications": "Notificações de atualização",
   "update_notifications_desc": "Notificar quando há atualizações disponíveis",
   "update_settings": "Definições de Atualização",

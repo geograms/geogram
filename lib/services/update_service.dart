@@ -274,7 +274,8 @@ class UpdateService {
 
       // Convert WebSocket URL to HTTP
       final httpUrl = _wsToHttpUrl(station.url);
-      final updateUrl = '$httpUrl/api/updates/latest';
+      final channel = (_settings?.betaUpdatesEnabled ?? false) ? 'beta' : 'stable';
+      final updateUrl = '$httpUrl/api/updates/latest?channel=$channel';
 
       LogService().log('Checking station for updates: $updateUrl');
 
@@ -313,10 +314,16 @@ class UpdateService {
   /// Check for updates from GitHub
   Future<ReleaseInfo?> _checkGitHubForUpdates() async {
     try {
-      final url = _settings?.updateUrl ??
-          'https://api.github.com/repos/geograms/geogram/releases/latest';
+      final betaEnabled = _settings?.betaUpdatesEnabled ?? false;
 
-      LogService().log('Checking GitHub for updates: $url');
+      // Beta: fetch newest release (may be prerelease) via /releases?per_page=1
+      // Stable: fetch latest stable via /releases/latest (GitHub filters out prereleases)
+      final url = betaEnabled
+          ? 'https://api.github.com/repos/geograms/geogram/releases?per_page=1'
+          : (_settings?.updateUrl ??
+              'https://api.github.com/repos/geograms/geogram/releases/latest');
+
+      LogService().log('Checking GitHub for updates: $url (channel: ${betaEnabled ? "beta" : "stable"})');
 
       final response = await http.get(
         Uri.parse(url),
@@ -330,8 +337,15 @@ class UpdateService {
         throw Exception('Failed to fetch release info: HTTP ${response.statusCode}');
       }
 
-      final json = jsonDecode(response.body) as Map<String, dynamic>;
-      return ReleaseInfo.fromGitHubJson(json);
+      if (betaEnabled) {
+        // /releases?per_page=1 returns an array
+        final list = jsonDecode(response.body) as List<dynamic>;
+        if (list.isEmpty) return null;
+        return ReleaseInfo.fromGitHubJson(list[0] as Map<String, dynamic>);
+      } else {
+        final json = jsonDecode(response.body) as Map<String, dynamic>;
+        return ReleaseInfo.fromGitHubJson(json);
+      }
     } catch (e) {
       LogService().log('Error checking GitHub for updates: $e');
       return null;

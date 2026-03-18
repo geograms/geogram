@@ -31,6 +31,8 @@
   "update_from_station_enabled": "Updates werden von der verbundenen Radiostation heruntergeladen (Offgrid)",
   "update_installed_restart": "Update installiert! Bitte starten Sie die Anwendung neu.",
   "update_map_position": "Kartenposition aktualisieren",
+  "beta_updates": "Beta-Updates",
+  "beta_updates_desc": "Vorabversionen erhalten (möglicherweise weniger stabil)",
   "update_notifications": "Update-Benachrichtigungen",
   "update_notifications_desc": "Benachrichtigen, wenn Updates verfügbar sind",
   "update_settings": "Update-Einstellungen",

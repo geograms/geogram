@@ -88,7 +88,8 @@ class StationServerSettings {
   // Update mirror settings
   bool updateMirrorEnabled;      // Enable/disable update mirroring from GitHub
   int updateCheckInterval;       // Polling interval in seconds (default: 120 = 2 min)
-  String? lastMirroredVersion;   // Track what version has been downloaded
+  String? lastMirroredVersion;   // Track what stable version has been downloaded
+  String? lastMirroredBetaVersion; // Track what beta version has been downloaded
   String updateMirrorUrl;        // GitHub API URL for releases (can be changed for different repos)
   // STUN server settings (for WebRTC NAT traversal)
   bool stunServerEnabled;        // Enable/disable STUN server (default: true)
@@ -111,6 +112,7 @@ class StationServerSettings {
     this.updateMirrorEnabled = true,
     this.updateCheckInterval = 120,
     this.lastMirroredVersion,
+    this.lastMirroredBetaVersion,
     this.updateMirrorUrl = 'https://api.github.com/repos/geograms/geogram/releases/latest',
     this.stunServerEnabled = true,  // Enabled by default for privacy
     this.stunServerPort = 3478,     // Standard STUN port
@@ -134,6 +136,7 @@ class StationServerSettings {
       updateMirrorEnabled: json['updateMirrorEnabled'] as bool? ?? true,
       updateCheckInterval: json['updateCheckInterval'] as int? ?? 120,
       lastMirroredVersion: json['lastMirroredVersion'] as String?,
+      lastMirroredBetaVersion: json['lastMirroredBetaVersion'] as String?,
       updateMirrorUrl: json['updateMirrorUrl'] as String? ?? 'https://api.github.com/repos/geograms/geogram/releases/latest',
       stunServerEnabled: json['stunServerEnabled'] as bool? ?? true,
       stunServerPort: json['stunServerPort'] as int? ?? 3478,
@@ -157,6 +160,7 @@ class StationServerSettings {
         'updateMirrorEnabled': updateMirrorEnabled,
         'updateCheckInterval': updateCheckInterval,
         'lastMirroredVersion': lastMirroredVersion,
+        'lastMirroredBetaVersion': lastMirroredBetaVersion,
         'updateMirrorUrl': updateMirrorUrl,
         'stunServerEnabled': stunServerEnabled,
         'stunServerPort': stunServerPort,
@@ -176,6 +180,7 @@ class StationServerSettings {
     bool? updateMirrorEnabled,
     int? updateCheckInterval,
     String? lastMirroredVersion,
+    String? lastMirroredBetaVersion,
     String? updateMirrorUrl,
     bool? stunServerEnabled,
     int? stunServerPort,
@@ -194,6 +199,7 @@ class StationServerSettings {
       updateMirrorEnabled: updateMirrorEnabled ?? this.updateMirrorEnabled,
       updateCheckInterval: updateCheckInterval ?? this.updateCheckInterval,
       lastMirroredVersion: lastMirroredVersion ?? this.lastMirroredVersion,
+      lastMirroredBetaVersion: lastMirroredBetaVersion ?? this.lastMirroredBetaVersion,
       updateMirrorUrl: updateMirrorUrl ?? this.updateMirrorUrl,
       stunServerEnabled: stunServerEnabled ?? this.stunServerEnabled,
       stunServerPort: stunServerPort ?? this.stunServerPort,
@@ -449,7 +455,8 @@ class StationServerService with KarmaMixin, ConferenceMixin {
 
   // Update mirror state
   MonitoredAsyncPeriodicTimer? _updatePollTimer;
-  Map<String, dynamic>? _cachedRelease;
+  Map<String, dynamic>? _cachedRelease; // Latest stable release
+  Map<String, dynamic>? _cachedBetaRelease; // Latest beta (prerelease) release
   String? _updatesDirectory;
   bool _isDownloadingUpdates = false;
 
@@ -6838,6 +6845,14 @@ h2 { font-size: 1.2rem; margin: 0 0 20px 0; }
 
         LogService().log('Loaded cached release: ${_cachedRelease?['version']} with ${_downloadedAssets.length} assets');
       }
+
+      // Also load beta release cache
+      final betaReleaseFile = File('$_updatesDirectory/beta_release.json');
+      if (await betaReleaseFile.exists()) {
+        final content = await betaReleaseFile.readAsString();
+        _cachedBetaRelease = jsonDecode(content) as Map<String, dynamic>;
+        LogService().log('Loaded cached beta release: ${_cachedBetaRelease?['version']}');
+      }
     } catch (e) {
       LogService().log('Error loading cached release: $e');
     }
@@ -6879,16 +6894,19 @@ h2 { font-size: 1.2rem; margin: 0 0 20px 0; }
     );
   }
 
-  /// Poll GitHub and download new releases
+  /// Poll GitHub and download new releases (both stable and beta)
   Future<void> _pollAndDownloadUpdates() async {
     if (_isDownloadingUpdates) return;
 
     try {
       _isDownloadingUpdates = true;
-      LogService().log('Checking for updates from: ${_settings.updateMirrorUrl}');
+
+      // Fetch multiple releases to find both latest stable and latest beta
+      final releasesUrl = 'https://api.github.com/repos/geograms/geogram/releases?per_page=5';
+      LogService().log('Checking for updates from: $releasesUrl');
 
       final response = await http.get(
-        Uri.parse(_settings.updateMirrorUrl),
+        Uri.parse(releasesUrl),
         headers: {
           'Accept': 'application/vnd.github.v3+json',
           'User-Agent': 'Geogram-Station-Updater',
@@ -6900,40 +6918,85 @@ h2 { font-size: 1.2rem; margin: 0 0 20px 0; }
         return;
       }
 
-      final json = jsonDecode(response.body) as Map<String, dynamic>;
-      final tagName = json['tag_name'] as String? ?? '';
-      final version = tagName.replaceFirst(RegExp(r'^v'), '');
-
-      // Check if we already have this version
-      if (_settings.lastMirroredVersion == version) {
-        LogService().log('Already have version $version cached');
+      final releases = jsonDecode(response.body) as List<dynamic>;
+      if (releases.isEmpty) {
+        LogService().log('No releases found on GitHub');
         return;
       }
 
-      LogService().log('New version available: $version (current: ${_settings.lastMirroredVersion})');
+      // Find latest stable (first non-prerelease) and latest overall (first entry, may be beta)
+      Map<String, dynamic>? latestStable;
+      Map<String, dynamic>? latestBeta;
 
-      // Download all platform binaries
-      await _downloadAllPlatformBinaries(json);
+      for (final release in releases) {
+        final r = release as Map<String, dynamic>;
+        final isPrerelease = r['prerelease'] as bool? ?? false;
+        if (!isPrerelease && latestStable == null) {
+          latestStable = r;
+        }
+        if (isPrerelease && latestBeta == null) {
+          latestBeta = r;
+        }
+        if (latestStable != null && latestBeta != null) break;
+      }
 
-      // Update cached release info
-      _cachedRelease = {
-        'status': 'available',
-        'version': version,
-        'tagName': tagName,
-        'name': json['name'] as String?,
-        'body': json['body'] as String?,
-        'publishedAt': json['published_at'] as String?,
-        'htmlUrl': json['html_url'] as String?,
-        'assets': _buildAssetUrls(),
-        'assetFilenames': _buildAssetFilenames(),
-      };
-      await _saveCachedRelease();
+      // Process stable release
+      if (latestStable != null) {
+        final tagName = latestStable['tag_name'] as String? ?? '';
+        final version = tagName.replaceFirst(RegExp(r'^v'), '');
 
-      // Update settings with new version
-      _settings = _settings.copyWith(lastMirroredVersion: version);
-      _saveSettings();
+        if (_settings.lastMirroredVersion != version) {
+          LogService().log('New stable version available: $version (current: ${_settings.lastMirroredVersion})');
+          await _downloadAllPlatformBinaries(latestStable);
 
-      LogService().log('Update mirror complete: version $version');
+          _cachedRelease = {
+            'status': 'available',
+            'version': version,
+            'tagName': tagName,
+            'name': latestStable['name'] as String?,
+            'body': latestStable['body'] as String?,
+            'publishedAt': latestStable['published_at'] as String?,
+            'htmlUrl': latestStable['html_url'] as String?,
+            'isPrerelease': false,
+            'assets': _buildAssetUrls(),
+            'assetFilenames': _buildAssetFilenames(),
+          };
+          await _saveCachedRelease();
+
+          _settings = _settings.copyWith(lastMirroredVersion: version);
+          _saveSettings();
+          LogService().log('Stable update mirror complete: version $version');
+        }
+      }
+
+      // Process beta release
+      if (latestBeta != null) {
+        final tagName = latestBeta['tag_name'] as String? ?? '';
+        final version = tagName.replaceFirst(RegExp(r'^v'), '');
+
+        if (_settings.lastMirroredBetaVersion != version) {
+          LogService().log('New beta version available: $version (current: ${_settings.lastMirroredBetaVersion})');
+          await _downloadAllPlatformBinaries(latestBeta);
+
+          _cachedBetaRelease = {
+            'status': 'available',
+            'version': version,
+            'tagName': tagName,
+            'name': latestBeta['name'] as String?,
+            'body': latestBeta['body'] as String?,
+            'publishedAt': latestBeta['published_at'] as String?,
+            'htmlUrl': latestBeta['html_url'] as String?,
+            'isPrerelease': true,
+            'assets': _buildAssetUrls(),
+            'assetFilenames': _buildAssetFilenames(),
+          };
+          await _saveCachedBetaRelease();
+
+          _settings = _settings.copyWith(lastMirroredBetaVersion: version);
+          _saveSettings();
+          LogService().log('Beta update mirror complete: version $version');
+        }
+      }
 
       // Also sync whisper models
       await _downloadWhisperModels();
@@ -7255,6 +7318,7 @@ h2 { font-size: 1.2rem; margin: 0 0 20px 0; }
   }
 
   /// Handle GET /api/updates/latest - Return latest release info
+  /// Supports ?channel=beta|stable query param (defaults to stable)
   Future<void> _handleUpdatesLatest(HttpRequest request) async {
     if (request.method != 'GET') {
       request.response.statusCode = 405;
@@ -7264,14 +7328,28 @@ h2 { font-size: 1.2rem; margin: 0 0 20px 0; }
 
     request.response.headers.contentType = ContentType.json;
 
-    if (_cachedRelease == null) {
+    final channel = request.uri.queryParameters['channel'] ?? 'stable';
+    final release = (channel == 'beta') ? (_cachedBetaRelease ?? _cachedRelease) : _cachedRelease;
+
+    if (release == null) {
       // No updates cached yet
       request.response.write(jsonEncode({
         'status': 'no_updates_cached',
         'message': 'Station has not downloaded any updates yet',
       }));
     } else {
-      request.response.write(jsonEncode(_cachedRelease));
+      request.response.write(jsonEncode(release));
+    }
+  }
+
+  /// Save cached beta release to disk
+  Future<void> _saveCachedBetaRelease() async {
+    if (_updatesDirectory == null || _cachedBetaRelease == null) return;
+    try {
+      final releaseFile = File('$_updatesDirectory/beta_release.json');
+      await releaseFile.writeAsString(jsonEncode(_cachedBetaRelease));
+    } catch (e) {
+      LogService().log('Error saving cached beta release: $e');
     }
   }
 

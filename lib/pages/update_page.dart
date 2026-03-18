@@ -960,6 +960,20 @@ class _UpdatePageState extends State<UpdatePage> {
                       },
                     ),
                     const Divider(height: 1),
+                    SwitchListTile(
+                      title: Text(_i18n.t('beta_updates')),
+                      subtitle: Text(_i18n.t('beta_updates_desc')),
+                      value: settings.betaUpdatesEnabled,
+                      onChanged: (value) async {
+                        await _updateService.updateSettings(
+                          settings.copyWith(betaUpdatesEnabled: value),
+                        );
+                        _setStateIfMounted(() {});
+                        // Re-check for updates with new channel
+                        _loadData();
+                      },
+                    ),
+                    const Divider(height: 1),
                     ListTile(
                       title: Text(_i18n.t('maximum_backups')),
                       subtitle: Text(_i18n.t('keep_previous_versions', params: [settings.maxBackups.toString()])),
@@ -1092,11 +1106,33 @@ class _UpdatePageState extends State<UpdatePage> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      title,
-                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                            fontWeight: FontWeight.bold,
+                    Row(
+                      children: [
+                        Text(
+                          title,
+                          style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                                fontWeight: FontWeight.bold,
+                              ),
+                        ),
+                        if (hasUpdate && _latestRelease?.isPrerelease == true) ...[
+                          const SizedBox(width: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: Colors.orange,
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: const Text(
+                              'BETA',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 10,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
                           ),
+                        ],
+                      ],
                     ),
                     const SizedBox(height: 4),
                     Text(

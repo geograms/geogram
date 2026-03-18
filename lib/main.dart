@@ -2026,7 +2026,11 @@ class _HomePageState extends State<HomePage> {
             Text(
               _i18n.t(
                 'update_available_version',
-                params: [latestRelease.version],
+                params: [
+                  latestRelease.isPrerelease
+                      ? '${latestRelease.version} (Beta)'
+                      : latestRelease.version,
+                ],
               ),
             ),
           ],

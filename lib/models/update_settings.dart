@@ -176,6 +176,7 @@ class UpdateSettings {
   bool? lastCheckedAssetAvailable; // Whether an asset existed for this platform
   String? currentVersionPublishedAt; // Release date of currently installed version
   String? dismissedUpdateVersion; // Last update version the user dismissed
+  bool betaUpdatesEnabled; // Opt-in to receive pre-release updates
 
   UpdateSettings({
     this.autoCheckUpdates = true,
@@ -194,6 +195,7 @@ class UpdateSettings {
     this.lastCheckedAssetAvailable,
     this.currentVersionPublishedAt,
     this.dismissedUpdateVersion,
+    this.betaUpdatesEnabled = false,
   });
 
   factory UpdateSettings.fromJson(Map<String, dynamic> json) {
@@ -217,6 +219,7 @@ class UpdateSettings {
       lastCheckedAssetAvailable: json['lastCheckedAssetAvailable'] as bool?,
       currentVersionPublishedAt: json['currentVersionPublishedAt'] as String?,
       dismissedUpdateVersion: json['dismissedUpdateVersion'] as String?,
+      betaUpdatesEnabled: json['betaUpdatesEnabled'] as bool? ?? false,
     );
   }
 
@@ -238,6 +241,7 @@ class UpdateSettings {
       'lastCheckedAssetAvailable': lastCheckedAssetAvailable,
       'currentVersionPublishedAt': currentVersionPublishedAt,
       'dismissedUpdateVersion': dismissedUpdateVersion,
+      'betaUpdatesEnabled': betaUpdatesEnabled,
     };
   }
 
@@ -258,6 +262,7 @@ class UpdateSettings {
     bool? lastCheckedAssetAvailable,
     String? currentVersionPublishedAt,
     String? dismissedUpdateVersion,
+    bool? betaUpdatesEnabled,
   }) {
     return UpdateSettings(
       autoCheckUpdates: autoCheckUpdates ?? this.autoCheckUpdates,
@@ -276,6 +281,7 @@ class UpdateSettings {
       lastCheckedAssetAvailable: lastCheckedAssetAvailable ?? this.lastCheckedAssetAvailable,
       currentVersionPublishedAt: currentVersionPublishedAt ?? this.currentVersionPublishedAt,
       dismissedUpdateVersion: dismissedUpdateVersion ?? this.dismissedUpdateVersion,
+      betaUpdatesEnabled: betaUpdatesEnabled ?? this.betaUpdatesEnabled,
     );
   }
 }
@@ -291,6 +297,7 @@ class ReleaseInfo {
   final Map<String, String> assets; // assetType.name -> download URL
   final Map<String, String> assetFilenames; // assetType.name -> original filename
   final String? stationBaseUrl; // If fetched from station, the base URL
+  final bool isPrerelease; // Whether this is a pre-release (beta) version
 
   ReleaseInfo({
     required this.version,
@@ -302,6 +309,7 @@ class ReleaseInfo {
     Map<String, String>? assets,
     Map<String, String>? assetFilenames,
     this.stationBaseUrl,
+    this.isPrerelease = false,
   })  : assets = assets ?? {},
         assetFilenames = assetFilenames ?? {};
 
@@ -337,6 +345,7 @@ class ReleaseInfo {
       htmlUrl: json['html_url'] as String?,
       assets: assets,
       assetFilenames: assetFilenames,
+      isPrerelease: json['prerelease'] as bool? ?? false,
     );
   }
 
@@ -369,6 +378,7 @@ class ReleaseInfo {
       assets: assets,
       assetFilenames: assetFilenames,
       stationBaseUrl: stationBaseUrl,
+      isPrerelease: json['isPrerelease'] as bool? ?? false,
     );
   }
 
@@ -382,6 +392,7 @@ class ReleaseInfo {
       'htmlUrl': htmlUrl,
       'assets': assets,
       'assetFilenames': assetFilenames,
+      'isPrerelease': isPrerelease,
     };
   }
 
