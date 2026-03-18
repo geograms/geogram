@@ -669,6 +669,12 @@ $extraScripts
         <button onclick="prevSlide()" id="prev-btn" disabled>\u2190 Prev</button>
         <span class="slide-counter" id="slide-counter">1 / ${slides.length}</span>
         <button onclick="nextSlide()" id="next-btn"${slides.length <= 1 ? ' disabled' : ''}>Next \u2192</button>
+        <button onclick="toggleFullscreen()" id="fs-btn" class="slide-fs-btn" title="Fullscreen">
+          <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5">
+            <polyline points="1,6 1,1 6,1"/><polyline points="12,1 17,1 17,6"/>
+            <polyline points="17,12 17,17 12,17"/><polyline points="6,17 1,17 1,12"/>
+          </svg>
+        </button>
       </div>
       ${hasNotes ? '<div class="slide-notes" id="slide-notes"></div>' : ''}''';
 
@@ -699,9 +705,31 @@ $extraScripts
     document.getElementById('slide-counter').textContent = (current + 1) + ' / ' + total;
     showNotes();
   }
+  window.toggleFullscreen = function() {
+    var deck = document.getElementById('slide-deck');
+    if (!deck) return;
+    if (document.fullscreenElement) {
+      document.exitFullscreen();
+    } else {
+      deck.requestFullscreen().catch(function() {});
+    }
+  };
+  document.addEventListener('fullscreenchange', function() {
+    var deck = document.getElementById('slide-deck');
+    var btn = document.getElementById('fs-btn');
+    if (document.fullscreenElement) {
+      deck.classList.add('slide-deck--fs');
+      if (btn) btn.title = 'Exit fullscreen';
+    } else {
+      deck.classList.remove('slide-deck--fs');
+      if (btn) btn.title = 'Fullscreen';
+    }
+  });
   document.addEventListener('keydown', function(e) {
     if (e.key === 'ArrowLeft') prevSlide();
     if (e.key === 'ArrowRight') nextSlide();
+    if (e.key === 'Escape' && document.fullscreenElement) document.exitFullscreen();
+    if (e.key === 'f' || e.key === 'F') toggleFullscreen();
   });
   showNotes();
 })();
@@ -833,6 +861,29 @@ $extraScripts
 }
 .slide-nav button:hover:not(:disabled) { border-color: var(--accent); }
 .slide-nav button:disabled { opacity: 0.3; cursor: not-allowed; }
+.slide-fs-btn {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 10px;
+}
+.slide-fs-btn:hover { color: var(--accent); border-color: var(--accent); }
+
+/* Fullscreen mode */
+.slide-deck--fs {
+  background: #000;
+}
+.slide-deck--fs .slide {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.slide-deck--fs .slide.active { display: flex; }
+.slide-deck--fs .slide-num {
+  font-size: 14px;
+  opacity: 0.2;
+}
 .slide-notes {
   display: none;
   padding: 10px 14px;
