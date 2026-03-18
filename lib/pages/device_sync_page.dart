@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../services/file_index_service.dart';
+import '../services/mirror_config_service.dart';
 import '../services/mirror_discovery_service.dart';
 import '../services/mirror_sync_service.dart';
 import '../models/mirror_config.dart';
@@ -459,6 +460,7 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
           manifest,
           localPath,
           syncStyle: SyncStyle.sendReceive,
+          excludeRules: MirrorConfigService.instance.config?.excludeRules ?? const [],
           storage: storage,
           fileIndex: fileIndex,
         );
@@ -551,6 +553,7 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
             manifest,
             localPath,
             syncStyle: SyncStyle.sendReceive,
+            excludeRules: MirrorConfigService.instance.config?.excludeRules ?? const [],
             storage: storage,
             fileIndex: fileIndex,
           );

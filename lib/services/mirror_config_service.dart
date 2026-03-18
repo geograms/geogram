@@ -47,11 +47,13 @@ class MirrorConfigService {
     _storage = storage;
     _config = null; // force reload for new profile
     await loadConfig(); // loads from new storage, emits to stream
+    await loadExcludeRules(); // load shared exclude rules
   }
 
   /// Initialize the service
   Future<void> initialize() async {
     await loadConfig();
+    await loadExcludeRules();
   }
 
   /// Load config from ProfileStorage.
@@ -310,6 +312,44 @@ class MirrorConfigService {
         .where((e) => e.value.enabled)
         .map((e) => e.key)
         .toList();
+  }
+
+  // ========== Exclude Rules (synced between devices) ==========
+
+  static const _excludeRulesPath = 'shared/sync_exclude_rules.json';
+
+  /// Load exclude rules from the shared syncable file.
+  /// Merges into the in-memory config if the shared file is newer.
+  Future<void> loadExcludeRules() async {
+    if (_storage == null || _config == null) return;
+    try {
+      final json = await _storage!.readJson(_excludeRulesPath);
+      if (json == null) return;
+
+      final rules = (json['rules'] as List<dynamic>?)
+              ?.map((e) => SyncExcludeRule.fromJson(e as Map<String, dynamic>))
+              .toList() ??
+          [];
+      _config = _config!.copyWith(excludeRules: rules);
+      _configController.add(_config!);
+    } catch (e) {
+      LogService().log('Error loading exclude rules: $e');
+    }
+  }
+
+  /// Save exclude rules to the shared syncable file.
+  /// This file syncs between mirrors via the `shared` folder.
+  Future<void> saveExcludeRules(List<SyncExcludeRule> rules) async {
+    if (_config == null) await loadConfig();
+    _config = _config!.copyWith(excludeRules: rules);
+    await saveConfig(_config!);
+
+    if (_storage != null) {
+      await _storage!.writeJson(_excludeRulesPath, {
+        'rules': rules.map((r) => r.toJson()).toList(),
+        'lastModified': DateTime.now().toUtc().toIso8601String(),
+      });
+    }
   }
 
   /// Dispose resources

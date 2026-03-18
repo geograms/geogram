@@ -248,6 +248,7 @@ class MirrorAutoSyncService {
               peerCallsign: peer.callsign,
               syncStyle: style,
               ignorePatterns: appConfig.ignorePatterns,
+              excludeRules: configService.config?.excludeRules ?? const [],
               onProgress: onProgress,
             );
 

@@ -522,6 +522,51 @@ class MirrorPeer {
   }
 }
 
+/// Mode for sync exclusion rules
+enum ExcludeMode {
+  /// Completely ignored — not added, not synced, not shown
+  always,
+
+  /// Only ignored when modified — new files are still added
+  modifiedOnly,
+}
+
+/// A rule for excluding files from sync
+class SyncExcludeRule {
+  /// The pattern to match (filename, path, or extension like "*.log")
+  final String pattern;
+
+  /// Whether to ignore always or only when modified
+  final ExcludeMode mode;
+
+  const SyncExcludeRule({
+    required this.pattern,
+    this.mode = ExcludeMode.always,
+  });
+
+  factory SyncExcludeRule.fromJson(Map<String, dynamic> json) {
+    return SyncExcludeRule(
+      pattern: json['pattern'] as String,
+      mode: ExcludeMode.values.firstWhere(
+        (e) => e.name == json['mode'],
+        orElse: () => ExcludeMode.always,
+      ),
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+        'pattern': pattern,
+        'mode': mode.name,
+      };
+
+  SyncExcludeRule copyWith({String? pattern, ExcludeMode? mode}) {
+    return SyncExcludeRule(
+      pattern: pattern ?? this.pattern,
+      mode: mode ?? this.mode,
+    );
+  }
+}
+
 /// Connection preferences
 class ConnectionPreferences {
   /// Sync over metered connections (cellular)?
@@ -604,6 +649,9 @@ class MirrorConfig {
   /// Default sync style for new apps
   SyncStyle defaultSyncStyle;
 
+  /// Global file exclusion rules applied to all sync operations
+  List<SyncExcludeRule> excludeRules;
+
   MirrorConfig({
     this.enabled = false,
     required this.deviceId,
@@ -611,8 +659,10 @@ class MirrorConfig {
     List<MirrorPeer>? peers,
     ConnectionPreferences? preferences,
     this.defaultSyncStyle = SyncStyle.sendReceive,
+    List<SyncExcludeRule>? excludeRules,
   })  : peers = peers ?? [],
-        preferences = preferences ?? ConnectionPreferences();
+        preferences = preferences ?? ConnectionPreferences(),
+        excludeRules = excludeRules ?? [];
 
   /// Get peer by ID
   MirrorPeer? getPeer(String peerId) {
@@ -655,6 +705,10 @@ class MirrorConfig {
         (e) => e.name == json['default_sync_style'],
         orElse: () => SyncStyle.sendReceive,
       ),
+      excludeRules: (json['exclude_rules'] as List<dynamic>?)
+              ?.map((e) => SyncExcludeRule.fromJson(e as Map<String, dynamic>))
+              .toList() ??
+          [],
     );
   }
 
@@ -665,6 +719,8 @@ class MirrorConfig {
         'peers': peers.map((p) => p.toJson()).toList(),
         'preferences': preferences.toJson(),
         'default_sync_style': defaultSyncStyle.name,
+        if (excludeRules.isNotEmpty)
+          'exclude_rules': excludeRules.map((r) => r.toJson()).toList(),
       };
 
   MirrorConfig copyWith({
@@ -673,6 +729,7 @@ class MirrorConfig {
     List<MirrorPeer>? peers,
     ConnectionPreferences? preferences,
     SyncStyle? defaultSyncStyle,
+    List<SyncExcludeRule>? excludeRules,
   }) {
     return MirrorConfig(
       enabled: enabled ?? this.enabled,
@@ -681,6 +738,7 @@ class MirrorConfig {
       peers: peers ?? List.from(this.peers),
       preferences: preferences ?? this.preferences,
       defaultSyncStyle: defaultSyncStyle ?? this.defaultSyncStyle,
+      excludeRules: excludeRules ?? List.from(this.excludeRules),
     );
   }
 }

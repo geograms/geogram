@@ -979,6 +979,7 @@ class MirrorSyncService {
     bool deleteLocalOnly = false,
     SyncStyle syncStyle = SyncStyle.receiveOnly,
     List<String> ignorePatterns = const [],
+    List<SyncExcludeRule> excludeRules = const [],
     ProfileStorage? storage,
     FileIndexService? fileIndex,
     void Function(int done, int total)? onProgress,
@@ -986,6 +987,18 @@ class MirrorSyncService {
     final changes = <FileChange>[];
     final localFiles = <String, ({int size, int mtime, String sha1})>{};
     final folder = path.basename(localPath);
+
+    // Merge per-app ignorePatterns with global "always" exclude rules
+    final alwaysExclude = <String>[
+      ...ignorePatterns,
+      ...excludeRules
+          .where((r) => r.mode == ExcludeMode.always)
+          .map((r) => r.pattern),
+    ];
+    final modifiedOnlyExclude = excludeRules
+        .where((r) => r.mode == ExcludeMode.modifiedOnly)
+        .map((r) => r.pattern)
+        .toList();
 
     int filesProcessed = 0;
     int totalEntries = 0;
@@ -1018,7 +1031,7 @@ class MirrorSyncService {
             onProgress?.call(filesProcessed, totalEntries);
             continue;
           }
-          if (isIgnored(relativePath, ignorePatterns)) {
+          if (isIgnored(relativePath, alwaysExclude)) {
             filesProcessed++;
             onProgress?.call(filesProcessed, totalEntries);
             continue;
@@ -1097,7 +1110,7 @@ class MirrorSyncService {
             onProgress?.call(filesProcessed, totalEntries);
             continue;
           }
-          if (isIgnored(relativePath, ignorePatterns)) {
+          if (isIgnored(relativePath, alwaysExclude)) {
             filesProcessed++;
             onProgress?.call(filesProcessed, totalEntries);
             continue;
@@ -1150,7 +1163,7 @@ class MirrorSyncService {
     // Check remote files against local
     for (final remoteFile in remote.files) {
       if (remoteFile.path == 'log' || remoteFile.path.startsWith('log/')) continue;
-      if (isIgnored(remoteFile.path, ignorePatterns)) continue;
+      if (isIgnored(remoteFile.path, alwaysExclude)) continue;
 
       final local = localFiles.remove(remoteFile.path);
 
@@ -1158,6 +1171,9 @@ class MirrorSyncService {
         // File doesn't exist locally - add (download from remote)
         changes.add(FileChange.add(remoteFile));
       } else if (local.sha1 != remoteFile.sha1) {
+        // Skip if the file matches a "modified only" exclude rule
+        if (isIgnored(remoteFile.path, modifiedOnlyExclude)) continue;
+
         // SHA1 differs
         if (syncStyle == SyncStyle.sendReceive) {
           // Bidirectional: most recent mtime wins
@@ -1379,6 +1395,7 @@ class MirrorSyncService {
     bool deleteLocalOnly = false,
     SyncStyle syncStyle = SyncStyle.receiveOnly,
     List<String> ignorePatterns = const [],
+    List<SyncExcludeRule> excludeRules = const [],
     void Function(SyncStatus)? onProgress,
     ProfileStorage? storage,
   }) async {
@@ -1424,6 +1441,7 @@ class MirrorSyncService {
         deleteLocalOnly: deleteLocalOnly,
         syncStyle: syncStyle,
         ignorePatterns: ignorePatterns,
+        excludeRules: excludeRules,
         storage: storage,
       );
 
