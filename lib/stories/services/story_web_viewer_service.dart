@@ -226,8 +226,14 @@ function filterStories(tag) {
     card.style.display = tags.includes(tag) ? '' : 'none';
   });
 }
-// Reload on Nostr login to refresh restricted stories
-document.addEventListener('nostr-connected', function() { location.reload(); });
+// Reload on Nostr login to refresh restricted stories (skip auto-connect on load)
+(function() {
+  var ready = false;
+  setTimeout(function() { ready = true; }, 2000);
+  document.addEventListener('nostr-connected', function() {
+    if (ready) location.reload();
+  });
+})();
 </script>
 <script>$nostrScripts</script>
 </body>
