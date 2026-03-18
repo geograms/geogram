@@ -434,6 +434,75 @@ class ThemesEmbedded {
   static const String _defaultBlogStylesCss = r'''
 /* Blog styles - extends global */
 
+/* ── Blog listing cards ─────────────────────────── */
+
+/* Override global post-title styles for blog cards */
+.post.on-list .post-title {
+  border-bottom: none;
+  padding-bottom: 0;
+  margin: 0 0 10px;
+  font-size: 1.35rem;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+/* Remove the > prefix — the card itself is the affordance */
+.post.on-list .post-title::before {
+  content: none;
+}
+
+/* Clickable card link wrapping the entire post */
+.blog-card-link {
+  display: block;
+  text-decoration: none;
+  color: inherit;
+}
+
+/* Excerpt — the most prominent text after the title */
+.blog-excerpt {
+  margin: 0 0 12px;
+  font-size: 0.95rem;
+  line-height: 1.6;
+  color: var(--color);
+  opacity: 0.75;
+}
+
+/* Footer row: date · tags · read more */
+.blog-card-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 14px;
+  font-size: 0.85rem;
+  color: var(--accent-alpha-70);
+}
+
+.blog-card-date {
+  font-family: monospace;
+}
+
+.blog-card-tags {
+  opacity: 0.6;
+}
+
+.blog-card-read {
+  margin-left: auto;
+  color: var(--accent);
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.post.on-list:hover .blog-card-read {
+  opacity: 1;
+}
+
+/* Tighten spacing between cards */
+.post.on-list {
+  padding: 16px 12px;
+  margin: 0 -12px;
+  border-radius: 4px;
+}
+
 /* Feedback section */
 .feedback-section {
   margin-top: 30px;
@@ -938,6 +1007,7 @@ class ThemesEmbedded {
   <style>{{GLOBAL_STYLES}}</style>
   <style>{{APP_STYLES}}</style>
   {{NOSTR_STYLES}}
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 </head>
 <body>
 <div class="container">
@@ -968,6 +1038,12 @@ class ThemesEmbedded {
       </div>
     </div>
   </footer>
+</div>
+
+<!-- Fullscreen map modal -->
+<div class="event-map-modal" id="event-map-modal" style="display:none">
+  <button class="event-map-modal-close" onclick="closeEventMap()">&times;</button>
+  <div id="event-map-full"></div>
 </div>
 
 <!-- Lightbox overlay -->
@@ -1017,10 +1093,6 @@ class ThemesEmbedded {
       return '/events/' + encodeURIComponent(ev.id) + '/files/' + encodeURIComponent(filename);
     }
 
-    function mapUrl(lat, lon) {
-      return 'https://www.openstreetmap.org/?mlat=' + lat + '&mlon=' + lon + '#map=15/' + lat + '/' + lon;
-    }
-
     // === Build page ===
     var html = '';
 
@@ -1034,7 +1106,8 @@ class ThemesEmbedded {
       check:    '<svg ' + svgSize + '><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>',
       heart0:   '<svg ' + svgSize + '><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>',
       heart1:   '<svg ' + svgSize.replace('fill="none"', 'fill="currentColor"') + '><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>',
-      arrow:    '<svg ' + svgSize + ' width="12" height="12"><line x1="7" y1="17" x2="17" y2="7"/><polyline points="7 7 17 7 17 17"/></svg>'
+      arrow:    '<svg ' + svgSize + ' width="12" height="12"><line x1="7" y1="17" x2="17" y2="7"/><polyline points="7 7 17 7 17 17"/></svg>',
+      expand:   '<svg ' + svgSize + '><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>'
     };
 
     // --- Hero ---
@@ -1051,18 +1124,35 @@ class ThemesEmbedded {
     }
 
     // Location
+    var hasCoords = ev.location && ev.location !== 'online' && ev.location.indexOf(',') !== -1;
     if (ev.location_name) {
-      var locText = esc(ev.location_name);
-      if (ev.location && ev.location !== 'online' && ev.location.indexOf(',') !== -1) {
-        var parts = ev.location.split(',');
-        locText = '<a href="' + mapUrl(parts[0].trim(), parts[1].trim()) + '" target="_blank" rel="noopener">' + locText + ' ' + ico.arrow + '</a>';
-      }
-      html += '<div class="event-hero-meta"><span class="event-hero-meta-icon">' + ico.pin + '</span> ' + locText + '</div>';
+      html += '<div class="event-hero-meta"><span class="event-hero-meta-icon">' + ico.pin + '</span> ' + esc(ev.location_name) + '</div>';
     } else if (ev.location === 'online') {
       html += '<div class="event-hero-meta"><span class="event-hero-meta-icon">' + ico.globe + '</span> Online</div>';
-    } else if (ev.location && ev.location.indexOf(',') !== -1) {
+    } else if (hasCoords) {
       var parts = ev.location.split(',');
-      html += '<div class="event-hero-meta"><span class="event-hero-meta-icon">' + ico.pin + '</span> <a href="' + mapUrl(parts[0].trim(), parts[1].trim()) + '" target="_blank" rel="noopener">View on map ' + ico.arrow + '</a></div>';
+      html += '<div class="event-hero-meta"><span class="event-hero-meta-icon">' + ico.pin + '</span> ' + parts[0].trim() + ', ' + parts[1].trim() + '</div>';
+    }
+
+    // Embedded map (when coordinates exist — either from location or linked place)
+    var lat = null, lon = null;
+    if (hasCoords) {
+      var cparts = ev.location.split(',');
+      lat = parseFloat(cparts[0].trim());
+      lon = parseFloat(cparts[1].trim());
+    } else if (ev.place_latitude != null && ev.place_longitude != null) {
+      lat = ev.place_latitude;
+      lon = ev.place_longitude;
+    }
+    var hasMap = lat !== null && lon !== null && !isNaN(lat) && !isNaN(lon);
+    if (hasMap) {
+      html += '<div class="event-map-wrap"><div id="event-map"></div>' +
+        '<button class="event-map-expand" onclick="openEventMap()" title="Fullscreen map">' + ico.expand + '</button></div>';
+      // Copyable coordinates row
+      var coordStr = lat.toFixed(6) + ', ' + lon.toFixed(6);
+      html += '<div class="event-coords" onclick="copyCoords()" title="Copy coordinates">' +
+        '<span class="event-coords-icon"><svg ' + svgSize + '><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></span>' +
+        '<span>' + coordStr + '</span></div>';
     }
 
     // Author
@@ -1276,6 +1366,31 @@ class ThemesEmbedded {
       countEl.textContent = count > 0 ? count + ' like' + (count !== 1 ? 's' : '') : '';
     }
 
+    // Copy coordinates to clipboard
+    window.copyCoords = function() {
+      var coordText = lat.toFixed(6) + ', ' + lon.toFixed(6);
+      if (navigator.clipboard) {
+        navigator.clipboard.writeText(coordText);
+      } else {
+        var ta = document.createElement('textarea');
+        ta.value = coordText;
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+      }
+      var toast = document.createElement('div');
+      toast.className = 'event-coords-toast';
+      toast.textContent = 'Coordinates copied';
+      document.body.appendChild(toast);
+      setTimeout(function() { toast.remove(); }, 1600);
+    };
+
+    // Store coordinates globally for map init
+    window._eventLat = lat;
+    window._eventLon = lon;
+    window._hasMap = hasMap;
+
     // Init: listen for Nostr connection
     document.addEventListener('nostr-connected', function(e) {
       onNostrConnected(e.detail.pubkey);
@@ -1284,6 +1399,79 @@ class ThemesEmbedded {
       onNostrConnected(window.GeogramNostr.pubkey);
     }
   })();
+</script>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+'use strict';
+(function() {
+  if (!window._hasMap) return;
+  var lat = window._eventLat;
+  var lon = window._eventLon;
+
+  var pinSvg = '<svg width="24" height="36" viewBox="0 0 24 36" xmlns="http://www.w3.org/2000/svg">' +
+    '<path d="M12 0C5.4 0 0 5.4 0 12c0 9 12 24 12 24s12-15 12-24C24 5.4 18.6 0 12 0z" fill="var(--accent, #ff7b00)"/>' +
+    '<circle cx="12" cy="12" r="5" fill="rgba(0,0,0,0.25)"/></svg>';
+  var pinIcon = L.divIcon({
+    html: pinSvg,
+    className: 'event-map-pin',
+    iconSize: [24, 36],
+    iconAnchor: [12, 36]
+  });
+
+  var satUrl = '/tiles/sat/{z}/{x}/{y}.png?layer=satellite';
+  var labelUrl = '/tiles/lbl/{z}/{x}/{y}.png?layer=labels';
+
+  // Small preview map
+  var mapEl = document.getElementById('event-map');
+  if (mapEl) {
+    var smallMap = L.map('event-map', {
+      center: [lat, lon],
+      zoom: 14,
+      zoomControl: false,
+      attributionControl: false,
+      dragging: false,
+      scrollWheelZoom: false,
+      doubleClickZoom: false,
+      touchZoom: false,
+      boxZoom: false,
+      keyboard: false
+    });
+    L.tileLayer(satUrl, { maxZoom: 18 }).addTo(smallMap);
+    L.tileLayer(labelUrl, { maxZoom: 18 }).addTo(smallMap);
+    L.marker([lat, lon], { icon: pinIcon }).addTo(smallMap);
+    mapEl.addEventListener('click', function() { openEventMap(); });
+  }
+
+  // Fullscreen map
+  var fullMap = null;
+  window.openEventMap = function() {
+    var modal = document.getElementById('event-map-modal');
+    modal.style.display = 'flex';
+    document.body.style.overflow = 'hidden';
+    if (!fullMap) {
+      fullMap = L.map('event-map-full', {
+        center: [lat, lon],
+        zoom: 15,
+        attributionControl: false
+      });
+      L.tileLayer(satUrl, { maxZoom: 18 }).addTo(fullMap);
+      L.tileLayer(labelUrl, { maxZoom: 18 }).addTo(fullMap);
+      L.marker([lat, lon], { icon: pinIcon }).addTo(fullMap);
+    }
+    setTimeout(function() { fullMap.invalidateSize(); }, 100);
+  };
+
+  window.closeEventMap = function() {
+    document.getElementById('event-map-modal').style.display = 'none';
+    document.body.style.overflow = '';
+  };
+
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape' && document.getElementById('event-map-modal').style.display !== 'none') {
+      closeEventMap();
+    }
+  });
+})();
 </script>
 </body>
 </html>
@@ -1635,6 +1823,12 @@ class ThemesEmbedded {
 
 /* ========== Event Detail Page ========== */
 
+/* Tighten post wrapper on event detail (overrides global .post) */
+.events-page .post {
+  margin-top: 0;
+  padding-top: 6px;
+}
+
 /* Hero */
 .event-hero {
   margin-bottom: 30px;
@@ -1648,7 +1842,7 @@ class ThemesEmbedded {
   color: var(--accent);
   font-size: 1.8rem;
   font-weight: 700;
-  margin: 0 0 20px 0;
+  margin: 0 0 16px 0;
   line-height: 1.3;
 }
 
@@ -1688,6 +1882,155 @@ class ThemesEmbedded {
 .event-signed {
   color: #4ade80;
   opacity: 1;
+}
+
+/* Embedded map */
+.event-map-wrap {
+  position: relative;
+  height: 200px;
+  border-radius: 6px;
+  overflow: hidden;
+  margin-top: 12px;
+  border: 1px solid var(--border-color);
+  cursor: pointer;
+}
+
+#event-map {
+  width: 100%;
+  height: 100%;
+}
+
+.event-map-expand {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 500;
+  background: rgba(0,0,0,0.5);
+  border: none;
+  color: #fff;
+  padding: 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+
+.event-map-expand:hover {
+  background: rgba(0,0,0,0.7);
+}
+
+.event-map-expand svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* Fullscreen map modal */
+.event-map-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  background: rgba(0,0,0,0.95);
+  display: flex;
+  align-items: stretch;
+  justify-content: stretch;
+}
+
+#event-map-full {
+  width: 100%;
+  height: 100%;
+}
+
+.event-map-modal-close {
+  position: absolute;
+  top: 12px;
+  right: 16px;
+  z-index: 10001;
+  background: rgba(0,0,0,0.6);
+  border: 1px solid rgba(255,255,255,0.2);
+  color: #fff;
+  font-size: 1.5rem;
+  cursor: pointer;
+  padding: 4px 12px;
+  border-radius: 4px;
+  line-height: 1;
+}
+
+.event-map-modal-close:hover {
+  background: rgba(0,0,0,0.8);
+}
+
+/* Map pin marker */
+.event-map-pin {
+  background: none !important;
+  border: none !important;
+}
+
+/* Coordinates row below map */
+.event-coords {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  font-family: monospace;
+  font-size: 0.85rem;
+  opacity: 0.6;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+.event-coords:hover {
+  opacity: 1;
+}
+.event-coords-icon {
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  display: inline-flex;
+  align-items: center;
+}
+.event-coords-icon svg {
+  width: 14px;
+  height: 14px;
+}
+.event-coords-toast {
+  position: fixed;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--accent);
+  color: #000;
+  padding: 8px 16px;
+  border-radius: 4px;
+  font-size: 0.85rem;
+  z-index: 9999;
+  pointer-events: none;
+  animation: fadeInOut 1.5s ease forwards;
+}
+@keyframes fadeInOut {
+  0% { opacity: 0; transform: translateX(-50%) translateY(10px); }
+  15% { opacity: 1; transform: translateX(-50%) translateY(0); }
+  75% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+/* Leaflet overrides for dark theme */
+.leaflet-container {
+  background: #1a1a2e;
+}
+
+.leaflet-control-zoom a {
+  background: rgba(0,0,0,0.6) !important;
+  color: #fff !important;
+  border-color: rgba(255,255,255,0.15) !important;
+}
+
+.leaflet-control-zoom a:hover {
+  background: rgba(0,0,0,0.8) !important;
+}
+
+.leaflet-tile {
+  outline: none !important;
 }
 
 /* Gallery */

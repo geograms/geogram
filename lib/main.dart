@@ -2630,7 +2630,7 @@ class _AppsPageState extends State<AppsPage> {
     _DefaultAppType('backup', Icons.backup),
     _DefaultAppType('console', Icons.terminal),
     _DefaultAppType('reader', Icons.menu_book),
-    _DefaultAppType('karma', Icons.emoji_events),
+    _DefaultAppType('karma', Icons.bolt),
   ];
 
   @override

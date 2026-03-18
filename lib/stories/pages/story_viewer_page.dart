@@ -15,6 +15,7 @@ import '../models/story.dart';
 import '../models/story_content.dart';
 import '../models/story_scene.dart';
 import '../models/story_trigger.dart';
+import '../services/quiz_state_store.dart';
 import '../services/sound_clips_service.dart';
 import '../services/stories_storage_service.dart';
 import '../widgets/scene_viewer_widget.dart';
@@ -24,12 +25,14 @@ class StoryViewerPage extends StatefulWidget {
   final Story story;
   final StoriesStorageService storage;
   final I18nService i18n;
+  final bool isPreview;
 
   const StoryViewerPage({
     super.key,
     required this.story,
     required this.storage,
     required this.i18n,
+    this.isPreview = false,
   });
 
   @override
@@ -51,10 +54,16 @@ class _StoryViewerPageState extends State<StoryViewerPage> {
   String? _currentMusicTrack;
   final _soundService = SoundClipsService();
 
+  // Quiz persistence
+  QuizStateStore? _quizStore;
+
   @override
   void initState() {
     super.initState();
     _initMusicPlayer();
+    if (!widget.isPreview) {
+      _initQuizStore();
+    }
     _loadContent();
   }
 
@@ -68,11 +77,17 @@ class _StoryViewerPageState extends State<StoryViewerPage> {
     });
   }
 
+  Future<void> _initQuizStore() async {
+    _quizStore = QuizStateStore(storiesDir: widget.storage.storiesDir);
+    await _quizStore!.initialize();
+  }
+
   @override
   void dispose() {
     _autoAdvanceTimer?.cancel();
     _stopMusic();
     _musicPlayer?.dispose();
+    _quizStore?.close();
     super.dispose();
   }
 
@@ -289,6 +304,7 @@ class _StoryViewerPageState extends State<StoryViewerPage> {
             story: widget.story,
             storage: widget.storage,
             onTrigger: _handleTrigger,
+            quizStore: _quizStore,
           ),
 
           // Top-right controls

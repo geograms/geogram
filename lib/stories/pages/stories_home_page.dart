@@ -323,13 +323,7 @@ class _StoriesHomePageState extends State<StoriesHomePage> {
     return Scaffold(
       appBar: AppBar(
         title: Text(widget.appTitle),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: _loadStories,
-            tooltip: 'Refresh',
-          ),
-        ],
+        actions: const [],
       ),
       body: Column(
         children: [

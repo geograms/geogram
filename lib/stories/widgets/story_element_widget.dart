@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 
 import '../models/story.dart';
 import '../models/story_element.dart';
+import '../services/quiz_state_store.dart';
 import '../services/stories_storage_service.dart';
 
 /// Widget that renders a single story element (text or button)
@@ -18,6 +19,8 @@ class StoryElementWidget extends StatefulWidget {
   final VoidCallback? onTap;
   final bool isEditing;
   final bool hasValidAction;
+  final QuizState? quizState;
+  final ValueChanged<String>? onQuizAnswer;
 
   const StoryElementWidget({
     super.key,
@@ -28,6 +31,8 @@ class StoryElementWidget extends StatefulWidget {
     this.onTap,
     this.isEditing = false,
     this.hasValidAction = true,
+    this.quizState,
+    this.onQuizAnswer,
   });
 
   @override
@@ -53,6 +58,9 @@ class _StoryElementWidgetState extends State<StoryElementWidget> {
         break;
       case ElementType.button:
         child = _buildButtonElement();
+        break;
+      case ElementType.quiz:
+        child = _buildQuizElement();
         break;
     }
 
@@ -366,6 +374,135 @@ class _StoryElementWidgetState extends State<StoryElementWidget> {
     );
   }
 
+  Widget _buildQuizElement() {
+    final props = widget.element.properties;
+    final question = props['question'] as String? ?? '';
+    final color = _parseColor(props['color'] as String? ?? '#FFFFFF');
+    final quizState = widget.quizState ?? const QuizState();
+
+    // In editor, show a static preview (FittedBox prevents overflow in small canvas)
+    if (widget.isEditing) {
+      return FittedBox(
+        fit: BoxFit.scaleDown,
+        child: Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: Colors.black54,
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.quiz, color: color, size: 36),
+              const SizedBox(height: 8),
+              Text(
+                question,
+                style: TextStyle(
+                  fontSize: 30,
+                  fontWeight: FontWeight.bold,
+                  color: color,
+                ),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Quiz',
+                style: TextStyle(
+                  fontSize: 18,
+                  color: color.withValues(alpha: 0.6),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    // Viewer mode
+    if (quizState.solved) {
+      return _buildQuizSolved(question, color);
+    }
+    if (quizState.isLocked) {
+      return _buildQuizLocked(question, color);
+    }
+    return _QuizInput(
+      question: question,
+      color: color,
+      attemptsRemaining: quizState.attemptsRemaining,
+      onSubmit: widget.onQuizAnswer,
+    );
+  }
+
+  Widget _buildQuizSolved(String question, Color color) {
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: Colors.black54,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            question,
+            style: TextStyle(
+              fontSize: 30,
+              fontWeight: FontWeight.bold,
+              color: color,
+            ),
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 16),
+          const Icon(Icons.check_circle, color: Colors.green, size: 48),
+          const SizedBox(height: 8),
+          const Text(
+            'Correct!',
+            style: TextStyle(
+              color: Colors.green,
+              fontSize: 24,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildQuizLocked(String question, Color color) {
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: Colors.black54,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            question,
+            style: TextStyle(
+              fontSize: 30,
+              fontWeight: FontWeight.bold,
+              color: color,
+            ),
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 16),
+          const Icon(Icons.cancel, color: Colors.red, size: 48),
+          const SizedBox(height: 8),
+          const Text(
+            'No more attempts',
+            style: TextStyle(
+              color: Colors.red,
+              fontSize: 24,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Color _parseColor(String colorString) {
     if (colorString.startsWith('#')) {
       final hex = colorString.substring(1);
@@ -399,5 +536,125 @@ class _StoryElementWidgetState extends State<StoryElementWidget> {
       default:
         return TextAlign.left;
     }
+  }
+}
+
+/// Interactive quiz input widget with text field and submit button
+class _QuizInput extends StatefulWidget {
+  final String question;
+  final Color color;
+  final int attemptsRemaining;
+  final ValueChanged<String>? onSubmit;
+
+  const _QuizInput({
+    required this.question,
+    required this.color,
+    required this.attemptsRemaining,
+    this.onSubmit,
+  });
+
+  @override
+  State<_QuizInput> createState() => _QuizInputState();
+}
+
+class _QuizInputState extends State<_QuizInput> {
+  final _controller = TextEditingController();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    final text = _controller.text.trim();
+    if (text.isEmpty) return;
+    widget.onSubmit?.call(text);
+    _controller.clear();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: Colors.black54,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // Question
+          Text(
+            widget.question,
+            style: TextStyle(
+              fontSize: 30,
+              fontWeight: FontWeight.bold,
+              color: widget.color,
+            ),
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 20),
+
+          // Text input
+          SizedBox(
+            width: 280,
+            child: TextField(
+              controller: _controller,
+              style: const TextStyle(color: Colors.white, fontSize: 20),
+              decoration: InputDecoration(
+                hintText: 'Your answer...',
+                hintStyle: TextStyle(color: Colors.white.withValues(alpha: 0.4), fontSize: 20),
+                filled: true,
+                fillColor: Colors.white.withValues(alpha: 0.15),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(24),
+                  borderSide: BorderSide.none,
+                ),
+                contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+              ),
+              onSubmitted: (_) => _submit(),
+              textInputAction: TextInputAction.go,
+            ),
+          ),
+          const SizedBox(height: 14),
+
+          // Submit button
+          SizedBox(
+            width: 180,
+            child: ElevatedButton(
+              onPressed: _submit,
+              style: ElevatedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(24),
+                ),
+              ),
+              child: const Text('Submit', style: TextStyle(fontSize: 18)),
+            ),
+          ),
+          const SizedBox(height: 14),
+
+          // Attempts indicator (3 dots)
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: List.generate(3, (i) {
+              final isUsed = i >= widget.attemptsRemaining;
+              return Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 5),
+                child: Container(
+                  width: 14,
+                  height: 14,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: isUsed ? Colors.red : Colors.green,
+                  ),
+                ),
+              );
+            }),
+          ),
+        ],
+      ),
+    );
   }
 }

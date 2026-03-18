@@ -15,6 +15,9 @@ enum ElementType {
 
   /// Interactive button
   button,
+
+  /// Interactive quiz with question/answer
+  quiz,
 }
 
 /// Button shapes available for button elements
@@ -243,6 +246,47 @@ class StoryElement {
 
   /// Check if button is invisible
   bool get isInvisible => buttonShape == ButtonShape.invisible;
+
+  // ============ Quiz Element Helpers ============
+
+  /// Create a quiz element with question and answer
+  factory StoryElement.quiz({
+    required String id,
+    required String question,
+    required String answer,
+    int appearAt = 0,
+    required ElementPosition position,
+    TitleFont font = TitleFont.bold,
+    String color = '#FFFFFF',
+  }) {
+    return StoryElement(
+      id: id,
+      type: ElementType.quiz,
+      appearAt: appearAt,
+      position: position,
+      properties: {
+        'question': question,
+        'answer': answer,
+        'font': font.name,
+        'color': color,
+      },
+    );
+  }
+
+  /// Get quiz question text
+  String? get quizQuestion => properties['question'] as String?;
+
+  /// Get quiz answer
+  String? get quizAnswer => properties['answer'] as String?;
+
+  /// Get quiz font style (reuses TitleFont)
+  TitleFont get quizFont {
+    final value = properties['font'] as String?;
+    return TitleFont.values.firstWhere(
+      (e) => e.name == value,
+      orElse: () => TitleFont.bold,
+    );
+  }
 
   factory StoryElement.fromJson(Map<String, dynamic> json) {
     return StoryElement(

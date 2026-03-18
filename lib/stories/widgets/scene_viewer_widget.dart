@@ -5,6 +5,7 @@
 
 import 'dart:async';
 import 'dart:io';
+import 'dart:ui';
 
 import 'package:flutter/material.dart';
 import 'package:media_kit/media_kit.dart';
@@ -14,6 +15,7 @@ import '../models/story.dart';
 import '../models/story_scene.dart';
 import '../models/story_element.dart';
 import '../models/story_trigger.dart';
+import '../services/quiz_state_store.dart';
 import '../services/stories_storage_service.dart';
 import 'story_element_widget.dart';
 
@@ -24,6 +26,7 @@ class SceneViewerWidget extends StatefulWidget {
   final StoriesStorageService storage;
   final Function(StoryTrigger) onTrigger;
   final bool isEditing;
+  final QuizStateStore? quizStore;
 
   const SceneViewerWidget({
     super.key,
@@ -32,6 +35,7 @@ class SceneViewerWidget extends StatefulWidget {
     required this.storage,
     required this.onTrigger,
     this.isEditing = false,
+    this.quizStore,
   });
 
   @override
@@ -46,10 +50,13 @@ class _SceneViewerWidgetState extends State<SceneViewerWidget> {
   final Map<String, bool> _visibleElements = {};
   Timer? _timingTimer;
   int _elapsedMs = 0;
+  final Map<String, QuizState> _quizStates = {};
+  final Set<String> _dismissedQuizzes = {};
 
   @override
   void initState() {
     super.initState();
+    _loadQuizStates();
     _loadBackground();
     _startTiming();
   }
@@ -64,6 +71,9 @@ class _SceneViewerWidgetState extends State<SceneViewerWidget> {
       _showBackground = false;
       _visibleElements.clear();
       _elapsedMs = 0;
+      _quizStates.clear();
+      _dismissedQuizzes.clear();
+      _loadQuizStates();
       _loadBackground();
       _startTiming();
     }
@@ -176,6 +186,63 @@ class _SceneViewerWidgetState extends State<SceneViewerWidget> {
     }
   }
 
+  void _loadQuizStates() {
+    if (widget.quizStore == null) return;
+    for (final element in widget.scene.elements) {
+      if (element.type == ElementType.quiz) {
+        final state = widget.quizStore!.getState(
+          widget.story.id,
+          element.id,
+        );
+        _quizStates[element.id] = state;
+        // Already-solved quizzes are dismissed immediately
+        if (state.solved) {
+          _dismissedQuizzes.add(element.id);
+        }
+      }
+    }
+  }
+
+  void _handleQuizAnswer(StoryElement element, String answer) {
+    if (widget.quizStore == null) return;
+    final current = _quizStates[element.id] ?? const QuizState();
+    if (current.solved || current.isLocked) return;
+
+    final correct = answer.trim().toLowerCase() ==
+        (element.quizAnswer ?? '').trim().toLowerCase();
+
+    final newState = correct
+        ? QuizState(attemptsUsed: current.attemptsUsed, solved: true)
+        : QuizState(attemptsUsed: current.attemptsUsed + 1, solved: false);
+
+    widget.quizStore!.saveState(widget.story.id, element.id, newState);
+    setState(() {
+      _quizStates[element.id] = newState;
+    });
+
+    // Auto-dismiss the quiz widget 5 seconds after correct answer
+    if (correct) {
+      Future.delayed(const Duration(seconds: 5), () {
+        if (mounted) {
+          setState(() {
+            _dismissedQuizzes.add(element.id);
+          });
+        }
+      });
+    }
+  }
+
+  /// Whether all quizzes are solved (for blur animation target)
+  bool get _allQuizzesSolved {
+    for (final element in widget.scene.elements) {
+      if (element.type == ElementType.quiz) {
+        final state = _quizStates[element.id] ?? const QuizState();
+        if (!state.solved) return false;
+      }
+    }
+    return true;
+  }
+
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(
@@ -236,7 +303,11 @@ class _SceneViewerWidgetState extends State<SceneViewerWidget> {
       mediaWidget = const SizedBox.shrink();
     }
 
-    return AnimatedOpacity(
+    // Check if we need blur for quiz elements
+    final hasQuiz = widget.scene.elements.any((e) => e.type == ElementType.quiz);
+    final targetSigma = (hasQuiz && !_allQuizzesSolved) ? 20.0 : 0.0;
+
+    Widget backgroundWidget = AnimatedOpacity(
       opacity: _showBackground ? 1.0 : 0.0,
       duration: const Duration(milliseconds: 300),
       child: Container(
@@ -246,6 +317,23 @@ class _SceneViewerWidgetState extends State<SceneViewerWidget> {
         child: mediaWidget,
       ),
     );
+
+    if (hasQuiz) {
+      backgroundWidget = TweenAnimationBuilder<double>(
+        tween: Tween(begin: targetSigma, end: targetSigma),
+        duration: const Duration(milliseconds: 800),
+        builder: (context, sigma, child) {
+          if (sigma <= 0.1) return child!;
+          return ImageFiltered(
+            imageFilter: ImageFilter.blur(sigmaX: sigma, sigmaY: sigma),
+            child: child,
+          );
+        },
+        child: backgroundWidget,
+      );
+    }
+
+    return backgroundWidget;
   }
 
   List<Widget> _buildTouchAreas(BoxConstraints constraints) {
@@ -302,11 +390,19 @@ class _SceneViewerWidgetState extends State<SceneViewerWidget> {
     final w = constraints.maxWidth;
     final h = constraints.maxHeight;
 
-    return widget.scene.elements.map((element) {
+    return widget.scene.elements.where((element) {
+      // Hide dismissed quiz elements (solved + 5s elapsed)
+      if (element.type == ElementType.quiz && _dismissedQuizzes.contains(element.id)) {
+        return false;
+      }
+      return true;
+    }).map((element) {
       final isVisible = _visibleElements[element.id] ?? false;
 
       final position = element.position;
-      final isTextOrTitle = element.type == ElementType.text || element.type == ElementType.title;
+      final isTextOrTitle = element.type == ElementType.text ||
+          element.type == ElementType.title ||
+          element.type == ElementType.quiz;
 
       final child = StoryElementWidget(
         element: element,
@@ -315,6 +411,12 @@ class _SceneViewerWidgetState extends State<SceneViewerWidget> {
         constraints: constraints,
         onTap: isVisible ? () => _handleElementTap(element) : null,
         isEditing: widget.isEditing,
+        quizState: element.type == ElementType.quiz
+            ? (_quizStates[element.id] ?? const QuizState())
+            : null,
+        onQuizAnswer: element.type == ElementType.quiz
+            ? (answer) => _handleQuizAnswer(element, answer)
+            : null,
       );
 
       if (isTextOrTitle) {

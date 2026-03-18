@@ -412,9 +412,10 @@ class _EditableElementWrapperState extends State<_EditableElementWrapper> {
     final w = widget.constraints.maxWidth;
     final h = widget.constraints.maxHeight;
 
-    // For text/title elements, use intrinsic sizing; for buttons use percentage
+    // For text/title/quiz elements, use intrinsic sizing; for buttons use percentage
     final isTextOrTitle = widget.element.type == ElementType.text ||
-        widget.element.type == ElementType.title;
+        widget.element.type == ElementType.title ||
+        widget.element.type == ElementType.quiz;
 
     // Calculate position differently for text/title vs other elements
     final double leftPx;

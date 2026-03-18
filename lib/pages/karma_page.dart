@@ -42,6 +42,10 @@ class _KarmaPageState extends State<KarmaPage>
     'Events': Icons.event,
   };
 
+  /// Vibrant magenta accent used across the karma page
+  static const _karmaMagenta = Color(0xFFE91E63);
+  static const _karmaMagentaDark = Color(0xFFC2185B);
+
   EventSubscription<KarmaUpdatedEvent>? _karmaSubscription;
 
   @override
@@ -122,7 +126,14 @@ class _KarmaPageState extends State<KarmaPage>
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Karma'),
+        title: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.bolt, color: _karmaMagenta, size: 24),
+            const SizedBox(width: 6),
+            const Text('Karma'),
+          ],
+        ),
         actions: [
           if (_myRank > 0)
             Padding(
@@ -135,6 +146,7 @@ class _KarmaPageState extends State<KarmaPage>
         ],
         bottom: TabBar(
           controller: _tabController,
+          indicatorColor: _karmaMagenta,
           tabs: const [
             Tab(text: 'Today'),
             Tab(text: 'Stats'),
@@ -212,8 +224,13 @@ class _KarmaPageState extends State<KarmaPage>
   Widget _buildTodaySummaryBar(ThemeData theme, int earnedPoints, int maxPoints) {
     final profile = _profile;
 
+    final isDark = theme.brightness == Brightness.dark;
     return Card(
-      color: theme.colorScheme.primaryContainer,
+      color: isDark ? _karmaMagentaDark.withValues(alpha: 0.25) : _karmaMagenta.withValues(alpha: 0.12),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: BorderSide(color: _karmaMagenta.withValues(alpha: 0.3)),
+      ),
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
         child: Row(
@@ -221,7 +238,7 @@ class _KarmaPageState extends State<KarmaPage>
             Text(
               '$earnedPoints',
               style: theme.textTheme.headlineLarge?.copyWith(
-                color: theme.colorScheme.onPrimaryContainer,
+                color: _karmaMagenta,
                 fontWeight: FontWeight.bold,
               ),
             ),
@@ -229,7 +246,7 @@ class _KarmaPageState extends State<KarmaPage>
             Text(
               'points today out of $maxPoints',
               style: theme.textTheme.bodyLarge?.copyWith(
-                color: theme.colorScheme.onPrimaryContainer,
+                color: theme.colorScheme.onSurface,
               ),
             ),
             const Spacer(),
@@ -313,7 +330,7 @@ class _KarmaPageState extends State<KarmaPage>
               '$pct%',
               style: theme.textTheme.bodyMedium?.copyWith(
                 fontWeight: FontWeight.bold,
-                color: theme.colorScheme.primary,
+                color: _karmaMagenta,
               ),
             ),
           ],
@@ -324,6 +341,8 @@ class _KarmaPageState extends State<KarmaPage>
           child: LinearProgressIndicator(
             value: progress.clamp(0.0, 1.0),
             minHeight: 10,
+            color: _karmaMagenta,
+            backgroundColor: _karmaMagenta.withValues(alpha: 0.15),
           ),
         ),
       ],
@@ -351,12 +370,12 @@ class _KarmaPageState extends State<KarmaPage>
           decoration: BoxDecoration(
             color: complete
                 ? Colors.green.withValues(alpha: 0.15)
-                : theme.colorScheme.surfaceContainerHighest,
+                : _karmaMagenta.withValues(alpha: 0.12),
             shape: BoxShape.circle,
           ),
           child: Icon(
             complete ? Icons.check : (_missionIcons[mission.name] ?? Icons.star),
-            color: complete ? Colors.green : theme.colorScheme.primary,
+            color: complete ? Colors.green : _karmaMagenta,
             size: 22,
           ),
         ),

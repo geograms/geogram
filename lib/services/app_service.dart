@@ -503,14 +503,38 @@ class AppService {
         return null;
       }
 
-      // Extract excerpt from content (first 200 chars after header)
+      // Extract excerpt from content (first 250 chars after header+metadata)
       String? excerpt;
-      final headerEndIndex = lines.indexWhere((line) => line.isEmpty && author != null);
-      if (headerEndIndex > 0 && headerEndIndex < lines.length - 1) {
-        final contentLines = lines.sublist(headerEndIndex + 1).where((l) => l.trim().isNotEmpty).toList();
+      // Find where actual content starts: skip header line, metadata lines,
+      // and arrow-prefixed lines (e.g. --> tags:, --> npub:)
+      bool pastHeader = false;
+      int contentStartIndex = -1;
+      for (int i = 1; i < lines.length; i++) {
+        final line = lines[i];
+        if (!pastHeader) {
+          // Still in metadata section
+          if (line.startsWith('AUTHOR: ') ||
+              line.startsWith('CREATED: ') ||
+              line.startsWith('EDITED: ') ||
+              line.startsWith('DESCRIPTION: ') ||
+              line.startsWith('STATUS: ') ||
+              line.startsWith('--> ') ||
+              line.isEmpty) {
+            continue;
+          }
+          // First non-metadata, non-empty line = content start
+          pastHeader = true;
+          contentStartIndex = i;
+          break;
+        }
+      }
+      if (contentStartIndex > 0) {
+        final contentLines = lines.sublist(contentStartIndex)
+            .where((l) => l.trim().isNotEmpty && !l.startsWith('--> '))
+            .toList();
         if (contentLines.isNotEmpty) {
-          final fullContent = contentLines.take(3).join(' ');
-          excerpt = fullContent.length > 200 ? '${fullContent.substring(0, 200)}...' : fullContent;
+          final fullContent = contentLines.take(5).join(' ');
+          excerpt = fullContent.length > 250 ? '${fullContent.substring(0, 250)}...' : fullContent;
         }
       }
 
@@ -591,14 +615,26 @@ class AppService {
           final excerpt = escapeHtml(post['excerpt'] as String? ?? post['description'] as String? ?? '');
           final created = post['created'] as String? ?? '';
           final postId = post['id'] as String? ?? '';
+          final tags = (post['tags'] as List?)?.cast<String>() ?? [];
+
+          // Format date for display
+          String displayDate = created;
+          try {
+            final dt = DateTime.parse(created.replaceAll('_', ':'));
+            displayDate = '${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')}';
+          } catch (_) {}
 
           postsHtml.writeln('''
 <div class="post on-list">
-  <h1 class="post-title"><a href="$postId.html">$title</a></h1>
-  <div class="post-meta-inline">
-    <span class="post-date">$created</span>
-  </div>
-  ${excerpt.isNotEmpty ? '<div class="post-content"><p>$excerpt</p><a class="read-more" href="$postId.html">Read more →</a></div>' : ''}
+  <a href="$postId.html" class="blog-card-link">
+    <h2 class="post-title">$title</h2>
+    ${excerpt.isNotEmpty ? '<p class="blog-excerpt">$excerpt</p>' : ''}
+    <div class="blog-card-footer">
+      <span class="blog-card-date">$displayDate</span>
+      ${tags.isNotEmpty ? '<span class="blog-card-tags">${tags.map((t) => '#${escapeHtml(t)}').join(' ')}</span>' : ''}
+      <span class="blog-card-read">Read more →</span>
+    </div>
+  </a>
 </div>''');
         }
       }

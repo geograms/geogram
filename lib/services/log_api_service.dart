@@ -387,6 +387,9 @@ class LogApiService with ChatModificationMixin {
           return response;
         }
       }
+      if (urlPath.startsWith('tiles/')) {
+        return _handleLocalTileRequest(request, urlPath, headers);
+      }
       if (urlPath == 'events/styles.css') {
         return await _handleThemeStylesRequest(headers, appType: 'events');
       }
@@ -1511,6 +1514,42 @@ class LogApiService with ChatModificationMixin {
 </html>''';
   }
 
+  // ── Local tile serving ─────────────────────────────────────────────────
+
+  Future<shelf.Response> _handleLocalTileRequest(
+    shelf.Request request,
+    String urlPath,
+    Map<String, String> headers,
+  ) async {
+    // Parse: tiles/{z}/{x}/{y}.png or tiles/{layer}/{z}/{x}/{y}.png
+    final regex = RegExp(r'tiles/(?:[^/]+/)?(\d+)/(\d+)/(\d+)\.png');
+    final match = regex.firstMatch(urlPath);
+    if (match == null) {
+      return shelf.Response.notFound('Invalid tile path');
+    }
+    final z = match.group(1)!;
+    final x = match.group(2)!;
+    final y = match.group(3)!;
+    final layer = request.url.queryParameters['layer'] ?? 'standard';
+    final tilesDir = StorageConfig().tilesDir;
+    var file = io.File('$tilesDir/$layer/$z/$x/$y.png');
+    if (!await file.exists()) {
+      // Also check cache/ subdirectory (flutter_map tile cache layout)
+      file = io.File('$tilesDir/cache/$layer/$z/$x/$y.png');
+    }
+    if (!await file.exists()) {
+      return shelf.Response.notFound('');
+    }
+    return shelf.Response.ok(
+      await file.readAsBytes(),
+      headers: {
+        ...headers,
+        'Content-Type': 'image/png',
+        'Cache-Control': 'public, max-age=86400',
+      },
+    );
+  }
+
   // ── Events HTML routes ────────────────────────────────────────────────
 
   Future<shelf.Response?> _handleEventsRoute(
@@ -1746,6 +1785,42 @@ class LogApiService with ChatModificationMixin {
 
     // 4. Build full JSON with feedback data
     final data = event.toApiJson(summary: false);
+
+    // Resolve place coordinates for map display
+    if (event.hasPlaceReference && !event.hasCoordinates) {
+      try {
+        final placePath = event.placePath!;
+        String? resolvedPath;
+        if (path.isAbsolute(placePath)) {
+          resolvedPath = placePath;
+        } else {
+          final callsign = event.author.isNotEmpty
+              ? event.author
+              : ProfileService().getProfile().callsign;
+          if (callsign.isNotEmpty) {
+            final basePath = StorageConfig().getCallsignDir(callsign);
+            resolvedPath = path.normalize(path.join(basePath, placePath));
+          }
+        }
+        if (resolvedPath != null) {
+          final placeFile = io.File(path.join(resolvedPath, 'place.txt'));
+          if (await placeFile.exists()) {
+            final content = await placeFile.readAsString();
+            final place = PlaceService().parsePlaceContent(
+              content: content,
+              filePath: placeFile.path,
+              folderPath: resolvedPath,
+            );
+            if (place != null) {
+              data['place_latitude'] = place.latitude;
+              data['place_longitude'] = place.longitude;
+            }
+          }
+        }
+      } catch (e) {
+        LogService().log('EventDetail: Error resolving place coordinates: $e');
+      }
+    }
 
     // Load feedback likes for the like button
     final eventPath = await EventService().getEventPath(event.id, dataDir);
@@ -14374,18 +14449,21 @@ class LogApiService with ChatModificationMixin {
         } catch (_) {}
       }
 
-      // Generate menu items based on available public apps
-      final appsDir = isOwnBlog
-          ? null // uses AppService default
-          : '$dataDir/devices/$deviceCallsign';
+      // Generate menu items — same as blog listing (generateBlogIndex)
       final blogMenuItems = await AppService().generateDeviceMenu(
         activeApp: 'blog',
-        appsPath: appsDir,
-        storage: isOwnBlog ? null : FilesystemProfileStorage('$dataDir/devices/$deviceCallsign'),
       );
 
+      // Load blog-specific styles from theme
+      String blogAppStyles = '';
+      try {
+        final themeService = WebThemeService();
+        await themeService.init();
+        blogAppStyles = await themeService.getAppStyles('blog') ?? '';
+      } catch (_) {}
+
       // Render HTML
-      final html = _renderBlogPostHtml(post, nickname ?? callsign, likedHexPubkeys, blogMenuItems);
+      final html = _renderBlogPostHtml(post, nickname ?? callsign, likedHexPubkeys, blogMenuItems, blogAppStyles);
 
       return shelf.Response.ok(
         html,
@@ -14401,8 +14479,7 @@ class LogApiService with ChatModificationMixin {
     }
   }
 
-  /// Render blog post as HTML
-  String _renderBlogPostHtml(BlogPost post, String authorIdentifier, List<String> likedHexPubkeys, String menuItems) {
+  String _renderBlogPostHtml(BlogPost post, String authorIdentifier, List<String> likedHexPubkeys, String menuItems, String appStyles) {
     // Pre-render plain text content to HTML paragraphs
     final htmlContent = post.content.split('\n\n')
       .where((p) => p.trim().isNotEmpty)
@@ -14430,6 +14507,7 @@ class LogApiService with ChatModificationMixin {
     return StationHtmlTemplates.buildBlogPostPage(
       postTitle: post.title,
       postDate: post.displayDate,
+      description: post.description,
       author: authorIdentifier,
       htmlContent: htmlContent,
       tags: post.tags,
@@ -14443,7 +14521,7 @@ class LogApiService with ChatModificationMixin {
       commentsHtml: commentsHtml,
       showSignedBadge: post.isSigned,
       globalStyles: StationHtmlTemplates.getBaseStyles(),
-      appStyles: '',
+      appStyles: appStyles,
       backUrl: './',
       backLabel: '\u2190 Back to blog',
     );

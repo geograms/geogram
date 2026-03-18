@@ -7,9 +7,11 @@ import 'dart:convert';
 import 'dart:io' as io;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:path/path.dart' as path;
 import 'package:url_launcher/url_launcher.dart';
 import '../models/event.dart';
+import '../services/station_service.dart';
 import '../models/event_link.dart';
 import '../models/event_update.dart';
 import '../models/event_registration.dart';
@@ -66,6 +68,7 @@ class EventDetailWidget extends StatelessWidget {
             children: [
           // Event metadata (author, date, location, visibility)
           _buildMetadata(theme, i18n),
+          _buildEventUrl(context, theme, i18n),
           const SizedBox(height: 16),
 
           // Flyer display
@@ -308,6 +311,89 @@ class EventDetailWidget extends StatelessWidget {
           ],
         ),
       ],
+    );
+  }
+
+  Widget _buildEventUrl(
+      BuildContext context, ThemeData theme, I18nService i18n) {
+    final stationUrl = StationService().getPreferredStation()?.url;
+    if (stationUrl == null) return const SizedBox.shrink();
+
+    final httpUrl = stationUrl
+        .replaceFirst('wss://', 'https://')
+        .replaceFirst('ws://', 'http://');
+    final eventPath = event.slug ?? event.id;
+    final url = '$httpUrl/events/$eventPath';
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 12),
+      child: Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: theme.colorScheme.surfaceContainerHighest.withOpacity(0.5),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(
+            color: theme.colorScheme.outline.withOpacity(0.2),
+          ),
+        ),
+        child: Row(
+          children: [
+            Icon(
+              Icons.link,
+              size: 18,
+              color: theme.colorScheme.primary,
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: GestureDetector(
+                onTap: () async {
+                  final uri = Uri.parse(url);
+                  if (await canLaunchUrl(uri)) {
+                    await launchUrl(uri, mode: LaunchMode.externalApplication);
+                  }
+                },
+                child: MouseRegion(
+                  cursor: SystemMouseCursors.click,
+                  child: Text(
+                    url,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.primary,
+                      fontFamily: 'monospace',
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            IconButton(
+              icon: const Icon(Icons.open_in_browser, size: 18),
+              onPressed: () async {
+                final uri = Uri.parse(url);
+                if (await canLaunchUrl(uri)) {
+                  await launchUrl(uri, mode: LaunchMode.externalApplication);
+                }
+              },
+              tooltip: i18n.t('open_in_browser'),
+              visualDensity: VisualDensity.compact,
+            ),
+            IconButton(
+              icon: const Icon(Icons.copy, size: 18),
+              onPressed: () {
+                Clipboard.setData(ClipboardData(text: url));
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(i18n.t('url_copied')),
+                    duration: const Duration(seconds: 2),
+                  ),
+                );
+              },
+              tooltip: i18n.t('copy_url'),
+              visualDensity: VisualDensity.compact,
+            ),
+          ],
+        ),
+      ),
     );
   }
 

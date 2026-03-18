@@ -684,7 +684,9 @@ ${getDownloadStyles()}
     const icon = document.getElementById('like-icon');
     const countEl = document.getElementById('like-count');
     button.classList.toggle('liked', isLiked);
-    icon.textContent = isLiked ? '\u2665' : '\u2661';
+    icon.innerHTML = isLiked
+      ? '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>'
+      : '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>';
     countEl.textContent = count > 0 ? count + ' like' + (count !== 1 ? 's' : '') : '';
   }
 
@@ -826,17 +828,19 @@ ${getDownloadStyles()}
         : '';
 
     final descHtml = (description != null && description.isNotEmpty)
-        ? '<p style="opacity:0.7;font-style:italic;margin-bottom:20px">${escapeHtml(description)}</p>'
+        ? '<p style="opacity:0.7;margin-bottom:20px">${escapeHtml(description)}</p>'
         : '';
 
     final signedHtml = showSignedBadge
         ? '<div style="color:#4ade80;font-size:0.9rem;margin-top:15px;display:flex;align-items:center;gap:4px"><span>\u2713</span> Signed with NOSTR</div>'
         : '';
 
+    const heartOpen = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>';
+    const heartFilled = '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>';
     final likesHtml = postId != null ? '''
       <div class="feedback-section" id="feedback-section" style="display: none;">
         <button class="like-button" id="like-button" onclick="toggleLike()">
-          <span id="like-icon">\u2661</span>
+          <span id="like-icon">$heartOpen</span>
           <span>Like</span>
         </button>
         <span class="like-count" id="like-count">${likesCount > 0 ? "$likesCount like${likesCount != 1 ? "s" : ""}" : ""}</span>
@@ -884,19 +888,29 @@ ${getDownloadStyles()}
   <title>${escapeHtml(postTitle)} - ${escapeHtml(author)}</title>
   $nostrStyles
   <style>$globalStyles</style>
-  ${appStyles.isNotEmpty ? '<style>$appStyles</style>' : ''}
+  ${appStyles.isNotEmpty ? '<style>$appStyles</style>' : '''<style>
+/* Blog post styles */
+.feedback-section { display:flex; align-items:center; gap:12px; margin-top:30px; padding-top:20px; border-top:1px solid var(--border-color); }
+.like-button { display:inline-flex; align-items:center; gap:6px; padding:8px 18px; border:1px solid var(--border-color); border-radius:6px; background:transparent; color:var(--color); cursor:pointer; font-size:1rem; font-family:inherit; transition:all 0.15s; }
+.like-button svg { width:16px; height:16px; }
+.like-button:hover:not(:disabled) { border-color:var(--accent); color:var(--accent); }
+.like-button.liked { border-color:var(--accent); color:var(--accent); }
+.like-button:disabled { opacity:0.4; cursor:default; }
+.like-count { font-size:0.9rem; color:var(--accent-alpha-70); }
+.like-hint { font-size:0.85rem; color:var(--accent-alpha-70); }
+</style>'''}
 </head>
 <body>
 <div class="container">
 $headerHtml
   <div class="content">
     <div class="post">
-      <h1 class="post-title"><a href="#">${escapeHtml(postTitle)}</a></h1>
+      <h1 class="post-title">${escapeHtml(postTitle)}</h1>
+      $descHtml
       <div class="post-meta-inline">
         <span class="post-date">$dateStr</span>
       </div>
       $tagsHtml
-      $descHtml
       <div class="post-content">
         $htmlContent
       </div>

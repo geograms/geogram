@@ -2720,6 +2720,31 @@ class PureStationServer with HeartbeatMixin, EmailHandlerMixin, ConsoleCommandMi
         await _handleAppsApi(request);
       } else if (path == '/alerts') {
         await _handleAlertsPage(request);
+      } else if (path == '/events' || path == '/events/') {
+        await _handleEventsListingPage(request);
+      } else if (path.startsWith('/events/') && !path.contains('/api/') && method == 'GET') {
+        final eventSlug = Uri.decodeComponent(path.substring('/events/'.length).split('/').first);
+        if (eventSlug.isNotEmpty && eventSlug != 'styles.css') {
+          // /events/{eventId}/files/{path} — serve event files
+          final segments = path.substring('/events/'.length).split('/');
+          if (segments.length >= 3 && segments[1] == 'files') {
+            final filePath = segments.sublist(2).map(Uri.decodeComponent).join('/');
+            final realId = await _resolveEventSlug(eventSlug);
+            if (realId != null) {
+              await _handleEventFileServe(request, realId, filePath);
+            } else {
+              request.response.statusCode = 404;
+              request.response.write('Event not found');
+            }
+          } else {
+            await _handleEventDetailPage(request, eventSlug);
+          }
+        } else if (eventSlug == 'styles.css') {
+          await _handleThemeFile('events/styles.css', request);
+        } else {
+          request.response.statusCode = 404;
+          request.response.write('Not Found');
+        }
       } else if (path == '/api/alerts' || path == '/api/alerts/list') {
         await _handleAlertsApi(request);
       } else if (path == '/api/places' || path == '/api/places/list') {
@@ -4163,6 +4188,216 @@ class PureStationServer with HeartbeatMixin, EmailHandlerMixin, ConsoleCommandMi
     } catch (e) {
       _log('ERROR', 'ALERT PHOTO: On-demand fetch error: $e');
       return false;
+    }
+  }
+
+  /// Build event page HTML from embedded templates
+  String _buildEventPageHtml({
+    required String templateKey,
+    required Map<String, dynamic> data,
+    required String menuItems,
+  }) {
+    final template = ThemesEmbedded.files['default/$templateKey'] ?? '<html><body>Template not found</body></html>';
+    final globalStyles = ThemesEmbedded.files['default/styles.css'] ?? '';
+    final appStyles = ThemesEmbedded.files['default/events/styles.css'] ?? '';
+    final dataJson = jsonEncode(data)
+        .replaceAll('</', '<\\/')
+        .replaceAll('<!--', '<\\!--');
+    var html = template;
+    final vars = {
+      'TITLE': 'Events',
+      'LOGO_TEXT': 'Events',
+      'DATA_JSON': dataJson,
+      'MENU_ITEMS': menuItems,
+      'NOSTR_STYLES': getNostrLoginStyles(),
+      'NOSTR_HEADER': getNostrLoginHeaderHtml(),
+      'GLOBAL_STYLES': globalStyles,
+      'APP_STYLES': appStyles,
+      'SCRIPTS': getNostrLoginScripts(),
+    };
+    for (final entry in vars.entries) {
+      html = html.replaceAll('{{${entry.key}}}', entry.value);
+    }
+    return html;
+  }
+
+  /// Build menu items for web pages
+  String _buildWebMenuItems({String activeApp = ''}) {
+    // Events are always available on the station; scan for other apps
+    return WebNavigation.generateDeviceMenuItems(
+      activeApp: activeApp,
+      hasEvents: true,
+      hasAlerts: true,
+      hasChat: true,
+    );
+  }
+
+  /// Resolve an event slug or ID to the real folder ID
+  Future<String?> _resolveEventSlug(String idOrSlug) async {
+    if (_dataDir == null) return null;
+    final allEvents = await EventService().getAllEventsGlobal(_dataDir!);
+    for (final e in allEvents) {
+      if (e.id == idOrSlug) return e.id;
+    }
+    for (final e in allEvents) {
+      if (e.slug == idOrSlug) return e.id;
+    }
+    return null;
+  }
+
+  /// Handle GET /events - Display events listing page
+  Future<void> _handleEventsListingPage(HttpRequest request) async {
+    try {
+      if (_dataDir == null) {
+        request.response.statusCode = 500;
+        request.response.write('Storage not initialized');
+        return;
+      }
+      final eventService = EventService();
+      final events = await eventService.getAllEventsGlobal(_dataDir!);
+      final years = await eventService.getAvailableYearsGlobal(_dataDir!);
+      final data = <String, dynamic>{
+        'events': events.map((e) => e.toApiJson(summary: true)).toList(),
+        'years': years,
+        'total': events.length,
+      };
+      final menuItems = _buildWebMenuItems(activeApp: 'events');
+      final html = _buildEventPageHtml(
+        templateKey: 'events/index.html',
+        data: data,
+        menuItems: menuItems,
+      );
+      await _sendCompressedResponse(
+        request,
+        html,
+        ContentType.html,
+        cacheControl: 'public, max-age=60',
+      );
+    } catch (e) {
+      _log('ERROR', 'Error loading events listing: $e');
+      request.response.statusCode = 500;
+      request.response.write('Error loading events');
+    }
+  }
+
+  /// Handle GET /events/{eventId} - Display event detail page
+  Future<void> _handleEventDetailPage(
+    HttpRequest request,
+    String eventId,
+  ) async {
+    try {
+      if (_dataDir == null) {
+        request.response.statusCode = 500;
+        request.response.write('Storage not initialized');
+        return;
+      }
+
+      // Load event — resolve ID/slug
+      var event = await EventService().findEventByIdGlobal(eventId, _dataDir!);
+      if (event == null) {
+        final allEvents = await EventService().getAllEventsGlobal(_dataDir!);
+        final bySlug = allEvents.cast<Event?>().firstWhere(
+          (e) => e?.slug == eventId,
+          orElse: () => null,
+        );
+        if (bySlug != null) {
+          event = await EventService().findEventByIdGlobal(bySlug.id, _dataDir!);
+          event ??= bySlug;
+        }
+      }
+      if (event == null) {
+        request.response.statusCode = 404;
+        request.response.headers.contentType = ContentType.html;
+        request.response.write('<html><body><h1>Event not found</h1></body></html>');
+        return;
+      }
+
+      // Build full JSON
+      final data = event.toApiJson(summary: false);
+
+      // Resolve place coordinates for map display
+      if (event.hasPlaceReference && !event.hasCoordinates) {
+        try {
+          final placePath = event.placePath!;
+          String? resolvedPath;
+          if (path.isAbsolute(placePath)) {
+            resolvedPath = placePath;
+          } else {
+            final callsign = event.author.isNotEmpty
+                ? event.author
+                : _settings.callsign;
+            final basePath = '$_dataDir/devices/$callsign';
+            resolvedPath = path.normalize(path.join(basePath, placePath));
+          }
+          if (resolvedPath != null) {
+            final placeFile = File(path.join(resolvedPath, 'place.txt'));
+            if (await placeFile.exists()) {
+              final content = await placeFile.readAsString();
+              // Parse COORDINATES line directly to avoid Flutter dependencies
+              for (final line in content.split('\n')) {
+                if (line.startsWith('COORDINATES:')) {
+                  final coords = line.substring('COORDINATES:'.length).trim();
+                  final parts = coords.split(',');
+                  if (parts.length == 2) {
+                    final lat = double.tryParse(parts[0].trim());
+                    final lon = double.tryParse(parts[1].trim());
+                    if (lat != null && lon != null) {
+                      data['place_latitude'] = lat;
+                      data['place_longitude'] = lon;
+                    }
+                  }
+                  break;
+                }
+              }
+            }
+          }
+        } catch (e) {
+          _log('WARN', 'EventDetail: Error resolving place coordinates: $e');
+        }
+      }
+
+      // Load feedback likes
+      final eventPath = await EventService().getEventPath(event.id, _dataDir!);
+      if (eventPath != null) {
+        final likesFile = File('$eventPath/.feedback/likes.txt');
+        if (await likesFile.exists()) {
+          final content = await likesFile.readAsString();
+          final feedbackLikes = content
+              .split('\n')
+              .map((l) => l.trim())
+              .where((l) => l.isNotEmpty)
+              .toList();
+          data['feedback_likes'] = feedbackLikes;
+          data['feedback_like_count'] = feedbackLikes.length;
+        }
+      }
+      if (data['feedback_likes'] != null) {
+        final npubLikes = data['feedback_likes'] as List<String>;
+        final hexPubkeys = <String>[];
+        for (final npub in npubLikes) {
+          try {
+            hexPubkeys.add(NostrCrypto.decodeNpub(npub));
+          } catch (_) {}
+        }
+        data['feedback_liked_hex_pubkeys'] = hexPubkeys;
+      }
+
+      final menuItems = _buildWebMenuItems(activeApp: 'events');
+      final html = _buildEventPageHtml(
+        templateKey: 'events/event.html',
+        data: data,
+        menuItems: menuItems,
+      );
+      await _sendCompressedResponse(
+        request,
+        html,
+        ContentType.html,
+        cacheControl: 'public, max-age=60',
+      );
+    } catch (e) {
+      _log('ERROR', 'Error loading event detail: $e');
+      request.response.statusCode = 500;
+      request.response.write('Error loading event');
     }
   }
 

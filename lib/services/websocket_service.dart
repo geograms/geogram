@@ -1446,13 +1446,26 @@ class WebSocketService {
       extensionSet: md.ExtensionSet.gitHubWeb,
     );
 
-    final html = _buildBlogHtmlPageStatic(foundPost, htmlContent, author, foundPostLikedHexPubkeys);
+    final html = await _buildBlogHtmlPageStatic(foundPost, htmlContent, author, foundPostLikedHexPubkeys);
     LogService().log('Served blog post: ${foundPost.title} (${html.length} bytes)');
     return (statusCode: 200, contentType: 'text/html', body: utf8.encode(html));
   }
 
   /// Build HTML page for blog post (static version)
-  static String _buildBlogHtmlPageStatic(BlogPost post, String htmlContent, String author, [List<String> likedHexPubkeys = const []]) {
+  static Future<String> _buildBlogHtmlPageStatic(BlogPost post, String htmlContent, String author, [List<String> likedHexPubkeys = const []]) async {
+    // Reuse the same menu generation as blog listing (generateBlogIndex)
+    final menuItems = await AppService().generateDeviceMenu(
+      activeApp: 'blog',
+    );
+
+    // Load blog-specific styles from theme
+    String blogStyles = '';
+    try {
+      final themeService = WebThemeService();
+      await themeService.init();
+      blogStyles = await themeService.getAppStyles('blog') ?? '';
+    } catch (_) {}
+
     return StationHtmlTemplates.buildBlogPostPage(
       postTitle: post.title,
       postDate: post.displayDate,
@@ -1460,12 +1473,13 @@ class WebSocketService {
       htmlContent: htmlContent,
       description: post.description,
       tags: post.tags,
+      menuItems: menuItems,
       postId: post.id,
       npub: post.npub,
       likesCount: post.likesCount,
       likedHexPubkeys: likedHexPubkeys,
       globalStyles: StationHtmlTemplates.getBaseStyles(),
-      appStyles: '',
+      appStyles: blogStyles,
     );
   }
 

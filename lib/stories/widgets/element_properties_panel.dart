@@ -79,6 +79,8 @@ class ElementPropertiesPanel extends StatelessWidget {
         return Icons.title;
       case ElementType.button:
         return Icons.smart_button;
+      case ElementType.quiz:
+        return Icons.quiz;
     }
   }
 
@@ -90,6 +92,8 @@ class ElementPropertiesPanel extends StatelessWidget {
         return i18n.get('element_title', 'stories');
       case ElementType.button:
         return i18n.get('element_button', 'stories');
+      case ElementType.quiz:
+        return i18n.get('element_quiz', 'stories');
     }
   }
 
@@ -208,6 +212,8 @@ class ElementPropertiesPanel extends StatelessWidget {
         return _buildTitleProperties(context);
       case ElementType.button:
         return _buildButtonProperties(context);
+      case ElementType.quiz:
+        return _buildQuizProperties(context);
     }
   }
 
@@ -443,6 +449,60 @@ class ElementPropertiesPanel extends StatelessWidget {
               },
             ),
           ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildQuizProperties(BuildContext context) {
+    final props = element.properties;
+
+    return _Section(
+      title: i18n.get('element_quiz', 'stories'),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Question
+          TextFormField(
+            initialValue: props['question'] as String? ?? '',
+            decoration: InputDecoration(
+              labelText: i18n.get('quiz_question', 'stories'),
+              border: const OutlineInputBorder(),
+            ),
+            onChanged: (value) {
+              final newProps = Map<String, dynamic>.from(props);
+              newProps['question'] = value;
+              onElementChanged(element.copyWith(properties: newProps));
+            },
+          ),
+          const SizedBox(height: 12),
+
+          // Answer
+          TextFormField(
+            initialValue: props['answer'] as String? ?? '',
+            decoration: InputDecoration(
+              labelText: i18n.get('quiz_answer', 'stories'),
+              border: const OutlineInputBorder(),
+            ),
+            onChanged: (value) {
+              final newProps = Map<String, dynamic>.from(props);
+              newProps['answer'] = value;
+              onElementChanged(element.copyWith(properties: newProps));
+            },
+          ),
+          const SizedBox(height: 12),
+
+          // Color
+          _ColorPickerRow(
+            label: i18n.get('button_text_color', 'stories'),
+            color: _parseColor(props['color'] as String? ?? '#FFFFFF'),
+            onColorChanged: (color) {
+              if (color == null) return;
+              final newProps = Map<String, dynamic>.from(props);
+              newProps['color'] = _colorToHex(color);
+              onElementChanged(element.copyWith(properties: newProps));
+            },
+          ),
         ],
       ),
     );

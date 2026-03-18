@@ -409,6 +409,7 @@ class _StoryStudioPageState extends State<StoryStudioPage> {
           story: _story,
           storage: widget.storage,
           i18n: widget.i18n,
+          isPreview: true,
         ),
       ),
     );
@@ -731,6 +732,12 @@ class _StoryStudioPageState extends State<StoryStudioPage> {
             icon: Icons.smart_button,
             label: widget.i18n.get('element_button', 'stories'),
             onPressed: () => _addElement(ElementType.button),
+          ),
+          const SizedBox(width: 8),
+          _ToolbarButton(
+            icon: Icons.quiz,
+            label: widget.i18n.get('element_quiz', 'stories'),
+            onPressed: () => _addElement(ElementType.quiz),
           ),
 
           const Spacer(),

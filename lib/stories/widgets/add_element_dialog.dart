@@ -49,6 +49,7 @@ class _AddElementDialogState extends State<AddElementDialog> {
   final _formKey = GlobalKey<FormState>();
   final _textController = TextEditingController();
   final _labelController = TextEditingController();
+  final _answerController = TextEditingController();
 
   AnchorPoint _anchor = AnchorPoint.center;
   ButtonShape _buttonShape = ButtonShape.roundedRect;
@@ -58,6 +59,7 @@ class _AddElementDialogState extends State<AddElementDialog> {
   void dispose() {
     _textController.dispose();
     _labelController.dispose();
+    _answerController.dispose();
     super.dispose();
   }
 
@@ -113,6 +115,8 @@ class _AddElementDialogState extends State<AddElementDialog> {
         return widget.i18n.get('element_title', 'stories');
       case ElementType.button:
         return widget.i18n.get('element_button', 'stories');
+      case ElementType.quiz:
+        return widget.i18n.get('element_quiz', 'stories');
     }
   }
 
@@ -124,6 +128,8 @@ class _AddElementDialogState extends State<AddElementDialog> {
         return _buildTitleFields();
       case ElementType.button:
         return _buildButtonFields();
+      case ElementType.quiz:
+        return _buildQuizFields();
     }
   }
 
@@ -238,6 +244,41 @@ class _AddElementDialogState extends State<AddElementDialog> {
     );
   }
 
+  Widget _buildQuizFields() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        TextFormField(
+          controller: _textController,
+          decoration: InputDecoration(
+            labelText: widget.i18n.get('quiz_question', 'stories'),
+            border: const OutlineInputBorder(),
+          ),
+          validator: (value) {
+            if (value == null || value.isEmpty) {
+              return 'Please enter a question';
+            }
+            return null;
+          },
+        ),
+        const SizedBox(height: 16),
+        TextFormField(
+          controller: _answerController,
+          decoration: InputDecoration(
+            labelText: widget.i18n.get('quiz_answer', 'stories'),
+            border: const OutlineInputBorder(),
+          ),
+          validator: (value) {
+            if (value == null || value.isEmpty) {
+              return 'Please enter the correct answer';
+            }
+            return null;
+          },
+        ),
+      ],
+    );
+  }
+
   Widget _buildShapeChip(ButtonShape shape, String label, IconData icon) {
     final isSelected = _buttonShape == shape;
     return ChoiceChip(
@@ -315,6 +356,9 @@ class _AddElementDialogState extends State<AddElementDialog> {
       case ElementType.button:
         width = _buttonShape == ButtonShape.invisible ? ElementSize.medium : ElementSize.medium;
         break;
+      case ElementType.quiz:
+        width = ElementSize.large;
+        break;
     }
 
     final position = ElementPosition(anchor: _anchor, width: width);
@@ -352,6 +396,15 @@ class _AddElementDialogState extends State<AddElementDialog> {
           position: position,
           backgroundColor: colorPair.$1,
           textColor: colorPair.$2,
+        );
+        break;
+
+      case ElementType.quiz:
+        element = StoryElement.quiz(
+          id: elementId,
+          question: _textController.text,
+          answer: _answerController.text,
+          position: position,
         );
         break;
     }
@@ -425,6 +478,14 @@ class AddElementBottomSheet extends StatelessWidget {
                   onTap: () {
                     Navigator.pop(context);
                     onTypeSelected(ElementType.button);
+                  },
+                ),
+                _ElementTypeButton(
+                  icon: Icons.quiz,
+                  label: i18n.get('element_quiz', 'stories'),
+                  onTap: () {
+                    Navigator.pop(context);
+                    onTypeSelected(ElementType.quiz);
                   },
                 ),
               ],
