@@ -519,6 +519,7 @@ class ThemesEmbedded {
 }
 .tl-desc {
   font-size: 0.9rem;
+  font-style: italic;
   opacity: 0.7;
   margin-bottom: 4px;
   line-height: 1.5;
