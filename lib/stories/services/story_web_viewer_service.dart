@@ -408,11 +408,6 @@ $headerHtml
     <div class="countdown-overlay" id="countdown-overlay" style="display:none;"></div>
     <div class="back-button" id="back-button" style="display:none;" onclick="goBack()">\u2190</div>
   </div>
-  <footer class="footer">
-    <div class="footer__inner">
-      <div class="copyright"><span>published via geogram</span></div>
-    </div>
-  </footer>
 </div>
 <script>
 var STORY_DATA = $storyDataJson;
@@ -498,16 +493,16 @@ ${interaction.permitComments ? feedback.getCommentsScript(ownerNpub, storyFilena
 .scene-viewport {
   position: relative;
   width: 100%;
-  max-width: 480px;
-  margin: 0 auto;
+  max-width: 420px;
+  margin: 0 auto 10vh;
   aspect-ratio: 9 / 16;
-  max-height: 80vh;
+  max-height: 70vh;
   overflow: hidden;
   border-radius: 8px;
   background: #000;
 }
 @media (max-width: 600px) {
-  .scene-viewport { max-width: 100%; max-height: 85vh; border-radius: 0; }
+  .scene-viewport { max-width: 100%; max-height: 75vh; margin-bottom: 5vh; border-radius: 0; }
 }
 .scene-container {
   position: absolute;
