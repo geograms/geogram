@@ -17738,6 +17738,36 @@ class LogApiService with ChatModificationMixin {
             headers: headers,
           );
 
+        case 'mirror_exclude_rules':
+          final rules = MirrorConfigService.instance.config?.excludeRules ?? [];
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'rules': rules.map((r) => r.toJson()).toList(),
+            }),
+            headers: headers,
+          );
+
+        case 'mirror_set_exclude_rules':
+          final rulesJson = params['rules'] as List<dynamic>?;
+          if (rulesJson == null) {
+            return shelf.Response.ok(
+              jsonEncode({'success': false, 'error': 'Missing rules array'}),
+              headers: headers,
+            );
+          }
+          final rules = rulesJson
+              .map((e) => SyncExcludeRule.fromJson(e as Map<String, dynamic>))
+              .toList();
+          await MirrorConfigService.instance.saveExcludeRules(rules);
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'rules_count': rules.length,
+            }),
+            headers: headers,
+          );
+
         case 'mirror_auto_sync_status':
           final autoSync = MirrorAutoSyncService.instance;
           return shelf.Response.ok(
@@ -17856,10 +17886,12 @@ class LogApiService with ChatModificationMixin {
 
             // Run diffManifest with storage (like client does)
             final localPath = '${profile.callsign}/$testFolder';
+            final globalExcludeRules = MirrorConfigService.instance.config?.excludeRules ?? const [];
             final selfChanges = await mirrorService.diffManifest(
               selfManifest,
               localPath,
               syncStyle: SyncStyle.sendReceive,
+              excludeRules: globalExcludeRules,
               storage: storage,
               fileIndex: fileIndex,
             );
@@ -17918,6 +17950,7 @@ class LogApiService with ChatModificationMixin {
               mutatedManifest,
               localPath,
               syncStyle: SyncStyle.sendReceive,
+              excludeRules: globalExcludeRules,
               storage: storage,
               fileIndex: fileIndex,
             );
@@ -17928,6 +17961,7 @@ class LogApiService with ChatModificationMixin {
               mutatedManifest,
               localPath,
               syncStyle: SyncStyle.sendReceive,
+              excludeRules: globalExcludeRules,
               storage: storage,
               fileIndex: fileIndex2,
             );
@@ -17996,6 +18030,8 @@ class LogApiService with ChatModificationMixin {
                 'mirror_open_settings',
                 'mirror_open_wizard',
                 'mirror_diff_test',
+                'mirror_exclude_rules',
+                'mirror_set_exclude_rules',
               ],
             }),
             headers: headers,
