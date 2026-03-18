@@ -8,7 +8,9 @@ import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 
+import '../models/monitored_task.dart';
 import '../util/managed_http_client.dart';
+import '../util/task_monitor_helpers.dart';
 import '../models/update_settings.dart';
 import '../services/app_args.dart';
 import '../services/config_service.dart';
@@ -61,7 +63,7 @@ class UpdateService {
   static const _progressMinChange = 0.01; // 1%
 
   /// Periodic update checking timer
-  Timer? _periodicCheckTimer;
+  MonitoredAsyncPeriodicTimer? _periodicCheckTimer;
   static const _periodicCheckInterval = Duration(minutes: 30);
 
   /// Track pending desktop update (staged but not yet applied — Linux or Windows)
@@ -126,13 +128,20 @@ class UpdateService {
   /// Start periodic background checking for updates
   void _startPeriodicChecking() {
     _periodicCheckTimer?.cancel();
-    _periodicCheckTimer = Timer.periodic(_periodicCheckInterval, (_) {
-      // Only check if not already checking or downloading
-      if (!_isChecking && !_isDownloading) {
-        LogService().log('UpdateService: Periodic update check triggered');
-        checkForUpdates();
-      }
-    });
+    _periodicCheckTimer = MonitoredAsyncPeriodicTimer(
+      id: 'update.periodic_check',
+      name: 'Update Check',
+      description: 'Periodic check for app updates',
+      serviceName: 'UpdateService',
+      interval: _periodicCheckInterval,
+      priority: TaskPriority.low,
+      callback: (_) async {
+        if (!_isChecking && !_isDownloading) {
+          LogService().log('UpdateService: Periodic update check triggered');
+          await checkForUpdates();
+        }
+      },
+    );
     LogService().log('UpdateService: Started periodic checking (every ${_periodicCheckInterval.inMinutes} minutes)');
   }
 

@@ -22,10 +22,12 @@ import 'package:path/path.dart' as p;
 import '../connection/connection_manager.dart';
 import '../connection/transports/lan_transport.dart';
 import '../models/backup_models.dart';
+import '../models/monitored_task.dart';
 import '../util/backup_encryption.dart';
 import '../util/nostr_crypto.dart';
 import '../util/nostr_event.dart';
 import '../util/event_bus.dart';
+import '../util/task_monitor_helpers.dart';
 import 'app_args.dart';
 import 'devices_service.dart';
 import 'log_service.dart';
@@ -66,7 +68,7 @@ class BackupService {
 
   // Station availability announcements
   EventSubscription<ConnectionStateChangedEvent>? _stationConnectionSubscription;
-  Timer? _providerAnnounceTimer;
+  MonitoredAsyncPeriodicTimer? _providerAnnounceTimer;
   static const Duration _providerAnnounceInterval = Duration(seconds: 60);
 
   // === Stream controllers ===
@@ -1793,9 +1795,15 @@ class BackupService {
 
   void _startProviderAnnounceTimer() {
     _providerAnnounceTimer?.cancel();
-    _providerAnnounceTimer = Timer.periodic(_providerAnnounceInterval, (_) {
-      unawaited(_announceProviderAvailability());
-    });
+    _providerAnnounceTimer = MonitoredAsyncPeriodicTimer(
+      id: 'backup.provider_announce',
+      name: 'Backup Announce',
+      description: 'Announces backup provider availability',
+      serviceName: 'BackupService',
+      interval: _providerAnnounceInterval,
+      priority: TaskPriority.low,
+      callback: (_) async => await _announceProviderAvailability(),
+    );
   }
 
   void _stopProviderAnnounceTimer() {

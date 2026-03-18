@@ -18,6 +18,8 @@ import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 
+import '../models/monitored_task.dart';
+import '../util/task_monitor_helpers.dart';
 import 'log_service.dart';
 import 'profile_service.dart';
 import 'map_tile_service.dart';
@@ -56,7 +58,7 @@ class UserLocationService extends ChangeNotifier {
   final ProfileService _profileService = ProfileService();
 
   UserLocation? _currentLocation;
-  Timer? _updateTimer;
+  MonitoredAsyncPeriodicTimer? _updateTimer;
   bool _isUpdating = false;
   StreamSubscription<Position>? _positionSubscription;
 
@@ -122,9 +124,15 @@ class UserLocationService extends ChangeNotifier {
 
     // Set up periodic updates (less frequent on web)
     _updateTimer?.cancel();
-    _updateTimer = Timer.periodic(const Duration(minutes: 5), (_) {
-      _detectBrowserLocation();
-    });
+    _updateTimer = MonitoredAsyncPeriodicTimer(
+      id: 'user_location.refresh',
+      name: 'Location Refresh',
+      description: 'Periodic user location update',
+      serviceName: 'UserLocationService',
+      interval: const Duration(minutes: 5),
+      priority: TaskPriority.low,
+      callback: (_) async => await _detectBrowserLocation(),
+    );
   }
 
   /// Detect location using browser Geolocation API
@@ -240,9 +248,15 @@ class UserLocationService extends ChangeNotifier {
 
     // Set up periodic IP-based updates
     _updateTimer?.cancel();
-    _updateTimer = Timer.periodic(ipUpdateInterval, (_) {
-      _detectLocationViaIP();
-    });
+    _updateTimer = MonitoredAsyncPeriodicTimer(
+      id: 'user_location.refresh',
+      name: 'Location Refresh',
+      description: 'Periodic user location update (IP-based)',
+      serviceName: 'UserLocationService',
+      interval: ipUpdateInterval,
+      priority: TaskPriority.low,
+      callback: (_) async => await _detectLocationViaIP(),
+    );
   }
 
   /// Detect location via IP address using the connected station's GeoIP service

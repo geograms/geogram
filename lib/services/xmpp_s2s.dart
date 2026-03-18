@@ -17,6 +17,8 @@ import 'dart:math';
 import 'package:crypto/crypto.dart';
 import 'package:dnsolve/dnsolve.dart';
 
+import '../models/monitored_task.dart';
+import '../util/task_monitor_helpers.dart';
 import '../util/xmpp_s2s_xml.dart';
 import '../util/xmpp_server_protocol.dart';
 import 'log_service.dart';
@@ -139,10 +141,10 @@ class XmppS2sManager {
   String? _dialbackSecret;
 
   /// Idle timeout timer
-  Timer? _idleTimer;
+  MonitoredPeriodicTimer? _idleTimer;
 
   /// Keepalive timer
-  Timer? _keepaliveTimer;
+  MonitoredPeriodicTimer? _keepaliveTimer;
 
   static final _random = Random.secure();
 
@@ -175,10 +177,26 @@ class XmppS2sManager {
       );
 
       // Idle timeout check every 5 minutes
-      _idleTimer = Timer.periodic(const Duration(minutes: 5), (_) => _checkIdle());
+      _idleTimer = MonitoredPeriodicTimer(
+        id: 'xmpp_s2s.idle_check',
+        name: 'XMPP S2S Idle',
+        description: 'Checks and closes idle XMPP S2S connections',
+        serviceName: 'XmppS2S',
+        interval: const Duration(minutes: 5),
+        priority: TaskPriority.low,
+        callback: (_) => _checkIdle(),
+      );
 
       // Whitespace keepalive every 5 minutes
-      _keepaliveTimer = Timer.periodic(const Duration(minutes: 5), (_) => _sendKeepalives());
+      _keepaliveTimer = MonitoredPeriodicTimer(
+        id: 'xmpp_s2s.keepalive',
+        name: 'XMPP S2S Keepalive',
+        description: 'Sends XMPP S2S whitespace keepalives',
+        serviceName: 'XmppS2S',
+        interval: const Duration(minutes: 5),
+        priority: TaskPriority.low,
+        callback: (_) => _sendKeepalives(),
+      );
 
       _log('Listening on port $port for S2S federation');
       return true;

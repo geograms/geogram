@@ -32,6 +32,7 @@ import '../cli/console_io.dart';
 import '../cli/console_io_buffer.dart';
 import '../cli/game/game_config.dart';
 import '../cli/game/game_engine_io.dart';
+import '../models/monitored_task.dart';
 import '../models/profile.dart';
 import '../models/chat_channel.dart';
 import '../models/chat_message.dart';
@@ -44,6 +45,7 @@ import '../services/station_service.dart';
 import '../services/station_cache_service.dart';
 import '../services/storage_config.dart';
 import '../models/station_chat_room.dart';
+import '../util/task_monitor_helpers.dart';
 import '../version.dart';
 
 // ---------------------------------------------------------------------------
@@ -612,7 +614,7 @@ class CliConsoleController {
   void Function(String output)? onLateOutput;
 
   /// Periodic timer for polling new messages while inside a chat room.
-  Timer? _pollTimer;
+  MonitoredAsyncPeriodicTimer? _pollTimer;
 
   /// Number of messages already shown, to detect new ones.
   int _lastShownMessageCount = 0;
@@ -978,25 +980,34 @@ class CliConsoleController {
   /// Start polling for new messages every 30 seconds.
   void _startRoomPolling(String roomId) {
     _stopRoomPolling();
-    _pollTimer = Timer.periodic(const Duration(seconds: 30), (_) {
-      if (_nav.currentChatRoom != roomId) {
-        _stopRoomPolling();
-        return;
-      }
-      final beforeCount = _lastShownMessageCount;
-      _stationAdapter.refreshRoomMessages(roomId).then((fresh) {
-        if (fresh.length > beforeCount) {
-          final buf = StringBuffer();
-          for (var i = beforeCount; i < fresh.length; i++) {
-            buf.writeln(_formatMessage(fresh[i]));
-          }
-          _lastShownMessageCount = fresh.length;
-          onLateOutput?.call(buf.toString());
+    _pollTimer = MonitoredAsyncPeriodicTimer(
+      id: 'cli_console.room_poll',
+      name: 'Console Poll',
+      description: 'Polls for new chat room messages',
+      serviceName: 'CliConsoleController',
+      interval: const Duration(seconds: 30),
+      priority: TaskPriority.low,
+      callback: (_) async {
+        if (_nav.currentChatRoom != roomId) {
+          _stopRoomPolling();
+          return;
         }
-      }).catchError((e) {
-        debugPrint('Poll error: $e');
-      });
-    });
+        final beforeCount = _lastShownMessageCount;
+        try {
+          final fresh = await _stationAdapter.refreshRoomMessages(roomId);
+          if (fresh.length > beforeCount) {
+            final buf = StringBuffer();
+            for (var i = beforeCount; i < fresh.length; i++) {
+              buf.writeln(_formatMessage(fresh[i]));
+            }
+            _lastShownMessageCount = fresh.length;
+            onLateOutput?.call(buf.toString());
+          }
+        } catch (e) {
+          debugPrint('Poll error: $e');
+        }
+      },
+    );
   }
 
   /// Stop room polling.

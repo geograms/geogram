@@ -6,7 +6,9 @@ import 'dart:collection';
 import 'dart:convert';
 import 'package:async/async.dart';
 import 'package:http/http.dart' as http;
+import '../models/monitored_task.dart';
 import '../util/managed_http_client.dart';
+import '../util/task_monitor_helpers.dart';
 import '../services/log_service.dart';
 import '../services/log_api_service.dart';
 import '../services/power_aware_service.dart';
@@ -63,7 +65,7 @@ class ConnectionManager {
   final _incomingController = StreamController<TransportMessage>.broadcast();
 
   /// Timer for processing queued messages
-  Timer? _queueProcessTimer;
+  MonitoredAsyncPeriodicTimer? _queueProcessTimer;
 
   /// Shared HTTP client for P2P forwarding (to localhost)
   final ManagedHttpClient _httpClient = ManagedHttpClient();
@@ -748,9 +750,14 @@ class ConnectionManager {
     _queueProcessTimer?.cancel();
 
     // Process queue every 30 seconds
-    _queueProcessTimer = Timer.periodic(
-      const Duration(seconds: 30),
-      (_) => _processQueue(),
+    _queueProcessTimer = MonitoredAsyncPeriodicTimer(
+      id: 'connection_manager.queue',
+      name: 'Connection Queue',
+      description: 'Processes pending message delivery queue',
+      serviceName: 'ConnectionManager',
+      interval: const Duration(seconds: 30),
+      priority: TaskPriority.critical,
+      callback: (_) async => await _processQueue(),
     );
   }
 
@@ -772,7 +779,15 @@ class ConnectionManager {
         break;
     }
 
-    _queueProcessTimer = Timer.periodic(interval, (_) => _processQueue());
+    _queueProcessTimer = MonitoredAsyncPeriodicTimer(
+      id: 'connection_manager.queue',
+      name: 'Connection Queue',
+      description: 'Processes pending message delivery queue',
+      serviceName: 'ConnectionManager',
+      interval: interval,
+      priority: TaskPriority.critical,
+      callback: (_) async => await _processQueue(),
+    );
     LogService().log('ConnectionManager: ${mode.name} — queue interval ${interval.inSeconds}s');
   }
 

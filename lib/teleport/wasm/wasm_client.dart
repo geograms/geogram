@@ -14,7 +14,9 @@ import 'dart:isolate';
 
 import 'package:ffi/ffi.dart';
 
+import '../../models/monitored_task.dart';
 import '../../services/log_service.dart';
+import '../../util/task_monitor_helpers.dart';
 import 'wasm_ffi.dart';
 
 /// High-level WASM module bridge client.
@@ -37,6 +39,7 @@ class WasmClient {
   Stream<Map<String, dynamic>> get updates => _updateController.stream;
 
   bool _running = false;
+  MonitoredIsolateHandle? _taskHandle;
 
   WasmClient() : _ffi = WasmFfi();
 
@@ -122,6 +125,9 @@ class WasmClient {
     if (!_running) return;
     _running = false;
 
+    _taskHandle?.markIdle();
+    _taskHandle?.dispose();
+    _taskHandle = null;
     _receiveIsolate?.kill(priority: Isolate.immediate);
     _receiveIsolate = null;
     _receivePort?.close();
@@ -159,8 +165,16 @@ class WasmClient {
       sendPort: _receivePort!.sendPort,
     );
 
+    _taskHandle = MonitoredIsolateHandle(
+      id: 'wasm.receive_loop',
+      name: 'WASM Receiver',
+      description: 'WASM FFI receive loop',
+      serviceName: 'WasmClient',
+      priority: TaskPriority.normal,
+    );
     Isolate.spawn(_receiveLoopEntry, params).then((isolate) {
       _receiveIsolate = isolate;
+      _taskHandle?.markRunning();
     });
   }
 

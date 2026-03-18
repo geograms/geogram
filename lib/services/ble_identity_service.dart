@@ -10,6 +10,8 @@ import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 
+import '../models/monitored_task.dart';
+import '../util/task_monitor_helpers.dart';
 import 'app_args.dart';
 import 'ble_foreground_service.dart';
 import 'app_service.dart';
@@ -31,7 +33,7 @@ class BLEIdentityService {
   String? _lastKnownMac;
 
   /// Timer for periodic advertisement
-  Timer? _advertisementTimer;
+  MonitoredPeriodicTimer? _advertisementTimer;
 
   /// Stream controller for identity changes
   final _identityChangeController = StreamController<BLEIdentityUpdate>.broadcast();
@@ -273,9 +275,14 @@ class BLEIdentityService {
       LogService().log('BLEIdentity: Started periodic advertisement via native handler (30s interval)');
     } else {
       // On other platforms (iOS), use Dart timer
-      _advertisementTimer = Timer.periodic(
-        const Duration(seconds: 30),
-        (_) => _advertiseIdentity(),
+      _advertisementTimer = MonitoredPeriodicTimer(
+        id: 'ble_identity.advertise',
+        name: 'BLE Advertise',
+        description: 'Periodic BLE identity advertisement',
+        serviceName: 'BLEIdentityService',
+        interval: const Duration(seconds: 30),
+        priority: TaskPriority.low,
+        callback: (_) => _advertiseIdentity(),
       );
       LogService().log('BLEIdentity: Started periodic advertisement via Dart timer (30s interval)');
     }

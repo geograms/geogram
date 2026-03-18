@@ -11,8 +11,10 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:http/http.dart' as http;
+import '../models/monitored_task.dart';
 import '../models/report.dart';
 import '../util/alert_folder_utils.dart';
+import '../util/task_monitor_helpers.dart';
 import 'profile_storage.dart';
 import 'log_service.dart';
 import 'station_service.dart';
@@ -47,7 +49,7 @@ class StationAlertService {
   final StationService _stationService = StationService();
   final ConfigService _configService = ConfigService();
 
-  Timer? _pollTimer;
+  MonitoredAsyncPeriodicTimer? _pollTimer;
   int _lastFetchTimestamp = 0;
   List<Report> _cachedAlerts = [];
   bool _isPolling = false;
@@ -72,9 +74,15 @@ class StationAlertService {
     fetchAlerts();
 
     _pollTimer?.cancel();
-    _pollTimer = Timer.periodic(pollInterval, (_) {
-      fetchAlerts();
-    });
+    _pollTimer = MonitoredAsyncPeriodicTimer(
+      id: 'station_alert.poll',
+      name: 'Alert Poll',
+      description: 'Polls station for new alerts',
+      serviceName: 'StationAlertService',
+      interval: pollInterval,
+      priority: TaskPriority.low,
+      callback: (_) async => await fetchAlerts(),
+    );
   }
 
   /// Stop polling

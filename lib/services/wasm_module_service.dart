@@ -8,8 +8,10 @@
 
 import 'dart:async';
 
+import '../models/monitored_task.dart';
 import '../teleport/wasm/wasm_client.dart';
 import '../teleport/wasm/wasm_ffi.dart';
+import '../util/task_monitor_helpers.dart';
 import 'log_service.dart';
 
 /// Event types emitted by the WASM module system.
@@ -107,7 +109,7 @@ class WasmModuleService {
   WasmClient? _client;
   bool _initialized = false;
   StreamSubscription<Map<String, dynamic>>? _updateSub;
-  Timer? _tickTimer;
+  MonitoredPeriodicTimer? _tickTimer;
 
   /// Currently tracked modules (id -> info).
   final Map<String, WasmModuleInfo> _modules = {};
@@ -359,9 +361,15 @@ class WasmModuleService {
         .reduce((a, b) => a < b ? a : b)
         .clamp(100, 60000);
 
-    _tickTimer = Timer.periodic(Duration(milliseconds: interval), (_) {
-      _tickAllModules();
-    });
+    _tickTimer = MonitoredPeriodicTimer(
+      id: 'wasm.module_tick',
+      name: 'WASM Tick',
+      description: 'Ticks all running WASM app modules',
+      serviceName: 'WasmModuleService',
+      interval: Duration(milliseconds: interval),
+      priority: TaskPriority.low,
+      callback: (_) => _tickAllModules(),
+    );
   }
 
   void _stopTickTimerIfEmpty() {

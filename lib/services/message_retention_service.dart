@@ -9,6 +9,8 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/foundation.dart' show kIsWeb;
+import '../models/monitored_task.dart';
+import '../util/task_monitor_helpers.dart';
 import 'chat_service.dart';
 import 'direct_message_service.dart';
 import 'log_service.dart';
@@ -89,7 +91,7 @@ class MessageRetentionService {
   factory MessageRetentionService() => _instance;
   MessageRetentionService._internal();
 
-  Timer? _cleanupTimer;
+  MonitoredAsyncPeriodicTimer? _cleanupTimer;
 
   /// Pure function: purge expired messages from raw text content.
   /// Returns the filtered content string with only surviving messages.
@@ -172,9 +174,15 @@ class MessageRetentionService {
   void startCleanupTimer() {
     stopCleanupTimer();
     // Run once at startup after a short delay, then every 30 min
-    _cleanupTimer = Timer.periodic(const Duration(minutes: 30), (_) {
-      _runCleanupCycle();
-    });
+    _cleanupTimer = MonitoredAsyncPeriodicTimer(
+      id: 'message_retention.cleanup',
+      name: 'DM Retention',
+      description: 'Purges expired direct messages',
+      serviceName: 'MessageRetentionService',
+      interval: const Duration(minutes: 30),
+      priority: TaskPriority.low,
+      callback: (_) async => await _runCleanupCycle(),
+    );
     // Initial run after 10 seconds (let the app finish loading)
     Future.delayed(const Duration(seconds: 10), _runCleanupCycle);
   }

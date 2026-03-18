@@ -37,6 +37,7 @@ import '../util/event_bus.dart';
 import '../util/feedback_folder_utils.dart';
 import '../util/nostr_crypto.dart';
 import '../util/nostr_key_generator.dart';
+import '../models/monitored_task.dart';
 import '../models/update_notification.dart';
 import '../models/update_settings.dart' show UpdateAssetType;
 import '../models/blog_post.dart';
@@ -46,6 +47,7 @@ import '../services/shared_folder_service.dart';
 import '../services/groups_service.dart';
 import '../tracker/models/tracker_visibility.dart';
 import '../work/services/ndf_web_viewer_service.dart';
+import '../util/task_monitor_helpers.dart';
 import '../work/services/work_storage_service.dart';
 
 /// WebSocket service for station connections (singleton)
@@ -58,8 +60,8 @@ class WebSocketService {
   StreamSubscription? _subscription;
   final _messageController = StreamController<Map<String, dynamic>>.broadcast();
   final _updateController = StreamController<UpdateNotification>.broadcast();
-  Timer? _reconnectTimer;
-  Timer? _pingTimer;
+  MonitoredPeriodicTimer? _reconnectTimer;
+  MonitoredPeriodicTimer? _pingTimer;
   Timer? _disconnectGraceTimer;  // Timer to mark as disconnected after grace period
   String? _stationUrl;
   bool _shouldReconnect = false;
@@ -1817,18 +1819,30 @@ class WebSocketService {
   /// Start reconnection monitoring timer
   void _startReconnectTimer() {
     _reconnectTimer?.cancel();
-    _reconnectTimer = Timer.periodic(const Duration(seconds: 10), (timer) {
-      _checkConnection();
-    });
+    _reconnectTimer = MonitoredPeriodicTimer(
+      id: 'websocket.reconnect',
+      name: 'WS Reconnect',
+      description: 'WebSocket reconnection monitor',
+      serviceName: 'WebSocketService',
+      interval: const Duration(seconds: 10),
+      priority: TaskPriority.critical,
+      callback: (_) => _checkConnection(),
+    );
   }
 
   /// Start heartbeat ping timer
   void _startPingTimer() {
     _pingTimer?.cancel();
     // Send PING every 30 seconds (matches station heartbeat interval)
-    _pingTimer = Timer.periodic(const Duration(seconds: 30), (timer) {
-      _sendPing();
-    });
+    _pingTimer = MonitoredPeriodicTimer(
+      id: 'websocket.ping',
+      name: 'WS Ping',
+      description: 'WebSocket keepalive ping',
+      serviceName: 'WebSocketService',
+      interval: const Duration(seconds: 30),
+      priority: TaskPriority.critical,
+      callback: (_) => _sendPing(),
+    );
   }
 
   /// Send PING message to keep connection alive

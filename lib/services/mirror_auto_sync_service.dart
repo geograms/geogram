@@ -14,6 +14,8 @@ import 'dart:async';
 import 'package:http/http.dart' as http;
 
 import '../models/mirror_config.dart';
+import '../models/monitored_task.dart';
+import '../util/task_monitor_helpers.dart';
 import 'log_service.dart';
 import 'mirror_config_service.dart';
 import 'mirror_sync_service.dart';
@@ -56,7 +58,7 @@ class MirrorAutoSyncService {
 
   MirrorAutoSyncService._();
 
-  Timer? _timer;
+  MonitoredAsyncPeriodicTimer? _timer;
   StreamSubscription<MirrorConfig>? _configSubscription;
   bool _isSyncing = false;
   bool _active = false;
@@ -120,9 +122,14 @@ class MirrorAutoSyncService {
       _timer?.cancel();
       _intervalMinutes = interval;
       _active = true;
-      _timer = Timer.periodic(
-        Duration(minutes: _intervalMinutes),
-        (_) => _onTick(),
+      _timer = MonitoredAsyncPeriodicTimer(
+        id: 'mirror_sync.auto',
+        name: 'Mirror Sync',
+        description: 'Automatic mirror peer synchronization',
+        serviceName: 'MirrorAutoSyncService',
+        interval: Duration(minutes: _intervalMinutes),
+        priority: TaskPriority.low,
+        callback: (_) async => await _onTick(),
       );
       LogService()
           .log('MirrorAutoSync: timer started (every ${_intervalMinutes}min)');

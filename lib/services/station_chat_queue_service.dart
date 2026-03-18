@@ -4,6 +4,7 @@ import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 
+import '../models/monitored_task.dart';
 import '../models/station_chat_room.dart';
 import '../services/log_service.dart';
 import '../services/station_cache_service.dart';
@@ -13,6 +14,7 @@ import '../services/signing_service.dart';
 import '../util/nostr_event.dart';
 import '../util/nostr_crypto.dart';
 import '../util/chat_format.dart';
+import '../util/task_monitor_helpers.dart';
 
 class QueuedStationChatMessage {
   final String stationUrl;
@@ -81,7 +83,7 @@ class StationChatQueueService {
   final StationService _stationService = StationService();
   final RelayCacheService _cacheService = RelayCacheService();
 
-  Timer? _processingTimer;
+  MonitoredAsyncPeriodicTimer? _processingTimer;
   bool _initialized = false;
   bool _isProcessing = false;
 
@@ -97,7 +99,15 @@ class StationChatQueueService {
       await storageConfig.init();
     }
     await _cacheService.initialize();
-    _processingTimer = Timer.periodic(_processInterval, (_) => processQueue());
+    _processingTimer = MonitoredAsyncPeriodicTimer(
+      id: 'chat_queue.process',
+      name: 'Chat Queue',
+      description: 'Delivers queued station chat messages',
+      serviceName: 'StationChatQueueService',
+      interval: _processInterval,
+      priority: TaskPriority.normal,
+      callback: (_) async => await processQueue(),
+    );
     _initialized = true;
     LogService().log('StationChatQueueService: Initialized');
   }

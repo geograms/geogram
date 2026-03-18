@@ -4,8 +4,10 @@
  */
 
 import 'dart:async';
+import '../models/monitored_task.dart';
 import '../models/now_item.dart';
 import '../util/event_bus.dart';
+import '../util/task_monitor_helpers.dart';
 import 'config_service.dart';
 import 'log_service.dart';
 
@@ -29,7 +31,7 @@ class NowService {
   EventSubscription<EventCreatedEvent>? _eventSubscription;
   EventSubscription<PlaceCreatedEvent>? _placeSubscription;
   bool _initialized = false;
-  Timer? _expiryTimer;
+  MonitoredPeriodicTimer? _expiryTimer;
 
   final _itemsController = StreamController<List<NowItem>>.broadcast();
   final _unreadCountController = StreamController<int>.broadcast();
@@ -274,9 +276,15 @@ class NowService {
     });
 
     // Periodic expiry pruning every 60 seconds
-    _expiryTimer = Timer.periodic(const Duration(seconds: 60), (_) {
-      _pruneExpired();
-    });
+    _expiryTimer = MonitoredPeriodicTimer(
+      id: 'now.expiry_check',
+      name: 'NOW Expiry',
+      description: 'Prunes expired NOW feed items',
+      serviceName: 'NowService',
+      interval: const Duration(seconds: 60),
+      priority: TaskPriority.low,
+      callback: (_) => _pruneExpired(),
+    );
 
     _initialized = true;
     LogService().log('NowService initialized');

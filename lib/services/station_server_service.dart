@@ -33,6 +33,7 @@ import '../util/nostr_key_generator.dart';
 import '../bot/services/vision_model_manager.dart';
 import '../bot/models/vision_model_info.dart';
 import '../bot/models/music_model_info.dart';
+import '../models/monitored_task.dart';
 import '../models/chat_channel.dart';
 import '../models/chat_message.dart';
 import '../models/event.dart';
@@ -61,6 +62,7 @@ import 'station_activity_store.dart';
 import 'station_group_access_service.dart';
 import '../server/mixins/karma_mixin.dart';
 import '../server/mixins/conference_mixin.dart';
+import '../util/task_monitor_helpers.dart';
 
 class _UploadPayload {
   final Uint8List bytes;
@@ -446,7 +448,7 @@ class StationServerService with KarmaMixin, ConferenceMixin {
   CliConsoleController? _cliController;
 
   // Update mirror state
-  Timer? _updatePollTimer;
+  MonitoredAsyncPeriodicTimer? _updatePollTimer;
   Map<String, dynamic>? _cachedRelease;
   String? _updatesDirectory;
   bool _isDownloadingUpdates = false;
@@ -6866,9 +6868,14 @@ h2 { font-size: 1.2rem; margin: 0 0 20px 0; }
     _pollAndDownloadUpdates();
 
     // Then poll periodically
-    _updatePollTimer = Timer.periodic(
-      Duration(seconds: _settings.updateCheckInterval),
-      (_) => _pollAndDownloadUpdates(),
+    _updatePollTimer = MonitoredAsyncPeriodicTimer(
+      id: 'station_server.update_poll',
+      name: 'Station Update Poll',
+      description: 'Polls and downloads station updates',
+      serviceName: 'StationServerService',
+      interval: Duration(seconds: _settings.updateCheckInterval),
+      priority: TaskPriority.low,
+      callback: (_) async => await _pollAndDownloadUpdates(),
     );
   }
 

@@ -5,10 +5,12 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:geolocator/geolocator.dart';
 
-import 'log_service.dart';
-import 'power_aware_service.dart';
+import '../models/monitored_task.dart';
 import '../util/geolocation_utils.dart';
 import '../util/event_bus.dart';
+import '../util/task_monitor_helpers.dart';
+import 'log_service.dart';
+import 'power_aware_service.dart';
 
 /// Represents a locked GPS position with metadata
 class LockedPosition {
@@ -121,7 +123,7 @@ class LocationProviderService extends ChangeNotifier {
   LocationProviderService._internal();
 
   StreamSubscription<Position>? _positionSubscription;
-  Timer? _periodicTimer;
+  MonitoredAsyncPeriodicTimer? _periodicTimer;
   LockedPosition? _currentPosition;
   DateTime? _lastUpdateTime;
   bool _isRunning = false;
@@ -384,9 +386,14 @@ class LocationProviderService extends ChangeNotifier {
 
     if (kIsWeb) {
       // Web: Timer-based
-      _periodicTimer = Timer.periodic(
-        Duration(seconds: intervalSeconds),
-        (_) => _capturePosition(),
+      _periodicTimer = MonitoredAsyncPeriodicTimer(
+        id: 'location_provider.gps',
+        name: 'GPS Updates',
+        description: 'Periodic GPS location capture (web)',
+        serviceName: 'LocationProviderService',
+        interval: Duration(seconds: intervalSeconds),
+        priority: TaskPriority.low,
+        callback: (_) async => await _capturePosition(),
       );
       _capturePosition();
     } else if (Platform.isAndroid || Platform.isIOS) {
@@ -446,9 +453,14 @@ class LocationProviderService extends ChangeNotifier {
       // Mobile uses event-driven stream from Geolocator, no timer needed
     } else {
       // Desktop: Timer-based
-      _periodicTimer = Timer.periodic(
-        Duration(seconds: intervalSeconds),
-        (_) => _capturePosition(),
+      _periodicTimer = MonitoredAsyncPeriodicTimer(
+        id: 'location_provider.gps',
+        name: 'GPS Updates',
+        description: 'Periodic GPS location capture (desktop)',
+        serviceName: 'LocationProviderService',
+        interval: Duration(seconds: intervalSeconds),
+        priority: TaskPriority.low,
+        callback: (_) async => await _capturePosition(),
       );
       _capturePosition();
     }

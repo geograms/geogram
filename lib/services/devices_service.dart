@@ -12,6 +12,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as path;
 import '../models/device_source.dart';
+import '../models/monitored_task.dart';
 import '../models/station.dart';
 import 'station_cache_service.dart';
 import 'station_service.dart';
@@ -41,6 +42,7 @@ import '../connection/transports/lan_transport.dart';
 import '../tracker/services/proximity_detection_service.dart';
 import 'usb_aoa_service.dart';
 import 'security_service.dart';
+import '../util/task_monitor_helpers.dart';
 
 /// Service for managing remote devices we've contacted
 class DevicesService {
@@ -74,7 +76,7 @@ class DevicesService {
   EventSubscription<ProfileChangedEvent>? _profileChangedSubscription;
 
   /// Timer for periodic cleanup of inactive discovered devices
-  Timer? _cleanupTimer;
+  MonitoredAsyncPeriodicTimer? _cleanupTimer;
 
   /// How often to clean up offline discovered devices
   static const _cleanupInterval = Duration(hours: 2);
@@ -227,9 +229,15 @@ class DevicesService {
   /// Start periodic timer to clean up inactive discovered devices
   void _startCleanupTimer() {
     _cleanupTimer?.cancel();
-    _cleanupTimer = Timer.periodic(_cleanupInterval, (_) {
-      _cleanupInactiveDiscoveredDevices();
-    });
+    _cleanupTimer = MonitoredAsyncPeriodicTimer(
+      id: 'devices.cleanup',
+      name: 'Device Cleanup',
+      description: 'Removes inactive discovered devices',
+      serviceName: 'DevicesService',
+      interval: _cleanupInterval,
+      priority: TaskPriority.low,
+      callback: (_) async => await _cleanupInactiveDiscoveredDevices(),
+    );
   }
 
   /// Remove offline devices from the "Discovered" folder

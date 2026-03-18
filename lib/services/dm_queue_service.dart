@@ -7,6 +7,7 @@ import 'dart:async';
 
 import '../connection/connection_manager.dart';
 import '../models/chat_message.dart';
+import '../models/monitored_task.dart';
 import '../util/event_bus.dart';
 import '../util/nostr_crypto.dart';
 import '../util/nostr_event.dart';
@@ -14,6 +15,7 @@ import 'direct_message_service.dart';
 import 'log_service.dart';
 import 'storage_config.dart';
 import 'profile_storage.dart';
+import '../util/task_monitor_helpers.dart';
 
 /// Background queue processor for DM message delivery
 ///
@@ -27,7 +29,7 @@ class DMQueueService {
   factory DMQueueService() => _instance;
   DMQueueService._internal();
 
-  Timer? _processingTimer;
+  MonitoredAsyncPeriodicTimer? _processingTimer;
   bool _isProcessing = false;
   bool _initialized = false;
 
@@ -64,7 +66,15 @@ class DMQueueService {
     DirectMessageService().onTriggerBackgroundDelivery = processQueue;
 
     // Start periodic queue processing
-    _processingTimer = Timer.periodic(_processInterval, (_) => processQueue());
+    _processingTimer = MonitoredAsyncPeriodicTimer(
+      id: 'dm_queue.process',
+      name: 'DM Queue',
+      description: 'Delivers queued direct messages',
+      serviceName: 'DMQueueService',
+      interval: _processInterval,
+      priority: TaskPriority.normal,
+      callback: (_) async => await processQueue(),
+    );
 
     _initialized = true;
     LogService().log('DMQueueService: Initialized with ${_processInterval.inSeconds}s interval');

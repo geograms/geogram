@@ -16,7 +16,9 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
 
+import '../../models/monitored_task.dart';
 import '../../services/log_service.dart';
+import '../../util/task_monitor_helpers.dart';
 import 'aprs_message_utils.dart';
 import 'aprs_service.dart';
 import 'models/aprs_packet.dart';
@@ -62,6 +64,7 @@ class AprsIsClient {
   bool _running = false;
   bool _connected = false;
   bool _verified = false;
+  MonitoredIsolateHandle? _taskHandle;
 
   AprsIsClient({
     required this.callsign,
@@ -92,12 +95,22 @@ class AprsIsClient {
   Future<void> connect() async {
     if (_running) return;
     _running = true;
+    _taskHandle = MonitoredIsolateHandle(
+      id: 'aprs.is_client',
+      name: 'APRS-IS Connection',
+      description: 'APRS-IS TCP connection loop',
+      serviceName: 'AprsIsClient',
+      priority: TaskPriority.normal,
+    );
     _spawnIsolate();
   }
 
   /// Disconnect and stop reconnection attempts.
   void disconnect() {
     _running = false;
+    _taskHandle?.markIdle();
+    _taskHandle?.dispose();
+    _taskHandle = null;
     _commandPort?.send({'cmd': 'stop'});
     _killIsolate();
     _connected = false;
@@ -188,6 +201,7 @@ class AprsIsClient {
     if (msg is String) {
       if (msg == 'connected') {
         _connected = true;
+        _taskHandle?.markRunning();
         AprsService().emitEvent(const AprsEvent(AprsEventType.connected));
       } else if (msg == 'verified') {
         _verified = true;
@@ -195,6 +209,7 @@ class AprsIsClient {
         final wasConnected = _connected;
         _connected = false;
         _verified = false;
+        _taskHandle?.markIdle();
         if (wasConnected) {
           AprsService().emitEvent(
             const AprsEvent(AprsEventType.disconnected),

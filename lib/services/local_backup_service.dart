@@ -15,6 +15,8 @@ import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as p;
 
 import '../models/local_backup_models.dart';
+import '../models/monitored_task.dart';
+import '../util/task_monitor_helpers.dart';
 import 'app_service.dart';
 import 'config_service.dart';
 import 'log_service.dart';
@@ -29,7 +31,7 @@ class LocalBackupService {
   bool _initialized = false;
   LocalBackupSettings _settings = LocalBackupSettings();
   LocalBackupStatus _status = LocalBackupStatus.idle();
-  Timer? _autoBackupTimer;
+  MonitoredAsyncPeriodicTimer? _autoBackupTimer;
 
   // --- Public getters ---
 
@@ -101,9 +103,14 @@ class LocalBackupService {
     stopAutoBackup();
     if (!_settings.autoBackupEnabled || _settings.backupFolderPath == null) return;
 
-    _autoBackupTimer = Timer.periodic(
-      Duration(minutes: _settings.autoBackupIntervalMinutes),
-      (_) => _onAutoBackupTick(),
+    _autoBackupTimer = MonitoredAsyncPeriodicTimer(
+      id: 'local_backup.auto',
+      name: 'Auto Backup',
+      description: 'Periodic local profile backup',
+      serviceName: 'LocalBackupService',
+      interval: Duration(minutes: _settings.autoBackupIntervalMinutes),
+      priority: TaskPriority.low,
+      callback: (_) async => await _onAutoBackupTick(),
     );
     _log('Auto-backup started (every ${_settings.autoBackupIntervalMinutes} min)');
   }

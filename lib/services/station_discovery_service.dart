@@ -3,12 +3,14 @@ import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:http/http.dart' as http;
 import 'dart:convert';
+import '../models/monitored_task.dart';
 import '../models/station.dart';
 import '../services/station_service.dart';
 import '../services/log_service.dart';
 import '../util/managed_http_client.dart';
 import '../services/app_args.dart';
 import '../services/devices_service.dart';
+import '../util/task_monitor_helpers.dart';
 
 /// Result of a network scan for a geogram device
 class NetworkScanResult {
@@ -72,7 +74,7 @@ class StationDiscoveryService {
   factory StationDiscoveryService() => _instance;
   StationDiscoveryService._internal();
 
-  Timer? _discoveryTimer;
+  MonitoredAsyncPeriodicTimer? _discoveryTimer;
   bool _isScanning = false;
   DateTime? _scanStartedAt;
   // Primary ports scanned first (most common station ports)
@@ -127,10 +129,18 @@ class StationDiscoveryService {
       discover();
 
       // Schedule periodic scans every 5 minutes
-      _discoveryTimer = Timer.periodic(_scanInterval, (_) {
-        LogService().log('StationDiscovery: Periodic scan starting');
-        discover();
-      });
+      _discoveryTimer = MonitoredAsyncPeriodicTimer(
+        id: 'station_discovery.scan',
+        name: 'Station Discovery',
+        description: 'LAN station discovery scan',
+        serviceName: 'StationDiscoveryService',
+        interval: _scanInterval,
+        priority: TaskPriority.low,
+        callback: (_) async {
+          LogService().log('StationDiscovery: Periodic scan starting');
+          await discover();
+        },
+      );
     });
   }
 

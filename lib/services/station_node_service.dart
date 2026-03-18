@@ -8,6 +8,7 @@ import 'dart:convert';
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'dart:isolate';
 import 'package:path/path.dart' as path;
+import '../models/monitored_task.dart';
 import '../models/station_node.dart';
 import '../models/station_network.dart';
 import '../util/nostr_key_generator.dart';
@@ -18,6 +19,7 @@ import 'config_service.dart';
 import 'log_service.dart';
 import 'profile_service.dart';
 import 'storage_config.dart';
+import '../util/task_monitor_helpers.dart';
 
 /// Service for managing this device as a station node
 class StationNodeService {
@@ -35,7 +37,7 @@ class StationNodeService {
   StationNetwork? _network;
   bool _initialized = false;
   DateTime? _startedAt;
-  Timer? _statsTimer;
+  MonitoredPeriodicTimer? _statsTimer;
 
   // Storage measurement cache
   int _cachedStorageUsedMb = 0;
@@ -441,9 +443,15 @@ class StationNodeService {
 
       // Start stats update timer
       _statsTimer?.cancel();
-      _statsTimer = Timer.periodic(const Duration(seconds: 30), (_) {
-        _updateStats();
-      });
+      _statsTimer = MonitoredPeriodicTimer(
+        id: 'station_node.stats',
+        name: 'Node Stats',
+        description: 'Refreshes station node statistics',
+        serviceName: 'StationNodeService',
+        interval: const Duration(seconds: 30),
+        priority: TaskPriority.low,
+        callback: (_) => _updateStats(),
+      );
 
       _saveStationConfig();
       _stateController.add(_stationNode);

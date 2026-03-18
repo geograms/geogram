@@ -13,6 +13,8 @@ import 'package:path/path.dart' as p;
 
 import 'package:encrypted_archive/encrypted_archive.dart';
 
+import '../models/monitored_task.dart';
+import '../util/task_monitor_helpers.dart';
 import 'storage_config.dart';
 import 'log_service.dart';
 import 'profile_storage.dart' show StorageEntry;
@@ -84,7 +86,7 @@ class EncryptedStorageService {
   final Map<String, EncryptedArchive> _openArchives = {};
 
   /// Periodic flush timer (30 seconds)
-  Timer? _flushTimer;
+  MonitoredPeriodicTimer? _flushTimer;
 
   /// Get or open archive for a callsign (reuses existing connection)
   Future<EncryptedArchive?> _getArchive(String callsign, String nsec) async {
@@ -123,9 +125,15 @@ class EncryptedStorageService {
   void _startPeriodicFlush() {
     if (_flushTimer != null) return; // Already running
 
-    _flushTimer = Timer.periodic(const Duration(seconds: 30), (_) {
-      _flushAllArchives();
-    });
+    _flushTimer = MonitoredPeriodicTimer(
+      id: 'encrypted_storage.flush',
+      name: 'Storage Flush',
+      description: 'Periodic encrypted storage WAL checkpoint',
+      serviceName: 'EncryptedStorageService',
+      interval: const Duration(seconds: 30),
+      priority: TaskPriority.low,
+      callback: (_) => _flushAllArchives(),
+    );
     _log.log('EncryptedStorage: Started periodic flush (30s interval)');
   }
 

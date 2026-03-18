@@ -16,6 +16,8 @@ import 'package:crypto/crypto.dart';
 import 'package:sqlite3/sqlite3.dart';
 
 import '../models/mirror_config.dart';
+import '../models/monitored_task.dart';
+import '../util/task_monitor_helpers.dart';
 import '../util/tlsh.dart';
 import 'log_service.dart';
 import 'profile_storage.dart';
@@ -325,7 +327,7 @@ class FileIndexService {
   // Background indexing (singleton timer)
   // ---------------------------------------------------------------------------
 
-  static Timer? _bgTimer;
+  static MonitoredAsyncPeriodicTimer? _bgTimer;
   static FileIndexService? _bgInstance;
   static bool _bgRunning = false;
 
@@ -350,9 +352,15 @@ class FileIndexService {
     });
 
     // Periodic scan
-    _bgTimer = Timer.periodic(interval, (_) {
-      _runBackgroundScan(storage);
-    });
+    _bgTimer = MonitoredAsyncPeriodicTimer(
+      id: 'file_index.background_scan',
+      name: 'File Index',
+      description: 'Background file index scan',
+      serviceName: 'FileIndexService',
+      interval: interval,
+      priority: TaskPriority.low,
+      callback: (_) async => await _runBackgroundScan(storage),
+    );
 
     LogService().log('FileIndex: background indexing started');
   }

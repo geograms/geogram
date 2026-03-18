@@ -14,7 +14,9 @@ import 'dart:isolate';
 
 import 'package:ffi/ffi.dart';
 
+import '../../models/monitored_task.dart';
 import '../../services/log_service.dart';
+import '../../util/task_monitor_helpers.dart';
 import 'signal_ffi.dart';
 
 /// High-level Signal JSON bridge client.
@@ -37,6 +39,7 @@ class SignalClient {
   Stream<Map<String, dynamic>> get updates => _updateController.stream;
 
   bool _running = false;
+  MonitoredIsolateHandle? _taskHandle;
 
   SignalClient() : _ffi = SignalFfi();
 
@@ -126,6 +129,9 @@ class SignalClient {
     if (!_running) return;
     _running = false;
 
+    _taskHandle?.markIdle();
+    _taskHandle?.dispose();
+    _taskHandle = null;
     _receiveIsolate?.kill(priority: Isolate.immediate);
     _receiveIsolate = null;
     _receivePort?.close();
@@ -164,8 +170,16 @@ class SignalClient {
       sendPort: _receivePort!.sendPort,
     );
 
+    _taskHandle = MonitoredIsolateHandle(
+      id: 'signal.receive_loop',
+      name: 'Signal Receiver',
+      description: 'Signal FFI receive loop',
+      serviceName: 'SignalClient',
+      priority: TaskPriority.normal,
+    );
     Isolate.spawn(_receiveLoopEntry, params).then((isolate) {
       _receiveIsolate = isolate;
+      _taskHandle?.markRunning();
     });
   }
 

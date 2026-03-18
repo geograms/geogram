@@ -15,7 +15,9 @@ import '../models/event.dart';
 import '../models/place.dart';
 import '../models/report.dart';
 import '../models/station_activity_event.dart';
+import '../models/monitored_task.dart';
 import '../util/event_bus.dart';
+import '../util/task_monitor_helpers.dart';
 import 'app_service.dart';
 import 'log_service.dart';
 import 'profile_storage.dart';
@@ -103,7 +105,7 @@ class StationActivityPublisherService {
 
   EventSubscription<ConnectionStateChangedEvent>? _connectionSubscription;
   EventSubscription<EventCreatedEvent>? _eventCreatedSubscription;
-  Timer? _processingTimer;
+  MonitoredAsyncPeriodicTimer? _processingTimer;
   bool _initialized = false;
   bool _isProcessing = false;
 
@@ -124,9 +126,14 @@ class StationActivityPublisherService {
         unawaited(publishEventRecord(event.eventRecord as Event));
       }
     });
-    _processingTimer ??= Timer.periodic(
-      _processInterval,
-      (_) => unawaited(processQueue()),
+    _processingTimer ??= MonitoredAsyncPeriodicTimer(
+      id: 'activity_publisher.queue',
+      name: 'Activity Queue',
+      description: 'Processes station activity event queue',
+      serviceName: 'StationActivityPublisherService',
+      interval: _processInterval,
+      priority: TaskPriority.normal,
+      callback: (_) async => await processQueue(),
     );
     _initialized = true;
     LogService().log('StationActivityPublisherService initialized');

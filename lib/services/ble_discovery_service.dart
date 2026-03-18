@@ -11,6 +11,8 @@ import 'dart:typed_data';
 import 'package:ble_peripheral/ble_peripheral.dart';
 import 'package:flutter/foundation.dart' show VoidCallback, kIsWeb;
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
+import '../models/monitored_task.dart';
+import '../util/task_monitor_helpers.dart';
 import 'app_args.dart';
 import 'ble_identity_service.dart';
 import 'ble_permission_service.dart';
@@ -110,7 +112,7 @@ class BLEDiscoveryService {
   bool get isPeriodicScanning => _isPeriodicScanningActive;
 
   /// Periodic scan timer
-  Timer? _periodicScanTimer;
+  MonitoredPeriodicTimer? _periodicScanTimer;
 
   /// Scan configuration
   static const Duration _periodicScanInterval = Duration(seconds: 45);
@@ -353,9 +355,15 @@ class BLEDiscoveryService {
     _runPeriodicScan();
 
     // Then schedule periodic scans
-    _periodicScanTimer = Timer.periodic(_periodicScanInterval, (_) {
-      _runPeriodicScan();
-    });
+    _periodicScanTimer = MonitoredPeriodicTimer(
+      id: 'ble_discovery.scan',
+      name: 'BLE Scan',
+      description: 'Periodic BLE device discovery scan',
+      serviceName: 'BLEDiscoveryService',
+      interval: _periodicScanInterval,
+      priority: TaskPriority.low,
+      callback: (_) => _runPeriodicScan(),
+    );
   }
 
   /// Stop periodic scanning
@@ -385,18 +393,29 @@ class BLEDiscoveryService {
         } else if (_isPeriodicScanningActive) {
           // Reset to default interval
           _periodicScanTimer?.cancel();
-          _periodicScanTimer = Timer.periodic(_periodicScanInterval, (_) {
-            _runPeriodicScan();
-          });
+          _periodicScanTimer = MonitoredPeriodicTimer(
+            id: 'ble_discovery.scan',
+            name: 'BLE Scan',
+            description: 'Periodic BLE device discovery scan',
+            serviceName: 'BLEDiscoveryService',
+            interval: _periodicScanInterval,
+            priority: TaskPriority.low,
+            callback: (_) => _runPeriodicScan(),
+          );
           LogService().log('BLEDiscovery: foreground — scan interval 45s');
         }
         break;
       case PowerMode.background:
         if (_isPeriodicScanningActive) {
           _periodicScanTimer?.cancel();
-          _periodicScanTimer = Timer.periodic(
-            const Duration(seconds: 120),
-            (_) => _runPeriodicScan(),
+          _periodicScanTimer = MonitoredPeriodicTimer(
+            id: 'ble_discovery.scan',
+            name: 'BLE Scan',
+            description: 'Periodic BLE device discovery scan (background)',
+            serviceName: 'BLEDiscoveryService',
+            interval: const Duration(seconds: 120),
+            priority: TaskPriority.low,
+            callback: (_) => _runPeriodicScan(),
           );
           LogService().log('BLEDiscovery: background — scan interval 120s');
         }

@@ -9,6 +9,8 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import '../models/ble_parcel.dart';
+import '../models/monitored_task.dart';
+import '../util/task_monitor_helpers.dart';
 import 'log_service.dart';
 
 /// Callback for sending a parcel over BLE
@@ -63,7 +65,7 @@ class BLEQueueService {
   final _incomingController = StreamController<BLECompletedMessage>.broadcast();
 
   /// Housekeeping timer for cleanup and missing parcel requests
-  Timer? _housekeepingTimer;
+  MonitoredPeriodicTimer? _housekeepingTimer;
 
   /// Stream of completed incoming messages
   Stream<BLECompletedMessage> get incomingMessages => _incomingController.stream;
@@ -78,9 +80,14 @@ class BLEQueueService {
   /// Start the housekeeping timer
   void _startHousekeeping() {
     _housekeepingTimer?.cancel();
-    _housekeepingTimer = Timer.periodic(
-      BLERetentionConstants.housekeepingInterval,
-      (_) => _performHousekeeping(),
+    _housekeepingTimer = MonitoredPeriodicTimer(
+      id: 'ble_queue.housekeeping',
+      name: 'BLE Housekeeping',
+      description: 'BLE message queue cleanup and missing parcel requests',
+      serviceName: 'BLEQueueService',
+      interval: BLERetentionConstants.housekeepingInterval,
+      priority: TaskPriority.low,
+      callback: (_) => _performHousekeeping(),
     );
   }
 

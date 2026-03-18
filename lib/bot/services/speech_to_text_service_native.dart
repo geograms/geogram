@@ -338,8 +338,7 @@ class SpeechToTextService {
       print('[STT_SERVICE] Creating silent WAV at $warmupPath');
       await _createSilentWav(warmupPath);
       final warmupStopwatch = Stopwatch()..start();
-      final cpuCores = Platform.numberOfProcessors;
-      final warmupThreads = cpuCores > 4 ? cpuCores - 2 : cpuCores;
+      const warmupThreads = 1;
 
       // Yield before warmup transcription
       await Future.delayed(Duration.zero);
@@ -466,9 +465,9 @@ class SpeechToTextService {
 
       // Transcribe the audio
       // whisper_flutter_new handles isolate/background processing internally
-      // Use available CPU cores for faster processing (default is 6)
-      final cpuCores = Platform.numberOfProcessors;
-      final threads = cpuCores > 4 ? cpuCores - 2 : cpuCores;
+      // Use a single thread so transcription doesn't compete with itself or the UI.
+      // Whisper work is sequential — one thread completes faster than two splitting CPU.
+      const threads = 1;
       final result = await _whisper!.transcribe(
         transcribeRequest: TranscribeRequest(
           audio: audioFilePath,
@@ -548,8 +547,7 @@ class SpeechToTextService {
     try {
       final stopwatch = Stopwatch()..start();
 
-      final cpuCores = Platform.numberOfProcessors;
-      final threads = cpuCores > 4 ? cpuCores - 2 : cpuCores;
+      const threads = 1;
       final result = await _whisper!.transcribe(
         transcribeRequest: TranscribeRequest(
           audio: audioFilePath,
