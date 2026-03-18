@@ -265,6 +265,7 @@ class NdfWebViewerService {
     required String documentFilename,
     String extraScripts = '',
     String containerClass = 'container',
+    bool showWorkspaceName = true,
   }) {
     final nostrHeaderHtml = getNostrLoginHeaderHtml();
     final nostrStyles = getNostrLoginStyles();
@@ -300,7 +301,7 @@ $headerHtml
   <div class="content">
     <div class="post">
       <h1 class="post-title">${escapeHtml(title)}</h1>
-      ${workspaceName.isNotEmpty ? '<div class="post-meta-inline"><span class="post-date">${escapeHtml(workspaceName)}</span></div>' : ''}
+      ${showWorkspaceName && workspaceName.isNotEmpty ? '<div class="post-meta-inline"><span class="post-date">${escapeHtml(workspaceName)}</span></div>' : ''}
       $contentHtml
       ${_buildFeedbackHtml(interaction, likesCount, comments)}
     </div>
@@ -725,6 +726,10 @@ $extraScripts
       if (btn) btn.title = 'Fullscreen';
     }
   });
+  // Click on slide deck to enter fullscreen
+  document.getElementById('slide-deck').addEventListener('click', function(e) {
+    if (!document.fullscreenElement) toggleFullscreen();
+  });
   document.addEventListener('keydown', function(e) {
     if (e.key === 'ArrowLeft') prevSlide();
     if (e.key === 'ArrowRight') nextSlide();
@@ -744,6 +749,7 @@ $extraScripts
       likesCount: likesCount, likedHexPubkeys: likedHexPubkeys,
       comments: comments, ownerNpub: ownerNpub,
       documentFilename: documentFilename, extraScripts: slideScript,
+      showWorkspaceName: false,
     );
   }
 
@@ -799,6 +805,11 @@ $extraScripts
 
   String _getPresentationStyles() {
     return '''
+/* Reduce gap between header and title */
+.post-title { margin-top: 0; }
+.content { padding-top: 0; }
+.header { margin-bottom: 15px; }
+
 .slide-deck {
   position: relative;
   width: 100%;
@@ -809,6 +820,7 @@ $extraScripts
   margin-bottom: 12px;
   background: #fff;
   container-type: inline-size;
+  cursor: pointer;
 }
 .slide {
   display: none;
@@ -884,6 +896,10 @@ $extraScripts
   font-size: 14px;
   opacity: 0.2;
 }
+
+/* More space before feedback section */
+.feedback-section { margin-top: 30px; }
+.comments-section { margin-top: 30px; }
 .slide-notes {
   display: none;
   padding: 10px 14px;
