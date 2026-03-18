@@ -136,7 +136,12 @@ import '../tracker/models/tracker_visibility.dart';
 import '../work/models/workspace.dart';
 import '../work/services/ndf_web_viewer_service.dart';
 import '../work/services/work_storage_service.dart';
-import '../util/feedback_comment_utils.dart';
+import '../stories/services/stories_storage_service.dart';
+import '../stories/services/story_ndf_service.dart';
+import '../stories/services/story_web_viewer_service.dart';
+import '../util/nostr_login_scripts.dart';
+import '../work/models/ndf_interaction_settings.dart';
+import 'package:archive/archive.dart';
 
 class _MeetSessionSnapshot {
   final String state;
@@ -405,6 +410,14 @@ class LogApiService with ChatModificationMixin {
     // Placed outside the GET block so feedback POST/DELETE also works
     if (urlPath.startsWith('work/')) {
       final response = await _handleWorkRoute(request, urlPath, headers);
+      if (response != null) {
+        return response;
+      }
+    }
+
+    // Stories routes — gallery and individual story viewer
+    if (urlPath.startsWith('stories/')) {
+      final response = await _handleStoriesRoute(request, urlPath, headers);
       if (response != null) {
         return response;
       }
@@ -14816,7 +14829,22 @@ class LogApiService with ChatModificationMixin {
     final feedbackPath = workStorage.documentFeedbackPath(workspaceId, filename);
     final interaction = workspace.getDocumentInteraction(filename);
     final storage = workStorage.storage;
+    final ownerNpub = workspace.ownerNpub;
+    return _handleNdfFeedbackAction(
+      request, action, feedbackPath, interaction, storage, ownerNpub, headers,
+    );
+  }
 
+  /// Generic NDF feedback action handler — used by Work and Stories routes.
+  Future<shelf.Response> _handleNdfFeedbackAction(
+    shelf.Request request,
+    String action,
+    String feedbackPath,
+    NdfInteractionSettings interaction,
+    ProfileStorage storage,
+    String ownerNpub,
+    Map<String, String> headers,
+  ) async {
     // POST .ndf/like
     if (action == 'like' && request.method == 'POST') {
       if (!interaction.permitLikes) {
@@ -14877,7 +14905,7 @@ class LogApiService with ChatModificationMixin {
         return shelf.Response(401,
           body: jsonEncode({'error': 'X-Npub header required'}), headers: headers);
       }
-      final isOwner = workspace.ownerNpub == requesterNpub;
+      final isOwner = ownerNpub == requesterNpub;
       final comment = await FeedbackCommentUtils.getComment(
         feedbackPath, commentId, storage: storage);
       if (comment == null) {
@@ -14921,6 +14949,437 @@ class LogApiService with ChatModificationMixin {
 
     return shelf.Response.notFound(
       jsonEncode({'error': 'Unknown action: $action'}), headers: headers);
+  }
+
+  // ============================================================
+  // Stories Web Viewer
+  // ============================================================
+
+  /// Handle stories/* routes — gallery and individual story viewer
+  Future<shelf.Response?> _handleStoriesRoute(
+    shelf.Request request,
+    String urlPath,
+    Map<String, String> headers,
+  ) async {
+    try {
+      // stories/styles.css
+      if (urlPath == 'stories/styles.css') {
+        return await _handleThemeStylesRequest(headers, appType: 'stories');
+      }
+
+      // Get current profile info
+      String? callsign;
+      String? nickname;
+      try {
+        final profile = ProfileService().getProfile();
+        if (profile.callsign.isNotEmpty) callsign = profile.callsign;
+        if (profile.nickname.isNotEmpty) nickname = profile.nickname;
+      } catch (_) {}
+      callsign ??= AppService().currentCallsign;
+      nickname ??= callsign;
+
+      if (callsign == null) {
+        return shelf.Response.internalServerError(
+          body: '<html><body><h1>500</h1><p>Profile not initialized</p></body></html>',
+          headers: {'Content-Type': 'text/html'},
+        );
+      }
+
+      // Find stories app
+      final apps = await AppService().loadApps();
+      App? storiesApp;
+      for (final app in apps) {
+        if (app.type == 'stories') {
+          storiesApp = app;
+          break;
+        }
+      }
+
+      if (storiesApp?.storagePath == null) {
+        return shelf.Response.notFound(
+          '<html><body><h1>404</h1><p>Stories app not found</p></body></html>',
+          headers: {'Content-Type': 'text/html'},
+        );
+      }
+
+      final profileStorage = AppService().profileStorage;
+      final storiesStorage = StoriesStorageService(
+        basePath: storiesApp!.storagePath!,
+        storage: profileStorage,
+      );
+      final storyNdfService = StoryNdfService(storage: profileStorage);
+      final identifier = nickname ?? callsign ?? '';
+
+      // Extract visitor identity from cookie
+      String? visitorNpub;
+      final hexPubkey = _extractNostrPubkeyFromCookie(request);
+      if (hexPubkey != null) {
+        try { visitorNpub = NostrCrypto.encodeNpub(hexPubkey); } catch (_) {}
+      }
+
+      final decodedPath = Uri.decodeFull(urlPath);
+
+      // Gallery page: stories/ or stories/index.html
+      if (decodedPath == 'stories' || decodedPath == 'stories/' || decodedPath == 'stories/index.html') {
+        if (request.method != 'GET') return null;
+        return await _handleStoriesGallery(
+          storiesStorage, storyNdfService, profileStorage,
+          identifier, visitorNpub, headers,
+        );
+      }
+
+      // Individual story: stories/{filename}.ndf[/action]
+      final ndfIdx = decodedPath.indexOf('.ndf');
+      if (ndfIdx < 0) return null;
+
+      final docPath = decodedPath.substring(0, ndfIdx + 4);
+      final actionPath = decodedPath.substring(ndfIdx + 4);
+      final action = actionPath.startsWith('/') ? actionPath.substring(1) : '';
+
+      // Extract filename from stories/{filename}.ndf
+      final parts = docPath.split('/');
+      if (parts.length < 2) return null;
+      final filename = parts.sublist(1).join('/');
+
+      return await _handleStoryViewer(
+        request, storiesStorage, storyNdfService, profileStorage,
+        filename, action, identifier, visitorNpub, headers,
+      );
+    } catch (e, stack) {
+      LogService().log('LogApiService: Error handling stories route: $e');
+      LogService().log('LogApiService: Stack: $stack');
+      return shelf.Response.internalServerError(
+        body: '<html><body><h1>500</h1><p>$e</p></body></html>',
+        headers: {'Content-Type': 'text/html'},
+      );
+    }
+  }
+
+  /// Build the stories gallery page
+  Future<shelf.Response> _handleStoriesGallery(
+    StoriesStorageService storiesStorage,
+    StoryNdfService storyNdfService,
+    ProfileStorage? profileStorage,
+    String identifier,
+    String? visitorNpub,
+    Map<String, String> headers,
+  ) async {
+    final stories = await storiesStorage.loadStories();
+    final entries = <StoryGalleryEntry>[];
+
+    for (final story in stories) {
+      if (story.filePath == null) continue;
+
+      // Read NDF bytes for thumbnail and permissions
+      Uint8List? ndfBytes;
+      if (profileStorage != null) {
+        final relPath = story.filePath!.startsWith('${profileStorage.basePath}/')
+            ? story.filePath!.substring(profileStorage.basePath.length + 1)
+            : story.filePath!;
+        ndfBytes = await profileStorage.readBytes(relPath);
+      } else {
+        final file = io.File(story.filePath!);
+        if (await file.exists()) ndfBytes = await file.readAsBytes();
+      }
+      if (ndfBytes == null) continue;
+
+      // Check permissions
+      final archive = ZipDecoder().decodeBytes(ndfBytes);
+      NdfPermission? permission;
+      for (final entry in archive) {
+        if (entry.name == 'permissions.json' && entry.isFile) {
+          try {
+            final content = utf8.decode(entry.content as List<int>);
+            permission = NdfPermission.fromJson(
+              jsonDecode(content) as Map<String, dynamic>,
+            );
+          } catch (_) {}
+          break;
+        }
+      }
+
+      // Access check: allow if anonymous view allowed, or visitor has permission
+      if (permission != null && !permission.allowAnonymousView) {
+        if (visitorNpub == null) continue;
+        if (!permission.hasPermission(visitorNpub, NdfPermissionAction.view)) {
+          // Check group membership
+          bool groupAccess = false;
+          try {
+            groupAccess = await _checkGroupAccess(visitorNpub, permission);
+          } catch (_) {}
+          if (!groupAccess) continue;
+        }
+      }
+
+      // Extract thumbnail
+      String? thumbnailDataUri;
+      for (final entry in archive) {
+        if (entry.name == 'assets/thumbnails/preview.png' && entry.isFile) {
+          final bytes = Uint8List.fromList(entry.content as List<int>);
+          thumbnailDataUri = 'data:image/png;base64,${base64Encode(bytes)}';
+          break;
+        }
+      }
+
+      entries.add(StoryGalleryEntry(
+        filename: story.filename,
+        title: story.title,
+        description: story.description,
+        tags: story.tags,
+        thumbnailDataUri: thumbnailDataUri,
+        sceneCount: story.content?.sceneCount ?? 0,
+        modified: story.modified,
+      ));
+    }
+
+    final menuItems = await AppService().generateDeviceMenu(
+      activeApp: 'stories',
+    );
+
+    final html = StoryWebViewerService().buildGalleryPage(
+      entries,
+      ownerIdentifier: identifier,
+      menuItems: menuItems,
+      logoText: identifier,
+      logoHref: '../',
+    );
+
+    return shelf.Response.ok(
+      html,
+      headers: {'Content-Type': 'text/html; charset=utf-8'},
+    );
+  }
+
+  /// Handle an individual story page or feedback action
+  Future<shelf.Response?> _handleStoryViewer(
+    shelf.Request request,
+    StoriesStorageService storiesStorage,
+    StoryNdfService storyNdfService,
+    ProfileStorage? profileStorage,
+    String filename,
+    String action,
+    String identifier,
+    String? visitorNpub,
+    Map<String, String> headers,
+  ) async {
+    // Read NDF bytes
+    final storyPath = '${storiesStorage.storiesDir}/$filename';
+    Uint8List? ndfBytes;
+    if (profileStorage != null) {
+      final relPath = storyPath.startsWith('${profileStorage.basePath}/')
+          ? storyPath.substring(profileStorage.basePath.length + 1)
+          : storyPath;
+      ndfBytes = await profileStorage.readBytes(relPath);
+    } else {
+      final file = io.File(storyPath);
+      if (await file.exists()) ndfBytes = await file.readAsBytes();
+    }
+
+    if (ndfBytes == null) {
+      return shelf.Response.notFound(
+        '<html><body><h1>404</h1><p>Story not found</p></body></html>',
+        headers: {'Content-Type': 'text/html'},
+      );
+    }
+
+    // Read permissions
+    final archive = ZipDecoder().decodeBytes(ndfBytes);
+    NdfPermission? permission;
+    NdfInteractionSettings interaction = const NdfInteractionSettings();
+    String ownerNpub = '';
+
+    for (final entry in archive) {
+      if (entry.name == 'permissions.json' && entry.isFile) {
+        try {
+          final content = utf8.decode(entry.content as List<int>);
+          permission = NdfPermission.fromJson(
+            jsonDecode(content) as Map<String, dynamic>,
+          );
+          ownerNpub = permission.owners.isNotEmpty ? permission.owners.first.npub : '';
+        } catch (_) {}
+        break;
+      }
+    }
+
+    // Read interaction settings from ndf.json
+    for (final entry in archive) {
+      if (entry.name == 'ndf.json' && entry.isFile) {
+        try {
+          final content = utf8.decode(entry.content as List<int>);
+          final json = jsonDecode(content) as Map<String, dynamic>;
+          final interactionJson = json['interaction'] as Map<String, dynamic>?;
+          if (interactionJson != null) {
+            interaction = NdfInteractionSettings.fromJson(interactionJson);
+          }
+        } catch (_) {}
+        break;
+      }
+    }
+
+    // Access check
+    if (permission != null && !permission.allowAnonymousView) {
+      if (visitorNpub == null) {
+        return _buildStoryAccessDeniedPage(headers);
+      }
+      if (!permission.hasPermission(visitorNpub, NdfPermissionAction.view)) {
+        bool groupAccess = false;
+        try {
+          groupAccess = await _checkGroupAccess(visitorNpub, permission);
+        } catch (_) {}
+        if (!groupAccess) {
+          return _buildStoryAccessDeniedPage(headers);
+        }
+      }
+    }
+
+    // Handle feedback sub-paths
+    if (action.isNotEmpty) {
+      if (profileStorage == null) {
+        return shelf.Response.internalServerError(
+          body: jsonEncode({'error': 'Storage not available'}), headers: headers);
+      }
+      final feedbackPath = '${storiesStorage.storiesDir}/feedback/$filename';
+      return await _handleNdfFeedbackAction(
+        request, action, feedbackPath, interaction, profileStorage, ownerNpub, headers,
+      );
+    }
+
+    // Render story page (GET only)
+    if (request.method != 'GET') return null;
+
+    final menuItems = await AppService().generateDeviceMenu(
+      activeApp: 'stories',
+    );
+
+    // Load feedback data
+    final feedbackPath = '${storiesStorage.storiesDir}/feedback/$filename';
+    int likesCount = 0;
+    List<String> likedHexPubkeys = [];
+    List<FeedbackComment> comments = [];
+    if (profileStorage != null) {
+      if (interaction.permitLikes) {
+        likesCount = await FeedbackFolderUtils.getFeedbackCount(
+          feedbackPath, FeedbackFolderUtils.feedbackTypeLikes,
+          storage: profileStorage,
+        );
+        final likedNpubs = await FeedbackFolderUtils.readFeedbackFile(
+          feedbackPath, FeedbackFolderUtils.feedbackTypeLikes,
+          storage: profileStorage,
+        );
+        for (final npub in likedNpubs) {
+          try { likedHexPubkeys.add(NostrCrypto.decodeNpub(npub)); } catch (_) {}
+        }
+      }
+      if (interaction.permitComments) {
+        comments = await FeedbackCommentUtils.loadComments(
+          feedbackPath, storage: profileStorage,
+        );
+      }
+    }
+
+    final html = StoryWebViewerService().buildStoryPage(
+      ndfBytes,
+      ownerIdentifier: identifier,
+      menuItems: menuItems,
+      logoText: identifier,
+      logoHref: './',
+      interaction: interaction,
+      likesCount: likesCount,
+      likedHexPubkeys: likedHexPubkeys,
+      comments: comments,
+      ownerNpub: ownerNpub,
+      storyFilename: filename,
+    );
+
+    if (html == null) {
+      return shelf.Response.notFound(
+        '<html><body><h1>404</h1><p>Could not render story</p></body></html>',
+        headers: {'Content-Type': 'text/html'},
+      );
+    }
+
+    return shelf.Response.ok(
+      html,
+      headers: {'Content-Type': 'text/html; charset=utf-8'},
+    );
+  }
+
+  shelf.Response _buildStoryAccessDeniedPage(Map<String, String> headers) {
+    final nostrStyles = getNostrLoginStyles();
+    final nostrScripts = getNostrLoginScripts();
+    final nostrHeaderHtml = getNostrLoginHeaderHtml();
+    final globalStyles = StationHtmlTemplates.getBaseStyles();
+
+    return shelf.Response.forbidden(
+      '''<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Access Denied</title>
+  $nostrStyles
+  <style>$globalStyles
+.container { max-width: 600px; margin: 0 auto; padding: 40px 20px; text-align: center; }
+h1 { color: var(--accent); }
+p { margin: 16px 0; opacity: 0.7; }
+  </style>
+</head>
+<body>
+<div class="container">
+  <header class="header"><div class="header__inner">$nostrHeaderHtml</div></header>
+  <h1>403 - Access Denied</h1>
+  <p>This story requires authentication. Connect with Nostr to access it.</p>
+</div>
+<script>
+document.addEventListener('nostr-connected', function() { location.reload(); });
+</script>
+<script>$nostrScripts</script>
+</body>
+</html>''',
+      headers: {'Content-Type': 'text/html; charset=utf-8'},
+    );
+  }
+
+  /// Check if a visitor has group-based access to an NDF permission
+  Future<bool> _checkGroupAccess(String visitorNpub, NdfPermission permission) async {
+    // Look for groups in the access list
+    final viewAccess = permission.access[NdfPermissionAction.view];
+    if (viewAccess == null) return false;
+    if (viewAccess.type != NdfAccessType.allowlist) return false;
+    // Check group membership — same pattern as work routes
+    final profileStorage = AppService().profileStorage;
+    if (profileStorage == null) return false;
+    final allApps = await AppService().loadApps();
+    final groupsApp = allApps.cast<App?>().firstWhere(
+      (a) => a?.type == 'groups',
+      orElse: () => null,
+    );
+    if (groupsApp?.storagePath == null) return false;
+    final groupsStorage = ScopedProfileStorage.fromAbsolutePath(
+      profileStorage, groupsApp!.storagePath!,
+    );
+    final groupsService = GroupsService();
+    groupsService.setStorage(groupsStorage);
+
+    // Check all owner npubs as potential group references
+    for (final owner in permission.owners) {
+      // Owners always have access, but here we're checking group membership
+      // for non-owners. The allowlist npubs may reference group IDs.
+    }
+
+    // Check allowlist entries that might be group members
+    final npubs = viewAccess.npubs;
+    if (npubs == null) return false;
+    // Try each npub as a group ID
+    for (final id in npubs) {
+      try {
+        final group = await groupsService.loadGroup(id);
+        if (group != null && group.isMember(visitorNpub)) {
+          return true;
+        }
+      } catch (_) {}
+    }
+    return false;
   }
 
   // ============ Wallet API Handlers ============
