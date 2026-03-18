@@ -336,11 +336,23 @@ class _SlideCanvasWidgetState extends State<SlideCanvasWidget> {
     widget.onElementChanged!(element.id, updatedElement);
   }
 
+  Color _editingBackground(Color slideBackground) {
+    final luminance = slideBackground.computeLuminance();
+    if (luminance > 0.5) {
+      return Colors.white.withValues(alpha: 0.7);
+    } else {
+      return Colors.black.withValues(alpha: 0.5);
+    }
+  }
+
   Widget _buildTextElement(
     BuildContext context,
     SlideElement element,
     BoxConstraints constraints,
   ) {
+    final bgColor = _parseColor(
+      widget.slide.background.color ?? widget.theme.colors.background,
+    );
     final isSelected = element.id == widget.selectedElementId;
     final style = element.style;
     final baseFontSize = (style?.fontSize ?? 48).toDouble();
@@ -387,94 +399,40 @@ class _SlideCanvasWidgetState extends State<SlideCanvasWidget> {
           }
           return KeyEventResult.ignored;
         },
-        child: Stack(
-          children: [
-            // Visual layer: RichText showing formatted text
-            Positioned.fill(
-              child: IgnorePointer(
-                child: _buildRichTextOverlay(
-                  element,
-                  scaledFontSize,
-                  textColor,
-                  textAlign,
-                  style,
-                ),
-              ),
+        child: Container(
+          decoration: BoxDecoration(
+            color: _editingBackground(bgColor),
+            border: Border.all(
+              color: textColor.withValues(alpha: 0.3),
             ),
-            // Input layer: TextField with transparent text for typing/selection
-            TextField(
-              controller: widget.textEditController,
-              focusNode: widget.textEditFocusNode,
-              autofocus: true,
-              maxLines: null,
-              style: TextStyle(
-                fontSize: scaledFontSize,
-                color: Colors.transparent, // Invisible text
-                fontWeight: style?.bold == true ? FontWeight.bold : FontWeight.normal,
-                fontStyle: style?.italic == true ? FontStyle.italic : FontStyle.normal,
-              ),
-              cursorColor: textColor, // Visible cursor
-              textAlign: textAlign,
-              decoration: const InputDecoration(
-                border: InputBorder.none,
-                contentPadding: EdgeInsets.zero,
-                isDense: true,
-              ),
-              // Don't submit on Enter, allow multiline text
-              textInputAction: TextInputAction.newline,
+            borderRadius: BorderRadius.circular(4),
+          ),
+          padding: const EdgeInsets.all(4),
+          child: TextField(
+            controller: widget.textEditController,
+            focusNode: widget.textEditFocusNode,
+            autofocus: true,
+            maxLines: null,
+            style: TextStyle(
+              fontSize: scaledFontSize,
+              color: textColor,
+              fontWeight: style?.bold == true ? FontWeight.bold : FontWeight.normal,
+              fontStyle: style?.italic == true ? FontStyle.italic : FontStyle.normal,
             ),
-          ],
+            cursorColor: textColor,
+            textAlign: textAlign,
+            decoration: const InputDecoration(
+              border: InputBorder.none,
+              contentPadding: EdgeInsets.zero,
+              isDense: true,
+            ),
+            textInputAction: TextInputAction.newline,
+          ),
         ),
       );
     }
 
     // Build rich text with spans (normal display mode)
-    if (element.content.isEmpty) {
-      return Text(
-        '',
-        style: TextStyle(
-          fontSize: scaledFontSize,
-          color: textColor,
-          fontWeight: style?.bold == true ? FontWeight.bold : FontWeight.normal,
-          fontStyle: style?.italic == true ? FontStyle.italic : FontStyle.normal,
-        ),
-        textAlign: textAlign,
-      );
-    }
-
-    final spans = <TextSpan>[];
-    for (final span in element.content) {
-      spans.add(TextSpan(
-        text: span.value,
-        style: TextStyle(
-          fontSize: scaledFontSize,
-          color: textColor,
-          fontWeight: (style?.bold == true || span.isBold)
-              ? FontWeight.bold
-              : FontWeight.normal,
-          fontStyle: (style?.italic == true || span.isItalic)
-              ? FontStyle.italic
-              : FontStyle.normal,
-          decoration: span.isUnderline ? TextDecoration.underline : null,
-        ),
-      ));
-    }
-
-    return RichText(
-      text: TextSpan(children: spans),
-      textAlign: textAlign,
-    );
-  }
-
-  /// Build a RichText overlay that shows formatted spans during inline editing.
-  /// This renders visually on top of the transparent TextField text.
-  Widget _buildRichTextOverlay(
-    SlideElement element,
-    double scaledFontSize,
-    Color textColor,
-    TextAlign textAlign,
-    SlideTextStyle? style,
-  ) {
     if (element.content.isEmpty) {
       return Text(
         '',
