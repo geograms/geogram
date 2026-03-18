@@ -627,7 +627,8 @@ class AppService {
         final grouped = <int, List<Map<String, dynamic>>>{};
         final yearOrder = <int>[];
         for (final post in publishedPosts) {
-          final year = post['year'] as int? ?? DateTime.now().year;
+          final yearVal = post['year'];
+          final year = yearVal is int ? yearVal : int.tryParse(yearVal?.toString() ?? '') ?? DateTime.now().year;
           if (!grouped.containsKey(year)) {
             grouped[year] = [];
             yearOrder.add(year);
