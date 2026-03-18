@@ -119,10 +119,6 @@ class AtprotoClientService {
     if (normalized.password.trim().isEmpty) {
       normalized = normalized.copyWith(password: _generatePassword());
     }
-    if (!normalized.enabled) {
-      normalized = normalized.copyWith(enabled: true);
-    }
-
     _config = normalized;
     await _storage?.saveConfig(normalized);
     final profileStorage = AppService().profileStorage;
