@@ -3520,7 +3520,8 @@ class LogApiService with ChatModificationMixin {
       await storageConfig.init();
     }
 
-    final testDir = io.Directory(path.join(storageConfig.baseDir, 'test-backup-data'));
+    final callsign = ProfileService().getProfile().callsign;
+    final testDir = io.Directory(path.join(storageConfig.getCallsignDir(callsign), 'test-backup-data'));
     if (!await testDir.exists()) {
       await testDir.create(recursive: true);
     }
