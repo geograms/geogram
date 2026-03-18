@@ -18,6 +18,7 @@ import '../models/ndf_document.dart';
 import '../models/ndf_interaction_settings.dart';
 import '../models/presentation_content.dart';
 import '../models/spreadsheet_content.dart';
+import '../models/todo_content.dart';
 import '../models/voicememo_content.dart';
 import 'ndf_service.dart';
 
@@ -96,6 +97,13 @@ class NdfWebViewerService {
           ownerNpub: ownerNpub, documentFilename: documentFilename);
       case NdfDocumentType.voicememo:
         return _buildVoiceMemoPage(ndfBytes, metadata: metadata,
+          ownerIdentifier: ownerIdentifier, workspaceName: workspaceName,
+          menuItems: menuItems, logoText: logoText, logoHref: logoHref,
+          interaction: interaction, likesCount: likesCount,
+          likedHexPubkeys: likedHexPubkeys, comments: comments,
+          ownerNpub: ownerNpub, documentFilename: documentFilename);
+      case NdfDocumentType.todo:
+        return _buildTodoPage(ndfBytes, metadata: metadata,
           ownerIdentifier: ownerIdentifier, workspaceName: workspaceName,
           menuItems: menuItems, logoText: logoText, logoHref: logoHref,
           interaction: interaction, likesCount: likesCount,
@@ -917,6 +925,395 @@ $extraScripts
 /* Presentation: extra space before feedback */
 .feedback-section { margin-top: 48px; }
 .comments-section { margin-top: 48px; }
+''';
+  }
+
+  // ============================================================
+  // TODO viewer (task list with expandable items)
+  // ============================================================
+
+  String? _buildTodoPage(Uint8List ndfBytes, {
+    required NdfDocument metadata,
+    String ownerIdentifier = '', String workspaceName = '',
+    String menuItems = '', String logoText = '', String logoHref = '../../',
+    NdfInteractionSettings interaction = const NdfInteractionSettings(),
+    int likesCount = 0, List<String> likedHexPubkeys = const [],
+    List<FeedbackComment> comments = const [], String ownerNpub = '',
+    String documentFilename = '',
+  }) {
+    final mainJson = _ndfService.readArchiveJsonFromBytes(ndfBytes, 'content/main.json');
+    if (mainJson == null) return null;
+
+    final content = TodoContent.fromJson(mainJson);
+    final title = metadata.title.isNotEmpty ? metadata.title : content.title;
+    final logo = logoText.isNotEmpty ? logoText : ownerIdentifier;
+
+    // Read all items
+    final items = <TodoItem>[];
+    for (final itemId in content.items) {
+      final itemJson = _ndfService.readArchiveJsonFromBytes(ndfBytes, 'content/items/$itemId.json');
+      if (itemJson != null) {
+        try {
+          items.add(TodoItem.fromJson(itemJson));
+        } catch (_) {}
+      }
+    }
+
+    // Sort items: pending first, then by priority
+    final pending = items.where((i) => !i.isCompleted).toList()
+      ..sort((a, b) => a.priority.sortWeight.compareTo(b.priority.sortWeight));
+    final completed = items.where((i) => i.isCompleted).toList()
+      ..sort((a, b) => (b.completedAt ?? b.createdAt).compareTo(a.completedAt ?? a.createdAt));
+
+    final pendingCount = pending.length;
+    final completedCount = completed.length;
+    final totalCount = items.length;
+
+    // Build content HTML
+    final contentHtml = StringBuffer();
+
+    // Summary bar
+    contentHtml.write('<div class="todo-summary">');
+    contentHtml.write('<span class="todo-summary-item">');
+    contentHtml.write('<span class="todo-count">$totalCount</span> item${totalCount != 1 ? 's' : ''}');
+    contentHtml.write('</span>');
+    if (pendingCount > 0) {
+      contentHtml.write('<span class="todo-summary-item todo-summary-pending">');
+      contentHtml.write('<span class="todo-dot todo-dot--pending"></span> $pendingCount pending');
+      contentHtml.write('</span>');
+    }
+    if (completedCount > 0) {
+      contentHtml.write('<span class="todo-summary-item todo-summary-done">');
+      contentHtml.write('<span class="todo-dot todo-dot--done"></span> $completedCount done');
+      contentHtml.write('</span>');
+    }
+    // Progress bar
+    if (totalCount > 0) {
+      final pct = (completedCount / totalCount * 100).round();
+      contentHtml.write('<span class="todo-progress-wrap">');
+      contentHtml.write('<span class="todo-progress-bar"><span class="todo-progress-fill" style="width:$pct%"></span></span>');
+      contentHtml.write('<span class="todo-progress-pct">$pct%</span>');
+      contentHtml.write('</span>');
+    }
+    contentHtml.write('</div>');
+
+    if (items.isEmpty) {
+      contentHtml.write('<p class="todo-empty">No items in this list</p>');
+    } else {
+      // Pending items
+      if (pending.isNotEmpty) {
+        contentHtml.write('<div class="todo-section">');
+        for (final item in pending) {
+          contentHtml.write(_buildTodoItemHtml(item, ndfBytes));
+        }
+        contentHtml.write('</div>');
+      }
+
+      // Completed items
+      if (completed.isNotEmpty && content.settings.showCompleted) {
+        contentHtml.write('<div class="todo-section todo-section--completed">');
+        contentHtml.write('<div class="todo-section-header" onclick="toggleCompleted()">');
+        contentHtml.write('<svg class="todo-chevron" id="todo-chevron" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6,4 10,8 6,12"/></svg>');
+        contentHtml.write(' Completed ($completedCount)');
+        contentHtml.write('</div>');
+        contentHtml.write('<div class="todo-completed-list" id="todo-completed-list">');
+        for (final item in completed) {
+          contentHtml.write(_buildTodoItemHtml(item, ndfBytes));
+        }
+        contentHtml.write('</div>');
+        contentHtml.write('</div>');
+      }
+    }
+
+    final todoScript = r'''<script>
+(function() {
+  // Toggle completed section
+  window.toggleCompleted = function() {
+    var list = document.getElementById('todo-completed-list');
+    var chevron = document.getElementById('todo-chevron');
+    if (!list) return;
+    var hidden = list.style.display === 'none';
+    list.style.display = hidden ? 'block' : 'none';
+    chevron.style.transform = hidden ? 'rotate(90deg)' : '';
+  };
+
+  // Toggle item details
+  window.toggleItem = function(id) {
+    var details = document.getElementById('details-' + id);
+    var chevron = document.getElementById('chevron-' + id);
+    if (!details) return;
+    var hidden = details.style.display === 'none';
+    details.style.display = hidden ? 'block' : 'none';
+    chevron.style.transform = hidden ? 'rotate(90deg)' : '';
+  };
+})();
+</script>''';
+
+    return _buildPageShell(
+      title: title,
+      ownerIdentifier: ownerIdentifier,
+      workspaceName: workspaceName,
+      menuItems: menuItems,
+      logo: logo,
+      logoHref: logoHref,
+      appStyles: _getTodoStyles(),
+      contentHtml: contentHtml.toString(),
+      interaction: interaction,
+      likesCount: likesCount,
+      likedHexPubkeys: likedHexPubkeys,
+      comments: comments,
+      ownerNpub: ownerNpub,
+      documentFilename: documentFilename,
+      extraScripts: todoScript,
+    );
+  }
+
+  String _buildTodoItemHtml(TodoItem item, Uint8List ndfBytes) {
+    final buf = StringBuffer();
+    final safeId = item.id.replaceAll(RegExp(r'[^a-zA-Z0-9_-]'), '');
+    final hasDetails = (item.description != null && item.description!.isNotEmpty) ||
+        item.pictures.isNotEmpty || item.links.isNotEmpty || item.updates.isNotEmpty;
+
+    buf.write('<div class="todo-item${item.isCompleted ? ' todo-item--done' : ''}">');
+
+    // Header row
+    buf.write('<div class="todo-item-header"${hasDetails ? ' onclick="toggleItem(\'$safeId\')" style="cursor:pointer"' : ''}>');
+
+    // Checkbox icon
+    if (item.isCompleted) {
+      buf.write('<svg class="todo-check todo-check--done" width="20" height="20" viewBox="0 0 20 20" fill="none">');
+      buf.write('<rect x="1" y="1" width="18" height="18" rx="3" fill="var(--accent)" stroke="var(--accent)" stroke-width="1.5"/>');
+      buf.write('<polyline points="5,10 8.5,13.5 14.5,6.5" stroke="#fff" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>');
+      buf.write('</svg>');
+    } else {
+      buf.write('<svg class="todo-check" width="20" height="20" viewBox="0 0 20 20" fill="none">');
+      buf.write('<rect x="1" y="1" width="18" height="18" rx="3" stroke="currentColor" stroke-width="1.5"/>');
+      buf.write('</svg>');
+    }
+
+    // Title
+    buf.write('<span class="todo-item-title">${escapeHtml(item.title)}</span>');
+
+    // Badges
+    buf.write('<span class="todo-badges">');
+
+    // Priority badge
+    if (item.priority != TodoPriority.normal) {
+      final (label, cssClass) = switch (item.priority) {
+        TodoPriority.high => ('High', 'todo-badge--high'),
+        TodoPriority.low => ('Low', 'todo-badge--low'),
+        _ => ('', ''),
+      };
+      buf.write('<span class="todo-badge $cssClass">$label</span>');
+    }
+
+    // Duration badge (for completed items)
+    if (item.isCompleted && item.durationSummary != null) {
+      buf.write('<span class="todo-badge todo-badge--duration">${escapeHtml(item.durationSummary!)}</span>');
+    }
+
+    // Attachment indicators
+    if (item.pictures.isNotEmpty) {
+      buf.write('<span class="todo-badge todo-badge--pictures">${item.pictures.length}</span>');
+    }
+    if (item.updates.isNotEmpty) {
+      buf.write('<span class="todo-badge todo-badge--updates">${item.updates.length}</span>');
+    }
+    if (item.links.isNotEmpty) {
+      buf.write('<span class="todo-badge todo-badge--links">${item.links.length}</span>');
+    }
+
+    buf.write('</span>'); // badges
+
+    // Expand chevron
+    if (hasDetails) {
+      buf.write('<svg class="todo-expand-chevron" id="chevron-$safeId" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6,4 10,8 6,12"/></svg>');
+    }
+
+    buf.write('</div>'); // header
+
+    // Expandable details
+    if (hasDetails) {
+      buf.write('<div class="todo-item-details" id="details-$safeId" style="display:none">');
+
+      // Description
+      if (item.description != null && item.description!.isNotEmpty) {
+        buf.write('<p class="todo-item-desc">${escapeHtml(item.description!)}</p>');
+      }
+
+      // Pictures
+      if (item.pictures.isNotEmpty) {
+        buf.write('<div class="todo-pictures">');
+        for (final picPath in item.pictures) {
+          final picBytes = _ndfService.readArchiveFileFromBytes(ndfBytes, 'assets/$picPath');
+          if (picBytes != null) {
+            final ext = picPath.split('.').last.toLowerCase();
+            final mime = ext == 'png' ? 'image/png'
+                : ext == 'gif' ? 'image/gif'
+                : ext == 'webp' ? 'image/webp'
+                : 'image/jpeg';
+            buf.write('<img class="todo-picture" src="data:$mime;base64,${base64Encode(picBytes)}" alt="">');
+          }
+        }
+        buf.write('</div>');
+      }
+
+      // Updates
+      if (item.updates.isNotEmpty) {
+        buf.write('<div class="todo-updates">');
+        for (final update in item.updates) {
+          buf.write('<div class="todo-update">');
+          buf.write('<span class="todo-update-date">${_formatTodoDate(update.createdAt)}</span>');
+          buf.write('<span class="todo-update-text">${escapeHtml(update.content)}</span>');
+          buf.write('</div>');
+        }
+        buf.write('</div>');
+      }
+
+      // Links
+      if (item.links.isNotEmpty) {
+        buf.write('<div class="todo-links">');
+        for (final link in item.links) {
+          buf.write('<a class="todo-link" href="${escapeHtml(link.url)}" target="_blank" rel="noopener">');
+          buf.write('<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M6.5 3.5H3a1 1 0 0 0-1 1V13a1 1 0 0 0 1 1h8.5a1 1 0 0 0 1-1V9.5"/><path d="M9.5 2h4.5v4.5"/><line x1="14" y1="2" x2="7.5" y2="8.5"/></svg>');
+          buf.write(' ${escapeHtml(link.title.isNotEmpty ? link.title : link.url)}');
+          buf.write('</a>');
+        }
+        buf.write('</div>');
+      }
+
+      buf.write('</div>'); // details
+    }
+
+    buf.write('</div>'); // todo-item
+    return buf.toString();
+  }
+
+  String _formatTodoDate(DateTime dt) {
+    final m = dt.month.toString().padLeft(2, '0');
+    final d = dt.day.toString().padLeft(2, '0');
+    final h = dt.hour.toString().padLeft(2, '0');
+    final min = dt.minute.toString().padLeft(2, '0');
+    return '${dt.year}-$m-$d $h:$min';
+  }
+
+  String _getTodoStyles() {
+    return '''
+/* TODO summary */
+.todo-summary {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 12px;
+  padding: 10px 14px;
+  background: var(--accent-alpha-20);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  font-size: 0.85rem;
+  margin-bottom: 16px;
+}
+.todo-summary-item { display: flex; align-items: center; gap: 5px; }
+.todo-count { font-weight: bold; }
+.todo-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+.todo-dot--pending { background: var(--accent); }
+.todo-dot--done { background: #4caf50; }
+.todo-progress-wrap { display: flex; align-items: center; gap: 6px; margin-left: auto; }
+.todo-progress-bar { width: 80px; height: 6px; background: var(--border-color); border-radius: 3px; overflow: hidden; }
+.todo-progress-fill { height: 100%; background: #4caf50; border-radius: 3px; transition: width 0.3s; }
+.todo-progress-pct { font-size: 0.8rem; font-weight: bold; opacity: 0.7; }
+.todo-empty { opacity: 0.5; font-style: italic; }
+
+/* Items */
+.todo-section { margin-bottom: 16px; }
+.todo-section--completed { margin-top: 8px; }
+.todo-section-header {
+  font-size: 0.85rem; font-weight: bold; opacity: 0.6;
+  cursor: pointer; display: flex; align-items: center; gap: 4px;
+  padding: 6px 0; user-select: none;
+}
+.todo-section-header:hover { opacity: 1; }
+.todo-chevron { transition: transform 0.15s; transform: rotate(90deg); }
+.todo-item {
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  margin-bottom: 8px;
+  transition: border-color 0.15s;
+}
+.todo-item:hover { border-color: var(--accent); }
+.todo-item--done { opacity: 0.65; }
+.todo-item-header {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 12px;
+}
+.todo-check { flex-shrink: 0; opacity: 0.5; }
+.todo-check--done { opacity: 1; }
+.todo-item-title {
+  flex: 1; min-width: 0;
+  font-weight: 500;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.todo-item--done .todo-item-title { text-decoration: line-through; opacity: 0.7; }
+.todo-badges { display: flex; gap: 6px; flex-shrink: 0; align-items: center; }
+.todo-badge {
+  display: inline-flex; align-items: center; gap: 3px;
+  padding: 2px 7px;
+  border-radius: 4px;
+  font-size: 0.7rem; font-weight: 600;
+  white-space: nowrap;
+}
+.todo-badge--high { background: rgba(244,67,54,0.15); color: #f44336; }
+.todo-badge--low { background: rgba(158,158,158,0.15); color: #9e9e9e; }
+.todo-badge--duration { background: rgba(76,175,80,0.15); color: #4caf50; }
+.todo-badge--pictures { background: rgba(33,150,243,0.15); color: #2196f3; }
+.todo-badge--pictures::before { content: "\\1F4F7"; font-size: 0.65rem; }
+.todo-badge--updates { background: rgba(255,152,0,0.15); color: #ff9800; }
+.todo-badge--updates::before { content: "\\1F4DD"; font-size: 0.65rem; }
+.todo-badge--links { background: rgba(156,39,176,0.15); color: #9c27b0; }
+.todo-badge--links::before { content: "\\1F517"; font-size: 0.65rem; }
+.todo-expand-chevron {
+  flex-shrink: 0; opacity: 0.4;
+  transition: transform 0.15s;
+}
+.todo-item:hover .todo-expand-chevron { opacity: 0.8; }
+
+/* Expandable details */
+.todo-item-details {
+  padding: 0 12px 12px 42px;
+  border-top: 1px solid var(--border-color);
+}
+.todo-item-desc {
+  margin: 10px 0;
+  font-size: 0.9rem;
+  line-height: 1.6;
+  opacity: 0.85;
+}
+.todo-pictures {
+  display: flex; flex-wrap: wrap; gap: 8px;
+  margin: 8px 0;
+}
+.todo-picture {
+  width: 80px; height: 80px;
+  object-fit: cover;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+}
+.todo-updates { margin: 8px 0; }
+.todo-update {
+  display: flex; flex-direction: column;
+  padding: 8px 10px;
+  margin-bottom: 6px;
+  background: var(--accent-alpha-20);
+  border-radius: 6px;
+  font-size: 0.85rem;
+}
+.todo-update-date { font-size: 0.7rem; opacity: 0.5; margin-bottom: 3px; }
+.todo-update-text { line-height: 1.5; }
+.todo-links { display: flex; flex-direction: column; gap: 4px; margin: 8px 0; }
+.todo-link {
+  display: inline-flex; align-items: center; gap: 5px;
+  color: var(--accent);
+  text-decoration: none;
+  font-size: 0.85rem;
+}
+.todo-link:hover { text-decoration: underline; }
+''' + _getFeedbackStyles() + '''
 ''';
   }
 
