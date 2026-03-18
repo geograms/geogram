@@ -810,6 +810,7 @@ ${interaction.permitComments ? feedback.getCommentsScript(ownerNpub, storyFilena
     div.style.top = el.top + '%';
     if (el.width > 0) div.style.width = el.width + '%';
     if (el.height != null) div.style.height = el.height + '%';
+    if (el.top > 70) div.style.transform = 'translateY(-100%)';
 
     var props = el.properties || {};
 
