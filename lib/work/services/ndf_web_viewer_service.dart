@@ -656,6 +656,15 @@ $extraScripts
           if (style?.bold == true) textStyles.add('font-weight:bold');
           if (style?.italic == true) textStyles.add('font-style:italic');
           if (style?.align != null) textStyles.add('text-align:${style!.align!.name}');
+          final vAlign = style?.vAlign ?? SlideVerticalAlign.top;
+          switch (vAlign) {
+            case SlideVerticalAlign.top:
+              textStyles.add('justify-content:flex-start');
+            case SlideVerticalAlign.center:
+              textStyles.add('justify-content:center');
+            case SlideVerticalAlign.bottom:
+              textStyles.add('justify-content:flex-end');
+          }
           textStyles.add('font-family:${theme.fonts.heading.family},sans-serif');
           final inlineStyle = textStyles.isNotEmpty ? '${textStyles.join(';')};' : '';
 
@@ -679,17 +688,9 @@ $extraScripts
     final contentHtml = '''
       <div class="slide-deck" id="slide-deck">
         $slidesHtml
-      </div>
-      <div class="slide-nav">
-        <button onclick="prevSlide()" id="prev-btn" disabled>\u2190 Prev</button>
+        <button class="slide-arrow slide-arrow--prev" onclick="prevSlide()" id="prev-btn" disabled>&#8249;</button>
+        <button class="slide-arrow slide-arrow--next" onclick="nextSlide()" id="next-btn"${slides.length <= 1 ? ' disabled' : ''}>&#8250;</button>
         <span class="slide-counter" id="slide-counter">1 / ${slides.length}</span>
-        <button onclick="nextSlide()" id="next-btn"${slides.length <= 1 ? ' disabled' : ''}>Next \u2192</button>
-        <button onclick="toggleFullscreen()" id="fs-btn" class="slide-fs-btn" title="Fullscreen">
-          <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5">
-            <polyline points="1,6 1,1 6,1"/><polyline points="12,1 17,1 17,6"/>
-            <polyline points="17,12 17,17 12,17"/><polyline points="6,17 1,17 1,12"/>
-          </svg>
-        </button>
       </div>
       ${hasNotes ? '<div class="slide-notes" id="slide-notes"></div>' : ''}''';
 
@@ -741,9 +742,10 @@ $extraScripts
       if (btn) btn.title = 'Fullscreen';
     }
   });
-  // Click on slide deck to enter fullscreen
+  // Click on slide deck to enter fullscreen (ignore clicks on buttons)
   var deck = document.getElementById('slide-deck');
   deck.addEventListener('click', function(e) {
+    if (e.target.closest('.slide-arrow') || e.target.closest('.slide-counter')) return;
     if (!document.fullscreenElement) toggleFullscreen();
   });
   // Make deck focusable so it receives key events in fullscreen
@@ -826,20 +828,21 @@ $extraScripts
 
   String _getPresentationStyles() {
     return '''
-/* Reduce gap between header and title */
-.post-title { margin-top: 0; }
-.content { padding-top: 0; }
-.header { margin-bottom: 15px; }
+/* Immersive story-like presentation — hide page chrome */
+.header { display: none; }
+.post-title { display: none; }
+.post-meta, .post-meta-inline { display: none; }
+.footer { display: none; }
+.content { padding: 0; }
+.post { padding: 0; margin: 0; max-width: 100%; }
+.container { max-width: 100%; padding: 0; }
 
 .slide-deck {
   position: relative;
   width: 100%;
   aspect-ratio: 16/9;
-  border: 1px solid var(--border-color);
-  border-radius: 4px;
   overflow: hidden;
-  margin-bottom: 12px;
-  background: #fff;
+  background: #000;
   container-type: inline-size;
   cursor: pointer;
 }
@@ -854,7 +857,8 @@ $extraScripts
   overflow: hidden;
   word-wrap: break-word;
   display: flex;
-  align-items: flex-start;
+  flex-direction: column;
+  align-items: stretch;
   z-index: 1;
 }
 .slide-decor {
@@ -870,38 +874,42 @@ $extraScripts
   opacity: 0.3;
   z-index: 2;
 }
-.slide-nav {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-bottom: 16px;
-}
-.slide-counter {
-  font-size: 0.85rem;
-  opacity: 0.6;
-  min-width: 60px;
-  text-align: center;
-}
-.slide-nav button {
-  background: transparent;
-  border: 1px solid var(--border-color);
-  color: var(--color);
-  padding: 6px 16px;
-  border-radius: 4px;
+
+/* Overlay arrow navigation */
+.slide-arrow {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 10;
+  background: rgba(0,0,0,0.3);
+  color: #fff;
+  border: none;
+  font-size: 2.5rem;
+  line-height: 1;
+  padding: 8px 12px;
   cursor: pointer;
-  font-family: inherit;
-  font-size: 0.85rem;
+  border-radius: 4px;
+  opacity: 0;
+  transition: opacity 0.2s;
 }
-.slide-nav button:hover:not(:disabled) { border-color: var(--accent); }
-.slide-nav button:disabled { opacity: 0.3; cursor: not-allowed; }
-.slide-fs-btn {
-  margin-left: auto;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 6px 10px;
+.slide-deck:hover .slide-arrow:not(:disabled) { opacity: 1; }
+.slide-arrow:hover:not(:disabled) { background: rgba(0,0,0,0.6); }
+.slide-arrow:disabled { display: none; }
+.slide-arrow--prev { left: 8px; }
+.slide-arrow--next { right: 8px; }
+.slide-counter {
+  position: absolute;
+  bottom: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 10;
+  font-size: 0.75rem;
+  color: rgba(255,255,255,0.5);
+  background: rgba(0,0,0,0.3);
+  padding: 2px 10px;
+  border-radius: 10px;
+  pointer-events: none;
 }
-.slide-fs-btn:hover { color: var(--accent); border-color: var(--accent); }
 
 /* Fullscreen mode */
 .slide-deck--fs {
@@ -921,7 +929,7 @@ $extraScripts
 .slide-notes {
   display: none;
   padding: 10px 14px;
-  margin-bottom: 16px;
+  margin: 8px 16px 16px;
   background: var(--accent-alpha-20);
   border-radius: 4px;
   font-size: 0.85rem;
@@ -929,8 +937,8 @@ $extraScripts
 }
 ''' + _getFeedbackStyles() + '''
 /* Presentation: extra space before feedback */
-.feedback-section { margin-top: 48px; }
-.comments-section { margin-top: 48px; }
+.feedback-section { margin-top: 48px; padding: 0 16px; }
+.comments-section { margin-top: 48px; padding: 0 16px; }
 ''';
   }
 
