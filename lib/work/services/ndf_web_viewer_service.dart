@@ -6,12 +6,14 @@
 // Web viewer service for NDF documents — generates read-only HTML pages.
 // Pure Dart, no Flutter dependencies.
 
+import 'dart:convert' show base64Encode;
 import 'dart:typed_data';
 
 import '../../util/feedback_comment_utils.dart';
 import '../../util/html_utils.dart';
 import '../../util/nostr_login_scripts.dart';
 import '../../util/station_html_templates.dart';
+import '../models/document_content.dart';
 import '../models/ndf_document.dart';
 import '../models/ndf_interaction_settings.dart';
 import '../models/spreadsheet_content.dart';
@@ -53,6 +55,22 @@ class NdfWebViewerService {
     switch (metadata.type) {
       case NdfDocumentType.spreadsheet:
         return buildSpreadsheetPage(
+          ndfBytes,
+          metadata: metadata,
+          ownerIdentifier: ownerIdentifier,
+          workspaceName: workspaceName,
+          menuItems: menuItems,
+          logoText: logoText,
+          logoHref: logoHref,
+          interaction: interaction,
+          likesCount: likesCount,
+          likedHexPubkeys: likedHexPubkeys,
+          comments: comments,
+          ownerNpub: ownerNpub,
+          documentFilename: documentFilename,
+        );
+      case NdfDocumentType.document:
+        return buildDocumentPage(
           ndfBytes,
           metadata: metadata,
           ownerIdentifier: ownerIdentifier,
@@ -134,7 +152,104 @@ class NdfWebViewerService {
       sheetsHtml.write('</div>');
     }
 
-    // Build the page using the same structure as buildBlogPostPage
+    // Build the spreadsheet-specific content
+    final contentHtml = StringBuffer();
+    if (sheets.length > 1) {
+      contentHtml.write('<div class="sheet-tabs">$tabsHtml</div>');
+    }
+    contentHtml.write('<div class="sheets-container">$sheetsHtml</div>');
+
+    final extraScripts = sheets.length > 1 ? '<script>${_getTabScript()}</script>' : '';
+
+    return _buildPageShell(
+      title: title,
+      ownerIdentifier: ownerIdentifier,
+      workspaceName: workspaceName,
+      menuItems: menuItems,
+      logo: logo,
+      logoHref: logoHref,
+      appStyles: _getSpreadsheetStyles(),
+      contentHtml: contentHtml.toString(),
+      interaction: interaction,
+      likesCount: likesCount,
+      likedHexPubkeys: likedHexPubkeys,
+      comments: comments,
+      ownerNpub: ownerNpub,
+      documentFilename: documentFilename,
+      extraScripts: extraScripts,
+      containerClass: 'container',
+    );
+  }
+
+  /// Build a read-only HTML page for a rich text NDF document.
+  String? buildDocumentPage(
+    Uint8List ndfBytes, {
+    required NdfDocument metadata,
+    String ownerIdentifier = '',
+    String workspaceName = '',
+    String menuItems = '',
+    String logoText = '',
+    String logoHref = '../../',
+    NdfInteractionSettings interaction = const NdfInteractionSettings(),
+    int likesCount = 0,
+    List<String> likedHexPubkeys = const [],
+    List<FeedbackComment> comments = const [],
+    String ownerNpub = '',
+    String documentFilename = '',
+  }) {
+    final mainJson =
+        _ndfService.readArchiveJsonFromBytes(ndfBytes, 'content/main.json');
+    if (mainJson == null) return null;
+
+    final content = DocumentContent.fromJson(mainJson);
+    final title = metadata.title.isNotEmpty ? metadata.title : 'Document';
+    final logo = logoText.isNotEmpty ? logoText : ownerIdentifier;
+
+    // Render document elements to HTML
+    final contentHtml = StringBuffer();
+    contentHtml.write('<div class="doc-content">');
+    for (final element in content.content) {
+      contentHtml.write(_renderDocElement(element, ndfBytes));
+    }
+    contentHtml.write('</div>');
+
+    return _buildPageShell(
+      title: title,
+      ownerIdentifier: ownerIdentifier,
+      workspaceName: workspaceName,
+      menuItems: menuItems,
+      logo: logo,
+      logoHref: logoHref,
+      appStyles: _getDocumentStyles(),
+      contentHtml: contentHtml.toString(),
+      interaction: interaction,
+      likesCount: likesCount,
+      likedHexPubkeys: likedHexPubkeys,
+      comments: comments,
+      ownerNpub: ownerNpub,
+      documentFilename: documentFilename,
+    );
+  }
+
+  /// Shared page shell used by all NDF document type renderers.
+  String _buildPageShell({
+    required String title,
+    required String ownerIdentifier,
+    required String workspaceName,
+    required String menuItems,
+    required String logo,
+    required String logoHref,
+    required String appStyles,
+    required String contentHtml,
+    required NdfInteractionSettings interaction,
+    required int likesCount,
+    required List<String> likedHexPubkeys,
+    required List<FeedbackComment> comments,
+    required String ownerNpub,
+    required String documentFilename,
+    String extraScripts = '',
+    String containerClass = 'container',
+  }) {
     final nostrHeaderHtml = getNostrLoginHeaderHtml();
     final nostrStyles = getNostrLoginStyles();
     final nostrScripts = getNostrLoginScripts();
@@ -161,19 +276,16 @@ class NdfWebViewerService {
   <title>${escapeHtml(title)}${ownerIdentifier.isNotEmpty ? ' - ${escapeHtml(ownerIdentifier)}' : ''}</title>
   $nostrStyles
   <style>$globalStyles</style>
-  <style>${_getSpreadsheetStyles()}</style>
+  <style>$appStyles</style>
 </head>
 <body>
-<div class="container">
+<div class="$containerClass">
 $headerHtml
   <div class="content">
     <div class="post">
       <h1 class="post-title">${escapeHtml(title)}</h1>
       ${workspaceName.isNotEmpty ? '<div class="post-meta-inline"><span class="post-date">${escapeHtml(workspaceName)}</span></div>' : ''}
-      ${sheets.length > 1 ? '<div class="sheet-tabs">$tabsHtml</div>' : ''}
-      <div class="sheets-container">
-        $sheetsHtml
-      </div>
+      $contentHtml
       ${_buildFeedbackHtml(interaction, likesCount, comments)}
     </div>
   </div>
@@ -187,11 +299,342 @@ $headerHtml
 </div>
 ${interaction.permitLikes ? _getLikesScript(ownerNpub, likesCount, likedHexPubkeys, documentFilename) : ''}
 ${interaction.permitComments ? _getCommentsScript(ownerNpub, documentFilename) : ''}
-${sheets.length > 1 ? '<script>${_getTabScript()}</script>' : ''}
+$extraScripts
 <script>$nostrScripts</script>
 </body>
 </html>''';
   }
+
+  // ============================================================
+  // Document element renderers
+  // ============================================================
+
+  String _renderDocElement(DocumentElement element, Uint8List ndfBytes) {
+    switch (element.type) {
+      case DocumentElementType.heading:
+        final h = element as HeadingElement;
+        final level = h.level.clamp(1, 6);
+        return '<h$level>${_renderSpans(h.content)}</h$level>';
+
+      case DocumentElementType.paragraph:
+        final p = element as ParagraphElement;
+        if (p.content.isEmpty || (p.content.length == 1 && p.content.first.value.isEmpty)) {
+          return '<p><br></p>';
+        }
+        return '<p>${_renderSpans(p.content)}</p>';
+
+      case DocumentElementType.list:
+        final l = element as ListElement;
+        return _renderList(l.ordered, l.items);
+
+      case DocumentElementType.image:
+        final img = element as ImageElement;
+        return _renderImage(img, ndfBytes);
+
+      case DocumentElementType.table:
+        final t = element as TableElement;
+        return _renderTable(t);
+
+      case DocumentElementType.code:
+        final c = element as CodeElement;
+        final langAttr = c.language != null && c.language!.isNotEmpty
+            ? ' class="language-${escapeHtml(c.language!)}"'
+            : '';
+        return '<pre><code$langAttr>${escapeHtml(c.content)}</code></pre>';
+
+      case DocumentElementType.blockquote:
+        final bq = element as BlockquoteElement;
+        return '<blockquote><p>${_renderSpans(bq.content)}</p></blockquote>';
+
+      case DocumentElementType.horizontalRule:
+        return '<hr>';
+
+      case DocumentElementType.formEmbed:
+        return ''; // Forms not rendered in read-only view
+    }
+  }
+
+  String _renderSpans(List<RichTextSpan> spans) {
+    final buf = StringBuffer();
+    for (final span in spans) {
+      var text = escapeHtml(span.value);
+      if (text.isEmpty) continue;
+
+      // Apply inline styles
+      final styles = <String>[];
+      if (span.color != null) styles.add('color:${span.color}');
+      if (span.background != null) styles.add('background-color:${span.background}');
+      if (span.fontSize != null) styles.add('font-size:${span.fontSize}px');
+
+      if (styles.isNotEmpty) {
+        text = '<span style="${styles.join(';')}">$text</span>';
+      }
+
+      // Apply marks (innermost first)
+      if (span.isCode) text = '<code>$text</code>';
+      if (span.marks.contains(TextMark.subscript)) text = '<sub>$text</sub>';
+      if (span.marks.contains(TextMark.superscript)) text = '<sup>$text</sup>';
+      if (span.isStrikethrough) text = '<del>$text</del>';
+      if (span.isUnderline) text = '<u>$text</u>';
+      if (span.isItalic) text = '<em>$text</em>';
+      if (span.isBold) text = '<strong>$text</strong>';
+
+      // Wrap in link if present
+      if (span.link != null && span.link!.isNotEmpty) {
+        text = '<a href="${escapeHtml(span.link!)}" target="_blank" rel="noopener">$text</a>';
+      }
+
+      buf.write(text);
+    }
+    return buf.toString();
+  }
+
+  String _renderList(bool ordered, List<ListItem> items) {
+    final tag = ordered ? 'ol' : 'ul';
+    final buf = StringBuffer('<$tag>');
+    for (final item in items) {
+      buf.write('<li>${_renderSpans(item.content)}');
+      if (item.children != null) {
+        buf.write(_renderList(item.children!.ordered, item.children!.items));
+      }
+      buf.write('</li>');
+    }
+    buf.write('</$tag>');
+    return buf.toString();
+  }
+
+  String _renderImage(ImageElement img, Uint8List ndfBytes) {
+    // For asset:// references, we can't serve them inline — show alt text or placeholder
+    if (img.isAsset) {
+      // Try to read image from NDF archive and embed as data URI
+      final assetPath = 'assets/${img.assetPath}';
+      final imageBytes = _ndfService.readArchiveFileFromBytes(ndfBytes, assetPath);
+      if (imageBytes != null) {
+        final ext = img.assetPath?.split('.').last.toLowerCase() ?? 'png';
+        final mime = ext == 'jpg' || ext == 'jpeg' ? 'image/jpeg'
+            : ext == 'png' ? 'image/png'
+            : ext == 'gif' ? 'image/gif'
+            : ext == 'svg' ? 'image/svg+xml'
+            : ext == 'webp' ? 'image/webp'
+            : 'image/png';
+        final b64 = base64Encode(imageBytes);
+        final alt = img.alt != null ? ' alt="${escapeHtml(img.alt!)}"' : '';
+        final caption = img.caption != null
+            ? '<figcaption>${escapeHtml(img.caption!)}</figcaption>'
+            : '';
+        return '<figure><img src="data:$mime;base64,$b64"$alt style="max-width:100%">$caption</figure>';
+      }
+    }
+    // External URL or failed asset
+    final alt = img.alt ?? img.caption ?? '';
+    if (img.src.startsWith('http')) {
+      return '<figure><img src="${escapeHtml(img.src)}" alt="${escapeHtml(alt)}" style="max-width:100%">'
+          '${img.caption != null ? '<figcaption>${escapeHtml(img.caption!)}</figcaption>' : ''}'
+          '</figure>';
+    }
+    return img.caption != null ? '<p><em>${escapeHtml(img.caption!)}</em></p>' : '';
+  }
+
+  String _renderTable(TableElement table) {
+    final buf = StringBuffer('<table class="doc-table">');
+    for (final row in table.rows) {
+      buf.write('<tr>');
+      final cellTag = row.header ? 'th' : 'td';
+      for (final cell in row.cells) {
+        final attrs = StringBuffer();
+        if (cell.colspan != null && cell.colspan! > 1) {
+          attrs.write(' colspan="${cell.colspan}"');
+        }
+        if (cell.rowspan != null && cell.rowspan! > 1) {
+          attrs.write(' rowspan="${cell.rowspan}"');
+        }
+        buf.write('<$cellTag$attrs>${_renderSpans(cell.content)}</$cellTag>');
+      }
+      buf.write('</tr>');
+    }
+    buf.write('</table>');
+    return buf.toString();
+  }
+
+  // ============================================================
+  // Document-specific styles
+  // ============================================================
+
+  String _getDocumentStyles() {
+    return '''
+.doc-content {
+  line-height: 1.7;
+  font-size: 1rem;
+}
+.doc-content h1 { font-size: 1.6rem; margin: 1.5em 0 0.5em; }
+.doc-content h2 { font-size: 1.3rem; margin: 1.3em 0 0.4em; }
+.doc-content h3 { font-size: 1.1rem; margin: 1.2em 0 0.3em; }
+.doc-content h4, .doc-content h5, .doc-content h6 { font-size: 1rem; margin: 1em 0 0.3em; }
+.doc-content p { margin: 0 0 0.8em; }
+.doc-content a { color: var(--accent); }
+.doc-content a:hover { text-decoration: underline; }
+.doc-content ul, .doc-content ol { margin: 0 0 0.8em; padding-left: 1.5em; }
+.doc-content li { margin-bottom: 0.3em; }
+.doc-content blockquote {
+  border-left: 3px solid var(--accent-alpha-70);
+  margin: 0 0 0.8em;
+  padding: 0.5em 1em;
+  opacity: 0.85;
+}
+.doc-content pre {
+  background: var(--accent-alpha-20);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  padding: 12px 16px;
+  overflow-x: auto;
+  margin: 0 0 0.8em;
+  font-size: 0.85rem;
+}
+.doc-content code {
+  background: var(--accent-alpha-20);
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 0.9em;
+}
+.doc-content pre code {
+  background: none;
+  padding: 0;
+  border-radius: 0;
+}
+.doc-content hr {
+  border: none;
+  border-top: 1px solid var(--border-color);
+  margin: 1.5em 0;
+}
+.doc-content figure {
+  margin: 1em 0;
+  text-align: center;
+}
+.doc-content figcaption {
+  font-size: 0.85rem;
+  opacity: 0.7;
+  margin-top: 0.5em;
+}
+.doc-content img {
+  border-radius: 4px;
+}
+.doc-table {
+  border-collapse: collapse;
+  margin: 0 0 0.8em;
+  width: 100%;
+  font-size: 0.9rem;
+}
+.doc-table th, .doc-table td {
+  border: 1px solid var(--border-color);
+  padding: 6px 10px;
+  text-align: left;
+}
+.doc-table th {
+  font-weight: bold;
+  background: var(--accent-alpha-20);
+}
+
+/* Feedback (shared with spreadsheet) */
+''' + _getFeedbackStyles() + '''
+''';
+  }
+
+  // ============================================================
+  // Shared feedback styles (used by all NDF viewer types)
+  // ============================================================
+
+  String _getFeedbackStyles() {
+    return '''
+/* Feedback section */
+.feedback-section {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 20px;
+  padding-top: 15px;
+  border-top: 1px solid var(--border-color);
+}
+.like-button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  padding: 6px 14px;
+  color: var(--color);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 0.9rem;
+  transition: border-color 0.15s;
+}
+.like-button:hover { border-color: var(--accent); }
+.like-button.liked { color: #e25555; border-color: #e25555; }
+.like-count { font-size: 0.85rem; opacity: 0.7; }
+
+/* Comments */
+.comments-section {
+  margin-top: 24px;
+  padding-top: 15px;
+  border-top: 1px solid var(--border-color);
+}
+.comments-section h3 { margin: 0 0 12px; }
+.comment {
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border-color);
+}
+.comment-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.8rem;
+  margin-bottom: 4px;
+}
+.comment-author { color: var(--accent); font-weight: bold; }
+.comment-date { opacity: 0.5; }
+.comment-delete {
+  background: none;
+  border: none;
+  color: var(--color);
+  opacity: 0.4;
+  cursor: pointer;
+  font-size: 0.8rem;
+  padding: 0 4px;
+  margin-left: auto;
+}
+.comment-delete:hover { opacity: 1; color: #e25555; }
+.comment p { margin: 0; font-size: 0.9rem; }
+.comment-form { margin-top: 16px; }
+.comment-form textarea {
+  width: 100%;
+  background: var(--background);
+  color: var(--color);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  padding: 8px;
+  font-family: inherit;
+  font-size: 0.9rem;
+  resize: vertical;
+}
+.comment-form button {
+  margin-top: 8px;
+  background: var(--accent);
+  color: #000;
+  border: none;
+  border-radius: 4px;
+  padding: 6px 16px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 0.85rem;
+}
+.comment-form button:hover { opacity: 0.9; }
+.comment-form button:disabled { opacity: 0.5; cursor: not-allowed; }
+''';
+  }
+
+  // ============================================================
+  // Spreadsheet helpers
+  // ============================================================
 
   /// Build an HTML table for a single sheet.
   String _buildSheetTable(SpreadsheetSheet sheet) {
@@ -464,90 +907,7 @@ ${sheets.length > 1 ? '<script>${_getTabScript()}</script>' : ''}
   .container { max-width: 95vw; }
 }
 
-/* Feedback section */
-.feedback-section {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-top: 20px;
-  padding-top: 15px;
-  border-top: 1px solid var(--border-color);
-}
-.like-button {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  background: transparent;
-  border: 1px solid var(--border-color);
-  border-radius: 4px;
-  padding: 6px 14px;
-  color: var(--color);
-  cursor: pointer;
-  font-family: inherit;
-  font-size: 0.9rem;
-  transition: border-color 0.15s;
-}
-.like-button:hover { border-color: var(--accent); }
-.like-button.liked { color: #e25555; border-color: #e25555; }
-.like-count { font-size: 0.85rem; opacity: 0.7; }
-
-/* Comments */
-.comments-section {
-  margin-top: 24px;
-  padding-top: 15px;
-  border-top: 1px solid var(--border-color);
-}
-.comments-section h3 { margin: 0 0 12px; }
-.comment {
-  padding: 10px 0;
-  border-bottom: 1px solid var(--border-color);
-}
-.comment-meta {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 0.8rem;
-  margin-bottom: 4px;
-}
-.comment-author { color: var(--accent); font-weight: bold; }
-.comment-date { opacity: 0.5; }
-.comment-delete {
-  background: none;
-  border: none;
-  color: var(--color);
-  opacity: 0.4;
-  cursor: pointer;
-  font-size: 0.8rem;
-  padding: 0 4px;
-  margin-left: auto;
-}
-.comment-delete:hover { opacity: 1; color: #e25555; }
-.comment p { margin: 0; font-size: 0.9rem; }
-.comment-form { margin-top: 16px; }
-.comment-form textarea {
-  width: 100%;
-  background: var(--background);
-  color: var(--color);
-  border: 1px solid var(--border-color);
-  border-radius: 4px;
-  padding: 8px;
-  font-family: inherit;
-  font-size: 0.9rem;
-  resize: vertical;
-}
-.comment-form button {
-  margin-top: 8px;
-  background: var(--accent);
-  color: #000;
-  border: none;
-  border-radius: 4px;
-  padding: 6px 16px;
-  cursor: pointer;
-  font-family: inherit;
-  font-size: 0.85rem;
-}
-.comment-form button:hover { opacity: 0.9; }
-.comment-form button:disabled { opacity: 0.5; cursor: not-allowed; }
+''' + _getFeedbackStyles() + '''
 ''';
   }
 
