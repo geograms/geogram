@@ -742,9 +742,9 @@ $extraScripts
       if (btn) btn.title = 'Fullscreen';
     }
   });
-  // Click on slide deck to enter fullscreen (ignore clicks on buttons)
+  // Double-click on slide deck to enter fullscreen (ignore clicks on buttons)
   var deck = document.getElementById('slide-deck');
-  deck.addEventListener('click', function(e) {
+  deck.addEventListener('dblclick', function(e) {
     if (e.target.closest('.slide-arrow') || e.target.closest('.slide-counter')) return;
     if (!document.fullscreenElement) toggleFullscreen();
   });
@@ -844,7 +844,7 @@ $extraScripts
   overflow: hidden;
   background: #000;
   container-type: inline-size;
-  cursor: pointer;
+  cursor: default;
 }
 .slide {
   display: none;
