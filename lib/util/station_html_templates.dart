@@ -335,13 +335,10 @@ ${getDownloadStyles()}
 ''';
   }
 
-  /// Static whisper model definitions (same as station_server_service)
+  /// Static whisper model definitions — only models actually used in the app
   static const List<Map<String, dynamic>> _defaultWhisperModels = [
-    {'id': 'ggml-tiny.bin', 'name': 'Whisper Tiny', 'size': 39 * 1024 * 1024, 'description': 'Fastest, lower accuracy'},
-    {'id': 'ggml-base.bin', 'name': 'Whisper Base', 'size': 145 * 1024 * 1024, 'description': 'Good balance of speed and accuracy'},
-    {'id': 'ggml-small.bin', 'name': 'Whisper Small', 'size': 465 * 1024 * 1024, 'description': 'Better accuracy, slower'},
-    {'id': 'ggml-medium.bin', 'name': 'Whisper Medium', 'size': 1500 * 1024 * 1024, 'description': 'High accuracy'},
-    {'id': 'ggml-large-v2.bin', 'name': 'Whisper Large v2', 'size': 3000 * 1024 * 1024, 'description': 'Best accuracy'},
+    {'id': 'ggml-tiny.bin', 'name': 'Whisper Tiny', 'size': 39 * 1024 * 1024, 'url': 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin', 'description': 'Fastest, lower accuracy'},
+    {'id': 'ggml-base.bin', 'name': 'Whisper Base', 'size': 145 * 1024 * 1024, 'url': 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin', 'description': 'Good balance of speed and accuracy'},
   ];
 
   /// Build whisper models HTML section based on available models
@@ -354,11 +351,12 @@ ${getDownloadStyles()}
       final name = m['name'] as String;
       final size = m['size'] as int;
       final description = m['description'] as String;
+      final url = m['url'] as String? ?? '/bot/models/whisper/$id';
       final sizeMb = (size / (1024 * 1024)).round();
       final sizeStr = sizeMb >= 1000 ? '~${(sizeMb / 1024).toStringAsFixed(1)} GB' : '~$sizeMb MB';
 
       return '''
-          <a href="/bot/models/whisper/$id" class="model-item">
+          <a href="$url" class="model-item">
             <span class="model-icon"><svg viewBox="0 0 24 24"><path d="M12 3v12m0 0l-4-4m4 4l4-4M5 17v2a2 2 0 002 2h10a2 2 0 002-2v-2"/></svg></span>
             <span class="model-name">$name</span>
             <span class="model-size">$sizeStr</span>
