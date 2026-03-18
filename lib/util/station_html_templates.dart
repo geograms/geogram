@@ -335,23 +335,17 @@ ${getDownloadStyles()}
 ''';
   }
 
-  /// Static whisper model definitions — only models actually used in the app
-  static const List<Map<String, dynamic>> _defaultWhisperModels = [
-    {'id': 'ggml-tiny.bin', 'name': 'Whisper Tiny', 'size': 39 * 1024 * 1024, 'url': 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin', 'description': 'Fastest, lower accuracy'},
-    {'id': 'ggml-base.bin', 'name': 'Whisper Base', 'size': 145 * 1024 * 1024, 'url': 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin', 'description': 'Good balance of speed and accuracy'},
-  ];
-
   /// Build whisper models HTML section based on available models
   static String _buildWhisperModelsHtml(List<Map<String, dynamic>>? models) {
-    // Fall back to static model list if none passed
-    final effectiveModels = (models != null && models.isNotEmpty) ? models : _defaultWhisperModels;
+    if (models == null || models.isEmpty) return '';
+    final effectiveModels = models;
 
     final modelItems = effectiveModels.map((m) {
       final id = m['id'] as String;
       final name = m['name'] as String;
       final size = m['size'] as int;
       final description = m['description'] as String;
-      final url = m['url'] as String? ?? '/bot/models/whisper/$id';
+      final url = '/bot/models/whisper/$id';
       final sizeMb = (size / (1024 * 1024)).round();
       final sizeStr = sizeMb >= 1000 ? '~${(sizeMb / 1024).toStringAsFixed(1)} GB' : '~$sizeMb MB';
 
