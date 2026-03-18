@@ -20,3 +20,8 @@ Keep this file limited to Claude compatibility notes and compact technical conte
 - Shared station behavior belongs in reusable code such as `lib/server/mixins/`.
 - `EmailHandlerMixin` provides shared email methods for both station implementations.
 - Existing shared mixins include `RateLimitMixin`, `HealthWatchdogMixin`, `SmtpMixin`, `SslMixin`, and `StunMixin`.
+
+## Others
+
++ Always commit after doing code changes
++ Always test your code changes with real data or in a deployment before saying it is done

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'app_service.dart';
 import 'storage_config.dart';
 import 'config_service.dart';
 import 'log_service.dart';
@@ -142,6 +143,7 @@ class WebThemeService {
   /// Set the current theme
   void setCurrentTheme(String themeName) {
     ConfigService().setNestedValue(_configKey, themeName);
+    AppService().invalidateWwwIndex();
     LogService().log('Web theme changed to: $themeName');
   }
 

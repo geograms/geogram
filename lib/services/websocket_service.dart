@@ -992,10 +992,12 @@ class WebSocketService {
       return WebSocketService()._handleSharedFolderRequestLocal(filePath, storagePath, headersJson);
     }
 
-    // For www collection requesting index.html, regenerate it dynamically
+    // For www collection requesting index.html, regenerate only if content changed
     if (appName == 'www' && (filePath == '/' || filePath == '/index.html')) {
-      LogService().log('Regenerating www index.html dynamically...');
-      await appService.generateDefaultWwwIndex(app);
+      if (appService.isWwwIndexDirty) {
+        LogService().log('Regenerating www index.html dynamically...');
+        await appService.generateDefaultWwwIndex(app);
+      }
     }
 
     // For blog collection requesting index.html, regenerate it dynamically

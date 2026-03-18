@@ -411,6 +411,7 @@ class BlogService {
       // Regenerate blog cache
       if (_appPath != null) {
         await AppService().generateBlogCache(_appPath!);
+        AppService().invalidateWwwIndex();
       }
 
       return signedPost;
@@ -527,6 +528,7 @@ class BlogService {
       // Regenerate blog cache
       if (_appPath != null) {
         await AppService().generateBlogCache(_appPath!);
+        AppService().invalidateWwwIndex();
       }
 
       return true;
@@ -569,6 +571,7 @@ class BlogService {
       // Regenerate blog cache
       if (_appPath != null) {
         await AppService().generateBlogCache(_appPath!);
+        AppService().invalidateWwwIndex();
       }
 
       return true;

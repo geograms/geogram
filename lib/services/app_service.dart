@@ -51,6 +51,9 @@ class AppService {
   /// In-memory app store for web platform
   final Map<String, App> _webApps = {};
 
+  /// Dirty flag for www index.html caching — when false, skip regeneration
+  bool _wwwIndexDirty = true;
+
   /// Notifier for when callsign/apps change (incremented on change)
   final callsignNotifier = ValueNotifier<int>(0);
 
@@ -258,6 +261,15 @@ class AppService {
     }
   }
 
+  /// Mark the www index.html as needing regeneration.
+  /// Call this when profile, blog posts, apps, or theme change.
+  void invalidateWwwIndex() {
+    _wwwIndexDirty = true;
+  }
+
+  /// Whether the www index.html needs regeneration.
+  bool get isWwwIndexDirty => _wwwIndexDirty;
+
   /// Generate default index.html for www app using the default theme
   /// This is public so it can be called from WebsocketService for on-demand creation
   Future<void> generateDefaultWwwIndex(App app) async {
@@ -369,6 +381,7 @@ class AppService {
         await stylesFile.writeAsString(combinedStyles);
         stderr.writeln('Generated default www index.html + styles.css: ${app.storagePath}');
       }
+      _wwwIndexDirty = false;
     } catch (e) {
       stderr.writeln('Error generating default www index.html: $e');
     }
@@ -1833,6 +1846,7 @@ class AppService {
           await _writeAppFilesWithStorage(app, folderName);
           stderr.writeln('Adopted synced folder as $type app');
           appsNotifier.value++;
+          invalidateWwwIndex();
           return app;
         }
 
@@ -1878,6 +1892,7 @@ class AppService {
 
       // Notify listeners that apps changed
       appsNotifier.value++;
+      invalidateWwwIndex();
 
       return app;
     } catch (e, stackTrace) {
@@ -3049,6 +3064,7 @@ ${currentProfile.callsign}
     if (app.isFavorite) {
       _configService.toggleFavorite(app.id);
     }
+    invalidateWwwIndex();
   }
 
   /// Toggle favorite status of an app

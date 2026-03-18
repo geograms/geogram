@@ -411,6 +411,7 @@ class ProfileService {
       _profiles.add(profile);
     }
     _saveAllProfiles();
+    AppService().invalidateWwwIndex();
     LogService().log('Profile saved: ${profile.callsign}');
   }
 
