@@ -925,7 +925,22 @@ $extraScripts
 
         contentHtml.write('</a>');
 
+        // Progress bar + time + equalizer (hidden until playing)
         if (hasAudio) {
+          contentHtml.write('<div class="vm-player" id="$clipId-player" style="display:none">');
+          // Equalizer bars (same pattern as meeting volume meter)
+          contentHtml.write('<div class="vm-meter" id="$clipId-meter">');
+          for (var b = 0; b < 20; b++) {
+            contentHtml.write('<div class="vm-meter-bar"></div>');
+          }
+          contentHtml.write('</div>');
+          // Seek slider + time
+          contentHtml.write('<div class="vm-seek-row">');
+          contentHtml.write('<span class="vm-time" id="$clipId-time">0:00</span>');
+          contentHtml.write('<input type="range" class="vm-slider" id="$clipId-slider" min="0" max="1000" value="0">');
+          contentHtml.write('<span class="vm-time" id="$clipId-dur">${clip.durationFormatted}</span>');
+          contentHtml.write('</div>');
+          contentHtml.write('</div>');
           contentHtml.write('<audio id="$clipId-audio" src="data:$audioMime;base64,${base64Encode(audioBytes)}" preload="none"></audio>');
         }
 
@@ -941,27 +956,82 @@ $extraScripts
     final audioScript = r'''<script>
 (function() {
   var currentAudio = null, currentCard = null, currentClipId = null;
-  window.playClip = function(id, e) {
-    e.preventDefault();
+  var progressTimer = null, meterTimer = null;
+  var seeking = false;
+
+  function fmt(s) {
+    if (isNaN(s) || !isFinite(s)) return '0:00';
+    var m = Math.floor(s / 60), sec = Math.floor(s % 60);
+    return m + ':' + (sec < 10 ? '0' : '') + sec;
+  }
+
+  function showPlayer(id, show) {
+    var player = document.getElementById(id + '-player');
+    if (player) player.style.display = show ? 'block' : 'none';
+  }
+
+  function startProgress(id) {
+    stopProgress();
     var audio = document.getElementById(id + '-audio');
-    var card = document.getElementById(id + '-card');
-    if (!audio) return;
-    if (currentAudio && currentAudio !== audio) {
-      currentAudio.pause(); currentAudio.currentTime = 0;
-      if (currentCard) currentCard.classList.remove('vm-asset--active');
-      setIcon(currentClipId, false);
-    }
-    if (audio.paused) {
-      audio.play(); currentAudio = audio; currentCard = card; currentClipId = id;
-      card.classList.add('vm-asset--active'); setIcon(id, true);
-    } else {
-      audio.pause(); setIcon(id, false);
-    }
-    audio.onended = function() {
-      setIcon(id, false); card.classList.remove('vm-asset--active');
-      currentAudio = null; currentCard = null; currentClipId = null;
+    var slider = document.getElementById(id + '-slider');
+    var timeEl = document.getElementById(id + '-time');
+    var durEl = document.getElementById(id + '-dur');
+    if (!audio || !slider) return;
+    // Set duration text once loaded
+    if (audio.duration && isFinite(audio.duration)) durEl.textContent = fmt(audio.duration);
+    audio.addEventListener('loadedmetadata', function() { durEl.textContent = fmt(audio.duration); });
+    progressTimer = setInterval(function() {
+      if (!seeking && audio.duration) {
+        slider.value = Math.floor((audio.currentTime / audio.duration) * 1000);
+        timeEl.textContent = fmt(audio.currentTime);
+      }
+    }, 200);
+    // Seek events
+    slider.oninput = function() { seeking = true; };
+    slider.onchange = function() {
+      if (audio.duration) audio.currentTime = (slider.value / 1000) * audio.duration;
+      seeking = false;
     };
-  };
+  }
+
+  function stopProgress() {
+    if (progressTimer) { clearInterval(progressTimer); progressTimer = null; }
+  }
+
+  // Equalizer meter animation (reuses meeting volume-meter pattern)
+  function startMeter(id) {
+    stopMeter();
+    var meter = document.getElementById(id + '-meter');
+    if (!meter) return;
+    var bars = meter.children;
+    meterTimer = setInterval(function() {
+      // Shift bars left
+      for (var i = 0; i < bars.length - 1; i++) {
+        bars[i].style.height = bars[i + 1].style.height;
+        bars[i].style.opacity = bars[i + 1].style.opacity;
+      }
+      // Random level for last bar (simulated from playback)
+      var h = 0.15 + Math.random() * 0.85;
+      var last = bars[bars.length - 1];
+      last.style.height = Math.max(2, h * 20) + 'px';
+      last.style.opacity = String(0.3 + h * 0.7);
+    }, 120);
+  }
+
+  function stopMeter() {
+    if (meterTimer) { clearInterval(meterTimer); meterTimer = null; }
+  }
+
+  function resetMeter(id) {
+    var meter = document.getElementById(id + '-meter');
+    if (!meter) return;
+    var bars = meter.children;
+    for (var i = 0; i < bars.length; i++) {
+      bars[i].style.height = '2px';
+      bars[i].style.opacity = '0.3';
+    }
+  }
+
   function setIcon(id, playing) {
     var svg = document.getElementById(id + '-icon');
     if (!svg) return;
@@ -969,6 +1039,57 @@ $extraScripts
       ? '<circle cx="18" cy="18" r="17" stroke="currentColor" stroke-width="1.5"/><rect x="12" y="11" width="4" height="14" rx="1" fill="currentColor"/><rect x="20" y="11" width="4" height="14" rx="1" fill="currentColor"/>'
       : '<circle cx="18" cy="18" r="17" stroke="currentColor" stroke-width="1.5"/><polygon points="14,11 14,25 26,18" fill="currentColor"/>';
   }
+
+  function stopAll() {
+    if (currentAudio) {
+      currentAudio.pause(); currentAudio.currentTime = 0;
+    }
+    if (currentCard) currentCard.classList.remove('vm-asset--active');
+    if (currentClipId) {
+      setIcon(currentClipId, false);
+      showPlayer(currentClipId, false);
+      resetMeter(currentClipId);
+    }
+    stopProgress(); stopMeter();
+    currentAudio = null; currentCard = null; currentClipId = null;
+  }
+
+  window.playClip = function(id, e) {
+    e.preventDefault();
+    var audio = document.getElementById(id + '-audio');
+    var card = document.getElementById(id + '-card');
+    if (!audio) return;
+
+    if (currentAudio && currentAudio !== audio) stopAll();
+
+    if (audio.paused) {
+      audio.play(); currentAudio = audio; currentCard = card; currentClipId = id;
+      card.classList.add('vm-asset--active');
+      setIcon(id, true);
+      showPlayer(id, true);
+      startProgress(id);
+      startMeter(id);
+    } else {
+      audio.pause();
+      setIcon(id, false);
+      stopProgress(); stopMeter();
+    }
+
+    audio.onended = function() {
+      setIcon(id, false);
+      card.classList.remove('vm-asset--active');
+      showPlayer(id, false);
+      resetMeter(id);
+      stopProgress(); stopMeter();
+      // Reset slider
+      var slider = document.getElementById(id + '-slider');
+      if (slider) slider.value = 0;
+      var timeEl = document.getElementById(id + '-time');
+      if (timeEl) timeEl.textContent = '0:00';
+      currentAudio = null; currentCard = null; currentClipId = null;
+    };
+  };
+
   window.toggleTranscript = function(id, e) {
     e.preventDefault(); e.stopPropagation();
     var panel = document.getElementById(id + '-transcript');
@@ -1017,6 +1138,71 @@ $extraScripts
 .vm-transcript-btn:hover { opacity: 1; }
 .vm-transcript-btn--open { opacity: 1; color: var(--accent); }
 .vm-transcript { padding: 8px 12px; font-size: 0.85rem; white-space: pre-wrap; color: var(--accent-alpha-70); line-height: 1.6; }
+
+/* Audio player: meter + seek slider */
+.vm-player {
+  padding: 6px 12px 8px;
+  margin-top: -1px;
+  border: 1px solid var(--accent-alpha-70);
+  border-top: none;
+  border-radius: 0 0 10px 10px;
+  background: var(--accent-alpha-20);
+}
+.vm-meter {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 20px;
+  width: 100%;
+  margin-bottom: 6px;
+}
+.vm-meter-bar {
+  flex: 1;
+  min-width: 2px;
+  height: 2px;
+  background: var(--accent);
+  border-radius: 1px;
+  opacity: 0.3;
+  transition: height 100ms ease-out, opacity 100ms ease-out;
+}
+.vm-seek-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.vm-time {
+  font-size: 0.7rem;
+  font-family: monospace;
+  opacity: 0.6;
+  min-width: 32px;
+  text-align: center;
+}
+.vm-slider {
+  flex: 1;
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  background: var(--border-color);
+  border-radius: 2px;
+  outline: none;
+  cursor: pointer;
+}
+.vm-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--accent);
+  cursor: pointer;
+}
+.vm-slider::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: none;
+  cursor: pointer;
+}
 ''' + _getFeedbackStyles() + '''
 ''';
   }
