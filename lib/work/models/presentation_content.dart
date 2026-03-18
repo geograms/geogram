@@ -27,6 +27,13 @@ enum SlideTextAlign {
   right,
 }
 
+/// Vertical alignment for slide text elements
+enum SlideVerticalAlign {
+  top,
+  center,
+  bottom,
+}
+
 /// Position of an element on the slide (percentage-based)
 class ElementPosition {
   final String x;
@@ -91,6 +98,7 @@ class SlideTextStyle {
   final String? color;
   final int? fontSize;
   final SlideTextAlign? align;
+  final SlideVerticalAlign? vAlign;
   final bool? bold;
   final bool? italic;
 
@@ -98,6 +106,7 @@ class SlideTextStyle {
     this.color,
     this.fontSize,
     this.align,
+    this.vAlign,
     this.bold,
     this.italic,
   });
@@ -110,11 +119,19 @@ class SlideTextStyle {
         orElse: () => SlideTextAlign.left,
       );
     }
+    SlideVerticalAlign? vAlign;
+    if (json['vAlign'] != null) {
+      vAlign = SlideVerticalAlign.values.firstWhere(
+        (a) => a.name == json['vAlign'],
+        orElse: () => SlideVerticalAlign.top,
+      );
+    }
 
     return SlideTextStyle(
       color: json['color'] as String?,
       fontSize: json['fontSize'] as int?,
       align: align,
+      vAlign: vAlign,
       bold: json['bold'] as bool?,
       italic: json['italic'] as bool?,
     );
@@ -124,6 +141,7 @@ class SlideTextStyle {
     if (color != null) 'color': color,
     if (fontSize != null) 'fontSize': fontSize,
     if (align != null) 'align': align!.name,
+    if (vAlign != null) 'vAlign': vAlign!.name,
     if (bold != null) 'bold': bold,
     if (italic != null) 'italic': italic,
   };
@@ -132,6 +150,7 @@ class SlideTextStyle {
     String? color,
     int? fontSize,
     SlideTextAlign? align,
+    SlideVerticalAlign? vAlign,
     bool? bold,
     bool? italic,
   }) {
@@ -139,6 +158,7 @@ class SlideTextStyle {
       color: color ?? this.color,
       fontSize: fontSize ?? this.fontSize,
       align: align ?? this.align,
+      vAlign: vAlign ?? this.vAlign,
       bold: bold ?? this.bold,
       italic: italic ?? this.italic,
     );

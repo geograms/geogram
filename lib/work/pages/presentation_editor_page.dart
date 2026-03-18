@@ -778,6 +778,22 @@ class _PresentationEditorPageState extends State<PresentationEditorPage> {
     }
   }
 
+  void _setVerticalAlignment(SlideVerticalAlign vAlign) {
+    final slide = _currentSlide;
+    final element = _selectedElement;
+    if (slide == null || element == null) return;
+
+    final index = slide.elements.indexWhere((e) => e.id == _selectedElementId);
+    if (index >= 0) {
+      setState(() {
+        slide.elements[index] = element.copyWith(
+          style: (element.style ?? SlideTextStyle()).copyWith(vAlign: vAlign),
+        );
+        _hasChanges = true;
+      });
+    }
+  }
+
   void _setFontSize(int size) {
     final slide = _currentSlide;
     final element = _selectedElement;
@@ -1530,6 +1546,7 @@ class _PresentationEditorPageState extends State<PresentationEditorPage> {
   Widget _buildElementToolbar(ThemeData theme) {
     final element = _selectedElement;
     final currentAlign = element?.style?.align ?? SlideTextAlign.left;
+    final currentVAlign = element?.style?.vAlign ?? SlideVerticalAlign.top;
     final isBold = element?.style?.bold ?? false;
     final isItalic = element?.style?.italic ?? false;
     final fontSize = element?.style?.fontSize ?? 24;
@@ -1609,6 +1626,27 @@ class _PresentationEditorPageState extends State<PresentationEditorPage> {
               tooltip: _i18n.t('work_align_right'),
               isActive: currentAlign == SlideTextAlign.right,
               onPressed: () => _setAlignment(SlideTextAlign.right),
+            ),
+            _toolbarDivider(theme),
+
+            // Vertical alignment
+            _ToolbarButton(
+              icon: Icons.vertical_align_top,
+              tooltip: _i18n.t('work_valign_top'),
+              isActive: currentVAlign == SlideVerticalAlign.top,
+              onPressed: () => _setVerticalAlignment(SlideVerticalAlign.top),
+            ),
+            _ToolbarButton(
+              icon: Icons.vertical_align_center,
+              tooltip: _i18n.t('work_valign_center'),
+              isActive: currentVAlign == SlideVerticalAlign.center,
+              onPressed: () => _setVerticalAlignment(SlideVerticalAlign.center),
+            ),
+            _ToolbarButton(
+              icon: Icons.vertical_align_bottom,
+              tooltip: _i18n.t('work_valign_bottom'),
+              isActive: currentVAlign == SlideVerticalAlign.bottom,
+              onPressed: () => _setVerticalAlignment(SlideVerticalAlign.bottom),
             ),
             _toolbarDivider(theme),
 

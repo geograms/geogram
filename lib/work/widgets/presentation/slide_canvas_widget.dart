@@ -372,9 +372,22 @@ class _SlideCanvasWidgetState extends State<SlideCanvasWidget> {
 
     final textColor = _parseColor(style?.color ?? widget.theme.colors.text);
 
+    // Vertical alignment
+    final Alignment vAlignment;
+    switch (style?.vAlign ?? SlideVerticalAlign.top) {
+      case SlideVerticalAlign.top:
+        vAlignment = Alignment.topCenter;
+      case SlideVerticalAlign.center:
+        vAlignment = Alignment.center;
+      case SlideVerticalAlign.bottom:
+        vAlignment = Alignment.bottomCenter;
+    }
+
     // Inline editing mode - render with rich text overlay for visual formatting
     if (isSelected && widget.isInlineEditing && widget.textEditController != null) {
-      return Focus(
+      return Align(
+        alignment: vAlignment,
+        child: Focus(
         onKeyEvent: (node, event) {
           if (event is KeyDownEvent) {
             final isCtrl = HardwareKeyboard.instance.isControlPressed ||
@@ -429,12 +442,14 @@ class _SlideCanvasWidgetState extends State<SlideCanvasWidget> {
             textInputAction: TextInputAction.newline,
           ),
         ),
+      ),
       );
     }
 
     // Build rich text with spans (normal display mode)
+    Widget textWidget;
     if (element.content.isEmpty) {
-      return Text(
+      textWidget = Text(
         '',
         style: TextStyle(
           fontSize: scaledFontSize,
@@ -444,29 +459,34 @@ class _SlideCanvasWidgetState extends State<SlideCanvasWidget> {
         ),
         textAlign: textAlign,
       );
+    } else {
+      final spans = <TextSpan>[];
+      for (final span in element.content) {
+        spans.add(TextSpan(
+          text: span.value,
+          style: TextStyle(
+            fontSize: scaledFontSize,
+            color: textColor,
+            fontWeight: (style?.bold == true || span.isBold)
+                ? FontWeight.bold
+                : FontWeight.normal,
+            fontStyle: (style?.italic == true || span.isItalic)
+                ? FontStyle.italic
+                : FontStyle.normal,
+            decoration: span.isUnderline ? TextDecoration.underline : null,
+          ),
+        ));
+      }
+
+      textWidget = RichText(
+        text: TextSpan(children: spans),
+        textAlign: textAlign,
+      );
     }
 
-    final spans = <TextSpan>[];
-    for (final span in element.content) {
-      spans.add(TextSpan(
-        text: span.value,
-        style: TextStyle(
-          fontSize: scaledFontSize,
-          color: textColor,
-          fontWeight: (style?.bold == true || span.isBold)
-              ? FontWeight.bold
-              : FontWeight.normal,
-          fontStyle: (style?.italic == true || span.isItalic)
-              ? FontStyle.italic
-              : FontStyle.normal,
-          decoration: span.isUnderline ? TextDecoration.underline : null,
-        ),
-      ));
-    }
-
-    return RichText(
-      text: TextSpan(children: spans),
-      textAlign: textAlign,
+    return Align(
+      alignment: vAlignment,
+      child: textWidget,
     );
   }
 
