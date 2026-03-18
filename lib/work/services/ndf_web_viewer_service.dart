@@ -556,7 +556,7 @@ $extraScripts
   }
 
   // ============================================================
-  // Presentation viewer
+  // Presentation viewer (with template decorations)
   // ============================================================
 
   String? _buildPresentationPage(Uint8List ndfBytes, {
@@ -576,10 +576,12 @@ $extraScripts
     final logo = logoText.isNotEmpty ? logoText : ownerIdentifier;
     final theme = content.theme;
 
+    // Match theme to a template for decorations
+    final template = _matchTemplate(theme.colors);
+
     // Read all slides
     final slides = <PresentationSlide>[];
     for (final slideId in content.slides) {
-      // Slides may be stored as content/{slideId}.json or content/slides/{slideId}.json
       var slideJson = _ndfService.readArchiveJsonFromBytes(ndfBytes, 'content/$slideId.json');
       slideJson ??= _ndfService.readArchiveJsonFromBytes(ndfBytes, 'content/slides/$slideId.json');
       if (slideJson != null) {
@@ -588,15 +590,35 @@ $extraScripts
     }
     if (slides.isEmpty) return null;
 
-    // Build slides HTML
+    // Build slides HTML with template decorations
     final slidesHtml = StringBuffer();
     for (var i = 0; i < slides.length; i++) {
       final slide = slides[i];
       final isActive = i == 0;
       final bg = slide.background;
-      final bgStyle = bg.color != null ? 'background-color:${bg.color};' : 'background-color:${theme.colors.background};';
 
-      slidesHtml.write('<div class="slide${isActive ? ' active' : ''}" data-index="$i" style="$bgStyle color:${theme.colors.text};">');
+      // Background: gradient or solid
+      final bgStyles = <String>[];
+      if (template != null && template.hasGradientBackground) {
+        bgStyles.add('background:linear-gradient(135deg,${template.gradientStart ?? theme.colors.background},${template.gradientEnd ?? theme.colors.background})');
+      } else {
+        bgStyles.add('background-color:${bg.color ?? theme.colors.background}');
+      }
+      bgStyles.add('color:${theme.colors.text}');
+
+      slidesHtml.write('<div class="slide${isActive ? ' active' : ''}" data-index="$i" style="${bgStyles.join(';')};">');
+
+      // Template decorations (rendered behind content)
+      if (template != null) {
+        if (template.titleBarColor != null) {
+          final y = template.titleBarY ?? '0%';
+          final h = template.titleBarH ?? '15%';
+          slidesHtml.write('<div class="slide-decor" style="left:0;top:$y;width:100%;height:$h;background:${template.titleBarColor};"></div>');
+        }
+        for (final d in template.decorations) {
+          slidesHtml.write(_renderDecoration(d));
+        }
+      }
 
       // Render elements
       for (final el in slide.elements) {
@@ -604,7 +626,6 @@ $extraScripts
         final posStyle = 'left:${pos.x};top:${pos.y};width:${pos.w};height:${pos.h};';
 
         if (el.type == SlideElementType.image && el.imagePath != null) {
-          // Try to load image from archive
           final imgPath = el.imagePath!.startsWith('asset://') ? 'assets/${el.imagePath!.substring(8)}' : el.imagePath!;
           final imgBytes = _ndfService.readArchiveFileFromBytes(ndfBytes, imgPath);
           if (imgBytes != null) {
@@ -613,14 +634,14 @@ $extraScripts
             slidesHtml.write('<div class="slide-el" style="$posStyle"><img src="data:$mime;base64,${base64Encode(imgBytes)}" style="width:100%;height:100%;object-fit:contain;"></div>');
           }
         } else {
-          // Text element
           final style = el.style;
           final textStyles = <String>[];
-          if (style?.fontSize != null) textStyles.add('font-size:${style!.fontSize}px');
+          if (style?.fontSize != null) textStyles.add('font-size:${_scaleFont(style!.fontSize!)}');
           if (style?.color != null) textStyles.add('color:${style!.color}');
           if (style?.bold == true) textStyles.add('font-weight:bold');
           if (style?.italic == true) textStyles.add('font-style:italic');
           if (style?.align != null) textStyles.add('text-align:${style!.align!.name}');
+          textStyles.add('font-family:${theme.fonts.heading.family},sans-serif');
           final inlineStyle = textStyles.isNotEmpty ? '${textStyles.join(';')};' : '';
 
           slidesHtml.write('<div class="slide-el" style="$posStyle$inlineStyle">');
@@ -635,26 +656,37 @@ $extraScripts
         }
       }
 
-      // Slide number
       slidesHtml.write('<div class="slide-num">${i + 1} / ${slides.length}</div>');
       slidesHtml.write('</div>');
     }
 
-    // Build content with navigation
+    final hasNotes = slides.any((s) => s.notes.isNotEmpty);
     final contentHtml = '''
       <div class="slide-deck" id="slide-deck">
         $slidesHtml
       </div>
       <div class="slide-nav">
-        <button onclick="prevSlide()" id="prev-btn" disabled>&larr; Prev</button>
-        <button onclick="nextSlide()" id="next-btn"${slides.length <= 1 ? ' disabled' : ''}>Next &rarr;</button>
-      </div>''';
+        <button onclick="prevSlide()" id="prev-btn" disabled>\u2190 Prev</button>
+        <span class="slide-counter" id="slide-counter">1 / ${slides.length}</span>
+        <button onclick="nextSlide()" id="next-btn"${slides.length <= 1 ? ' disabled' : ''}>Next \u2192</button>
+      </div>
+      ${hasNotes ? '<div class="slide-notes" id="slide-notes"></div>' : ''}''';
 
-    final slideScript = slides.length > 1 ? '''<script>
+    final notesData = hasNotes
+        ? slides.map((s) => s.notes.replaceAll("'", "\\'").replaceAll('\n', '\\n')).toList()
+        : <String>[];
+
+    final slideScript = '''<script>
 (function() {
   var current = 0;
   var total = ${slides.length};
   var slides = document.querySelectorAll('.slide');
+  var notes = ${hasNotes ? "[${notesData.map((n) => "'$n'").join(',')}]" : '[]'};
+  var notesEl = document.getElementById('slide-notes');
+  function showNotes() {
+    if (notesEl && notes[current]) { notesEl.innerHTML = '<strong>Notes:</strong> ' + notes[current]; notesEl.style.display = 'block'; }
+    else if (notesEl) { notesEl.style.display = 'none'; }
+  }
   window.prevSlide = function() {
     if (current > 0) { slides[current].classList.remove('active'); current--; slides[current].classList.add('active'); updateNav(); }
   };
@@ -664,13 +696,16 @@ $extraScripts
   function updateNav() {
     document.getElementById('prev-btn').disabled = current === 0;
     document.getElementById('next-btn').disabled = current === total - 1;
+    document.getElementById('slide-counter').textContent = (current + 1) + ' / ' + total;
+    showNotes();
   }
   document.addEventListener('keydown', function(e) {
     if (e.key === 'ArrowLeft') prevSlide();
     if (e.key === 'ArrowRight') nextSlide();
   });
+  showNotes();
 })();
-</script>''' : '';
+</script>''';
 
     return _buildPageShell(
       title: title, ownerIdentifier: ownerIdentifier,
@@ -684,6 +719,56 @@ $extraScripts
     );
   }
 
+  /// Match theme colors to the closest predefined SlideTemplate.
+  SlideTemplate? _matchTemplate(ThemeColors colors) {
+    for (final t in SlideTemplate.templates) {
+      if (t.colors.primary == colors.primary &&
+          t.colors.background == colors.background) {
+        return t;
+      }
+    }
+    return null;
+  }
+
+  /// Render a template decoration as an absolutely-positioned HTML div.
+  String _renderDecoration(SlideDecoration d) {
+    final pos = 'left:${d.x};top:${d.y};width:${d.w};height:${d.h};';
+    final opacity = d.opacity < 1.0 ? 'opacity:${d.opacity};' : '';
+    switch (d.shape) {
+      case DecorationShape.rectangle:
+        return '<div class="slide-decor" style="${pos}background:${d.color};$opacity"></div>';
+      case DecorationShape.circle:
+        return '<div class="slide-decor" style="${pos}background:${d.color};border-radius:50%;$opacity"></div>';
+      case DecorationShape.gradientBar:
+        return '<div class="slide-decor" style="${pos}background:linear-gradient(90deg,${d.color},${d.color2 ?? d.color});$opacity"></div>';
+      case DecorationShape.wave:
+        return '<div class="slide-decor" style="${pos}background:${d.color};border-radius:50% 50% 0 0;$opacity"></div>';
+      case DecorationShape.cornerAccent:
+        return '<div class="slide-decor" style="${pos}background:${d.color};clip-path:polygon(0 0,100% 0,100% 100%);$opacity"></div>';
+      case DecorationShape.grid:
+        final pct = 100 ~/ (d.count ?? 20);
+        return '<div class="slide-decor" style="${pos}background:repeating-linear-gradient(0deg,${d.color} 0px,${d.color} 1px,transparent 1px,transparent $pct%),repeating-linear-gradient(90deg,${d.color} 0px,${d.color} 1px,transparent 1px,transparent $pct%);$opacity"></div>';
+      case DecorationShape.scanlines:
+        final gap = d.count != null && d.count! > 0 ? (100 / d.count!).toStringAsFixed(2) : '1';
+        return '<div class="slide-decor" style="${pos}background:repeating-linear-gradient(0deg,${d.color} 0px,${d.color} 1px,transparent 1px,transparent ${gap}%);$opacity"></div>';
+      case DecorationShape.diagonalStripes:
+        return '<div class="slide-decor" style="${pos}background:repeating-linear-gradient(45deg,${d.color} 0px,${d.color} 2px,transparent 2px,transparent 10px);$opacity"></div>';
+      case DecorationShape.dots:
+        final sz = 100 ~/ (d.count ?? 4);
+        return '<div class="slide-decor" style="${pos}background:radial-gradient(circle,${d.color} 2px,transparent 2px);background-size:${sz}% ${sz}%;$opacity"></div>';
+      case DecorationShape.triangle:
+        return '<div class="slide-decor" style="${pos}background:${d.color};clip-path:polygon(50% 0,100% 100%,0 100%);$opacity"></div>';
+      case DecorationShape.line:
+        return '<div class="slide-decor" style="${pos}border-bottom:${d.strokeWidth ?? 2}px solid ${d.color};$opacity"></div>';
+    }
+  }
+
+  /// Scale font size from slide coordinates (1920px) to responsive CSS.
+  String _scaleFont(int slideFontSize) {
+    final vw = (slideFontSize / 19.2).toStringAsFixed(1);
+    return 'clamp(${(slideFontSize * 0.25).round()}px, ${vw}cqw, ${slideFontSize}px)';
+  }
+
   String _getPresentationStyles() {
     return '''
 .slide-deck {
@@ -694,6 +779,8 @@ $extraScripts
   border-radius: 4px;
   overflow: hidden;
   margin-bottom: 12px;
+  background: #fff;
+  container-type: inline-size;
 }
 .slide {
   display: none;
@@ -707,18 +794,32 @@ $extraScripts
   word-wrap: break-word;
   display: flex;
   align-items: flex-start;
+  z-index: 1;
+}
+.slide-decor {
+  position: absolute;
+  pointer-events: none;
+  z-index: 0;
 }
 .slide-num {
   position: absolute;
   bottom: 8px;
   right: 12px;
   font-size: 11px;
-  opacity: 0.4;
+  opacity: 0.3;
+  z-index: 2;
 }
 .slide-nav {
   display: flex;
-  gap: 8px;
+  align-items: center;
+  gap: 12px;
   margin-bottom: 16px;
+}
+.slide-counter {
+  font-size: 0.85rem;
+  opacity: 0.6;
+  min-width: 60px;
+  text-align: center;
 }
 .slide-nav button {
   background: transparent;
@@ -732,12 +833,21 @@ $extraScripts
 }
 .slide-nav button:hover:not(:disabled) { border-color: var(--accent); }
 .slide-nav button:disabled { opacity: 0.3; cursor: not-allowed; }
+.slide-notes {
+  display: none;
+  padding: 10px 14px;
+  margin-bottom: 16px;
+  background: var(--accent-alpha-20);
+  border-radius: 4px;
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
 ''' + _getFeedbackStyles() + '''
 ''';
   }
 
   // ============================================================
-  // Voice memo viewer
+  // Voice memo viewer (meeting recordings design with audio playback)
   // ============================================================
 
   String? _buildVoiceMemoPage(Uint8List ndfBytes, {
@@ -767,29 +877,108 @@ $extraScripts
       }
     }
 
-    // Build clips HTML
-    final contentHtml = StringBuffer('<div class="vm-clips">');
+    // Build clips HTML — meeting recording card design with audio playback
+    final contentHtml = StringBuffer();
     if (clips.isEmpty) {
       contentHtml.write('<p style="opacity:0.5">No clips in this voice memo</p>');
-    }
-    for (final clip in clips) {
-      contentHtml.write('<div class="vm-clip">');
-      contentHtml.write('<div class="vm-clip-header">');
-      contentHtml.write('<span class="vm-clip-title">${escapeHtml(clip.title)}</span>');
-      contentHtml.write('<span class="vm-clip-duration">${clip.durationFormatted}</span>');
-      contentHtml.write('</div>');
-      if (clip.description != null && clip.description!.isNotEmpty) {
-        contentHtml.write('<p class="vm-clip-desc">${escapeHtml(clip.description!)}</p>');
-      }
-      if (clip.transcription != null && content.settings.showTranscriptions) {
-        contentHtml.write('<div class="vm-transcription">');
-        contentHtml.write('<div class="vm-transcription-label">Transcription</div>');
-        contentHtml.write('<p>${escapeHtml(clip.transcription!.text)}</p>');
+    } else {
+      contentHtml.write('<div class="vm-count">${clips.length} clip${clips.length != 1 ? 's' : ''}</div>');
+      contentHtml.write('<div class="vm-clips">');
+      for (var i = 0; i < clips.length; i++) {
+        final clip = clips[i];
+        final audioPath = 'assets/${clip.audioFile}';
+        final audioBytes = _ndfService.readArchiveFileFromBytes(ndfBytes, audioPath);
+        final ext = clip.audioFile.split('.').last.toLowerCase();
+        final audioMime = ext == 'ogg' ? 'audio/ogg'
+            : ext == 'mp3' ? 'audio/mpeg'
+            : ext == 'wav' ? 'audio/wav'
+            : ext == 'webm' ? 'audio/webm'
+            : ext == 'm4a' ? 'audio/mp4'
+            : 'audio/ogg';
+        final hasAudio = audioBytes != null;
+        final clipId = 'clip-$i';
+        final hasTranscript = clip.transcription != null && content.settings.showTranscriptions;
+
+        contentHtml.write('<div class="vm-wrapper">');
+        contentHtml.write('<a class="vm-asset${i == 0 && hasAudio ? ' vm-asset--active' : ''}" href="#" onclick="playClip(\'$clipId\',event)" id="$clipId-card">');
+
+        // Play/pause icon (circle + triangle, matching meeting recording design)
+        contentHtml.write('<svg class="vm-play-icon" id="$clipId-icon" width="36" height="36" viewBox="0 0 36 36" fill="none">');
+        contentHtml.write('<circle cx="18" cy="18" r="17" stroke="currentColor" stroke-width="1.5"/>');
+        contentHtml.write('<polygon points="14,11 14,25 26,18" fill="currentColor"/>');
+        contentHtml.write('</svg>');
+
+        contentHtml.write('<div class="vm-info">');
+        contentHtml.write('<div class="vm-asset-title">${escapeHtml(clip.title)}</div>');
+        contentHtml.write('<div class="vm-asset-meta">${clip.durationFormatted}');
+        if (clip.description != null && clip.description!.isNotEmpty) {
+          contentHtml.write(' \u00B7 ${escapeHtml(clip.description!)}');
+        }
+        contentHtml.write('</div>');
+        contentHtml.write('</div>');
+
+        if (hasTranscript) {
+          contentHtml.write('<button class="vm-transcript-btn" onclick="toggleTranscript(\'$clipId\',event)" title="Transcript">');
+          contentHtml.write('<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><rect x="2" y="2" width="12" height="12" rx="1.5"/><line x1="4.5" y1="5" x2="11.5" y2="5"/><line x1="4.5" y1="8" x2="11.5" y2="8"/><line x1="4.5" y1="11" x2="8.5" y2="11"/></svg>');
+          contentHtml.write('</button>');
+        }
+
+        contentHtml.write('</a>');
+
+        if (hasAudio) {
+          contentHtml.write('<audio id="$clipId-audio" src="data:$audioMime;base64,${base64Encode(audioBytes)}" preload="none"></audio>');
+        }
+
+        if (hasTranscript) {
+          contentHtml.write('<div class="vm-transcript" id="$clipId-transcript" style="display:none">${escapeHtml(clip.transcription!.text)}</div>');
+        }
+
         contentHtml.write('</div>');
       }
       contentHtml.write('</div>');
     }
-    contentHtml.write('</div>');
+
+    final audioScript = r'''<script>
+(function() {
+  var currentAudio = null, currentCard = null, currentClipId = null;
+  window.playClip = function(id, e) {
+    e.preventDefault();
+    var audio = document.getElementById(id + '-audio');
+    var card = document.getElementById(id + '-card');
+    if (!audio) return;
+    if (currentAudio && currentAudio !== audio) {
+      currentAudio.pause(); currentAudio.currentTime = 0;
+      if (currentCard) currentCard.classList.remove('vm-asset--active');
+      setIcon(currentClipId, false);
+    }
+    if (audio.paused) {
+      audio.play(); currentAudio = audio; currentCard = card; currentClipId = id;
+      card.classList.add('vm-asset--active'); setIcon(id, true);
+    } else {
+      audio.pause(); setIcon(id, false);
+    }
+    audio.onended = function() {
+      setIcon(id, false); card.classList.remove('vm-asset--active');
+      currentAudio = null; currentCard = null; currentClipId = null;
+    };
+  };
+  function setIcon(id, playing) {
+    var svg = document.getElementById(id + '-icon');
+    if (!svg) return;
+    svg.innerHTML = playing
+      ? '<circle cx="18" cy="18" r="17" stroke="currentColor" stroke-width="1.5"/><rect x="12" y="11" width="4" height="14" rx="1" fill="currentColor"/><rect x="20" y="11" width="4" height="14" rx="1" fill="currentColor"/>'
+      : '<circle cx="18" cy="18" r="17" stroke="currentColor" stroke-width="1.5"/><polygon points="14,11 14,25 26,18" fill="currentColor"/>';
+  }
+  window.toggleTranscript = function(id, e) {
+    e.preventDefault(); e.stopPropagation();
+    var panel = document.getElementById(id + '-transcript');
+    if (!panel) return;
+    var open = panel.style.display !== 'none';
+    panel.style.display = open ? 'none' : 'block';
+    e.currentTarget.classList.toggle('vm-transcript-btn--open', !open);
+  };
+})();
+</script>''';
 
     return _buildPageShell(
       title: title, ownerIdentifier: ownerIdentifier,
@@ -799,50 +988,35 @@ $extraScripts
       contentHtml: contentHtml.toString(), interaction: interaction,
       likesCount: likesCount, likedHexPubkeys: likedHexPubkeys,
       comments: comments, ownerNpub: ownerNpub,
-      documentFilename: documentFilename,
+      documentFilename: documentFilename, extraScripts: audioScript,
     );
   }
 
   String _getVoiceMemoStyles() {
     return '''
-.vm-clips { display: flex; flex-direction: column; gap: 12px; }
-.vm-clip {
+.vm-count { font-size: 0.85rem; opacity: 0.6; margin-bottom: 12px; }
+.vm-clips { display: flex; flex-direction: column; gap: 10px; }
+.vm-asset {
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 12px;
   border: 1px solid var(--border-color);
-  border-radius: 4px;
-  padding: 12px 16px;
+  border-radius: 10px;
+  color: inherit; text-decoration: none; cursor: pointer;
+  transition: border-color 0.15s;
 }
-.vm-clip-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 4px;
+.vm-asset:hover { border-color: var(--accent); color: var(--accent); }
+.vm-asset--active { border-color: var(--accent); background: var(--accent-alpha-20); }
+.vm-play-icon { flex-shrink: 0; color: var(--accent); }
+.vm-info { flex: 1; min-width: 0; }
+.vm-asset-title { font-weight: bold; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.vm-asset-meta { font-size: 0.8rem; opacity: 0.6; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.vm-transcript-btn {
+  flex-shrink: 0; background: none; border: none; color: inherit;
+  opacity: 0.5; padding: 4px; cursor: pointer; display: flex; align-items: center;
 }
-.vm-clip-title { font-weight: bold; }
-.vm-clip-duration {
-  font-size: 0.8rem;
-  color: var(--accent);
-  font-family: monospace;
-}
-.vm-clip-desc {
-  margin: 4px 0 0;
-  font-size: 0.9rem;
-  opacity: 0.8;
-}
-.vm-transcription {
-  margin-top: 8px;
-  padding: 8px 12px;
-  background: var(--accent-alpha-20);
-  border-radius: 4px;
-  font-size: 0.85rem;
-}
-.vm-transcription-label {
-  font-size: 0.75rem;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  opacity: 0.6;
-  margin-bottom: 4px;
-}
-.vm-transcription p { margin: 0; line-height: 1.6; }
+.vm-transcript-btn:hover { opacity: 1; }
+.vm-transcript-btn--open { opacity: 1; color: var(--accent); }
+.vm-transcript { padding: 8px 12px; font-size: 0.85rem; white-space: pre-wrap; color: var(--accent-alpha-70); line-height: 1.6; }
 ''' + _getFeedbackStyles() + '''
 ''';
   }
