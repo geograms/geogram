@@ -11,7 +11,6 @@ import '../services/mirror_config_service.dart';
 import '../services/mirror_sync_service.dart';
 import '../widgets/transfer/transfer_progress_widget.dart';
 import 'mirror_wizard_page.dart';
-import 'sync_exclude_rules_page.dart';
 
 /// Opens a non-dismissible modal dialog that displays real-time sync progress.
 ///
@@ -167,30 +166,6 @@ class _MirrorSettingsPageState extends State<MirrorSettingsPage> {
               tooltip: 'Sync now',
               onPressed: _syncAll,
             ),
-          PopupMenuButton<String>(
-            icon: const Icon(Icons.menu),
-            onSelected: (value) {
-              if (value == 'excluded_files') {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => const SyncExcludeRulesPage(),
-                  ),
-                ).then((_) => _loadConfig());
-              }
-            },
-            itemBuilder: (context) => [
-              const PopupMenuItem(
-                value: 'excluded_files',
-                child: ListTile(
-                  leading: Icon(Icons.filter_alt),
-                  title: Text('Excluded files'),
-                  dense: true,
-                  contentPadding: EdgeInsets.zero,
-                ),
-              ),
-            ],
-          ),
         ],
       ),
       body: _isLoading

@@ -10,6 +10,7 @@ import '../services/log_service.dart';
 import '../services/app_service.dart';
 import '../services/storage_config.dart';
 import '../services/websocket_service.dart';
+import 'sync_exclude_rules_page.dart';
 
 /// Multi-device sync page with three stages:
 /// 1. Mirror list — discover and select a mirror device (or multi-select for push)
@@ -79,6 +80,32 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
           icon: const Icon(Icons.arrow_back),
           onPressed: _handleBack,
         ),
+        actions: [
+          PopupMenuButton<String>(
+            icon: const Icon(Icons.menu),
+            onSelected: (value) {
+              if (value == 'excluded_files') {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => const SyncExcludeRulesPage(),
+                  ),
+                );
+              }
+            },
+            itemBuilder: (context) => [
+              const PopupMenuItem(
+                value: 'excluded_files',
+                child: ListTile(
+                  leading: Icon(Icons.filter_alt),
+                  title: Text('Excluded files'),
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                ),
+              ),
+            ],
+          ),
+        ],
       ),
       body: _buildStage(),
     );
