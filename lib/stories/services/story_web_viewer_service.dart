@@ -192,10 +192,10 @@ class StoryWebViewerService {
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1">
   <title>Stories${ownerIdentifier.isNotEmpty ? ' - ${escapeHtml(ownerIdentifier)}' : ''}</title>
-  $nostrStyles
   <style>$globalStyles
 ${_getGalleryStyles()}
   </style>
+  $nostrStyles
 </head>
 <body>
 <div class="container">
@@ -387,11 +387,11 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, user-scalable=no">
   <title>${escapeHtml(story.title)}${ownerIdentifier.isNotEmpty ? ' - ${escapeHtml(ownerIdentifier)}' : ''}</title>
-  $nostrStyles
   <style>$globalStyles
 ${_getViewerStyles()}
 ${feedback.getFeedbackStyles()}
   </style>
+  $nostrStyles
 </head>
 <body>
 <div class="story-page-container">
@@ -502,16 +502,16 @@ ${interaction.permitComments ? feedback.getCommentsScript(ownerNpub, storyFilena
 .scene-viewport {
   position: relative;
   width: 100%;
-  max-width: 800px;
+  max-width: 480px;
   margin: 0 auto;
   aspect-ratio: 9 / 16;
-  max-height: 80vh;
+  max-height: 70vh;
   overflow: hidden;
   border-radius: 8px;
   background: #000;
 }
-@media (min-width: 900px) {
-  .scene-viewport { max-height: 85vh; }
+@media (max-width: 600px) {
+  .scene-viewport { max-width: 100%; max-height: 75vh; border-radius: 0; }
 }
 .scene-container {
   position: absolute;

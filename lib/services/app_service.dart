@@ -799,6 +799,7 @@ class AppService {
       'alerts': false,
       'meet': false,
       'work': false,
+      'stories': false,
     };
 
     final effectiveStorage = storage ?? _profileStorage;
@@ -807,7 +808,7 @@ class AppService {
 
     try {
       for (final appType in result.keys) {
-        if (appType == 'meet' || appType == 'work') continue; // handled separately below
+        if (appType == 'meet' || appType == 'work' || appType == 'stories') continue; // handled separately below
         // Check directory exists and is not private
         if (!await _appIsPublic(appType, dirPath, effectiveStorage)) continue;
         // Check for actual content per app type
@@ -849,6 +850,30 @@ class AppService {
           if (result['work']!) break;
         }
         if (result['work']!) break;
+      }
+    } catch (_) {}
+
+    // Stories: show if stories directory has any .ndf files
+    try {
+      if (!await _appIsPublic('stories', dirPath, effectiveStorage)) {
+        // fallback: check if directory exists with any .ndf files
+      }
+      if (effectiveStorage != null) {
+        final scoped = ScopedProfileStorage.fromAbsolutePath(effectiveStorage, dirPath);
+        if (await scoped.directoryExists('stories/stories')) {
+          final entries = await scoped.listDirectory('stories/stories');
+          result['stories'] = entries.any((e) => !e.isDirectory && e.name.endsWith('.ndf'));
+        }
+      } else {
+        final storiesDir = Directory('$dirPath/stories/stories');
+        if (await storiesDir.exists()) {
+          await for (final entity in storiesDir.list()) {
+            if (entity is File && entity.path.endsWith('.ndf')) {
+              result['stories'] = true;
+              break;
+            }
+          }
+        }
       }
     } catch (_) {}
 
@@ -987,6 +1012,7 @@ class AppService {
       hasShared: apps['shared']!,
       hasMeet: apps['meet'] ?? false,
       hasWork: apps['work'] ?? false,
+      hasStories: apps['stories'] ?? false,
       hasAlerts: apps['alerts']!,
       hasDownload: hasDownload,
       isRootLevel: isRootLevel,
