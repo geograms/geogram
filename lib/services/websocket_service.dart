@@ -1569,6 +1569,8 @@ class WebSocketService {
         depth: 2,
       );
 
+      final interaction = workspace.getDocumentInteraction(filename);
+
       final html = NdfWebViewerService().buildPage(
         ndfBytes,
         ownerIdentifier: identifier,
@@ -1576,6 +1578,8 @@ class WebSocketService {
         menuItems: menuItems,
         logoText: identifier,
         logoHref: '../../',
+        interaction: interaction,
+        documentFilename: filename,
       );
 
       if (html == null) {

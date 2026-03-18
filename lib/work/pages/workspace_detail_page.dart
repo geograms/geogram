@@ -1086,6 +1086,9 @@ class _WorkspaceDetailPageState extends State<WorkspaceDetailPage> {
             builder: (context) => TodoEditorPage(
               filePath: filePath,
               title: doc.title,
+              workspaceId: widget.workspaceId,
+              documentFilename: doc.filename,
+              workStorage: _storage,
             ),
           ),
         ).then((_) => onEditorClosed());
