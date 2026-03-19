@@ -10,6 +10,7 @@ import '../services/log_service.dart';
 import '../util/managed_http_client.dart';
 import '../services/app_args.dart';
 import '../services/devices_service.dart';
+import '../services/mirror_discovery_service.dart';
 import '../util/task_monitor_helpers.dart';
 
 /// Result of a network scan for a geogram device
@@ -25,6 +26,9 @@ class NetworkScanResult {
   final double? latitude;
   final double? longitude;
   final int? connectedDevices;
+  final String? npub;
+  final String? deviceId; // ConfigService().deviceId from remote
+  final bool mirrorEnabled; // Whether remote has mirror sync enabled
 
   NetworkScanResult({
     required this.ip,
@@ -38,6 +42,9 @@ class NetworkScanResult {
     this.latitude,
     this.longitude,
     this.connectedDevices,
+    this.npub,
+    this.deviceId,
+    this.mirrorEnabled = false,
   });
 
   String get wsUrl => 'ws://$ip:$port';
@@ -192,10 +199,15 @@ class StationDiscoveryService {
     final results = <NetworkScanResult>[];
     final seenKeys = <String, int>{}; // Maps key -> index in results
 
-    // Helper to add result with real-time deduplication (stations only)
+    final allDeviceResults = <NetworkScanResult>[]; // All geogram devices (for mirror discovery)
+
+    // Helper to add result with real-time deduplication
     void addResult(NetworkScanResult result) {
-      // Only add stations, ignore clients/desktops
-      if (result.type != 'station') return;
+      // Track all geogram device types for mirror discovery
+      if (result.type != 'station') {
+        allDeviceResults.add(result);
+        return; // Non-station results don't go into the station results list
+      }
 
       String key;
       if (result.callsign != null && result.callsign!.isNotEmpty) {
@@ -288,17 +300,19 @@ class StationDiscoveryService {
         for (var port in _primaryPorts) {
           if (shouldCancel?.call() == true) break;
           final result = await _checkGeogramDevice(host, port, timeoutMs);
-          if (result != null && result.type == 'station') {
+          if (result != null) {
             LogService().log(
-              'StationDiscovery: Found station at $host:$port - ${result.callsign ?? result.displayName}',
+              'StationDiscovery: Found ${result.type} at $host:$port - ${result.callsign ?? result.displayName}',
             );
             addResult(result);
-            onProgress?.call(
-              'Found: ${result.displayName}',
-              scannedHosts,
-              totalHosts,
-              results,
-            );
+            if (result.type == 'station') {
+              onProgress?.call(
+                'Found: ${result.displayName}',
+                scannedHosts,
+                totalHosts,
+                results,
+              );
+            }
           }
           scannedHosts++;
         }
@@ -342,17 +356,19 @@ class StationDiscoveryService {
               target.value,
               timeoutMs,
             );
-            if (result != null && result.type == 'station') {
+            if (result != null) {
               LogService().log(
-                'StationDiscovery: Found station at ${target.key}:${target.value}',
+                'StationDiscovery: Found ${result.type} at ${target.key}:${target.value}',
               );
               addResult(result);
-              onProgress?.call(
-                'Found: ${result.displayName}',
-                scannedHosts,
-                totalHosts,
-                results,
-              );
+              if (result.type == 'station') {
+                onProgress?.call(
+                  'Found: ${result.displayName}',
+                  scannedHosts,
+                  totalHosts,
+                  results,
+                );
+              }
             }
           }).toList();
 
@@ -457,8 +473,14 @@ class StationDiscoveryService {
       onProgress?.call(message, totalHosts, totalHosts, results);
 
       LogService().log(
-        'StationDiscovery: === SCAN COMPLETE: ${results.length} station(s) ===',
+        'StationDiscovery: === SCAN COMPLETE: ${results.length} station(s), ${allDeviceResults.length} peer device(s) ===',
       );
+
+      // Feed LAN-discovered peer devices to MirrorDiscoveryService
+      if (allDeviceResults.isNotEmpty) {
+        MirrorDiscoveryService().handleLanDiscovery(allDeviceResults);
+      }
+
       return results;
     } catch (e) {
       LogService().log('Error during scan: $e');
@@ -573,9 +595,28 @@ class StationDiscoveryService {
               latitude: _getDouble(data, 'location.latitude'),
               longitude: _getDouble(data, 'location.longitude'),
               connectedDevices: data['connected_devices'] as int?,
+              npub: data['npub'] as String?,
+              deviceId: data['device_id'] as String?,
+              mirrorEnabled: data['mirror_enabled'] as bool? ?? false,
             );
           }
-          // Ignore clients (X1 callsigns) - return null
+
+          // Return non-station geogram devices (desktops/clients) for mirror discovery
+          if (callsign != null && callsign.isNotEmpty) {
+            final service = data['service'] as String? ?? '';
+            final type = service.contains('Desktop') ? 'desktop' : 'client';
+            return NetworkScanResult(
+              ip: ip,
+              port: port,
+              type: type,
+              callsign: callsign,
+              name: data['name'] as String? ?? data['nickname'] as String?,
+              version: data['version'] as String?,
+              npub: data['npub'] as String?,
+              deviceId: data['device_id'] as String?,
+              mirrorEnabled: data['mirror_enabled'] as bool? ?? false,
+            );
+          }
         }
       } catch (_) {
         // Try next endpoint
@@ -722,11 +763,12 @@ class StationDiscoveryService {
 
       // Always scan localhost first on primary ports
       int foundCount = 0;
+      final lanPeers = <NetworkScanResult>[];
       LogService().log(
         '  Scanning localhost (127.0.0.1) on primary ports: ${_primaryPorts.join(", ")}...',
       );
       for (var port in _primaryPorts) {
-        final station = await _checkRelay('127.0.0.1', port);
+        final station = await _checkRelay('127.0.0.1', port, lanPeers: lanPeers);
         if (station != null) {
           foundCount++;
           LogService().log('    Found station at localhost:$port');
@@ -736,13 +778,18 @@ class StationDiscoveryService {
       // Scan each network range
       for (var range in ranges) {
         LogService().log('  Range: $range.0/24');
-        final found = await _scanRange(range);
+        final found = await _scanRange(range, lanPeers: lanPeers);
         foundCount += found;
       }
 
       LogService().log('');
-      LogService().log('Discovery complete: $foundCount station(s) found');
+      LogService().log('Discovery complete: $foundCount station(s) found, ${lanPeers.length} peer device(s)');
       LogService().log('══════════════════════════════════════');
+
+      // Feed LAN-discovered peer devices to MirrorDiscoveryService
+      if (lanPeers.isNotEmpty) {
+        MirrorDiscoveryService().handleLanDiscovery(lanPeers);
+      }
     } catch (e) {
       LogService().log('Error during discovery: $e');
     } finally {
@@ -760,7 +807,7 @@ class StationDiscoveryService {
   /// Scan a network range for stations
   /// Uses batched connections to avoid exhausting file descriptors
   /// Scans primary ports first, then secondary ports
-  Future<int> _scanRange(String subnet) async {
+  Future<int> _scanRange(String subnet, {List<NetworkScanResult>? lanPeers}) async {
     int foundCount = 0;
 
     // Scan primary ports first (fast)
@@ -785,7 +832,7 @@ class StationDiscoveryService {
       final batch = primaryTargets.sublist(batchStart, batchEnd);
 
       final futures = batch.map((target) async {
-        final station = await _checkRelay(target.key, target.value);
+        final station = await _checkRelay(target.key, target.value, lanPeers: lanPeers);
         if (station != null) {
           foundCount++;
         }
@@ -817,7 +864,7 @@ class StationDiscoveryService {
       final batch = secondaryTargets.sublist(batchStart, batchEnd);
 
       final futures = batch.map((target) async {
-        final station = await _checkRelay(target.key, target.value);
+        final station = await _checkRelay(target.key, target.value, lanPeers: lanPeers);
         if (station != null) {
           foundCount++;
         }
@@ -831,8 +878,9 @@ class StationDiscoveryService {
     return foundCount;
   }
 
-  /// Check if a station or desktop client exists at given IP and port
-  Future<Station?> _checkRelay(String ip, int port) async {
+  /// Check if a station or desktop client exists at given IP and port.
+  /// If [lanPeers] is provided, non-station geogram devices are collected for mirror discovery.
+  Future<Station?> _checkRelay(String ip, int port, {List<NetworkScanResult>? lanPeers}) async {
     try {
       // Use /api/status endpoint for detection (returns JSON)
       final url = 'http://$ip:$port/api/status';
@@ -891,6 +939,19 @@ class StationDiscoveryService {
               url: deviceUrl,
               isOnline: true,
             );
+
+            // Collect for mirror discovery
+            lanPeers?.add(NetworkScanResult(
+              ip: ip,
+              port: port,
+              type: 'desktop',
+              callsign: callsign,
+              name: name,
+              version: data['version'] as String?,
+              npub: data['npub'] as String?,
+              deviceId: data['device_id'] as String?,
+              mirrorEnabled: data['mirror_enabled'] as bool? ?? false,
+            ));
 
             // Return a dummy station to indicate success (so foundCount is incremented)
             return Station(

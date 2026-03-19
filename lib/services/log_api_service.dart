@@ -967,6 +967,10 @@ class LogApiService with ChatModificationMixin {
       // Profile service not initialized
     }
 
+    // Add device_id and mirror_enabled for LAN mirror discovery
+    response['device_id'] = ConfigService().deviceId;
+    response['mirror_enabled'] = MirrorConfigService.instance.isEnabled;
+
     // Add uptime in seconds
     if (_startTime != null) {
       response['uptime'] = DateTime.now().difference(_startTime!).inSeconds;

@@ -263,6 +263,7 @@ class MirrorConfigService {
     String? npub,
     String platform = 'unknown',
     String displayName = '',
+    String? directAddress,
   }) async {
     if (_config == null) await loadConfig();
 
@@ -280,14 +281,22 @@ class MirrorConfigService {
           effectiveName.isNotEmpty &&
           effectiveName != existing.name;
       final platformChanged = platform != existing.platform;
+      // Check if we have a new direct address not yet in the peer's addresses
+      final addressChanged = directAddress != null &&
+          directAddress.isNotEmpty &&
+          !existing.addresses.contains(directAddress);
 
-      if (timeSinceLastSeen < 5 && !nameChanged && !platformChanged) return;
+      if (timeSinceLastSeen < 5 && !nameChanged && !platformChanged && !addressChanged) return;
 
-      // Update existing peer
+      // Update existing peer — add direct address if new
+      final updatedAddresses = addressChanged
+          ? [directAddress!, ...existing.addresses.where((a) => !a.startsWith('http://'))]
+          : null;
       await updatePeer(existing.copyWith(
         lastSeenAt: now,
         name: nameChanged ? effectiveName : null,
         platform: platformChanged ? platform : null,
+        addresses: updatedAddresses,
       ));
     } else {
       // Create new peer with defaults (manual mode, no folders enabled)
@@ -299,6 +308,7 @@ class MirrorConfigService {
         platform: platform,
         lastSeenAt: now,
         autoSyncMode: AutoSyncMode.manual,
+        addresses: directAddress != null ? [directAddress] : [],
       ));
     }
   }

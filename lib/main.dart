@@ -417,6 +417,7 @@ void main() async {
             npub: m.npub,
             platform: m.platform,
             displayName: m.displayName,
+            directAddress: m.directAddress,
           );
         }
       }

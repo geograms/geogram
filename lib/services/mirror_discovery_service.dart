@@ -2,8 +2,10 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
+import 'config_service.dart';
 import 'log_service.dart';
 import 'profile_service.dart';
+import 'station_discovery_service.dart';
 
 /// A mirror device discovered via station relay or LAN scan.
 class MirrorDevice {
@@ -173,6 +175,59 @@ class MirrorDiscoveryService {
       mirrors.value = lanMirrors;
     }
     LogService().log('MirrorDiscovery: hello_ack reports $count mirror(s)');
+  }
+
+  /// Handle LAN-discovered peer devices from StationDiscoveryService.
+  ///
+  /// Filters to same-callsign, mirror-enabled, non-self devices and
+  /// merges them with station-sourced mirrors.
+  void handleLanDiscovery(List<NetworkScanResult> results) {
+    final activeProfile = ProfileService().getProfile();
+    final myCallsign = activeProfile.callsign.toUpperCase();
+    final myDeviceId = ConfigService().deviceId;
+
+    final lanMirrors = <MirrorDevice>[];
+    for (final r in results) {
+      // Skip devices without a callsign or device_id
+      if (r.callsign == null || r.deviceId == null) continue;
+      // Same account only
+      if (r.callsign!.toUpperCase() != myCallsign) continue;
+      // Skip self
+      if (r.deviceId == myDeviceId) continue;
+      // Only mirror-enabled peers
+      if (!r.mirrorEnabled) continue;
+
+      lanMirrors.add(MirrorDevice(
+        deviceId: r.deviceId!,
+        installId: r.deviceId,
+        callsign: r.callsign!,
+        npub: r.npub,
+        deviceName: r.name,
+        platform: r.type, // 'desktop', 'client'
+        connectionType: 'lan',
+        directAddress: 'http://${r.ip}:${r.port}',
+      ));
+    }
+
+    if (lanMirrors.isEmpty) return;
+
+    // Merge: replace all LAN-sourced mirrors, preserve station-sourced ones
+    final stationMirrors = mirrors.value
+        .where((m) => m.connectionType == 'station')
+        .toList();
+    final merged = [...stationMirrors, ...lanMirrors];
+
+    // Stable sort so the list doesn't jump around
+    merged.sort((a, b) => a.deviceId.compareTo(b.deviceId));
+
+    // Only notify listeners when devices actually changed
+    if (!_mirrorListChanged(mirrors.value, merged)) return;
+    mirrors.value = merged;
+
+    LogService().log('MirrorDiscovery: ${lanMirrors.length} LAN mirror(s) for $myCallsign');
+
+    // Notify listener for peer auto-registration
+    _scheduleCallback(lanMirrors);
   }
 
   /// Clear all mirror state (e.g. on profile switch or disconnect).
