@@ -10042,11 +10042,64 @@ class PureStationServer with HeartbeatMixin, EmailHandlerMixin, ConsoleCommandMi
 
       // Also sync Supertonic TTS models
       await _downloadSupertonicModels();
+
+      // Prune old versions to stay under 5GB
+      await _pruneOldUpdates();
     } catch (e) {
       _log('ERROR', 'Error polling for updates: $e');
     } finally {
       _isDownloadingUpdates = false;
     }
+  }
+
+  /// Remove old version directories when updates/ exceeds 5GB.
+  Future<void> _pruneOldUpdates() async {
+    if (_updatesDirectory == null) return;
+    const maxBytes = 5 * 1024 * 1024 * 1024; // 5GB
+    const minKeep = 2; // always keep at least 2 newest versions
+
+    final dir = Directory(_updatesDirectory!);
+    if (!await dir.exists()) return;
+
+    // Collect version subdirectories (skip files like release.json)
+    final versionDirs = <Directory>[];
+    await for (final entity in dir.list()) {
+      if (entity is Directory) versionDirs.add(entity);
+    }
+    if (versionDirs.length <= minKeep) return;
+
+    // Sort newest first (by directory name = version string)
+    versionDirs.sort((a, b) =>
+        b.path.split('/').last.compareTo(a.path.split('/').last));
+
+    // Calculate sizes
+    int totalBytes = 0;
+    final dirSizes = <Directory, int>{};
+    for (final d in versionDirs) {
+      int size = 0;
+      await for (final f in d.list(recursive: true)) {
+        if (f is File) size += await f.length();
+      }
+      dirSizes[d] = size;
+      totalBytes += size;
+    }
+
+    if (totalBytes <= maxBytes) return;
+
+    // Delete oldest directories until under limit (keep at least minKeep)
+    for (int i = versionDirs.length - 1;
+        i >= minKeep && totalBytes > maxBytes;
+        i--) {
+      final old = versionDirs[i];
+      final size = dirSizes[old] ?? 0;
+      _log('INFO',
+          'Pruning old update: ${old.path.split('/').last} (${(size / (1024 * 1024)).toStringAsFixed(0)}MB)');
+      await old.delete(recursive: true);
+      totalBytes -= size;
+    }
+
+    _log('INFO',
+        'Updates pruned to ${(totalBytes / (1024 * 1024)).toStringAsFixed(0)}MB');
   }
 
   /// Download all assets from GitHub release
