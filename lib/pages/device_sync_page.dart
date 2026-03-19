@@ -922,9 +922,12 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
                   _isMultiMode ? _multiPushLabel(folder, change.path) : _changeLabel(change.type),
                   style: TextStyle(fontSize: 11, color: _changeColor(change.type)),
                 ),
-                // In multi-mode, direction is always push — no toggle
-                trailing: (!_isMultiMode && isSelected)
-                    ? IconButton(
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // In multi-mode, direction is always push — no toggle
+                    if (!_isMultiMode && isSelected)
+                      IconButton(
                         icon: Icon(
                           isPull ? Icons.arrow_back : Icons.arrow_forward,
                           color: isPull ? Colors.green : Colors.blue,
@@ -935,11 +938,69 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
                             _fileDirections[key] = !isPull;
                           });
                         },
-                      )
-                    : null,
+                      ),
+                    PopupMenuButton<String>(
+                      icon: const Icon(Icons.more_vert, size: 20),
+                      padding: EdgeInsets.zero,
+                      itemBuilder: (_) => [
+                        const PopupMenuItem(
+                          value: 'exclude',
+                          child: Text('Exclude from sync'),
+                        ),
+                      ],
+                      onSelected: (value) {
+                        if (value == 'exclude') {
+                          _excludeFile(folder, change);
+                        }
+                      },
+                    ),
+                  ],
+                ),
               );
             }),
         ],
+      ),
+    );
+  }
+
+  /// Exclude a file from future syncs and remove it from the current diff.
+  void _excludeFile(String folder, FileChange change) {
+    final pattern = '$folder/${change.path}';
+    final rule = SyncExcludeRule(pattern: pattern, mode: ExcludeMode.always);
+    final configService = MirrorConfigService.instance;
+    final rules = List<SyncExcludeRule>.from(
+      configService.config?.excludeRules ?? [],
+    )..add(rule);
+    configService.saveExcludeRules(rules);
+
+    // Capture for undo
+    final removedChange = change;
+    final wasSelected = _selectedFiles[folder]?.contains(change.path) == true;
+
+    setState(() {
+      _diffs[folder]?.removeWhere((c) => c.path == change.path);
+      _selectedFiles[folder]?.remove(change.path);
+    });
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Excluded "$pattern" from sync'),
+        action: SnackBarAction(
+          label: 'Undo',
+          onPressed: () {
+            final current = List<SyncExcludeRule>.from(
+              configService.config?.excludeRules ?? [],
+            )..removeWhere((r) => r.pattern == pattern);
+            configService.saveExcludeRules(current);
+            setState(() {
+              _diffs[folder] ??= [];
+              _diffs[folder]!.add(removedChange);
+              if (wasSelected) {
+                _selectedFiles.putIfAbsent(folder, () => {}).add(change.path);
+              }
+            });
+          },
+        ),
       ),
     );
   }
