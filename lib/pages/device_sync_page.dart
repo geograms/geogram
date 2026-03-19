@@ -738,38 +738,41 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
         // Select / Deselect all checkbox
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-          child: Row(
-            children: [
-              Checkbox(
-                value: _isAllSelected()
-                    ? true
-                    : _isNoneSelected()
-                        ? false
-                        : null,
-                tristate: true,
-                onChanged: (value) {
-                  setState(() {
-                    if (value == true || value == null) {
-                      // Select all files in all folders
-                      for (final entry in _diffs.entries) {
-                        _selectedFiles[entry.key] = entry.value.map((c) => c.path).toSet();
-                      }
-                    } else {
-                      // Deselect all
-                      for (final folder in _diffs.keys) {
-                        _selectedFiles[folder] = {};
-                      }
-                    }
-                  });
-                },
-              ),
-              Text(
-                _isAllSelected()
-                    ? 'Deselect all'
-                    : 'Select all (${_totalFileCount()} files)',
-                style: const TextStyle(fontSize: 13),
-              ),
-            ],
+          child: InkWell(
+            onTap: () {
+              setState(() {
+                if (_isAllSelected()) {
+                  for (final folder in _diffs.keys) {
+                    _selectedFiles[folder] = {};
+                  }
+                } else {
+                  for (final entry in _diffs.entries) {
+                    _selectedFiles[entry.key] = entry.value.map((c) => c.path).toSet();
+                  }
+                }
+              });
+            },
+            child: Row(
+              children: [
+                IgnorePointer(
+                  child: Checkbox(
+                    value: _isAllSelected()
+                        ? true
+                        : _isNoneSelected()
+                            ? false
+                            : null,
+                    tristate: true,
+                    onChanged: (_) {},
+                  ),
+                ),
+                Text(
+                  _isAllSelected()
+                      ? 'Deselect all'
+                      : 'Select all (${_totalFileCount()} files)',
+                  style: const TextStyle(fontSize: 13),
+                ),
+              ],
+            ),
           ),
         ),
         Expanded(
@@ -857,60 +860,66 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           // Folder header — checkbox is separate from the expand tap area
-          InkWell(
-            onTap: () {
-              setState(() {
-                if (isExpanded) {
-                  _expandedFolders.remove(folder);
-                } else {
-                  _expandedFolders.add(folder);
-                }
-              });
-            },
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              child: Row(
-                children: [
-                  Checkbox(
-                    value: selected.length == changes.length
-                        ? true
-                        : selected.isEmpty
-                            ? false
-                            : null,
-                    tristate: true,
-                    onChanged: (value) {
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            child: Row(
+              children: [
+                Checkbox(
+                  value: selected.length == changes.length
+                      ? true
+                      : selected.isEmpty
+                          ? false
+                          : null,
+                  tristate: true,
+                  onChanged: (value) {
+                    setState(() {
+                      if (value == true || value == null) {
+                        _selectedFiles[folder] = changes.map((c) => c.path).toSet();
+                      } else {
+                        _selectedFiles[folder] = {};
+                      }
+                    });
+                  },
+                ),
+                Expanded(
+                  child: InkWell(
+                    onTap: () {
                       setState(() {
-                        if (value == true || value == null) {
-                          _selectedFiles[folder] = changes.map((c) => c.path).toSet();
+                        if (isExpanded) {
+                          _expandedFolders.remove(folder);
                         } else {
-                          _selectedFiles[folder] = {};
+                          _expandedFolders.add(folder);
                         }
                       });
                     },
-                  ),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+                    child: Row(
                       children: [
-                        Text(
-                          kFolderLabels[folder]?.$1 ?? folder,
-                          style: const TextStyle(fontWeight: FontWeight.bold),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                kFolderLabels[folder]?.$1 ?? folder,
+                                style: const TextStyle(fontWeight: FontWeight.bold),
+                              ),
+                              const SizedBox(height: 4),
+                              Row(
+                                children: [
+                                  if (adds > 0) _changeChip('+$adds', Colors.green),
+                                  if (mods > 0) _changeChip('~$mods', Colors.amber),
+                                  if (dels > 0) _changeChip('-$dels', Colors.red),
+                                  if (ups > 0) _changeChip('^$ups', Colors.blue),
+                                ],
+                              ),
+                            ],
+                          ),
                         ),
-                        const SizedBox(height: 4),
-                        Row(
-                          children: [
-                            if (adds > 0) _changeChip('+$adds', Colors.green),
-                            if (mods > 0) _changeChip('~$mods', Colors.amber),
-                            if (dels > 0) _changeChip('-$dels', Colors.red),
-                            if (ups > 0) _changeChip('^$ups', Colors.blue),
-                          ],
-                        ),
+                        Icon(isExpanded ? Icons.expand_less : Icons.expand_more),
                       ],
                     ),
                   ),
-                  Icon(isExpanded ? Icons.expand_less : Icons.expand_more),
-                ],
-              ),
+                ),
+              ],
             ),
           ),
           // File list — shown when expanded
@@ -922,17 +931,20 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
 
               return ListTile(
                 dense: true,
-                leading: Checkbox(
-                  value: isSelected,
-                  onChanged: (v) {
-                    setState(() {
-                      if (v == true) {
-                        _selectedFiles.putIfAbsent(folder, () => {}).add(change.path);
-                      } else {
-                        _selectedFiles[folder]?.remove(change.path);
-                      }
-                    });
-                  },
+                onTap: () {
+                  setState(() {
+                    if (isSelected) {
+                      _selectedFiles[folder]?.remove(change.path);
+                    } else {
+                      _selectedFiles.putIfAbsent(folder, () => {}).add(change.path);
+                    }
+                  });
+                },
+                leading: IgnorePointer(
+                  child: Checkbox(
+                    value: isSelected,
+                    onChanged: (_) {},
+                  ),
                 ),
                 title: Text(
                   change.path,
