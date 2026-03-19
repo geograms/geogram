@@ -39,13 +39,18 @@ class MirrorDevice {
     DateTime? lastSeen,
   }) : lastSeen = lastSeen ?? DateTime.now();
 
-  /// Short display name: deviceName with install suffix, else platform fallback.
+  /// Short display name: nickname > deviceName > platform, with install suffix.
   String get displayName {
-    if (deviceName != null && deviceName!.isNotEmpty) {
+    final name = (nickname != null && nickname!.isNotEmpty)
+        ? nickname!
+        : (deviceName != null && deviceName!.isNotEmpty)
+            ? deviceName!
+            : null;
+    if (name != null) {
       if (installId != null && installId!.length >= 4) {
-        return '$deviceName (${installId!.substring(0, 4)})';
+        return '$name (${installId!.substring(0, 4)})';
       }
-      return deviceName!;
+      return name;
     }
     if (installId != null && installId!.length >= 4) {
       return '$platform (${installId!.substring(0, 4)})';
