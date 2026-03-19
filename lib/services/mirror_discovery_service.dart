@@ -194,8 +194,6 @@ class MirrorDiscoveryService {
       if (r.callsign!.toUpperCase() != myCallsign) continue;
       // Skip self
       if (r.deviceId == myDeviceId) continue;
-      // Only mirror-enabled peers
-      if (!r.mirrorEnabled) continue;
 
       lanMirrors.add(MirrorDevice(
         deviceId: r.deviceId!,
