@@ -922,8 +922,8 @@ class StationDiscoveryService {
         if (service == 'Geogram Desktop') {
           final callsign = data['callsign'] as String?;
           final name =
-              data['nickname'] as String? ??
               data['name'] as String? ??
+              data['nickname'] as String? ??
               callsign;
           final deviceUrl = 'http://$ip:$port';
 
