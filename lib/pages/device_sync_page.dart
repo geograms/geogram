@@ -864,22 +864,28 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
             child: Row(
               children: [
-                Checkbox(
-                  value: selected.length == changes.length
-                      ? true
-                      : selected.isEmpty
-                          ? false
-                          : null,
-                  tristate: true,
-                  onChanged: (value) {
+                GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () {
                     setState(() {
-                      if (value == true || value == null) {
-                        _selectedFiles[folder] = changes.map((c) => c.path).toSet();
-                      } else {
+                      if (selected.length == changes.length) {
                         _selectedFiles[folder] = {};
+                      } else {
+                        _selectedFiles[folder] = changes.map((c) => c.path).toSet();
                       }
                     });
                   },
+                  child: IgnorePointer(
+                    child: Checkbox(
+                      value: selected.length == changes.length
+                          ? true
+                          : selected.isEmpty
+                              ? false
+                              : null,
+                      tristate: true,
+                      onChanged: (_) {},
+                    ),
+                  ),
                 ),
                 Expanded(
                   child: InkWell(
