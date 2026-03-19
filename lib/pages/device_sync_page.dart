@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../services/file_index_service.dart';
@@ -9,6 +11,7 @@ import '../services/profile_service.dart';
 import '../services/log_service.dart';
 import '../services/app_service.dart';
 import '../services/storage_config.dart';
+import '../services/sync_transfer_service.dart';
 import '../services/websocket_service.dart';
 import 'device_sync_settings_page.dart';
 import 'sync_exclude_rules_page.dart';
@@ -58,11 +61,8 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
   // Stage 3: transfer state
   final Map<String, Set<String>> _selectedFiles = {}; // folder -> selected file paths
   final Map<String, bool> _fileDirections = {}; // "folder:path" -> true=pull, false=push
-  bool _transferring = false;
-  int _filesTransferred = 0;
-  int _totalFilesToTransfer = 0;
-  String? _currentTransferFile;
-  String? _currentTransferDevice; // multi-mode: which device we're pushing to
+  StreamSubscription<SyncTransferProgress>? _transferSub;
+  SyncTransferProgress? _transferProgress;
 
   // Stage 2: diff progress
   int _diffFoldersDone = 0;
@@ -71,6 +71,30 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
 
   // Known app folders to sync — uses shared constant from mirror_config
   static const _appFolders = kSyncableFolders;
+
+  @override
+  void initState() {
+    super.initState();
+    _subscribeToTransfer();
+    // If a transfer is already running (or just completed), jump to stage 3
+    final service = SyncTransferService.instance;
+    if (service.isBusy || service.lastProgress.isComplete) {
+      _stage = 3;
+      _transferProgress = service.lastProgress;
+    }
+  }
+
+  void _subscribeToTransfer() {
+    _transferSub = SyncTransferService.instance.progressStream.listen((p) {
+      if (mounted) setState(() => _transferProgress = p);
+    });
+  }
+
+  @override
+  void dispose() {
+    _transferSub?.cancel();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -138,14 +162,27 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
         }
         return 'Changes with ${_selectedMirror?.displayName ?? "Mirror"}';
       case 3:
-        return 'Syncing...';
+        return (_transferProgress?.isComplete ?? false) ? 'Sync complete' : 'Syncing...';
       default:
         return 'Device Sync';
     }
   }
 
   void _handleBack() {
-    if (_transferring) return; // Don't go back during transfer
+    if (_stage == 3) {
+      final p = _transferProgress;
+      if (p != null && !p.isComplete) {
+        // Transfer still running — let the user leave, it continues in background
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Transfer continues in background')),
+        );
+      }
+      if (p != null && p.isComplete) {
+        SyncTransferService.instance.clearLastProgress();
+      }
+      Navigator.of(context).pop();
+      return;
+    }
     if (_stage > 1) {
       setState(() {
         _stage--;
@@ -163,7 +200,6 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
           _diffFoldersDone = 0;
           _diffFoldersTotal = 0;
           _currentDiffFolder = null;
-          _currentTransferDevice = null;
         }
       });
     } else {
@@ -1167,25 +1203,25 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
 
       if (confirmed != true) return;
 
-      // Count total file transfers across all devices
-      int totalTransfers = 0;
-      for (final entry in _selectedFiles.entries) {
-        final folder = entry.key;
-        for (final path in entry.value) {
-          for (final needs in _multiDeviceNeeds.values) {
-            if (needs[folder]?.contains(path) == true) totalTransfers++;
-          }
+      final request = SyncTransferRequest.multi(
+        mirrors: _multiMirrors,
+        peerUrls: _multiPeerUrls,
+        tokens: _multiTokens,
+        deviceNeeds: _multiDeviceNeeds,
+        selectedFiles: _selectedFiles,
+        diffs: _diffs,
+      );
+
+      final started = SyncTransferService.instance.startTransfer(request);
+      if (!started) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('A sync transfer is already in progress')),
+          );
         }
+        return;
       }
-
-      setState(() {
-        _stage = 3;
-        _transferring = true;
-        _filesTransferred = 0;
-        _totalFilesToTransfer = totalTransfers;
-      });
-
-      await _executeMultiTransfer();
+      setState(() => _stage = 3);
     } else {
       final pullCount = _selectedFiles.entries.expand((e) {
         return e.value.where((path) => _fileDirections['${e.key}:$path'] == true);
@@ -1210,144 +1246,33 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
 
       if (confirmed != true) return;
 
-      setState(() {
-        _stage = 3;
-        _transferring = true;
-        _filesTransferred = 0;
-        _totalFilesToTransfer = totalSelected;
-      });
+      final request = SyncTransferRequest.single(
+        peerUrl: _peerUrl!,
+        tokens: _tokens,
+        selectedFiles: _selectedFiles,
+        fileDirections: _fileDirections,
+        diffs: _diffs,
+      );
 
-      await _executeTransfer();
-    }
-  }
-
-  Future<void> _executeTransfer() async {
-    final mirror = MirrorSyncService.instance;
-    final storage = AppService().profileStorage;
-    final profile = ProfileService().getProfile();
-
-    for (final entry in _selectedFiles.entries) {
-      final folder = entry.key;
-      final files = entry.value;
-      final token = _tokens[folder];
-      if (token == null) continue;
-
-      for (final filePath in files) {
-        final key = '$folder:$filePath';
-        final isPull = _fileDirections[key] ?? true;
-        final localPath = '${profile.callsign}/$folder';
-
-        setState(() {
-          _currentTransferFile = '$folder/$filePath';
-        });
-
-        try {
-          if (isPull) {
-            // Download from mirror
-            final change = _diffs[folder]?.firstWhere((c) => c.path == filePath);
-            await mirror.downloadFile(
-              _peerUrl!,
-              folder,
-              filePath,
-              localPath,
-              token,
-              expectedSha1: change?.remoteEntry?.sha1,
-              storage: storage,
-            );
-          } else {
-            // Upload to mirror
-            final change = _diffs[folder]?.firstWhere((c) => c.path == filePath);
-            await mirror.uploadFile(
-              _peerUrl!,
-              folder,
-              filePath,
-              localPath,
-              token,
-              sha1Hash: change?.localEntry?.sha1,
-              storage: storage,
-            );
-          }
-        } catch (e) {
-          LogService().log('DeviceSync: Transfer failed for $filePath: $e');
+      final started = SyncTransferService.instance.startTransfer(request);
+      if (!started) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('A sync transfer is already in progress')),
+          );
         }
-
-        setState(() {
-          _filesTransferred++;
-        });
+        return;
       }
+      setState(() => _stage = 3);
     }
-
-    setState(() {
-      _transferring = false;
-      _currentTransferFile = null;
-    });
-
-    // Refresh the main UI app list so newly-synced folders appear
-    AppService().appsNotifier.value++;
-  }
-
-  /// Push selected files to all devices that need them.
-  Future<void> _executeMultiTransfer() async {
-    final mirrorService = MirrorSyncService.instance;
-    final storage = AppService().profileStorage;
-    final profile = ProfileService().getProfile();
-
-    for (final entry in _selectedFiles.entries) {
-      final folder = entry.key;
-      final files = entry.value;
-      final localPath = '${profile.callsign}/$folder';
-
-      for (final filePath in files) {
-        // Push to each device that needs this file
-        for (final mirror in _multiMirrors) {
-          final deviceId = mirror.deviceId;
-          final needs = _multiDeviceNeeds[deviceId]?[folder];
-          if (needs == null || !needs.contains(filePath)) continue;
-
-          final peerUrl = _multiPeerUrls[deviceId];
-          final token = _multiTokens[deviceId]?[folder];
-          if (peerUrl == null || token == null) continue;
-
-          setState(() {
-            _currentTransferFile = '$folder/$filePath';
-            _currentTransferDevice = mirror.displayName;
-          });
-
-          try {
-            final change = _diffs[folder]?.firstWhere((c) => c.path == filePath);
-            await mirrorService.uploadFile(
-              peerUrl,
-              folder,
-              filePath,
-              localPath,
-              token,
-              sha1Hash: change?.localEntry?.sha1,
-              storage: storage,
-            );
-          } catch (e) {
-            LogService().log('DeviceSync: Multi-push failed for $filePath to $deviceId: $e');
-          }
-
-          setState(() {
-            _filesTransferred++;
-          });
-        }
-      }
-    }
-
-    setState(() {
-      _transferring = false;
-      _currentTransferFile = null;
-      _currentTransferDevice = null;
-    });
-
-    AppService().appsNotifier.value++;
   }
 
   Widget _buildTransferView() {
-    final progress = _totalFilesToTransfer > 0
-        ? _filesTransferred / _totalFilesToTransfer
-        : 0.0;
+    final p = _transferProgress;
+    if (p == null) return const Center(child: CircularProgressIndicator());
+
+    final progress = p.totalFiles > 0 ? p.filesTransferred / p.totalFiles : 0.0;
+    final transferring = !p.isComplete;
 
     return Center(
       child: Padding(
@@ -1355,45 +1280,66 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            if (_transferring) ...[
+            if (transferring) ...[
               const CircularProgressIndicator(),
               const SizedBox(height: 24),
               Text(
                 _isMultiMode
-                    ? 'Pushing $_filesTransferred / $_totalFilesToTransfer'
-                    : 'Syncing $_filesTransferred / $_totalFilesToTransfer files',
+                    ? 'Pushing ${p.filesTransferred} / ${p.totalFiles}'
+                    : 'Syncing ${p.filesTransferred} / ${p.totalFiles} files',
                 style: const TextStyle(fontSize: 18),
               ),
-              if (_currentTransferDevice != null) ...[
+              if (p.currentDevice != null) ...[
                 const SizedBox(height: 8),
                 Text(
-                  _currentTransferDevice!,
+                  p.currentDevice!,
                   style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
                 ),
               ],
-              if (_currentTransferFile != null) ...[
+              if (p.currentFile != null) ...[
                 const SizedBox(height: 4),
                 Text(
-                  _currentTransferFile!,
+                  p.currentFile!,
                   style: const TextStyle(fontSize: 13, color: Colors.grey),
                   overflow: TextOverflow.ellipsis,
+                ),
+              ],
+              if (p.failCount > 0) ...[
+                const SizedBox(height: 4),
+                Text(
+                  '${p.failCount} failed',
+                  style: const TextStyle(fontSize: 12, color: Colors.orange),
                 ),
               ],
               const SizedBox(height: 24),
               LinearProgressIndicator(value: progress),
             ] else ...[
-              const Icon(Icons.check_circle, size: 64, color: Colors.green),
+              Icon(
+                p.failCount > 0 ? Icons.warning : Icons.check_circle,
+                size: 64,
+                color: p.failCount > 0 ? Colors.orange : Colors.green,
+              ),
               const SizedBox(height: 16),
               Text(
                 _isMultiMode
-                    ? 'Push complete — $_filesTransferred transfer(s) to ${_multiMirrors.length} device(s)'
-                    : 'Sync complete — $_filesTransferred file(s) transferred',
+                    ? 'Push complete \u2014 ${p.filesTransferred} transfer(s)'
+                    : 'Sync complete \u2014 ${p.filesTransferred} file(s) transferred',
                 style: const TextStyle(fontSize: 18),
                 textAlign: TextAlign.center,
               ),
+              if (p.failCount > 0) ...[
+                const SizedBox(height: 8),
+                Text(
+                  '${p.failCount} file(s) failed',
+                  style: const TextStyle(fontSize: 14, color: Colors.orange),
+                ),
+              ],
               const SizedBox(height: 24),
               FilledButton(
-                onPressed: () => Navigator.of(context).pop(),
+                onPressed: () {
+                  SyncTransferService.instance.clearLastProgress();
+                  Navigator.of(context).pop();
+                },
                 child: const Text('Done'),
               ),
             ],
