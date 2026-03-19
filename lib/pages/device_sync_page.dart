@@ -712,6 +712,43 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
               ],
             ),
           ),
+        // Select / Deselect all checkbox
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+          child: Row(
+            children: [
+              Checkbox(
+                value: _isAllSelected()
+                    ? true
+                    : _isNoneSelected()
+                        ? false
+                        : null,
+                tristate: true,
+                onChanged: (value) {
+                  setState(() {
+                    if (value == true || value == null) {
+                      // Select all files in all folders
+                      for (final entry in _diffs.entries) {
+                        _selectedFiles[entry.key] = entry.value.map((c) => c.path).toSet();
+                      }
+                    } else {
+                      // Deselect all
+                      for (final folder in _diffs.keys) {
+                        _selectedFiles[folder] = {};
+                      }
+                    }
+                  });
+                },
+              ),
+              Text(
+                _isAllSelected()
+                    ? 'Deselect all'
+                    : 'Select all (${_totalFileCount()} files)',
+                style: const TextStyle(fontSize: 13),
+              ),
+            ],
+          ),
+        ),
         Expanded(
           child: ListView(
             padding: const EdgeInsets.all(16),
@@ -723,6 +760,32 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
         _buildApplyBar(),
       ],
     );
+  }
+
+  /// Whether every file across all folders is selected.
+  bool _isAllSelected() {
+    for (final entry in _diffs.entries) {
+      final selected = _selectedFiles[entry.key] ?? {};
+      if (selected.length != entry.value.length) return false;
+    }
+    return _diffs.isNotEmpty;
+  }
+
+  /// Whether no files are selected in any folder.
+  bool _isNoneSelected() {
+    for (final selected in _selectedFiles.values) {
+      if (selected.isNotEmpty) return false;
+    }
+    return true;
+  }
+
+  /// Total number of files across all folders.
+  int _totalFileCount() {
+    int count = 0;
+    for (final changes in _diffs.values) {
+      count += changes.length;
+    }
+    return count;
   }
 
   /// Select/deselect files based on the direction filter.
