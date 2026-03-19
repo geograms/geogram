@@ -41,6 +41,7 @@ This document catalogs reusable UI components available in the Geogram codebase.
 - [FileIndexService](#fileindexservice) - SQLite file hash cache for fast mirror sync comparison (sha1, tlsh, size, mtime)
 - [FileSystemService path utilities](#filesystemservice-path-utilities) - Cross-platform path handling (Windows `\` + Unix `/`)
 - [ZipProfileStorage](#zipprofilestorage) - ProfileStorage backed by an in-memory ZIP archive (NDF files)
+- [NdfService.updateArchiveEntriesInBytes](#ndfserviceupdatearchiveentriesinbytes) - Pure-bytes ZIP entry updater (no filesystem I/O)
 
 ### Mirror Sync Constants
 - [kSyncableFolders](#ksyncablefolders) - Canonical list of folder IDs that can be synced between devices
@@ -11179,6 +11180,28 @@ await storage.close();   // Flush + release memory
 **Constructor**: `ZipProfileStorage.open(String filePath)` (static async factory)
 
 **Used in**: `ConferenceArchiveService` for NDF-native meeting archives
+
+---
+
+## NdfService.updateArchiveEntriesInBytes
+
+**File**: `lib/work/services/ndf_service.dart`
+
+Pure-bytes ZIP entry updater — modifies or adds files inside a ZIP archive without touching the filesystem. Accepts archive bytes and a map of path → content, returns updated archive bytes. Works with `ProfileStorage` (including encrypted storage) since it avoids `File` I/O.
+
+Two variants:
+- `updateArchiveEntriesInBytes(Uint8List archiveBytes, Map<String, Uint8List> files)` — binary entries
+- `updateArchiveStringEntriesInBytes(Uint8List archiveBytes, Map<String, String> files)` — text entries (UTF-8 encoded)
+
+```dart
+final ndfService = NdfService();
+final updated = ndfService.updateArchiveStringEntriesInBytes(
+  archiveBytes, {'index.html': htmlContent},
+);
+await storage.writeBytes(path, updated);
+```
+
+**Used in**: NDF HTML cache (`log_api_service.dart` — caches rendered `index.html` inside NDF archives)
 
 ---
 

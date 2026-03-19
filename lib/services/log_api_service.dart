@@ -134,6 +134,7 @@ import 'hotspot_portal_service.dart';
 import '../models/app.dart';
 import '../tracker/models/tracker_visibility.dart';
 import '../work/models/workspace.dart';
+import '../work/services/ndf_service.dart';
 import '../work/services/ndf_web_viewer_service.dart';
 import '../work/services/work_storage_service.dart';
 import '../stories/services/stories_storage_service.dart';
@@ -14752,7 +14753,7 @@ class LogApiService with ChatModificationMixin {
 
       // Read NDF document bytes (GET only for HTML rendering)
       if (request.method != 'GET') return null;
-      final ndfBytes = await workStorage.readDocumentBytes(workspaceId, filename);
+      var ndfBytes = await workStorage.readDocumentBytes(workspaceId, filename);
       if (ndfBytes == null) {
         return shelf.Response.notFound(
           '<html><body><h1>404</h1><p>Document file not found</p></body></html>',
@@ -14760,6 +14761,26 @@ class LogApiService with ChatModificationMixin {
         );
       }
 
+      // --- HTML cache: serve cached index.html if revision matches ---
+      final ndfService = NdfService();
+      final metadata = ndfService.readMetadataFromBytes(ndfBytes);
+      final currentRevision = metadata?.revision ?? 0;
+
+      // Check for cached index.html inside the archive
+      final cachedHtmlBytes = ndfService.readArchiveFileFromBytes(ndfBytes, 'index.html');
+      if (cachedHtmlBytes != null) {
+        final cachedHtml = utf8.decode(cachedHtmlBytes);
+        final cachedRevision = NdfWebViewerService.extractCacheRevision(cachedHtml);
+        if (cachedRevision != null && cachedRevision == currentRevision) {
+          // Cache hit — serve directly
+          return shelf.Response.ok(
+            cachedHtml,
+            headers: {'Content-Type': 'text/html; charset=utf-8'},
+          );
+        }
+      }
+
+      // Cache miss — generate HTML
       // Generate navigation menu
       final menuItems = await AppService().generateDeviceMenu(
         activeApp: 'work',
@@ -14814,6 +14835,17 @@ class LogApiService with ChatModificationMixin {
           '<html><body><h1>404</h1><p>Unsupported document type</p></body></html>',
           headers: {'Content-Type': 'text/html'},
         );
+      }
+
+      // Write cached HTML with revision marker into the archive
+      final cachedContent = NdfWebViewerService.prependCacheRevision(html, currentRevision);
+      try {
+        final updatedBytes = ndfService.updateArchiveStringEntriesInBytes(
+          ndfBytes, {'index.html': cachedContent},
+        );
+        await workStorage.writeDocumentBytes(workspaceId, filename, updatedBytes);
+      } catch (e) {
+        LogService().log('LogApiService: Failed to cache index.html: $e');
       }
 
       return shelf.Response.ok(

@@ -51,6 +51,11 @@ class TodoItemCardWidget extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final i18n = I18nService();
+    final hasSecondLine = item.priority != TodoPriority.normal ||
+        (item.isCompleted && item.durationSummary != null) ||
+        item.pictures.isNotEmpty ||
+        item.updates.isNotEmpty ||
+        item.links.isNotEmpty;
 
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
@@ -64,7 +69,9 @@ class TodoItemCardWidget extends StatelessWidget {
             child: Padding(
               padding: const EdgeInsets.all(12),
               child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
+                crossAxisAlignment: hasSecondLine
+                    ? CrossAxisAlignment.start
+                    : CrossAxisAlignment.center,
                 children: [
                   // Checkbox
                   Checkbox(
@@ -87,6 +94,7 @@ class TodoItemCardWidget extends StatelessWidget {
                                 : null,
                           ),
                         ),
+                        if (hasSecondLine) ...[
                         const SizedBox(height: 4),
                         Row(
                           children: [
@@ -182,6 +190,7 @@ class TodoItemCardWidget extends StatelessWidget {
                             ],
                           ],
                         ),
+                        ],
                       ],
                     ),
                   ),

@@ -25,6 +25,23 @@ import 'ndf_service.dart';
 
 /// Singleton service for rendering NDF documents as HTML pages.
 class NdfWebViewerService {
+  /// Cache revision marker prefix in generated HTML.
+  static const _cacheRevisionPrefix = '<!-- ndf-cache-revision:';
+
+  /// Extract the cache revision from HTML containing a revision comment.
+  /// Returns null if no revision marker is found.
+  static int? extractCacheRevision(String html) {
+    if (!html.startsWith(_cacheRevisionPrefix)) return null;
+    final endIdx = html.indexOf(' -->');
+    if (endIdx < 0) return null;
+    return int.tryParse(html.substring(_cacheRevisionPrefix.length, endIdx));
+  }
+
+  /// Prepend a cache revision comment to the HTML.
+  static String prependCacheRevision(String html, int revision) {
+    return '$_cacheRevisionPrefix$revision -->\n$html';
+  }
+
   static final NdfWebViewerService _instance =
       NdfWebViewerService._internal();
 

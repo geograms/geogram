@@ -1454,6 +1454,46 @@ class NdfService {
     LogService().log('NdfService: Updated ${files.length} files in $filePath');
   }
 
+  /// Update multiple binary files in an archive in-memory (no filesystem I/O).
+  /// Returns the updated archive bytes.
+  Uint8List updateArchiveEntriesInBytes(Uint8List archiveBytes, Map<String, Uint8List> files) {
+    final archive = ZipDecoder().decodeBytes(archiveBytes);
+    final newArchive = Archive();
+    final addedPaths = <String>{};
+
+    for (final entry in archive) {
+      if (files.containsKey(entry.name)) {
+        final newData = files[entry.name]!;
+        newArchive.addFile(ArchiveFile(entry.name, newData.length, newData));
+        addedPaths.add(entry.name);
+      } else {
+        newArchive.addFile(entry);
+      }
+    }
+
+    for (final entry in files.entries) {
+      if (!addedPaths.contains(entry.key)) {
+        newArchive.addFile(ArchiveFile(entry.key, entry.value.length, entry.value));
+      }
+    }
+
+    final zipData = ZipEncoder().encode(newArchive);
+    if (zipData == null) {
+      throw Exception('Failed to encode updated NDF archive');
+    }
+    return Uint8List.fromList(zipData);
+  }
+
+  /// Update multiple text files in an archive in-memory (no filesystem I/O).
+  /// Returns the updated archive bytes.
+  Uint8List updateArchiveStringEntriesInBytes(Uint8List archiveBytes, Map<String, String> files) {
+    final bytesMap = <String, Uint8List>{};
+    for (final entry in files.entries) {
+      bytesMap[entry.key] = Uint8List.fromList(utf8.encode(entry.value));
+    }
+    return updateArchiveEntriesInBytes(archiveBytes, bytesMap);
+  }
+
   /// Delete files from an archive
   Future<void> deleteArchiveFiles(
     String filePath,
