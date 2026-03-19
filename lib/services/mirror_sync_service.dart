@@ -988,16 +988,21 @@ class MirrorSyncService {
     final localFiles = <String, ({int size, int mtime, String sha1})>{};
     final folder = path.basename(localPath);
 
-    // Merge per-app ignorePatterns with global "always" exclude rules
+    // Merge per-app ignorePatterns with global "always" exclude rules.
+    // Exclude-rule patterns may be folder-scoped (e.g. "blog/file.json")
+    // or plain (e.g. "*.log").  Strip the current folder prefix so that
+    // matching against the within-folder relativePath works for both forms.
+    String stripFolder(String p) =>
+        p.startsWith('$folder/') ? p.substring(folder.length + 1) : p;
     final alwaysExclude = <String>[
       ...ignorePatterns,
       ...excludeRules
           .where((r) => r.mode == ExcludeMode.always)
-          .map((r) => r.pattern),
+          .map((r) => stripFolder(r.pattern)),
     ];
     final modifiedOnlyExclude = excludeRules
         .where((r) => r.mode == ExcludeMode.modifiedOnly)
-        .map((r) => r.pattern)
+        .map((r) => stripFolder(r.pattern))
         .toList();
 
     int filesProcessed = 0;
