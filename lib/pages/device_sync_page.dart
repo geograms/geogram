@@ -767,8 +767,8 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
                 ),
                 Text(
                   _isAllSelected()
-                      ? 'Deselect all'
-                      : 'Select all (${_totalFileCount()} files)',
+                      ? 'Deselect all (${_totalFileCount()} files)'
+                      : 'Select all (${_selectedFileCount()}/${_totalFileCount()} files)',
                   style: const TextStyle(fontSize: 13),
                 ),
               ],
@@ -803,6 +803,15 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
       if (selected.isNotEmpty) return false;
     }
     return true;
+  }
+
+  /// Total number of selected files across all folders.
+  int _selectedFileCount() {
+    int count = 0;
+    for (final selected in _selectedFiles.values) {
+      count += selected.length;
+    }
+    return count;
   }
 
   /// Total number of files across all folders.
