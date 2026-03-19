@@ -85,7 +85,6 @@ import 'models/app.dart';
 import 'util/file_icon_helper.dart';
 import 'util/event_bus.dart';
 import 'util/app_type_theme.dart';
-import 'pages/device_sync_settings_page.dart';
 import 'pages/profile_page.dart';
 import 'pages/about_page.dart';
 import 'pages/update_page.dart';
@@ -2367,19 +2366,6 @@ class _HomePageState extends State<HomePage> {
                       context,
                       MaterialPageRoute(
                         builder: (context) => const StationsPage(),
-                      ),
-                    );
-                  },
-                ),
-                ListTile(
-                  leading: const Icon(Icons.sync_alt),
-                  title: Text(_i18n.t('device_sync')),
-                  onTap: () {
-                    Navigator.pop(context);
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => const DeviceSyncSettingsPage(),
                       ),
                     );
                   },

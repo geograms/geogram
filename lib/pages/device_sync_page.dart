@@ -10,6 +10,7 @@ import '../services/log_service.dart';
 import '../services/app_service.dart';
 import '../services/storage_config.dart';
 import '../services/websocket_service.dart';
+import 'device_sync_settings_page.dart';
 import 'sync_exclude_rules_page.dart';
 
 /// Multi-device sync page with three stages:
@@ -91,9 +92,25 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
                     builder: (_) => const SyncExcludeRulesPage(),
                   ),
                 );
+              } else if (value == 'mirror_config') {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => const DeviceSyncSettingsPage(),
+                  ),
+                );
               }
             },
             itemBuilder: (context) => [
+              const PopupMenuItem(
+                value: 'mirror_config',
+                child: ListTile(
+                  leading: Icon(Icons.sync_alt),
+                  title: Text('Mirror config'),
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                ),
+              ),
               const PopupMenuItem(
                 value: 'excluded_files',
                 child: ListTile(

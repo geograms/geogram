@@ -59,7 +59,7 @@ class _DeviceSyncSettingsPageState extends State<DeviceSyncSettingsPage> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Device Sync'),
+        title: const Text('Mirror config'),
       ),
       body: ValueListenableBuilder<List<MirrorDevice>>(
               valueListenable: _discovery.mirrors,
