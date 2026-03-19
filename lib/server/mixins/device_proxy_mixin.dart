@@ -132,7 +132,7 @@ mixin DeviceProxyMixin {
 
     try {
       client.socket.add(jsonEncode(proxyRequest));
-      final response = await completer.future.timeout(const Duration(seconds: 5));
+      final response = await completer.future.timeout(const Duration(seconds: 30));
       final statusCode = response['statusCode'] as int? ?? 500;
       if (statusCode >= 200 && statusCode < 400) {
         client.successCount++;

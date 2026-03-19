@@ -409,8 +409,13 @@ class LogApiService with ChatModificationMixin {
 
     // Work document routes — GET for HTML pages, POST/DELETE for feedback actions
     // Placed outside the GET block so feedback POST/DELETE also works
-    if (urlPath.startsWith('work/')) {
-      final response = await _handleWorkRoute(request, urlPath, headers);
+    // Handle both direct paths (work/...) and station-proxied paths (apps/work/...)
+    var workUrlPath = urlPath;
+    if (workUrlPath.startsWith('apps/work/')) {
+      workUrlPath = workUrlPath.substring(5); // Strip 'apps/' prefix
+    }
+    if (workUrlPath.startsWith('work/')) {
+      final response = await _handleWorkRoute(request, workUrlPath, headers);
       if (response != null) {
         return response;
       }

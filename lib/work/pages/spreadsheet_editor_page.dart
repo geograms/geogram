@@ -10,6 +10,10 @@ import 'package:flutter/material.dart';
 
 import '../../services/i18n_service.dart';
 import '../../services/log_service.dart';
+import '../../services/profile_service.dart';
+import '../../services/station_service.dart';
+import '../../services/websocket_service.dart';
+import '../../util/callsign_url.dart';
 import '../models/ndf_document.dart';
 import '../models/ndf_interaction_settings.dart';
 import '../models/spreadsheet_content.dart';
@@ -248,9 +252,19 @@ class _SpreadsheetEditorPageState extends State<SpreadsheetEditorPage>
   }
 
   String? _buildShareUrl(String workspaceId, String filename) {
-    // Build URL from what we know — the station URL must be configured externally
-    // For now, return a relative path that the user can combine with their station URL
-    return 'work/$workspaceId/$filename';
+    if (!WebSocketService().isConnected) return null;
+    final station = StationService().getPreferredStation();
+    final connected = StationService().getConnectedStation();
+    final url = station?.url.isNotEmpty == true ? station!.url : connected?.url;
+    if (url == null || url.isEmpty) return null;
+
+    var domain = url.replaceFirst('wss://', '').replaceFirst('ws://', '');
+    if (domain.endsWith('/')) domain = domain.substring(0, domain.length - 1);
+
+    final callsign = ProfileService().getProfile().callsign;
+    if (callsign.isEmpty) return null;
+
+    return 'https://$domain/${callsignForUrl(callsign)}/work/$workspaceId/$filename';
   }
 
   void _onSheetChanged(SpreadsheetSheet sheet) {

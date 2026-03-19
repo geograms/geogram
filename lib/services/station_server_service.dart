@@ -6290,9 +6290,15 @@ h2 { font-size: 1.2rem; margin: 0 0 20px 0; }
     final targetCallsign = parts[0].toUpperCase();
     // Preserve /meet/* so the client can serve its regular Meetings web page
     // and related assets through the same hosted route as the local browser.
-    final apiPath = parts[1] == 'meet'
+    var apiPath = parts[1] == 'meet'
         ? '/${parts.sublist(1).join('/')}'
         : '/${parts.sublist(1).join('/')}'; // /api/{endpoint}
+
+    // Preserve query parameters
+    final proxyQueryString = request.uri.query;
+    if (proxyQueryString.isNotEmpty) {
+      apiPath = '$apiPath?$proxyQueryString';
+    }
 
     LogService().log('Device proxy request: $method $path -> $targetCallsign $apiPath');
 
@@ -6433,6 +6439,12 @@ h2 { font-size: 1.2rem; margin: 0 0 20px 0; }
       if (!appPath.endsWith('/') && !appPath.contains('.')) {
         appPath += '/';
       }
+    }
+
+    // Preserve query parameters (needed for unlisted key validation, etc.)
+    final queryString = request.uri.query;
+    if (queryString.isNotEmpty) {
+      appPath = '$appPath?$queryString';
     }
 
     LogService().log('Device content request: $method $path -> $targetCallsign $appPath');
