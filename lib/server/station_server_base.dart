@@ -736,6 +736,7 @@ abstract class StationServerBase with MirrorNotifyMixin {
     // Update client info
     client.callsign = callsign;
     client.nickname = nickname;
+    client.deviceName = message['device_name'] as String?;
     client.color = color;
     client.npub = npub;
     client.deviceType = deviceType;

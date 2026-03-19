@@ -131,6 +131,8 @@ class SpeechToTextService {
   SpeechToTextState _state = SpeechToTextState.idle;
   Completer<bool>? _preloadCompleter;
   final Set<String> _warmedModels = {};
+  Completer<bool>? _warmupCompleter; // guards concurrent warmup calls
+  Completer<bool>? _loadCompleter; // guards concurrent loadModel calls
 
   final StreamController<SpeechToTextState> _stateController =
       StreamController<SpeechToTextState>.broadcast();
@@ -252,6 +254,13 @@ class SpeechToTextService {
   /// Returns true if model was loaded successfully
   Future<bool> loadModel(String modelId) async {
     print('[STT_SERVICE] loadModel($modelId) called');
+
+    // If another loadModel call is already in progress, wait for it
+    if (_loadCompleter != null) {
+      print('[STT_SERVICE] loadModel already in progress, waiting...');
+      return _loadCompleter!.future;
+    }
+
     // Check if whisper library is available (may need download on F-Droid)
     if (!await isLibraryAvailable()) {
       LogService().log('SpeechToTextService: Whisper library not available');
@@ -264,6 +273,8 @@ class SpeechToTextService {
       print('[STT_SERVICE] Model already loaded, returning true');
       return true; // Already loaded - instant
     }
+
+    _loadCompleter = Completer<bool>();
 
     // Unload current model first
     await unloadModel();
@@ -303,11 +314,15 @@ class SpeechToTextService {
 
       LogService().log('SpeechToTextService: Model $modelId loaded');
       print('[STT_SERVICE] Model $modelId loaded, returning true');
+      _loadCompleter?.complete(true);
+      _loadCompleter = null;
       return true;
     } catch (e) {
       LogService().log('SpeechToTextService: Error loading model: $e');
       print('[STT_SERVICE] Error loading model: $e');
       _setState(SpeechToTextState.error);
+      _loadCompleter?.complete(false);
+      _loadCompleter = null;
       return false;
     }
   }
@@ -322,6 +337,13 @@ class SpeechToTextService {
   /// Generate and transcribe a short silent WAV to fully load the model into memory.
   Future<bool> _warmupModel(String modelId) async {
     print('[STT_SERVICE] _warmupModel($modelId) called');
+
+    // If another warmup is already in progress, wait for it
+    if (_warmupCompleter != null) {
+      print('[STT_SERVICE] Warmup already in progress, waiting...');
+      return _warmupCompleter!.future;
+    }
+
     if (_whisper == null || _loadedModelId != modelId) {
       print('[STT_SERVICE] Warmup skipped: whisper=${_whisper != null}, loadedId=$_loadedModelId');
       return false;
@@ -330,6 +352,8 @@ class SpeechToTextService {
       print('[STT_SERVICE] Model already warmed, returning true');
       return true;
     }
+
+    _warmupCompleter = Completer<bool>();
 
     final tempDir = await getTemporaryDirectory();
     final warmupPath = p.join(tempDir.path, 'whisper_warmup.wav');
@@ -365,11 +389,15 @@ class SpeechToTextService {
       LogService().log(
           'SpeechToTextService: Warmed up model $modelId in ${warmupStopwatch.elapsedMilliseconds}ms');
       print('[STT_SERVICE] Warmed up in ${warmupStopwatch.elapsedMilliseconds}ms');
+      _warmupCompleter?.complete(true);
+      _warmupCompleter = null;
       return true;
     } catch (e) {
       _warmedModels.remove(modelId);
       LogService().log('SpeechToTextService: Warmup failed for $modelId: $e');
       print('[STT_SERVICE] Warmup failed: $e');
+      _warmupCompleter?.complete(false);
+      _warmupCompleter = null;
       return false;
     } finally {
       try {

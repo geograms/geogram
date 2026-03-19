@@ -924,7 +924,7 @@ class LogApiService with ChatModificationMixin {
       'type': 'desktop',
       'status': 'online',
       'callsign': callsign,
-      'name': callsign.isNotEmpty ? callsign : 'Geogram Desktop',
+      'name': MirrorConfigService.instance.config?.deviceName ?? (callsign.isNotEmpty ? callsign : 'Geogram Desktop'),
       'hostname': io.Platform.localHostname,
       'platform': io.Platform.operatingSystem,
       'port': port,
@@ -18607,7 +18607,9 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
               'device_name': config.deviceName,
               'peers': config.peers.map((p) => {
                 'peer_id': p.peerId,
+                'name': p.name,
                 'callsign': p.callsign,
+                'platform': p.platform,
                 'addresses': p.addresses,
                 'apps': p.apps.map((k, v) => MapEntry(k, {
                   'enabled': v.enabled,

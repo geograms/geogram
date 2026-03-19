@@ -261,6 +261,29 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
     );
   }
 
+  /// Resolve the best display name for a mirror device.
+  ///
+  /// Checks persisted [MirrorPeer.name] when the live [MirrorDevice.displayName]
+  /// falls back to the raw platform/installId string.
+  String _resolveDisplayName(MirrorDevice mirror) {
+    final hasLiveName = (mirror.nickname != null && mirror.nickname!.isNotEmpty) ||
+        (mirror.deviceName != null &&
+            mirror.deviceName!.isNotEmpty &&
+            mirror.deviceName != mirror.callsign);
+    if (hasLiveName) return mirror.displayName;
+
+    // Fall back to the persisted peer name from a prior session.
+    final peers = MirrorConfigService.instance.config?.peers ?? [];
+    final peer = peers.where((p) => p.peerId == mirror.installId).firstOrNull;
+    if (peer != null && peer.name.isNotEmpty && peer.name != mirror.callsign) {
+      final suffix = mirror.installId != null && mirror.installId!.length >= 4
+          ? ' (${mirror.installId!.substring(0, 4)})'
+          : '';
+      return '${peer.name}$suffix';
+    }
+    return mirror.displayName;
+  }
+
   Widget _buildMirrorCard(MirrorDevice mirror) {
     final icon = _platformIcon(mirror.platform);
     final connectionIcon = mirror.connectionType == 'lan'
@@ -271,7 +294,7 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
       margin: const EdgeInsets.only(bottom: 12),
       child: ListTile(
         leading: Icon(icon, size: 40),
-        title: Text(mirror.displayName),
+        title: Text(_resolveDisplayName(mirror)),
         subtitle: Row(
           children: [
             Icon(connectionIcon, size: 14, color: Colors.grey),
@@ -302,7 +325,7 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
       margin: const EdgeInsets.only(bottom: 12),
       child: ListTile(
         leading: Icon(icon, size: 40),
-        title: Text(mirror.displayName),
+        title: Text(_resolveDisplayName(mirror)),
         subtitle: Row(
           children: [
             Icon(connectionIcon, size: 14, color: Colors.grey),
