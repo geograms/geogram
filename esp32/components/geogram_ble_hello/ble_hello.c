@@ -300,9 +300,10 @@ static int ble_hello_gap_event(struct ble_gap_event *event, void *arg)
             s_conn_handle = event->connect.conn_handle;
             s_conn_active = true;
             ESP_LOGI(TAG, "connected — conn_handle=%d", s_conn_handle);
+        } else {
+            /* Connection failed — restart advertising */
+            start_advertise();
         }
-        /* Restart advertising so other devices can still discover us */
-        start_advertise();
         break;
 
     case BLE_GAP_EVENT_DISCONNECT:
