@@ -209,11 +209,21 @@ class _DeviceSyncSettingsPageState extends State<DeviceSyncSettingsPage> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Padding(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+          child: Text(
+            'This Device',
+            style: theme.textTheme.titleSmall?.copyWith(
+              color: theme.colorScheme.primary,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+        ),
+        Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16),
           child: TextField(
             controller: _nicknameController,
             decoration: const InputDecoration(
-              labelText: 'This device nickname',
+              labelText: 'Device nickname',
               hintText: 'Enter a name for this device',
               border: OutlineInputBorder(),
             ),
