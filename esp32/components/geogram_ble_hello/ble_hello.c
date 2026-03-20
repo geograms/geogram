@@ -218,15 +218,19 @@ static void cycle_timer_cb(void *arg)
     (void)arg;
     if (!s_active) return;
 
-    /* Skip cycling while a GATT client is connected */
-    if (s_conn_active) return;
-
+    /* NimBLE can scan while a connection is active (just not while
+     * advertising).  Always cycle so device count stays fresh. */
     if (!s_scanning) {
-        /* Was advertising → switch to brief scan window */
+        /* Was advertising (or connected) → brief scan window */
         start_scan();
     } else {
-        /* Was scanning → switch back to advertising */
-        start_advertise();
+        /* Was scanning → resume advertising (unless connected) */
+        if (!s_conn_active) {
+            start_advertise();
+        } else {
+            s_scanning = false;  /* just stop scanning, stay connected */
+            ble_gap_disc_cancel();
+        }
     }
 }
 
@@ -376,9 +380,9 @@ static int ble_hello_gap_event(struct ble_gap_event *event, void *arg)
         break;
 
     case BLE_GAP_EVENT_DISC_COMPLETE:
-        /* Scan window finished — switch back to advertising */
+        /* Scan window finished — resume advertising if not connected */
         s_scanning = false;
-        if (s_active) {
+        if (s_active && !s_conn_active) {
             start_advertise();
         }
         break;
