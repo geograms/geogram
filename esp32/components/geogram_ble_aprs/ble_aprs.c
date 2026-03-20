@@ -274,8 +274,9 @@ esp_err_t ble_aprs_advertise(const char *tnc2, uint32_t duration_ms)
         rsp_fields.mfg_data_len = RSP_HEADER_LEN + cont_len;
     }
 
-    /* Stop scanning first (single radio) */
+    /* Stop scanning first (single radio) — brief delay for NimBLE to settle */
     ble_aprs_scan_stop();
+    vTaskDelay(pdMS_TO_TICKS(10));
 
     int rc = ble_gap_adv_set_fields(&adv_fields);
     if (rc != 0) {
@@ -368,7 +369,8 @@ bool ble_aprs_is_active(void)
 static void on_sync(void)
 {
     /* Use random address (no public address needed for observer+broadcaster) */
-    int rc = ble_hs_id_infer_auto(1, NULL);
+    uint8_t addr_type = 0;
+    int rc = ble_hs_id_infer_auto(1, &addr_type);
     if (rc != 0) {
         ESP_LOGW(TAG, "ble_hs_id_infer_auto failed: %d", rc);
     }

@@ -162,12 +162,11 @@ static void build_ui(void)
     lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
     lv_obj_clear_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
 
-    /* ---- Top bar (orange) ---- */
+    /* ---- Top bar (orange, rounded corners) ---- */
     lv_obj_t *top = lv_obj_create(scr);
     lv_obj_set_size(top, SCREEN_W, TOP_H);
     lv_obj_set_style_bg_color(top, lv_color_make(255, 140, 0), 0);
     lv_obj_set_style_border_width(top, 0, 0);
-    lv_obj_set_style_radius(top, 0, 0);
     lv_obj_set_style_pad_all(top, 0, 0);
     lv_obj_clear_flag(top, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_align(top, LV_ALIGN_TOP_MID, 0, 0);
@@ -197,12 +196,11 @@ static void build_ui(void)
     lv_obj_set_width(s_msg_label, LV_PCT(100));
     lv_obj_align(s_msg_label, LV_ALIGN_TOP_LEFT, 0, 0);
 
-    /* ---- Bottom bar (grey) ---- */
+    /* ---- Bottom bar (grey, rounded corners) ---- */
     lv_obj_t *bot = lv_obj_create(scr);
     lv_obj_set_size(bot, SCREEN_W, BOTTOM_H);
     lv_obj_set_style_bg_color(bot, lv_color_make(128, 128, 128), 0);
     lv_obj_set_style_border_width(bot, 0, 0);
-    lv_obj_set_style_radius(bot, 0, 0);
     lv_obj_set_style_pad_all(bot, 0, 0);
     lv_obj_clear_flag(bot, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_align(bot, LV_ALIGN_BOTTOM_MID, 0, 0);

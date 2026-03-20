@@ -16,9 +16,10 @@
 
 static const char *TAG = "st7735";
 
-/* Column/row offsets for the 160x80 GREENTAB variant */
-#define COL_OFFSET  26
-#define ROW_OFFSET  1
+/* Column/row offsets for the 160x80 GREENTAB variant in landscape (rotation=1).
+ * Portrait offsets are col=26, row=1; rotation=1 swaps them. */
+#define COL_OFFSET  1
+#define ROW_OFFSET  26
 
 struct st7735_dev {
     spi_device_handle_t spi;
@@ -87,13 +88,14 @@ static void st7735_hw_reset(st7735_handle_t h)
 
 static void st7735_init_sequence(st7735_handle_t h)
 {
+    /* ---- Rcmd1: reset + power/frame config (matches TFT_eSPI exactly) ---- */
     st7735_cmd(h, 0x01);  /* SWRESET */
     vTaskDelay(pdMS_TO_TICKS(150));
 
     st7735_cmd(h, 0x11);  /* SLPOUT */
-    vTaskDelay(pdMS_TO_TICKS(120));
+    vTaskDelay(pdMS_TO_TICKS(500));
 
-    /* Frame rate control */
+    /* Frame rate control (normal/idle/partial) */
     st7735_cmd(h, 0xB1);
     st7735_data8(h, 0x01); st7735_data8(h, 0x2C); st7735_data8(h, 0x2D);
 
@@ -128,18 +130,28 @@ static void st7735_init_sequence(st7735_handle_t h)
     st7735_cmd(h, 0xC5);
     st7735_data8(h, 0x0E);
 
-    /* Memory access: rotation = landscape (MX + MV), BGR order */
-    st7735_cmd(h, 0x36);
-    st7735_data8(h, 0xA8);   /* MY=1 MX=0 MV=1 BGR=1 */
+    /* Inversion OFF (Rcmd1 default — overridden below for GREENTAB) */
+    st7735_cmd(h, 0x20);
 
-    /* 16-bit colour */
+    /* Initial MADCTL: portrait MX|MY|BGR = 0xC8 (matches TFT_eSPI Rcmd1) */
+    st7735_cmd(h, 0x36);
+    st7735_data8(h, 0xC8);
+
+    /* 16-bit colour (RGB565) */
     st7735_cmd(h, 0x3A);
     st7735_data8(h, 0x05);
 
-    /* Display inversion on (needed for GREENTAB) */
-    st7735_cmd(h, 0x21);
+    /* ---- Rcmd2green: column/row window (green-tab) ---- */
+    st7735_cmd(h, 0x2A);  /* CASET */
+    { uint8_t d[] = {0x00, 0x02, 0x00, 0x81}; st7735_data(h, d, 4); }
 
-    /* Gamma */
+    st7735_cmd(h, 0x2B);  /* RASET */
+    { uint8_t d[] = {0x00, 0x01, 0x00, 0xA0}; st7735_data(h, d, 4); }
+
+    /* ---- GREENTAB160x80 specific: enable inversion ---- */
+    st7735_cmd(h, 0x21);  /* INVON */
+
+    /* ---- Rcmd3: gamma + display on ---- */
     st7735_cmd(h, 0xE0);
     { uint8_t d[] = {0x02,0x1C,0x07,0x12,0x37,0x32,0x29,0x2D,
                      0x29,0x25,0x2B,0x39,0x00,0x01,0x03,0x10}; st7735_data(h, d, 16); }
@@ -153,6 +165,10 @@ static void st7735_init_sequence(st7735_handle_t h)
 
     st7735_cmd(h, 0x29);  /* DISPON */
     vTaskDelay(pdMS_TO_TICKS(100));
+
+    /* ---- Apply rotation=1 (landscape): MADCTL + swapped offsets ---- */
+    st7735_cmd(h, 0x36);
+    st7735_data8(h, 0xA8);   /* MV=1 MY=1 BGR=1 — landscape for GREENTAB160x80 */
 }
 
 /* ---- public API --------------------------------------------------------- */
