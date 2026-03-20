@@ -57,10 +57,16 @@ class _StoryViewerPageState extends State<StoryViewerPage> {
   // Quiz persistence
   QuizStateStore? _quizStore;
 
+  // Key to force SceneViewerWidget rebuild on restart
+  int _restartKey = 0;
+
   @override
   void initState() {
     super.initState();
     _initMusicPlayer();
+    if (!widget.isPreview) {
+      _initQuizStore();
+    }
     _loadContent();
   }
 
@@ -91,7 +97,6 @@ class _StoryViewerPageState extends State<StoryViewerPage> {
   Future<void> _loadContent() async {
     setState(() => _isLoading = true);
     try {
-      await _initQuizStore();
       await _soundService.init();
       _content = await widget.storage.loadStoryContent(widget.story);
       if (_content != null && _content!.startScene != null) {
@@ -271,6 +276,19 @@ class _StoryViewerPageState extends State<StoryViewerPage> {
     // if (path != null) { play(path); }
   }
 
+  void _restartStory() {
+    if (_content == null) return;
+    _quizStore?.clearStory(widget.story.id);
+    _autoAdvanceTimer?.cancel();
+    _countdownSeconds = 0;
+    _sceneHistory.clear();
+    setState(() {
+      _restartKey++;
+    });
+    _navigateToScene(_content!.startSceneId, addToHistory: false);
+    _startStoryMusic();
+  }
+
   void _exitStory() {
     _stopMusic();
     Navigator.of(context).pop();
@@ -298,6 +316,7 @@ class _StoryViewerPageState extends State<StoryViewerPage> {
         children: [
           // Scene viewer
           SceneViewerWidget(
+            key: ValueKey(_restartKey),
             scene: _currentScene!,
             story: widget.story,
             storage: widget.storage,
@@ -319,6 +338,15 @@ class _StoryViewerPageState extends State<StoryViewerPage> {
                     onPressed: _goBack,
                     tooltip: widget.i18n.get('back', 'stories'),
                   ),
+
+                const SizedBox(width: 8),
+
+                // Restart button
+                _buildControlButton(
+                  icon: Icons.refresh,
+                  onPressed: _restartStory,
+                  tooltip: widget.i18n.get('restart_story', 'stories'),
+                ),
 
                 const SizedBox(width: 8),
 

@@ -76,6 +76,15 @@ class QuizStateStore {
     );
   }
 
+  /// Clear all quiz states for a story (used by restart)
+  void clearStory(String storyId) {
+    if (_db == null) return;
+    _db!.execute(
+      'DELETE FROM quiz_states WHERE story_id = ?',
+      [storyId],
+    );
+  }
+
   void close() {
     _db?.dispose();
     _db = null;
