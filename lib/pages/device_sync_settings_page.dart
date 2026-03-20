@@ -66,13 +66,13 @@ class _DeviceSyncSettingsPageState extends State<DeviceSyncSettingsPage> {
               builder: (context, discoveredMirrors, _) {
                 return ListView(
                   children: [
-                    // Known mirror devices section
-                    _buildKnownDevicesSection(theme, discoveredMirrors),
+                    // This device section
+                    _buildThisDeviceSection(theme),
 
                     const Divider(),
 
-                    // This device section
-                    _buildThisDeviceSection(theme),
+                    // Known mirror devices section
+                    _buildKnownDevicesSection(theme, discoveredMirrors),
                   ],
                 );
               },
