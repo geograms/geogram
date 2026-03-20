@@ -5,9 +5,20 @@
 #define MODEL_NAME    "T-Dongle-S3"
 #define MODEL_VARIANT "LILYGO ESP32-S3 USB Dongle"
 
+// ST7735 LCD pin definitions (T-Dongle-S3 hardware)
+#define TDONGLE_LCD_MOSI_PIN   3
+#define TDONGLE_LCD_SCLK_PIN   5
+#define TDONGLE_LCD_CS_PIN     4
+#define TDONGLE_LCD_DC_PIN     2
+#define TDONGLE_LCD_RST_PIN    1
+#define TDONGLE_LCD_BL_PIN     38
+
 // Feature flags
 #ifndef HAS_DISPLAY
-#define HAS_DISPLAY           0
+#define HAS_DISPLAY           1
+#endif
+#ifndef HAS_TFT_DISPLAY
+#define HAS_TFT_DISPLAY       1
 #endif
 #ifndef HAS_EPAPER_DISPLAY
 #define HAS_EPAPER_DISPLAY    0

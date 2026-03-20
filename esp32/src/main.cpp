@@ -80,6 +80,7 @@
     #include "model_config.h"
     #include "model_init.h"
     #include "ble_aprs.h"
+    #include "tdongle_ui.h"
 #elif BOARD_MODEL == MODEL_HELTEC_V3
     #include "model_config.h"
     #include "model_init.h"
@@ -867,11 +868,22 @@ static void kv4p_aprs_to_ble(const char *from, const char *to,
 #endif  /* MODEL_KV4P */
 
 #if BOARD_MODEL == MODEL_TDONGLE_S3
-/** BlueAPRS RX callback — log received frames */
+/** BlueAPRS RX callback — log received frames and push to LCD */
 static void tdongle_ble_aprs_rx(const char *tnc2, int rssi, void *ctx)
 {
     (void)ctx;
     ESP_LOGI(TAG, "BlueAPRS RX (rssi=%d): %s", rssi, tnc2);
+
+    /* Parse TNC2 "FROM>TO:message" and push to display */
+    const char *gt = strchr(tnc2, '>');
+    const char *colon = strchr(tnc2, ':');
+    if (gt && colon && colon > gt) {
+        char from[16] = {0};
+        int from_len = gt - tnc2;
+        if (from_len > 15) from_len = 15;
+        memcpy(from, tnc2, from_len);
+        tdongle_ui_push_message(from, colon + 1);
+    }
 }
 #endif  /* MODEL_TDONGLE_S3 */
 
@@ -940,6 +952,19 @@ extern "C" void app_main(void)
     // KV4P: station init (BLE observer+broadcaster added after HTTP server)
     station_init();
 #elif BOARD_MODEL == MODEL_TDONGLE_S3
+    // T-Dongle-S3: initialise LCD UI
+    {
+        st7735_handle_t lcd = model_get_lcd();
+        if (lcd) {
+            ret = tdongle_ui_init(lcd);
+            if (ret == ESP_OK) {
+                ESP_LOGI(TAG, "T-Dongle LCD UI started");
+            } else {
+                ESP_LOGW(TAG, "T-Dongle UI init failed: %s", esp_err_to_name(ret));
+            }
+        }
+    }
+
     // T-Dongle-S3: BlueAPRS observer+broadcaster
     ret = ble_aprs_init(tdongle_ble_aprs_rx, NULL);
     if (ret == ESP_OK) {
@@ -1360,6 +1385,7 @@ extern "C" void app_main(void)
             if (ble_aprs_is_active() && !test_sent) {
                 ESP_LOGI(TAG, "Sending test: DONGLE>CQ:BlueAPRS test");
                 ble_aprs_advertise("DONGLE>CQ:BlueAPRS test", 3000);
+                tdongle_ui_push_message("DONGLE", "BlueAPRS test");
                 test_sent = true;
             }
             vTaskDelay(pdMS_TO_TICKS(500));
