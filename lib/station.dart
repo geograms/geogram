@@ -5901,12 +5901,26 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
       return json;
     }).toList();
 
+    // Group by callsign for homepage display
+    final grouped = <String, List<Map<String, dynamic>>>{};
+    for (final c in clients) {
+      final cs = (c['callsign'] as String?) ?? 'Unknown';
+      grouped.putIfAbsent(cs, () => []).add(c);
+    }
+
     // Return different format for /api/clients vs /api/devices
     final jsonData = path == '/api/clients'
         ? jsonEncode({
             'station': _settings.callsign,
             'count': clients.length,
             'clients': clients,
+            'identities': grouped.entries.map((e) {
+              return {
+                'callsign': e.key,
+                'devices': e.value,
+                'device_count': e.value.length,
+              };
+            }).toList(),
           })
         : jsonEncode({'devices': clients});
 
@@ -6637,53 +6651,84 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
       hasDownload: true,
     );
 
-    // Build devices list HTML and collect coordinates for map
+    // Build devices list HTML grouped by callsign
     final devicesHtml = StringBuffer();
     final devicesWithLocation = <Map<String, dynamic>>[];
 
+    // Group clients by callsign
+    final byCallsign = <String, List<StationClient>>{};
     for (final client in _clients.values) {
-      final callsign = client.callsign ?? client.id;
-      final nickname = client.nickname ?? callsign;
-      final connectedAgo = formatTimeAgo(client.connectedAt);
-      final location = (client.latitude != null && client.longitude != null)
-          ? '${client.latitude!.toStringAsFixed(2)}, ${client.longitude!.toStringAsFixed(2)}'
-          : '';
+      final cs = client.callsign ?? client.id;
+      byCallsign.putIfAbsent(cs, () => []).add(client);
+    }
 
-      // Determine device icon based on platform/deviceType
-      final platform = (client.platform ?? '').toLowerCase();
-      final deviceType = (client.deviceType ?? '').toLowerCase();
-      String deviceIcon;
-      if (platform.contains('android') || platform.contains('ios') || deviceType.contains('phone') || deviceType.contains('mobile')) {
-        deviceIcon = 'phone';
-      } else {
-        deviceIcon = 'laptop';
+    for (final entry in byCallsign.entries) {
+      final callsign = entry.key;
+      final devices = entry.value;
+
+      // Build sub-device list HTML
+      final deviceListHtml = StringBuffer();
+      for (final client in devices) {
+        final nickname = client.nickname ?? client.deviceName ?? '';
+        final platform = (client.platform ?? '').toLowerCase();
+        final deviceType = (client.deviceType ?? '').toLowerCase();
+        String deviceIcon;
+        if (platform.contains('android') || platform.contains('ios') || deviceType.contains('phone') || deviceType.contains('mobile')) {
+          deviceIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="14" height="20" rx="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>';
+        } else if (deviceType.contains('station')) {
+          deviceIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4.9 16.1C1 12.2 1 5.8 4.9 1.9"/><path d="M7.8 13.2c-2.3-2.3-2.3-6.1 0-8.5"/><circle cx="12" cy="9" r="2"/><path d="M16.2 4.8c2.3 2.3 2.3 6.1 0 8.5"/><path d="M19.1 1.9C23 5.8 23 12.2 19.1 16.1"/><path d="M12 11v12"/><path d="M8 23h8"/></svg>';
+        } else {
+          deviceIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 16V7a2 2 0 00-2-2H6a2 2 0 00-2 2v9m16 0H4m16 0l1.28 2.55a1 1 0 01-.9 1.45H3.62a1 1 0 01-.9-1.45L4 16"/></svg>';
+        }
+        final connType = client.connectionType.code;
+        final connLabel = connType[0].toUpperCase() + connType.substring(1);
+        final connectedAgo = formatTimeAgo(client.connectedAt);
+        final label = nickname.isNotEmpty && nickname != callsign ? escapeHtml(nickname) : connLabel;
+
+        deviceListHtml.writeln('''
+          <div class="sub-device">
+            <span class="sub-device-icon">$deviceIcon</span>
+            <span class="sub-device-label">$label</span>
+            <span class="connection-badge $connType">$connLabel</span>
+            <span class="sub-device-meta">$connectedAgo</span>
+          </div>
+        ''');
       }
 
-      // Collect devices with location for map
-      if (client.latitude != null && client.longitude != null) {
-        devicesWithLocation.add({
-          'callsign': callsign,
-          'nickname': nickname,
-          'lat': client.latitude,
-          'lng': client.longitude,
-          'icon': deviceIcon,
-        });
+      // Collect map locations from all devices
+      for (final client in devices) {
+        if (client.latitude != null && client.longitude != null) {
+          final nickname = client.nickname ?? callsign;
+          final platform = (client.platform ?? '').toLowerCase();
+          final deviceType = (client.deviceType ?? '').toLowerCase();
+          String deviceIcon;
+          if (platform.contains('android') || platform.contains('ios') || deviceType.contains('phone') || deviceType.contains('mobile')) {
+            deviceIcon = 'phone';
+          } else {
+            deviceIcon = 'laptop';
+          }
+          devicesWithLocation.add({
+            'callsign': callsign,
+            'nickname': nickname,
+            'lat': client.latitude,
+            'lng': client.longitude,
+            'icon': deviceIcon,
+          });
+        }
       }
 
-      // Only show nickname if different from callsign
-      final nicknameHtml = (nickname != callsign)
-          ? '<div class="device-nickname">${escapeHtml(nickname)}</div>'
+      final deviceCountBadge = devices.length > 1
+          ? '<span class="device-count-badge">${devices.length} devices</span>'
           : '';
 
       devicesHtml.writeln('''
         <a href="/$callsign/" class="device-card">
           <div class="device-header">
             <span class="device-callsign">$callsign</span>
-            <span class="connection-badge internet">Internet</span>
+            $deviceCountBadge
           </div>
-          $nicknameHtml
-          <div class="device-meta">
-            Connected since $connectedAgo${location.isNotEmpty ? ' · $location' : ''}
+          <div class="sub-device-list">
+            ${deviceListHtml.toString()}
           </div>
         </a>
       ''');

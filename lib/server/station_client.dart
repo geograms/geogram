@@ -176,6 +176,7 @@ class StationClient implements EmailClient, ConnectedClientReadable, DeviceProxy
       'nickname': nickname ?? callsign,
       'color': color,
       'npub': npub,
+      'device_name': deviceName,
       'device_type': deviceType ?? 'Unknown',
       'platform': platform,
       'version': version,

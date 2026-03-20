@@ -2095,6 +2095,7 @@ h2 { font-size: 1.2rem; margin: 0 0 20px 0; }
 .connection-badge.internet { background: rgba(96, 165, 250, 0.2); color: #60a5fa; }
 .connection-badge.bluetooth { background: rgba(167, 139, 250, 0.2); color: #a78bfa; }
 .connection-badge.lora, .connection-badge.radio { background: rgba(251, 191, 36, 0.2); color: #fbbf24; }
+.connection-badge.other { background: rgba(148, 163, 184, 0.2); color: #94a3b8; }
 .device-nickname { font-size: 1rem; margin-bottom: 8px; }
 .device-meta { font-size: 0.85rem; color: var(--accent-alpha-70); }
 

@@ -971,10 +971,25 @@ abstract class StationServerBase with MirrorNotifyMixin {
 
   Future<void> _handleClients(HttpRequest request) async {
     final clientList = _clients.values.map((c) => c.toJson()).toList();
+
+    // Group by callsign for homepage display
+    final grouped = <String, List<Map<String, dynamic>>>{};
+    for (final c in clientList) {
+      final cs = (c['callsign'] as String?) ?? 'Unknown';
+      grouped.putIfAbsent(cs, () => []).add(c);
+    }
+
     request.response.headers.contentType = ContentType.json;
     request.response.write(jsonEncode({
       'count': clientList.length,
       'clients': clientList,
+      'identities': grouped.entries.map((e) {
+        return {
+          'callsign': e.key,
+          'devices': e.value,
+          'device_count': e.value.length,
+        };
+      }).toList(),
     }));
   }
 

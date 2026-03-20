@@ -522,6 +522,16 @@ ${getDownloadStyles()}
       return div.innerHTML;
     }
 
+    function getDeviceIconSvg(platform, deviceType) {
+      const p = (platform || '').toLowerCase();
+      const d = (deviceType || '').toLowerCase();
+      if (p.includes('android') || p.includes('ios') || d.includes('phone') || d.includes('mobile'))
+        return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="14" height="20" rx="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>';
+      if (d.includes('station'))
+        return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4.9 16.1C1 12.2 1 5.8 4.9 1.9"/><path d="M7.8 13.2c-2.3-2.3-2.3-6.1 0-8.5"/><circle cx="12" cy="9" r="2"/><path d="M16.2 4.8c2.3 2.3 2.3 6.1 0 8.5"/><path d="M19.1 1.9C23 5.8 23 12.2 19.1 16.1"/><path d="M12 11v12"/><path d="M8 23h8"/></svg>';
+      return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 16V7a2 2 0 00-2-2H6a2 2 0 00-2 2v9m16 0H4m16 0l1.28 2.55a1 1 0 01-.9 1.45H3.62a1 1 0 01-.9-1.45L4 16"/></svg>';
+    }
+
     function updateDeviceCards(clients) {
       const grid = document.querySelector('.devices-grid');
       const emptyState = document.querySelector('.no-devices');
@@ -537,24 +547,39 @@ ${getDownloadStyles()}
       grid.style.display = 'grid';
       emptyState.style.display = 'none';
 
-      // Rebuild device cards
-      grid.innerHTML = clients.map(c => {
-        const callsign = c.callsign || 'Unknown';
-        const nickname = c.nickname || callsign;
-        const connType = c.connection_type || 'internet';
-        const connLabel = connType.charAt(0).toUpperCase() + connType.slice(1);
-        const location = (c.latitude && c.longitude)
-          ? ' · ' + c.latitude.toFixed(2) + ', ' + c.longitude.toFixed(2)
+      // Group by callsign
+      const grouped = {};
+      clients.forEach(c => {
+        const cs = c.callsign || 'Unknown';
+        if (!grouped[cs]) grouped[cs] = [];
+        grouped[cs].push(c);
+      });
+
+      grid.innerHTML = Object.entries(grouped).map(([callsign, devices]) => {
+        const countBadge = devices.length > 1
+          ? '<span class="device-count-badge">' + devices.length + ' devices</span>'
           : '';
+
+        const subDevices = devices.map(c => {
+          const nickname = c.nickname || c.device_name || '';
+          const connType = c.connection_type || 'internet';
+          const connLabel = connType.charAt(0).toUpperCase() + connType.slice(1);
+          const iconSvg = getDeviceIconSvg(c.platform, c.device_type);
+          const label = (nickname && nickname !== callsign) ? escapeHtml(nickname) : connLabel;
+          return '<div class="sub-device">' +
+            '<span class="sub-device-icon">' + iconSvg + '</span>' +
+            '<span class="sub-device-label">' + label + '</span>' +
+            '<span class="connection-badge ' + connType + '">' + connLabel + '</span>' +
+            '<span class="sub-device-meta">' + formatTimeAgo(c.connected_at) + '</span>' +
+          '</div>';
+        }).join('');
+
         return '<a href="/' + callsign + '/" class="device-card">' +
           '<div class="device-header">' +
             '<span class="device-callsign">' + escapeHtml(callsign) + '</span>' +
-            '<span class="connection-badge ' + connType + '">' + connLabel + '</span>' +
+            countBadge +
           '</div>' +
-          '<div class="device-nickname">' + escapeHtml(nickname) + '</div>' +
-          '<div class="device-meta">' +
-            'Connected since ' + formatTimeAgo(c.connected_at) + location +
-          '</div>' +
+          '<div class="sub-device-list">' + subDevices + '</div>' +
         '</a>';
       }).join('');
     }
@@ -965,8 +990,32 @@ $nostrScript
 .connection-badge.internet { background: rgba(96, 165, 250, 0.2); color: #60a5fa; }
 .connection-badge.bluetooth { background: rgba(167, 139, 250, 0.2); color: #a78bfa; }
 .connection-badge.lora, .connection-badge.radio { background: rgba(251, 191, 36, 0.2); color: #fbbf24; }
+.connection-badge.other { background: rgba(148, 163, 184, 0.2); color: #94a3b8; }
 .device-nickname { font-size: 1rem; margin-bottom: 8px; }
 .device-meta { font-size: 0.85rem; color: var(--accent-alpha-70); }
+/* Sub-device list within grouped card */
+.sub-device-list { display: flex; flex-direction: column; gap: 6px; }
+.sub-device {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.03);
+  font-size: 0.85rem;
+}
+.sub-device-icon { flex-shrink: 0; width: 16px; height: 16px; color: var(--accent); display: flex; align-items: center; }
+.sub-device-icon svg { width: 16px; height: 16px; }
+.sub-device-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sub-device-meta { font-size: 0.75rem; color: var(--accent-alpha-70); flex-shrink: 0; }
+.device-count-badge {
+  font-size: 0.7rem;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: transparent;
+  border: 1px solid var(--accent);
+  color: var(--accent);
+}
 .no-devices {
   display: $noDevicesDisplay;
   text-align: center;
@@ -1240,18 +1289,50 @@ $nostrScript
       return 'phone';
     }
 
+    function getDeviceIconSvg(iconType) {
+      if (iconType === 'phone')
+        return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="14" height="20" rx="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>';
+      if (iconType === 'station')
+        return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4.9 16.1C1 12.2 1 5.8 4.9 1.9"/><path d="M7.8 13.2c-2.3-2.3-2.3-6.1 0-8.5"/><circle cx="12" cy="9" r="2"/><path d="M16.2 4.8c2.3 2.3 2.3 6.1 0 8.5"/><path d="M19.1 1.9C23 5.8 23 12.2 19.1 16.1"/><path d="M12 11v12"/><path d="M8 23h8"/></svg>';
+      return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 16V7a2 2 0 00-2-2H6a2 2 0 00-2 2v9m16 0H4m16 0l1.28 2.55a1 1 0 01-.9 1.45H3.62a1 1 0 01-.9-1.45L4 16"/></svg>';
+    }
+
     function updateDeviceCards(clients) {
       const grid = document.querySelector('.devices-grid');
       const emptyState = document.querySelector('.no-devices');
       if (!grid || !emptyState) return;
       if (clients.length === 0) { grid.style.display = 'none'; emptyState.style.display = 'block'; return; }
       grid.style.display = 'grid'; emptyState.style.display = 'none';
-      grid.innerHTML = clients.map(c => {
-        const callsign = c.callsign || 'Unknown';
-        const nickname = c.nickname || callsign;
-        const nicknameHtml = nickname !== callsign ? '<div class="device-nickname">' + escapeHtml(nickname) + '</div>' : '';
-        const location = (c.latitude && c.longitude) ? ' \\u00b7 ' + c.latitude.toFixed(2) + ', ' + c.longitude.toFixed(2) : '';
-        return '<a href="/' + callsign + '/" class="device-card"><div class="device-header"><span class="device-callsign">' + escapeHtml(callsign) + '</span><span class="connection-badge internet">Internet</span></div>' + nicknameHtml + '<div class="device-meta">Connected since ' + formatTimeAgo(c.connected_at) + location + '</div></a>';
+
+      // Group by callsign
+      const grouped = {};
+      clients.forEach(c => {
+        const cs = c.callsign || 'Unknown';
+        if (!grouped[cs]) grouped[cs] = [];
+        grouped[cs].push(c);
+      });
+
+      grid.innerHTML = Object.entries(grouped).map(([callsign, devices]) => {
+        const countBadge = devices.length > 1
+          ? '<span class="device-count-badge">' + devices.length + ' devices</span>'
+          : '';
+        const subDevices = devices.map(c => {
+          const nickname = c.nickname || c.device_name || '';
+          const connType = c.connection_type || 'internet';
+          const connLabel = connType.charAt(0).toUpperCase() + connType.slice(1);
+          const icon = getDeviceIcon(c.platform, c.device_type);
+          const iconSvg = getDeviceIconSvg(icon);
+          const label = (nickname && nickname !== callsign) ? escapeHtml(nickname) : connLabel;
+          return '<div class="sub-device">' +
+            '<span class="sub-device-icon">' + iconSvg + '</span>' +
+            '<span class="sub-device-label">' + label + '</span>' +
+            '<span class="connection-badge ' + connType + '">' + connLabel + '</span>' +
+            '<span class="sub-device-meta">' + formatTimeAgo(c.connected_at) + '</span>' +
+          '</div>';
+        }).join('');
+        return '<a href="/' + callsign + '/" class="device-card">' +
+          '<div class="device-header"><span class="device-callsign">' + escapeHtml(callsign) + '</span>' + countBadge + '</div>' +
+          '<div class="sub-device-list">' + subDevices + '</div></a>';
       }).join('');
     }
 
