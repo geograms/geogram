@@ -7,6 +7,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -287,6 +288,7 @@ class _StoryViewerPageState extends State<StoryViewerPage> {
     });
     _navigateToScene(_content!.startSceneId, addToHistory: false);
     _startStoryMusic();
+    widget.storage.setBlurredThumbnail(widget.story);
   }
 
   void _exitStory() {
@@ -310,78 +312,92 @@ class _StoryViewerPageState extends State<StoryViewerPage> {
       );
     }
 
-    return Scaffold(
-      backgroundColor: Colors.black,
-      body: Stack(
-        children: [
-          // Scene viewer
-          SceneViewerWidget(
-            key: ValueKey(_restartKey),
-            scene: _currentScene!,
-            story: widget.story,
-            storage: widget.storage,
-            onTrigger: _handleTrigger,
-            quizStore: _quizStore,
-          ),
+    return CallbackShortcuts(
+      bindings: {
+        const SingleActivator(LogicalKeyboardKey.escape): _exitStory,
+      },
+      child: Focus(
+        autofocus: true,
+        child: Scaffold(
+          backgroundColor: Colors.black,
+          body: Stack(
+            children: [
+              // Scene viewer
+              SceneViewerWidget(
+                key: ValueKey(_restartKey),
+                scene: _currentScene!,
+                story: widget.story,
+                storage: widget.storage,
+                onTrigger: _handleTrigger,
+                quizStore: _quizStore,
+                onAllQuizzesSolved: () =>
+                    widget.storage.restoreClearThumbnail(widget.story),
+              ),
 
-          // Top-right controls
-          Positioned(
-            top: MediaQuery.of(context).padding.top + 8,
-            right: 8,
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                // Back button
-                if (_canGoBack)
-                  _buildControlButton(
-                    icon: Icons.arrow_back,
-                    onPressed: _goBack,
-                    tooltip: widget.i18n.get('back', 'stories'),
-                  ),
+              // Top-right controls
+              Positioned(
+                top: MediaQuery.of(context).padding.top + 8,
+                right: 8,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // Back button
+                    if (_canGoBack)
+                      _buildControlButton(
+                        icon: Icons.arrow_back,
+                        onPressed: _goBack,
+                        tooltip: widget.i18n.get('back', 'stories'),
+                      ),
 
-                const SizedBox(width: 8),
+                    const SizedBox(width: 8),
 
-                // Restart button
-                _buildControlButton(
-                  icon: Icons.refresh,
-                  onPressed: _restartStory,
-                  tooltip: widget.i18n.get('restart_story', 'stories'),
-                ),
+                    // Restart button
+                    _buildControlButton(
+                      icon: Icons.refresh,
+                      onPressed: _restartStory,
+                      tooltip: widget.i18n.get('restart_story', 'stories'),
+                    ),
 
-                const SizedBox(width: 8),
+                    const SizedBox(width: 8),
 
-                // Exit button
-                _buildControlButton(
-                  icon: Icons.close,
-                  onPressed: _exitStory,
-                  tooltip: widget.i18n.get('exit_story', 'stories'),
-                ),
-              ],
-            ),
-          ),
-
-          // Bottom-right countdown
-          if (_countdownSeconds > 0 && (_currentScene?.autoAdvance?.showCountdown ?? true))
-            Positioned(
-              bottom: MediaQuery.of(context).padding.bottom + 16,
-              right: 16,
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                decoration: BoxDecoration(
-                  color: Colors.black54,
-                  borderRadius: BorderRadius.circular(20),
-                ),
-                child: Text(
-                  '$_countdownSeconds',
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 24,
-                    fontWeight: FontWeight.bold,
-                  ),
+                    // Exit button
+                    _buildControlButton(
+                      icon: Icons.close,
+                      onPressed: _exitStory,
+                      tooltip: widget.i18n.get('exit_story', 'stories'),
+                    ),
+                  ],
                 ),
               ),
-            ),
-        ],
+
+              // Bottom-right countdown
+              if (_countdownSeconds > 0 &&
+                  (_currentScene?.autoAdvance?.showCountdown ?? true))
+                Positioned(
+                  bottom: MediaQuery.of(context).padding.bottom + 16,
+                  right: 16,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 8,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.black54,
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Text(
+                      '$_countdownSeconds',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 24,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
       ),
     );
   }

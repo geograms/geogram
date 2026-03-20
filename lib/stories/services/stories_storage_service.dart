@@ -354,6 +354,38 @@ class StoriesStorageService {
     return _ndfService.extractMediaToTemp(story.filePath!, thumbnailRef);
   }
 
+  /// Switch thumbnail to the blurred quiz version
+  Future<void> setBlurredThumbnail(Story story) async {
+    if (story.filePath == null) return;
+    final content = await _ndfService.readStoryContent(story.filePath!);
+    if (content == null || content.sceneIds.isEmpty) return;
+
+    final firstScene = content.scenes[content.sceneIds.first];
+    if (firstScene == null) return;
+
+    final bgAsset = firstScene.background.asset;
+    if (bgAsset == null) return;
+
+    // Derive blur ref: media/hash.ext → quiz_blur/hash_blur.jpg
+    final assetPath = bgAsset.startsWith('asset://') ? bgAsset.substring(8) : bgAsset;
+    final baseName = assetPath.split('/').last;
+    final dotIdx = baseName.lastIndexOf('.');
+    final nameOnly = dotIdx > 0 ? baseName.substring(0, dotIdx) : baseName;
+    final blurRef = 'asset://quiz_blur/${nameOnly}_blur.jpg';
+
+    // Just update metadata pointer — blurred image already in the NDF
+    await _ndfService.setThumbnailRef(story.filePath!, blurRef);
+  }
+
+  /// Switch thumbnail back to the clear version
+  Future<void> restoreClearThumbnail(Story story) async {
+    if (story.filePath == null) return;
+    await _ndfService.setThumbnailRef(
+      story.filePath!,
+      'asset://thumbnails/preview.png',
+    );
+  }
+
   /// Cleanup unused media in a story
   Future<void> cleanupMedia(Story story) async {
     if (story.filePath == null) return;

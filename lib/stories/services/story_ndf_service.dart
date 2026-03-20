@@ -373,6 +373,17 @@ class StoryNdfService {
     }
   }
 
+  /// Switch thumbnail pointer without writing image bytes
+  Future<void> setThumbnailRef(String filePath, String assetRef) async {
+    final story = await readStory(filePath);
+    if (story != null) {
+      final updated = story.copyWith(
+        thumbnail: assetRef,
+      );
+      await saveStoryMetadata(filePath, updated);
+    }
+  }
+
   /// Read thumbnail
   Future<Uint8List?> readThumbnail(String filePath) async {
     final story = await readStory(filePath);

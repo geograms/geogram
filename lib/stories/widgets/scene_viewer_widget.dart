@@ -27,6 +27,7 @@ class SceneViewerWidget extends StatefulWidget {
   final Function(StoryTrigger) onTrigger;
   final bool isEditing;
   final QuizStateStore? quizStore;
+  final VoidCallback? onAllQuizzesSolved;
 
   const SceneViewerWidget({
     super.key,
@@ -36,6 +37,7 @@ class SceneViewerWidget extends StatefulWidget {
     required this.onTrigger,
     this.isEditing = false,
     this.quizStore,
+    this.onAllQuizzesSolved,
   });
 
   @override
@@ -222,6 +224,9 @@ class _SceneViewerWidgetState extends State<SceneViewerWidget> {
 
     // Auto-dismiss the quiz widget 5 seconds after correct answer
     if (correct) {
+      if (_allQuizzesSolved) {
+        widget.onAllQuizzesSolved?.call();
+      }
       Future.delayed(const Duration(seconds: 5), () {
         if (mounted) {
           setState(() {
