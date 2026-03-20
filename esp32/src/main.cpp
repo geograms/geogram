@@ -1014,14 +1014,14 @@ extern "C" void app_main(void)
         } else {
             geogram_wifi_ap_config_t ap_config = {};
             strncpy(ap_config.ssid, "geogram", sizeof(ap_config.ssid) - 1);
-            strncpy(ap_config.password, "geogram", sizeof(ap_config.password) - 1);
+            strncpy(ap_config.password, "geogram1", sizeof(ap_config.password) - 1);
             ap_config.channel = 1;
             ap_config.max_connections = 4;
             ap_config.callback = tdongle_wifi_event_cb;
 
             ret = geogram_wifi_start_ap(&ap_config);
             if (ret == ESP_OK) {
-                ESP_LOGI(TAG, "WiFi AP started: geogram (password: geogram)");
+                ESP_LOGI(TAG, "WiFi AP started: geogram (password: geogram1)");
                 tdongle_ui_set_ip("192.168.4.1");
 
                 // Auto-connect STA if saved credentials exist (5s delay)
