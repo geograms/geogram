@@ -4,6 +4,7 @@ import 'dart:io' as io if (dart.library.html) '../platform/io_stub.dart';
 import 'dart:math';
 import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
+import 'package:image/image.dart' as img;
 import 'package:mime/mime.dart';
 import 'package:http/http.dart' as http;
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -137,6 +138,9 @@ import '../work/models/workspace.dart';
 import '../work/services/ndf_service.dart';
 import '../work/services/ndf_web_viewer_service.dart';
 import '../work/services/work_storage_service.dart';
+import '../stories/models/story_content.dart';
+import '../stories/models/story_element.dart';
+import '../stories/models/story_scene.dart';
 import '../stories/services/stories_storage_service.dart';
 import '../stories/services/story_ndf_service.dart';
 import '../stories/services/story_web_viewer_service.dart';
@@ -15715,6 +15719,21 @@ ${_getWorkExplorerStyles()}
       return _handleNdfAssetRequest(ndfBytes!, action);
     }
 
+    // Quiz answer validation endpoint
+    if (action == 'quiz' && request.method == 'POST') {
+      return await _handleStoryQuizSubmit(
+        request, ndfBytes!, storyNdfService, storiesStorage,
+        profileStorage, filename, visitorNpub, headers,
+      );
+    }
+
+    // Quiz state query endpoint
+    if (action == 'quiz-state' && request.method == 'GET') {
+      return await _handleStoryQuizStateWithRequest(
+        request, storiesStorage, profileStorage, filename, visitorNpub, headers,
+      );
+    }
+
     // Handle feedback sub-paths
     if (action.isNotEmpty) {
       if (profileStorage == null) {
@@ -15729,6 +15748,11 @@ ${_getWorkExplorerStyles()}
 
     // Render story page (GET only)
     if (request.method != 'GET') return null;
+
+    // Generate blurred images for quiz scenes (cached in NDF archive)
+    ndfBytes = await _ensureQuizBlurredImages(
+      ndfBytes!, storyNdfService, storiesStorage, profileStorage, filename,
+    );
 
     final menuItems = await AppService().generateDeviceMenu(
       activeApp: 'stories',
@@ -15785,6 +15809,277 @@ ${_getWorkExplorerStyles()}
       html,
       headers: {'Content-Type': 'text/html; charset=utf-8'},
     );
+  }
+
+  /// Build a visitor identifier for quiz state tracking (IP + optional pubkey).
+  String _quizVisitorId(shelf.Request request, String? visitorNpub) {
+    final ip = (request.headers['x-forwarded-for'] ?? request.headers['x-real-ip'] ?? 'unknown')
+        .split(',').first.trim();
+    return visitorNpub != null ? '${ip}_$visitorNpub' : ip;
+  }
+
+  /// Read quiz state JSON for a story. Returns map of elementId -> { attemptsUsed, solved }.
+  Future<Map<String, dynamic>> _readQuizStateFile(
+    StoriesStorageService storiesStorage,
+    ProfileStorage? profileStorage,
+    String filename,
+  ) async {
+    final statePath = '${storiesStorage.storiesDir}/quiz_state/$filename.json';
+    try {
+      String? content;
+      if (profileStorage != null) {
+        final relPath = statePath.startsWith('${profileStorage.basePath}/')
+            ? statePath.substring(profileStorage.basePath.length + 1) : statePath;
+        final bytes = await profileStorage.readBytes(relPath);
+        if (bytes != null) content = utf8.decode(bytes);
+      } else {
+        final file = io.File(statePath);
+        if (await file.exists()) content = await file.readAsString();
+      }
+      if (content != null) return jsonDecode(content) as Map<String, dynamic>;
+    } catch (_) {}
+    return {};
+  }
+
+  /// Write quiz state JSON for a story.
+  Future<void> _writeQuizStateFile(
+    StoriesStorageService storiesStorage,
+    ProfileStorage? profileStorage,
+    String filename,
+    Map<String, dynamic> stateData,
+  ) async {
+    final statePath = '${storiesStorage.storiesDir}/quiz_state/$filename.json';
+    final content = const JsonEncoder.withIndent('  ').convert(stateData);
+    if (profileStorage != null) {
+      final relPath = statePath.startsWith('${profileStorage.basePath}/')
+          ? statePath.substring(profileStorage.basePath.length + 1) : statePath;
+      await profileStorage.writeBytes(relPath, Uint8List.fromList(utf8.encode(content)));
+    } else {
+      final file = io.File(statePath);
+      await file.parent.create(recursive: true);
+      await file.writeAsString(content);
+    }
+  }
+
+  /// Load story content from NDF bytes.
+  StoryContent? _loadStoryContentFromBytes(Uint8List ndfBytes) {
+    try {
+      final archive = ZipDecoder().decodeBytes(ndfBytes);
+      Map<String, dynamic>? mainJson;
+      for (final entry in archive) {
+        if (entry.name == 'content/main.json' && entry.isFile) {
+          mainJson = jsonDecode(utf8.decode(entry.content as List<int>)) as Map<String, dynamic>;
+          break;
+        }
+      }
+      if (mainJson == null) return null;
+      final scenes = <String, StoryScene>{};
+      for (final entry in archive) {
+        if (entry.name.startsWith('content/scenes/') && entry.name.endsWith('.json') && entry.isFile) {
+          final sceneJson = jsonDecode(utf8.decode(entry.content as List<int>)) as Map<String, dynamic>;
+          final scene = StoryScene.fromJson(sceneJson);
+          scenes[scene.id] = scene;
+        }
+      }
+      return StoryContent.fromJson(mainJson, loadedScenes: scenes);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Handle POST quiz answer submission.
+  Future<shelf.Response> _handleStoryQuizSubmit(
+    shelf.Request request,
+    Uint8List ndfBytes,
+    StoryNdfService storyNdfService,
+    StoriesStorageService storiesStorage,
+    ProfileStorage? profileStorage,
+    String filename,
+    String? visitorNpub,
+    Map<String, String> headers,
+  ) async {
+    try {
+      final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+      final elementId = body['elementId'] as String?;
+      final answer = (body['answer'] as String?)?.trim();
+      if (elementId == null || answer == null || answer.isEmpty) {
+        return shelf.Response(400,
+          body: jsonEncode({'error': 'elementId and answer required'}), headers: headers);
+      }
+
+      // Load story content to find the quiz element and its answer
+      final content = _loadStoryContentFromBytes(ndfBytes);
+      if (content == null) {
+        return shelf.Response.internalServerError(
+          body: jsonEncode({'error': 'Failed to load story content'}), headers: headers);
+      }
+
+      // Find the quiz element
+      StoryElement? quizElement;
+      StoryScene? quizScene;
+      for (final scene in content.orderedScenes) {
+        for (final el in scene.elements) {
+          if (el.id == elementId && el.type == ElementType.quiz) {
+            quizElement = el;
+            quizScene = scene;
+            break;
+          }
+        }
+        if (quizElement != null) break;
+      }
+      if (quizElement == null) {
+        return shelf.Response.notFound(
+          jsonEncode({'error': 'Quiz element not found'}), headers: headers);
+      }
+
+      final correctAnswer = quizElement.quizAnswer ?? '';
+      final visitorId = _quizVisitorId(request, visitorNpub);
+      const maxAttempts = 3;
+
+      // Read current state
+      final stateData = await _readQuizStateFile(storiesStorage, profileStorage, filename);
+      final visitorStates = (stateData[visitorId] as Map<String, dynamic>?) ?? {};
+      final elementState = (visitorStates[elementId] as Map<String, dynamic>?) ?? {};
+      int attemptsUsed = (elementState['attemptsUsed'] as num?)?.toInt() ?? 0;
+      bool solved = elementState['solved'] == true;
+
+      // Already solved or locked
+      if (solved) {
+        return shelf.Response.ok(
+          jsonEncode({'correct': true, 'attemptsRemaining': 0}), headers: headers);
+      }
+      if (attemptsUsed >= maxAttempts) {
+        return shelf.Response.ok(
+          jsonEncode({'correct': false, 'attemptsRemaining': 0}), headers: headers);
+      }
+
+      // Validate answer
+      final isCorrect = answer.toLowerCase() == correctAnswer.toLowerCase();
+      if (!isCorrect) {
+        attemptsUsed++;
+        visitorStates[elementId] = {'attemptsUsed': attemptsUsed, 'solved': false};
+        stateData[visitorId] = visitorStates;
+        await _writeQuizStateFile(storiesStorage, profileStorage, filename, stateData);
+        return shelf.Response.ok(
+          jsonEncode({'correct': false, 'attemptsRemaining': maxAttempts - attemptsUsed}),
+          headers: headers);
+      }
+
+      // Correct answer — mark solved
+      visitorStates[elementId] = {'attemptsUsed': attemptsUsed, 'solved': true};
+      stateData[visitorId] = visitorStates;
+      await _writeQuizStateFile(storiesStorage, profileStorage, filename, stateData);
+
+      // Return original unblurred image as data URL
+      String? imageDataUrl;
+      final bgAsset = quizScene!.background.asset;
+      if (bgAsset != null) {
+        final assetPath = bgAsset.startsWith('asset://') ? bgAsset.substring(8) : bgAsset;
+        final originalBytes = NdfService().readArchiveFileFromBytes(ndfBytes, 'assets/$assetPath');
+        if (originalBytes != null) {
+          final mimeType = lookupMimeType(assetPath, headerBytes: originalBytes) ?? 'image/jpeg';
+          imageDataUrl = 'data:$mimeType;base64,${base64Encode(originalBytes)}';
+        }
+      }
+
+      return shelf.Response.ok(
+        jsonEncode({'correct': true, 'imageDataUrl': imageDataUrl}),
+        headers: headers);
+    } catch (e) {
+      LogService().log('LogApiService: Quiz submit error: $e');
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'error': 'Internal error'}), headers: headers);
+    }
+  }
+
+  /// Handle GET quiz state query — returns visitor's state for all quiz elements.
+  Future<shelf.Response> _handleStoryQuizStateWithRequest(
+    shelf.Request request,
+    StoriesStorageService storiesStorage,
+    ProfileStorage? profileStorage,
+    String filename,
+    String? visitorNpub,
+    Map<String, String> headers,
+  ) async {
+    try {
+      final visitorId = _quizVisitorId(request, visitorNpub);
+      final stateData = await _readQuizStateFile(storiesStorage, profileStorage, filename);
+      final visitorStates = (stateData[visitorId] as Map<String, dynamic>?) ?? {};
+      return shelf.Response.ok(jsonEncode(visitorStates), headers: headers);
+    } catch (e) {
+      return shelf.Response.ok(jsonEncode({}), headers: headers);
+    }
+  }
+
+  /// Generate blurred images for quiz scenes and cache them in the NDF archive.
+  Future<Uint8List> _ensureQuizBlurredImages(
+    Uint8List ndfBytes,
+    StoryNdfService storyNdfService,
+    StoriesStorageService storiesStorage,
+    ProfileStorage? profileStorage,
+    String filename,
+  ) async {
+    try {
+      final content = _loadStoryContentFromBytes(ndfBytes);
+      if (content == null) return ndfBytes;
+
+      final blurFiles = <String, Uint8List>{};
+
+      for (final scene in content.orderedScenes) {
+        final hasQuiz = scene.elements.any((e) => e.type == ElementType.quiz);
+        if (!hasQuiz) continue;
+
+        final bgAsset = scene.background.asset;
+        if (bgAsset == null || bgAsset.isEmpty) continue;
+
+        final assetPath = bgAsset.startsWith('asset://') ? bgAsset.substring(8) : bgAsset;
+        final baseName = assetPath.split('/').last;
+        final dotIdx = baseName.lastIndexOf('.');
+        final nameOnly = dotIdx > 0 ? baseName.substring(0, dotIdx) : baseName;
+        final blurPath = 'assets/quiz_blur/${nameOnly}_blur.jpg';
+
+        // Check if blur already exists in archive
+        final existing = NdfService().readArchiveFileFromBytes(ndfBytes, blurPath);
+        if (existing != null) continue;
+
+        // Read original image
+        final originalBytes = NdfService().readArchiveFileFromBytes(ndfBytes, 'assets/$assetPath');
+        if (originalBytes == null) continue;
+
+        // Generate blurred version
+        final decoded = img.decodeImage(originalBytes);
+        if (decoded == null) continue;
+
+        // Downscale to max 800px width
+        var blurred = decoded;
+        if (decoded.width > 800) {
+          blurred = img.copyResize(decoded, width: 800, interpolation: img.Interpolation.linear);
+        }
+        blurred = img.gaussianBlur(blurred, radius: 15);
+        final blurredBytes = Uint8List.fromList(img.encodeJpg(blurred, quality: 60));
+        blurFiles[blurPath] = blurredBytes;
+      }
+
+      if (blurFiles.isEmpty) return ndfBytes;
+
+      // Write blurred images into the NDF archive
+      final updatedBytes = NdfService().updateArchiveEntriesInBytes(ndfBytes, blurFiles);
+
+      // Persist updated archive
+      final storyPath = '${storiesStorage.storiesDir}/$filename';
+      if (profileStorage != null) {
+        final relPath = storyPath.startsWith('${profileStorage.basePath}/')
+            ? storyPath.substring(profileStorage.basePath.length + 1) : storyPath;
+        await profileStorage.writeBytes(relPath, updatedBytes);
+      } else {
+        await io.File(storyPath).writeAsBytes(updatedBytes);
+      }
+
+      return updatedBytes;
+    } catch (e) {
+      LogService().log('LogApiService: Failed to generate quiz blur images: $e');
+      return ndfBytes;
+    }
   }
 
   shelf.Response _buildStoryAccessDeniedPage(Map<String, String> headers) {

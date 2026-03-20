@@ -19,6 +19,7 @@ import '../../util/web_feedback_widgets.dart' as feedback;
 import '../../work/models/ndf_interaction_settings.dart';
 import '../models/story.dart';
 import '../models/story_content.dart';
+import '../models/story_element.dart';
 import '../models/story_scene.dart';
 
 /// Entry for the gallery page.
@@ -96,13 +97,14 @@ class StoryWebViewerService {
         if (bgAsset != null && bgAsset.isNotEmpty) {
           if (!backgroundUrls.containsKey(bgAsset)) {
             final assetPath = bgAsset.startsWith('asset://') ? bgAsset.substring(8) : bgAsset;
-            backgroundUrls[bgAsset] = '$assetBaseUrl$assetPath';
+            backgroundUrls[bgAsset] = '${assetBaseUrl}assets/$assetPath';
           }
         }
       }
 
-      // Build STORY_DATA JSON
-      final storyData = _buildStoryData(storyContent, backgroundUrls);
+      // Build STORY_DATA JSON (quiz answers stripped for security)
+      final storyData = _buildStoryData(
+        storyContent, backgroundUrls, storyFilename);
       final storyDataJson = jsonEncode(storyData);
 
       // Build page
@@ -268,15 +270,25 @@ function filterStories(tag) {
 
 
   /// Build the STORY_DATA JSON object for the JS runtime.
+  /// Quiz answers are stripped — validation happens server-side.
   Map<String, dynamic> _buildStoryData(
     StoryContent content,
     Map<String, String> backgroundUrls,
+    String storyFilename,
   ) {
     final scenesData = <Map<String, dynamic>>[];
     for (final scene in content.orderedScenes) {
+      // Detect if this scene has quiz elements
+      final hasQuiz = scene.elements.any((e) => e.type == ElementType.quiz);
+
       final elementsData = <Map<String, dynamic>>[];
       for (final el in scene.elements) {
         final (left, top) = el.position.calculatePosition();
+        // Strip answer from quiz element properties
+        Map<String, dynamic> props = el.properties;
+        if (el.type == ElementType.quiz) {
+          props = Map<String, dynamic>.from(props)..remove('answer');
+        }
         elementsData.add({
           'id': el.id,
           'type': el.type.name,
@@ -285,7 +297,7 @@ function filterStories(tag) {
           'top': top,
           'width': el.position.widthPercent,
           'height': el.position.heightPercent,
-          'properties': el.properties,
+          'properties': props,
         });
       }
 
@@ -304,17 +316,31 @@ function filterStories(tag) {
       }
 
       String? bgUrl;
+      String? originalBgUrl;
       final bgAsset = scene.background.asset;
       if (bgAsset != null && backgroundUrls.containsKey(bgAsset)) {
         bgUrl = backgroundUrls[bgAsset];
+        // For quiz scenes, swap to server-blurred image
+        if (hasQuiz && bgUrl != null) {
+          originalBgUrl = bgUrl;
+          // Derive blur asset path from original: media/hash.ext -> quiz_blur/hash_blur.jpg
+          final assetPath = bgAsset.startsWith('asset://') ? bgAsset.substring(8) : bgAsset;
+          final baseName = assetPath.split('/').last;
+          final dotIdx = baseName.lastIndexOf('.');
+          final nameOnly = dotIdx > 0 ? baseName.substring(0, dotIdx) : baseName;
+          final assetBaseUrl = storyFilename.isNotEmpty ? '$storyFilename/' : '';
+          bgUrl = '${assetBaseUrl}assets/quiz_blur/${nameOnly}_blur.jpg';
+        }
       }
 
       scenesData.add({
         'id': scene.id,
         'index': scene.index,
         'title': scene.title,
+        'hasQuiz': hasQuiz,
         'background': {
           'assetUrl': bgUrl,
+          if (hasQuiz && originalBgUrl != null) 'originalAssetUrl': originalBgUrl,
           'placeholder': scene.background.placeholder,
           'appearAt': scene.background.appearAt,
         },
@@ -330,6 +356,7 @@ function filterStories(tag) {
     }
 
     return {
+      'storyFilename': storyFilename,
       'startSceneId': content.startSceneId,
       'sceneIds': content.sceneIds,
       'scenes': scenesData,
@@ -616,21 +643,88 @@ ${interaction.permitComments ? feedback.getCommentsScript(ownerNpub, storyFilena
 
 /* Quiz element */
 .story-el-quiz {
-  cursor: pointer;
   user-select: none;
   text-align: center;
   color: #fff;
   text-shadow: 0 1px 4px rgba(0,0,0,0.5);
 }
-.quiz-question { font-weight: bold; }
-.quiz-answer {
-  margin-top: 8px;
-  opacity: 0;
-  transition: opacity 0.3s;
-  font-style: italic;
+.quiz-container {
+  background: rgba(0,0,0,0.65);
+  border-radius: 12px;
+  padding: 16px 20px;
+  max-width: 320px;
+  margin: 0 auto;
 }
-.quiz-answer.revealed { opacity: 1; }
-.quiz-hint { font-size: 0.7em; opacity: 0.6; margin-top: 4px; }
+.quiz-question {
+  font-weight: bold;
+  font-size: 1.1em;
+  margin-bottom: 12px;
+}
+.quiz-input {
+  width: 100%;
+  padding: 8px 12px;
+  border: 2px solid rgba(255,255,255,0.3);
+  border-radius: 8px;
+  background: rgba(255,255,255,0.1);
+  color: #fff;
+  font-size: 1em;
+  font-family: inherit;
+  outline: none;
+  box-sizing: border-box;
+  transition: border-color 0.2s;
+}
+.quiz-input:focus { border-color: var(--accent, #ffa86a); }
+.quiz-input.wrong { border-color: #ff4444; animation: shake 0.4s ease; }
+@keyframes shake {
+  0%,100% { transform: translateX(0); }
+  25% { transform: translateX(-6px); }
+  75% { transform: translateX(6px); }
+}
+.quiz-submit {
+  margin-top: 8px;
+  padding: 8px 24px;
+  background: var(--accent, #ffa86a);
+  color: #000;
+  border: none;
+  border-radius: 8px;
+  font-size: 0.95em;
+  font-family: inherit;
+  cursor: pointer;
+  font-weight: bold;
+  transition: opacity 0.2s;
+}
+.quiz-submit:hover { opacity: 0.85; }
+.quiz-submit:disabled { opacity: 0.4; cursor: default; }
+.quiz-dots {
+  display: flex;
+  gap: 6px;
+  justify-content: center;
+  margin-top: 10px;
+}
+.quiz-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #4CAF50;
+  transition: background 0.3s;
+}
+.quiz-dot.used { background: #ff4444; }
+.quiz-result {
+  margin-top: 10px;
+  font-weight: bold;
+  font-size: 1em;
+}
+.quiz-result.correct { color: #4CAF50; }
+.quiz-result.locked { color: #ff4444; }
+.quiz-dismissed {
+  animation: quizFadeOut 0.5s ease forwards;
+}
+@keyframes quizFadeOut {
+  to { opacity: 0; transform: translateY(-10px); }
+}
+.scene-container {
+  transition: background-image 0.8s ease;
+}
 
 /* Touch areas */
 .touch-area {
@@ -692,11 +786,21 @@ ${interaction.permitComments ? feedback.getCommentsScript(ownerNpub, storyFilena
   var elementTimers = [];
   var touchStartX = 0;
   var touchStartY = 0;
+  var quizStates = {};
+  var quizSolvedElements = {};
 
   function init() {
-    goToScene(data.startSceneId);
+    // Load quiz state from server, then render first scene
+    var apiBase = encodeURIComponent(data.storyFilename);
+    fetch(apiBase + '/quiz-state')
+      .then(function(r) { return r.ok ? r.json() : {}; })
+      .then(function(states) { quizStates = states || {}; })
+      .catch(function() {})
+      .finally(function() {
+        goToScene(data.startSceneId);
+      });
 
-    // Swipe navigation
+    // Swipe navigation (set up immediately, independent of quiz state)
     if (data.settings.enableSwipeNavigation) {
       var vp = document.getElementById('scene-viewport');
       vp.addEventListener('touchstart', function(e) {
@@ -750,9 +854,15 @@ ${interaction.permitComments ? feedback.getCommentsScript(ownerNpub, storyFilena
     // Apply transition
     container.style.opacity = '0';
     setTimeout(function() {
-      // Set background
-      if (scene.background.assetUrl) {
-        container.style.backgroundImage = 'url(' + scene.background.assetUrl + ')';
+      // Set background — use original if all quizzes in scene are solved
+      var bgUrl = scene.background.assetUrl;
+      if (scene.hasQuiz && scene.background.originalAssetUrl) {
+        var allSolved = scene.elements.filter(function(e) { return e.type === 'quiz'; })
+          .every(function(e) { return quizSolvedElements[e.id]; });
+        if (allSolved) bgUrl = scene.background.originalAssetUrl;
+      }
+      if (bgUrl) {
+        container.style.backgroundImage = 'url(' + bgUrl + ')';
         container.style.backgroundColor = scene.background.placeholder || '#000';
       } else {
         container.style.backgroundImage = 'none';
@@ -873,22 +983,141 @@ ${interaction.permitComments ? feedback.getCommentsScript(ownerNpub, storyFilena
         div.classList.add('story-el-quiz');
         div.classList.add('font-' + (props.font || 'bold'));
         div.style.color = props.color || '#fff';
+        var qc = document.createElement('div');
+        qc.className = 'quiz-container';
+        qc.setAttribute('data-element-id', el.id);
+
         var qDiv = document.createElement('div');
         qDiv.className = 'quiz-question';
         qDiv.textContent = props.question || '';
-        div.appendChild(qDiv);
-        var aDiv = document.createElement('div');
-        aDiv.className = 'quiz-answer';
-        aDiv.textContent = props.answer || '';
-        div.appendChild(aDiv);
-        var hint = document.createElement('div');
-        hint.className = 'quiz-hint';
-        hint.textContent = 'Tap to reveal';
-        div.appendChild(hint);
-        div.onclick = function() {
-          aDiv.classList.add('revealed');
-          hint.style.display = 'none';
-        };
+        qc.appendChild(qDiv);
+
+        var qInput = document.createElement('input');
+        qInput.className = 'quiz-input';
+        qInput.type = 'text';
+        qInput.placeholder = 'Your answer...';
+        qInput.autocomplete = 'off';
+        qc.appendChild(qInput);
+
+        var qBtn = document.createElement('button');
+        qBtn.className = 'quiz-submit';
+        qBtn.textContent = 'Submit';
+        qc.appendChild(qBtn);
+
+        var qDots = document.createElement('div');
+        qDots.className = 'quiz-dots';
+        for (var di = 0; di < 3; di++) {
+          var dot = document.createElement('div');
+          dot.className = 'quiz-dot';
+          qDots.appendChild(dot);
+        }
+        qc.appendChild(qDots);
+
+        // Prevent scene click-through
+        qc.onclick = function(e) { e.stopPropagation(); };
+        qInput.onclick = function(e) { e.stopPropagation(); };
+        qBtn.onclick = function(e) { e.stopPropagation(); };
+
+        // Submit handler
+        (function(elementId, input, btn, dots, container) {
+          var attemptsUsed = 0;
+          var maxAttempts = 3;
+          var solved = false;
+
+          function submit() {
+            if (solved || attemptsUsed >= maxAttempts) return;
+            var answer = input.value.trim();
+            if (!answer) return;
+            btn.disabled = true;
+            var apiBase = encodeURIComponent(data.storyFilename);
+            fetch(apiBase + '/quiz', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ elementId: elementId, answer: answer })
+            })
+            .then(function(r) { return r.json(); })
+            .then(function(resp) {
+              btn.disabled = false;
+              if (resp.correct) {
+                solved = true;
+                quizSolvedElements[elementId] = true;
+                // Show correct
+                var res = document.createElement('div');
+                res.className = 'quiz-result correct';
+                res.textContent = 'Correct!';
+                container.appendChild(res);
+                input.style.display = 'none';
+                btn.style.display = 'none';
+                dots.style.display = 'none';
+                // Replace background with original image
+                if (resp.imageDataUrl) {
+                  var sc = document.getElementById('scene-container');
+                  sc.style.backgroundImage = 'url(' + resp.imageDataUrl + ')';
+                }
+                // Auto dismiss quiz after 1.5s
+                setTimeout(function() {
+                  container.classList.add('quiz-dismissed');
+                  setTimeout(function() { container.parentElement.style.display = 'none'; }, 500);
+                }, 1500);
+              } else {
+                attemptsUsed = maxAttempts - resp.attemptsRemaining;
+                // Update dots
+                var dotEls = dots.querySelectorAll('.quiz-dot');
+                for (var i = 0; i < attemptsUsed && i < dotEls.length; i++) {
+                  dotEls[i].classList.add('used');
+                }
+                if (resp.attemptsRemaining <= 0) {
+                  input.disabled = true;
+                  btn.disabled = true;
+                  var res = document.createElement('div');
+                  res.className = 'quiz-result locked';
+                  res.textContent = 'No more attempts';
+                  container.appendChild(res);
+                } else {
+                  input.value = '';
+                  input.classList.add('wrong');
+                  setTimeout(function() { input.classList.remove('wrong'); }, 400);
+                }
+              }
+            })
+            .catch(function() { btn.disabled = false; });
+          }
+
+          btn.addEventListener('click', submit);
+          input.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') submit();
+          });
+
+          // Restore state from server on load
+          var state = quizStates[elementId];
+          if (state) {
+            attemptsUsed = state.attemptsUsed || 0;
+            var dotEls = dots.querySelectorAll('.quiz-dot');
+            for (var i = 0; i < attemptsUsed && i < dotEls.length; i++) {
+              dotEls[i].classList.add('used');
+            }
+            if (state.solved) {
+              solved = true;
+              quizSolvedElements[elementId] = true;
+              input.style.display = 'none';
+              btn.style.display = 'none';
+              dots.style.display = 'none';
+              var res = document.createElement('div');
+              res.className = 'quiz-result correct';
+              res.textContent = 'Already solved';
+              container.appendChild(res);
+            } else if (attemptsUsed >= maxAttempts) {
+              input.disabled = true;
+              btn.disabled = true;
+              var res = document.createElement('div');
+              res.className = 'quiz-result locked';
+              res.textContent = 'No more attempts';
+              container.appendChild(res);
+            }
+          }
+        })(el.id, qInput, qBtn, qDots, qc);
+
+        div.appendChild(qc);
         break;
     }
 
