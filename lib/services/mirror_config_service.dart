@@ -153,6 +153,11 @@ class MirrorConfigService {
     await updateConfig((c) => c.copyWith(deviceName: name));
   }
 
+  /// Update device priority (1=high, 2=medium, 3=low/default)
+  Future<void> setPriority(int priority) async {
+    await updateConfig((c) => c.copyWith(priority: priority));
+  }
+
   /// Add a new peer
   Future<void> addPeer(MirrorPeer peer) async {
     await updateConfig((c) {

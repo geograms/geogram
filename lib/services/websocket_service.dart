@@ -406,6 +406,7 @@ class WebSocketService {
       final (roundedLat, roundedLon) = SecurityService().applyLocationGranularity(latitude, longitude);
 
       // Create hello event (include challenge nonce for v2 authentication)
+      final mirrorCfg = MirrorConfigService.instance.config;
       final event = NostrEvent.createHello(
         npub: profile.npub,
         callsign: profile.callsign,
@@ -417,6 +418,7 @@ class WebSocketService {
         ssid: profile.ssid,
         challenge: challengeNonce,
         deviceId: ConfigService().deviceId,
+        priority: mirrorCfg?.priority ?? 3,
       );
       event.calculateId();
 

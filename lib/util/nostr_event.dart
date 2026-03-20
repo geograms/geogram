@@ -152,6 +152,7 @@ class NostrEvent {
     int? ssid,
     String? challenge,
     String? deviceId,
+    int? priority,
   }) {
     // Convert npub to pubkey hex
     final pubkeyHex = NostrCrypto.decodeNpub(npub);
@@ -187,6 +188,10 @@ class NostrEvent {
     // Include per-install device ID for NAT-safe dedup
     if (deviceId != null && deviceId.isNotEmpty) {
       tags.add(['device_id', deviceId]);
+    }
+    // Include device priority for station routing (1=high, 2=medium, 3=default)
+    if (priority != null && priority > 0) {
+      tags.add(['priority', priority.toString()]);
     }
     // Build content with platform name
     final platformName = platform ?? 'Desktop';

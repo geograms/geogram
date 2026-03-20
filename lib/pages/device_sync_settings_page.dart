@@ -204,6 +204,7 @@ class _DeviceSyncSettingsPageState extends State<DeviceSyncSettingsPage> {
   }
 
   Widget _buildThisDeviceSection(ThemeData theme) {
+    final currentPriority = _config?.priority ?? 3;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -227,6 +228,28 @@ class _DeviceSyncSettingsPageState extends State<DeviceSyncSettingsPage> {
               onPressed: () => _saveNickname(_nicknameController.text),
               child: const Text('Save'),
             ),
+          ),
+        ),
+        const SizedBox(height: 8),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: DropdownButtonFormField<int>(
+            value: currentPriority,
+            decoration: const InputDecoration(
+              labelText: 'Station routing priority',
+              helperText: 'Which device serves content when visitors open your page',
+              border: OutlineInputBorder(),
+            ),
+            items: const [
+              DropdownMenuItem(value: 1, child: Text('High — serve content first')),
+              DropdownMenuItem(value: 2, child: Text('Medium')),
+              DropdownMenuItem(value: 3, child: Text('Low (default)')),
+            ],
+            onChanged: (value) {
+              if (value != null && value != currentPriority) {
+                _savePriority(value);
+              }
+            },
           ),
         ),
         const SizedBox(height: 16),
@@ -264,6 +287,18 @@ class _DeviceSyncSettingsPageState extends State<DeviceSyncSettingsPage> {
           SnackBar(content: Text('${peer.name} removed')),
         );
       }
+    }
+  }
+
+  Future<void> _savePriority(int priority) async {
+    await _configService.setPriority(priority);
+    // Re-send hello so station gets the updated priority immediately
+    WebSocketService().reconnect();
+    if (mounted) {
+      final label = priority == 1 ? 'High' : priority == 2 ? 'Medium' : 'Low';
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Priority set to $label')),
+      );
     }
   }
 

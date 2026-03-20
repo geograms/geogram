@@ -26,6 +26,8 @@ abstract class DeviceProxyClient {
   set failCount(int value);
   double get successRate;
   int get priority;
+  set priority(int value);
+  DateTime get connectedAt;
 }
 
 /// Abstract contract that the station must fulfil for device proxying.
@@ -85,7 +87,7 @@ mixin DeviceProxyMixin {
   }
 
   /// Find ALL connected clients matching a callsign or nickname.
-  /// Sorted by priority first (lower = higher priority), then by success rate.
+  /// Sorted by priority first (lower = higher priority), then by longest connected.
   List<DeviceProxyClient> findAllClientsByIdentifier(String identifier) {
     final lower = identifier.toLowerCase();
     final matches = proxyClients.values
@@ -94,11 +96,10 @@ mixin DeviceProxyMixin {
             (c.nickname != null && c.nickname!.toLowerCase() == lower))
         .toList();
     matches.sort((a, b) {
-      // Priority: lower number = higher priority, 0 means "no priority set" → sort last
-      final aPri = a.priority > 0 ? a.priority : 999;
-      final bPri = b.priority > 0 ? b.priority : 999;
-      if (aPri != bPri) return aPri.compareTo(bPri);
-      return b.successRate.compareTo(a.successRate);
+      // Lower priority number = tried first (1=highest, 3=default)
+      if (a.priority != b.priority) return a.priority.compareTo(b.priority);
+      // Same priority → prefer longest-connected device (oldest connectedAt first)
+      return a.connectedAt.compareTo(b.connectedAt);
     });
     return matches;
   }

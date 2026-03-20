@@ -652,6 +652,9 @@ class MirrorConfig {
   /// Global file exclusion rules applied to all sync operations
   List<SyncExcludeRule> excludeRules;
 
+  /// Device priority for station routing (1=high, 2=medium, 3=low/default)
+  int priority;
+
   MirrorConfig({
     this.enabled = false,
     required this.deviceId,
@@ -660,6 +663,7 @@ class MirrorConfig {
     ConnectionPreferences? preferences,
     this.defaultSyncStyle = SyncStyle.sendReceive,
     List<SyncExcludeRule>? excludeRules,
+    this.priority = 3,
   })  : peers = peers ?? [],
         preferences = preferences ?? ConnectionPreferences(),
         excludeRules = excludeRules ?? [];
@@ -709,6 +713,7 @@ class MirrorConfig {
               ?.map((e) => SyncExcludeRule.fromJson(e as Map<String, dynamic>))
               .toList() ??
           [],
+      priority: json['priority'] as int? ?? 3,
     );
   }
 
@@ -721,6 +726,7 @@ class MirrorConfig {
         'default_sync_style': defaultSyncStyle.name,
         if (excludeRules.isNotEmpty)
           'exclude_rules': excludeRules.map((r) => r.toJson()).toList(),
+        'priority': priority,
       };
 
   MirrorConfig copyWith({
@@ -730,6 +736,7 @@ class MirrorConfig {
     ConnectionPreferences? preferences,
     SyncStyle? defaultSyncStyle,
     List<SyncExcludeRule>? excludeRules,
+    int? priority,
   }) {
     return MirrorConfig(
       enabled: enabled ?? this.enabled,
@@ -739,6 +746,7 @@ class MirrorConfig {
       preferences: preferences ?? this.preferences,
       defaultSyncStyle: defaultSyncStyle ?? this.defaultSyncStyle,
       excludeRules: excludeRules ?? List.from(this.excludeRules),
+      priority: priority ?? this.priority,
     );
   }
 }

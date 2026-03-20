@@ -111,9 +111,9 @@ class StationClient implements EmailClient, ConnectedClientReadable, DeviceProxy
   @override
   int failCount = 0; // Timeouts/errors
 
-  // Device priority (lower = higher priority, 0 = no priority set)
+  // Device priority (lower = higher priority, 3 = default)
   @override
-  int priority = 0;
+  int priority = 3;
 
   /// MirrorClient address alias (maps to remoteAddress)
   @override
@@ -191,6 +191,7 @@ class StationClient implements EmailClient, ConnectedClientReadable, DeviceProxy
       'verified': verified,
       'success_count': successCount,
       'fail_count': failCount,
+      'priority': priority,
     };
   }
 }

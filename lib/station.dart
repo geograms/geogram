@@ -2657,7 +2657,7 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
                     } else if (tag[0] == 'device_id') {
                       client.deviceId = tag[1] as String?;
                     } else if (tag[0] == 'priority') {
-                      client.priority = int.tryParse(tag[1].toString()) ?? 0;
+                      client.priority = int.tryParse(tag[1].toString()) ?? 3;
                     }
                   }
                 }
