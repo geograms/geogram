@@ -10,6 +10,7 @@
 
 #include "esp_log.h"
 #include "esp_mac.h"
+#include "esp_timer.h"
 #include "nvs_flash.h"
 
 #include "nimble/nimble_port.h"
@@ -37,6 +38,12 @@ static const char *TAG = "ble_hello";
 #define CHR_WRITE_UUID      0xFFF1
 #define CHR_NOTIFY_UUID     0xFFF2
 
+/* Time-sharing: NimBLE legacy can't advertise + scan simultaneously.
+ * Advertise most of the time (phones discover us), brief scan windows
+ * to count nearby Geogram devices. */
+#define ADV_DURATION_SEC    10          /* advertise for 10s */
+#define SCAN_DURATION_MS    3000        /* scan for 3s */
+
 /* ---- state -------------------------------------------------------------- */
 
 static bool     s_active;
@@ -60,6 +67,10 @@ static int          s_seen_count;
 static uint16_t s_notify_handle;
 static uint16_t s_conn_handle;
 static bool     s_conn_active;
+
+/* Time-sharing state */
+static esp_timer_handle_t s_cycle_timer;
+static bool     s_scanning;             /* true = scan phase, false = adv phase */
 
 /* ---- helpers ------------------------------------------------------------ */
 
@@ -130,6 +141,10 @@ static void track_device(const uint8_t *addr)
 
 static void start_advertise(void)
 {
+    /* Stop scanning first — can't coexist with legacy adv */
+    ble_gap_disc_cancel();
+    s_scanning = false;
+
     struct ble_gap_adv_params adv_params = {0};
     adv_params.conn_mode = BLE_GAP_CONN_MODE_UND;  /* connectable for GATT */
     adv_params.disc_mode = BLE_GAP_DISC_MODE_GEN;
@@ -159,18 +174,42 @@ static void start_advertise(void)
 
 static void start_scan(void)
 {
+    /* Stop advertising first — can't coexist with legacy scan */
+    ble_gap_adv_stop();
+    s_scanning = true;
+
     struct ble_gap_disc_params params = {0};
     params.passive = 1;
     params.itvl = 0x0050;          /* 50 ms */
     params.window = 0x0030;        /* 30 ms */
     params.filter_duplicates = 0;  /* we do our own dedup */
 
-    int rc = ble_gap_disc(BLE_OWN_ADDR_PUBLIC, BLE_HS_FOREVER,
+    /* Scan for a limited duration, then cycle timer switches back to adv */
+    int rc = ble_gap_disc(BLE_OWN_ADDR_PUBLIC, SCAN_DURATION_MS,
                           &params, ble_hello_gap_event, NULL);
     if (rc != 0 && rc != BLE_HS_EALREADY) {
         ESP_LOGW(TAG, "scan start failed: %d", rc);
+        /* Fall back to advertising */
+        start_advertise();
+    }
+}
+
+/* ---- adv/scan cycle timer ----------------------------------------------- */
+
+static void cycle_timer_cb(void *arg)
+{
+    (void)arg;
+    if (!s_active) return;
+
+    /* Skip cycling while a GATT client is connected */
+    if (s_conn_active) return;
+
+    if (!s_scanning) {
+        /* Was advertising → switch to brief scan window */
+        start_scan();
     } else {
-        ESP_LOGI(TAG, "passive scan started");
+        /* Was scanning → switch back to advertising */
+        start_advertise();
     }
 }
 
@@ -313,7 +352,15 @@ static int ble_hello_gap_event(struct ble_gap_event *event, void *arg)
         break;
 
     case BLE_GAP_EVENT_ADV_COMPLETE:
-        /* Restart advertising unless we're shutting down */
+        /* Advertising ended (e.g. duration expired) — restart if active */
+        if (s_active && !s_scanning) {
+            start_advertise();
+        }
+        break;
+
+    case BLE_GAP_EVENT_DISC_COMPLETE:
+        /* Scan window finished — switch back to advertising */
+        s_scanning = false;
         if (s_active) {
             start_advertise();
         }
@@ -337,9 +384,14 @@ static void on_sync(void)
         return;
     }
 
-    ESP_LOGI(TAG, "BLE host synced — starting adv + scan");
+    ESP_LOGI(TAG, "BLE host synced — starting advertising");
     start_advertise();
-    start_scan();
+
+    /* Start the adv/scan cycle timer — fires every ADV_DURATION_SEC to
+     * briefly scan, then DISC_COMPLETE switches back to advertising. */
+    if (s_cycle_timer) {
+        esp_timer_start_periodic(s_cycle_timer, ADV_DURATION_SEC * 1000000ULL);
+    }
 }
 
 static void on_reset(int reason)
@@ -369,6 +421,18 @@ esp_err_t ble_hello_init(const char *callsign)
     memset(s_seen, 0, sizeof(s_seen));
     s_seen_count = 0;
     s_conn_active = false;
+    s_scanning = false;
+
+    /* Create adv/scan cycle timer */
+    esp_timer_create_args_t timer_args = {
+        .callback = cycle_timer_cb,
+        .name = "ble_hello_cycle",
+    };
+    esp_err_t err = esp_timer_create(&timer_args, &s_cycle_timer);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "cycle timer create failed: %s", esp_err_to_name(err));
+        s_cycle_timer = NULL;
+    }
 
     /* NimBLE init */
     int rc = nimble_port_init();
@@ -411,6 +475,11 @@ void ble_hello_stop(void)
 {
     if (!s_active) return;
     s_active = false;
+    if (s_cycle_timer) {
+        esp_timer_stop(s_cycle_timer);
+        esp_timer_delete(s_cycle_timer);
+        s_cycle_timer = NULL;
+    }
     ble_gap_adv_stop();
     ble_gap_disc_cancel();
     nimble_port_stop();
