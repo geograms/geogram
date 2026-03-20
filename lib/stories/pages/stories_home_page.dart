@@ -235,7 +235,7 @@ class _StoriesHomePageState extends State<StoriesHomePage> {
           i18n: widget.i18n,
         ),
       ),
-    );
+    ).then((_) => _loadStories());
   }
 
   void _openStudio(Story story) {
